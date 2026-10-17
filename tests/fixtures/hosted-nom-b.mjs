@@ -2,7 +2,7 @@ import { fcosSalesforceEnvironment } from '../../config/fcosConnections.js';
 import { dependencyHash, loadNomBLegacyAssumptions } from '../../scripts/lib/hosted-release/dependencies.mjs';
 
 // Synthetic retained originals. The production setup separately pins actual legacy history.
-export async function nomBFixture({ manifest: m, now }) {
+export async function nomBFixture({ manifest: m, now, contentVersionOriginalBytes }) {
   const H = 'a'.repeat(64), devee = fcosSalesforceEnvironment('devee'), artifacts = new Map();
   const put = value => { const bytes = Buffer.from(JSON.stringify(value)), sha256 = dependencyHash(bytes); artifacts.set(sha256, bytes); return sha256; };
   const ref = value => ({ path: '/untrusted/path/original.json', sha256: put(value) });
@@ -18,7 +18,12 @@ export async function nomBFixture({ manifest: m, now }) {
     WorkflowRule: [{ Id: id('01Q'), Name: 'ReviewedWorkflow', TableEnumOrId: 'STEM__c', LastModifiedDate: classes[0].LastModifiedDate }], FlowDefinitionView: [], Xero_Contact_Sync_Setting__c: [] };
   const result = records => ({ done: true, totalSize: records.length, records });
   const evidence = {}, comparisons = {}, schemas = {};
-  for (const object of ['Nomination__c','STEM__c','ContentVersion']) { schemas[object] = { name: object, fields: [{ name: 'Id', type: 'id' }] }; evidence[`describe-${object}.json`] = ref({ result: schemas[object] }); }
+  for (const object of ['Nomination__c','STEM__c','ContentVersion']) {
+    if (object === 'ContentVersion' && contentVersionOriginalBytes) {
+      const sha256 = dependencyHash(contentVersionOriginalBytes); artifacts.set(sha256, Buffer.from(contentVersionOriginalBytes));
+      schemas[object] = JSON.parse(contentVersionOriginalBytes).result; evidence[`describe-${object}.json`] = { sha256 };
+    } else { schemas[object] = { name: object, fields: [{ name: 'Id', type: 'id' }] }; evidence[`describe-${object}.json`] = ref({ result: schemas[object] }); }
+  }
   for (const [object, name, field, values] of [['ApexClass','relevant-class-index.json','Name',names],['ApexTrigger','relevant-active-trigger-index.json','TableEnumOrId',objects],
     ['ValidationRule','relevant-active-validation-index.json','EntityDefinitionId',entities],['WorkflowRule','relevant-workflow-index.json','TableEnumOrId',objects],['FlowDefinitionView','relevant-active-flows.json','TriggerObjectOrEventId',entities]]) {
     const records = responses[object].map(({ Body, ...row }) => row);

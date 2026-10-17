@@ -22,6 +22,33 @@ export function salesforceDependencySourceVerified(manifest, handoff) {
     && !Object.hasOwn(handoff, 'sourceMapping');
 }
 
+const contentVersionOriginalArtifact = 'c0a1e2bec6314ea2f589e1877e3e093659332241282cc71ef3e7e52b5d134e84';
+const contentVersionOriginalSchema = '53487b8b495a3f4ee974b0a8613de9a665e46e71f0b7e6b2ed6405518de09da7';
+const contentVersionSuccessorSchema = '6e568b9cdd62603c2f7ad41956933c0d2cf76c41920ff15362598883dcdd6855';
+
+/** One observed DEVEE metadata successor, never a caller-selected hash exception.
+ * Original bytes remain immutable; full live equality uses the separate successor.
+ */
+export function nomBContentVersionMetadataSuccessor(originalBytes) {
+  required(dependencyHash(originalBytes) === contentVersionOriginalArtifact);
+  const evidence = JSON.parse(Buffer.from(originalBytes).toString('utf8')), devee = fcosSalesforceEnvironment('devee');
+  required(evidence.orgId === devee.orgId && evidence.username === devee.username && evidence.apiVersion === 'v67.0'
+    && evidence.method === 'GET' && evidence.path === '/services/data/v67.0/sobjects/ContentVersion/describe'
+    && evidence.result?.name === 'ContentVersion' && dependencyHash(evidence.result) === contentVersionOriginalSchema);
+  const schema = structuredClone(evidence.result), field = schema.fields.find(row => row.name === 'FirstPublishLocationId');
+  required(field.referenceTo.includes('Nomination__c') && !field.referenceTo.includes('LiveChatTranscript')
+    && !schema.childRelationships.some(row => row.childSObject === 'LiveChatTranscriptFeed'));
+  field.referenceTo.splice(45, 0, 'LiveChatTranscript');
+  schema.childRelationships.splice(41, 0, { cascadeDelete: false, childSObject: 'LiveChatTranscriptFeed', deprecatedAndHidden: false,
+    field: 'RelatedRecordId', junctionIdListNames: [], junctionReferenceTo: [], relationshipName: null, restrictedDelete: false });
+  required(dependencyHash(schema) === contentVersionSuccessorSchema);
+  return { schema, attestation: { kind: 'exact_content_version_metadata_successor', orgId: devee.orgId, username: devee.username,
+    apiVersion: evidence.apiVersion, originalArtifactSha256: contentVersionOriginalArtifact,
+    originalCanonicalSha256: contentVersionOriginalSchema, currentCanonicalSha256: contentVersionSuccessorSchema,
+    rawSchemaEqual: false, relevantNomBAssumptionsUnchanged: true,
+    additions: ['FirstPublishLocationId.referenceTo:LiveChatTranscript', 'childRelationships:LiveChatTranscriptFeed/RelatedRecordId/null'] } };
+}
+
 /** Follow only hash references from the admitted originals, never their local paths.
  * The setup loader pins the primary eight artifacts independently of the handoff.
  */
@@ -34,9 +61,9 @@ export async function loadNomBLegacyAssumptions({ handoff, readArtifact }) {
     if (!cache.has(sha256)) {
       required(cache.size < 128); const bytes = Buffer.from(await readArtifact({ sha256 })); total += bytes.length;
       required(bytes.length > 0 && bytes.length <= 8 * 1024 * 1024 && total <= 32 * 1024 * 1024 && dependencyHash(bytes) === sha256);
-      cache.set(sha256, JSON.parse(bytes.toString('utf8')));
+      cache.set(sha256, { bytes, value: JSON.parse(bytes.toString('utf8')) });
     }
-    return cache.get(sha256);
+    return cache.get(sha256).value;
   };
   const a = handoff.artifacts;
   const [acceptance, scope, admission, dependencies, cleanup] = await Promise.all(
@@ -61,10 +88,14 @@ export async function loadNomBLegacyAssumptions({ handoff, readArtifact }) {
     && fixture.nominationId === scope.nominationId && fixture.ownedSynthetic === true
     && automation.orgId === devee.orgId && automation.username === devee.username
     && automation.completeRelevantIndexesAndLastModifiedUnchanged === true && automation.noRelevantActiveRecordFlows === true);
-  const schema = {};
+  const schema = {}, originalSchema = {}, compatibleSchemaSuccessors = [];
   for (const [object, key] of [['Nomination__c','nominationSchemaSha256'],['STEM__c','stemSchemaSha256'],['ContentVersion','contentSchemaSha256']]) {
     const reference = dependencies.evidence?.[`describe-${object}.json`]; required(reference?.sha256 === dependencies[key]);
-    const evidence = await load(reference); required(evidence.result?.name === object); schema[object] = evidence.result;
+    const evidence = await load(reference); required(evidence.result?.name === object); originalSchema[object] = evidence.result;
+    if (object === 'ContentVersion' && reference.sha256 === contentVersionOriginalArtifact) {
+      const successor = nomBContentVersionMetadataSuccessor(cache.get(reference.sha256).bytes);
+      schema[object] = successor.schema; compatibleSchemaSuccessors.push(successor.attestation);
+    } else schema[object] = evidence.result;
   }
   const scopes = evidence => {
     const query = new URL(evidence.path, 'https://unused.invalid').searchParams.get('q');
@@ -104,7 +135,7 @@ export async function loadNomBLegacyAssumptions({ handoff, readArtifact }) {
   const fixtureIds = { Nomination__c: fixture.nominationId, STEM__c: fixture.stemId, Stem_Status__c: fixture.statusId,
     ContentDocument: acceptance.ownedContentDocumentId, ContentVersion: acceptance.ownedContentVersionId };
   required(Object.values(fixtureIds).every(value => /^[A-Za-z0-9]{18}$/.test(value || '')));
-  return { inputs, environment, schema, indexes, apex, fixtureIds };
+  return { inputs, environment, schema, originalSchema, compatibleSchemaSuccessors, indexes, apex, fixtureIds };
 }
 
 /** Hash reviewed relevant paths without importing or executing candidate files. */
@@ -201,7 +232,8 @@ export async function importAcceptedNomB({ manifest, handoff, verifyHandoff, rea
       inputsSha256: dependencyHash(current.inputs), capturedAt: live.completedAt,
       result: { actualExecution: true, coverage: 'disposable_devee_nom_b_synthetic', targets: manifest.targets,
         candidateSalesforceSourceSha256: manifest.candidate.salesforceSourceSha256, originalRelevantSalesforceSha256: legacy.inputs.salesforceSourceSha256,
-        salesforceEvidenceKind: 'accepted_relevant_live_schema_and_automation', originalArtifactSha256: a.liveEvidence,
+        salesforceEvidenceKind: 'accepted_relevant_live_schema_and_automation', compatibleSchemaSuccessors: legacy.compatibleSchemaSuccessors,
+        originalArtifactSha256: a.liveEvidence,
         originalAcceptanceSha256: a.acceptance, migrationHandoffSha256: dependencyHash(handoff),
         originalCapturedAt: live.completedAt, dependenciesObservedAt: current.capturedAt, exactReplayNoExtraPost: true,
         financialChildCategoriesVerifiedZero: 9, fixtureCleaned: true, deployedPreviewProved: false, financialAuthority: false } };

@@ -23,8 +23,9 @@ function manifest() { return { schemaVersion: 2, contract: 'fcos-hosted-release/
   requiredChecks: [...contract.REQUIRED_LIVE_CHECKS], authorization: { validitySeconds: 86400, actions: [...contract.WRITE_PHASES], rollback: { mode: 'compatible_previous_only', schemaRollback: false } },
   migration: { mode: 'none', expectedSchemaSha256: H }, runtime: { expectedSha256: dependencyHash({ safety: true }), expectedProduction: { safety: true }, expectedPreview: { safety: true } }, changes: ['offline dependency test'] }; }
 function temporary(t) { const directory = mkdtempSync(join(tmpdir(), 'fcos-hosted-dependencies-')); t.after(() => rmSync(directory, { recursive: true, force: true })); return directory; }
-async function recipeFixture(t) {
-  const directory = temporary(t), devee = fcosSalesforceEnvironment('devee'), f = await nomBFixture({ manifest: manifest(), now });
+async function recipeFixture(t, options = {}) {
+  const directory = temporary(t), devee = fcosSalesforceEnvironment('devee'), f = await nomBFixture({ manifest: manifest(), now, ...options });
+  if (options.contentVersionOriginalBytes) f.schemas.ContentVersion = structuredClone(f.legacy.schema.ContentVersion);
   for (const file of ['source.js','harness.js','fixture.json']) writeFileSync(join(directory, file), file);
   const file = (root, path) => ({ root, path, sha256: dependencyHash(readFileSync(join(directory, path))) });
   const query = (object, fields, field, values, tooling = false) => ({ kind: 'query', object, tooling, fields, limit: 100, ...(field ? { where: { field, values } } : {}) });
@@ -86,6 +87,32 @@ test('live original Apex checks cannot be waived by changing the admitted expect
     const f=await recipeFixture(t);mutate(f);f.refreshRecipe();await assert.rejects(measureHostedNomBInputs(f),{code:'NOM_B_READONLY_REVALIDATION_REQUIRED'});
   }
 });
+const contentVersionOriginalBytes = readFileSync(new URL('./fixtures/hosted-nom-b-content-version-original.json', import.meta.url));
+test('exact ContentVersion successor is freshly measured while original input fingerprints remain intact', async t => {
+  const f = await recipeFixture(t, { contentVersionOriginalBytes }), measured = await measureHostedNomBInputs(f);
+  assert.deepEqual(measured.inputs, f.handoff.relevantInputs);
+  assert.notEqual(dependencyHash(f.legacy.originalSchema.ContentVersion), dependencyHash(f.schemas.ContentVersion));
+  assert.equal(dependencyHash(f.schemas.ContentVersion), '6e568b9cdd62603c2f7ad41956933c0d2cf76c41920ff15362598883dcdd6855');
+  assert.deepEqual(validateNomBMeasurementReceipt({ ...f, receipt: measured.receipt,
+    job: { started_at: new Date(now - 1000).toISOString(), completed_at: new Date(now + 1000).toISOString() } }).inputs, measured.inputs);
+});
+test('ContentVersion successor cannot admit changed targets, permissions, relationships or other fields by replacing expected hashes', async t => {
+  const field = f => f.schemas.ContentVersion.fields.find(row => row.name === 'FirstPublishLocationId');
+  const child = f => f.schemas.ContentVersion.childRelationships.find(row => row.childSObject === 'LiveChatTranscriptFeed');
+  for (const mutate of [f => { field(f).referenceTo = field(f).referenceTo.filter(v => v !== 'Nomination__c'); },
+    f => { field(f).referenceTo.push('Unapproved__c'); }, f => { field(f).createable = false; },
+    f => { f.schemas.ContentVersion.createable = false; }, f => { child(f).field = 'OtherId'; },
+    f => { child(f).relationshipName = 'Unexpected'; }, f => { child(f).cascadeDelete = true; },
+    f => { f.schemas.ContentVersion.childRelationships[0].restrictedDelete = true; },
+    f => { f.schemas.ContentVersion.fields.find(row => row.name === 'Checksum').type = 'changed'; },
+    f => { f.schemas.ContentVersion = structuredClone(f.legacy.originalSchema.ContentVersion); },
+    f => { f.schemas.ContentVersion.fields.reverse(); }, f => { f.recipe.orgId = '00D222222222222222'; },
+    f => { f.recipe.username = 'other@example.invalid'; }, f => { f.recipe.apiVersion = 'v68.0'; }]) {
+    const f = await recipeFixture(t, { contentVersionOriginalBytes }); mutate(f); f.refreshRecipe();
+    await assert.rejects(measureHostedNomBInputs(f), { code: 'NOM_B_READONLY_REVALIDATION_REQUIRED' });
+  }
+});
+
 test('cleaned fixture must stay absent and coverage cannot omit original objects or bodies', async t => {
   for(const object of ['STEM__c','Nomination__c','Stem_Status__c','ContentDocument','ContentVersion','ContentDocumentLink']) {
     const f=await recipeFixture(t);f.responses[object]=[{Id:f.fixtureIds[object]||'link'}];f.refreshRecipe();

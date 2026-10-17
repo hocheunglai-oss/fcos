@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fcosConnectionIdentifier, fcosSalesforceEnvironment } from '../config/fcosConnections.js';
 import { nomBFixture } from './fixtures/hosted-nom-b.mjs';
-import { collectFinancialPreservation, dependencyHash, importAcceptedNomB, measureDependencyFiles } from '../scripts/lib/hosted-release/dependencies.mjs';
+import { collectFinancialPreservation, dependencyHash, importAcceptedNomB, measureDependencyFiles, nomBContentVersionMetadataSuccessor, loadNomBLegacyAssumptions } from '../scripts/lib/hosted-release/dependencies.mjs';
 
 const H = 'a'.repeat(64), S = 'b'.repeat(40), now = Date.parse('2026-10-17T01:00:00Z');
 const manifest = () => ({ candidate: { sha: '04ee3425aac7a49089eda781eb3c976aea1f6785', salesforceSourceSha256: H }, controller: { sha: S }, targets: { supabaseProject: fcosConnectionIdentifier('supabase', 'Project ref') } });
@@ -51,6 +51,35 @@ test('original live inputs are derived from loaded original bytes, not self-asse
   const f = await nomFixture(); const original = f.artifacts.get(f.handoff.artifacts.dependencies);
   f.artifacts.set(f.handoff.artifacts.dependencies, Buffer.from(original.toString().replace('v67.0', 'v68.0')));
   await assert.rejects(importAcceptedNomB(f), { code: 'NOM_B_DEPENDENCY_REVALIDATION_REQUIRED' });
+});
+
+const contentVersionOriginalBytes = readFileSync(new URL('./fixtures/hosted-nom-b-content-version-original.json', import.meta.url));
+test('exact ContentVersion successor preserves original bytes, identity, timestamps and every other metadata value', async () => {
+  const original = JSON.parse(contentVersionOriginalBytes), before = Buffer.from(contentVersionOriginalBytes);
+  const { schema, attestation } = nomBContentVersionMetadataSuccessor(contentVersionOriginalBytes);
+  assert.equal(dependencyHash(contentVersionOriginalBytes), 'c0a1e2bec6314ea2f589e1877e3e093659332241282cc71ef3e7e52b5d134e84');
+  assert.equal(original.observedAt, '2026-10-10T18:26:01.432966+00:00');
+  assert.equal(dependencyHash(original.result), attestation.originalCanonicalSha256);
+  assert.equal(dependencyHash(schema), '6e568b9cdd62603c2f7ad41956933c0d2cf76c41920ff15362598883dcdd6855');
+  assert.equal(attestation.rawSchemaEqual, false); assert.equal(attestation.relevantNomBAssumptionsUnchanged, true);
+  const reverted = structuredClone(schema), field = reverted.fields.find(row => row.name === 'FirstPublishLocationId');
+  assert.equal(field.referenceTo.splice(45, 1)[0], 'LiveChatTranscript');
+  assert.deepEqual(reverted.childRelationships.splice(41, 1)[0], { cascadeDelete: false, childSObject: 'LiveChatTranscriptFeed', deprecatedAndHidden: false,
+    field: 'RelatedRecordId', junctionIdListNames: [], junctionReferenceTo: [], relationshipName: null, restrictedDelete: false });
+  assert.deepEqual(reverted, original.result); assert.deepEqual(contentVersionOriginalBytes, before);
+  const f = await nomBFixture({ manifest: manifest(), now, contentVersionOriginalBytes }), legacy = await loadNomBLegacyAssumptions(f);
+  assert.deepEqual(legacy.originalSchema.ContentVersion, original.result); assert.deepEqual(legacy.schema.ContentVersion, schema);
+  assert.deepEqual(legacy.inputs, f.handoff.relevantInputs);
+  const proof = await importAcceptedNomB(f); assert.deepEqual(proof.result.compatibleSchemaSuccessors, [attestation]);
+  assert.equal(proof.capturedAt, f.live.completedAt); assert.equal(proof.result.financialAuthority, false);
+});
+test('ContentVersion successor rejects alternate original bytes, target, API, identity and schema hashes', () => {
+  assert.throws(() => nomBContentVersionMetadataSuccessor(Buffer.from('{}')));
+  for (const mutate of [e => { e.orgId = '00D222222222222222'; }, e => { e.username = 'other@example.invalid'; },
+    e => { e.apiVersion = 'v68.0'; }, e => { e.result.fields[0].type = 'changed'; }, e => { e.observedAt = '2026-10-17T01:00:00Z'; }]) {
+    const evidence = JSON.parse(contentVersionOriginalBytes); mutate(evidence);
+    assert.throws(() => nomBContentVersionMetadataSuccessor(Buffer.from(JSON.stringify(evidence))));
+  }
 });
 
 test('relevant file measurement rejects traversal and symlinks and changes only with measured bytes', t => {
