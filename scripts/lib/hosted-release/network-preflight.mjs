@@ -3,20 +3,20 @@ import tls from 'node:tls';
 import { lookup } from 'node:dns/promises';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { fcosConnectionIdentifier } from '../../../config/fcosConnections.js';
+import { observerEndpoint } from './observer-target.mjs';
 
-const host = `db.${fcosConnectionIdentifier('supabase', 'Project ref')}.supabase.co`;
 const sslRequest = Buffer.from([0, 0, 0, 8, 4, 210, 22, 47]);
 const caUrl = new URL('../../../supabase/functions/release-coordinator/supabase-root-2021.crt', import.meta.url);
 
 // Transport admission only. Never send a PostgreSQL StartupMessage, password,
 // SQL, bearer credential or customer data. The sole plaintext write is SSLRequest.
 export async function probeObserverTransport({ resolve = lookup, connect = net.connect,
-  secure = tls.connect, ca = undefined, timeoutMs = 10000, now = Date.now } = {}) {
+  secure = tls.connect, ca = undefined, timeoutMs = 10000, now = Date.now, transport = 'direct' } = {}) {
+  const { host } = observerEndpoint(transport);
   const started = now();
   const certificate = ca ?? await readFile(caUrl);
   let stage = 'dns', socket, encrypted, timer, finished = false;
-  const report = { schemaVersion: 1, kind: 'fcos_observer_transport_preflight_v1', host, port: 5432,
+  const report = { schemaVersion: 1, kind: 'fcos_observer_transport_preflight_v1', transport, host, port: 5432,
     capturedAt: new Date(started).toISOString(), authenticationAttempted: false, sqlSubmitted: false,
     caSha256: createHash('sha256').update(certificate).digest('hex') };
   try {

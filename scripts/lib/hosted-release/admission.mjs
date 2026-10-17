@@ -6,6 +6,7 @@ import { collectBuildProvenance } from '../build-provenance.mjs';
 import { collectCheckBinding, collectReleaseCheckSource, loadReleaseCheckManifest, requiredReleaseChecks } from './checks.mjs';
 import { canonical, digest, fail, REQUIRED_LIVE_CHECKS, validateManifest } from './contract.mjs';
 import { validateVercelReadAcceptance } from './vercel-read-auth.mjs';
+import { validateVercelPreviewWriterAcceptance } from './vercel-writer-auth.mjs';
 
 const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 export function collectSourceAdmission({ candidateDirectory, controllerDirectory, controllerSha, candidateSha, sourceProfile }) {
@@ -68,5 +69,7 @@ export function assertHostedSetup({ manifest, env = process.env }) {
     || manifest.qualificationSource !== undefined && canonical(setup.qualificationSource || null) !== canonical(manifest.qualificationSource)) fail('ADMITTED_SETUP_CHANGED');
   if(manifest.stage==='qualification' || manifest.verification?.vercelReadCredential)
     validateVercelReadAcceptance(manifest.verification?.vercelReadCredential,setup,{targets:manifest.targets});
+  if (manifest.verification?.vercelPreviewWriterCredential)
+    validateVercelPreviewWriterAcceptance(manifest.verification.vercelPreviewWriterCredential, setup, { targets: manifest.targets });
   return setup;
 }

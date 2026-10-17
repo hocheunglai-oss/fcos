@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import pg from 'pg';
 import { SCHEMA_QUERY, collectSchemaObservation } from '../scripts/lib/hosted-release/observations.mjs';
 import { digest } from '../scripts/lib/hosted-release/contract.mjs';
+import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
 
 const available = spawnSync('pg_config', ['--bindir'], { encoding: 'utf8' });
 const bindir = available.status === 0 ? available.stdout.trim() : null;
@@ -76,8 +77,9 @@ test('native schema observer detects access and executable relation drift with s
       class LocalObserver extends pg.Client {
         constructor() { super({ host: directory, port, user: 'fcos_release_observer', database: 'postgres' }); }
       }
-      const manifest = { targets: { supabaseProject: 'disposable-fixture' }, migration: { expectedSchemaSha256: initialHash } };
-      const env = { FCOS_HOSTED_SCHEMA_DATABASE_URL: 'postgresql://fcos_release_observer:fixture@db.disposable-fixture.supabase.co/postgres?sslmode=verify-full' };
+      const project = fcosConnectionIdentifier('supabase', 'Project ref');
+      const manifest = { targets: { supabaseProject: project }, migration: { expectedSchemaSha256: initialHash } };
+      const env = { FCOS_HOSTED_SCHEMA_DATABASE_URL: `postgresql://fcos_release_observer:fixture@db.${project}.supabase.co/postgres?sslmode=verify-full` };
       const proof = await collectSchemaObservation({ manifest, env, Client: LocalObserver });
       assert.equal(proof.sha256, initialHash); assert.equal(proof.readOnly, true);
       await db.query('alter table public.ledger disable row level security');

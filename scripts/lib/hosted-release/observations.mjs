@@ -1,5 +1,6 @@
 import pg from 'pg';
 import { digest, fail } from './contract.mjs';
+import { assertObserverConnection, observerClientConfiguration } from './observer-target.mjs';
 
 // Logical catalog identities only: OIDs and ACL array order must not change a
 // fingerprint, while effective access and executable relation behavior must.
@@ -36,14 +37,12 @@ export const SCHEMA_QUERY = `select jsonb_build_object(
 ) as snapshot`;
 
 export function assertObserverTarget(connectionString, project) {
-  let url; try { url = new URL(connectionString); } catch { fail('SCHEMA_OBSERVER_SETUP_REQUIRED'); }
-  if (url.protocol !== 'postgresql:' || url.hostname !== `db.${project}.supabase.co` || url.pathname !== '/postgres'
-    || url.username !== 'fcos_release_observer' || !url.password || url.searchParams.get('sslmode') !== 'verify-full') fail('SCHEMA_OBSERVER_TARGET');
-  return url;
+  if (!connectionString) fail('SCHEMA_OBSERVER_SETUP_REQUIRED');
+  try { return assertObserverConnection(connectionString, project); } catch { fail('SCHEMA_OBSERVER_TARGET'); }
 }
 export async function collectSchemaObservation({ manifest, env = process.env, Client = pg.Client, now = Date.now }) {
   assertObserverTarget(env.FCOS_HOSTED_SCHEMA_DATABASE_URL, manifest.targets.supabaseProject);
-  const client = new Client({ connectionString: env.FCOS_HOSTED_SCHEMA_DATABASE_URL, connectionTimeoutMillis: 10000,
+  const client = new Client({ ...observerClientConfiguration(env.FCOS_HOSTED_SCHEMA_DATABASE_URL, manifest.targets.supabaseProject), connectionTimeoutMillis: 10000,
     statement_timeout: 15000, application_name: 'fcos-hosted-schema-read' });
   try {
     await client.connect();

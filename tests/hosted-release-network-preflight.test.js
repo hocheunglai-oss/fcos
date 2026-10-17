@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { probeObserverTransport } from '../scripts/lib/hosted-release/network-preflight.mjs';
+import { observerEndpoint } from '../scripts/lib/hosted-release/observer-target.mjs';
 
 function fixture({ response = 'S', authorized = true, tlsError = false } = {}) {
   const writes = [], options = [], sockets = [];
@@ -28,6 +29,14 @@ test('DNS failure exposes a fixed code and never opens a socket', async () => {
   const f = fixture(); f.resolve = async () => { throw new Error('sensitive diagnostics'); };
   const result = await probeObserverTransport(f); assert.equal(result.code, 'OBSERVER_TRANSPORT_DNS_FAILED');
   assert.equal(f.sockets.length, 0); assert.ok(!JSON.stringify(result).includes('sensitive'));
+});
+
+test('approved session transport uses only its pinned host with verified hostname TLS', async () => {
+  const f = fixture(); const result = await probeObserverTransport({ ...f, transport: 'session' });
+  assert.equal(result.status, 'passed'); assert.equal(result.transport, 'session');
+  assert.equal(result.host, observerEndpoint('session').host);
+  assert.equal(f.options[0].host, result.host); assert.equal(f.options[1].servername, result.host);
+  assert.equal(f.options[1].rejectUnauthorized, true); assert.equal(f.writes.length, 1);
 });
 
 test('server SSL refusal never starts TLS or authentication', async () => {

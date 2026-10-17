@@ -124,3 +124,14 @@ test('preservation setup waits and authority/target/SQL/baseline/key drift fails
     if (f.calls.includes('connect')) assert.equal(f.calls.at(-1), 'end');
   }
 });
+
+test('preservation accepts the explicit pinned session route and retains role and membership guards', async () => {
+  const { observerEndpoint } = await import('../scripts/lib/hosted-release/observer-target.mjs');
+  const e = observerEndpoint('session'), f = preservationFixture();
+  f.env.FCOS_HOSTED_PRESERVATION_DATABASE_URL = `postgresql://${e.username}:private@${e.host}:5432/postgres?sslmode=verify-full`;
+  const report = await collectFinancialPreservation(f);
+  assert.equal(report.status, 'passed'); assert.equal(report.result.financialAuthority, false);
+  assert.ok(f.calls.some(c => c.sql === 'begin isolation level repeatable read read only'));
+  f.identity.role = 'postgres';
+  await assert.rejects(collectFinancialPreservation(f), { code: 'PRESERVATION_REVALIDATION_REQUIRED' });
+});

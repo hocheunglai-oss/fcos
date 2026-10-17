@@ -3,6 +3,7 @@ import { lstatSync, readFileSync } from 'node:fs';
 import { resolve, sep } from 'node:path';
 import pg from 'pg';
 import { fcosConnectionIdentifier, fcosSalesforceEnvironment } from '../../../config/fcosConnections.js';
+import { observerClientConfiguration } from './observer-target.mjs';
 
 const canonical = value => Array.isArray(value) ? `[${value.map(canonical).join(',')}]` : value && typeof value === 'object'
   ? `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}` : JSON.stringify(value);
@@ -263,10 +264,7 @@ export async function collectFinancialPreservation({ manifest, membership, verif
         && new Set(table.keys).size === table.keys.length && table.keys.every(k => typeof k === 'string' && k.length > 0 && k.length <= 200));
       seen.add(table.table);
     }
-    const url = new URL(env.FCOS_HOSTED_PRESERVATION_DATABASE_URL);
-    required(url.protocol === 'postgresql:' && url.hostname === `db.${project}.supabase.co` && url.pathname === '/postgres'
-      && url.username === 'fcos_release_observer' && url.password && url.searchParams.get('sslmode') === 'verify-full' && !url.hash);
-    client = new Client({ connectionString: env.FCOS_HOSTED_PRESERVATION_DATABASE_URL, connectionTimeoutMillis: 10000, statement_timeout: 15000, application_name: 'fcos-hosted-preservation-read' });
+    client = new Client({ ...observerClientConfiguration(env.FCOS_HOSTED_PRESERVATION_DATABASE_URL, project), connectionTimeoutMillis: 10000, statement_timeout: 15000, application_name: 'fcos-hosted-preservation-read' });
     await client.connect();
     const { rows: [identity] } = await client.query(`select current_user as role,current_database() as database,r.rolsuper,r.rolcreaterole,r.rolcreatedb,r.rolbypassrls,
       exists(select 1 from pg_auth_members where member=r.oid) as memberships,
