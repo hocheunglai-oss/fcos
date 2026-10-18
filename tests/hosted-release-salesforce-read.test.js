@@ -43,7 +43,7 @@ test('HTTP failure, redirect, invalid JSON, response bounds and lost authenticat
 });
 test('public setup and independent root acceptance are exact and have no private substitutions',()=>{
   const f=fixture();validateSalesforceReadAcceptance(f.binding,f.setup);
-  for(const mutate of [b=>b.username='other',b=>b.orgId='00D000000000000AAA',b=>b.apiVersion='v68.0',b=>b.audience='https://login.salesforce.com',b=>b.clientConfigurationReadbackSha256='wrong',b=>b.authenticationProtocol='jwt-bearer',b=>b.kind='fcos_salesforce_jwt_recipe_reader',b=>b.schemaVersion=2,b=>b.providerPermissionMode='read_only',b=>b.scopes=['full'],b=>b.notAfter=1,b=>b.privateKey='private']){const b=structuredClone(f.binding);mutate(b);assert.throws(()=>validateSalesforceReadBinding(b));}
+  for(const mutate of [b=>b.username='other',b=>delete b.externalClientApplicationId,b=>b.externalClientApplicationId='02u000000000001AAA',b=>b.orgId='00D000000000000AAA',b=>b.apiVersion='v68.0',b=>b.audience='https://login.salesforce.com',b=>b.clientConfigurationReadbackSha256='wrong',b=>b.authenticationProtocol='jwt-bearer',b=>b.kind='fcos_salesforce_jwt_recipe_reader',b=>b.schemaVersion=2,b=>b.providerPermissionMode='read_only',b=>b.scopes=['full'],b=>b.notAfter=1,b=>b.privateKey='private']){const b=structuredClone(f.binding);mutate(b);assert.throws(()=>validateSalesforceReadBinding(b));}
   for(const mutate of [s=>s.salesforceReadCredentialAcceptance.sha256='b'.repeat(64),s=>s.salesforceReadCredentialAcceptance.json='{}']){const s=structuredClone(f.setup);mutate(s);assert.throws(()=>validateSalesforceReadAcceptance(f.binding,s));}
 });
 test('adapter has no arbitrary URL/method/instance and bounds complete recipe reads at sixteen',async()=>{
@@ -186,8 +186,8 @@ test('wrong licence, direct Chatter privilege, old global modes and provider-wid
   await assert.rejects(createSalesforceRecipeReader(direct).admit());assert.equal(direct.calls.length,0);
 });
 
-test('exact nine root-evidenced profile TabSets are admitted while executable, direct, changed and novel grants fail',async()=>{
-  const f=fixture();assert.equal(f.permissionIntrospection.nonExecutableSetupEntityGrants.length,9);await createSalesforceRecipeReader(f).readRecipe(0);
+test('exact nine root-evidenced profile TabSets and separate owned client authorization are admitted while other grants fail',async()=>{
+  const f=fixture();assert.equal(f.permissionIntrospection.nonExecutableSetupEntityGrants.length,9);assert.equal(f.permissionValues[5].records.length,10);await createSalesforceRecipeReader(f).readRecipe(0);
   for(const mutate of [f=>f.permissionValues[5].records[0].SetupEntityType='ApexClass',f=>f.permissionValues[5].records[0].SetupEntityType='Flow',
     f=>f.permissionValues[5].records[0].SetupEntityType='ConnectedApplication',f=>f.permissionValues[5].records[0].ParentId=f.permissionIntrospection.permissionSets[1].id,
     f=>f.permissionValues[5].records[0].SetupEntityId='02u000000000999AAA',
@@ -202,13 +202,49 @@ test('exact nine root-evidenced profile TabSets are admitted while executable, d
   }
 });
 
+test('owned client authorization is tied to the same accepted app and named direct read set',async()=>{
+  const f=fixture(),grant=f.permissionIntrospection.clientAuthorizationGrant;
+  assert.equal(grant.setupEntityId,f.binding.externalClientApplicationId);
+  assert.equal(grant.setupEntityId,f.runAsAcceptance.externalClientApplicationId);
+  assert.equal(grant.setupEntityType,'ExternalClientApplication');
+  const parent=f.permissionIntrospection.permissionSets.find(row=>row.id===grant.parentId);
+  assert.equal(parent.name,'FCOS_Hosted_NomB_Read');assert.equal(parent.isOwnedByProfile,false);
+  await createSalesforceRecipeReader(f).readRecipe(0);
+  const reordered=fixture();reordered.permissionValues[5].records.reverse();await createSalesforceRecipeReader(reordered).readRecipe(0);
+});
+test('fresh owned authorization row changes, missing, duplicate and additional grants fail before NomB reads',async()=>{
+  const mutations=[r=>r.Id='0J0000000000999AAA',r=>r.ParentId='0PS000000000001AAA',r=>r.ParentId='0PS0000000000999AAA',
+    r=>r.SetupEntityId='0xI000000000002AAA',r=>r.SetupEntityType='ConnectedApplication',r=>r.SetupEntityType='ApexClass',
+    r=>r.SetupEntityType='Flow',r=>r.SetupEntityType='TabSet',r=>r.SetupEntityType='FutureExecutable'];
+  for(const mutate of mutations){const f=fixture();mutate(f.permissionValues[5].records.at(-1));
+    await assert.rejects(createSalesforceRecipeReader(f).readRecipe(0),{code:'SALESFORCE_READ_EFFECTIVE_PERMISSIONS_CHANGED'});assert.ok(!f.calls.some(row=>row.url.includes('FROM%20ApexClass')));
+  }
+  for(const kind of ['missing','duplicate','extra','other-client']){const f=fixture(),v=f.permissionValues[5],row=v.records.at(-1);
+    if(kind==='missing')v.records.pop();else v.records.push({...row,...(kind==='duplicate'?{}:{Id:'0J0000000000999AAA'}),...(kind==='other-client'?{SetupEntityId:'0xI000000000002AAA'}:{})});v.totalSize=v.records.length;
+    await assert.rejects(createSalesforceRecipeReader(f).readRecipe(0),{code:'SALESFORCE_READ_EFFECTIVE_PERMISSIONS_CHANGED'});assert.ok(!f.calls.some(row=>row.url.includes('FROM%20ApexClass')));
+  }
+});
+test('rewritten recipe hashes cannot move client authorization into generic grants or another app, type or set',async()=>{
+  const mutations=[r=>delete r.clientAuthorizationGrant,r=>r.clientAuthorizationGrant=null,
+    r=>r.clientAuthorizationGrant.id='0Pa000000000001AAA',r=>r.clientAuthorizationGrant.extra=false,
+    r=>r.clientAuthorizationGrant.parentId=r.permissionSets[0].id,r=>r.clientAuthorizationGrant.parentId='0PS0000000000999AAA',
+    r=>r.clientAuthorizationGrant.setupEntityId='0xI000000000002AAA',r=>r.clientAuthorizationGrant.setupEntityType='ConnectedApplication',
+    r=>r.clientAuthorizationGrant.setupEntityType='ApexClass',r=>r.clientAuthorizationGrant.setupEntityType='Flow',
+    r=>r.clientAuthorizationGrant.setupEntityType='TabSet',r=>r.permissionSets[1].name='Other_Read_Set',
+    r=>r.nonExecutableSetupEntityGrants.push(r.clientAuthorizationGrant),
+    r=>r.permissionSets.push({...r.permissionSets[1],id:'0PS000000000003AAA'}),r=>r.schemaVersion=2];
+  for(const mutate of mutations){const f=fixture();mutate(f.permissionIntrospection);refreshIntrospectionReview(f);
+    await assert.rejects(createSalesforceRecipeReader(f).admit(),{code:'SALESFORCE_READ_PERMISSION_RECIPE_REQUIRED'});assert.equal(f.calls.length,0);
+  }
+});
+
 test('automatic profile-owned assignment and exact admitted direct assignments are mandatory and exhaustive',async()=>{
   const baseline=fixture();baseline.permissionIntrospection.permissionSets.splice(1);
   baseline.permissionIntrospection.paths=salesforcePermissionRecipePaths(baseline.permissionIntrospection);
   baseline.permissionValues[1].records.splice(1);baseline.permissionValues[1].totalSize=1;
   baseline.permissionValues[2].records.splice(1);baseline.permissionValues[2].totalSize=1;
   for(const index of [3,4])baseline.permissionValues[index]={done:true,totalSize:0,records:[]};
-  acceptPermissionSnapshots(baseline);await createSalesforceRecipeReader(baseline).readRecipe(0);
+  acceptPermissionSnapshots(baseline);await assert.rejects(createSalesforceRecipeReader(baseline).readRecipe(0),{code:'SALESFORCE_READ_PERMISSION_RECIPE_REQUIRED'});assert.equal(baseline.calls.length,0);
   assert.equal(baseline.permissionValues[1].records.length,1);
   assert.equal(baseline.permissionValues[1].records[0].PermissionSetId,baseline.permissionIntrospection.permissionSets[0].id);
   for(const mutate of [f=>{f.permissionValues[1].records.splice(0,1);f.permissionValues[1].totalSize--;},
@@ -251,7 +287,7 @@ function refreshRunAsReview(f) {
 }
 test('provider-fixed Run As proof must pin the exact reader and actual client configuration, not app membership',async()=>{
   const mutations=[r=>r.runAsUsername='other@example.invalid',r=>r.runAsUserId='005000000000002AAA',r=>r.orgId='00D000000000000AAA',
-    r=>r.clientId='other-client-0000000000000',r=>r.serverEnforcedRunAs=false,r=>r.clientCredentialsEnabled=false,
+    r=>r.clientId='other-client-0000000000000',r=>r.externalClientApplicationId='0xI000000000002AAA',r=>delete r.externalClientApplicationId,r=>r.schemaVersion=1,r=>r.serverEnforcedRunAs=false,r=>r.clientCredentialsEnabled=false,
     r=>r.jwtBearerEnabled=true,r=>r.credentialAloneUserSelectionEnabled=true,r=>r.interactiveAuthorizationRequiresUserAuthentication=false,r=>r.clientConfigurationReadbackSha256='b'.repeat(64),
     r=>r.capturedAt='2020-01-01T00:00:00Z',r=>r.capturedAt='2999-01-01T00:00:00Z',r=>r.memberOnly=true];
   for(const mutate of mutations){const f=fixture();mutate(f.runAsAcceptance);refreshRunAsReview(f);
@@ -310,7 +346,7 @@ test('complete 135-object and 334-field profile snapshot permits 241 ineffective
   const f=materializedPermissionFixture();await createSalesforceRecipeReader(f).readRecipe(0);
   assert.equal(f.permissionValues[4].records.filter(row=>row.PermissionsEdit).length,241);
   assert.equal(f.permissionValues[3].records.filter(row=>row.PermissionsViewAllRecords).length,128);
-  assert.equal(f.permissionValues[6].fields.length,7);assert.equal(f.permissionIntrospection.schemaVersion,2);
+  assert.equal(f.permissionValues[6].fields.length,7);assert.equal(f.permissionIntrospection.schemaVersion,3);
   assert.ok(!Object.hasOwn(f.permissionIntrospection,'readableFields'));
   assert.match(decodeURIComponent(f.permissionIntrospection.paths[4]),/SELECT Id,ParentId,SobjectType,Field,PermissionsEdit,PermissionsRead,SystemModstamp FROM FieldPermissions .* ORDER BY Id LIMIT 500$/);
   assert.ok(f.permissionIntrospection.paths[3].includes('LIMIT%20200'));

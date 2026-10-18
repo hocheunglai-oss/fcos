@@ -11,7 +11,7 @@ const canonical = value => Array.isArray(value) ? `[${value.map(canonical).join(
 const exact = (value, keys) => value && Object.getPrototypeOf(value) === Object.prototype && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
 function refuse(code = 'SALESFORCE_READ_AUTHENTICATION_REQUIRED') { const error = new Error(code); error.code = code; error.phase = 'salesforce.read'; throw error; }
 const need = (value, code = 'SALESFORCE_READ_CREDENTIAL_BINDING') => { if (!value) refuse(code); };
-const credentialFields = ['clientId','orgId','username','userId','profileId','profileName','userLicenseId','userLicenseName','instanceUrl','isSandbox','apiVersion','authenticationProtocol','scopes','clientConfigurationReadbackSha256','runAsAcceptanceSha256','issuedAt','notAfter','sessionUseSeconds','providerPermissionMode','readOnlyScope','providerWideReadOnly','residualCapabilities','originalFixtureIdentitySha256','effectivePermissionsSha256','permissionRecipeSha256'];
+const credentialFields = ['clientId','externalClientApplicationId','orgId','username','userId','profileId','profileName','userLicenseId','userLicenseName','instanceUrl','isSandbox','apiVersion','authenticationProtocol','scopes','clientConfigurationReadbackSha256','runAsAcceptanceSha256','issuedAt','notAfter','sessionUseSeconds','providerPermissionMode','readOnlyScope','providerWideReadOnly','residualCapabilities','originalFixtureIdentitySha256','effectivePermissionsSha256','permissionRecipeSha256'];
 export const SALESFORCE_BUSINESS_READ_ONLY_SCOPE = Object.freeze(['business_records','metadata','administration','executable_grants']);
 export const SALESFORCE_READER_RESIDUAL_CAPABILITIES = Object.freeze(['chatter_collaboration','user_profile_self_service']);
 const scopesValid = scopes => Array.isArray(scopes) && new Set(scopes).size === scopes.length && scopes.includes('api') && scopes.includes('id') && scopes.every(scope => ['api','id','openid'].includes(scope));
@@ -27,6 +27,7 @@ export function validateSalesforceReadBinding(binding, { now = Date.now() } = {}
   need(exact(binding, ['schemaVersion','kind',...credentialFields,'originalSetupReceiptSha256','rootAcceptanceSha256'])
     && binding.schemaVersion === 3 && binding.kind === 'fcos_salesforce_client_credentials_recipe_reader'
     && typeof binding.clientId === 'string' && /^[A-Za-z0-9_.-]{20,256}$/.test(binding.clientId)
+    && /^0xI[A-Za-z0-9]{15}$/.test(binding.externalClientApplicationId || '')
     && binding.orgId === devee.orgId && binding.username === fcosConnectionIdentifier('salesforce', 'Hosted DEVEE read-only username') && binding.username.toLowerCase() !== devee.username.toLowerCase() && binding.instanceUrl === devee.instanceUrl
     && binding.isSandbox === true && binding.authenticationProtocol === 'client_credentials' && binding.apiVersion === 'v67.0'
     && /^005[A-Za-z0-9]{15}$/.test(binding.userId || '') && /^00e[A-Za-z0-9]{15}$/.test(binding.profileId || '')
@@ -60,9 +61,9 @@ export function validateSalesforceReadAcceptance(binding, setup, options) {
     && review.environment === SALESFORCE_READ_ENVIRONMENT && review.environmentOnly === true
     && exact(review.credential, credentialFields) && canonical(review.credential) === canonical(Object.fromEntries(credentialFields.map(key => [key, binding[key]]))), 'SALESFORCE_READ_SETUP_PROOF_REQUIRED');
   const runAs = review.runAsAcceptance;
-  need(exact(runAs, ['schemaVersion','kind','orgId','clientId','runAsUsername','runAsUserId','capturedAt','clientConfigurationReadbackSha256','serverEnforcedRunAs','clientCredentialsEnabled','jwtBearerEnabled','credentialAloneUserSelectionEnabled','interactiveAuthorizationRequiresUserAuthentication'])
-    && runAs.schemaVersion === 1 && runAs.kind === 'fcos_salesforce_eca_client_credentials_run_as_acceptance'
-    && runAs.orgId === binding.orgId && runAs.clientId === binding.clientId
+  need(exact(runAs, ['schemaVersion','kind','orgId','clientId','externalClientApplicationId','runAsUsername','runAsUserId','capturedAt','clientConfigurationReadbackSha256','serverEnforcedRunAs','clientCredentialsEnabled','jwtBearerEnabled','credentialAloneUserSelectionEnabled','interactiveAuthorizationRequiresUserAuthentication'])
+    && runAs.schemaVersion === 2 && runAs.kind === 'fcos_salesforce_eca_client_credentials_run_as_acceptance'
+    && runAs.orgId === binding.orgId && runAs.clientId === binding.clientId && runAs.externalClientApplicationId === binding.externalClientApplicationId
     && runAs.runAsUsername === binding.username && runAs.runAsUserId === binding.userId
     && runAs.serverEnforcedRunAs === true && runAs.clientCredentialsEnabled === true
     && runAs.jwtBearerEnabled === false && runAs.credentialAloneUserSelectionEnabled === false && runAs.interactiveAuthorizationRequiresUserAuthentication === true
@@ -91,6 +92,8 @@ export function validateSalesforceReadAcceptance(binding, setup, options) {
 // The mandatory Integration-licence Chatter baseline is permitted only on the
 // exact profile-owned set, under the explicit business-data scope and residuals.
 const readOnlySystemPermissions = new Set(['PermissionsApiEnabled','PermissionsApiUserOnly','PermissionsViewSetup','PermissionsViewAllData','PermissionsViewAllUsers','PermissionsViewAllFields','PermissionsViewAllCustomSettings','PermissionsQueryAllFiles','PermissionsViewAllForecasts','PermissionsViewEventLogFiles','PermissionsViewPublicDashboards','PermissionsViewPublicReports','PermissionsViewRoles']);
+// This owned source metadata set alone can authorize the accepted fixed client.
+const clientAuthorizationPermissionSetName = 'FCOS_Hosted_NomB_Read';
 const permissionId = value => typeof value === 'string' && /^0PS[A-Za-z0-9]{15}$/.test(value);
 const sorted = values => [...values].sort();
 const same = (a, b) => canonical(a) === canonical(b);
@@ -116,8 +119,8 @@ export function salesforcePermissionRecipePaths(recipe) {
     query('SetupEntityAccess', `ParentId IN (${ids})`), `/services/data/${recipe.apiVersion}/sobjects/FieldPermissions/describe`];
 }
 function validateSalesforcePermissionRecipe(recipe, binding, readbackSha256, permission) {
-  need(exact(recipe, ['schemaVersion','kind','orgId','userId','profileId','apiVersion','permissionReadbackSha256','maxRows','permissionSets','systemPermissionFields','readableObjects','objectPermissionsSha256','fieldPermissionsSha256','nonExecutableSetupEntityGrants','paths'])
-    && recipe.schemaVersion === 2 && recipe.kind === 'fcos_salesforce_fresh_business_data_read_only_permission_recipe'
+  need(exact(recipe, ['schemaVersion','kind','orgId','userId','profileId','apiVersion','permissionReadbackSha256','maxRows','permissionSets','systemPermissionFields','readableObjects','objectPermissionsSha256','fieldPermissionsSha256','nonExecutableSetupEntityGrants','clientAuthorizationGrant','paths'])
+    && recipe.schemaVersion === 3 && recipe.kind === 'fcos_salesforce_fresh_business_data_read_only_permission_recipe'
     && ['orgId','userId','profileId','apiVersion'].every(key => recipe[key] === binding[key])
     && hash(recipe.permissionReadbackSha256) && recipe.permissionReadbackSha256 === readbackSha256
     && hash(recipe.objectPermissionsSha256) && recipe.objectPermissionsSha256 === permission.effectiveObjectPermissionsReadbackSha256
@@ -145,6 +148,13 @@ function validateSalesforcePermissionRecipe(recipe, binding, readbackSha256, per
     && recipe.nonExecutableSetupEntityGrants.every(row => exact(row, ['id','parentId','setupEntityId','setupEntityType'])
       && /^[A-Za-z0-9]{18}$/.test(row.id) && /^02u[A-Za-z0-9]{15}$/.test(row.setupEntityId)
       && row.setupEntityType === 'TabSet' && row.parentId === recipe.permissionSets.find(item => item.isOwnedByProfile).id), 'SALESFORCE_READ_PERMISSION_RECIPE_REQUIRED');
+  const grant = recipe.clientAuthorizationGrant;
+  const ownedSets = recipe.permissionSets.filter(row => row.isOwnedByProfile === false && row.name === clientAuthorizationPermissionSetName);
+  need(exact(grant, ['id','parentId','setupEntityId','setupEntityType'])
+    && /^0J0[A-Za-z0-9]{15}$/.test(grant.id || '') && grant.setupEntityType === 'ExternalClientApplication'
+    && grant.setupEntityId === binding.externalClientApplicationId
+    && ownedSets.length === 1 && grant.parentId === ownedSets[0].id
+    && !recipe.nonExecutableSetupEntityGrants.some(row => row.id === grant.id || row.setupEntityId === grant.setupEntityId), 'SALESFORCE_READ_PERMISSION_RECIPE_REQUIRED');
   return recipe;
 }
 function permissionRows(value, recipe, maxRows = recipe.maxRows) {
@@ -207,11 +217,12 @@ function validateFreshSalesforcePermissions(recipe, binding, values) {
   // attributes metadata is excluded. No raw 334-row snapshot enters setup JSON.
   capabilityNeed(semanticPermissionHash(fields, fieldPermissionColumns) === recipe.fieldPermissionsSha256);
   // Existing app TabSets are inert under the mandatory API-only baseline. Only
-  // the exact root-evidenced profile-owned list is admitted; never any executable,
-  // connected-app, direct-set or newly introduced entity/type by generic allowance.
+  // the exact root-evidenced profile-owned list is admitted. The one separate
+  // client authorization row binds the same accepted fixed Run As app and owned
+  // direct read set; no generic executable or connected-app allowance exists.
   const grants = permissionRows(executableValue, recipe).map(row => ({ id: row.Id, parentId: row.ParentId, setupEntityId: row.SetupEntityId, setupEntityType: row.SetupEntityType }));
   const byId = rows => [...rows].sort((a, b) => a.id.localeCompare(b.id));
-  capabilityNeed(same(byId(grants), byId(recipe.nonExecutableSetupEntityGrants)));
+  capabilityNeed(same(byId(grants), byId([...recipe.nonExecutableSetupEntityGrants, recipe.clientAuthorizationGrant])));
 }
 
 const field = value => typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,79}$/.test(value);
