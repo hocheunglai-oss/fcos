@@ -8,6 +8,7 @@ import { createPreviousProductionObserver, createSetupDiscoveryCollector } from 
 import { digest, fail, releaseTargets, sha } from './lib/hosted-release/contract.mjs';
 import { assertHostedController, assertHostedSetup, assertSourceAdmission, collectSourceAdmission } from './lib/hosted-release/admission.mjs';
 import { githubClient, validateQualificationRun } from './lib/hosted-release/github.mjs';
+import {validatePreservationPreflightSetup} from './lib/hosted-release/preservation-preflight.mjs';
 import { readManifest, writeJson, workflowOutput } from './lib/hosted-release/session.mjs';
 
 /** Runs before candidate checkout/private provider inputs in the qualification bootstrap. */
@@ -74,16 +75,18 @@ const discoveryCode = (error, phase) => {
 
 /** Separate admission: no admitted release setup, active epoch, expected contracts or manifest. */
 export async function validateHostedDiscoveryDispatch({ env = process.env, createGithub = githubClient,
-  now = Date.now, wait = milliseconds => new Promise(resolveWait => setTimeout(resolveWait,milliseconds)), validateDispatchOnly = false } = {}) {
+  now = Date.now, wait = milliseconds => new Promise(resolveWait => setTimeout(resolveWait,milliseconds)), validateDispatchOnly = false,preservationPreflight=false } = {}) {
+  const input=preservationPreflight?'FCOS_ADMITTED_PRESERVATION_PREFLIGHT':'FCOS_ADMITTED_DISCOVERY_SETUP';
+  const admittedFlag=preservationPreflight?'FCOS_HOSTED_PRESERVATION_PREFLIGHT_ADMITTED':'FCOS_HOSTED_SETUP_DISCOVERY_ADMITTED';
   let setup;
   try {
-    if (typeof env.FCOS_ADMITTED_DISCOVERY_SETUP !== 'string' || Buffer.byteLength(env.FCOS_ADMITTED_DISCOVERY_SETUP) > 49152) fail('DISCOVERY_INPUT_INVALID');
-    setup = JSON.parse(env.FCOS_ADMITTED_DISCOVERY_SETUP);
+    if (typeof env[input] !== 'string' || Buffer.byteLength(env[input]) > 49152) fail('DISCOVERY_INPUT_INVALID');
+    setup = JSON.parse(env[input]);
   } catch { fail('DISCOVERY_INPUT_INVALID'); }
-  validateDiscoverySetup(setup, { controllerSha: env.FCOS_CONTROLLER_SHA, candidateSha: env.FCOS_CANDIDATE_SHA, now: now() });
+  (preservationPreflight?validatePreservationPreflightSetup:validateDiscoverySetup)(setup, { controllerSha: env.FCOS_CONTROLLER_SHA, candidateSha: env.FCOS_CANDIDATE_SHA, now: now() });
   const source = setup.qualificationSource, repository = setup.targets.repository, actor = repository.split('/')[0];
-  if (env.FCOS_HOSTED_SETUP_DISCOVERY_ADMITTED !== 'true' || env.FCOS_SETUP_DISCOVERY_BOOTSTRAP !== 'true'
-    || env.FCOS_HOSTED_ENVIRONMENT !== setup.environment || env.GITHUB_JOB !== 'setup_discovery'
+  if (env[admittedFlag] !== 'true' || env.FCOS_SETUP_DISCOVERY_BOOTSTRAP !== 'true'
+    || env.FCOS_HOSTED_ENVIRONMENT !== setup.environment || env.GITHUB_JOB !== (preservationPreflight?'preservation_preflight':'setup_discovery')
     || env.GITHUB_ACTIONS !== 'true' || env.GITHUB_REPOSITORY !== repository || env.GITHUB_REPOSITORY_ID !== '1278654816'
     || env.GITHUB_REF !== source.ref || env.GITHUB_REF_PROTECTED !== 'true' || env.GITHUB_SHA !== source.bootstrapSha
     || env.GITHUB_WORKFLOW_REF !== source.callerWorkflowRef || env.GITHUB_WORKFLOW_SHA !== source.bootstrapSha
@@ -95,10 +98,12 @@ export async function validateHostedDiscoveryDispatch({ env = process.env, creat
     'FCOS_HOSTED_VERCEL_TOKEN','VERCEL_TOKEN','VERCEL_OIDC_TOKEN','SUPABASE_SERVICE_ROLE_KEY','SUPABASE_SECRET_KEY',
     'SUPABASE_ACCESS_TOKEN','SF_ACCESS_TOKEN','FCOS_HOSTED_PRESERVATION_DATABASE_URL','FCOS_HOSTED_COORDINATOR_URL',
     'FCOS_HOSTED_NORMAL_EMAIL','FCOS_HOSTED_NORMAL_PASSWORD','FCOS_HOSTED_RESTRICTED_EMAIL','FCOS_HOSTED_RESTRICTED_PASSWORD'];
-  if (forbidden.some(key => env[key]) || Object.entries(env).some(([key,value]) => value
+  if (forbidden.filter(k=>!preservationPreflight||k!=='FCOS_HOSTED_PRESERVATION_DATABASE_URL').some(key => env[key])
+    ||preservationPreflight&&['FCOS_HOSTED_VERCEL_READ_TOKEN','FCOS_HOSTED_SCHEMA_DATABASE_URL','FCOS_PRODUCTION_VERIFICATION_BYPASS','FCOS_E2E_VERCEL_BYPASS','FCOS_HOSTED_RUNTIME_EMAIL','FCOS_HOSTED_RUNTIME_PASSWORD'].some(k=>env[k])
+    || Object.entries(env).some(([key,value]) => value
     && /(?:SALESFORCE|COORDINATOR|PRIVATE_KEY|CLIENT_SECRET)/.test(key))) fail('DISCOVERY_CREDENTIAL_BOUNDARY');
   const controllerDirectory = resolve(env.FCOS_CONTROLLER_DIRECTORY || 'controller');
-  assertAdmittedSetup({ setup, expectedSha256: env.FCOS_ADMITTED_DISCOVERY_SETUP_SHA256, controllerDirectory, controllerSha: env.FCOS_CONTROLLER_SHA });
+  assertAdmittedSetup({ setup, expectedSha256: env[`${input}_SHA256`], controllerDirectory, controllerSha: env.FCOS_CONTROLLER_SHA });
   if (execFileSync('git',['status','--porcelain','--untracked-files=no'],{cwd:controllerDirectory,encoding:'utf8'}).trim()) fail('CONTROLLER_CHECKOUT_CHANGED');
   const github = createGithub({ token: env.FCOS_HOSTED_GITHUB_READ_TOKEN || env.GITHUB_TOKEN, repositoryId: env.GITHUB_REPOSITORY_ID });
   await github.identity();
@@ -133,7 +138,7 @@ export async function validateHostedDiscoveryDispatch({ env = process.env, creat
   if (workflow?.type !== 'file' || workflow.path !== '.github/workflows/authenticated-release.yml' || workflow.encoding !== 'base64'
     || typeof workflow.content !== 'string' || workflow.content.length > 196608
     || Buffer.from(workflow.content,'base64').toString('utf8') !== expectedWorkflow) fail('DISCOVERY_BOOTSTRAP_CHANGED');
-  const activeStep = validateDispatchOnly ? 'Admit discovery before candidate checkout' : 'Discover public setup baseline';
+  const activeStep = preservationPreflight?(validateDispatchOnly?'Admit preservation preflight before candidate checkout':'Observe preservation without release authority'):(validateDispatchOnly ? 'Admit discovery before candidate checkout' : 'Discover public setup baseline');
   const pollStarted = now(), publicationDeadline = pollStarted + 20000;
   let knownJobId, knownStartedAt, polls = 0;
   const activeJob = () => {
@@ -142,7 +147,7 @@ export async function validateHostedDiscoveryDispatch({ env = process.env, creat
       || jobs.total_count > 100 || jobs.total_count < 0) fail('DISCOVERY_JOB_CONTEXT');
     for (const value of jobs.jobs) if (value.run_id !== Number(env.GITHUB_RUN_ID) || value.head_sha !== source.bootstrapSha
       || value.run_attempt !== 1) fail('DISCOVERY_JOB_CONTEXT');
-    const matches = jobs.jobs.filter(value => value.name === 'Setup discovery');
+    const matches = jobs.jobs.filter(value => value.name === (preservationPreflight?'Preservation preflight':'Setup discovery'));
     if (matches.length > 1) fail('DISCOVERY_JOB_CONTEXT');
     if (!matches.length) return null; // A complete page may precede publication of this job.
     const job = matches[0];

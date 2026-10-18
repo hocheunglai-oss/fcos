@@ -17,6 +17,7 @@ The coordinator must run on the user's selected isolated host, separate from app
 
 ## Continue from actual evidence
 
+- For local interactive provider writes, use the hash-verified `runGuardedProviderWrite` from the reviewed checkout (`scripts/lib/guarded-provider-write.mjs`), following `docs/operations/guarded-provider-write.md`. Keep claim, completed-result validation, lease assertions, durable intent and the single provider callback inside that guarded sequence. A refusal, pending command or uncertain outcome stops the enclosing operation; never issue a separate follow-up write after it. The helper grants no action authority and does not resolve a lease.
 - Resume the same manifest at its first incomplete phase. Use the maintained `scripts/hosted-release*.mjs` entrypoints and their documented inputs; inspect the journal before dispatch. Completed operations are reused. Uncertain submissions permit owner readback only, never automatic retry, adoption, expiry or takeover.
 - Reuse passing deterministic evidence only with matching relevant inputs and original timestamps. Refresh volatile observations at their required boundaries. Pending producer evidence is a dependency, not proof of failure; do not regenerate successful suites merely because a run resumes.
 - Keep candidate builds credential-free and trusted controller execution separate. Preserve restricted-browser coverage, separate 15-module normal-role verification, server-bundle budgets, Salesforce promotion order and financial preservation evidence.

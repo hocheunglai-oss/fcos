@@ -248,14 +248,28 @@ const identifier = value => typeof value === 'string' && /^[a-z][a-z0-9_]{0,62}$
 export async function collectFinancialPreservation({ manifest, membership, verifyMembership, env = process.env, Client = pg.Client, now = Date.now } = {}) {
   if (!membership || typeof verifyMembership !== 'function' || !env.FCOS_HOSTED_PRESERVATION_DATABASE_URL)
     return waiting('preservation', ['reviewed_exact_preservation_membership_and_baseline', 'readonly_fcos_release_observer_database_connection']);
-  let client;
   try {
-    const project = fcosConnectionIdentifier('supabase', 'Project ref');
     const admitted = await verifyMembership({ membership, manifest, membershipSha256: dependencyHash(membership) });
     required(admitted?.verified === true && admitted.manifestHash === dependencyHash(manifest)
       && admitted.membershipSha256 === dependencyHash(membership) && admitted.financialAuthority === false);
-    required(manifest.targets.supabaseProject === project && membership.kind === 'fcos_release_preservation_membership'
-      && membership.schemaVersion === 1 && membership.project === project && membership.manifestHash === dependencyHash(manifest)
+    required(membership.manifestHash === dependencyHash(manifest));
+    const observed=await collectPreservationSnapshot({targets:manifest.targets,membership,env,Client,now});
+    const binding=admitted.membershipFileSha256?dependencyHash({kind:'fcos_preservation_membership_file_binding_v1',manifestHash:dependencyHash(manifest),membershipFileSha256:admitted.membershipFileSha256}):dependencyHash(membership);
+    if(admitted.membershipFileSha256){required(hash(admitted.membershipFileSha256));observed.result.membershipSha256=binding;observed.result.membershipFileSha256=admitted.membershipFileSha256;}
+    return {schemaVersion:2,kind:'fcos_hosted_dependency_raw',checkId:'preservation',status:'passed',evidenceKind:'volatile',maxAgeSeconds:1800,
+      manifestHash:dependencyHash(manifest),candidateSha:manifest.candidate.sha,controllerSha:manifest.controller.sha,
+      inputsSha256:dependencyHash({membershipSha256:binding,project:manifest.targets.supabaseProject}),...observed};
+  } catch {const error=new Error('PRESERVATION_REVALIDATION_REQUIRED');error.code=error.message;throw error;}
+}
+
+/** Shared SELECT-only implementation. Callers admit either a real release
+ * manifest or the explicitly separate discovery contract before entering it. */
+export async function collectPreservationSnapshot({targets,membership,env=process.env,Client=pg.Client,now=Date.now}={}) {
+  let client;
+  try {
+    const project=fcosConnectionIdentifier('supabase','Project ref');
+    required(targets?.supabaseProject === project && membership.kind === 'fcos_release_preservation_membership'
+      && membership.schemaVersion === 1 && membership.project === project
       && Array.isArray(membership.tables) && membership.tables.length > 0 && membership.tables.length <= 64);
     const seen = new Set();
     for (const table of membership.tables) {
@@ -285,11 +299,9 @@ export async function collectFinancialPreservation({ manifest, membership, verif
       results.push({ table: table.table, count: rows.length, rowsSha256 });
     }
     await client.query('commit');
-    return { schemaVersion: 2, kind: 'fcos_hosted_dependency_raw', checkId: 'preservation', status: 'passed', evidenceKind: 'volatile', maxAgeSeconds: 1800,
-      manifestHash: dependencyHash(manifest), candidateSha: manifest.candidate.sha, controllerSha: manifest.controller.sha,
-      inputsSha256: dependencyHash({ membershipSha256: dependencyHash(membership), project }), capturedAt: new Date(now()).toISOString(),
+    return { capturedAt: new Date(now()).toISOString(),
       result: { actualExecution: true, readOnly: true, fullKeyedRowsUnchanged: true, membershipSha256: dependencyHash(membership),
-        snapshotSha256: dependencyHash(results), tableCount: results.length, rowCount: results.reduce((n, r) => n + r.count, 0), financialAuthority: false, targets: manifest.targets } };
+        snapshotSha256: dependencyHash(results), tableCount: results.length, rowCount: results.reduce((n, r) => n + r.count, 0), financialAuthority: false, targets } };
   } catch { if (client) await client.query('rollback').catch(() => {}); const error = new Error('PRESERVATION_REVALIDATION_REQUIRED'); error.code = error.message; throw error; }
   finally { if (client) await client.end().catch(() => {}); }
 }

@@ -15,6 +15,7 @@ run-name: ${{ inputs.bootstrap_phase == 'toolchain' && format('FCOS toolchain {0
           - qualification
           - toolchain
           - setup-discovery
+          - preservation-preflight
       intent_sha256:
         description: Exact held legacy publication intent; required only for the toolchain phase.
         type: string
@@ -109,6 +110,67 @@ jobs:
         with:
           name: ${{ format('fcos-setup-discovery-{0}', github.run_id) }}
           path: setup-discovery.json
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: false
+  preservation_preflight:
+    name: Preservation preflight
+    if: ${{ inputs.bootstrap_phase == 'preservation-preflight' && vars.FCOS_HOSTED_PRESERVATION_PREFLIGHT_ADMITTED == 'true' }}
+    runs-on: ubuntu-24.04
+    environment: fcos-hosted-dependency-verification
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    env:
+      FCOS_SETUP_DISCOVERY_BOOTSTRAP: 'true'
+      FCOS_HOSTED_PRESERVATION_PREFLIGHT_ADMITTED: ${{ vars.FCOS_HOSTED_PRESERVATION_PREFLIGHT_ADMITTED }}
+      FCOS_HOSTED_ENVIRONMENT: fcos-hosted-dependency-verification
+      FCOS_CONTROLLER_DIRECTORY: controller
+      FCOS_CANDIDATE_DIRECTORY: candidate
+      FCOS_CONTROLLER_SHA: __FCOS_CONTROLLER_SHA__
+      FCOS_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      FCOS_ADMITTED_PRESERVATION_PREFLIGHT: ${{ vars.FCOS_ADMITTED_PRESERVATION_PREFLIGHT }}
+      FCOS_ADMITTED_PRESERVATION_PREFLIGHT_SHA256: ${{ vars.FCOS_ADMITTED_PRESERVATION_PREFLIGHT_SHA256 }}
+      FCOS_PRESERVATION_PREFLIGHT_OUTPUT: preservation-preflight.json
+    steps:
+      - name: Check out admitted controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: __FCOS_CONTROLLER_SHA__
+          path: controller
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - name: Install admitted controller dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Admit preservation preflight before candidate checkout
+        run: node controller/scripts/hosted-preservation-preflight.mjs --validate-dispatch-only
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ env.FCOS_CANDIDATE_SHA }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Observe preservation without release authority
+        run: node controller/scripts/hosted-preservation-preflight.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+          FCOS_HOSTED_PRESERVATION_DATABASE_URL: ${{ secrets.FCOS_HOSTED_PRESERVATION_DATABASE_URL }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ always() }}
+        with:
+          name: ${{ format('fcos-preservation-preflight-{0}', github.run_id) }}
+          path: preservation-preflight.json
           if-no-files-found: error
           retention-days: 30
           overwrite: false

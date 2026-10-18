@@ -10,6 +10,7 @@ import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
 import { salesforceReaderFixture } from './helpers/hosted-salesforce-read.mjs';
 import { nomBFixture } from './fixtures/hosted-nom-b.mjs';
 import { collectFinancialPreservation, dependencyHash } from '../scripts/lib/hosted-release/dependencies.mjs';
+import {sealPreservationMembership} from '../scripts/lib/hosted-release/preservation-preflight.mjs';
 import { hostedDependencies } from '../scripts/hosted-release-dependencies.mjs';
 import { loadDependencySetup, measureHostedNomBInputs, NOM_B_LEGACY_HISTORY, publishDependencies, validateNomBMeasurementReceipt } from '../scripts/lib/hosted-release/dependency-publisher.mjs';
 
@@ -149,10 +150,13 @@ function preservationSetup(t) {
   const directory = temporary(t), m = manifest(), rows = [{ id: '1', amount: '123.45', lines: [{ quantity: 1 }], payments: [] }];
   const original = { schemaVersion: 1, kind: 'fcos_release_preservation_membership', project: m.targets.supabaseProject,
     tables: [{ table: 'invoices', keyColumn: 'id', keys: ['1'], expectedRowsSha256: dependencyHash(rows) }] };
-  const bytes = Buffer.from(JSON.stringify(original)), file = join(directory, 'membership.json'); writeFileSync(file, bytes);
-  m.dependencies = { schemaVersion: 1, preservation: { membershipSha256: dependencyHash(bytes) } };
+  const bytes = Buffer.from(JSON.stringify(original)), file = join(directory, 'membership.encrypted.json');
+  const connection=`postgresql://fcos_release_observer:private@db.${m.targets.supabaseProject}.supabase.co/postgres?sslmode=verify-full`;
+  const sealed=sealPreservationMembership(bytes,{candidateSha:m.candidate.sha,project:m.targets.supabaseProject,membershipSha256:dependencyHash(bytes),connection});writeFileSync(file,sealed);
+  m.dependencies = { schemaVersion: 1, preservation: { membershipSha256: dependencyHash(bytes),envelopeSha256:dependencyHash(sealed),tableCount:1,rowCount:1,
+    snapshotSha256:dependencyHash(original.tables.map(t=>({table:t.table,count:t.keys.length,rowsSha256:t.expectedRowsSha256}))) } };
   const env = { FCOS_RELEASE_MANIFEST: JSON.stringify(m), FCOS_VERIFICATION_PHASE: 'before', FCOS_HOSTED_PRESERVATION_MEMBERSHIP_FILE: file,
-    FCOS_HOSTED_PRESERVATION_DATABASE_URL: `postgresql://fcos_release_observer:private@db.${m.targets.supabaseProject}.supabase.co/postgres?sslmode=verify-full` };
+    FCOS_HOSTED_PRESERVATION_DATABASE_URL: connection };
   class Client { async connect() {} async end() {} async query(sql) {
     if (sql.startsWith('select current_user')) return { rows: [{ role: 'fcos_release_observer', database: 'postgres', rolsuper: false, rolcreaterole: false, rolcreatedb: false, rolbypassrls: false, memberships: false, table_writes: false, definer_access: false }] };
     return { rows: sql.startsWith('select to_jsonb') ? rows.map(row => ({ row })) : [] };
@@ -190,9 +194,12 @@ test('dependency publisher uses actual strict common publisher and independently
   const args = { manifest: f.manifest, env: f.env, runId: 101, phase: 'before', now: f.now, collectArtifact: async () => collected,
     publish: common.publishChecks, coordinator: { appendEvidence: async proof => saved.push(proof) } };
   assert.equal((await publishDependencies(args)).status, 'waiting_dependency'); assert.equal(saved.length, 1); assert.equal(saved[0].evidence.checkId, 'preservation');
+  const publicEnv={...f.env};delete publicEnv.FCOS_HOSTED_PRESERVATION_DATABASE_URL;
+  assert.equal((await publishDependencies({...args,env:publicEnv,readFile:()=>assert.fail('publisher cannot read private membership')})).status,'waiting_dependency');
+  assert.equal(saved.length,2);
   report.checks.find(row => row.checkId === 'preservation').result.snapshotSha256 = 'd'.repeat(64);
-  await assert.rejects(publishDependencies(args)); assert.equal(saved.length, 1);
-  collected.job.conclusion = 'failure'; await assert.rejects(publishDependencies(args)); assert.equal(saved.length, 1);
+  await assert.rejects(publishDependencies(args)); assert.equal(saved.length, 2);
+  collected.job.conclusion = 'failure'; await assert.rejects(publishDependencies(args)); assert.equal(saved.length, 2);
 });
 test('historical timestamp permission is exact NomB deterministic and cannot waive ordinary proof job times', async () => {
   const m = manifest(), collected = hostedArtifact(m, {}), saved = [], old = new Date(now - 86400000).toISOString();
@@ -207,9 +214,10 @@ test('historical timestamp permission is exact NomB deterministic and cannot wai
 
 test('actual CLI process writes waiting report and calls no-OIDC hosted entrypoint without executing candidate code', t => {
   const directory = temporary(t), sourceRoot = fileURLToPath(new URL('../', import.meta.url));
-  for (const relative of ['scripts/hosted-release-dependencies.mjs','scripts/lib/hosted-release/dependencies.mjs','scripts/lib/hosted-release/observer-target.mjs','scripts/lib/hosted-release/dependency-publisher.mjs','scripts/lib/hosted-release/salesforce-read-auth.mjs','config/fcosConnections.js','config/runtime-compatibility-successor-live.json']) {
+  for (const relative of ['scripts/hosted-release-dependencies.mjs','scripts/lib/hosted-release/dependencies.mjs','scripts/lib/hosted-release/observer-target.mjs','scripts/lib/hosted-release/preservation-preflight.mjs','scripts/lib/hosted-release/dependency-publisher.mjs','scripts/lib/hosted-release/salesforce-read-auth.mjs','config/fcosConnections.js','config/hostedReleaseQualification.js','config/runtime-compatibility-successor-live.json']) {
     const destination = join(directory, relative); mkdirSync(dirname(destination), { recursive: true }); copyFileSync(join(sourceRoot, relative), destination);
   }
+  symlinkSync(join(sourceRoot,'scripts/lib/hosted-release/contract.mjs'),join(directory,'scripts/lib/hosted-release/contract.mjs'));
   writeFileSync(join(directory,'package.json'), JSON.stringify({ type: 'module' })); symlinkSync(join(sourceRoot,'node_modules'),join(directory,'node_modules'));
   writeFileSync(join(directory,'scripts/lib/hosted-release/session.mjs'), `import {writeFileSync} from 'node:fs'; export const readManifest=JSON.parse; export async function hostedSession(options){writeFileSync(process.env.FCOS_TEST_SESSION_FILE,JSON.stringify({requireOidc:options.requireOidc,jobName:options.jobName}));return{admission:{}};}`);
   mkdirSync(join(directory,'candidate')); const canary=join(directory,'executed');

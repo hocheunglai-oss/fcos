@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fcosSalesforceEnvironment } from '../../../config/fcosConnections.js';
 import { dependencyHash, importAcceptedNomB, loadNomBLegacyAssumptions, measureDependencyFiles, salesforceDependencySourceVerified } from './dependencies.mjs';
+import {openPreservationMembership} from './preservation-preflight.mjs';
 
 const keys = ['sourceSha256','harnessSha256','salesforceSourceSha256','fixtureSha256','environmentSha256'];
 const canonical = value => Array.isArray(value) ? `[${value.map(canonical).join(',')}]` : value && typeof value === 'object'
@@ -33,11 +34,11 @@ function pinnedJson(file, pin, readFile, onBytes) {
 /** Setup files omit manifestHash to avoid a circular file/hash/manifest binding.
  * The admitted manifest pins their exact bytes; binding is attached in memory.
  */
-export function loadDependencySetup({ manifest, env = process.env, readFile = readFileSync }) {
+export function loadDependencySetup({ manifest, env = process.env, readFile = readFileSync,privateMembership=true }) {
   env = { ...env };
   if (env.FCOS_HOSTED_DEPENDENCY_SETUP_DIRECTORY) {
     const directory = resolve(env.FCOS_HOSTED_DEPENDENCY_SETUP_DIRECTORY);
-    for (const [key, name] of Object.entries({ FCOS_HOSTED_NOM_B_HANDOFF_FILE: 'handoff.json', FCOS_HOSTED_NOM_B_ARTIFACTS_FILE: 'artifacts.json', FCOS_HOSTED_NOM_B_RECIPE_FILE: 'recipe.json', FCOS_HOSTED_PRESERVATION_MEMBERSHIP_FILE: 'membership.json' })) env[key] ||= join(directory, name);
+    for (const [key, name] of Object.entries({ FCOS_HOSTED_NOM_B_HANDOFF_FILE: 'handoff.json', FCOS_HOSTED_NOM_B_ARTIFACTS_FILE: 'artifacts.json', FCOS_HOSTED_NOM_B_RECIPE_FILE: 'recipe.json', FCOS_HOSTED_PRESERVATION_MEMBERSHIP_FILE: 'membership.encrypted.json' })) env[key] ||= join(directory, name);
   }
   const definition = manifest.dependencies;
   if (!definition) return { nomBMissing: ['manifest_dependencies_nom_b_setup'], preservationMissing: ['manifest_dependencies_preservation_setup'] };
@@ -68,12 +69,21 @@ export function loadDependencySetup({ manifest, env = process.env, readFile = re
   }
   if (!preservation || !env.FCOS_HOSTED_PRESERVATION_MEMBERSHIP_FILE) setup.preservationMissing = ['manifest_pinned_preservation_membership_and_baseline'];
   else {
-    const original = pinnedJson(env.FCOS_HOSTED_PRESERVATION_MEMBERSHIP_FILE, preservation.membershipSha256, readFile);
+    need(hash(preservation.membershipSha256)&&hash(preservation.envelopeSha256)&&hash(preservation.snapshotSha256)
+      &&Number.isSafeInteger(preservation.tableCount)&&preservation.tableCount>0&&preservation.tableCount<=64&&Number.isSafeInteger(preservation.rowCount)&&preservation.rowCount>0);
+    const publicBinding=dependencyHash({kind:'fcos_preservation_membership_file_binding_v1',manifestHash,membershipFileSha256:preservation.membershipSha256});
+    if(!privateMembership){setup.preservation={publicBinding,setupPins:{...preservation}};return setup;}
+    let sealed;try{sealed=readFile(env.FCOS_HOSTED_PRESERVATION_MEMBERSHIP_FILE);}catch(error){need(error.code!=='ENOENT','DEPENDENCY_SETUP_PENDING');throw error;}
+    const plain=openPreservationMembership(sealed,{candidateSha:manifest.candidate.sha,project:manifest.targets.supabaseProject,membershipSha256:preservation.membershipSha256,
+      envelopeSha256:preservation.envelopeSha256,connection:env.FCOS_HOSTED_PRESERVATION_DATABASE_URL});
+    let original;try{original=JSON.parse(plain.toString('utf8'));}finally{plain.fill(0);}
     need(!Object.hasOwn(original, 'manifestHash'));
+    need(original.tables.length===preservation.tableCount&&original.tables.reduce((n,t)=>n+t.keys.length,0)===preservation.rowCount
+      &&dependencyHash(original.tables.map(t=>({table:t.table,count:t.keys.length,rowsSha256:t.expectedRowsSha256})))===preservation.snapshotSha256);
     const membership = { ...original, manifestHash };
     setup.preservation = { membership, setupPins: { ...preservation }, verifyMembership: async ({ membership: actual, membershipSha256 }) => {
       need(canonical(actual) === canonical(membership) && membershipSha256 === dependencyHash(membership));
-      return { verified: true, membershipSha256, manifestHash, financialAuthority: false };
+      return { verified: true, membershipSha256, manifestHash, financialAuthority: false,membershipFileSha256:preservation.membershipSha256 };
     } };
   }
   return setup;
@@ -257,7 +267,7 @@ export async function publishDependencies({ github, coordinator, manifest, runId
     artifactName: `fcos-${manifest.releaseId}-dependencies-${phase}`, jobName, fileName: 'dependencies.json' });
   if (collected.status === 'waiting_dependency') return collected;
   let setup;
-  try { setup = loadDependencySetup({ manifest, env, readFile }); }
+  try { setup = loadDependencySetup({ manifest, env, readFile,privateMembership:false }); }
   catch (error) { if (error.code !== 'DEPENDENCY_SETUP_PENDING') throw error; return { status: 'waiting_dependency', missing: ['manifest_pinned_dependency_setup_files_pending'] }; }
   let historical;
   const validateReport = async report => {
@@ -280,11 +290,10 @@ export async function publishDependencies({ github, coordinator, manifest, runId
       } else {
         need(setup.preservation && row.evidenceKind === 'volatile' && row.maxAgeSeconds === 1800 && within(row.capturedAt, collected.job.started_at, collected.job.completed_at)
           && row.result?.actualExecution === true && row.result.readOnly === true && row.result.fullKeyedRowsUnchanged === true && row.result.financialAuthority === false
-          && row.result.membershipSha256 === dependencyHash(setup.preservation.membership)
-          && row.inputsSha256 === dependencyHash({ membershipSha256: dependencyHash(setup.preservation.membership), project: manifest.targets.supabaseProject })
-          && row.result.tableCount === setup.preservation.membership.tables.length
-          && row.result.rowCount === setup.preservation.membership.tables.reduce((n, table) => n + table.keys.length, 0)
-          && row.result.snapshotSha256 === dependencyHash(setup.preservation.membership.tables.map(table => ({ table: table.table, count: table.keys.length, rowsSha256: table.expectedRowsSha256 }))) && canonical(row.result.targets) === canonical(manifest.targets));
+          && row.result.membershipSha256 === setup.preservation.publicBinding&&row.result.membershipFileSha256===setup.preservation.setupPins.membershipSha256
+          && row.inputsSha256 === dependencyHash({ membershipSha256: setup.preservation.publicBinding, project: manifest.targets.supabaseProject })
+          && row.result.tableCount === setup.preservation.setupPins.tableCount&&row.result.rowCount === setup.preservation.setupPins.rowCount
+          && row.result.snapshotSha256 === setup.preservation.setupPins.snapshotSha256 && canonical(row.result.targets) === canonical(manifest.targets));
       }
       accepted.push({ id: row.checkId, kind: row.evidenceKind, status: 'passed', inputsSha256: row.inputsSha256, completedAt: row.capturedAt,
         ...(row.evidenceKind === 'volatile' ? { maxAgeSeconds: row.maxAgeSeconds } : {}), result: row.result });
