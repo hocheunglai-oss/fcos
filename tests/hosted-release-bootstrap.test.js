@@ -122,7 +122,7 @@ test('actual rendered bootstrap wires exactly three public readback inputs to im
   assert.equal(input.bootstrap_phase.default,'qualification');assert.equal(input.xero_recovery_mode.default,'disabled');assert.deepEqual(input.xero_recovery_mode.options,['disabled','owner-readback','original-warm']);
   assert.equal(job.uses,`hocheunglai-oss/fcos/.github/workflows/hosted-xero-recovery-carrier.yml@${sha}`);assert.equal(job.with.controller_sha,sha);assert.equal(job.with.mode,'owner-readback');
   assert.equal(job.with.template_base64,'${{ inputs.xero_recovery_template_base64 }}');assert.equal(job.with.owner_readback_base64,'${{ inputs.xero_recovery_readback_base64 }}');
-  assert.deepEqual(job.permissions,{contents:'read',actions:'read','id-token':'write'});assert.notEqual(job.secrets,'inherit');assert.deepEqual(Object.keys(job.secrets).sort(),['FCOS_HOSTED_VERCEL_READ_TOKEN','FCOS_HOSTED_RUNTIME_EMAIL','FCOS_HOSTED_RUNTIME_PASSWORD','FCOS_PRODUCTION_VERIFICATION_BYPASS','FCOS_XERO_RECOVERY_REQUEST_NONCE'].sort());
+  assert.deepEqual(job.permissions,{contents:'read',actions:'read',statuses:'read','id-token':'write'});assert.notEqual(job.secrets,'inherit');assert.deepEqual(Object.keys(job.secrets).sort(),['FCOS_HOSTED_VERCEL_READ_TOKEN','FCOS_HOSTED_RUNTIME_EMAIL','FCOS_HOSTED_RUNTIME_PASSWORD','FCOS_PRODUCTION_VERIFICATION_BYPASS','FCOS_XERO_RECOVERY_REQUEST_NONCE'].sort());
   const evaluate=(expression,inputs)=>Function('inputs','vars',`return (${expression.slice(3,-2)});`)(new Proxy(inputs,{get:(o,k)=>o[k]??''}),{FCOS_HOSTED_QUALIFICATION_ADMITTED:'true',FCOS_HOSTED_SETUP_DISCOVERY_ADMITTED:'true',FCOS_HOSTED_PRESERVATION_PREFLIGHT_ADMITTED:'true'});
   for(const mode of ['disabled','owner-readback','original-warm','submit','foreign'])for(const phase of input.bootstrap_phase.options){const inputs={bootstrap_phase:phase,xero_recovery_mode:mode,xero_recovery_template_base64:'SYNTHETIC-PUBLIC-TEMPLATE',xero_recovery_readback_base64:'SYNTHETIC-PUBLIC-READBACK'};
     assert.equal(evaluate(job.if,inputs),mode==='owner-readback'&&phase==='qualification');
@@ -138,7 +138,7 @@ test('original warm caller renders one hardcoded submit job from public root-ins
   const sha='e'.repeat(40),rendered=yaml.load(template.replaceAll('__FCOS_CONTROLLER_SHA__',sha)),job=rendered.jobs.xero_original_warm;
   assert.equal(job.uses,`hocheunglai-oss/fcos/.github/workflows/hosted-xero-recovery-carrier.yml@${sha}`);
   assert.deepEqual(job.with,{controller_sha:sha,template_base64:'${{ vars.FCOS_XERO_ORIGINAL_CARRIER_TEMPLATE_BASE64 }}',mode:'submit'});
-  assert.deepEqual(job.permissions,{contents:'read',actions:'read','id-token':'write'});assert.deepEqual(job.secrets,rendered.jobs.xero_owner_readback.secrets);
+  assert.deepEqual(job.permissions,{contents:'read',actions:'read',statuses:'read','id-token':'write'});assert.deepEqual(job.secrets,rendered.jobs.xero_owner_readback.secrets);
   assert.doesNotMatch(JSON.stringify(job),/inputs\.(?:plan|xero_recovery_template_base64|xero_recovery_readback_base64)/);
   assert.match(rendered['run-name'],/FCOS original Xero carrier/);assert.equal(Object.keys(rendered.on.workflow_dispatch.inputs).length,9);
   const evaluate=(inputs,vars)=>Function('inputs','vars',`return (${job.if.slice(3,-2)});`)(new Proxy(inputs,{get:(o,k)=>o[k]??''}),new Proxy(vars,{get:(o,k)=>o[k]??''}));

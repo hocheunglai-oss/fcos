@@ -319,6 +319,7 @@ jobs:
     permissions:
       contents: read
       actions: read
+      statuses: read
       id-token: write
     uses: hocheunglai-oss/fcos/.github/workflows/hosted-xero-recovery-carrier.yml@__FCOS_CONTROLLER_SHA__
     with:
@@ -340,6 +341,7 @@ jobs:
     permissions:
       contents: read
       actions: read
+      statuses: read
       id-token: write
     uses: hocheunglai-oss/fcos/.github/workflows/hosted-xero-recovery-carrier.yml@__FCOS_CONTROLLER_SHA__
     with:

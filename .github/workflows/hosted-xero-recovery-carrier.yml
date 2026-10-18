@@ -28,6 +28,7 @@ on:
 permissions:
   contents: read
   actions: read
+  statuses: read
   id-token: write
 jobs:
   xero-recovery-carrier:
@@ -95,4 +96,5 @@ jobs:
         with:
           script: |
             const { carrierMain } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/hosted-xero-recovery-carrier.mjs`);
-            try { await carrierMain(); } catch { throw new Error('XERO_COURIER_STOPPED_OWNER_READBACK_REQUIRED'); }
+            const { safeCode } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/lib/hosted-release/xero-recovery-native-relay.mjs`);
+            try { await carrierMain(); } catch (error) { throw new Error(safeCode(error)); }

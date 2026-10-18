@@ -21,8 +21,8 @@ const plain = v => v !== null && typeof v === 'object' && Object.getPrototypeOf(
 export const exact = (v, keys) => plain(v) && Object.keys(v).length === keys.length && keys.every(k => Object.hasOwn(v, k));
 export const refusal = code => Object.assign(new Error(code), { code });
 export const need = (v, code = 'XERO_COURIER_REFUSED') => { if (!v) throw refusal(code); };
-const SAFE_CODES = new Set(['XERO_COURIER_READBACK_ADMISSION_REQUIRED','XERO_COURIER_READBACK_RESULT_INVALID','XERO_COURIER_READBACK_DISPATCH_UNKNOWN','XERO_COURIER_LOCAL_REPOSITORY_MISMATCH','XERO_COURIER_PACKAGE_BUILD_REFUSED','XERO_COURIER_CANONICAL_STATE_REQUIRED','XERO_COURIER_ROOT_ADMISSION_REQUIRED','XERO_COURIER_ORIGINAL_CLAIM_REQUIRED','XERO_COURIER_SOURCE_BYTES_UNPROVEN','XERO_COURIER_OIDC_INVALID','XERO_COURIER_AUTHORITY_EXPIRED','XERO_COURIER_CONSUMED_GET_ONLY','XERO_COURIER_REMOTE_OUTCOME_UNKNOWN','XERO_COURIER_ACK_TIMEOUT_UNKNOWN','XERO_COURIER_NATIVE_COMMAND_UNKNOWN','XERO_COURIER_GITHUB_READ_UNKNOWN','XERO_COURIER_HTTP_OUTCOME_UNKNOWN','XERO_COURIER_CAPTURE_UNKNOWN','XERO_COURIER_RUN_MISMATCH','XERO_COURIER_REQUEST_INVALID','XERO_COURIER_TEMPLATE_INVALID','XERO_COURIER_NONCE_REQUIRED','XERO_COURIER_ACK_MISMATCH','XERO_COURIER_RESULT_MISMATCH']);
-export const safeCode = e => { try { return SAFE_CODES.has(e?.code) ? e.code : 'XERO_COURIER_STOPPED_OWNER_READBACK_REQUIRED'; } catch { return 'XERO_COURIER_STOPPED_OWNER_READBACK_REQUIRED'; } };
+const SAFE_CODES = new Set(['XERO_COURIER_RESPONSE_REFUSED','XERO_COURIER_PUBLICATION_INVALID','XERO_COURIER_PUBLICATION_UNKNOWN','XERO_COURIER_READBACK_ADMISSION_REQUIRED','XERO_COURIER_READBACK_RESULT_INVALID','XERO_COURIER_READBACK_DISPATCH_UNKNOWN','XERO_COURIER_LOCAL_REPOSITORY_MISMATCH','XERO_COURIER_PACKAGE_BUILD_REFUSED','XERO_COURIER_CANONICAL_STATE_REQUIRED','XERO_COURIER_ROOT_ADMISSION_REQUIRED','XERO_COURIER_ORIGINAL_CLAIM_REQUIRED','XERO_COURIER_SOURCE_BYTES_UNPROVEN','XERO_COURIER_OIDC_INVALID','XERO_COURIER_AUTHORITY_EXPIRED','XERO_COURIER_CONSUMED_GET_ONLY','XERO_COURIER_REMOTE_OUTCOME_UNKNOWN','XERO_COURIER_ACK_TIMEOUT_UNKNOWN','XERO_COURIER_NATIVE_COMMAND_UNKNOWN','XERO_COURIER_GITHUB_READ_UNKNOWN','XERO_COURIER_HTTP_OUTCOME_UNKNOWN','XERO_COURIER_CAPTURE_UNKNOWN','XERO_COURIER_RUN_MISMATCH','XERO_COURIER_REQUEST_INVALID','XERO_COURIER_TEMPLATE_INVALID','XERO_COURIER_NONCE_REQUIRED','XERO_COURIER_ACK_MISMATCH','XERO_COURIER_RESULT_MISMATCH']);
+export const safeCode = e => { try { const code=e?.code;return SAFE_CODES.has(code) ? code : 'XERO_COURIER_STOPPED_OWNER_READBACK_REQUIRED'; } catch { return 'XERO_COURIER_STOPPED_OWNER_READBACK_REQUIRED'; } };
 export const bytesHash = value => createHash('sha256').update(value).digest('hex');
 const gitHash = (kind, b) => createHash('sha1').update(`${kind} ${b.length}\0`).update(b).digest('hex');
 export function parseCourierTemplate(text) {
@@ -59,6 +59,35 @@ export function parseCourierRequest(raw, t) {
   return r;
 }
 export function courierRequestRef(t, runId, raw) { const r = parseCourierRequest(raw, t); return `${courierPrefix(t, runId)}/request-${r.step}-${r.submissionId}`; }
+/** Deterministic public publisher receipt. GitHub fills creator; commit author
+ * text and this public hash are not publisher/financial authority. The native
+ * operator writes this status only after a completed guarded exact-ref push. */
+export function courierPublicationStatus({templateJson,runId,ref,commitSha,raw,kind}) {
+  const {template:t,templateSha256,plan,planSha256}=parseCourierTemplate(templateJson);
+  need(typeof raw==='string'&&Buffer.byteLength(raw)<=2048&&SHA.test(commitSha)&&['locator','request'].includes(kind),'XERO_COURIER_PUBLICATION_INVALID');
+  const prefix=courierPrefix(t,runId);
+  if(kind==='request')need(ref===courierRequestRef(t,runId,raw),'XERO_COURIER_PUBLICATION_INVALID');
+  else {const v=JSON.parse(raw);need(ref===`${prefix}/locator`&&exact(v,['schemaVersion','kind','deploymentId','url'])&&v.schemaVersion===1&&v.kind==='fcos_xero_host_locator_v1'
+    &&/^dpl_[A-Za-z0-9]+$/.test(v.deploymentId)&&/^https:\/\/[a-z0-9-]+\.vercel\.app$/.test(v.url),'XERO_COURIER_PUBLICATION_INVALID');}
+  const binding={schemaVersion:1,kind:'fcos_native_xero_courier_publication_v1',repository:REPOSITORY,repositoryId:REPO_ID,publisherId:ACTOR_ID,publisherLogin:'hocheunglai-oss',
+    templateSha256,planSha256,operationId:plan.binding.operationId,runId:String(runId),publicationKind:kind,ref,commitSha,rawPayloadSha256:hash(raw)};
+  const bindingSha256=hash(canonical(binding)),body={state:'success',context:`fcos/xero-courier/v1/${bindingSha256}`,description:`${kind} ${binding.rawPayloadSha256}`,
+    target_url:`https://github.com/${REPOSITORY}/actions/runs/${runId}#fcos-xero-${bindingSha256}`};
+  return {binding,bindingSha256,body,route:`repos/${REPOSITORY}/statuses/${commitSha}`,readRoute:`repos/${REPOSITORY}/commits/${commitSha}/statuses?per_page=100`,issuedAt:t.issuedAt,notAfter:t.notAfter};
+}
+export function assertCourierPublicationStatus(value,expected,now=Date.now()) {
+  const b=expected.body,created=Date.parse(value?.created_at),updated=Date.parse(value?.updated_at);
+  need(value&&Number.isSafeInteger(value.id)&&value.id>0&&value.url===`https://api.github.com/${expected.route}`
+    &&value.creator?.id===ACTOR_ID&&value.creator.login==='hocheunglai-oss'&&['state','context','description','target_url'].every(k=>value[k]===b[k])
+    &&Number.isFinite(created)&&Number.isFinite(updated)&&created>=expected.issuedAt-1000&&created<expected.notAfter&&created<=now+30000&&updated>=created&&updated<=now+30000,
+  'XERO_COURIER_PUBLICATION_INVALID');
+  return {id:value.id,url:value.url,creator:{id:ACTOR_ID,login:'hocheunglai-oss'},context:b.context,createdAt:value.created_at,bindingSha256:expected.bindingSha256};
+}
+function nativeGithubCreatedStatus(output,expected,now) {
+  need(typeof output==='string'&&Buffer.byteLength(output)<=65536&&/^HTTP\/[0-9.]+ 201(?: |\r?\n)/.test(output),'XERO_COURIER_PUBLICATION_UNKNOWN');
+  const separator=output.match(/\r?\n\r?\n/);need(separator,'XERO_COURIER_PUBLICATION_UNKNOWN');
+  return assertCourierPublicationStatus(JSON.parse(output.slice(separator.index+separator[0].length)),expected,now);
+}
 export const courierArtifactName = (runId, submissionId) => { need(/^[1-9][0-9]{0,19}$/.test(String(runId)) && UUID.test(submissionId)); return `fcos-xero-ack-${runId}-${submissionId}`; };
 export async function assertCourierRun(read, t, runId, { allowCompleted = false } = {}) {
   const repository = await read(`repos/${REPOSITORY}`), run = await read(`repos/${REPOSITORY}/actions/runs/${runId}`);
@@ -307,7 +336,7 @@ export function assertNativeCourierAdmission({template:t,templateSha256,plan,pla
   const scope={templateSha256,planSha256,target,sourcePins:a.sourcePins,evidence:{originalAuthority:a.evidence.originalAuthority,artifactCaptureAuthority:a.evidence.artifactCaptureAuthority,hostDeploymentSourceReceipt:a.evidence.hostDeploymentSourceReceipt,coordinationQuota:a.evidence.coordinationQuota}};
   need(a.scopeSha256===hash(canonical(scope)),'XERO_COURIER_ROOT_ADMISSION_REQUIRED');
   for(const [key,role] of [['rootReview','root'],['independentReview','independent']]){const r=documents[key];need(r?.kind==='fcos_actual_native_xero_courier_action_review_v1' && r.accepted===true && r.role===role && r.scopeSha256===a.scopeSha256
-    && r.originalHumanAuthorityProvenanceReviewed===true && r.actualDeploymentSourceProvenanceReviewed===true && r.actualSharedCoordinationQuotaReviewed===true
+    && r.originalHumanAuthorityProvenanceReviewed===true && r.actualDeploymentSourceProvenanceReviewed===true && r.actualSharedCoordinationQuotaReviewed===true && r.actualPublisherStatusScopeAndConsumersReviewed===true
     && (role==='root'?r.reviewerId==='/root':typeof r.reviewerId==='string'&&/^\/root\/[a-z0-9_]+(?:\/[a-z0-9_]+)*$/.test(r.reviewerId)&&r.reviewerId!=='/root/xero_host_actor_auth'&&!r.reviewerId.startsWith('/root/xero_host_actor_auth/')),'XERO_COURIER_ROOT_ADMISSION_REQUIRED');}
   const q=documents.coordinationQuota;need(q?.kind==='fcos_actual_xero_courier_shared_get_quota_v1' && q.accepted===true && q.repository===REPOSITORY && q.nativeGetsPerMinute===20 && q.carrierGetsPerMinute===20 && q.sharedMaximum===45 && q.maximumConcurrentClients===2 && q.actualSharedPreflightReviewed===true,'XERO_COURIER_ROOT_ADMISSION_REQUIRED');
   return a;
@@ -430,8 +459,8 @@ export async function createNativeXeroRecoveryRelay({ templateJson, binding, sta
           need(chain.previous!==null && existsSync(statePath('held-lease')),'XERO_COURIER_ORIGINAL_CLAIM_REQUIRED');const held=JSON.parse(regular(statePath('held-lease')));need(canonical(held.binding)===canonical(binding)&&held.templateSha256===templateSha256&&held.planSha256===planSha256,'XERO_COURIER_ORIGINAL_CLAIM_REQUIRED');return lease('assert',held.lease);
         },
           assertLease: ({ lease: held }) => lease('assert', held),
-          recordIntent: ({ lease: held, phase }) => { const v = { lease: held, state: phase, durable: true }; record(statePath(`${request.step}.${phase}`), { ...v, rawRequestJson: raw, requestSha256: hash(raw), ref, binding, maximumRefPushes: 1, maximumHostPosts: 1, maximumSanitizedAckUploads: 1 }); return completed(v); },
-          submit: async () => {
+          recordIntent: ({ lease: held, phase }) => { const v = { lease: held, state: phase, durable: true }; record(statePath(`${request.step}.${phase}`), { ...v, rawRequestJson: raw, requestSha256: hash(raw), ref, binding, maximumRefPushes: 1, maximumPublisherStatusPosts: 1, maximumHostPosts: 1, maximumSanitizedAckUploads: 1 }); return completed(v); },
+          submit: async ({lease:held}) => {
             activeSubmission = request.step;
             await identity();
             const env = { PATH: runtime.env.PATH, HOME: runtime.env.HOME, GH_CONFIG_DIR: runtime.env.GH_CONFIG_DIR, GH_HOST: 'github.com', GH_REPO: REPOSITORY, GH_PROMPT_DISABLED: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: 'FCOS native recovery', GIT_AUTHOR_EMAIL: 'fcos-native@example.invalid', GIT_COMMITTER_NAME: 'FCOS native recovery', GIT_COMMITTER_EMAIL: 'fcos-native@example.invalid' };
@@ -441,10 +470,27 @@ export async function createNativeXeroRecoveryRelay({ templateJson, binding, sta
             const tree = git(['mktree'], `100644 blob ${blob}\trequest.json\n`); need(SHA.test(tree));
             commitSha = git(['commit-tree', tree], 'FCOS exact public recovery request\n'); need(SHA.test(commitSha));
             record(statePath(`${request.step}.publication`), { ref, commitSha, requestSha256: hash(raw), maximumAttempts: 1 });
-            // Exactly one create-only remote ref push; never delete/update it.
-            need(now() < t.notAfter && !existsSync(statePath('stopped')), 'XERO_COURIER_AUTHORITY_EXPIRED');
-            git(['-c','credential.helper=','-c',`credential.https://github.com.helper=!${runtime.command} auth git-credential`,'push',`--force-with-lease=${ref}:`, `https://github.com/${REPOSITORY}.git`, `${commitSha}:${ref}`]);
-            const end = Math.min(t.notAfter, now() + 120000);
+            // Each consequential GitHub write has its OWN actual guard/intent,
+            // asserting the original held financial lease; no second claim or
+            // matching-lease adoption. The OUTER step guard below still requires
+            // the actual HTTP artifact; publication ACKs cannot complete a step.
+            const publication=courierPublicationStatus({templateJson,runId:binding.runId,ref,commitSha,raw,kind:'request'});
+            const active=()=>need(now()>=t.issuedAt&&now()<t.notAfter&&!existsSync(statePath('stopped')),'XERO_COURIER_AUTHORITY_EXPIRED');
+            const guardedPublication=async(phase,submit,validate)=>{
+              const outcome=await runGuardedProviderWrite({expected,claim:()=>lease('assert',held),assertLease:()=>lease('assert',held),
+                recordIntent:({lease:actual,phase:state})=>{const v={lease:actual,state,durable:true};record(statePath(`${request.step}.publication-${phase}.${state}`),{...v,publication:publication.binding,bindingSha256:publication.bindingSha256,maximumProviderWrites:1});return completed(v);},
+                submit:async()=>{active();return submit();},validateProviderResult:validate,
+                recordOutcome:({lease:actual,outcome:o})=>{const v={lease:actual,state:o.state,durable:true};record(statePath(`${request.step}.publication-${phase}.${o.state}`),{...v,reason:o.reason,bindingSha256:publication.bindingSha256});return completed(v);}});
+              need(outcome.status==='submitted_acknowledged','XERO_COURIER_PUBLICATION_UNKNOWN');return outcome;
+            };
+            await guardedPublication('ref',()=>{git(['-c','credential.helper=','-c',`credential.https://github.com.helper=!${runtime.command} auth git-credential`,'push',`--force-with-lease=${ref}:`, `https://github.com/${REPOSITORY}.git`, `${commitSha}:${ref}`]);return completed({ref,commitSha,nativeRefPushCompleted:true});},
+              value=>{try{const v=JSON.parse(value.output);return v.nativeRefPushCompleted===true&&v.ref===ref&&v.commitSha===commitSha;}catch{return false;}});
+            // A missing/uncertain push returns above BEFORE this additional POST.
+            // GitHub's authenticated creator is server metadata, never submitted.
+            await guardedPublication('status',()=>{const output=gh(['api',publication.route,'--method','POST','--include','--input','-'],JSON.stringify(publication.body)),receipt=nativeGithubCreatedStatus(output,publication,now());
+              record(statePath(`${request.step}.publication-status.provider-ack`),{...receipt,nativeCompleted:true,httpStatus:201,nativeOutputSha256:bytesHash(output)});return completed(receipt);},
+              value=>{try{return JSON.parse(value.output).bindingSha256===publication.bindingSha256;}catch{return false;}});
+            active();const end = Math.min(t.notAfter, now() + 120000);
             while (now() < end) { const ack = await acknowledgement(request, ref, commitSha, chain.checkpoint); if (ack) return completed(ack); await wait(10000); }
             throw refusal('XERO_COURIER_ACK_TIMEOUT_UNKNOWN');
           }, validateProviderResult: value => { try { return plain(JSON.parse(value.output)?.envelope); } catch { return false; } },

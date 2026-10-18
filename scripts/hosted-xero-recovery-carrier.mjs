@@ -10,7 +10,7 @@ import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
 import { loginLegacyHostedRuntime, validateLegacyRuntimePublicAuth } from './lib/hosted-release/legacy-hosted-runtime-login.mjs';
 import { createVercelReadTransport, validateVercelReadAcceptance } from './lib/hosted-release/vercel-read-auth.mjs';
 import { createCourierReadBudget, parseCourierTemplate, parseCourierRequest, courierPrefix, courierRequestRef, courierArtifactName, assertCourierRun,
-  readCourierGitFile, assertCourierAck, parseOwnerReadbackCarrier, assertOwnerReadbackAck, validateOwnerReadbackResult, ownerReadbackArtifactName, hash, bytesHash, exact, need, refusal, safeCode, REPOSITORY, RUNTIME_MATERIAL_FILENAME } from './lib/hosted-release/xero-recovery-native-relay.mjs';
+  readCourierGitFile, courierPublicationStatus, assertCourierPublicationStatus, assertCourierAck, parseOwnerReadbackCarrier, assertOwnerReadbackAck, validateOwnerReadbackResult, ownerReadbackArtifactName, hash, bytesHash, exact, need, refusal, safeCode, REPOSITORY, RUNTIME_MATERIAL_FILENAME } from './lib/hosted-release/xero-recovery-native-relay.mjs';
 const TEAM = fcosConnectionIdentifier('vercel','Team ID'), PROJECT = fcosConnectionIdentifier('vercel','Project ID');
 const targets = { vercelTeam: TEAM, vercelProject: PROJECT };
 const GH_ISSUER = 'https://token.actions.githubusercontent.com';
@@ -31,16 +31,19 @@ export function courierGithubReader({env,fetchImpl=fetch,signal,now=Date.now,wai
     let response; try { response = await fetchImpl(`https://api.github.com/${route}`, {method:'GET',redirect:'error',signal:AbortSignal.any([signal,AbortSignal.timeout(15000)]),cache:'no-store',headers:{authorization:`Bearer ${env.GITHUB_TOKEN}`,accept:'application/vnd.github+json','x-github-api-version':'2022-11-28'}}); } catch { throw refusal('XERO_COURIER_GITHUB_READ_UNKNOWN'); }
     if (optional && response.status === 404) { await response.body?.cancel(); return null; }
     need(response.ok && (!response.url || response.url===`https://api.github.com/${route}`), 'XERO_COURIER_GITHUB_READ_UNKNOWN');
+    if(/\/commits\/[a-f0-9]{40}\/statuses\?per_page=100$/.test(route))need(response.headers.get('link')===null,'XERO_COURIER_PUBLICATION_INVALID');
     return JSON.parse((await bounded(response,262144)).toString('utf8'));
   };
 }
-// Commit author text is not publisher proof. Missing/delayed event attribution
-// stays a dependency; it never authenticates a request or causes a replay.
-export async function courierPublicationObserved(read, ref, commitSha) {
-  const events = await read(`repos/${REPOSITORY}/events?per_page=100`);
-  need(Array.isArray(events) && events.length <= 100, 'XERO_COURIER_EVENT_READ_UNKNOWN');
-  return events.some(e => e.type==='PushEvent' && e.repo?.name===REPOSITORY && e.actor?.id===265701760 && e.actor.login==='hocheunglai-oss'
-    && e.payload?.ref===ref && e.payload?.head===commitSha);
+// GitHub fills authenticated status.creator. Activity Events can lag hours and
+// are not this protocol's receipt. Missing is a bounded dependency; ambiguity,
+// incomplete pages or forged creator/binding stop before any owner/provider use.
+export async function courierPublicationObserved(read, input, now=Date.now()) {
+  const expected=courierPublicationStatus(input),statuses=await read(expected.readRoute);
+  need(Array.isArray(statuses)&&statuses.length<100,'XERO_COURIER_PUBLICATION_INVALID');
+  const selected=statuses.filter(v=>typeof v?.context==='string'&&v.context.toLowerCase()===expected.body.context);
+  need(selected.length<=1,'XERO_COURIER_PUBLICATION_INVALID');if(selected.length===0)return false;
+  assertCourierPublicationStatus(selected[0],expected,now);return true;
 }
 export async function verifyCourierOidc({token,t,runId,audience,fetchImpl=fetch,jwks,signal,now=Date.now}) {
   need(typeof token==='string' && token.length<16384 && !signal.aborted, 'XERO_COURIER_OIDC_INVALID');
@@ -137,15 +140,15 @@ export async function runWarmXeroRecoveryCarrier({templateJson,env=process.env,f
   need(/^FCOS original Xero carrier [a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(actual.run.display_title||''),'XERO_COURIER_RUN_MISMATCH');
   let locator;
   while(!locator) { active(signal,t,now);const found=await readCourierGitFile(read,`${prefix}/locator`,'locator.json',2048);
-    if(found && await courierPublicationObserved(read,found.ref,found.commitSha))locator=JSON.parse(found.raw);else await wait(10000); }
-  const expectedFiles=await buildCourierExpectedFiles({t,runId});
-  const host=await verifyCourierDeploymentBytes({t,locator,expectedFiles,env,fetchImpl,signal,now});
+    if(found && await courierPublicationObserved(read,{templateJson,runId,ref:found.ref,commitSha:found.commitSha,raw:found.raw,kind:'locator'},now()))locator=JSON.parse(found.raw);else await wait(10000); }
+  active(signal,t,now);const expectedFiles=await buildCourierExpectedFiles({t,runId});
+  active(signal,t,now);const host=await verifyCourierDeploymentBytes({t,locator,expectedFiles,env,fetchImpl:(...args)=>{active(signal,t,now);return fetchImpl(...args);},signal,now});
   const checkpoint={};let previous=null,next='preflight';
   while(next) { active(signal,t,now);const refs=await read(`repos/${REPOSITORY}/git/matching-refs/${prefix.slice(5)}/request-${next}-`);
     need(Array.isArray(refs) && refs.length<=1,'XERO_COURIER_REQUEST_AMBIGUOUS');if(!refs.length){await wait(10000);continue;}
     const found=await readCourierGitFile(read,refs[0].ref,'request.json',2048);need(found);
-    if(!await courierPublicationObserved(read,found.ref,found.commitSha)){await wait(10000);continue;}
-    const request=parseCourierRequest(found.raw,t);need(found.ref===courierRequestRef(t,runId,found.raw) && request.step===next && request.previousResultSha256===previous,'XERO_COURIER_REQUEST_INVALID');
+    if(!await courierPublicationObserved(read,{templateJson,runId,ref:found.ref,commitSha:found.commitSha,raw:found.raw,kind:'request'},now())){await wait(10000);continue;}
+    active(signal,t,now);const request=parseCourierRequest(found.raw,t);need(found.ref===courierRequestRef(t,runId,found.raw) && request.step===next && request.previousResultSha256===previous,'XERO_COURIER_REQUEST_INVALID');
     const current=await assertCourierRun(read,t,runId);need(current.job.id===actual.job.id);
     const audience=`${host.origin}/xero-recovery`,oidc=await ownOidc(env,audience,fetchImpl,signal);
     await verifyCourierOidc({token:oidc,t,runId,audience,fetchImpl,jwks,signal,now});
