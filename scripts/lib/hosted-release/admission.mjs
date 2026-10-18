@@ -7,7 +7,7 @@ import { collectCheckBinding, collectReleaseCheckSource, loadReleaseCheckManifes
 import { canonical, digest, fail, REQUIRED_LIVE_CHECKS, validateManifest } from './contract.mjs';
 import { validateSalesforceReadAcceptance } from './salesforce-read-auth.mjs';
 import { validateVercelReadAcceptance } from './vercel-read-auth.mjs';
-import { validateVercelPreviewWriterAcceptance } from './vercel-writer-auth.mjs';
+import { validateVercelPreviewWriterAcceptance, validateVercelProductionWriterAcceptance } from './vercel-writer-auth.mjs';
 import { assertFirstRuntimeSetup } from './first-runtime.mjs';
 
 const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
@@ -73,6 +73,9 @@ export function assertHostedSetup({ manifest, env = process.env }) {
     validateVercelReadAcceptance(manifest.verification?.vercelReadCredential,setup,{targets:manifest.targets});
   if (manifest.verification?.vercelPreviewWriterCredential)
     validateVercelPreviewWriterAcceptance(manifest.verification.vercelPreviewWriterCredential, setup, { targets: manifest.targets });
+  if (manifest.verification?.vercelProductionWriterCredential)
+    validateVercelProductionWriterAcceptance(manifest.verification.vercelProductionWriterCredential, setup,
+      { targets: manifest.targets, previewBinding: manifest.verification.vercelPreviewWriterCredential });
   if (manifest.verification?.salesforceReadCredential)
     validateSalesforceReadAcceptance(manifest.verification.salesforceReadCredential, setup);
   assertFirstRuntimeSetup({setup,manifest});

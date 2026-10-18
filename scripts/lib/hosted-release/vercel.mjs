@@ -9,7 +9,7 @@ import { canonicalFcosE2eCandidateUrl } from '../../verify-e2e-candidate.mjs';
 import { canonical, digest, fail, validateManifest,ReleaseError } from './contract.mjs';
 import { createVercelReadTransport, createVercelIntegrationReader } from './vercel-read-auth.mjs';
 import { assertHostedSetup, assertHostedSourceContext } from './admission.mjs';
-import { assertVercelPreviewWriterSecret } from './vercel-writer-auth.mjs';
+import { assertVercelPreviewWriterSecret, assertVercelProductionWriterSecret } from './vercel-writer-auth.mjs';
 import { validateFirstRuntimeOwnerRefresh } from './first-runtime.mjs';
 
 export function assertProjectConfiguration(actual, expected) {
@@ -48,11 +48,20 @@ export function createVercelAdapter({ manifest, candidateDirectory, env = proces
       'The original credential owner must refresh expired read-only legacy observations and install their accepted public digest. Keep this manifest and its valid checks. An already-recorded intent remains consumed and GET-only; a fresh observation alone cannot retry it. Never renew historical timestamps or replay a consumed write.',
       {providerSubmissionStarted:false});}
   }
+  function assertProductionWriterContext(release) {
+    const binding = release.verification?.vercelProductionWriterCredential;
+    if (!binding) return;
+    if (cliEnv.VERCEL_TOKEN !== env.FCOS_HOSTED_VERCEL_TOKEN) fail('VERCEL_PRODUCTION_WRITER_CREDENTIAL_SUBSTITUTED', 'vercel.production');
+    assertHostedSetup({ manifest: release, env }); assertHostedSourceContext({ manifest: release, env });
+    assertVercelProductionWriterSecret(binding, { targets: target, previewBinding: release.verification.vercelPreviewWriterCredential,
+      stage: release.stage, executionMode: release.executionMode, env, now: now() });
+  }
   const run = args => {
     if(readOnly)fail('VERCEL_READ_WRITE_FORBIDDEN','vercel.read');
     // No await or provider read may separate this pure boundary check from the
     // actual CLI invocation. Keep its precise pre-launch error outside catch.
     if(args[0]==='promote'||args[0]==='deploy'&&args.includes('--prod'))assertCurrentFirstRuntimeOwnerRefresh(manifest);
+    if (args[0] === 'promote' || args[0] === 'rollback' || args[0] === 'deploy' && args.includes('--prod')) assertProductionWriterContext(manifest);
     try { return execute('vercel', [...args, '--scope', fcosConnectionIdentifier('vercel', 'Team'), '--cwd', cwd, '--no-color'], {
       cwd, env: cliEnv, encoding: 'utf8', timeout: 180000, maxBuffer: 2 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'],
     }).trim(); } catch { fail('VERCEL_COMMAND_UNRESOLVED', 'vercel.write', 'Read back this operation; command errors do not prove that submission did not occur.'); }
@@ -119,8 +128,11 @@ export function createVercelAdapter({ manifest, candidateDirectory, env = proces
     if (production && env.FCOS_HOSTED_CREDENTIAL_CLASS !== 'production' || !production && env.FCOS_HOSTED_CREDENTIAL_CLASS !== 'preview') fail('CREDENTIAL_CLASS_MISMATCH', phase);
     if(production)assertCurrentFirstRuntimeOwnerRefresh(release);
     const previewBinding = release.verification?.vercelPreviewWriterCredential;
+    const productionBinding = release.verification?.vercelProductionWriterCredential;
     if (!production && release.stage === 'qualification' && !previewBinding) fail('VERCEL_PREVIEW_WRITER_SETUP_REQUIRED', phase);
     if (previewBinding && production && digest(env.FCOS_HOSTED_VERCEL_TOKEN) === previewBinding.bearerSha256) fail('VERCEL_PREVIEW_WRITER_FOR_PRODUCTION', phase);
+    if (productionBinding && !production && digest(env.FCOS_HOSTED_VERCEL_TOKEN) === productionBinding.bearerSha256) fail('VERCEL_PRODUCTION_WRITER_FOR_PREVIEW', phase);
+    if (production && productionBinding) assertProductionWriterContext(release);
     if (previewBinding && !production) {
       assertHostedSetup({ manifest: release, env }); assertHostedSourceContext({ manifest: release, env });
       assertVercelPreviewWriterSecret(previewBinding, { targets: target, env, now: now() });
@@ -132,18 +144,19 @@ export function createVercelAdapter({ manifest, candidateDirectory, env = proces
     if (run(['--version']).replace(/^Vercel CLI /i, '') !== '54.20.1') fail('VERCEL_CLI_VERSION', phase);
     const p = await project();
     assertProjectConfiguration(p, release.verification.projectSettings);
-    const token = previewBinding && !production ? null : (await api('/v5/user/tokens/current', { scopeTeam: false })).token;
+    const originalWriter = production ? productionBinding : previewBinding;
+    const token = originalWriter ? null : (await api('/v5/user/tokens/current', { scopeTeam: false })).token;
     if (p.id !== target.vercelProject || p.accountId !== target.vercelTeam || p.name !== fcosConnectionIdentifier('vercel', 'Project')
       || p.link?.type !== 'github' || `${p.link.org}/${p.link.repo}` !== target.repository
       || p.autoAssignCustomDomains !== false || !Array.isArray(p.link.deployHooks) || p.link.deployHooks.length) fail('VERCEL_PROJECT_IDENTITY', phase);
-    if (!(previewBinding && !production) && (token?.id !== env.FCOS_HOSTED_VERCEL_TOKEN_ID || token.revokedAt || token.leakedAt || !Number.isFinite(Number(token.expiresAt))
+    if (!originalWriter && (token?.id !== env.FCOS_HOSTED_VERCEL_TOKEN_ID || token.revokedAt || token.leakedAt || !Number.isFinite(Number(token.expiresAt))
       || Number(token.expiresAt) <= now() || !Array.isArray(token.scopes) || token.scopes.length !== 1
       || token.scopes[0].type !== 'team' || token.scopes[0].teamId !== target.vercelTeam
       || token.scopes[0].expiresAt && Number(token.scopes[0].expiresAt) <= now())) fail('VERCEL_TOKEN_AUTHORITY', phase);
     const list = await api('/v9/projects?limit=100');
     const userStatus = await api('/v2/user', { permitStatus: true, scopeTeam: false });
     const teamStatus = await api(`/v2/teams/${target.vercelTeam}`, { permitStatus: true, scopeTeam: false });
-    const userHidden = previewBinding && !production ? [403, 404].includes(userStatus) : userStatus === 403;
+    const userHidden = originalWriter ? [403, 404].includes(userStatus) : userStatus === 403;
     if (list.projects?.length !== 1 || list.projects[0].id !== target.vercelProject || list.pagination?.next !== null
       || list.pagination?.count !== 1 || !userHidden || teamStatus !== 403) fail('VERCEL_PROJECT_SCOPE', phase);
     const configuration = JSON.parse(readFileSync(join(cwd, 'vercel.json'), 'utf8')), enabled = configuration.git?.deploymentEnabled;
@@ -151,7 +164,8 @@ export function createVercelAdapter({ manifest, candidateDirectory, env = proces
     const configFile = join(cwd, '.vercel/project.json'), expected = { projectId: target.vercelProject, orgId: target.vercelTeam, projectName: p.name };
     if (existsSync(configFile)) { if (canonical(JSON.parse(readFileSync(configFile))) !== canonical(expected)) fail('VERCEL_LINK_MISMATCH', phase); }
     else { mkdirSync(join(cwd, '.vercel'), { recursive: true, mode: 0o700 }); writeFileSync(configFile, `${JSON.stringify(expected)}\n`, { mode: 0o600, flag: 'wx' }); }
-    return { credentialAuthority: previewBinding && !production ? 'root_accepted_original_issuance' : 'live_token_metadata',
+    return { credentialAuthority: production && productionBinding ? 'root_accepted_original_production_issuance'
+      : previewBinding && !production ? 'root_accepted_original_issuance' : 'live_token_metadata',
       effectiveAccess: { userStatus, teamStatus, projectId: p.id, projectCount: list.pagination.count } };
   }
   async function create(release, context, production) {
@@ -196,8 +210,14 @@ export function createVercelAdapter({ manifest, candidateDirectory, env = proces
       if (result.sha !== release.candidate.sha || result.target !== targetName) fail('DEPLOYMENT_READBACK_MISMATCH');
       return { outcome: 'applied', result };
     },
-    promote: async value => { run(['promote', value.id, '--yes']); },
-    rollback: async previous => { run(['rollback', previous.deploymentId, '--yes']); },
+    promote: async value => {
+      if (manifest.verification?.vercelProductionWriterCredential) await admit(manifest, 'production.promote');
+      run(['promote', value.id, '--yes']);
+    },
+    rollback: async previous => {
+      if (manifest.verification?.vercelProductionWriterCredential) await admit(manifest, 'production.rollback');
+      run(['rollback', previous.deploymentId, '--yes']);
+    },
     rollbackCompatibility: async (previous, release) => {
       if(previous.firstRuntime?.rollbackEligible===false)return {compatible:false,deploymentId:previous.deploymentId,reason:'legacy_runtime_compatibility_unobserved'};
       if (typeof schemaObservation !== 'function') fail('ROLLBACK_SCHEMA_OBSERVATION_REQUIRED', 'production.rollback');

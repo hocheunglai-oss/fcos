@@ -3,7 +3,7 @@ import { qualificationSourceBinding } from '../../../config/hostedReleaseQualifi
 import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier } from '../../../config/fcosConnections.js';
 import { validateSalesforceReadBinding } from './salesforce-read-auth.mjs';
 import { validateVercelReadBinding } from './vercel-read-auth.mjs';
-import { validateVercelPreviewWriterBinding } from './vercel-writer-auth.mjs';
+import { validateVercelPreviewWriterBinding, validateVercelProductionWriterBinding } from './vercel-writer-auth.mjs';
 import { assertFirstRuntimeManifest } from './first-runtime.mjs';
 
 export const CONTRACT_VERSION = 'fcos-hosted-release/v2';
@@ -83,6 +83,9 @@ export function validateManifest(manifest) {
   if (manifest.verification?.salesforceReadCredential) validateSalesforceReadBinding(manifest.verification.salesforceReadCredential);
   if (manifest.verification?.vercelPreviewWriterCredential)
     validateVercelPreviewWriterBinding(manifest.verification.vercelPreviewWriterCredential, { targets: manifest.targets });
+  if (manifest.verification?.vercelProductionWriterCredential)
+    validateVercelProductionWriterBinding(manifest.verification.vercelProductionWriterCredential,
+      { targets: manifest.targets, previewBinding: manifest.verification.vercelPreviewWriterCredential });
   if (manifest.verification) {
     if (!/^ghcr\.io\/hocheunglai-oss\/fcos-release-checks@sha256:[a-f0-9]{64}$/.test(manifest.verification.runtime?.image || '')
       || manifest.verification.runtime.node !== 'v24.18.0' || manifest.verification.runtime.platform !== 'linux'
