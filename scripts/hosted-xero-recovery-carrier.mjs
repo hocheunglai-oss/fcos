@@ -129,6 +129,12 @@ export async function runWarmXeroRecoveryCarrier({templateJson,env=process.env,f
   const {template:t,templateSha256,plan,planSha256}=parseCourierTemplate(templateJson);active(signal,t,now);
   need(env.GITHUB_REPOSITORY===REPOSITORY && env.GITHUB_RUN_ATTEMPT==='1' && /^[1-9][0-9]{0,19}$/.test(env.GITHUB_RUN_ID), 'XERO_COURIER_RUN_MISMATCH');
   const runId=env.GITHUB_RUN_ID,read=courierGithubReader({env,fetchImpl,signal,now,wait}),actual=await assertCourierRun(read,t,runId),prefix=courierPrefix(t,runId);
+  // This immutable caller sources the PUBLIC template from repository vars.
+  // Native admission proves its actual installation metadata and observes this
+  // exact dispatch/run before publishing any locator/request. A display title is
+  // correlation only, never approval or JWT input attestation. No extra token or
+  // ungranted Variables API permission is assumed for the hosted GITHUB_TOKEN.
+  need(/^FCOS original Xero carrier [a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(actual.run.display_title||''),'XERO_COURIER_RUN_MISMATCH');
   let locator;
   while(!locator) { active(signal,t,now);const found=await readCourierGitFile(read,`${prefix}/locator`,'locator.json',2048);
     if(found && await courierPublicationObserved(read,found.ref,found.commitSha))locator=JSON.parse(found.raw);else await wait(10000); }

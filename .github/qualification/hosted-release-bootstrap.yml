@@ -2,10 +2,12 @@
 # Replace every controller placeholder with the admitted immutable controller.
 # Publish only as authenticated-release.yml on the separately admitted protected qualification branch.
 # Admission binds that branch/commit/candidate/setup; Production authority is never available.
+# Original warm start only waits on public fixed refs/source proof until a
+# separately guarded native request exists. Its dispatch never approves a step.
 # Owner readback is a separate root-admitted finite orchestration dispatch. It
 # cannot submit a financial step; OIDC authenticates source/run, not input mode.
 name: FCOS hosted qualification bootstrap
-run-name: ${{ inputs.bootstrap_phase == 'toolchain' && format('FCOS toolchain {0}', inputs.intent_sha256) || format('FCOS hosted qualification {0}', inputs.candidate_sha || 'resume saved manifest') }}
+run-name: ${{ inputs.xero_recovery_mode == 'original-warm' && format('FCOS original Xero carrier {0}', inputs.xero_original_warm_dispatch_id) || inputs.bootstrap_phase == 'toolchain' && format('FCOS toolchain {0}', inputs.intent_sha256) || format('FCOS hosted qualification {0}', inputs.candidate_sha || 'resume saved manifest') }}
 'on':
   workflow_dispatch:
     inputs:
@@ -35,12 +37,17 @@ run-name: ${{ inputs.bootstrap_phase == 'toolchain' && format('FCOS toolchain {0
         type: string
         required: false
       xero_recovery_mode:
-        description: Separately admitted original-owner GET recovery only; disabled for qualification.
+        description: Separate finite orchestration purposes; disabled for qualification. No financial authority.
         type: choice
         default: disabled
         options:
           - disabled
           - owner-readback
+          - original-warm
+      xero_original_warm_dispatch_id:
+        description: Native one-time public correlation UUID, never authority; original template comes only from the admitted repository variable.
+        type: string
+        required: false
       xero_recovery_template_base64:
         description: Exact original trusted public carrier template from the native readback admission.
         type: string
@@ -320,6 +327,26 @@ jobs:
       # Hardcoded purpose: no dispatch input can select the POST entrypoint.
       mode: owner-readback
       owner_readback_base64: ${{ inputs.xero_recovery_readback_base64 }}
+    secrets:
+      FCOS_HOSTED_VERCEL_READ_TOKEN: ${{ secrets.FCOS_HOSTED_VERCEL_READ_TOKEN }}
+      FCOS_HOSTED_RUNTIME_EMAIL: ${{ secrets.FCOS_HOSTED_RUNTIME_EMAIL }}
+      FCOS_HOSTED_RUNTIME_PASSWORD: ${{ secrets.FCOS_HOSTED_RUNTIME_PASSWORD }}
+      FCOS_PRODUCTION_VERIFICATION_BYPASS: ${{ secrets.FCOS_PRODUCTION_VERIFICATION_BYPASS }}
+      FCOS_XERO_RECOVERY_REQUEST_NONCE: ${{ secrets.FCOS_XERO_RECOVERY_REQUEST_NONCE }}
+
+  xero_original_warm:
+    name: xero-original-warm
+    if: ${{ inputs.xero_recovery_mode == 'original-warm' && inputs.bootstrap_phase == 'qualification' && inputs.xero_original_warm_dispatch_id != '' && vars.FCOS_XERO_ORIGINAL_CARRIER_TEMPLATE_BASE64 != '' }}
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    uses: hocheunglai-oss/fcos/.github/workflows/hosted-xero-recovery-carrier.yml@__FCOS_CONTROLLER_SHA__
+    with:
+      controller_sha: __FCOS_CONTROLLER_SHA__
+      # Repository public setup, never a dispatch-selected submit template.
+      template_base64: ${{ vars.FCOS_XERO_ORIGINAL_CARRIER_TEMPLATE_BASE64 }}
+      mode: submit
     secrets:
       FCOS_HOSTED_VERCEL_READ_TOKEN: ${{ secrets.FCOS_HOSTED_VERCEL_READ_TOKEN }}
       FCOS_HOSTED_RUNTIME_EMAIL: ${{ secrets.FCOS_HOSTED_RUNTIME_EMAIL }}
