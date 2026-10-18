@@ -20,6 +20,7 @@ function fixture() {
   const calls=[],options={binding,production,controllerDirectory:root,bypass:'PRIVATE_BYPASS',now:()=>at,
     protection:async value=>{calls.push('protection');assert.equal(value.origin,binding.origin);assert.equal(value.bypass,'PRIVATE_BYPASS');return {private:'PRIVATE_PROTECTION_STATE'};},
     tokenProvider:async value=>{calls.push('login');assert.equal(value.deployment.id,binding.deploymentId);assert.equal(value.protectionState.private,'PRIVATE_PROTECTION_STATE');return 'PRIVATE_FCOS_SESSION';},
+    recheckProduction:async()=>{calls.push('recheck');return {...structuredClone(production),capturedAt:new Date(at).toISOString()};},
     fetchImpl:async(url,o)=>{calls.push('fetch');assert.equal(url,`${binding.origin}${binding.path}`);assert.equal(o.method,'GET');assert.equal(o.redirect,'error');assert.equal(o.cache,'no-store');assert.equal(o.body,undefined);
       assert.deepEqual(o.headers,{authorization:'Bearer PRIVATE_FCOS_SESSION','x-vercel-protection-bypass':'PRIVATE_BYPASS'});assert.ok(o.signal instanceof AbortSignal);return response();}};
   return {binding,production,calls,options};
@@ -27,7 +28,8 @@ function fixture() {
 
 test('actual adapter verifies immutable source before callbacks and performs one existing app read; only aggregate evidence is saved',async()=>{
   const f=fixture(),result=await observeLegacySalesforceApp(f.options);
-  assert.equal(result.status,'observed',JSON.stringify(result.failures));assert.deepEqual(f.calls,['protection','login','fetch']);assert.equal(result.source.verified,true);assert.equal(result.source.files.length,4);
+  assert.equal(result.status,'observed',JSON.stringify(result.failures));assert.deepEqual(f.calls,['protection','login','recheck','fetch']);assert.equal(result.source.verified,true);assert.equal(result.source.files.length,4);
+  assert.equal(result.binding.productionRecheckedAt,new Date(at).toISOString());
   assert.equal(result.result.objectCount,2);assert.equal(result.result.customObjectCount,1);assert.equal(result.result.responseSha256,firstRuntimeDigest(Buffer.from(JSON.stringify({objects}))));
   assert.equal(result.appOwnedAuth.state,'authenticated');assert.equal(result.appOwnedAuth.selectedMode,'unknown');assert.equal(result.appOwnedAuth.orgId,null);assert.equal(result.appOwnedAuth.isSandbox,null);
   assert.equal(result.baselineAccepted,false);assert.equal(result.qualificationAccepted,false);assert.equal(result.behavior.existingJwtOrRefreshMayOccur,true);assert.equal(result.behavior.ordinaryErrorLoggingMayOccur,true);
@@ -51,6 +53,27 @@ test('Git override is rejected before private callbacks; a slow login cannot use
   if(previous===undefined)delete process.env.GIT_CONFIG_COUNT;else process.env.GIT_CONFIG_COUNT=previous;
   const slow=fixture();let clock=at;const r=await observeLegacySalesforceApp({...slow.options,now:()=>clock,tokenProvider:async()=>{slow.calls.push('login');clock=at+1800001;return 'PRIVATE_SESSION';}});
   assert.equal(r.status,'unknown');assert.deepEqual(slow.calls,['protection','login']);assert.equal(r.httpStatus,null);
+});
+
+test('required fresh native recheck blocks login-time Production move, cached proof, changed receipt or callback failure before schema GET',async()=>{
+  const missing=fixture(),absent=await observeLegacySalesforceApp({...missing.options,recheckProduction:undefined});
+  assert.equal(absent.failures[0].code,'LEGACY_SALESFORCE_APP_TARGET_CHANGED');assert.deepEqual(missing.calls,[]);
+  for(const change of ['moved','source','cached','same_object','version','future','failure']){
+    const f=fixture();let loggedIn=false;
+    const r=await observeLegacySalesforceApp({...f.options,tokenProvider:async()=>{f.calls.push('login');loggedIn=true;return 'PRIVATE_SESSION';},
+      recheckProduction:async()=>{f.calls.push('recheck');assert.equal(loggedIn,true);
+        if(change==='failure')throw Error('PRIVATE_PROVIDER_RECHECK_ERROR');
+        if(change==='cached')return structuredClone(f.production);
+        if(change==='same_object'){f.production.capturedAt=new Date(at).toISOString();return f.production;}
+        const fresh={...structuredClone(f.production),capturedAt:new Date(at).toISOString()};
+        if(change==='moved')fresh.deployment.id='dpl_ProductionMovedDuringLogin';
+        if(change==='source')fresh.deployment.sourceSha256='b'.repeat(64);
+        if(change==='version'){fresh.publicVersion.sha256='b'.repeat(64);fresh.originalBinding.publicVersionSha256=fresh.publicVersion.sha256;}
+        if(change==='future')fresh.capturedAt=new Date(at+1).toISOString();return fresh;
+      }});
+    assert.equal(r.status,'unknown');assert.equal(r.failures[0].code,'LEGACY_SALESFORCE_APP_TARGET_CHANGED');assert.equal(r.httpStatus,null);assert.equal(r.result,undefined);
+    assert.deepEqual(f.calls,['protection','login','recheck']);assert.doesNotMatch(JSON.stringify(r),/PRIVATE_/);
+  }
 });
 
 test('401/403/500, network exceptions and redirects are unknown with one outer GET and no raw error/hash leakage',async()=>{

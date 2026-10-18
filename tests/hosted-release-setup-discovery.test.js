@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -112,10 +113,19 @@ function schemaClient({unsafe=false,fail=false}={}) {
 }
 const login=async()=>({token:'PRIVATE_RUNTIME_BEARER',auth:{user:{id:'00000000-0000-4000-8000-000000000001',email:'runtime@example.invalid',active:true,read_only_ci:false,user_type:'administrator'},moduleAccess:{}}});
 
+function legacyRuntimeAuthFixture() {
+ const publicAnonKey=['eyJhbGciOiJIUzI1NiJ9',Buffer.from(JSON.stringify({iss:'supabase',ref:releaseTargets().supabaseProject,role:'anon',exp:Math.floor(now/1000)+3600})).toString('base64url'),'FIXTURE_SIGNATURE'].join('.');
+ return {kind:'fcos_legacy_runtime_own_profile_auth_v1',supabaseOrigin:`https://${releaseTargets().supabaseProject}.supabase.co`,publicAnonKey,publicAnonKeySha256:createHash('sha256').update(publicAnonKey).digest('hex'),issuerAuthorizationPath:'/api/oidc/authorize',
+  identity:{profileId:'00000000-0000-4000-8000-000000000123',email:'runtime@example.invalid',role:'administrator',accessRevision:2,fcunoSubjectSha256:H},
+  preflight:{kind:'fcos_legacy_runtime_own_profile_preflight_v1',accepted:true,reviewerId:'/root',capturedAt:new Date(now).toISOString(),sourceSha:FIRST_RUNTIME.previousSha,sourceSha256:FIRST_RUNTIME.sourceSha256,
+   origin:FIRST_RUNTIME.previousUrl,deploymentId:FIRST_RUNTIME.previousDeploymentId,profileRlsOwnSelect:true,authenticatedSelectOnly:true,effectiveAccessSourceVerified:true,effectiveAdmin:true,
+   profileExisting:true,linkExisting:true,linkBoundToProfile:true,linkSourceActive:true,linkUseFcos:true,linkRevokedBefore:null,issuer:'https://fcuno.com',
+   effectiveAccessSourceSha256:'f5e2678098eb9745e6915c9f23989cb7d46aa9de484132390dcbdab50cbbf4d9',evidenceSha256:H}};
+}
 const legacySalesforceBinding=()=>({kind:'fcos_legacy_salesforce_app_read_v1',deploymentId:FIRST_RUNTIME.previousDeploymentId,
  sha:FIRST_RUNTIME.previousSha,sourceSha256:FIRST_RUNTIME.sourceSha256,origin:FIRST_RUNTIME.previousUrl,path:'/api/functions/salesforceSchema'});
 test('legacy Salesforce app observation requires a separate exact opt-in and never substitutes baseline authority',t=>{
- const f=fixture(t);providerFixture(f,{legacy:true,firstRuntime:true});f.setup.legacySalesforceAppObservation=legacySalesforceBinding();
+ const f=fixture(t);providerFixture(f,{legacy:true,firstRuntime:true});f.setup.legacySalesforceAppObservation=legacySalesforceBinding();f.setup.legacyRuntimeAuth=legacyRuntimeAuthFixture();
  assert.equal(validateDiscoverySetup(f.setup,{controllerSha:f.C,candidateSha:FROZEN_COMPATIBILITY_SHA,now}),f.setup);
  for(const change of [v=>v.path='/api/functions/systemHealth',v=>v.origin='https://foreign.vercel.app',v=>v.sha='e'.repeat(40),v=>v.sourceSha256=H,v=>v.extra=true]){
   const setup=clone(f.setup);change(setup.legacySalesforceAppObservation);
@@ -124,8 +134,17 @@ test('legacy Salesforce app observation requires a separate exact opt-in and nev
  const setup=clone(f.setup);setup.firstRuntimeBaseline=firstRuntimeFixture({now}).reference;
  assert.throws(()=>validateDiscoverySetup(setup,{controllerSha:f.C,candidateSha:FROZEN_COMPATIBILITY_SHA,now}),{code:'DISCOVERY_LEGACY_SALESFORCE_BINDING_INVALID'});
 });
+test('legacy runtime authentication is inseparable from its opt-in and actual identity preflight',t=>{
+ const f=fixture(t);providerFixture(f,{legacy:true,firstRuntime:true});f.setup.legacySalesforceAppObservation=legacySalesforceBinding();f.setup.legacyRuntimeAuth=legacyRuntimeAuthFixture();
+ for(const change of [s=>delete s.legacyRuntimeAuth,s=>s.legacyRuntimeAuth.identity.email='other@example.invalid',s=>s.legacyRuntimeAuth.preflight.effectiveAdmin=false,s=>s.legacyRuntimeAuth.preflight.authenticatedSelectOnly=false,
+  s=>s.legacyRuntimeAuth.supabaseOrigin='https://foreign.supabase.co',s=>s.legacyRuntimeAuth.preflight.capturedAt=new Date(now-1800001).toISOString()]){
+  const setup=clone(f.setup);change(setup);assert.throws(()=>validateDiscoverySetup(setup,{controllerSha:f.C,candidateSha:FROZEN_COMPATIBILITY_SHA,now}),{code:'DISCOVERY_LEGACY_RUNTIME_AUTH_INVALID'});
+ }
+ const setup=clone(f.setup);delete setup.legacySalesforceAppObservation;
+ assert.throws(()=>validateDiscoverySetup(setup,{controllerSha:f.C,candidateSha:FROZEN_COMPATIBILITY_SHA,now}),{code:'DISCOVERY_LEGACY_RUNTIME_AUTH_INVALID'});
+});
 test('actual discovery entrypoint invokes opted-in app observer and keeps first-runtime baseline incomplete',async t=>{
- const f=fixture(t),p=providerFixture(f,{legacy:true,firstRuntime:true}),db=schemaClient();f.setup.legacySalesforceAppObservation=legacySalesforceBinding();repin(f);let observations=0;
+ const f=fixture(t),p=providerFixture(f,{legacy:true,firstRuntime:true}),db=schemaClient();f.setup.legacySalesforceAppObservation=legacySalesforceBinding();f.setup.legacyRuntimeAuth=legacyRuntimeAuthFixture();repin(f);let observations=0;
  const proof={kind:'fcos_legacy_salesforce_app_read_observation_v1',baselineAccepted:false,appOwnedAuth:{state:'authenticated',selectedMode:'unknown',orgId:null,isSandbox:null}};
  const result=await discoverHostedSetup({...f.options,createCollector:options=>createSetupDiscoveryCollector({...options,fetchImpl:p.fetchImpl,Client:db.Client,login,protection:async()=>({}),
   verifyLegacySource:()=>({sourceAbsent:true}),observeLegacySalesforce:async args=>{observations++;assert.deepEqual(args.binding,f.setup.legacySalesforceAppObservation);assert.equal(args.production.deployment.id,FIRST_RUNTIME.previousDeploymentId);assert.equal(args.bypass,'PRIVATE_BYPASS');assert.equal(typeof args.tokenProvider,'function');return proof;}})});
@@ -135,7 +154,7 @@ test('actual discovery entrypoint invokes opted-in app observer and keeps first-
 });
 test('opted-in legacy app observation cannot bypass runtime identity or protection admission',async t=>{
  for(const missing of ['identity','protection']){
-  const f=fixture(t),p=providerFixture(f,{legacy:true,firstRuntime:true}),db=schemaClient();f.setup.legacySalesforceAppObservation=legacySalesforceBinding();repin(f);
+  const f=fixture(t),p=providerFixture(f,{legacy:true,firstRuntime:true}),db=schemaClient();f.setup.legacySalesforceAppObservation=legacySalesforceBinding();f.setup.legacyRuntimeAuth=legacyRuntimeAuthFixture();repin(f);
   if(missing==='identity')f.env.FCOS_HOSTED_RUNTIME_EMAIL='different@example.invalid';else delete f.env.FCOS_PRODUCTION_VERIFICATION_BYPASS;
   if(missing==='protection'){
    const collector=createSetupDiscoveryCollector({setup:f.setup,env:f.env,now:()=>now,fetchImpl:p.fetchImpl,verifyLegacySource:()=>({sourceAbsent:true}),

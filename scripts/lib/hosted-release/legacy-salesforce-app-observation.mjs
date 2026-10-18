@@ -62,7 +62,7 @@ async function metadata(response) {
  * deployed application's usual auth; it never signs, refreshes or exports any
  * Salesforce credential itself. Ordinary app JWT/refresh/retry/error logging
  * may occur behind this existing read endpoint and are explicitly disclosed. */
-export async function observeLegacySalesforceApp({binding,production,controllerDirectory,tokenProvider,protection,bypass,fetchImpl=fetch,now=Date.now}={}) {
+export async function observeLegacySalesforceApp({binding,production,controllerDirectory,tokenProvider,protection,recheckProduction,bypass,fetchImpl=fetch,now=Date.now}={}) {
   const sf=fcosSalesforceEnvironment('production');
   const report={schemaVersion:1,kind:'fcos_legacy_salesforce_app_read_observation_v1',status:'unknown',baselineAccepted:false,qualificationAccepted:false,
     readOnly:true,appOwnedAuth:{state:'unknown',selectedMode:'unknown',orgId:null,isSandbox:null,providerTargetExpected:{instanceUrl:sf.instanceUrl,orgId:sf.orgId,isSandbox:false}},
@@ -72,15 +72,24 @@ export async function observeLegacySalesforceApp({binding,production,controllerD
   try{
     const started=now(),deployment=verifiedProduction(binding,production,started);
     need(typeof protection==='function'&&typeof tokenProvider==='function'&&typeof fetchImpl==='function'&&typeof bypass==='string'&&bypass.length>0&&bypass.length<=8192);
+    failure='LEGACY_SALESFORCE_APP_TARGET_CHANGED';need(typeof recheckProduction==='function');
     failure='LEGACY_SALESFORCE_APP_SOURCE_INVALID';const source=verifySource(controllerDirectory);
     report.binding={...binding,publicVersionSha256:production.publicVersion.sha256,productionObservedAt:production.capturedAt};report.source=source;
     failure='LEGACY_SALESFORCE_APP_LOGIN_UNKNOWN';
     const protectionState=await protection({origin:binding.origin,sha:binding.sha,bypass});
     const token=await tokenProvider({origin:binding.origin,deployment,protectionState});
     need(typeof token==='string'&&token.length>0&&token.length<=16384);
-    // Recheck the unchanged verified binding after asynchronous login. A slow
-    // login may expire its native observation; no stale target gets a GET.
+    // Retain the original admitted tuple/horizon, then actually re-observe the
+    // native Production alias and receipt after asynchronous login. Reusing a
+    // previously cached object/timestamp cannot satisfy this boundary.
+    failure='LEGACY_SALESFORCE_APP_TARGET_CHANGED';
     verifiedProduction(binding,production,now());
+    const recheckStarted=now(),current=await recheckProduction(),recheckFinished=now();
+    verifiedProduction(binding,current,recheckFinished);
+    need(current!==production&&Date.parse(current.capturedAt)>Date.parse(report.binding.productionObservedAt)
+      &&Date.parse(current.capturedAt)>=recheckStarted&&Date.parse(current.capturedAt)<=recheckFinished
+      &&current.publicVersion.sha256===report.binding.publicVersionSha256);
+    report.binding.productionRecheckedAt=current.capturedAt;
     failure='LEGACY_SALESFORCE_APP_READ_UNKNOWN';const url=`${binding.origin}${path}`;
     response=await fetchImpl(url,{method:'GET',headers:{authorization:`Bearer ${token}`,'x-vercel-protection-bypass':bypass},redirect:'error',cache:'no-store',signal:AbortSignal.timeout(15000)});
     if(Number.isSafeInteger(response?.status)&&response.status>=100&&response.status<=599)report.httpStatus=response.status;

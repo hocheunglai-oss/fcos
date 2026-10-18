@@ -4,6 +4,7 @@ import { collectSourceAdmission } from './admission.mjs';
 import { validateVercelReadAcceptance } from './vercel-read-auth.mjs';
 import { CONTRACT_VERSION, CONTROLLER_WORKFLOW, digest, fail, REQUIRED_LIVE_CHECKS, releaseTargets, validateManifest, WRITE_PHASES, FROZEN_COMPATIBILITY_SHA } from './contract.mjs';
 import { assertFirstRuntimeSetup, admittedFirstRuntimeBaseline, FIRST_RUNTIME } from './first-runtime.mjs';
+import { validateLegacyRuntimePublicAuth } from './legacy-hosted-runtime-login.mjs';
 
 /** Source hashes and check sets are computed by the admitted controller. The
  * release plan supplies business scope, never a replacement check definition. */
@@ -60,7 +61,7 @@ export function validateDiscoverySetup(setup, { controllerSha, candidateSha, now
   const isHash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
   const keys=['schemaVersion','kind','controllerSha','candidateSha','sourceProfile','targets','qualificationSource',
     'environment','issuedAt','notAfter','runtimeIdentity','vercelReadCredential','vercelReadCredentialAcceptance','legacyProductionBinding'];
-  if (!exact(setup, [...keys,...['firstRuntimeBaseline','legacySalesforceAppObservation'].filter(k=>Object.hasOwn(setup||{},k))])
+  if (!exact(setup, [...keys,...['firstRuntimeBaseline','legacySalesforceAppObservation','legacyRuntimeAuth'].filter(k=>Object.hasOwn(setup||{},k))])
     || setup.schemaVersion !== 1 || setup.kind !== 'fcos_hosted_setup_discovery'
     || setup.controllerSha !== controllerSha || setup.candidateSha !== candidateSha
     || setup.candidateSha !== FROZEN_COMPATIBILITY_SHA || setup.sourceProfile !== 'frozen_04ee'
@@ -91,6 +92,14 @@ export function validateDiscoverySetup(setup, { controllerSha, candidateSha, now
       ||binding.origin!==FIRST_RUNTIME.previousUrl||binding.path!=='/api/functions/salesforceSchema'
       ||!legacy||legacy.deploymentId!==binding.deploymentId||legacy.commit!==binding.sha||legacy.immutableUrl!==binding.origin
       ||legacy.sourceDigest!==binding.sourceSha256||setup.firstRuntimeBaseline)fail('DISCOVERY_LEGACY_SALESFORCE_BINDING_INVALID');
+  }
+  if(Boolean(setup.legacySalesforceAppObservation)!==Boolean(setup.legacyRuntimeAuth))fail('DISCOVERY_LEGACY_RUNTIME_AUTH_INVALID');
+  if(setup.legacyRuntimeAuth){
+    try {
+      validateLegacyRuntimePublicAuth({publicAuth:setup.legacyRuntimeAuth,email:setup.legacyRuntimeAuth.identity?.email,
+        expectedRole:setup.runtimeIdentity.role,origin:FIRST_RUNTIME.previousUrl,now});
+      if(digest(setup.legacyRuntimeAuth.identity.email)!==setup.runtimeIdentity.emailSha256)fail('DISCOVERY_LEGACY_RUNTIME_AUTH_INVALID');
+    } catch {fail('DISCOVERY_LEGACY_RUNTIME_AUTH_INVALID');}
   }
   return setup;
 }

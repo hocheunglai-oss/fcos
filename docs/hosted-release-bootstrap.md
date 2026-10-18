@@ -55,7 +55,13 @@ Setup discovery can separately opt into `legacySalesforceAppObservation`, an exa
 binding to the frozen previous deployment/source and its immutable origin's
 `GET /api/functions/salesforceSchema`. The trusted controller verifies that
 deployed source's handler, read policy and Salesforce request path before using
-the existing hosted runtime login and verification bypass. It never runs the
+the existing verification bypass and the dedicated legacy runtime login.
+The opt-in also requires `legacyRuntimeAuth`, binding the approved existing
+identity, public Supabase key, root-observed own-profile RLS/SELECT grants and
+existing active FCUNO link. This login blocks every FCOS API, WebSocket and
+unrelated request before navigation, verifies the fresh own-user and own-profile
+through actual read-only Supabase endpoints, and retains its bearer only in
+trusted memory. It does not call legacy `authContext` or fabricate module access. It never runs the
 candidate with credentials. This route exercises the application's own normal
 authentication (which may issue or refresh its ordinary Salesforce session),
 rather than treating a failing static bearer probe as failure of its active

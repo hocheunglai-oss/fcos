@@ -12,6 +12,7 @@ import { digest, fail } from './contract.mjs';
 import { admittedFirstRuntimeBaseline, assertFirstRuntimeSetup, FIRST_RUNTIME, firstRuntimePrevious, firstRuntimeLegacyBinding, firstRuntimeSourceAbsence, isFirstRuntimePair } from './first-runtime.mjs';
 import { PREVIEW_PARITY_POLICY } from '../preview-parity.mjs';
 import { observeLegacySalesforceApp } from './legacy-salesforce-app-observation.mjs';
+import { loginLegacyHostedRuntime } from './legacy-hosted-runtime-login.mjs';
 
 /** Read-only pre-manifest transport. It has no complete-manifest seed, writer
  * credential, deploy method, candidate execution or application secret input. */
@@ -119,7 +120,9 @@ export function createSetupDiscoveryCollector({ setup, env = process.env, fetchI
   Client, login, protection = collectRuntimeProtectionState,controllerDirectory=env.FCOS_CONTROLLER_DIRECTORY,
   verifyLegacySource=firstRuntimeSourceAbsence,observeLegacySalesforce=observeLegacySalesforceApp } = {}) {
   const provider = createVercelProductionObserver({ setup, env, fetchImpl, now });
-  const tokenProvider = createHostedRuntimeTokenProvider({ env, login, verifyTarget: async ({ origin, deployment }) => {
+  const discoveryLogin=login||(setup.legacySalesforceAppObservation
+    ? options=>loginLegacyHostedRuntime({...options,publicAuth:setup.legacyRuntimeAuth,fetchImpl,now}) : undefined);
+  const tokenProvider = createHostedRuntimeTokenProvider({ env, login:discoveryLogin, verifyTarget: async ({ origin, deployment }) => {
     const actual = await provider.inspect(deployment.id);
     if (actual.url !== origin || actual.sha !== deployment.sha || actual.state !== 'READY') fail('DISCOVERY_RUNTIME_TARGET');
     return { verified: true, origin, deploymentId: actual.id, sha: actual.sha, sourceSha256: deployment.sourceSha256 };
@@ -151,7 +154,7 @@ export function createSetupDiscoveryCollector({ setup, env = process.env, fetchI
           if(!email||digest(email)!==setup.runtimeIdentity.emailSha256||env.FCOS_HOSTED_RUNTIME_EXPECTED_ROLE!==setup.runtimeIdentity.role)fail('DISCOVERY_RUNTIME_IDENTITY');
           if(!env.FCOS_PRODUCTION_VERIFICATION_BYPASS)fail('DISCOVERY_RUNTIME_PROTECTION');
           legacySalesforceAppObservation=await observeLegacySalesforce({binding:setup.legacySalesforceAppObservation,production,controllerDirectory,
-            tokenProvider,protection,bypass:env.FCOS_PRODUCTION_VERIFICATION_BYPASS,fetchImpl,now});
+            tokenProvider,protection,recheckProduction:provider.observe,bypass:env.FCOS_PRODUCTION_VERIFICATION_BYPASS,fetchImpl,now});
           const after=await provider.observe();
           if(after.deployment.id!==production.deployment.id||after.deployment.sha!==production.deployment.sha
             ||after.deployment.sourceSha256!==production.deployment.sourceSha256||after.publicVersion.sha256!==production.publicVersion.sha256)fail('DISCOVERY_PRODUCTION_MOVED');
