@@ -3,6 +3,7 @@ import { fcosSalesforceEnvironment, fcosConnectionIdentifier } from '../../../co
 
 export const SALESFORCE_READ_ENVIRONMENT = 'fcos-hosted-dependency-verification';
 const SALESFORCE_IDENTITY_ORIGIN = 'https://login.salesforce.com';
+const SALESFORCE_SANDBOX_IDENTITY_ORIGIN = 'https://test.salesforce.com';
 const digest = value => createHash('sha256').update(value).digest('hex');
 const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const canonical = value => Array.isArray(value) ? `[${value.map(canonical).join(',')}]` : value && typeof value === 'object'
@@ -296,7 +297,7 @@ export function createSalesforceRecipeReader({ manifest, recipe, recipeBytes, re
         && response.instance_url === binding.instanceUrl && !Object.hasOwn(response, 'refresh_token') && typeof response.scope === 'string'
         && canonical(response.scope.split(' ').filter(Boolean).sort()) === canonical([...binding.scopes].sort()), 'SALESFORCE_READ_EXCHANGE_BINDING');
       const id = new URL(response.id);
-      need([binding.instanceUrl, SALESFORCE_IDENTITY_ORIGIN].includes(id.origin) && !id.search && !id.hash && !id.username && !id.password
+      need(([binding.instanceUrl, SALESFORCE_IDENTITY_ORIGIN].includes(id.origin) || binding.isSandbox === true && id.origin === SALESFORCE_SANDBOX_IDENTITY_ORIGIN) && !id.search && !id.hash && !id.username && !id.password
         && [binding.orgId, binding.orgId.slice(0,15)].some(org => [binding.userId,binding.userId.slice(0,15)].some(user => id.pathname === `/id/${org}/${user}`)), 'SALESFORCE_READ_EXCHANGE_BINDING');
       need(typeof response.issued_at === 'string' && /^[1-9][0-9]{12}$/.test(response.issued_at)
         && Number(response.issued_at) >= exchangedAt - 30000 && Number(response.issued_at) <= now() + 30000

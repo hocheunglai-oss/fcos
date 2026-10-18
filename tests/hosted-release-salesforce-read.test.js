@@ -266,12 +266,14 @@ test('only canonical My Domain token endpoint is admitted; documented identity o
   for(const origin of ['https://test.salesforce.com','https://login.salesforce.com','http://fratellicosulich--devee.sandbox.my.salesforce.com','https://attacker.invalid']){
     const f=fixture();f.binding.instanceUrl=origin;assert.throws(()=>createSalesforceRecipeReader(f));assert.equal(f.calls.length,0);
   }
-  for(const origin of ['https://login.salesforce.com',fixture().binding.instanceUrl]){
+  for(const origin of ['https://login.salesforce.com','https://test.salesforce.com',fixture().binding.instanceUrl]){
     const f=fixture();f.exchange.id=`${origin}/id/${f.binding.orgId.slice(0,15)}/${f.binding.userId.slice(0,15)}`;
     await createSalesforceRecipeReader(f).readRecipe(0);assert.ok(f.calls.every(c=>new URL(c.url).origin===f.binding.instanceUrl));
   }
   for(const suffix of ['?x=1','#part']){const f=fixture();f.exchange.id+=suffix;await assert.rejects(createSalesforceRecipeReader(f).admit());assert.equal(f.calls.length,1);}
-  const f=fixture();f.exchange.id=`https://test.salesforce.com/id/${f.binding.orgId}/${f.binding.userId}`;await assert.rejects(createSalesforceRecipeReader(f).admit());assert.equal(f.calls.length,1);
+  for (const origin of ['https://test.salesforce.com.attacker.invalid','https://test.salesforce.com:8443']) {
+    const f=fixture();f.exchange.id=`${origin}/id/${f.binding.orgId}/${f.binding.userId}`;await assert.rejects(createSalesforceRecipeReader(f).admit());assert.equal(f.calls.length,1);
+  }
 });
 test('wrong secret, stale issuance and forged or absent HMAC fail closed before identity GET and never retry',async()=>{
   const mutations=[f=>f.env.FCOS_HOSTED_SALESFORCE_CLIENT_SECRET='different-secret-for-fixture-only',
