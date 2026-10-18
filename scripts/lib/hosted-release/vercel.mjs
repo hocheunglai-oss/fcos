@@ -6,10 +6,11 @@ import { collectBuildProvenance } from '../build-provenance.mjs';
 import { collectRuntimeObservation } from '../../collect-preview-parity.mjs';
 import { assertProductionRuntimeReadback } from '../release-production.mjs';
 import { canonicalFcosE2eCandidateUrl } from '../../verify-e2e-candidate.mjs';
-import { canonical, digest, fail, validateManifest } from './contract.mjs';
+import { canonical, digest, fail, validateManifest,ReleaseError } from './contract.mjs';
 import { createVercelReadTransport, createVercelIntegrationReader } from './vercel-read-auth.mjs';
 import { assertHostedSetup, assertHostedSourceContext } from './admission.mjs';
 import { assertVercelPreviewWriterSecret } from './vercel-writer-auth.mjs';
+import { validateFirstRuntimeOwnerRefresh } from './first-runtime.mjs';
 
 export function assertProjectConfiguration(actual, expected) {
   const keys = ['framework','buildCommand','devCommand','installCommand','outputDirectory','rootDirectory','nodeVersion'];
@@ -37,8 +38,21 @@ export function createVercelAdapter({ manifest, candidateDirectory, env = proces
   if (!readOnly && (!env.FCOS_HOSTED_VERCEL_TOKEN || !env.FCOS_HOSTED_VERCEL_TOKEN_ID)) fail('HOSTED_VERCEL_CREDENTIAL_MISSING');
   const cliEnv = { PATH: env.PATH, HOME: env.HOME, CI: '1', NO_COLOR: '1', VERCEL_TOKEN: env.FCOS_HOSTED_VERCEL_TOKEN,
     VERCEL_ORG_ID: target.vercelTeam, VERCEL_PROJECT_ID: target.vercelProject };
+  function assertCurrentFirstRuntimeOwnerRefresh(release) {
+    if(!release.previousProduction.firstRuntime)return;
+    const setup=assertHostedSetup({manifest:release,env});assertHostedSourceContext({manifest:release,env});
+    let reference;try{reference=env.FCOS_ADMITTED_FIRST_RUNTIME_OWNER_REFRESH?JSON.parse(env.FCOS_ADMITTED_FIRST_RUNTIME_OWNER_REFRESH):null;}
+    catch{fail('FIRST_RUNTIME_OWNER_REFRESH_INVALID','first_runtime.owner_refresh');}
+    try{validateFirstRuntimeOwnerRefresh(reference,{baselineReference:setup.firstRuntimeBaseline,expectedSha256:env.FCOS_ADMITTED_FIRST_RUNTIME_OWNER_REFRESH_SHA256,now:now()});}
+    catch(error){throw new ReleaseError(error.code||'FIRST_RUNTIME_OWNER_REFRESH_INVALID','first_runtime.owner_refresh',
+      'The original credential owner must refresh expired read-only legacy observations and install their accepted public digest. Keep this manifest and its valid checks. An already-recorded intent remains consumed and GET-only; a fresh observation alone cannot retry it. Never renew historical timestamps or replay a consumed write.',
+      {providerSubmissionStarted:false});}
+  }
   const run = args => {
     if(readOnly)fail('VERCEL_READ_WRITE_FORBIDDEN','vercel.read');
+    // No await or provider read may separate this pure boundary check from the
+    // actual CLI invocation. Keep its precise pre-launch error outside catch.
+    if(args[0]==='promote'||args[0]==='deploy'&&args.includes('--prod'))assertCurrentFirstRuntimeOwnerRefresh(manifest);
     try { return execute('vercel', [...args, '--scope', fcosConnectionIdentifier('vercel', 'Team'), '--cwd', cwd, '--no-color'], {
       cwd, env: cliEnv, encoding: 'utf8', timeout: 180000, maxBuffer: 2 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'],
     }).trim(); } catch { fail('VERCEL_COMMAND_UNRESOLVED', 'vercel.write', 'Read back this operation; command errors do not prove that submission did not occur.'); }
@@ -103,6 +117,7 @@ export function createVercelAdapter({ manifest, candidateDirectory, env = proces
     if(readOnly)return reader.admit();
     const production = phase.startsWith('production');
     if (production && env.FCOS_HOSTED_CREDENTIAL_CLASS !== 'production' || !production && env.FCOS_HOSTED_CREDENTIAL_CLASS !== 'preview') fail('CREDENTIAL_CLASS_MISMATCH', phase);
+    if(production)assertCurrentFirstRuntimeOwnerRefresh(release);
     const previewBinding = release.verification?.vercelPreviewWriterCredential;
     if (!production && release.stage === 'qualification' && !previewBinding) fail('VERCEL_PREVIEW_WRITER_SETUP_REQUIRED', phase);
     if (previewBinding && production && digest(env.FCOS_HOSTED_VERCEL_TOKEN) === previewBinding.bearerSha256) fail('VERCEL_PREVIEW_WRITER_FOR_PRODUCTION', phase);
@@ -184,6 +199,7 @@ export function createVercelAdapter({ manifest, candidateDirectory, env = proces
     promote: async value => { run(['promote', value.id, '--yes']); },
     rollback: async previous => { run(['rollback', previous.deploymentId, '--yes']); },
     rollbackCompatibility: async (previous, release) => {
+      if(previous.firstRuntime?.rollbackEligible===false)return {compatible:false,deploymentId:previous.deploymentId,reason:'legacy_runtime_compatibility_unobserved'};
       if (typeof schemaObservation !== 'function') fail('ROLLBACK_SCHEMA_OBSERVATION_REQUIRED', 'production.rollback');
       const schema = await schemaObservation(), prior = await deployment(previous.deploymentId);
       const token = runtimeTokenProvider ? await runtimeTokenProvider({ origin: prior.url, deployment: { ...prior, sourceSha256: previous.sourceSha256 } }) : env.FCOS_RELEASE_RUNTIME_TOKEN;

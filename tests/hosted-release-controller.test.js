@@ -1,8 +1,10 @@
 import test from 'node:test';
 import { admitVercelReadFixture } from './helpers/hosted-vercel-read.mjs';
 import assert from 'node:assert/strict';
-import { canonical, digest, NORMAL_MODULES, validateManifest } from '../scripts/lib/hosted-release/contract.mjs';
-import { consequential, executeHostedProduction, preparePreview } from '../scripts/lib/hosted-release/controller.mjs';
+import { canonical, digest, NORMAL_MODULES, validateManifest,fail } from '../scripts/lib/hosted-release/contract.mjs';
+import { consequential, executeHostedProduction, preparePreview,safeFailure } from '../scripts/lib/hosted-release/controller.mjs';
+import { firstRuntimeFixture,firstRuntimeOwnerRefreshFixture } from './helpers/hosted-first-runtime.mjs';
+import { firstRuntimePrevious,validateFirstRuntimeOwnerRefresh } from '../scripts/lib/hosted-release/first-runtime.mjs';
 
 const H = 'a'.repeat(64), S = 'b'.repeat(40), clock = Date.parse('2026-10-17T03:00:00Z');
 import { fixtureManifest } from './helpers/hosted-release-manifest.mjs';
@@ -121,4 +123,22 @@ test('long staged build rechecks volatile acceptance before promotion and resume
   for(const proof of Object.values(f.state.checks)) if(proof.kind==='volatile')proof.capturedAt=new Date(current).toISOString();
   assert.equal((await executeHostedProduction(f)).status,'complete');
   assert.equal(f.events.filter(x=>x==='stage').length,1);assert.equal(f.events.filter(x=>x==='promote').length,1);
+});
+
+test('first cutover preserves its manifest and completed stage while awaiting only expired original-owner observations',async()=>{
+  const f=fixture(),first=firstRuntimeFixture({now:clock});let current=clock,reference;
+  f.manifest.candidate.sourceProfile='frozen_04ee';f.manifest.previousProduction=firstRuntimePrevious(first.reference,{now:clock});
+  const runtime={flags:first.runtime.flags,safety:first.runtime.safety,auth:first.runtime.auth};f.manifest.runtime.expectedProduction=runtime;f.manifest.runtime.expectedSha256=digest(runtime);
+  f.setLive({id:f.manifest.previousProduction.deploymentId,sha:f.manifest.previousProduction.sha});f.now=()=>current;
+  for(const proof of Object.values(f.state.checks))proof.manifestHash=digest(f.manifest);
+  const manifestHash=digest(f.manifest),originalBaseline=first.reference.json;
+  f.provider.admit=async()=>{try{validateFirstRuntimeOwnerRefresh(reference,{baselineReference:first.reference,expectedSha256:reference?.sha256,now:current});}
+    catch(e){fail(e.code,'first_runtime.owner_refresh');}};
+  let error;try{await executeHostedProduction(f);}catch(e){error=e;}assert.equal(safeFailure(error).status,'waiting_dependency');assert.equal(f.events.length,0);
+  reference=firstRuntimeOwnerRefreshFixture(first).reference;f.provider.ready=async d=>{current=clock+1800001;return d;};
+  try{await executeHostedProduction(f);}catch(e){error=e;}assert.equal(error.code,'FIRST_RUNTIME_OWNER_REFRESH_REQUIRED');assert.equal(f.events.filter(e=>e==='stage').length,1);assert.ok(!f.events.includes('promote'));
+  reference=firstRuntimeOwnerRefreshFixture(first,{now:current}).reference;
+  f.provider.collectCheck=async id=>({...f.state.checks[id],capturedAt:new Date(current).toISOString()});
+  assert.equal((await executeHostedProduction(f)).status,'complete');assert.equal(f.events.filter(e=>e==='stage').length,1);assert.equal(f.events.filter(e=>e==='promote').length,1);
+  assert.equal(digest(f.manifest),manifestHash);assert.equal(first.reference.json,originalBaseline);
 });

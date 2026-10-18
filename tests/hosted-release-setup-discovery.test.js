@@ -14,6 +14,8 @@ import { digest, FROZEN_COMPATIBILITY_SHA, releaseTargets, validateManifest } fr
 import { PREVIEW_PARITY_POLICY } from '../scripts/lib/preview-parity.mjs';
 import { vercelReadFixture } from './helpers/hosted-vercel-read.mjs';
 import { githubClient } from '../scripts/lib/hosted-release/github.mjs';
+import { firstRuntimeFixture } from './helpers/hosted-first-runtime.mjs';
+import { FIRST_RUNTIME,firstRuntimeLegacyBinding,firstRuntimeSourceAbsence } from '../scripts/lib/hosted-release/first-runtime.mjs';
 
 const H = 'a'.repeat(64), B = 'b'.repeat(40), now = Date.now();
 const template = readFileSync(new URL('../.github/qualification/hosted-release-bootstrap.yml',import.meta.url),'utf8');
@@ -65,15 +67,17 @@ function fixture(t) {
   return {directory,C,setup,source,env,branch,protection,run,workflow,job,jobs,calls,github,read,options,waits,advance:milliseconds=>{current+=milliseconds;}};
 }
 function repin(f) { f.env.FCOS_ADMITTED_DISCOVERY_SETUP=JSON.stringify(f.setup);f.env.FCOS_ADMITTED_DISCOVERY_SETUP_SHA256=digest(f.setup); }
-function providerFixture(f,{legacy=false}={}) {
-  const target=f.setup.targets,id='dpl_discovery',sha='c'.repeat(40),url='https://fcos-abcdefghi-hocheunglai-6535s-projects.vercel.app';
-  const version={commit:sha,deploymentId:legacy?null:id,builtAt:new Date(now-86400000).toISOString(),provenance:{commit:sha,sourceAttested:!legacy,sourceDigest:H,sourceDigestAlgorithm:'sha256:fcos-vercel-source-v1'}};
+function providerFixture(f,{legacy=false,firstRuntime=false}={}) {
+  const first=firstRuntime?firstRuntimeFixture({now}):null;
+  const target=f.setup.targets,id=firstRuntime?FIRST_RUNTIME.previousDeploymentId:'dpl_discovery',sha=firstRuntime?FIRST_RUNTIME.previousSha:'c'.repeat(40),url=firstRuntime?FIRST_RUNTIME.previousUrl:'https://fcos-abcdefghi-hocheunglai-6535s-projects.vercel.app';
+  const version=first?.version||{commit:sha,deploymentId:legacy?null:id,builtAt:new Date(now-86400000).toISOString(),provenance:{commit:sha,sourceAttested:!legacy,sourceDigest:H,sourceDigestAlgorithm:'sha256:fcos-vercel-source-v1'}};
   const deployment={id,url:new URL(url).hostname,projectId:target.vercelProject,ownerId:target.vercelTeam,target:'production',readyState:'READY',createdAt:now-86400000,meta:{githubCommitSha:sha}};
   const alias={alias:new URL(target.productionOrigin).hostname,projectId:target.vercelProject,deploymentId:id,deployment:{id,url:deployment.url},redirect:null,deletedAt:null};
   const project={id:target.vercelProject,accountId:target.vercelTeam,name:'fcos',link:{type:'github',org:'hocheunglai-oss',repo:'fcos'},targets:{production:{id}}};
   if(legacy)f.setup.legacyProductionBinding={kind:'fcos_discovery_legacy_public_version',teamId:target.vercelTeam,projectId:target.vercelProject,
     productionOrigin:target.productionOrigin,deploymentId:id,immutableUrl:url,commit:sha,sourceDigest:H,sourceDigestAlgorithm:'sha256:fcos-vercel-source-v1',
     publicVersionSha256:digest(version),sourceAttested:false,providerEvidenceSha256:H,versionEvidenceSha256:H,capturedAt:new Date(now-60000).toISOString()};
+  if(firstRuntime)f.setup.legacyProductionBinding=firstRuntimeLegacyBinding(first.reference,{now});
   repin(f);
   const runtime={schemaVersion:1,deploymentId:id,sha,sourceDigest:H,capturedAt:new Date(now).toISOString(),
     flags:Object.fromEntries(PREVIEW_PARITY_POLICY.runtimeFlags.map(key=>[key,{state:'known',value:false}])),
@@ -89,10 +93,12 @@ function providerFixture(f,{legacy=false}={}) {
       if(u.pathname===`/v13/deployments/${id}`)return Response.json(deployment);
     }
     if(u.pathname==='/app-version.json') {assert.equal(options.headers?.authorization,undefined);assert.equal(options.headers?.['x-vercel-protection-bypass'],u.origin===url?'PRIVATE_BYPASS':undefined);return Response.json(version);}
-    if(u.href===`${url}/api/connection-runtime`) {assert.equal(options.method,'POST');assert.equal(options.body,JSON.stringify({action:'probe'}));return Response.json(runtime);}
+    if(u.href===`${url}/api/connection-runtime`) {
+      if(firstRuntime){assert.equal(options.method,'GET');assert.equal(options.headers['x-vercel-protection-bypass'],'PRIVATE_BYPASS');assert.equal(options.redirect,'error');return new Response(null,{status:404});}
+      assert.equal(options.method,'POST');assert.equal(options.body,JSON.stringify({action:'probe'}));return Response.json(runtime);}
     assert.fail(`unexpected provider read ${u.href}`);
   };
-  return {version,deployment,alias,project,runtime,fetchImpl,calls,url,id,sha};
+  return {version,deployment,alias,project,runtime,fetchImpl,calls,url,id,sha,first};
 }
 function schemaClient({unsafe=false,fail=false}={}) {
   const calls=[];
@@ -105,6 +111,29 @@ function schemaClient({unsafe=false,fail=false}={}) {
   return {Client,calls};
 }
 const login=async()=>({token:'PRIVATE_RUNTIME_BEARER',auth:{user:{id:'00000000-0000-4000-8000-000000000001',email:'runtime@example.invalid',active:true,read_only_ci:false,user_type:'administrator'},moduleAccess:{}}});
+
+test('actual discovery reports exact first-runtime baseline dependency without POSTing the absent endpoint',async t=>{
+  for(const baseline of [false,true,'unknown']){
+    const f=fixture(t),p=providerFixture(f,{legacy:true,firstRuntime:true}),db=schemaClient();
+    if(baseline){const value=clone(p.first.value);if(baseline==='unknown')value.runtime.auth.salesforce.state='unknown';f.setup.firstRuntimeBaseline=p.first.referenceFor(value);repin(f);}
+    const result=await discoverHostedSetup({...f.options,createCollector:options=>createSetupDiscoveryCollector({...options,fetchImpl:p.fetchImpl,Client:db.Client,
+      verifyLegacySource:()=>firstRuntimeSourceAbsence(new URL('..',import.meta.url).pathname),login:()=>assert.fail('legacy login forbidden'),protection:()=>assert.fail('legacy POST protection forbidden')})});
+    assert.equal(result.status,baseline===true?'observed':'baseline_required',JSON.stringify(result.failures));assert.deepEqual(result.failures,[]);
+    assert.equal(result.qualificationAccepted,false);assert.equal(result.admittedSetup,false);const runtime=result.observations.runtime.result;
+    assert.equal(runtime.endpointAbsent,true);assert.equal(runtime.automaticRollbackEligible,false);assert.ok(p.calls.every(c=>c.method!=='POST'));
+    if(!baseline){assert.equal(runtime.endpointObservation.httpStatus,404);assert.equal(result.observations.runtime.status,'endpoint_absent');assert.equal(runtime.flags.FCOS_ENABLE_FCUNO_FEDERATION.state,'unknown');}
+    else {assert.equal(runtime.authHistorical,true);assert.equal(runtime.freshOwnerObservationRequired,true);}
+    assert.doesNotMatch(readFileSync(f.env.FCOS_DISCOVERY_OUTPUT,'utf8'),/PRIVATE_/);
+  }
+});
+test('immutable Git source absence alone never becomes an observed deployed HTTP404',async t=>{
+  const f=fixture(t),p=providerFixture(f,{legacy:true,firstRuntime:true}),production={deployment:{id:p.id,sha:p.sha,url:p.url,sourceSha256:FIRST_RUNTIME.sourceSha256},publicVersion:{sha256:digest(p.version)}};
+  for(const response of [null,302,401,200]){
+    const env={...f.env};if(response===null)delete env.FCOS_PRODUCTION_VERIFICATION_BYPASS;let calls=0;
+    const collector=createSetupDiscoveryCollector({setup:f.setup,env,now:()=>now,verifyLegacySource:()=>({sourceAbsent:true}),fetchImpl:async()=>{calls++;return new Response(null,{status:response});},login:()=>assert.fail('no login')});
+    const runtime=await collector.runtime(production);assert.equal(runtime.sourceAbsent,true);assert.equal(runtime.endpointAbsent,null);assert.equal(runtime.endpointObservation.status,'not_observed');assert.equal(runtime.baselineRequired,true);assert.equal(calls,response===null?0:1);
+  }
+});
 
 test('seedless actual discovery entrypoint admits exact B/C/F and emits baseline only without a release or epoch',async t=>{
   const f=fixture(t),p=providerFixture(f,{legacy:true}),db=schemaClient();

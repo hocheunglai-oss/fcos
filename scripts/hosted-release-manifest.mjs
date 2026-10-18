@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertAdmittedSetup, prepareReleaseManifest, validateDiscoverySetup } from './lib/hosted-release/manifest.mjs';
-import { createLiveCollector, createSetupDiscoveryCollector } from './lib/hosted-release/live-collector.mjs';
+import { createPreviousProductionObserver, createSetupDiscoveryCollector } from './lib/hosted-release/live-collector.mjs';
 import { digest, fail, releaseTargets, sha } from './lib/hosted-release/contract.mjs';
 import { assertHostedController, assertHostedSetup, assertSourceAdmission, collectSourceAdmission } from './lib/hosted-release/admission.mjs';
 import { githubClient, validateQualificationRun } from './lib/hosted-release/github.mjs';
@@ -21,7 +21,8 @@ export async function validateHostedDispatch({ env = process.env, createGithub =
   const mode = resumed ? resumed.executionMode : plan.executionMode || (plan.stage === 'qualification' ? 'qualification' : 'release');
   if (!['compatibility', 'application', 'qualification'].includes(plan.stage)
     || (plan.stage === 'qualification') !== (mode === 'qualification') || !['release', 'qualification'].includes(mode)) fail('MANIFEST_SCHEMA');
-  const manifest = resumed || { stage: plan.stage, executionMode: mode, candidate: { sha: env.FCOS_CANDIDATE_SHA },
+  const manifest = resumed || { stage: plan.stage, executionMode: mode, candidate: { sha: env.FCOS_CANDIDATE_SHA,
+    sourceProfile:plan.stage==='compatibility'?'frozen_04ee':plan.stage==='application'?'application_v2':plan.sourceProfile },scope:plan.scope,
     controller: { sha: env.FCOS_CONTROLLER_SHA }, setupSha256: digest(setup), epoch: setup.epoch, targets: releaseTargets(),
     verification: setup.verification, ...(setup.dependencies ? { dependencies: setup.dependencies } : {}),
     ...(plan.stage === 'qualification' && setup.qualificationSource ? { qualificationSource: setup.qualificationSource } : {}) };
@@ -38,7 +39,7 @@ export async function validateHostedDispatch({ env = process.env, createGithub =
 }
 
 export async function prepareHostedManifest({ env = process.env, validateDispatchOnly = false, createGithub = githubClient,
-  prepareManifest = prepareReleaseManifest } = {}) {
+  prepareManifest = prepareReleaseManifest,createPreviousObserver=createPreviousProductionObserver } = {}) {
   const { setup, plan, resumed, controllerDirectory } = await validateHostedDispatch({ env, createGithub });
   if (validateDispatchOnly) return { status: 'passed', phase: 'dispatch.admission', executionMode: plan.stage === 'qualification' ? 'qualification' : 'release' };
   const candidateDirectory = resolve(env.FCOS_CANDIDATE_DIRECTORY || 'candidate');
@@ -50,7 +51,7 @@ export async function prepareHostedManifest({ env = process.env, validateDispatc
   }
   const manifest = await prepareManifest({ plan, setup, controllerDirectory, candidateDirectory,
     controllerSha: env.FCOS_CONTROLLER_SHA, candidateSha: env.FCOS_CANDIDATE_SHA,
-    observePreviousProduction: async provisional => createLiveCollector({ session: { manifest: provisional, env }, candidateDirectory }).provider.observePreviousProduction() });
+    observePreviousProduction: async context => createPreviousObserver({context,setup,env}).observePreviousProduction() });
   writeJson(env.FCOS_RELEASE_OUTPUT || 'release-manifest.json', manifest);
   workflowOutput({ manifest: JSON.stringify(manifest) }, env);
   return manifest;
@@ -65,7 +66,9 @@ const discoveryCode = (error, phase) => {
     'QUALIFICATION_SOURCE_INVALID','VERCEL_READ_CREDENTIAL_BINDING','VERCEL_READ_OAUTH_PROOF_REQUIRED',
     'VERCEL_READ_WRITE_CREDENTIAL_FORBIDDEN','VERCEL_READ_CREDENTIAL_REQUIRED','VERCEL_READ_CREDENTIAL_SUBSTITUTED',
     'VERCEL_READ_CONFIGURATION_CHANGED','VERCEL_READ_UNAVAILABLE','VERCEL_READ_ROUTE_FORBIDDEN',
-    'SCHEMA_OBSERVER_SETUP_REQUIRED','SCHEMA_OBSERVER_TARGET','SCHEMA_OBSERVER_PRIVILEGES','SCHEMA_OBSERVATION_UNAVAILABLE']);
+    'SCHEMA_OBSERVER_SETUP_REQUIRED','SCHEMA_OBSERVER_TARGET','SCHEMA_OBSERVER_PRIVILEGES','SCHEMA_OBSERVATION_UNAVAILABLE',
+    'FIRST_RUNTIME_BASELINE_INVALID','FIRST_RUNTIME_BASELINE_NOT_ADMITTED','FIRST_RUNTIME_BASELINE_REVIEW_REQUIRED','FIRST_RUNTIME_BASELINE_CHANGED',
+    'FIRST_RUNTIME_BASELINE_INCOMPLETE','FIRST_RUNTIME_SOURCE_CHANGED','FIRST_RUNTIME_SCOPE_CHANGED','FIRST_RUNTIME_SOURCE_CAPABILITY']);
   return known.has(error?.code) ? error.code : `DISCOVERY_${phase.toUpperCase()}_FAILED`;
 };
 
@@ -217,20 +220,20 @@ export async function discoverHostedSetup({ env = process.env, validateDispatchO
       phase = 'collector';
       if (now() >= setup.notAfter) fail('DISCOVERY_SETUP_EXPIRED');
       if (now() >= Date.parse(jobStartedAt)+900000) fail('DISCOVERY_JOB_CONTEXT');
-      const collector = createCollector({ setup, env, now });
+      const collector = createCollector({ setup, env, now,controllerDirectory });
       const observe = async (name, read) => {
         try {
           if (now() >= setup.notAfter) fail('DISCOVERY_SETUP_EXPIRED');
           const result = await read();
           if (now() >= setup.notAfter) fail('DISCOVERY_SETUP_EXPIRED');
-          report.observations[name] = { status: 'observed', result };
+          report.observations[name] = { status: result?.kind==='first_runtime_endpoint_absent'?'endpoint_absent':'observed', result };
         }
         catch (error) { report.failures.push({ phase: name, code: discoveryCode(error,name) }); report.observations[name] = { status: 'failed' }; }
       };
       await Promise.all([observe('production',collector.production),observe('schema',collector.schema)]);
       if (report.observations.production.status === 'observed') await observe('runtime',() => collector.runtime(report.observations.production.result));
       else report.observations.runtime = { status: 'not_observed', reason: 'production_binding_failed' };
-      if (!report.failures.length) report.status = 'observed';
+      if (!report.failures.length) report.status = report.observations.runtime?.result?.baselineRequired?'baseline_required':'observed';
     }
   } catch (error) { report.failures.push({ phase, code: discoveryCode(error,phase) }); }
   writeJson(env.FCOS_DISCOVERY_OUTPUT || 'setup-discovery.json', report);

@@ -9,6 +9,42 @@ import { collectRuntimeObservation } from '../../collect-preview-parity.mjs';
 import { createVercelAdapter, createVercelReadAdapter, createVercelProductionObserver } from './vercel.mjs';
 import { collectSchemaSnapshot, collectSchemaObservation, hostedProof } from './observations.mjs';
 import { digest, fail } from './contract.mjs';
+import { admittedFirstRuntimeBaseline, assertFirstRuntimeSetup, FIRST_RUNTIME, firstRuntimePrevious, firstRuntimeLegacyBinding, firstRuntimeSourceAbsence, isFirstRuntimePair } from './first-runtime.mjs';
+import { PREVIEW_PARITY_POLICY } from '../preview-parity.mjs';
+
+/** Read-only pre-manifest transport. It has no complete-manifest seed, writer
+ * credential, deploy method, candidate execution or application secret input. */
+export function createPreviousProductionObserver({context,setup,env=process.env,fetchImpl=fetch,now=Date.now,
+  schemaObservation=()=>collectSchemaObservation({manifest:context,env,now}),login,protection=collectRuntimeProtectionState}={}) {
+  const baseline=assertFirstRuntimeSetup({setup,manifest:context,now:now()});
+  const observerSetup={targets:context.targets,vercelReadCredential:context.verification.vercelReadCredential,
+    legacyProductionBinding:baseline?firstRuntimeLegacyBinding(setup.firstRuntimeBaseline,{now:now()}):null};
+  const provider=createVercelProductionObserver({setup:observerSetup,env,fetchImpl,now});
+  const tokenProvider=createHostedRuntimeTokenProvider({env,login,verifyTarget:async({origin,deployment})=>{
+    const actual=await provider.inspect(deployment.id);
+    if(actual.url!==origin||actual.sha!==deployment.sha||actual.state!=='READY')fail('RUNTIME_LOGIN_TARGET');
+    return {verified:true,origin,deploymentId:actual.id,sha:actual.sha,sourceSha256:deployment.sourceSha256};
+  }});
+  return {observePreviousProduction:async()=>{
+    const production=await provider.observe(),deployment=production.deployment,schema=await schemaObservation();
+    if(baseline) {
+      const current=admittedFirstRuntimeBaseline(setup.firstRuntimeBaseline,{now:now()});
+      if(!isFirstRuntimePair({candidateSha:context.candidate.sha,previous:{deploymentId:deployment.id,sha:deployment.sha,url:deployment.url,sourceSha256:deployment.sourceSha256}})
+        ||production.publicVersion.sha256!==current.nativeEvidence.versionSha256||schema.sha256!==current.schema.sha256)fail('FIRST_RUNTIME_BASELINE_CHANGED');
+      return {readOnly:true,capturedAt:new Date(now()).toISOString(),previousProduction:firstRuntimePrevious(setup.firstRuntimeBaseline,{now:now()}),
+        observationKind:current.source.observationKind,originalBaselineCapturedAt:current.runtime.capturedAt};
+    }
+    if(deployment.sha===FIRST_RUNTIME.previousSha)fail('FIRST_RUNTIME_BASELINE_NOT_ADMITTED');
+    if(!env.FCOS_PRODUCTION_VERIFICATION_BYPASS)fail('RUNTIME_PROTECTION_SETUP_REQUIRED');
+    const state=await protection({origin:deployment.url,sha:deployment.sha,bypass:env.FCOS_PRODUCTION_VERIFICATION_BYPASS});
+    const token=await tokenProvider({origin:deployment.url,deployment,protectionState:state});
+    const runtime=await collectRuntimeObservation({url:deployment.url,deployment,sourceDigest:deployment.sourceSha256,token,
+      protectionBypass:env.FCOS_PRODUCTION_VERIFICATION_BYPASS,fetchImpl,now:now()});
+    if(!runtime)fail('PREVIOUS_RUNTIME_UNOBSERVED');
+    return {readOnly:true,capturedAt:new Date(now()).toISOString(),previousProduction:{deploymentId:deployment.id,sha:deployment.sha,sourceSha256:deployment.sourceSha256,
+      schemaSha256:schema.sha256,runtimeSha256:digest({flags:runtime.flags,safety:runtime.safety,auth:runtime.auth})}};
+  }};
+}
 
 export async function collectFcunoContract({ env = process.env, fetchImpl = fetch, now = Date.now }) {
   const pin = FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation;
@@ -79,7 +115,8 @@ export async function collectRuntimeProtectionState({ origin, sha, bypass, reque
 
 /** Dedicated discovery collectors return observations, never hosted check evidence. */
 export function createSetupDiscoveryCollector({ setup, env = process.env, fetchImpl = fetch, now = Date.now,
-  Client, login, protection = collectRuntimeProtectionState } = {}) {
+  Client, login, protection = collectRuntimeProtectionState,controllerDirectory=env.FCOS_CONTROLLER_DIRECTORY,
+  verifyLegacySource=firstRuntimeSourceAbsence } = {}) {
   const provider = createVercelProductionObserver({ setup, env, fetchImpl, now });
   const tokenProvider = createHostedRuntimeTokenProvider({ env, login, verifyTarget: async ({ origin, deployment }) => {
     const actual = await provider.inspect(deployment.id);
@@ -90,6 +127,26 @@ export function createSetupDiscoveryCollector({ setup, env = process.env, fetchI
     production: provider.observe,
     schema: () => collectSchemaSnapshot({ targets: setup.targets, env, now, ...(Client ? { Client } : {}) }),
     runtime: async production => {
+      const previous={deploymentId:production.deployment.id,sha:production.deployment.sha,url:production.deployment.url,sourceSha256:production.deployment.sourceSha256};
+      if(isFirstRuntimePair({candidateSha:setup.candidateSha,previous})) {
+        verifyLegacySource(controllerDirectory);
+        if(setup.firstRuntimeBaseline) {
+          const baseline=admittedFirstRuntimeBaseline(setup.firstRuntimeBaseline,{now:now(),complete:false});
+          if(baseline.nativeEvidence.versionSha256!==production.publicVersion.sha256)fail('FIRST_RUNTIME_BASELINE_CHANGED');
+          return {kind:'first_runtime_baseline_observation',readOnly:true,endpointAbsent:true,baselineSha256:setup.firstRuntimeBaseline.sha256,
+            observationKind:baseline.source.observationKind,runtime:baseline.runtime,authHistorical:true,freshOwnerObservationRequired:true,
+            baselineRequired:PREVIEW_PARITY_POLICY.requiredAuth.some(p=>baseline.runtime.auth[p].state!=='authenticated'),qualificationAccepted:false,automaticRollbackEligible:false};
+        }
+        let endpointAbsent=null,endpointObservation={status:'not_observed'};
+        if(env.FCOS_PRODUCTION_VERIFICATION_BYPASS)try {
+          const url=`${previous.url}/api/connection-runtime`,response=await fetchImpl(url,{method:'GET',headers:{'x-vercel-protection-bypass':env.FCOS_PRODUCTION_VERIFICATION_BYPASS},redirect:'error',signal:AbortSignal.timeout(5000)});
+          if(response.status===404&&!response.redirected&&(!response.url||response.url===url)) {
+            endpointAbsent=true;endpointObservation={url,method:'GET',httpStatus:404,redirected:false,capturedAt:new Date(now()).toISOString()};
+          }
+        } catch { /* Source absence alone never proves the deployed HTTP route. */ }
+        return {kind:endpointAbsent?'first_runtime_endpoint_absent':'first_runtime_source_absent',readOnly:true,sourceAbsent:true,endpointAbsent,endpointObservation,baselineRequired:true,qualificationAccepted:false,automaticRollbackEligible:false,
+          deploymentId:previous.deploymentId,sha:previous.sha,flags:Object.fromEntries(PREVIEW_PARITY_POLICY.runtimeFlags.map(k=>[k,{state:'unknown'}])),safety:{readOnly:null},auth:{}};
+      }
       const email = env.FCOS_HOSTED_RUNTIME_EMAIL?.trim().toLowerCase();
       if (!email || digest(email) !== setup.runtimeIdentity.emailSha256
         || env.FCOS_HOSTED_RUNTIME_EXPECTED_ROLE !== setup.runtimeIdentity.role) fail('DISCOVERY_RUNTIME_IDENTITY');

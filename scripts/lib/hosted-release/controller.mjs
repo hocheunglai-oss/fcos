@@ -16,9 +16,14 @@ export async function consequential({ manifest, phase, request, coordinator, sub
   if (claim.disposition === 'execute') {
     let value;
     try { value = await submit({ operationId, request }); }
-    catch {
+    catch (error) {
       // Even a local transport exception can occur after submission. Never infer no write.
-      await coordinator.uncertain({ ...binding, phase, operationId, reason: 'PROVIDER_RESPONSE_LOST' });
+      const ownerRefreshRequired=error instanceof ReleaseError&&error.code==='FIRST_RUNTIME_OWNER_REFRESH_REQUIRED'
+        &&error.detail?.providerSubmissionStarted===false;
+      await coordinator.uncertain({ ...binding, phase, operationId, reason: ownerRefreshRequired?'FIRST_RUNTIME_OWNER_REFRESH_REQUIRED_BEFORE_SUBMISSION':'PROVIDER_RESPONSE_LOST' });
+      // Preserve the consumed intent. This precise trusted pre-launch guard can
+      // wait for its dependency, but cannot turn a restart into a second submit.
+      if(ownerRefreshRequired)throw error;
     }
     if (value !== undefined) {
       const evidence = { outcome: 'applied', result: value };
@@ -215,6 +220,8 @@ export async function executeHostedProduction({ manifest, coordinator, provider,
 }
 
 export function safeFailure(error) {
+  if(error instanceof ReleaseError&&error.code==='FIRST_RUNTIME_OWNER_REFRESH_REQUIRED')return {
+    status:'waiting_dependency',code:error.code,phase:error.phase,recovery:error.recovery};
   return error instanceof ReleaseError ? { status: 'intervention_required', code: error.code, phase: error.phase, recovery: error.recovery }
     : { status: 'intervention_required', code: 'UNCLASSIFIED_PROVIDER_FAILURE', phase: 'unknown', recovery: 'Inspect sanitized phase evidence; do not replay a consequential operation.' };
 }

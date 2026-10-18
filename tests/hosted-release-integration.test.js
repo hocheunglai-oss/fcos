@@ -27,10 +27,13 @@ test('hosted public publishable-key alias preserves controller credential isolat
   assert.doesNotThrow(() => validateManifest(manifest));
   const options = { home: '/tmp/check-home', candidateDirectory: '/tmp/candidate', command: { env: {} },
     environment: { FCOS_HOSTED_PUBLIC_BUILD_INPUTS: JSON.stringify(values), VERCEL_TOKEN: 'controller-only', SUPABASE_SECRET_KEY: 'controller-only' } };
+  options.environment.FCOS_ADMITTED_FIRST_RUNTIME_OWNER_REFRESH='PRIVATE_OWNER_OBSERVATION';
+  options.environment.FCOS_ADMITTED_FIRST_RUNTIME_OWNER_REFRESH_SHA256='PRIVATE_OWNER_DIGEST';
   const env = sanitisedCheckEnvironment(options);
   assert.equal(env.VITE_SUPABASE_PUBLISHABLE_KEY, values.VITE_SUPABASE_PUBLISHABLE_KEY);
   assert.equal(env.VERCEL_TOKEN, undefined);
   assert.equal(env.SUPABASE_SECRET_KEY, undefined);
+  assert.equal(env.FCOS_ADMITTED_FIRST_RUNTIME_OWNER_REFRESH,undefined);assert.equal(env.FCOS_ADMITTED_FIRST_RUNTIME_OWNER_REFRESH_SHA256,undefined);
   assert.throws(() => sanitisedCheckEnvironment({ ...options, environment: { FCOS_HOSTED_PUBLIC_BUILD_INPUTS: JSON.stringify({ SUPABASE_SECRET_KEY: 'private' }) } }), /Unadmitted public build inputs/);
 });
 function setupFixture() {
@@ -103,6 +106,8 @@ test('workflow isolates candidate jobs and has exactly one Production reviewer b
   assert.equal(jobs.dependencies_before.permissions['id-token'],undefined);
   assert.ok(jobs.publish_after.needs.includes('dependencies_after'));
   assert.doesNotMatch(JSON.stringify(jobs.dependencies_before),/secrets\.FCOS_HOSTED_VERCEL|secrets\.FCOS_HOSTED_RUNTIME/);
+  const ownerSteps=Object.entries(jobs).flatMap(([jobId,j])=>(j.steps||[]).filter(s=>s.env?.FCOS_ADMITTED_FIRST_RUNTIME_OWNER_REFRESH).map(s=>[jobId,s]));
+  assert.equal(ownerSteps.length,1);assert.equal(ownerSteps[0][0],'execute');assert.match(ownerSteps[0][1].env.FCOS_ADMITTED_FIRST_RUNTIME_OWNER_REFRESH,/vars\.FCOS_ADMITTED_FIRST_RUNTIME_OWNER_REFRESH/);
 });
 test('deployment binds remote build settings and public build values to deterministic verification',()=>{
   const settings={framework:'vite',buildCommand:'npm run build',devCommand:null,installCommand:'npm ci',outputDirectory:'dist',rootDirectory:null,nodeVersion:'24.x'};

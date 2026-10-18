@@ -25,11 +25,11 @@ const forwarding = names => Object.fromEntries(names.map(name => [name, `\${{ se
 test('qualification bootstrap stays inactive and calls the same immutable controller', () => {
   assert.deepEqual(Object.keys(definition.on), ['workflow_dispatch']);
   assert.deepEqual(definition.permissions, {});
-  assert.deepEqual(Object.keys(definition.jobs), ['toolchain', 'manifest', 'release']);
+  assert.deepEqual(Object.keys(definition.jobs), ['toolchain', 'setup_discovery', 'manifest', 'release']);
   assert.equal(definition.jobs.manifest.if, "${{ inputs.bootstrap_phase == 'qualification' && vars.FCOS_HOSTED_QUALIFICATION_ADMITTED == 'true' }}");
   assert.equal(definition.jobs.manifest.environment, 'fcos-hosted-verification');
   assert.deepEqual(definition.jobs.manifest.permissions, { contents: 'read', actions: 'read' });
-  assert.equal(template.split('__FCOS_CONTROLLER_SHA__').length - 1, 5);
+  assert.equal(template.split('__FCOS_CONTROLLER_SHA__').length - 1, 7);
   const sha = 'a'.repeat(40), rendered = yaml.load(template.replaceAll('__FCOS_CONTROLLER_SHA__', sha));
   assert.equal(rendered.jobs.manifest.env.FCOS_CONTROLLER_SHA, sha);
   assert.equal(rendered.jobs.manifest.steps[0].with.ref, sha);

@@ -3,10 +3,11 @@ import { execFileSync } from 'node:child_process';
 import { collectSourceAdmission } from './admission.mjs';
 import { validateVercelReadAcceptance } from './vercel-read-auth.mjs';
 import { CONTRACT_VERSION, CONTROLLER_WORKFLOW, digest, fail, REQUIRED_LIVE_CHECKS, releaseTargets, validateManifest, WRITE_PHASES, FROZEN_COMPATIBILITY_SHA } from './contract.mjs';
+import { assertFirstRuntimeSetup, admittedFirstRuntimeBaseline } from './first-runtime.mjs';
 
 /** Source hashes and check sets are computed by the admitted controller. The
  * release plan supplies business scope, never a replacement check definition. */
-export function buildReleaseManifest({ plan, setup, previousProduction, candidateDirectory, controllerDirectory, controllerSha,
+function releaseManifestDraft({ plan, setup, previousProduction, candidateDirectory, controllerDirectory, controllerSha,
   candidateSha, collectSource = collectSourceAdmission }) {
   if (setup?.schemaVersion !== 2 || setup.controllerSha !== controllerSha || setup.targetsSha256 !== digest(releaseTargets())
     || plan?.schemaVersion !== 2 || !['compatibility','application','qualification'].includes(plan.stage)) fail('RELEASE_SETUP_NOT_ADMITTED');
@@ -25,20 +26,24 @@ export function buildReleaseManifest({ plan, setup, previousProduction, candidat
     migration: plan.migration, runtime: plan.runtime, changes: plan.changes, verification: setup.verification,
     ...(qualificationSource ? { qualificationSource: { ...qualificationSource } } : {}),
     ...(setup.dependencies ? { dependencies: setup.dependencies } : {}) };
-  validateManifest(manifest);
   return manifest;
+}
+export function buildReleaseManifest(options) {
+  const manifest=releaseManifestDraft(options);validateManifest(manifest);assertFirstRuntimeSetup({setup:options.setup,manifest});return manifest;
 }
 
 export async function prepareReleaseManifest({ plan, setup, candidateDirectory, controllerDirectory, controllerSha, candidateSha,
   observePreviousProduction, collectSource, now = Date.now }) {
   if (typeof observePreviousProduction !== 'function') fail('PRODUCTION_OBSERVATION_REQUIRED');
-  const provisional = buildReleaseManifest({ plan, setup, previousProduction: setup.previousProduction,
+  // Source/admission is validated first. A prior runtime hash is an observation,
+  // never a seed required merely to construct the observation transport.
+  const provisional = releaseManifestDraft({ plan, setup,
     candidateDirectory, controllerDirectory, controllerSha, candidateSha, collectSource });
   const observed = await observePreviousProduction(provisional);
   if (observed?.readOnly !== true || !Number.isFinite(Date.parse(observed.capturedAt))
     || now() - Date.parse(observed.capturedAt) > 300000 || Date.parse(observed.capturedAt) > now() + 30000) fail('PRODUCTION_OBSERVATION_EXPIRED');
-  return buildReleaseManifest({ plan, setup, previousProduction: observed.previousProduction,
-    candidateDirectory, controllerDirectory, controllerSha, candidateSha, collectSource });
+  const manifest={...provisional,previousProduction:observed.previousProduction};
+  validateManifest(manifest);assertFirstRuntimeSetup({setup,manifest,now:now()});return manifest;
 }
 
 export function assertAdmittedSetup({ setup, expectedSha256, controllerDirectory, controllerSha }) {
@@ -53,8 +58,9 @@ export function validateDiscoverySetup(setup, { controllerSha, candidateSha, now
   const exact = (value, keys) => value && Object.getPrototypeOf(value) === Object.prototype
     && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
   const isHash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
-  if (!exact(setup, ['schemaVersion','kind','controllerSha','candidateSha','sourceProfile','targets','qualificationSource',
-    'environment','issuedAt','notAfter','runtimeIdentity','vercelReadCredential','vercelReadCredentialAcceptance','legacyProductionBinding'])
+  const keys=['schemaVersion','kind','controllerSha','candidateSha','sourceProfile','targets','qualificationSource',
+    'environment','issuedAt','notAfter','runtimeIdentity','vercelReadCredential','vercelReadCredentialAcceptance','legacyProductionBinding'];
+  if (!exact(setup, [...keys,...(Object.hasOwn(setup||{},'firstRuntimeBaseline')?['firstRuntimeBaseline']:[])])
     || setup.schemaVersion !== 1 || setup.kind !== 'fcos_hosted_setup_discovery'
     || setup.controllerSha !== controllerSha || setup.candidateSha !== candidateSha
     || setup.candidateSha !== FROZEN_COMPATIBILITY_SHA || setup.sourceProfile !== 'frozen_04ee'
@@ -76,5 +82,6 @@ export function validateDiscoverySetup(setup, { controllerSha, candidateSha, now
     || !['sourceDigest','publicVersionSha256','providerEvidenceSha256','versionEvidenceSha256'].every(key => isHash(legacy[key]))
     || legacy.sourceDigestAlgorithm !== 'sha256:fcos-vercel-source-v1' || legacy.sourceAttested !== false
     || !Number.isFinite(Date.parse(legacy.capturedAt)) || Date.parse(legacy.capturedAt) > now + 30000)) fail('DISCOVERY_LEGACY_BINDING_INVALID');
+  if(setup.firstRuntimeBaseline)admittedFirstRuntimeBaseline(setup.firstRuntimeBaseline,{now,complete:false});
   return setup;
 }

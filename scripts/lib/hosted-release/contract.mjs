@@ -4,6 +4,7 @@ import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier } from '../../../confi
 import { validateSalesforceReadBinding } from './salesforce-read-auth.mjs';
 import { validateVercelReadBinding } from './vercel-read-auth.mjs';
 import { validateVercelPreviewWriterBinding } from './vercel-writer-auth.mjs';
+import { assertFirstRuntimeManifest } from './first-runtime.mjs';
 
 export const CONTRACT_VERSION = 'fcos-hosted-release/v2';
 export const CONTROLLER_WORKFLOW = '.github/workflows/hosted-release-controller.yml';
@@ -62,6 +63,7 @@ export function validateManifest(manifest) {
   const prior = manifest.previousProduction;
   if (!/^dpl_[A-Za-z0-9]+$/.test(prior?.deploymentId || '') || !sha(prior.sha)
     || !['sourceSha256', 'schemaSha256', 'runtimeSha256'].every(key => hash(prior[key]))) fail('PREVIOUS_PRODUCTION_BINDING');
+  assertFirstRuntimeManifest(manifest);
   if (!Array.isArray(manifest.requiredChecks) || !manifest.requiredChecks.length
     || new Set(manifest.requiredChecks).size !== manifest.requiredChecks.length
     || manifest.requiredChecks.some(id => !/^[a-z][a-z0-9_]+$/.test(id))
@@ -119,7 +121,7 @@ export function renderReleaseSummary(manifest, evidence = {}) {
   validateManifest(manifest);
   const lines = ['# FCOS Production approval', '', `Manifest: \`${digest(manifest)}\``, `Release: \`${manifest.releaseId}\` (${manifest.stage})`,
     `Candidate: \`${manifest.candidate.sha}\``, `Controller: \`${manifest.controller.sha}\``, `Current Production: \`${manifest.previousProduction.deploymentId}\` (${manifest.previousProduction.sha})`,
-    `Migration: ${manifest.migration.mode}`, `Rollback: previous build only after current schema/runtime compatibility is reverified.`, '', 'Included changes:', ...manifest.changes.map(text => `- ${text.replace(/[\r\n]/g, ' ')}`), '', 'Required checks:', ...manifest.requiredChecks.map(id => `- ${id}: ${evidence[id]?.status || 'pending'}`), '',
+    `Migration: ${manifest.migration.mode}`, manifest.previousProduction.firstRuntime ? 'Rollback: legacy previous build is not automatically eligible; failed live verification requires intervention unless compatibility is independently established.' : `Rollback: previous build only after current schema/runtime compatibility is reverified.`, '', 'Included changes:', ...manifest.changes.map(text => `- ${text.replace(/[\r\n]/g, ' ')}`), '', 'Required checks:', ...manifest.requiredChecks.map(id => `- ${id}: ${evidence[id]?.status || 'pending'}`), '',
     'This approval authorizes staging, same-build promotion and compatible automatic rollback for this immutable manifest for 24 hours after protected execution begins. It does not authorize financial changes or schema rollback.'];
   return `${lines.join('\n')}\n`;
 }

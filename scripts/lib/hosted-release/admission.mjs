@@ -8,6 +8,7 @@ import { canonical, digest, fail, REQUIRED_LIVE_CHECKS, validateManifest } from 
 import { validateSalesforceReadAcceptance } from './salesforce-read-auth.mjs';
 import { validateVercelReadAcceptance } from './vercel-read-auth.mjs';
 import { validateVercelPreviewWriterAcceptance } from './vercel-writer-auth.mjs';
+import { assertFirstRuntimeSetup } from './first-runtime.mjs';
 
 const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 export function collectSourceAdmission({ candidateDirectory, controllerDirectory, controllerSha, candidateSha, sourceProfile }) {
@@ -74,5 +75,6 @@ export function assertHostedSetup({ manifest, env = process.env }) {
     validateVercelPreviewWriterAcceptance(manifest.verification.vercelPreviewWriterCredential, setup, { targets: manifest.targets });
   if (manifest.verification?.salesforceReadCredential)
     validateSalesforceReadAcceptance(manifest.verification.salesforceReadCredential, setup);
+  assertFirstRuntimeSetup({setup,manifest});
   return setup;
 }
