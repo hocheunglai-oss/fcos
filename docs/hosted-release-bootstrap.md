@@ -51,6 +51,26 @@ Pass the full actual decrypted `{envs:[…]}` response as private `nativeEnviron
 
 The configuration bridge requires a complete, unpaginated Production response: every unique project record must occur in the immutable deployed key inventory and have native creation/update times at or before the immutable deployment's native creation time. Every dependency of the byte-verified configuration interpreter and existing-session collector must have an actual observed value, or be provably absent from that deployed inventory. Opaque/missing application values fail closed. Unneeded platform values remain named and unobserved; no prefix-based ignore list or inferred empty string is accepted. The sanitized output retains the full deployed inventory, project-record names, observed/absent/unobserved names, dependency digest and private-values digest. Root must independently accept the actual native evidence before admitting the exact output bytes as `setup.firstRuntimeBaseline={json,sha256,acceptance:{json,sha256}}`; hashes alone do not attest provider provenance.
 
+Setup discovery can separately opt into `legacySalesforceAppObservation`, an exact
+binding to the frozen previous deployment/source and its immutable origin's
+`GET /api/functions/salesforceSchema`. The trusted controller verifies that
+deployed source's handler, read policy and Salesforce request path before using
+the existing hosted runtime login and verification bypass. It never runs the
+candidate with credentials. This route exercises the application's own normal
+authentication (which may issue or refresh its ordinary Salesforce session),
+rather than treating a failing static bearer probe as failure of its active
+authentication path. It makes no new credential or signing receipt.
+
+Retain this as separate app-owned authentication evidence, including its actual
+HTTP disposition, aggregate schema result and unknown selected auth mode. The
+route does not return OrgId or IsSandbox; do not manufacture them or relabel this
+as the original direct provider probe. A failed read may trigger the deployed
+application's normal error logging. The controller makes one bounded request,
+does not retry, exports no object details or credentials, and rechecks Production
+identity afterward. Without the explicit opt-in, discovery keeps its existing
+behavior and performs no legacy login. This evidence does not admit a baseline,
+qualify a release, supply Xero authorization, or authorize Production execution.
+
 The baseline keeps source, configuration, endpoint-absence and original historical authentication timestamps durably. It is not fresh authentication at a later write boundary. Manifest preparation first observes current provider identity, immutable/public version, alias and schema, then completes validation using the real accepted baseline hashes. It needs no invented previous-runtime seed. All ordinary checks, all 15 normal-role modules, stronger frozen04ee source/browser/email proofs, Nom B, preservation, staged and live endpoint probes remain required.
 
 For this initial cutover only, the original credential owner uses `captureFirstRuntimeOriginalOwnerRefresh` with the accepted baseline and the same private custody/configuration inputs, fresh `identityCapturedAt`, fresh read-only `schema`, and current native evidence. It collects only existing-session provider authentication; original source/configuration/GET404 timestamps are not renewed. Root accepts the public refresh bytes with kind `fcos_root_accepted_first_runtime_owner_refresh_v1`, then installs the reference JSON as protected `FCOS_ADMITTED_FIRST_RUNTIME_OWNER_REFRESH` and its exact payload-byte digest as `FCOS_ADMITTED_FIRST_RUNTIME_OWNER_REFRESH_SHA256` under the existing setup authority and shared lease. This is an administrator admission of actual evidence, not a new human approval window. The execute step alone receives these public inputs; candidate code cannot supply them.

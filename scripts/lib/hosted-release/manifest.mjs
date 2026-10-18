@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { collectSourceAdmission } from './admission.mjs';
 import { validateVercelReadAcceptance } from './vercel-read-auth.mjs';
 import { CONTRACT_VERSION, CONTROLLER_WORKFLOW, digest, fail, REQUIRED_LIVE_CHECKS, releaseTargets, validateManifest, WRITE_PHASES, FROZEN_COMPATIBILITY_SHA } from './contract.mjs';
-import { assertFirstRuntimeSetup, admittedFirstRuntimeBaseline } from './first-runtime.mjs';
+import { assertFirstRuntimeSetup, admittedFirstRuntimeBaseline, FIRST_RUNTIME } from './first-runtime.mjs';
 
 /** Source hashes and check sets are computed by the admitted controller. The
  * release plan supplies business scope, never a replacement check definition. */
@@ -60,7 +60,7 @@ export function validateDiscoverySetup(setup, { controllerSha, candidateSha, now
   const isHash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
   const keys=['schemaVersion','kind','controllerSha','candidateSha','sourceProfile','targets','qualificationSource',
     'environment','issuedAt','notAfter','runtimeIdentity','vercelReadCredential','vercelReadCredentialAcceptance','legacyProductionBinding'];
-  if (!exact(setup, [...keys,...(Object.hasOwn(setup||{},'firstRuntimeBaseline')?['firstRuntimeBaseline']:[])])
+  if (!exact(setup, [...keys,...['firstRuntimeBaseline','legacySalesforceAppObservation'].filter(k=>Object.hasOwn(setup||{},k))])
     || setup.schemaVersion !== 1 || setup.kind !== 'fcos_hosted_setup_discovery'
     || setup.controllerSha !== controllerSha || setup.candidateSha !== candidateSha
     || setup.candidateSha !== FROZEN_COMPATIBILITY_SHA || setup.sourceProfile !== 'frozen_04ee'
@@ -83,5 +83,14 @@ export function validateDiscoverySetup(setup, { controllerSha, candidateSha, now
     || legacy.sourceDigestAlgorithm !== 'sha256:fcos-vercel-source-v1' || legacy.sourceAttested !== false
     || !Number.isFinite(Date.parse(legacy.capturedAt)) || Date.parse(legacy.capturedAt) > now + 30000)) fail('DISCOVERY_LEGACY_BINDING_INVALID');
   if(setup.firstRuntimeBaseline)admittedFirstRuntimeBaseline(setup.firstRuntimeBaseline,{now,complete:false});
+  if(Object.hasOwn(setup,'legacySalesforceAppObservation')) {
+    const binding=setup.legacySalesforceAppObservation;
+    if(!exact(binding,['kind','deploymentId','sha','sourceSha256','origin','path'])
+      ||binding.kind!=='fcos_legacy_salesforce_app_read_v1'||binding.deploymentId!==FIRST_RUNTIME.previousDeploymentId
+      ||binding.sha!==FIRST_RUNTIME.previousSha||binding.sourceSha256!==FIRST_RUNTIME.sourceSha256
+      ||binding.origin!==FIRST_RUNTIME.previousUrl||binding.path!=='/api/functions/salesforceSchema'
+      ||!legacy||legacy.deploymentId!==binding.deploymentId||legacy.commit!==binding.sha||legacy.immutableUrl!==binding.origin
+      ||legacy.sourceDigest!==binding.sourceSha256||setup.firstRuntimeBaseline)fail('DISCOVERY_LEGACY_SALESFORCE_BINDING_INVALID');
+  }
   return setup;
 }

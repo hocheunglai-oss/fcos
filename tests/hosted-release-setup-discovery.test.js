@@ -112,6 +112,43 @@ function schemaClient({unsafe=false,fail=false}={}) {
 }
 const login=async()=>({token:'PRIVATE_RUNTIME_BEARER',auth:{user:{id:'00000000-0000-4000-8000-000000000001',email:'runtime@example.invalid',active:true,read_only_ci:false,user_type:'administrator'},moduleAccess:{}}});
 
+const legacySalesforceBinding=()=>({kind:'fcos_legacy_salesforce_app_read_v1',deploymentId:FIRST_RUNTIME.previousDeploymentId,
+ sha:FIRST_RUNTIME.previousSha,sourceSha256:FIRST_RUNTIME.sourceSha256,origin:FIRST_RUNTIME.previousUrl,path:'/api/functions/salesforceSchema'});
+test('legacy Salesforce app observation requires a separate exact opt-in and never substitutes baseline authority',t=>{
+ const f=fixture(t);providerFixture(f,{legacy:true,firstRuntime:true});f.setup.legacySalesforceAppObservation=legacySalesforceBinding();
+ assert.equal(validateDiscoverySetup(f.setup,{controllerSha:f.C,candidateSha:FROZEN_COMPATIBILITY_SHA,now}),f.setup);
+ for(const change of [v=>v.path='/api/functions/systemHealth',v=>v.origin='https://foreign.vercel.app',v=>v.sha='e'.repeat(40),v=>v.sourceSha256=H,v=>v.extra=true]){
+  const setup=clone(f.setup);change(setup.legacySalesforceAppObservation);
+  assert.throws(()=>validateDiscoverySetup(setup,{controllerSha:f.C,candidateSha:FROZEN_COMPATIBILITY_SHA,now}),{code:'DISCOVERY_LEGACY_SALESFORCE_BINDING_INVALID'});
+ }
+ const setup=clone(f.setup);setup.firstRuntimeBaseline=firstRuntimeFixture({now}).reference;
+ assert.throws(()=>validateDiscoverySetup(setup,{controllerSha:f.C,candidateSha:FROZEN_COMPATIBILITY_SHA,now}),{code:'DISCOVERY_LEGACY_SALESFORCE_BINDING_INVALID'});
+});
+test('actual discovery entrypoint invokes opted-in app observer and keeps first-runtime baseline incomplete',async t=>{
+ const f=fixture(t),p=providerFixture(f,{legacy:true,firstRuntime:true}),db=schemaClient();f.setup.legacySalesforceAppObservation=legacySalesforceBinding();repin(f);let observations=0;
+ const proof={kind:'fcos_legacy_salesforce_app_read_observation_v1',baselineAccepted:false,appOwnedAuth:{state:'authenticated',selectedMode:'unknown',orgId:null,isSandbox:null}};
+ const result=await discoverHostedSetup({...f.options,createCollector:options=>createSetupDiscoveryCollector({...options,fetchImpl:p.fetchImpl,Client:db.Client,login,protection:async()=>({}),
+  verifyLegacySource:()=>({sourceAbsent:true}),observeLegacySalesforce:async args=>{observations++;assert.deepEqual(args.binding,f.setup.legacySalesforceAppObservation);assert.equal(args.production.deployment.id,FIRST_RUNTIME.previousDeploymentId);assert.equal(args.bypass,'PRIVATE_BYPASS');assert.equal(typeof args.tokenProvider,'function');return proof;}})});
+ assert.equal(observations,1);assert.equal(result.status,'baseline_required');assert.equal(result.qualificationAccepted,false);assert.equal(result.admittedSetup,false);
+ assert.deepEqual(result.observations.runtime.result.legacySalesforceAppObservation,proof);assert.deepEqual(result.observations.runtime.result.auth,{});
+ assert.equal(result.observations.runtime.result.automaticRollbackEligible,false);assert.doesNotMatch(readFileSync(f.env.FCOS_DISCOVERY_OUTPUT,'utf8'),/PRIVATE_/);
+});
+test('opted-in legacy app observation cannot bypass runtime identity or protection admission',async t=>{
+ for(const missing of ['identity','protection']){
+  const f=fixture(t),p=providerFixture(f,{legacy:true,firstRuntime:true}),db=schemaClient();f.setup.legacySalesforceAppObservation=legacySalesforceBinding();repin(f);
+  if(missing==='identity')f.env.FCOS_HOSTED_RUNTIME_EMAIL='different@example.invalid';else delete f.env.FCOS_PRODUCTION_VERIFICATION_BYPASS;
+  if(missing==='protection'){
+   const collector=createSetupDiscoveryCollector({setup:f.setup,env:f.env,now:()=>now,fetchImpl:p.fetchImpl,verifyLegacySource:()=>({sourceAbsent:true}),
+    observeLegacySalesforce:()=>assert.fail('no app auth before protection'),login:()=>assert.fail('no login')});
+   await assert.rejects(collector.runtime({deployment:{id:p.id,sha:p.sha,url:p.url,sourceSha256:FIRST_RUNTIME.sourceSha256},publicVersion:{sha256:digest(p.version)}}),{code:'DISCOVERY_RUNTIME_PROTECTION'});
+   continue;
+  }
+  const result=await discoverHostedSetup({...f.options,createCollector:options=>createSetupDiscoveryCollector({...options,fetchImpl:p.fetchImpl,Client:db.Client,
+   verifyLegacySource:()=>({sourceAbsent:true}),observeLegacySalesforce:()=>assert.fail('no app auth before admission'),login:()=>assert.fail('no login')})});
+  assert.equal(result.status,'incomplete');assert.equal(result.failures[0].code,'DISCOVERY_RUNTIME_IDENTITY');
+ }
+});
+
 test('actual discovery reports exact first-runtime baseline dependency without POSTing the absent endpoint',async t=>{
   for(const baseline of [false,true,'unknown']){
     const f=fixture(t),p=providerFixture(f,{legacy:true,firstRuntime:true}),db=schemaClient();
