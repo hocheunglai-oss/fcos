@@ -49,6 +49,14 @@ during and after the diagnostic. One uncertain submission is consumed and
 permits exact-owner GET-only readback; it never permits a second deployment.
 Do not infer automatic retry safety from the CLI command name.
 
+The create acknowledgement may omit optional domain/alias arrays. Accept its
+exact owned ID, slug, description and Preview type without treating omission as
+proof of absence. Before deploying, independently read project membership,
+environment associations and domains, then verify unchanged original settings,
+Production aliases and crons. Preserve the original acknowledgement and any
+parser refusal; resolve a known creation through owner readback rather than
+submitting it again.
+
 ## Observation and evidence
 
 The diagnostic accepts only its exact GET path, private capability, fresh

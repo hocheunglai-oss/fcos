@@ -18,9 +18,16 @@ export function prepareDiagnosticEnvironmentCreate({operationId}={}) {
   return {url,body,sha256:digest({url,body}),operationId};
 }
 export function validateDiagnosticEnvironmentAcknowledgement(value,request) {
+  const expected=prepareDiagnosticEnvironmentCreate({operationId:request?.operationId});
+  need(request.sha256===expected.sha256&&request.url===expected.url&&digest(request.body)===digest(expected.body),'DIAGNOSTIC_ENVIRONMENT_REQUEST_CHANGED');
+  // Vercel's creation response omits these optional association arrays. An
+  // acknowledgement establishes the returned ID only; native owner readback
+  // must still prove project membership, no domains and Production preservation
+  // before a diagnostic deployment. Missing fields never prove absence.
+  const optionalEmpty=key=>!Object.hasOwn(value||{},key)||(Array.isArray(value[key])&&value[key].length===0);
   need(value&&/^env_[A-Za-z0-9_-]+$/.test(value.id||'')&&value.slug===request.body.slug&&value.type==='preview'
-    &&!value.branchMatcher&&Array.isArray(value.domains)&&value.domains.length===0
-    &&Array.isArray(value.currentDeploymentAliases)&&value.currentDeploymentAliases.length===0,'DIAGNOSTIC_ENVIRONMENT_ACKNOWLEDGEMENT_INCOMPLETE');
+    &&value.description===request.body.description&&!value.branchMatcher&&optionalEmpty('domains')
+    &&optionalEmpty('currentDeploymentAliases'),'DIAGNOSTIC_ENVIRONMENT_ACKNOWLEDGEMENT_INCOMPLETE');
   return {id:value.id,slug:value.slug,copyFrom:'production'};
 }
 

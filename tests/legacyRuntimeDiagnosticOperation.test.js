@@ -66,15 +66,25 @@ test('metadata equality retains inference and cannot accept value exports, chang
 test('environment creation uses provider-internal copy without secrets, branch matcher or domains',()=>{
  const request=prepareDiagnosticEnvironmentCreate({operationId:'a'.repeat(64)});assert.equal(request.body.copyEnvVarsFrom,'production');
  for(const k of ['env','branchMatcher','domains','target'])assert.ok(!Object.hasOwn(request.body,k));
- const value={id:'env_new123',slug:request.body.slug,type:'preview',domains:[],currentDeploymentAliases:[]};
+ const value={id:'env_new123',slug:request.body.slug,description:request.body.description,type:'preview',domains:[],currentDeploymentAliases:[]};
  assert.equal(validateDiagnosticEnvironmentAcknowledgement(value,request).copyFrom,'production');
  for(const change of [v=>v.type='production',v=>v.domains=['fcos.fcuno.com'],v=>v.branchMatcher={type:'equals',pattern:'main'},v=>v.id='foreign']){const copy=structuredClone(value);change(copy);assert.throws(()=>validateDiagnosticEnvironmentAcknowledgement(copy,request));}
+});
+
+test('actual minimal create response acknowledges only the owned ID without claiming optional associations were read',()=>{
+ const request=prepareDiagnosticEnvironmentCreate({operationId:'a'.repeat(64)});
+ const actual={id:'env_new123',slug:request.body.slug,description:request.body.description,type:'preview',createdAt:1792308155035,updatedAt:1792308155035};
+ assert.deepEqual(validateDiagnosticEnvironmentAcknowledgement(actual,request),{id:actual.id,slug:actual.slug,copyFrom:'production'});
+ for(const change of [v=>v.description='foreign operation',v=>v.domains=null,v=>v.currentDeploymentAliases={},v=>v.currentDeploymentAliases=['fcos.fcuno.com'],v=>v.branchMatcher={type:'equals',pattern:'main'}]){
+  const value=structuredClone(actual);change(value);assert.throws(()=>validateDiagnosticEnvironmentAcknowledgement(value,request));
+ }
+ const changed=structuredClone(request);changed.body.description='foreign';assert.throws(()=>validateDiagnosticEnvironmentAcknowledgement(actual,changed),{code:'DIAGNOSTIC_ENVIRONMENT_REQUEST_CHANGED'});
 });
 
 test('custom-environment submission is one-shot and unknown response retains GET-only state',async()=>{
  const {submitDiagnosticEnvironmentOnce}=await import('../scripts/lib/hosted-release/legacy-runtime-diagnostic-operation.mjs');
  const request=prepareDiagnosticEnvironmentCreate({operationId:'a'.repeat(64)});let calls=0;
- const result=await submitDiagnosticEnvironmentOnce({request,expectedRequestSha256:request.sha256,token:'private',fetchImpl:async()=>{calls++;return Response.json({id:'env_new123',slug:request.body.slug,type:'preview',domains:[],currentDeploymentAliases:[]});}});
+ const result=await submitDiagnosticEnvironmentOnce({request,expectedRequestSha256:request.sha256,token:'private',fetchImpl:async()=>{calls++;return Response.json({id:'env_new123',slug:request.body.slug,description:request.body.description,type:'preview',domains:[],currentDeploymentAliases:[]});}});
  assert.equal(calls,1);assert.equal(result.copyFrom,'production');
  await assert.rejects(submitDiagnosticEnvironmentOnce({request,expectedRequestSha256:request.sha256,token:'private',fetchImpl:async()=>{calls++;throw Error('PRIVATE');}}),{code:'DIAGNOSTIC_ENVIRONMENT_SUBMISSION_UNCERTAIN',getOnly:true,noReplay:true});assert.equal(calls,2);
 });
