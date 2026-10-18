@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {runInNewContext} from 'node:vm';
-import {loginLegacyHostedRuntime,validateLegacyRuntimePublicAuth} from '../scripts/lib/hosted-release/legacy-hosted-runtime-login.mjs';
+import {loginLegacyHostedRuntime,validateLegacyRuntimePublicAuth,legacyRuntimeLoginFailureCode,LEGACY_HOSTED_RUNTIME_LOGIN_FAILURE_CODES} from '../scripts/lib/hosted-release/legacy-hosted-runtime-login.mjs';
 import {FIRST_RUNTIME} from '../scripts/lib/hosted-release/first-runtime.mjs';
 import {FCOS_CONNECTION_POLICY,fcosConnectionIdentifier} from '../config/fcosConnections.js';
 import {assertHostedBrowserIdentity} from '../scripts/lib/hosted-release/browser.mjs';
@@ -35,13 +35,13 @@ function fixture() {
       assert.equal(await request(`${origin}/assets/index-fixture.js`,'GET','script'),'continue');
       let closed=false;await wsGate({close:async()=>{closed=true;},connectToServer:()=>assert.fail('WebSocket forwarding is forbidden')});assert.equal(closed,true);
     },
-    getByRole:(_role,{name,exact})=>({click:async()=>{assert.equal(exact,true);calls.push(name==='Login'?'login-click':'continue-click');
+    getByRole:(_role,{name,exact})=>{const button={waitFor:async options=>{assert.equal(options.state,'visible');},elementHandle:async()=>({click:button.click,dispose:async()=>{}}),click:async()=>{assert.equal(exact,true);calls.push(name==='Login'?'login-click':'continue-click');
       if(name==='Continue with FCUNO'){location=`${issuer}/admin`;assert.equal(await request(location,'GET','document'),'continue');assert.equal(await request(`${issuer}/api/admin/session`),'continue');
         assert.equal(await request(`${issuer}/api/admin/dashboard-swatches`),'abort');assert.equal(await request('https://s3.tradingview.com/external-embedding/embed-widget-market-overview.js','GET','script'),'abort');}
       else {assert.equal(name,'Login');assert.equal(await request(`${issuer}/api/admin/login`,'POST','fetch',true,{headers:{'Content-Type':'application/json'},postData:JSON.stringify({username:email,password:'PRIVATE_APPROVED_PASSWORD'})}),'continue');
         assert.equal(await request(`${issuer}/api/oidc/authorize?client_id=fcos-production`,'GET','document'),'continue');location=`${origin}/login?federated=1`;
         assert.equal(await request(`${supabase}/auth/v1/user`,'OPTIONS','preflight',true,{headers:{Origin:origin,'Access-Control-Request-Method':'GET','Access-Control-Request-Headers':'apikey,authorization,x-client-info,x-supabase-api-version'}}),'continue');}
-      for(const waiter of waiters.splice(0)){assert.equal(waiter.fn(new URL(location)),true);waiter.resolve();}}}),
+      for(const waiter of waiters.splice(0)){assert.equal(waiter.fn(new URL(location)),true);waiter.resolve();}}};return button;},
     getByLabel:(label,{exact})=>({fill:async value=>{assert.equal(exact,true);assert.ok(['Username','Password'].includes(label));assert.equal(new URL(location).origin,issuer);calls.push(label==='Username'?'email-filled':'password-filled');assert.equal(typeof value,'string');}}),
     waitForURL:fn=>fn(new URL(location))?Promise.resolve():new Promise(resolve=>waiters.push({fn,resolve})),
     waitForFunction:async(fn,arg)=>{assert.equal(evaluate(fn,arg),true);},
@@ -70,7 +70,9 @@ function fixture() {
       assert.deepEqual(options.headers,{authorization:`Bearer ${token}`,apikey:publicAuth.publicAnonKey,accept:'application/json','accept-profile':'public'});assert.ok(options.signal instanceof AbortSignal);
       if(url===`${supabase}/auth/v1/user`)return response(authUser);
       const u=new URL(url);assert.equal(u.origin,supabase);assert.equal(u.pathname,'/rest/v1/user_profiles');assert.equal(u.searchParams.get('id'),`eq.${id}`);assert.equal(u.searchParams.get('select'),'id,email,user_type,active,access_revision');return response([profile]);}};
-  return {options,publicAuth,calls,traffic,request,profile,authUser,context,page,storage,token,nativeCalls,nativePause:async event=>nativeGate(event),setClock:value=>{clock=value;},setLocation:value=>{location=value;}};
+  return {options,publicAuth,calls,traffic,request,profile,authUser,context,page,storage,token,nativeCalls,nativePause:async event=>nativeGate(event),setClock:value=>{clock=value;},setLocation:value=>{location=value;},navigateTo:value=>{
+    location=value;for(let i=waiters.length-1;i>=0;i--)if(waiters[i].fn(new URL(location))){waiters[i].resolve();waiters.splice(i,1);}
+  }};
 }
 
 test('actual runtime entrypoint gates before navigation, blocks FCOS APIs/business traffic/WebSockets, and returns actual own identity only',async()=>{
@@ -110,7 +112,7 @@ test('fresh own-user and profile mismatches or fabricated metadata privileges ne
   const mutations=[f=>f.authUser.id='00000000-0000-4000-8000-000000000456',f=>f.authUser.email='other@example.invalid',f=>f.authUser.identities=[],f=>f.authUser.identities[0].identity_data.sub='PRIVATE_DIFFERENT_SUBJECT',
     f=>f.authUser.is_anonymous=true,f=>f.profile.id='00000000-0000-4000-8000-000000000456',f=>f.profile.active=false,f=>{f.profile.user_type='viewer';f.authUser.user_metadata={user_type:'administrator',active:true};},
     f=>f.profile.access_revision=3,f=>f.profile.email='other@example.invalid'];
-  for(const mutate of mutations){const f=fixture();mutate(f);await assert.rejects(loginLegacyHostedRuntime(f.options),e=>e.code==='LEGACY_HOSTED_RUNTIME_LOGIN_IDENTITY_INVALID');assert.deepEqual(f.calls.slice(-2),['context-close','browser-close']);
+  for(const [index,mutate] of mutations.entries()){const f=fixture();mutate(f);await assert.rejects(loginLegacyHostedRuntime(f.options),e=>e.code===(index<5?'LEGACY_HOSTED_RUNTIME_LOGIN_AUTH_USER_FAILED':'LEGACY_HOSTED_RUNTIME_LOGIN_OWN_PROFILE_FAILED'));assert.deepEqual(f.calls.slice(-2),['context-close','browser-close']);
     assert.ok(f.calls.filter(c=>c==='get-user').length===1);assert.ok(f.calls.filter(c=>c==='get-own-profile').length<=1);}
 });
 
@@ -118,9 +120,9 @@ test('invalid auth response headers, duplicates, redirects, oversized data and p
   const bodies=[()=>response({error:'PRIVATE_RAW_ERROR'},{'content-type':'text/plain'}),()=>new Response(JSON.stringify({error:'PRIVATE_PROVIDER_FAILURE'}),{status:500,headers:{'content-type':'application/json'}}),
     ()=>({status:200,ok:true,redirected:true,headers:new Headers({'content-type':'application/json'}),body:new Response('private').body}),()=>response({data:'x'.repeat(65537)}),()=>{throw Error('PRIVATE_RAW_PROVIDER_ERROR');}];
   for(const body of bodies){const f=fixture();let count=0;f.options.fetchImpl=async()=>{count++;return body();};
-    await assert.rejects(loginLegacyHostedRuntime(f.options),e=>e.code==='LEGACY_HOSTED_RUNTIME_LOGIN_IDENTITY_INVALID'&&!e.message.includes('PRIVATE'));assert.equal(count,1);assert.deepEqual(f.calls.slice(-2),['context-close','browser-close']);}
+    await assert.rejects(loginLegacyHostedRuntime(f.options),e=>e.code==='LEGACY_HOSTED_RUNTIME_LOGIN_AUTH_USER_FAILED'&&!e.message.includes('PRIVATE'));assert.equal(count,1);assert.deepEqual(f.calls.slice(-2),['context-close','browser-close']);}
   const f=fixture(),read=f.options.fetchImpl;f.options.fetchImpl=async(url,o)=>url.includes('/rest/v1/')?response([f.profile,f.profile]):read(url,o);
-  await assert.rejects(loginLegacyHostedRuntime(f.options),e=>e.code==='LEGACY_HOSTED_RUNTIME_LOGIN_IDENTITY_INVALID');
+  await assert.rejects(loginLegacyHostedRuntime(f.options),e=>e.code==='LEGACY_HOSTED_RUNTIME_LOGIN_OWN_PROFILE_FAILED');
 });
 
 test('stale or revoked token and callback/source drift stop before own reads; no reused session is accepted',async()=>{
@@ -130,7 +132,7 @@ test('stale or revoked token and callback/source drift stop before own reads; no
   for(const mutate of mutations){const f=fixture();mutate(f);await assert.rejects(loginLegacyHostedRuntime(f.options));assert.ok(!f.calls.includes('get-user'));assert.deepEqual(f.calls.slice(-2),['context-close','browser-close']);}
   for(const claim of [{iss:'https://foreign.invalid/auth/v1'},{sub:'00000000-0000-4000-8000-000000000456'},{role:'service_role'},{aud:'foreign'},{exp:Math.floor(now/1000)-1}]){
     const f=fixture(),p={iss:`${supabase}/auth/v1`,aud:'authenticated',role:'authenticated',sub:id,iat:Math.floor(now/1000),exp:Math.floor(now/1000)+3600,...claim};
-    f.storage.set(key,JSON.stringify({access_token:jwt(p)}));await assert.rejects(loginLegacyHostedRuntime(f.options),e=>e.code==='LEGACY_HOSTED_RUNTIME_LOGIN_IDENTITY_INVALID');assert.ok(!f.calls.includes('get-user'));
+    f.storage.set(key,JSON.stringify({access_token:jwt(p)}));await assert.rejects(loginLegacyHostedRuntime(f.options),e=>e.code==='LEGACY_HOSTED_RUNTIME_LOGIN_SESSION_BINDING_INVALID');assert.ok(!f.calls.includes('get-user'));
   }
 });
 
@@ -152,7 +154,7 @@ test('request allowlist rejects encoded API paths, foreign authority, issuer bus
 });
 
 test('missing WebSocket interception or browser cleanup failure never returns an identity',async()=>{
-  const f=fixture();delete f.context.routeWebSocket;await assert.rejects(loginLegacyHostedRuntime(f.options),e=>e.code==='LEGACY_HOSTED_RUNTIME_LOGIN_UNKNOWN');assert.ok(!f.calls.includes('goto'));assert.deepEqual(f.calls.slice(-2),['context-close','browser-close']);
+  const f=fixture();delete f.context.routeWebSocket;await assert.rejects(loginLegacyHostedRuntime(f.options),e=>e.code==='LEGACY_HOSTED_RUNTIME_LOGIN_REQUEST_GATE_FAILED');assert.ok(!f.calls.includes('goto'));assert.deepEqual(f.calls.slice(-2),['context-close','browser-close']);
   const g=fixture();g.context.close=async()=>{g.calls.push('context-close');throw Error('PRIVATE_CLEANUP_ERROR');};
   await assert.rejects(loginLegacyHostedRuntime(g.options),e=>e.code==='LEGACY_HOSTED_RUNTIME_LOGIN_CLEANUP_FAILED'&&!e.message.includes('PRIVATE'));assert.deepEqual(g.calls.slice(-2),['context-close','browser-close']);
 });
@@ -186,4 +188,71 @@ test('callback CORS preflight admits only canonical own-user GET from exact admi
   for(const changed of [{...headers,origin:'https://foreign.invalid'},{...headers,'access-control-request-method':'POST'},{...headers,'access-control-request-headers':'apikey, private-secret-header'},
     {...headers,'access-control-request-headers':''}])assert.equal(await f.request(`${supabase}/auth/v1/user`,'OPTIONS','preflight',true,{headers:changed}),'abort');
   for(const path of ['/auth/v1/token','/rest/v1/user_profiles','/auth/v1/user?other=user'])assert.equal(await f.request(`${supabase}${path}`,'OPTIONS','preflight',true,{headers}),'abort');
+});
+
+test('automatic issuer arrival before or after initial URL check never waits for or clicks a missing Continue button',async()=>{
+  for(const automatic of ['already_arrived','delayed_arrival']){
+    const f=fixture(),goto=f.page.goto,role=f.page.getByRole;
+    f.page.goto=async(...args)=>{await goto(...args);if(automatic==='already_arrived')f.navigateTo(`${issuer}/admin?returnTo=fixture`);};
+    f.page.getByRole=(kind,options)=>{
+      if(options.name!=='Continue with FCUNO')return role(kind,options);
+      return {waitFor:()=>new Promise(()=>{if(automatic==='delayed_arrival')setTimeout(()=>f.navigateTo(`${issuer}/admin?returnTo=fixture`),5);}),
+        elementHandle:()=>assert.fail('Automatic login never acquires the missing Continue button'),click:()=>assert.fail('Automatic login never clicks the missing Continue button')};
+    };
+    const result=await loginLegacyHostedRuntime(f.options);assert.equal(result.auth.user.id,id);assert.ok(!f.calls.includes('continue-click'));
+    assert.deepEqual(f.calls.slice(-4),['get-user','get-own-profile','context-close','browser-close']);
+  }
+});
+
+test('automatic redirect while the original Continue element becomes detached still reaches issuer without retrying a next-page locator',async()=>{
+  const f=fixture(),role=f.page.getByRole;let elementClicks=0,disposed=0;
+  f.page.getByRole=(kind,options)=>options.name==='Continue with FCUNO'?{waitFor:async()=>{},elementHandle:async()=>({click:async()=>{elementClicks++;f.navigateTo(`${issuer}/admin`);throw Error('PRIVATE_ORIGINAL_DOCUMENT_DETACHED');},dispose:async()=>{disposed++;}}),
+    click:()=>assert.fail('A live locator must not retry on the issuer page')}:role(kind,options);
+  const result=await loginLegacyHostedRuntime(f.options);assert.equal(result.auth.user.id,id);assert.equal(elementClicks,1);assert.equal(disposed,1);assert.ok(!f.calls.includes('continue-click'));
+});
+
+test('each login boundary reports only its exact sanitized fixed phase and stops subsequent private work',async()=>{
+  const cases=[
+    ['BROWSER_START_FAILED',f=>{f.options.browserType.launch=async()=>{throw Error('PRIVATE_BROWSER_PATH');};}],
+    ['REQUEST_GATE_FAILED',f=>{delete f.context.routeWebSocket;}],
+    ['FCOS_NAVIGATION_FAILED',f=>{f.page.goto=async()=>{throw Error('PRIVATE_URL_ERROR');};}],
+    ['ISSUER_ARRIVAL_FAILED',f=>{f.page.waitForURL=async()=>{throw Error('PRIVATE_ISSUER_LOCATION');};const role=f.page.getByRole;f.page.getByRole=(kind,o)=>o.name==='Continue with FCUNO'?{waitFor:async()=>{throw Error('PRIVATE_BUTTON_TIMEOUT');}}:role(kind,o);}],
+    ['ISSUER_FORM_FAILED',f=>{f.page.getByLabel=()=>({fill:async()=>{throw Error('PRIVATE_FORM_VALUE');}});}],
+    ['ISSUER_SUBMIT_FAILED',f=>{const role=f.page.getByRole;f.page.getByRole=(kind,o)=>o.name==='Login'?{click:async()=>{throw Error('PRIVATE_SUBMIT_RESPONSE');}}:role(kind,o);}],
+    ['CALLBACK_FAILED',f=>{const wait=f.page.waitForURL;f.page.waitForURL=(predicate,options)=>predicate(new URL(`${origin}/login?federated=1`))?Promise.reject(Error('PRIVATE_CALLBACK_TOKEN')):wait(predicate,options);}],
+    ['SESSION_STORAGE_FAILED',f=>{f.page.waitForFunction=async()=>{throw Error('PRIVATE_STORAGE_TOKEN');};}],
+    ['SESSION_BINDING_INVALID',f=>{f.storage.set(key,JSON.stringify({access_token:'PRIVATE_INVALID_SESSION'}));}],
+    ['AUTH_USER_FAILED',f=>{f.options.fetchImpl=async()=>{throw Error('PRIVATE_AUTH_USER');};}],
+    ['OWN_PROFILE_FAILED',f=>{const read=f.options.fetchImpl;f.options.fetchImpl=(url,o)=>url.includes('/rest/v1/')?Promise.reject(Error('PRIVATE_ROW_ID')):read(url,o);}],
+  ];
+  for(const [phase,mutate] of cases){const f=fixture();mutate(f);await assert.rejects(loginLegacyHostedRuntime(f.options),error=>{
+    assert.equal(error.code,`LEGACY_HOSTED_RUNTIME_LOGIN_${phase}`);assert.equal(error.message,error.code);assert.equal(legacyRuntimeLoginFailureCode(error),error.code);assert.doesNotMatch(JSON.stringify(error),/PRIVATE_|password|access_token/);return true;
+  });if(!['AUTH_USER_FAILED','OWN_PROFILE_FAILED'].includes(phase)){assert.ok(!f.calls.includes('get-user'));assert.ok(!f.calls.includes('get-own-profile'));}}
+});
+
+test('failure-code sanitizer never propagates arbitrary messages, provider codes or throwing accessors',()=>{
+  assert.equal(Object.isFrozen(LEGACY_HOSTED_RUNTIME_LOGIN_FAILURE_CODES),true);
+  for(const code of LEGACY_HOSTED_RUNTIME_LOGIN_FAILURE_CODES)assert.equal(legacyRuntimeLoginFailureCode({code,message:'PRIVATE_PROVIDER_MESSAGE'}),code);
+  for(const error of [null,{},Error('PRIVATE_TOKEN'),{code:'PRIVATE_CODE'},{code:'LEGACY_HOSTED_RUNTIME_LOGIN_ISSUER_ARRIVAL_FAILED PRIVATE_TOKEN'},
+    {get code(){throw Error('PRIVATE_ACCESSOR');}},{message:'LEGACY_HOSTED_RUNTIME_LOGIN_ISSUER_ARRIVAL_FAILED'}])assert.equal(legacyRuntimeLoginFailureCode(error),null);
+});
+
+
+test('losing manual-button wait cannot act on callback or after automatic login completes',async()=>{
+  for(const timing of ['callback','after_complete']){
+    const f=fixture(),goto=f.page.goto,role=f.page.getByRole;let release,handles=0,clicks=0;
+    const visible=new Promise(resolve=>{release=resolve;});
+    f.page.goto=async(...args)=>{await goto(...args);queueMicrotask(()=>f.navigateTo(`${issuer}/admin?returnTo=fixture`));};
+    f.page.getByRole=(kind,options)=>{
+      if(options.name==='Continue with FCUNO')return {waitFor:()=>visible,elementHandle:async()=>{handles++;return {click:async()=>{clicks++;},dispose:async()=>{}};}};
+      const original=role(kind,options);
+      if(options.name!=='Login')return original;
+      return {...original,click:async()=>{await original.click();if(timing==='callback')release();}};
+    };
+    const result=await loginLegacyHostedRuntime(f.options);assert.equal(result.auth.user.id,id);
+    if(timing==='after_complete')release();
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(handles,0);assert.equal(clicks,0);assert.equal(f.calls.filter(c=>c==='login-click').length,1);
+    assert.equal(f.calls.filter(c=>c==='get-own-profile').length,1);
+  }
 });

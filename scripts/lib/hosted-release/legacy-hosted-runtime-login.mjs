@@ -28,6 +28,16 @@ const need=v=>{if(!v)throw Error('LEGACY_HOSTED_RUNTIME_LOGIN_REFUSED');};
 const environmentKeys=['PATH','HOME','TMPDIR','TMP','TEMP','LANG','LC_ALL','TZ','DISPLAY','XAUTHORITY','PLAYWRIGHT_BROWSERS_PATH'];
 const defaultEnvironment=()=>Object.fromEntries(environmentKeys.filter(k=>typeof process.env[k]==='string').map(k=>[k,process.env[k]]));
 const jwt=token=>{need(typeof token==='string'&&token.length<=16384&&/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token));return JSON.parse(Buffer.from(token.split('.')[1],'base64url').toString('utf8'));};
+export const LEGACY_HOSTED_RUNTIME_LOGIN_FAILURE_CODES=Object.freeze([
+  'LEGACY_HOSTED_RUNTIME_LOGIN_BINDING_INVALID','LEGACY_HOSTED_RUNTIME_LOGIN_BROWSER_START_FAILED','LEGACY_HOSTED_RUNTIME_LOGIN_REQUEST_GATE_FAILED',
+  'LEGACY_HOSTED_RUNTIME_LOGIN_FCOS_NAVIGATION_FAILED','LEGACY_HOSTED_RUNTIME_LOGIN_ISSUER_ARRIVAL_FAILED','LEGACY_HOSTED_RUNTIME_LOGIN_ISSUER_FORM_FAILED',
+  'LEGACY_HOSTED_RUNTIME_LOGIN_ISSUER_SUBMIT_FAILED','LEGACY_HOSTED_RUNTIME_LOGIN_CALLBACK_FAILED','LEGACY_HOSTED_RUNTIME_LOGIN_SESSION_STORAGE_FAILED',
+  'LEGACY_HOSTED_RUNTIME_LOGIN_SESSION_BINDING_INVALID','LEGACY_HOSTED_RUNTIME_LOGIN_AUTH_USER_FAILED','LEGACY_HOSTED_RUNTIME_LOGIN_OWN_PROFILE_FAILED',
+  'LEGACY_HOSTED_RUNTIME_LOGIN_CLEANUP_FAILED',
+]);
+export function legacyRuntimeLoginFailureCode(error) {
+  try{const code=error?.code;return LEGACY_HOSTED_RUNTIME_LOGIN_FAILURE_CODES.includes(code)?code:null;}catch{return null;}
+}
 
 /** Public setup validation only; no password, browser or provider activity. */
 export function validateLegacyRuntimePublicAuth({origin,email,expectedRole,publicAuth,now=Date.now()}={}) {
@@ -130,51 +140,84 @@ export async function installLegacyRuntimeBrowserGate({context,allowRequest}) {
   return {page,assertHealthy:()=>need(!gateFailed)};
 }
 
+const isIssuerAdmin=value=>{try{const u=new URL(value);return u.origin===issuer&&u.pathname==='/admin';}catch{return false;}};
+async function arriveAtIssuerAdmin(page,origin) {
+  // The pinned FCOS Login effect can redirect automatically before its Continue
+  // button is ever visible. Wait for either event instead of a URL snapshot.
+  let arrived=false;
+  const arrival=page.waitForURL(u=>isIssuerAdmin(u.href),{timeout:45000}).then(()=>{arrived=true;});
+  const manual=(async()=>{
+    const button=page.getByRole('button',{name:'Continue with FCUNO',exact:true});
+    await button.waitFor({state:'visible',timeout:45000});
+    if(arrived||isIssuerAdmin(page.url()))return;
+    const u=new URL(page.url());need(u.origin===origin&&u.pathname==='/login'&&!u.searchParams.has('federated'));
+    // Bind the optional click to this original document. A locator retry must
+    // never search the next issuer page after an automatic redirect.
+    if(arrived)return;
+    const element=await button.elementHandle({timeout:1000});need(element);
+    try{if(!arrived&&!isIssuerAdmin(page.url())){const current=new URL(page.url());need(current.origin===origin&&current.pathname==='/login'&&!current.searchParams.has('federated'));await element.click({timeout:5000});}}
+    finally{await element.dispose().catch(()=>{});}
+    await arrival;
+  })().catch(()=>arrival);
+  await Promise.race([arrival,manual]);
+  need(isIssuerAdmin(page.url()));
+}
+
 /** Legacy setup observations only. Reuses approved own FCUNO authentication;
  * ordinary issuer/session synchronization may occur. No FCOS API is allowed
  * during login, no token/state is persisted, and no moduleAccess is invented.
  * The caller must admit publicAuth through the protected controller/setup. */
 export async function loginLegacyHostedRuntime({origin,credentials,mode,protectionState,browserType=chromium,launchEnvironment=defaultEnvironment(),publicAuth,fetchImpl=fetch,now=Date.now}={}) {
-  let browser,context,failure='LEGACY_HOSTED_RUNTIME_LOGIN_BINDING_INVALID',cleanupFailed=false;
+  let browser,context,assertGateHealthy,failure='LEGACY_HOSTED_RUNTIME_LOGIN_BINDING_INVALID',cleanupFailed=false;
   try{
     const started=now(),identity=admission({origin,credentials,mode,publicAuth,now:started});
     need(typeof fetchImpl==='function'&&typeof browserType?.launch==='function'&&launchEnvironment&&Object.keys(launchEnvironment).every(k=>environmentKeys.includes(k)&&typeof launchEnvironment[k]==='string'));
     const protection=candidateProtectionState(protectionState,origin,started);
-    failure='LEGACY_HOSTED_RUNTIME_LOGIN_UNKNOWN';browser=await browserType.launch({headless:true,env:launchEnvironment});
+    failure='LEGACY_HOSTED_RUNTIME_LOGIN_BROWSER_START_FAILED';browser=await browserType.launch({headless:true,env:launchEnvironment});
     context=await browser.newContext({storageState:protection,viewport:{width:1440,height:1000},serviceWorkers:'block',acceptDownloads:false});
+    failure='LEGACY_HOSTED_RUNTIME_LOGIN_REQUEST_GATE_FAILED';
     const {page,assertHealthy}=await installLegacyRuntimeBrowserGate({context,allowRequest:request=>allowedBrowserRequest(request,origin,publicAuth.issuerAuthorizationPath,credentials)});
+    assertGateHealthy=assertHealthy;
+    failure='LEGACY_HOSTED_RUNTIME_LOGIN_FCOS_NAVIGATION_FAILED';
     await page.goto(`${origin}/login`,{waitUntil:'domcontentloaded',timeout:45000});
-    if(new URL(page.url()).origin!==issuer){await page.getByRole('button',{name:'Continue with FCUNO',exact:true}).click();await page.waitForURL(u=>u.origin===issuer,{timeout:30000});}
+    failure='LEGACY_HOSTED_RUNTIME_LOGIN_ISSUER_ARRIVAL_FAILED';await arriveAtIssuerAdmin(page,origin);
     const atIssuer=()=>{const u=new URL(page.url());need(u.origin===issuer&&u.pathname==='/admin');};
+    failure='LEGACY_HOSTED_RUNTIME_LOGIN_ISSUER_FORM_FAILED';
     atIssuer();await page.getByLabel('Username',{exact:true}).fill(credentials.email);
     atIssuer();await page.getByLabel('Password',{exact:true}).fill(credentials.password);atIssuer();
-    await Promise.all([page.waitForURL(u=>u.origin===origin&&u.pathname==='/login'&&u.searchParams.get('federated')==='1'&&!u.searchParams.has('error')&&!u.searchParams.has('error_code'),{timeout:60000}),page.getByRole('button',{name:'Login',exact:true}).click()]);
+    const callback=page.waitForURL(u=>u.origin===origin&&u.pathname==='/login'&&u.searchParams.get('federated')==='1'&&!u.searchParams.has('error')&&!u.searchParams.has('error_code'),{timeout:60000}).then(()=>true,()=>false);
+    failure='LEGACY_HOSTED_RUNTIME_LOGIN_ISSUER_SUBMIT_FAILED';await page.getByRole('button',{name:'Login',exact:true}).click();
+    failure='LEGACY_HOSTED_RUNTIME_LOGIN_CALLBACK_FAILED';need(await callback);
     const key=`sb-${project}-auth-token`;
+    failure='LEGACY_HOSTED_RUNTIME_LOGIN_SESSION_STORAGE_FAILED';
     await page.waitForFunction(({origin,key})=>{try{const u=new URL(window.location.href);return u.origin===origin&&u.pathname==='/login'&&u.searchParams.get('federated')==='1'&&typeof JSON.parse(window.localStorage.getItem(key))?.access_token==='string';}catch{return false;}},{origin,key},{timeout:30000});
     const token=await page.evaluate(({origin,key})=>{if(window.location.origin!==origin||window.location.pathname!=='/login'||new URLSearchParams(window.location.search).get('federated')!=='1')return null;try{return JSON.parse(window.localStorage.getItem(key))?.access_token;}catch{return null;}},{origin,key});
-    assertHealthy();admission({origin,credentials,mode,publicAuth,now:now()});
-    failure='LEGACY_HOSTED_RUNTIME_LOGIN_IDENTITY_INVALID';const claims=jwt(token),time=now();
+    failure='LEGACY_HOSTED_RUNTIME_LOGIN_REQUEST_GATE_FAILED';assertHealthy();
+    failure='LEGACY_HOSTED_RUNTIME_LOGIN_BINDING_INVALID';admission({origin,credentials,mode,publicAuth,now:now()});
+    failure='LEGACY_HOSTED_RUNTIME_LOGIN_SESSION_BINDING_INVALID';const claims=jwt(token),time=now();
     need(claims.iss===`${supabaseOrigin}/auth/v1`&&claims.sub===identity.profileId&&claims.role==='authenticated'
       &&(claims.aud==='authenticated'||Array.isArray(claims.aud)&&claims.aud.includes('authenticated'))
       &&Number.isSafeInteger(claims.iat)&&claims.iat*1000>=started-30000&&claims.iat*1000<=time+30000&&Number.isSafeInteger(claims.exp)&&claims.exp*1000>time
       &&(publicAuth.preflight.linkRevokedBefore===null||claims.iat*1000>Date.parse(publicAuth.preflight.linkRevokedBefore)));
-    const user=await readJson(fetchImpl,`${supabaseOrigin}/auth/v1/user`,token,publicAuth.publicAnonKey);
+    failure='LEGACY_HOSTED_RUNTIME_LOGIN_AUTH_USER_FAILED';const user=await readJson(fetchImpl,`${supabaseOrigin}/auth/v1/user`,token,publicAuth.publicAnonKey);
     const linked=(user.identities||[]).filter(i=>i?.provider===federation.oidcProvider);
     need(user.id===identity.profileId&&user.email?.toLowerCase()===identity.email&&user.is_anonymous!==true&&linked.length===1
       &&typeof(linked[0].identity_data?.sub||linked[0].provider_id)==='string'&&digest(linked[0].identity_data?.sub||linked[0].provider_id)===identity.fcunoSubjectSha256);
-    assertHealthy();admission({origin,credentials,mode,publicAuth,now:now()});
+    failure='LEGACY_HOSTED_RUNTIME_LOGIN_REQUEST_GATE_FAILED';assertHealthy();
+    failure='LEGACY_HOSTED_RUNTIME_LOGIN_BINDING_INVALID';admission({origin,credentials,mode,publicAuth,now:now()});
     const url=new URL('/rest/v1/user_profiles',supabaseOrigin);url.searchParams.set('select',profileColumns);url.searchParams.set('id',`eq.${user.id}`);
-    const profiles=await readJson(fetchImpl,url.href,token,publicAuth.publicAnonKey);
+    failure='LEGACY_HOSTED_RUNTIME_LOGIN_OWN_PROFILE_FAILED';const profiles=await readJson(fetchImpl,url.href,token,publicAuth.publicAnonKey);
     need(Array.isArray(profiles)&&profiles.length===1);const profile=profiles[0];
     need(exact(profile,profileColumns.split(','))&&profile.id===user.id&&profile.email?.toLowerCase()===identity.email&&profile.active===true
       &&profile.user_type===identity.role&&profile.access_revision===identity.accessRevision);
-    assertHealthy();admission({origin,credentials,mode,publicAuth,now:now()});
+    failure='LEGACY_HOSTED_RUNTIME_LOGIN_REQUEST_GATE_FAILED';assertHealthy();
+    failure='LEGACY_HOSTED_RUNTIME_LOGIN_BINDING_INVALID';admission({origin,credentials,mode,publicAuth,now:now()});
     return {token,auth:{kind:'fcos_runtime_own_profile_auth_observation_v1',user:{id:profile.id,email:profile.email,user_type:profile.user_type,active:true,read_only_ci:false},
       provenance:{kind:'supabase_auth_user_and_rls_own_profile_get',capturedAt:new Date(now()).toISOString(),profileAccessRevision:profile.access_revision,
         preflightEvidenceSha256:publicAuth.preflight.evidenceSha256,authContextCalled:false,moduleAccessObserved:false,existingFcunoOwnIdentitySynchronizationMayOccur:true,
         issuerOwnSessionAndCodeCreationMayOccur:true,issuerOwnCookieRenewalOrInvalidSessionRevocationMayOccur:true,
         issuerSource:{repository:federation.providerRepository,sha:federation.providerCommit,files:issuerSources.map(([path,sha256])=>({path,sha256}))}}}};
-  }catch{throw Object.assign(new Error(failure),{code:failure});}
+  }catch{try{assertGateHealthy?.();}catch{failure='LEGACY_HOSTED_RUNTIME_LOGIN_REQUEST_GATE_FAILED';}throw Object.assign(new Error(failure),{code:failure});}
   finally{
     try{await context?.close();}catch{cleanupFailed=true;}
     try{await browser?.close();}catch{cleanupFailed=true;}

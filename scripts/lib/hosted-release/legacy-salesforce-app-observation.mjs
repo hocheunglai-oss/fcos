@@ -3,6 +3,7 @@ import {realpathSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {FIRST_RUNTIME,firstRuntimeDigest,firstRuntimeTargets} from './first-runtime.mjs';
 import {fcosSalesforceEnvironment} from '../../../config/fcosConnections.js';
+import {legacyRuntimeLoginFailureCode} from './legacy-hosted-runtime-login.mjs';
 
 const exact=(v,keys)=>v&&Object.getPrototypeOf(v)===Object.prototype&&Object.keys(v).sort().join(',')===[...keys].sort().join(',');
 const hash=v=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v);
@@ -100,7 +101,10 @@ export async function observeLegacySalesforceApp({binding,production,controllerD
     failure='LEGACY_SALESFORCE_APP_RESPONSE_UNKNOWN';const result=await metadata(response);
     verifiedProduction(binding,production,now());
     report.status='observed';report.capturedAt=new Date(now()).toISOString();report.appOwnedAuth.state='authenticated';report.result=result;
-  }catch{report.failures=[{code:failure}];}
+  }catch(error){
+    const loginPhase=failure==='LEGACY_SALESFORCE_APP_LOGIN_UNKNOWN'?legacyRuntimeLoginFailureCode(error):null;
+    report.failures=[{code:failure,...(loginPhase?{loginPhase}:{})}];
+  }
   finally{try{if(response?.body&&!response.body.locked&&typeof response.body.cancel==='function')await response.body.cancel();}catch{/* Cleanup never exposes provider diagnostics. */}}
   return report;
 }

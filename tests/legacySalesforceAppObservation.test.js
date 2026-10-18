@@ -96,3 +96,13 @@ test('private login errors stay sanitized; native observation expiring during th
   const late=fixture();let clock=at;const r=await observeLegacySalesforceApp({...late.options,now:()=>clock,fetchImpl:async()=>{late.calls.push('fetch');clock=at+1800001;return response();}});
   assert.equal(r.status,'unknown');assert.equal(r.result,undefined);assert.equal(r.appOwnedAuth.state,'unknown');assert.equal(late.calls.filter(c=>c==='fetch').length,1);assert.equal(r.failures[0].code,'LEGACY_SALESFORCE_APP_RESPONSE_UNKNOWN');
 });
+
+
+test('only an exact fixed login phase is published; private suffixes and later provider failures are sanitized',async()=>{
+  for(const [code,expected] of [['LEGACY_HOSTED_RUNTIME_LOGIN_ISSUER_ARRIVAL_FAILED','LEGACY_HOSTED_RUNTIME_LOGIN_ISSUER_ARRIVAL_FAILED'],['LEGACY_HOSTED_RUNTIME_LOGIN_ISSUER_ARRIVAL_FAILED_PRIVATE',undefined],['PRIVATE_PASSWORD',undefined]]){
+    const f=fixture(),r=await observeLegacySalesforceApp({...f.options,tokenProvider:async()=>{throw Object.assign(Error('PRIVATE_PASSWORD_AND_URL'),{code});}});
+    assert.equal(r.failures[0].code,'LEGACY_SALESFORCE_APP_LOGIN_UNKNOWN');assert.equal(r.failures[0].loginPhase,expected);assert.equal(r.httpStatus,null);assert.doesNotMatch(JSON.stringify(r),/PRIVATE_/);
+  }
+  const f=fixture(),r=await observeLegacySalesforceApp({...f.options,fetchImpl:async()=>{throw Object.assign(Error('PRIVATE_PROVIDER_ERROR'),{code:'LEGACY_HOSTED_RUNTIME_LOGIN_ISSUER_ARRIVAL_FAILED'});}});
+  assert.equal(r.failures[0].code,'LEGACY_SALESFORCE_APP_READ_UNKNOWN');assert.equal(r.failures[0].loginPhase,undefined);
+});

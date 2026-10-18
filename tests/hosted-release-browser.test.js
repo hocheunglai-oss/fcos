@@ -179,3 +179,14 @@ test('actual frozen harness accepts trusted source seams without legacy GitHub l
     error => error.normalRoleDiagnostic?.stage === 'BROWSER_SETUP');
   assert.equal(launches, 1);
 });
+
+
+test('runtime token provider preserves only fixed login phases, never raw private diagnostics', async t => {
+  const f = fixture(t);
+  const env = { FCOS_HOSTED_RUNTIME_EMAIL: 'runtime@example.invalid', FCOS_HOSTED_RUNTIME_PASSWORD: 'PRIVATE_RUNTIME', FCOS_HOSTED_RUNTIME_EXPECTED_ROLE: 'administrator' };
+  const verifyTarget = async () => ({ verified: true, origin, deploymentId: f.preview.id, sha: f.preview.sha, sourceSha256: 'a'.repeat(64) });
+  for (const [code, expected] of [['LEGACY_HOSTED_RUNTIME_LOGIN_ISSUER_ARRIVAL_FAILED', 'LEGACY_HOSTED_RUNTIME_LOGIN_ISSUER_ARRIVAL_FAILED'], ['PRIVATE_PASSWORD', 'Hosted runtime identity verification failed.'], ['LEGACY_HOSTED_RUNTIME_LOGIN_ISSUER_ARRIVAL_FAILED_PRIVATE', 'Hosted runtime identity verification failed.']]) {
+    const provider = createHostedRuntimeTokenProvider({ env, verifyTarget, login: async () => { throw Object.assign(Error('PRIVATE_PASSWORD_AND_URL'), { code }); } });
+    await assert.rejects(provider({ origin, deployment: f.preview }), error => error.message === expected && !String(error.stack).includes('PRIVATE_PASSWORD_AND_URL'));
+  }
+});

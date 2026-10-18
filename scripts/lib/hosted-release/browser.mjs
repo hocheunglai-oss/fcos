@@ -16,6 +16,7 @@ import { COMPATIBILITY_NORMAL_MODULES, verifyRuntimeCompatibilityNormalRole } fr
 import { PREVIEW_EMAIL_SIGNER_MAILBOX_REGISTRY_ID } from '../preview-email-signer.mjs';
 import { compatibilityBrowserIsolationVerified } from '../compatibility-browser-isolation.mjs';
 import { createVercelIntegrationReader } from './vercel-read-auth.mjs';
+import { legacyRuntimeLoginFailureCode } from './legacy-hosted-runtime-login.mjs';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const FROZEN = '04ee3425aac7a49089eda781eb3c976aea1f6785';
@@ -211,6 +212,8 @@ export function createHostedRuntimeTokenProvider({ env = process.env, verifyTarg
       return authenticated.token;
     } catch (error) {
       if (error instanceof HostedBrowserSetupError) throw error;
+      const code = legacyRuntimeLoginFailureCode(error);
+      if (code) throw Object.assign(new Error(code), { code });
       throw new Error('Hosted runtime identity verification failed.');
     }
   };
