@@ -5,6 +5,7 @@ import { existsSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { PGlite } from '@electric-sql/pglite';
 import pg from 'pg';
 
@@ -37,7 +38,7 @@ const nativeAvailable = bindir && existsSync(join(bindir, 'initdb'));
 async function fixture(t, native) {
   let db, query, exec, newClient;
   if (native) {
-    const directory = await mkdtemp('/private/tmp/fcos-step-pg-');
+    const directory = await mkdtemp(join(process.platform === 'darwin' ? '/private/tmp' : tmpdir(), 'fcos-step-pg-'));
     const data = join(directory, 'data'), port = 54622;
     let started = false;
     const config = { host: directory, port, user: 'postgres', database: 'postgres' };

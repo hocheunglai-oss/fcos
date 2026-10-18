@@ -126,6 +126,7 @@ test('existing owner requires real getUser, signed FCUNO proof, own RLS profile 
     assert.equal(actor.sourceBinding.identityRevision, 7); assert.equal(actor.sourceBinding.credentialRevision, 3);
     assert.equal(actor.sourceBinding.issuer, pin.issuer); assert.equal(actor.sourceBinding.clientId, pin.oidcClientId);
     assert.equal(actor.sourceBinding.emailSha256, emailSha256);
+    assert.equal(actor.sourceBinding.supabaseSessionExpiresAt, (seconds + 3600) * 1000);
     assert.equal(actor.sourceBinding.sessionIdSha256, createHash('sha256').update(sessionId).digest('hex'));
     for (const sensitive of [secret, f.bearer, f.providerAccessToken, email, subject, sessionId]) assert.equal(JSON.stringify(actor).includes(sensitive), false);
   }
@@ -437,4 +438,14 @@ test('host cancellation between owned-link response and service RPC dispatch pre
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(f.state.calls.map(call => call.kind), ['user', 'profile', 'link']);
   assert.equal(f.state.counts.access, undefined);
+});
+
+test('source binding carries only the exact Supabase expiry after both real getUser checks', async () => {
+  const f = await fixture({ claims: { exp: seconds + 42 } });
+  const actor = await f.auth.authenticate(f.input);
+  assert.equal(f.state.counts.user, 2);
+  assert.equal(actor.sourceBinding.supabaseSessionExpiresAt, (seconds + 42) * 1000);
+  assert.equal(Object.isFrozen(actor.sourceBinding), true);
+  const forged = await fixture(); forged.input.supabaseSessionExpiresAt = base + 99999999;
+  await denied(forged); assert.equal(forged.state.calls.length, 0);
 });

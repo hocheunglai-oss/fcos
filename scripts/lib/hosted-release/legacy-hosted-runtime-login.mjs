@@ -1,5 +1,6 @@
 import {createHash} from 'node:crypto';
 import {chromium} from '@playwright/test';
+import {createLocalJWKSet,jwtVerify} from 'jose';
 import {FCOS_CONNECTION_POLICY,fcosConnectionIdentifier} from '../../../config/fcosConnections.js';
 import {FCOS_READ_ONLY_CI} from '../../../config/fcosCiIdentity.js';
 import {candidateProtectionState} from '../../e2e-protection-state.mjs';
@@ -33,6 +34,7 @@ export const LEGACY_HOSTED_RUNTIME_LOGIN_FAILURE_CODES=Object.freeze([
   'LEGACY_HOSTED_RUNTIME_LOGIN_FCOS_NAVIGATION_FAILED','LEGACY_HOSTED_RUNTIME_LOGIN_ISSUER_ARRIVAL_FAILED','LEGACY_HOSTED_RUNTIME_LOGIN_ISSUER_FORM_FAILED',
   'LEGACY_HOSTED_RUNTIME_LOGIN_ISSUER_SUBMIT_FAILED','LEGACY_HOSTED_RUNTIME_LOGIN_CALLBACK_FAILED','LEGACY_HOSTED_RUNTIME_LOGIN_SESSION_STORAGE_FAILED',
   'LEGACY_HOSTED_RUNTIME_LOGIN_SESSION_BINDING_INVALID','LEGACY_HOSTED_RUNTIME_LOGIN_AUTH_USER_FAILED','LEGACY_HOSTED_RUNTIME_LOGIN_OWN_PROFILE_FAILED',
+  'LEGACY_HOSTED_RUNTIME_LOGIN_PROVIDER_TOKEN_MISSING','LEGACY_HOSTED_RUNTIME_LOGIN_PROVIDER_TOKEN_INVALID',
   'LEGACY_HOSTED_RUNTIME_LOGIN_CLEANUP_FAILED',
 ]);
 export function legacyRuntimeLoginFailureCode(error) {
@@ -103,7 +105,7 @@ function allowedBrowserRequest(request,origin,authorizationPath,credentials) {
 }
 
 async function readJson(fetchImpl,url,token,key) {
-  const response=await fetchImpl(url,{method:'GET',headers:{authorization:`Bearer ${token}`,apikey:key,accept:'application/json','accept-profile':'public'},redirect:'error',cache:'no-store',signal:AbortSignal.timeout(15000)});
+  const response=await fetchImpl(url,{method:'GET',headers:token===null?{accept:'application/json'}:{authorization:`Bearer ${token}`,apikey:key,accept:'application/json','accept-profile':'public'},redirect:'error',cache:'no-store',...(token===null?{credentials:'omit'}:{}),signal:AbortSignal.timeout(15000)});
   try{
     need(response.status===200&&response.ok&&!response.redirected&&(!response.url||response.url===url)&&/^application\/json(?:\s*;|$)/i.test(response.headers?.get('content-type')||'')
       &&response.body?.getReader&&(!response.headers.get('content-length')||Number(response.headers.get('content-length'))<=65536));
@@ -112,6 +114,37 @@ async function readJson(fetchImpl,url,token,key) {
     finally{await reader.cancel().catch(()=>{});}
     return JSON.parse(Buffer.concat(chunks).toString('utf8'));
   }finally{try{if(response.body&&!response.body.locked)await response.body.cancel();}catch{/* No raw provider errors escape. */}}
+}
+
+// Private handoff proof only: no identity/session binding is inserted here.
+// Current live link revisions, revocation and Xero authority remain the recovery
+// actor verifier's responsibility at each protected operation.
+async function verifyOwnerProviderToken({providerAccessToken,claims,subject,identity,publicAuth,fetchImpl,now,started}) {
+  jwt(providerAccessToken);
+  const initial=now(),oauth=Array.isArray(claims.amr)?claims.amr.filter(entry=>entry?.method==='oauth'):[];
+  need(Number.isSafeInteger(initial)&&initial>=started&&uuid(claims.session_id)&&claims.is_anonymous!==true
+    &&Number.isSafeInteger(claims.iat)&&claims.iat>0&&claims.exp>claims.iat&&claims.exp*1000>initial
+    &&Array.isArray(claims.amr)&&claims.amr.length>0&&claims.amr.length<=10&&oauth.length===1
+    &&claims.amr.every(entry=>entry&&['oauth','totp','mfa/phone','token_refresh'].includes(entry.method)
+      &&Number.isSafeInteger(entry.timestamp)&&entry.timestamp>0&&entry.timestamp<=claims.iat+60&&entry.timestamp*1000<=initial+60000));
+  const authenticatedAt=oauth[0].timestamp*1000;
+  need(authenticatedAt>=started-30000);
+  const keys=await readJson(fetchImpl,federation.syncJwksEndpoint,null,null),at=now();
+  need(Number.isSafeInteger(at)&&at>=initial&&keys&&Array.isArray(keys.keys)&&keys.keys.length>0&&keys.keys.length<=8
+    &&keys.keys.every(key=>key&&key.kty==='EC'&&key.crv==='P-256'&&!Object.hasOwn(key,'d')));
+  const {payload}=await jwtVerify(providerAccessToken,createLocalJWKSet(keys),{
+    issuer:federation.issuer,audience:federation.oidcClientId,algorithms:['ES256'],currentDate:new Date(at),
+  });
+  const floor=publicAuth.preflight.linkRevokedBefore===null?0:Date.parse(publicAuth.preflight.linkRevokedBefore),final=now();
+  need(Number.isSafeInteger(final)&&final>=at&&claims.exp*1000>final
+    &&payload.typ==='at+jwt'&&payload.sub===subject&&digest(payload.sub)===identity.fcunoSubjectSha256
+    &&payload.use_fcos===true&&payload.email_verified===true&&typeof payload.jti==='string'&&payload.jti.length>0&&payload.jti.length<=500
+    &&Number.isSafeInteger(payload.iat)&&payload.iat>0&&Number.isSafeInteger(payload.exp)&&payload.exp>payload.iat&&payload.exp*1000>final
+    &&payload.iat*1000<=final+60000&&final-payload.iat*1000<=300000&&payload.exp-payload.iat<=300
+    &&authenticatedAt<=(payload.iat+60)*1000&&Number.isSafeInteger(payload.identity_revision)&&payload.identity_revision>0
+    &&Number.isSafeInteger(payload.credential_revision)&&payload.credential_revision>0
+    &&Number.isFinite(floor)&&authenticatedAt>floor&&payload.iat*1000>floor
+    &&(payload.email===undefined||typeof payload.email==='string'&&payload.email.trim().toLowerCase()===identity.email));
 }
 
 /** Shared transport mechanism for the runtime login and a provider-free local
@@ -166,12 +199,16 @@ async function arriveAtIssuerAdmin(page,origin) {
 /** Legacy setup observations only. Reuses approved own FCUNO authentication;
  * ordinary issuer/session synchronization may occur. No FCOS API is allowed
  * during login, no token/state is persisted, and no moduleAccess is invented.
- * The caller must admit publicAuth through the protected controller/setup. */
-export async function loginLegacyHostedRuntime({origin,credentials,mode,protectionState,browserType=chromium,launchEnvironment=defaultEnvironment(),publicAuth,fetchImpl=fetch,now=Date.now}={}) {
+ * The caller must admit publicAuth through the protected controller/setup.
+ * ownerRecoveryProviderToken is a trusted caller option, never request data. It
+ * privately returns the same callback's verified provider token in a read-only,
+ * non-enumerable providerAccessToken property. No refresh token or browser state
+ * is returned or copied out; this handoff admits no recovery/financial operation. */
+export async function loginLegacyHostedRuntime({origin,credentials,mode,protectionState,browserType=chromium,launchEnvironment=defaultEnvironment(),publicAuth,fetchImpl=fetch,now=Date.now,ownerRecoveryProviderToken=false}={}) {
   let browser,context,assertGateHealthy,failure='LEGACY_HOSTED_RUNTIME_LOGIN_BINDING_INVALID',cleanupFailed=false;
   try{
     const started=now(),identity=admission({origin,credentials,mode,publicAuth,now:started});
-    need(typeof fetchImpl==='function'&&typeof browserType?.launch==='function'&&launchEnvironment&&Object.keys(launchEnvironment).every(k=>environmentKeys.includes(k)&&typeof launchEnvironment[k]==='string'));
+    need(typeof ownerRecoveryProviderToken==='boolean'&&typeof fetchImpl==='function'&&typeof browserType?.launch==='function'&&launchEnvironment&&Object.keys(launchEnvironment).every(k=>environmentKeys.includes(k)&&typeof launchEnvironment[k]==='string'));
     const protection=candidateProtectionState(protectionState,origin,started);
     failure='LEGACY_HOSTED_RUNTIME_LOGIN_BROWSER_START_FAILED';browser=await browserType.launch({headless:true,env:launchEnvironment});
     context=await browser.newContext({storageState:protection,viewport:{width:1440,height:1000},serviceWorkers:'block',acceptDownloads:false});
@@ -191,7 +228,10 @@ export async function loginLegacyHostedRuntime({origin,credentials,mode,protecti
     const key=`sb-${project}-auth-token`;
     failure='LEGACY_HOSTED_RUNTIME_LOGIN_SESSION_STORAGE_FAILED';
     await page.waitForFunction(({origin,key})=>{try{const u=new URL(window.location.href);return u.origin===origin&&u.pathname==='/login'&&u.searchParams.get('federated')==='1'&&typeof JSON.parse(window.localStorage.getItem(key))?.access_token==='string';}catch{return false;}},{origin,key},{timeout:30000});
-    const token=await page.evaluate(({origin,key})=>{if(window.location.origin!==origin||window.location.pathname!=='/login'||new URLSearchParams(window.location.search).get('federated')!=='1')return null;try{return JSON.parse(window.localStorage.getItem(key))?.access_token;}catch{return null;}},{origin,key});
+    // Read the two exact callback fields together once; a second storage read
+    // could accidentally pair the actor bearer with a different OAuth session.
+    const callbackSession=await page.evaluate(({origin,key,includeProvider})=>{if(window.location.origin!==origin||window.location.pathname!=='/login'||new URLSearchParams(window.location.search).get('federated')!=='1')return null;try{const session=JSON.parse(window.localStorage.getItem(key));return includeProvider?{token:session?.access_token,providerAccessToken:session?.provider_token}:session?.access_token;}catch{return null;}},{origin,key,includeProvider:ownerRecoveryProviderToken});
+    const token=ownerRecoveryProviderToken?callbackSession?.token:callbackSession;
     failure='LEGACY_HOSTED_RUNTIME_LOGIN_REQUEST_GATE_FAILED';assertHealthy();
     failure='LEGACY_HOSTED_RUNTIME_LOGIN_BINDING_INVALID';admission({origin,credentials,mode,publicAuth,now:now()});
     failure='LEGACY_HOSTED_RUNTIME_LOGIN_SESSION_BINDING_INVALID';const claims=jwt(token),time=now();
@@ -212,11 +252,22 @@ export async function loginLegacyHostedRuntime({origin,credentials,mode,protecti
       &&profile.user_type===identity.role&&profile.access_revision===identity.accessRevision);
     failure='LEGACY_HOSTED_RUNTIME_LOGIN_REQUEST_GATE_FAILED';assertHealthy();
     failure='LEGACY_HOSTED_RUNTIME_LOGIN_BINDING_INVALID';admission({origin,credentials,mode,publicAuth,now:now()});
-    return {token,auth:{kind:'fcos_runtime_own_profile_auth_observation_v1',user:{id:profile.id,email:profile.email,user_type:profile.user_type,active:true,read_only_ci:false},
+    if(ownerRecoveryProviderToken){
+      failure='LEGACY_HOSTED_RUNTIME_LOGIN_PROVIDER_TOKEN_MISSING';
+      need(callbackSession?.providerAccessToken!==undefined&&callbackSession.providerAccessToken!==null&&callbackSession.providerAccessToken!=='');
+      failure='LEGACY_HOSTED_RUNTIME_LOGIN_PROVIDER_TOKEN_INVALID';
+      await verifyOwnerProviderToken({providerAccessToken:callbackSession.providerAccessToken,claims,
+        subject:linked[0].identity_data?.sub||linked[0].provider_id,identity,publicAuth,fetchImpl,now,started});
+      failure='LEGACY_HOSTED_RUNTIME_LOGIN_REQUEST_GATE_FAILED';assertHealthy();
+      failure='LEGACY_HOSTED_RUNTIME_LOGIN_BINDING_INVALID';admission({origin,credentials,mode,publicAuth,now:now()});
+    }
+    const result={token,auth:{kind:'fcos_runtime_own_profile_auth_observation_v1',user:{id:profile.id,email:profile.email,user_type:profile.user_type,active:true,read_only_ci:false},
       provenance:{kind:'supabase_auth_user_and_rls_own_profile_get',capturedAt:new Date(now()).toISOString(),profileAccessRevision:profile.access_revision,
         preflightEvidenceSha256:publicAuth.preflight.evidenceSha256,authContextCalled:false,moduleAccessObserved:false,existingFcunoOwnIdentitySynchronizationMayOccur:true,
         issuerOwnSessionAndCodeCreationMayOccur:true,issuerOwnCookieRenewalOrInvalidSessionRevocationMayOccur:true,
         issuerSource:{repository:federation.providerRepository,sha:federation.providerCommit,files:issuerSources.map(([path,sha256])=>({path,sha256}))}}}};
+    if(ownerRecoveryProviderToken)Object.defineProperty(result,'providerAccessToken',{value:callbackSession.providerAccessToken,enumerable:false});
+    return result;
   }catch{try{assertGateHealthy?.();}catch{failure='LEGACY_HOSTED_RUNTIME_LOGIN_REQUEST_GATE_FAILED';}throw Object.assign(new Error(failure),{code:failure});}
   finally{
     try{await context?.close();}catch{cleanupFailed=true;}

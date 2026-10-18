@@ -243,7 +243,7 @@ export function createXeroRecoveryActorAuthenticator(options = {}) {
               issuer: pin.issuer, clientId: pin.oidcClientId, ...binding,
               identityRevision: final.link.identityRevision, credentialRevision: final.link.credentialRevision,
               identityLinkId: final.link.id, sessionIdSha256: hash(session.sessionId), subjectSha256: hash(subject),
-              authenticatedAt: session.authenticatedAt, providerIssuedAt: provider.iat * 1000,
+              authenticatedAt: session.authenticatedAt, supabaseSessionExpiresAt: session.expiresAt, providerIssuedAt: provider.iat * 1000,
               providerExpiresAt: provider.exp * 1000, startedAt, capturedAt, atomicSnapshot: false }) });
         };
         const cancelled = new Promise((_, reject) => {

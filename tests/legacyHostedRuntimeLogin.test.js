@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {runInNewContext} from 'node:vm';
+import {exportJWK,generateKeyPair,SignJWT} from 'jose';
 import {loginLegacyHostedRuntime,validateLegacyRuntimePublicAuth,legacyRuntimeLoginFailureCode,LEGACY_HOSTED_RUNTIME_LOGIN_FAILURE_CODES} from '../scripts/lib/hosted-release/legacy-hosted-runtime-login.mjs';
 import {FIRST_RUNTIME} from '../scripts/lib/hosted-release/first-runtime.mjs';
 import {FCOS_CONNECTION_POLICY,fcosConnectionIdentifier} from '../config/fcosConnections.js';
@@ -17,7 +18,7 @@ const response=(v,headers={})=>new Response(JSON.stringify(v),{headers:{'content
 
 function fixture() {
   const calls=[],traffic=[],waiters=[],nativeCalls=[];let gate,wsGate,nativeGate,nativeEnabled=false,location=`${origin}/login`,clock=now;
-  const token=jwt({iss:`${supabase}/auth/v1`,aud:'authenticated',role:'authenticated',sub:id,iat:Math.floor(now/1000),exp:Math.floor(now/1000)+3600});
+  const token=jwt({iss:`${supabase}/auth/v1`,aud:'authenticated',role:'authenticated',sub:id,session_id:'22222222-2222-4222-8222-222222222222',is_anonymous:false,amr:[{method:'oauth',timestamp:Math.floor(now/1000)}],iat:Math.floor(now/1000),exp:Math.floor(now/1000)+3600});
   const storage=new Map([[key,JSON.stringify({access_token:token,refresh_token:'PRIVATE_NEVER_EXTRACT_REFRESH'})]]);
   const profile={id,email,user_type:'administrator',active:true,access_revision:2};
   const authUser={id,email,is_anonymous:false,identities:[{provider:federation.oidcProvider,identity_data:{sub:subject}}],user_metadata:{user_type:'viewer',active:false}};
@@ -45,7 +46,7 @@ function fixture() {
     getByLabel:(label,{exact})=>({fill:async value=>{assert.equal(exact,true);assert.ok(['Username','Password'].includes(label));assert.equal(new URL(location).origin,issuer);calls.push(label==='Username'?'email-filled':'password-filled');assert.equal(typeof value,'string');}}),
     waitForURL:fn=>fn(new URL(location))?Promise.resolve():new Promise(resolve=>waiters.push({fn,resolve})),
     waitForFunction:async(fn,arg)=>{assert.equal(evaluate(fn,arg),true);},
-    evaluate:async(fn,arg)=>evaluate(fn,arg),
+    evaluate:async(fn,arg)=>structuredClone(evaluate(fn,arg)),
   };
   const context={route:async(_pattern,handler)=>{calls.push('route');gate=handler;},routeWebSocket:async(_pattern,handler)=>{calls.push('websocket-route');wsGate=handler;},
     newPage:async()=>{calls.push('new-page');assert.deepEqual(calls.slice(-3),['route','websocket-route','new-page']);return page;},
@@ -255,4 +256,127 @@ test('losing manual-button wait cannot act on callback or after automatic login 
     assert.equal(handles,0);assert.equal(clicks,0);assert.equal(f.calls.filter(c=>c==='login-click').length,1);
     assert.equal(f.calls.filter(c=>c==='get-own-profile').length,1);
   }
+});
+
+
+// These signed keys and synthetic browser callbacks model no live issuer or
+// provider-token availability. Supabase getUser remains the existing hermetic
+// Auth-server stand-in; Production must qualify the real callback separately.
+const ownerKeys=await generateKeyPair('ES256'),foreignOwnerKeys=await generateKeyPair('ES256');
+const ownerJwks={keys:[{...await exportJWK(ownerKeys.publicKey),kid:'owner-recovery-fixture',alg:'ES256',use:'sig'}]};
+const signedProvider=(patch={},key=ownerKeys.privateKey)=>new SignJWT({iss:issuer,aud:federation.oidcClientId,sub:subject,typ:'at+jwt',
+  use_fcos:true,email_verified:true,email,jti:'PRIVATE_PROVIDER_JTI',identity_revision:7,credential_revision:3,
+  iat:Math.floor(now/1000),exp:Math.floor(now/1000)+300,...patch}).setProtectedHeader({alg:'ES256',kid:'owner-recovery-fixture'}).sign(key);
+async function ownerFixture(patch={},signingKey=ownerKeys.privateKey) {
+  const f=fixture(),providerAccessToken=await signedProvider(patch,signingKey),read=f.options.fetchImpl;
+  f.options.ownerRecoveryProviderToken=true;
+  f.storage.set(key,JSON.stringify({access_token:f.token,provider_token:providerAccessToken,refresh_token:'PRIVATE_NEVER_EXTRACT_REFRESH',provider_refresh_token:'PRIVATE_NEVER_EXTRACT_PROVIDER_REFRESH'}));
+  f.options.fetchImpl=async(url,options)=>{
+    if(url!==federation.syncJwksEndpoint)return read(url,options);
+    f.calls.push('get-provider-jwks');
+    assert.equal(options.method,'GET');assert.equal(options.redirect,'error');assert.equal(options.cache,'no-store');assert.equal(options.credentials,'omit');
+    assert.deepEqual(options.headers,{accept:'application/json'});assert.equal(options.body,undefined);
+    assert.ok(options.signal instanceof AbortSignal);
+    return response(ownerJwks);
+  };
+  return {...f,providerAccessToken};
+}
+const ownerRefusal=async(f,phase='PROVIDER_TOKEN_INVALID')=>{
+  await assert.rejects(loginLegacyHostedRuntime(f.options),error=>{
+    assert.equal(error.code,`LEGACY_HOSTED_RUNTIME_LOGIN_${phase}`);assert.equal(error.message,error.code);
+    assert.equal(legacyRuntimeLoginFailureCode(error),error.code);
+    for(const privateValue of [f.providerAccessToken,f.token,'PRIVATE_APPROVED_PASSWORD','PRIVATE_NEVER_EXTRACT_REFRESH',subject]) {
+      assert.equal(error.stack.includes(privateValue),false);assert.equal(JSON.stringify(error).includes(privateValue),false);
+    }
+    return true;
+  });
+  assert.deepEqual(f.calls.slice(-2),['context-close','browser-close']);
+};
+
+test('trusted owner option returns only verified same-callback provider token privately and retains browser gates',async()=>{
+  const f=await ownerFixture();let evaluations=0;
+  const evaluate=f.page.evaluate;
+  f.page.evaluate=async(fn,arg)=>{evaluations++;assert.equal(arg.includeProvider,true);const captured=await evaluate(fn,arg);
+    // A later callback-storage change cannot substitute either member of the
+    // single accepted pair or cause a second extraction of the other session.
+    f.storage.set(key,JSON.stringify({access_token:'PRIVATE_OTHER_SESSION',provider_token:'PRIVATE_OTHER_PROVIDER'}));return captured;};
+  const result=await loginLegacyHostedRuntime(f.options);
+  assert.equal(evaluations,1);assert.equal(result.token,f.token);assert.equal(result.providerAccessToken,f.providerAccessToken);
+  assert.deepEqual(Object.keys(result),['token','auth']);
+  assert.deepEqual(Object.getOwnPropertyDescriptor(result,'providerAccessToken'),{value:f.providerAccessToken,writable:false,enumerable:false,configurable:false});
+  assert.equal(JSON.stringify(result).includes(f.providerAccessToken),false);
+  assert.doesNotMatch(JSON.stringify(result.auth),/PRIVATE_|provider_token|refresh_token|password/);
+  assert.equal(f.calls.filter(call=>call==='get-provider-jwks').length,1);
+  assert.deepEqual(f.calls.slice(-5),['get-user','get-own-profile','get-provider-jwks','context-close','browser-close']);
+  assert.equal(await f.request(federation.syncJwksEndpoint,'GET','fetch'),'abort');
+  assert.ok(f.traffic.filter(r=>new URL(r.url).origin===origin&&new URL(r.url).pathname.startsWith('/api/')).every(r=>r.result==='abort'));
+});
+
+test('default path never extracts, returns or verifies any provider secret and opt-in must be literal Boolean',async()=>{
+  const f=await ownerFixture();delete f.options.ownerRecoveryProviderToken;
+  const evaluate=f.page.evaluate;f.page.evaluate=async(fn,arg)=>{assert.equal(arg.includeProvider,false);const value=await evaluate(fn,arg);assert.equal(typeof value,'string');return value;};
+  const result=await loginLegacyHostedRuntime(f.options);
+  assert.equal(Object.hasOwn(result,'providerAccessToken'),false);assert.equal(result.providerAccessToken,undefined);
+  assert.equal(f.calls.includes('get-provider-jwks'),false);assert.equal(JSON.stringify(result).includes(f.providerAccessToken),false);
+  for(const value of [null,'true',1,{returnProviderToken:true}]) {
+    const invalid=fixture();invalid.options.ownerRecoveryProviderToken=value;
+    await assert.rejects(loginLegacyHostedRuntime(invalid.options),{code:'LEGACY_HOSTED_RUNTIME_LOGIN_BINDING_INVALID'});assert.deepEqual(invalid.calls,[]);
+  }
+});
+
+test('owner provider handoff fails closed on missing, malformed, oversized and foreign-signed tokens with cleanup',async()=>{
+  for(const value of [undefined,null,'',{},true,'PRIVATE_RAW_TOKEN','x'.repeat(16385)]) {
+    const f=await ownerFixture();f.storage.set(key,JSON.stringify({access_token:f.token,provider_token:value,refresh_token:'PRIVATE_NEVER_EXTRACT_REFRESH'}));
+    await ownerRefusal(f,value===undefined||value===null||value===''?'PROVIDER_TOKEN_MISSING':'PROVIDER_TOKEN_INVALID');
+    assert.equal(f.calls.includes('get-provider-jwks'),false);
+  }
+  const wrongKey=await ownerFixture({},foreignOwnerKeys.privateKey);await ownerRefusal(wrongKey);
+});
+
+test('owner handoff verifies pinned issuer/audience/subject, access claims, lifetime and revision types cryptographically',async()=>{
+  const seconds=Math.floor(now/1000);
+  for(const patch of [{iss:'https://foreign.invalid'},{aud:'foreign-client'},{sub:'PRIVATE_OTHER_SUBJECT'},{typ:'id+jwt'},
+    {use_fcos:false},{email_verified:false},{email:'foreign@example.invalid'},{jti:''},{jti:'x'.repeat(501)},{identity_revision:0},{identity_revision:'7'},
+    {credential_revision:0},{credential_revision:'3'},{exp:seconds-1},{exp:seconds},{exp:seconds+301},{iat:seconds+61},
+    {iat:0},{iat:'not-numeric'},{exp:undefined},{nbf:seconds+61}]) {
+    const f=await ownerFixture(patch);await ownerRefusal(f);
+  }
+});
+
+test('owner handoff requires fresh original OAuth session evidence and does not accept refreshed password metadata',async()=>{
+  for(const patch of [{session_id:undefined},{session_id:'invalid'},{is_anonymous:true},{amr:undefined},{amr:[]},
+    {amr:[{method:'password',timestamp:Math.floor(now/1000)}]},
+    {amr:[{method:'oauth',timestamp:Math.floor(now/1000)},{method:'password',timestamp:Math.floor(now/1000)}]},
+    {amr:[{method:'oauth',timestamp:Math.floor(now/1000)-100}]},
+    {amr:[{method:'oauth',timestamp:String(Math.floor(now/1000))}]},
+    {amr:[{method:'oauth',timestamp:Math.floor(now/1000)+61}]}]) {
+    const f=await ownerFixture(),claims={iss:`${supabase}/auth/v1`,aud:'authenticated',role:'authenticated',sub:id,
+      session_id:'22222222-2222-4222-8222-222222222222',iat:Math.floor(now/1000),exp:Math.floor(now/1000)+3600,
+      amr:[{method:'oauth',timestamp:Math.floor(now/1000)}],...patch};
+    const changed=jwt(claims),read=f.options.fetchImpl;
+    f.storage.set(key,JSON.stringify({access_token:changed,provider_token:f.providerAccessToken}));
+    // The real Auth endpoint verifies the exact supplied token. This stand-in
+    // accepts the changed fixture only to exercise the post-getUser AMR guard.
+    f.options.fetchImpl=(url,options)=>read(url,{...options,headers:{...options.headers,authorization:`Bearer ${f.token}`}});
+    await ownerRefusal(f);assert.equal(f.calls.includes('get-provider-jwks'),false);
+  }
+});
+
+test('owner provider expiry/revocation and bounded JWKS errors fail once, clean up and expose only fixed codes',async()=>{
+  const seconds=Math.floor(now/1000);
+  const revoked=await ownerFixture({iat:seconds-10,exp:seconds+290});revoked.publicAuth.preflight.linkRevokedBefore=new Date((seconds-5)*1000).toISOString();await ownerRefusal(revoked);
+  for(const change of ['expiry','raw-error','redirect','oversize','private-jwk']) {
+    const f=await ownerFixture(),read=f.options.fetchImpl;
+    f.options.fetchImpl=async(url,options)=>{
+      if(url!==federation.syncJwksEndpoint)return read(url,options);
+      if(change==='raw-error')throw Error(`PRIVATE_RAW_PROVIDER_ERROR ${f.providerAccessToken}`);
+      if(change==='redirect')return {status:200,ok:true,redirected:true,headers:new Headers({'content-type':'application/json'}),body:response(ownerJwks).body};
+      if(change==='oversize')return response({keys:[],private:'x'.repeat(65537)});
+      if(change==='private-jwk')return response({keys:[{...ownerJwks.keys[0],d:'PRIVATE_KEY'}]});
+      const result=await read(url,options);f.setClock(now+301000);return result;
+    };
+    await ownerRefusal(f);
+  }
+  const cleanup=await ownerFixture();cleanup.context.close=async()=>{cleanup.calls.push('context-close');throw Error(`PRIVATE_CLEANUP_ERROR ${cleanup.providerAccessToken}`);};
+  await ownerRefusal(cleanup,'CLEANUP_FAILED');
 });

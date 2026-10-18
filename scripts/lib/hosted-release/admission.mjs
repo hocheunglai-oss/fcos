@@ -1,3 +1,4 @@
+import { firstRuntimeCandidateProfile } from '../../../config/hostedCompatibilityCorrection.js';
 import { qualificationSourceBinding } from '../../../config/hostedReleaseQualification.js';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -35,7 +36,7 @@ export function assertSourceAdmission({ manifest, candidateDirectory, controller
   const required = [...new Set([...actual.checks.map(row => row.id).filter(id => id !== 'final_acceptance'), ...REQUIRED_LIVE_CHECKS,
     ...(manifest.stage === 'application' ? ['compatibility_production_observation'] : [])])].sort();
   if (canonical([...manifest.requiredChecks].sort()) !== canonical(required)) fail('REQUIRED_CHECKS_CHANGED');
-  if (manifest.stage === 'compatibility' && manifest.candidate.sourceProfile !== 'frozen_04ee'
+  if (manifest.stage === 'compatibility' && manifest.candidate.sourceProfile !== firstRuntimeCandidateProfile(manifest.candidate.sha)
     || manifest.stage === 'application' && manifest.candidate.sourceProfile !== 'application_v2') fail('PRODUCTION_SOURCE_PROFILE');
   return actual;
 }

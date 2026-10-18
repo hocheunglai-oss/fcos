@@ -1,3 +1,4 @@
+import { AUTH_MAINTENANCE_PHASES, AUTH_MAINTENANCE_CURRENT_OWNER, AUTH_MAINTENANCE_HISTORICAL_OWNER, validateAuthMaintenanceManifest } from '../../../supabase/functions/release-coordinator/core.mjs';
 import { createHash } from 'node:crypto';
 const fail=code=>{throw Object.assign(new Error(code),{code});};
 const need=(v,code)=>{if(!v)fail(code);};
@@ -41,5 +42,53 @@ export function createFinancialCoordinationBridge({coordinator,epoch,ownerId,exi
       // Durable bindings survive runner-local memory loss; endpoint validates the original manifest and intent.
       bindings.set(input.operationId,b);return result(await coordinator.readback({releaseId:b.releaseId,manifestHash:b.manifestHash,phase:b.phase,operationId:b.operationId,evidence}));},
     async snapshot(input){const b=binding(input);return coordinator.snapshot({releaseId:b.releaseId,manifestHash:b.manifestHash});},
+  });
+}
+
+
+/** New coordination-only scope. Imported authority and actual principal setup
+ * remain privileged external prerequisites, never client-created approvals. */
+export function createAuthMaintenanceCoordinationBridge({coordinator,authority,authoritySha256,recheckAuthority,recheckFence,now=Date.now}={}) {
+  need(coordinator && ['register','begin','complete','snapshot'].every(k=>typeof coordinator[k]==='function')
+    && authority && hash(authoritySha256) && digest(authority)===authoritySha256
+    && authority.currentOwnerId===AUTH_MAINTENANCE_CURRENT_OWNER && authority.historicalOwnerThreadId===AUTH_MAINTENANCE_HISTORICAL_OWNER
+    && canonical(authority.phases)===canonical(AUTH_MAINTENANCE_PHASES) && authority.caps && AUTH_MAINTENANCE_PHASES.every(p=>Number.isSafeInteger(authority.caps[p])&&authority.caps[p]>=0)
+    && Number.isSafeInteger(authority.issuedAt)&&Number.isSafeInteger(authority.notAfter)&&authority.notAfter>authority.issuedAt
+    && Number.isSafeInteger(authority.maximumOccurrenceWindowMs)&&authority.maximumOccurrenceWindowMs>0&&authority.maximumOccurrenceWindowMs<=900000
+    && typeof recheckAuthority==='function'&&typeof recheckFence==='function'&&typeof now==='function','AUTH_MAINTENANCE_IMPORTED_AUTHORITY_REQUIRED');
+  const a=JSON.parse(JSON.stringify(authority));
+  const binding=input=>{
+    need(input&&typeof input==='object','AUTH_MAINTENANCE_BOUND_SCOPE_REQUIRED');
+    const inherited=['epoch','authorityId','currentOwnerId','historicalOwnerThreadId','humanTransferEvidenceSha256','actorId','tenantId',
+      'clientSha256','grantLineageSha256','sourceSha256','executorSha256','controllerSha256','destinationsSha256'];
+    const m={schemaVersion:1,executionMode:'auth_maintenance',...Object.fromEntries(inherited.map(k=>[k,a[k]])),authoritySha256,
+      ...Object.fromEntries(['phase','operationId','occurrenceId','requestFingerprint','expectedVersion','refreshLeaseId','requestId',
+        'issuedAt','notAfter','recoveryOf','recoveryReadbackSha256','custodySha256'].map(k=>[k,input[k]])),coordinationOnly:true,providerAuthorityGranted:false};
+    validateAuthMaintenanceManifest(m);
+    need(m.issuedAt>=a.issuedAt&&m.notAfter<=a.notAfter&&m.notAfter-m.issuedAt<=a.maximumOccurrenceWindowMs,
+      'AUTH_MAINTENANCE_TIME_SCOPE_REQUIRED');
+    Object.freeze(m);
+    return Object.freeze({manifest:m,manifestHash:digest(m),releaseId:`auth-maintenance-${m.occurrenceId}`,phase:m.phase,operationId:m.operationId,requestHash:m.requestFingerprint});
+  };
+  const result=value=>({...value,coordinationOnly:true,providerAuthorityGranted:false,financialAuthorityGranted:false});
+  const checked=async b=>{
+    need(Number.isSafeInteger(now())&&now()>=b.manifest.issuedAt&&now()<b.manifest.notAfter,'AUTH_MAINTENANCE_EXPIRED');
+    const proof=await recheckAuthority(b),fence=await recheckFence(b);
+    need(proof?.authorityId===a.authorityId&&proof.authoritySha256===authoritySha256&&proof.currentOwnerId===a.currentOwnerId
+      &&proof.historicalOwnerThreadId===a.historicalOwnerThreadId&&proof.humanTransferEvidenceSha256===a.humanTransferEvidenceSha256,
+      'AUTH_MAINTENANCE_IMPORTED_AUTHORITY_REQUIRED');
+    need(fence?.permanentlyFenced===true&&fence.currentOwnerId===a.currentOwnerId&&fence.historicalOwnerThreadId===a.historicalOwnerThreadId
+      &&fence.legacyFenceProofSha256===a.legacyFenceProofSha256&&fence.fenceInventorySha256===a.fenceInventorySha256,
+      'AUTH_MAINTENANCE_HANDOFF_FENCE_REQUIRED');
+    need(now()<b.manifest.notAfter,'AUTH_MAINTENANCE_EXPIRED');
+  };
+  return Object.freeze({
+    async begin(input){const b=binding(input);await checked(b);await coordinator.register(b);return result(await coordinator.begin(b));},
+    async complete(input,evidence){const b=binding(input);await checked(b);
+      need(evidence&&Object.keys(evidence).length===3&&['applied','not_applied'].includes(evidence.outcome)
+        &&hash(evidence.nativeAcknowledgementSha256)&&hash(evidence.independentReadbackSha256),'AUTH_MAINTENANCE_DEFINITIVE_READBACK_REQUIRED');
+      return result(await coordinator.complete({...b,evidence}));},
+    async snapshot(input){const b=binding(input);return result(await coordinator.snapshot(b));},
+    async recover(input){const b=binding(input);return result(await coordinator.snapshot(b));},
   });
 }

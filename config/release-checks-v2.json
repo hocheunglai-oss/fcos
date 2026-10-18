@@ -36,7 +36,8 @@
         "frozen_04ee",
         "controller_v2",
         "historical_f457",
-        "application_v2"
+        "application_v2",
+        "compat_application_auth_20261018"
       ]
     },
     {
@@ -63,7 +64,8 @@
         "frozen_04ee",
         "controller_v2",
         "historical_f457",
-        "application_v2"
+        "application_v2",
+        "compat_application_auth_20261018"
       ]
     },
     {
@@ -91,7 +93,8 @@
         "frozen_04ee",
         "controller_v2",
         "historical_f457",
-        "application_v2"
+        "application_v2",
+        "compat_application_auth_20261018"
       ],
       "profileCommands": {
         "controller_v2": [
@@ -170,7 +173,8 @@
         "frozen_04ee",
         "controller_v2",
         "historical_f457",
-        "application_v2"
+        "application_v2",
+        "compat_application_auth_20261018"
       ]
     },
     {
@@ -208,7 +212,8 @@
         "frozen_04ee",
         "controller_v2",
         "historical_f457",
-        "application_v2"
+        "application_v2",
+        "compat_application_auth_20261018"
       ]
     },
     {
@@ -235,7 +240,8 @@
         "frozen_04ee",
         "controller_v2",
         "historical_f457",
-        "application_v2"
+        "application_v2",
+        "compat_application_auth_20261018"
       ]
     },
     {
@@ -284,7 +290,8 @@
         "frozen_04ee",
         "controller_v2",
         "historical_f457",
-        "application_v2"
+        "application_v2",
+        "compat_application_auth_20261018"
       ],
       "profileCommands": {
         "controller_v2": [
@@ -333,7 +340,8 @@
         "frozen_04ee",
         "controller_v2",
         "historical_f457",
-        "application_v2"
+        "application_v2",
+        "compat_application_auth_20261018"
       ],
       "artifactInputs": [
         "dist"
@@ -392,7 +400,8 @@
       "profiles": [
         "frozen_04ee",
         "historical_f457",
-        "application_v2"
+        "application_v2",
+        "compat_application_auth_20261018"
       ]
     },
     {
@@ -421,7 +430,8 @@
       "profiles": [
         "frozen_04ee",
         "historical_f457",
-        "application_v2"
+        "application_v2",
+        "compat_application_auth_20261018"
       ]
     },
     {
@@ -477,7 +487,8 @@
       "profiles": [
         "frozen_04ee",
         "historical_f457",
-        "application_v2"
+        "application_v2",
+        "compat_application_auth_20261018"
       ]
     },
     {
@@ -506,7 +517,8 @@
       "profiles": [
         "frozen_04ee",
         "historical_f457",
-        "application_v2"
+        "application_v2",
+        "compat_application_auth_20261018"
       ]
     },
     {
@@ -537,7 +549,8 @@
       "profiles": [
         "frozen_04ee",
         "historical_f457",
-        "application_v2"
+        "application_v2",
+        "compat_application_auth_20261018"
       ]
     },
     {
@@ -577,7 +590,8 @@
       "profiles": [
         "frozen_04ee",
         "historical_f457",
-        "application_v2"
+        "application_v2",
+        "compat_application_auth_20261018"
       ]
     },
     {
@@ -608,7 +622,8 @@
       "profiles": [
         "frozen_04ee",
         "historical_f457",
-        "application_v2"
+        "application_v2",
+        "compat_application_auth_20261018"
       ]
     },
     {
@@ -642,7 +657,8 @@
       "profiles": [
         "frozen_04ee",
         "historical_f457",
-        "application_v2"
+        "application_v2",
+        "compat_application_auth_20261018"
       ]
     },
     {
@@ -674,7 +690,8 @@
       "profiles": [
         "frozen_04ee",
         "historical_f457",
-        "application_v2"
+        "application_v2",
+        "compat_application_auth_20261018"
       ]
     },
     {
@@ -706,7 +723,8 @@
       "profiles": [
         "frozen_04ee",
         "historical_f457",
-        "application_v2"
+        "application_v2",
+        "compat_application_auth_20261018"
       ]
     },
     {
@@ -737,7 +755,8 @@
       "profiles": [
         "frozen_04ee",
         "historical_f457",
-        "application_v2"
+        "application_v2",
+        "compat_application_auth_20261018"
       ]
     },
     {
@@ -768,7 +787,8 @@
       "profiles": [
         "frozen_04ee",
         "historical_f457",
-        "application_v2"
+        "application_v2",
+        "compat_application_auth_20261018"
       ]
     },
     {
@@ -799,7 +819,8 @@
       "profiles": [
         "frozen_04ee",
         "historical_f457",
-        "application_v2"
+        "application_v2",
+        "compat_application_auth_20261018"
       ]
     },
     {
@@ -830,7 +851,8 @@
       "profiles": [
         "frozen_04ee",
         "historical_f457",
-        "application_v2"
+        "application_v2",
+        "compat_application_auth_20261018"
       ]
     },
     {
@@ -861,7 +883,8 @@
       "profiles": [
         "frozen_04ee",
         "historical_f457",
-        "application_v2"
+        "application_v2",
+        "compat_application_auth_20261018"
       ]
     },
     {
@@ -892,7 +915,8 @@
       "profiles": [
         "frozen_04ee",
         "historical_f457",
-        "application_v2"
+        "application_v2",
+        "compat_application_auth_20261018"
       ]
     },
     {
@@ -911,7 +935,8 @@
         "frozen_04ee",
         "controller_v2",
         "historical_f457",
-        "application_v2"
+        "application_v2",
+        "compat_application_auth_20261018"
       ]
     },
     {
@@ -930,7 +955,8 @@
         "frozen_04ee",
         "controller_v2",
         "historical_f457",
-        "application_v2"
+        "application_v2",
+        "compat_application_auth_20261018"
       ]
     },
     {
@@ -962,7 +988,8 @@
         "frozen_04ee",
         "controller_v2",
         "historical_f457",
-        "application_v2"
+        "application_v2",
+        "compat_application_auth_20261018"
       ],
       "artifactInputs": [
         "dist",
@@ -1000,7 +1027,8 @@
         "frozen_04ee",
         "controller_v2",
         "historical_f457",
-        "application_v2"
+        "application_v2",
+        "compat_application_auth_20261018"
       ],
       "artifactInputs": [
         "dist",
@@ -1031,7 +1059,8 @@
         "frozen_04ee",
         "controller_v2",
         "historical_f457",
-        "application_v2"
+        "application_v2",
+        "compat_application_auth_20261018"
       ]
     },
     {
@@ -1070,7 +1099,8 @@
         "frozen_04ee",
         "controller_v2",
         "historical_f457",
-        "application_v2"
+        "application_v2",
+        "compat_application_auth_20261018"
       ]
     },
     {
@@ -1154,7 +1184,8 @@
         "frozen_04ee",
         "controller_v2",
         "historical_f457",
-        "application_v2"
+        "application_v2",
+        "compat_application_auth_20261018"
       ]
     }
   ],
@@ -1172,6 +1203,11 @@
     },
     "application_v2": {
       "purpose": "Final separately admitted application scope after observed compatibility Production."
+    },
+    "compat_application_auth_20261018": {
+      "candidateSha": "8f39dde6a6885292ce3b70cb61a78f8b86b947c3",
+      "purpose": "Complete original accepted business release scope.",
+      "description": "Explicit three-file Salesforce application-auth diagnostic correction of frozen04ee; same complete check requirements."
     }
   }
 }

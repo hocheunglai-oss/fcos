@@ -1,8 +1,9 @@
+import { firstRuntimeCandidateProfile, isFirstRuntimeCandidateSha } from '../../../config/hostedCompatibilityCorrection.js';
 import { validateQualificationSource } from '../../../config/hostedReleaseQualification.js';
 import { execFileSync } from 'node:child_process';
 import { collectSourceAdmission } from './admission.mjs';
 import { validateVercelReadAcceptance } from './vercel-read-auth.mjs';
-import { CONTRACT_VERSION, CONTROLLER_WORKFLOW, digest, fail, REQUIRED_LIVE_CHECKS, releaseTargets, validateManifest, WRITE_PHASES, FROZEN_COMPATIBILITY_SHA } from './contract.mjs';
+import { CONTRACT_VERSION, CONTROLLER_WORKFLOW, digest, fail, REQUIRED_LIVE_CHECKS, releaseTargets, validateManifest, WRITE_PHASES } from './contract.mjs';
 import { assertFirstRuntimeSetup, admittedFirstRuntimeBaseline, FIRST_RUNTIME } from './first-runtime.mjs';
 import { validateLegacyRuntimePublicAuth } from './legacy-hosted-runtime-login.mjs';
 
@@ -15,7 +16,7 @@ function releaseManifestDraft({ plan, setup, previousProduction, candidateDirect
   if (plan.executionMode !== undefined && plan.executionMode !== (plan.stage === 'qualification' ? 'qualification' : 'release')) fail('MANIFEST_SCHEMA');
   const qualificationSource = plan.stage === 'qualification' && setup.qualificationSource
     ? validateQualificationSource(setup.qualificationSource, { controllerSha, candidateSha }) : null;
-  const sourceProfile = plan.stage === 'compatibility' ? 'frozen_04ee' : plan.stage === 'application' ? 'application_v2' : plan.sourceProfile;
+  const sourceProfile = plan.stage === 'compatibility' ? firstRuntimeCandidateProfile(candidateSha) : plan.stage === 'application' ? 'application_v2' : plan.sourceProfile;
   const source = collectSource({ candidateDirectory, controllerDirectory, controllerSha, candidateSha, sourceProfile });
   const manifest = { schemaVersion: 2, contract: CONTRACT_VERSION, releaseId: plan.releaseId, stage: plan.stage,
     executionMode: plan.stage === 'qualification' ? 'qualification' : 'release', epoch: setup.epoch, setupSha256: digest(setup),
@@ -64,7 +65,7 @@ export function validateDiscoverySetup(setup, { controllerSha, candidateSha, now
   if (!exact(setup, [...keys,...['firstRuntimeBaseline','legacySalesforceAppObservation','legacySalesforceIdentityObservation','legacyRuntimeAuth'].filter(k=>Object.hasOwn(setup||{},k))])
     || setup.schemaVersion !== 1 || setup.kind !== 'fcos_hosted_setup_discovery'
     || setup.controllerSha !== controllerSha || setup.candidateSha !== candidateSha
-    || setup.candidateSha !== FROZEN_COMPATIBILITY_SHA || setup.sourceProfile !== 'frozen_04ee'
+    || !isFirstRuntimeCandidateSha(setup.candidateSha) || setup.sourceProfile !== firstRuntimeCandidateProfile(setup.candidateSha)
     || digest(setup.targets) !== digest(releaseTargets()) || setup.environment !== 'fcos-hosted-verification'
     || !Number.isSafeInteger(setup.issuedAt) || setup.issuedAt <= 0 || setup.issuedAt > now + 30000
     || !Number.isSafeInteger(setup.notAfter) || setup.notAfter <= now || setup.notAfter <= setup.issuedAt

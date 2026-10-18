@@ -4,6 +4,7 @@ import { readFile, mkdtemp, rm } from 'node:fs/promises';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { PGlite } from '@electric-sql/pglite';
 import pg from 'pg';
 import { readXeroSharedControlFixture } from './helpers/xero-recovery-fixture.mjs';
@@ -26,7 +27,7 @@ const nativeAvailable = bindir && existsSync(join(bindir, 'initdb'));
 async function database(t, native) {
   let db, query, exec, newClient;
   if (native) {
-    const directory = await mkdtemp('/private/tmp/fcos-custody-pg-');
+    const directory = await mkdtemp(join(process.platform === 'darwin' ? '/private/tmp' : tmpdir(), 'fcos-custody-pg-'));
     const data = join(directory, 'data'), port = 54621;
     let started = false;
     const config = { host: directory, port, user: 'postgres', database: 'postgres' };

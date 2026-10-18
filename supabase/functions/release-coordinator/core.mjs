@@ -62,6 +62,7 @@ export async function createNotificationDeliveryProof({receiptJson,challenge,now
 }
 
 export function assertQualificationScope(principal,payload,action) {
+  assertAuthMaintenanceScope(principal,payload,action);
   if(principal.qualificationOnly!==true) return;
   need(principal.kind==='github'&&payload.owner.kind==='release'&&!['approve','admitApproval','resume'].includes(action),
     'COORDINATION_QUALIFICATION_ONLY',403);
@@ -109,4 +110,41 @@ export function createMetadataAdmission({now=Date.now}={}) {
     },
     runRead,
   };
+}
+
+
+export const AUTH_MAINTENANCE_PHASES = Object.freeze(['auth_maintenance.renew_existing_grant', 'auth_maintenance.read_connections',
+  'auth_maintenance.read_organisations', 'auth_maintenance.finish_saved_rotation']);
+export const AUTH_MAINTENANCE_CURRENT_OWNER = '01a0f08b-7fcb-7870-9edc-343e16052b62';
+export const AUTH_MAINTENANCE_HISTORICAL_OWNER = '01a0b0e2-b1af-7bf0-963d-3138c42648e3';
+const maintenanceHash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+const maintenanceUuid = value => typeof value === 'string' && /^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
+export function validateAuthMaintenanceManifest(m) {
+  const hashes = ['authorityId','authoritySha256','humanTransferEvidenceSha256','clientSha256','grantLineageSha256',
+    'sourceSha256','executorSha256','controllerSha256','destinationsSha256','requestFingerprint'];
+  const keys = ['schemaVersion','epoch','executionMode','currentOwnerId','historicalOwnerThreadId','actorId','tenantId','phase',
+    'operationId','occurrenceId','expectedVersion','refreshLeaseId','requestId','issuedAt','notAfter','recoveryOf','recoveryReadbackSha256',
+    'custodySha256','coordinationOnly','providerAuthorityGranted',...hashes];
+  need(m && Object.getPrototypeOf(m) === Object.prototype && Object.keys(m).length === keys.length && keys.every(k => Object.hasOwn(m,k))
+    && m.schemaVersion === 1 && m.executionMode === 'auth_maintenance' && Number.isSafeInteger(m.epoch) && m.epoch > 0
+    && m.currentOwnerId === AUTH_MAINTENANCE_CURRENT_OWNER && m.historicalOwnerThreadId === AUTH_MAINTENANCE_HISTORICAL_OWNER
+    && m.coordinationOnly === true && m.providerAuthorityGranted === false && hashes.every(k => maintenanceHash(m[k]))
+    && ['actorId','tenantId','occurrenceId','refreshLeaseId','requestId'].every(k => maintenanceUuid(m[k]))
+    && typeof m.operationId === 'string' && /^[A-Za-z0-9._:-]{1,200}$/.test(m.operationId)
+    && AUTH_MAINTENANCE_PHASES.includes(m.phase) && Number.isSafeInteger(m.expectedVersion) && m.expectedVersion > 0 && m.expectedVersion < 2147483647
+    && Number.isSafeInteger(m.issuedAt) && m.issuedAt > 0 && Number.isSafeInteger(m.notAfter) && m.notAfter > m.issuedAt
+    && m.notAfter - m.issuedAt <= 900000
+    && (m.phase === 'auth_maintenance.finish_saved_rotation'
+      ? typeof m.recoveryOf === 'string' && /^[A-Za-z0-9._:-]{1,200}$/.test(m.recoveryOf) && maintenanceHash(m.recoveryReadbackSha256) && maintenanceHash(m.custodySha256)
+      : m.recoveryOf === null && m.recoveryReadbackSha256 === null && m.custodySha256 === null), 'COORDINATION_MAINTENANCE_MANIFEST_INVALID',400);
+  return m;
+}
+export function assertAuthMaintenanceScope(principal,payload,action) {
+  if (payload.manifest?.executionMode !== 'auth_maintenance' && !(typeof payload.phase === 'string' && payload.phase.startsWith('auth_maintenance.'))) return;
+  need(principal.kind === 'financial' && principal.coordinationOnly === true && principal.providerAuthorityGranted === false
+    && principal.ownerId === AUTH_MAINTENANCE_CURRENT_OWNER && payload.owner.kind === 'financial' && payload.owner.id === principal.ownerId
+    && principal.qualificationOnly !== true && ['register','snapshot','begin','claim','complete','uncertain','readback'].includes(action),
+  'COORDINATION_MAINTENANCE_PRINCIPAL_REQUIRED',403);
+  if (action === 'register') validateAuthMaintenanceManifest(payload.manifest);
+  if (payload.phase !== undefined) need(AUTH_MAINTENANCE_PHASES.includes(payload.phase),'COORDINATION_PHASE_FORBIDDEN',403);
 }

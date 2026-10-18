@@ -9,7 +9,7 @@ import { collectRuntimeObservation } from '../../collect-preview-parity.mjs';
 import { createVercelAdapter, createVercelReadAdapter, createVercelProductionObserver } from './vercel.mjs';
 import { collectSchemaSnapshot, collectSchemaObservation, hostedProof } from './observations.mjs';
 import { digest, fail } from './contract.mjs';
-import { admittedFirstRuntimeBaseline, assertFirstRuntimeSetup, FIRST_RUNTIME, firstRuntimePrevious, firstRuntimeLegacyBinding, firstRuntimeSourceAbsence, isFirstRuntimePair } from './first-runtime.mjs';
+import { admittedFirstRuntimeBaseline, assertFirstRuntimeSetup, FIRST_RUNTIME, firstRuntimePrevious, firstRuntimeLegacyBinding, firstRuntimeSourceAbsence, isFirstRuntimePair, firstRuntimeVersionEvidence } from './first-runtime.mjs';
 import { PREVIEW_PARITY_POLICY } from '../preview-parity.mjs';
 import { observeLegacySalesforceApp } from './legacy-salesforce-app-observation.mjs';
 import { observeLegacySalesforceIdentity as observeLegacySalesforceIdentityRead } from './legacy-salesforce-identity-observation.mjs';
@@ -33,7 +33,7 @@ export function createPreviousProductionObserver({context,setup,env=process.env,
     if(baseline) {
       const current=admittedFirstRuntimeBaseline(setup.firstRuntimeBaseline,{now:now()});
       if(!isFirstRuntimePair({candidateSha:context.candidate.sha,previous:{deploymentId:deployment.id,sha:deployment.sha,url:deployment.url,sourceSha256:deployment.sourceSha256}})
-        ||production.publicVersion.sha256!==current.nativeEvidence.versionSha256||schema.sha256!==current.schema.sha256)fail('FIRST_RUNTIME_BASELINE_CHANGED');
+        ||production.publicVersion.sha256!==firstRuntimeVersionEvidence(current)||schema.sha256!==current.schema.sha256)fail('FIRST_RUNTIME_BASELINE_CHANGED');
       return {readOnly:true,capturedAt:new Date(now()).toISOString(),previousProduction:firstRuntimePrevious(setup.firstRuntimeBaseline,{now:now()}),
         observationKind:current.source.observationKind,originalBaselineCapturedAt:current.runtime.capturedAt};
     }
@@ -134,13 +134,14 @@ export function createSetupDiscoveryCollector({ setup, env = process.env, fetchI
     runtime: async production => {
       const previous={deploymentId:production.deployment.id,sha:production.deployment.sha,url:production.deployment.url,sourceSha256:production.deployment.sourceSha256};
       if(isFirstRuntimePair({candidateSha:setup.candidateSha,previous})) {
-        verifyLegacySource(controllerDirectory);
+        verifyLegacySource(controllerDirectory,setup.candidateSha);
         if(setup.firstRuntimeBaseline) {
           const baseline=admittedFirstRuntimeBaseline(setup.firstRuntimeBaseline,{now:now(),complete:false});
-          if(baseline.nativeEvidence.versionSha256!==production.publicVersion.sha256)fail('FIRST_RUNTIME_BASELINE_CHANGED');
+          if(firstRuntimeVersionEvidence(baseline)!==production.publicVersion.sha256)fail('FIRST_RUNTIME_BASELINE_CHANGED');
           return {kind:'first_runtime_baseline_observation',readOnly:true,endpointAbsent:true,baselineSha256:setup.firstRuntimeBaseline.sha256,
             observationKind:baseline.source.observationKind,runtime:baseline.runtime,authHistorical:true,freshOwnerObservationRequired:true,
-            baselineRequired:PREVIEW_PARITY_POLICY.requiredAuth.some(p=>baseline.runtime.auth[p].state!=='authenticated'),qualificationAccepted:false,automaticRollbackEligible:false};
+            ...(baseline.schemaVersion===2?{configurationCopy:baseline.configurationCopy,desiredRuntime:baseline.desiredRuntime,historicalRuntimeUnobserved:true}:{}),
+            baselineRequired:baseline.schemaVersion===2||PREVIEW_PARITY_POLICY.requiredAuth.some(p=>baseline.runtime.auth[p].state!=='authenticated'),qualificationAccepted:false,automaticRollbackEligible:false};
         }
         let endpointAbsent=null,endpointObservation={status:'not_observed'};
         if(env.FCOS_PRODUCTION_VERIFICATION_BYPASS)try {

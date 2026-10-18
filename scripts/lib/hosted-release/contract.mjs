@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { isFirstRuntimeCandidateSha, firstRuntimeCandidateProfile } from '../../../config/hostedCompatibilityCorrection.js';
 import { qualificationSourceBinding } from '../../../config/hostedReleaseQualification.js';
 import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier } from '../../../config/fcosConnections.js';
 import { validateSalesforceReadBinding } from './salesforce-read-auth.mjs';
@@ -51,7 +52,8 @@ export function validateManifest(manifest) {
     || !/^[A-Za-z0-9][A-Za-z0-9_./-]{0,200}$/.test(candidate.branch || '') || candidate.branch.includes('..')) fail('CANDIDATE_BINDING');
   if (!sha(controller?.sha) || controller.workflow !== CONTROLLER_WORKFLOW || !hash(controller.checkManifestSha256)
     || !hash(controller.configurationSha256) || !Number.isSafeInteger(manifest.epoch) || manifest.epoch < 1) fail('CONTROLLER_BINDING');
-  if (manifest.stage === 'compatibility' && (candidate.sha !== FROZEN_COMPATIBILITY_SHA
+  if (manifest.stage === 'compatibility' && (!isFirstRuntimeCandidateSha(candidate.sha)
+    || (candidate.sha !== FROZEN_COMPATIBILITY_SHA || candidate.sourceProfile !== undefined) && candidate.sourceProfile !== firstRuntimeCandidateProfile(candidate.sha)
     || canonical(manifest.scope?.handoffs) !== '[]' || manifest.scope?.existingUi !== false)) fail('FROZEN_SCOPE_CHANGED');
   if (!hash(manifest.scope?.sha256) || !Array.isArray(manifest.scope.handoffs)
     || manifest.scope.financialAuthority !== false) fail('SCOPE_BINDING');
