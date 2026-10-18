@@ -252,7 +252,7 @@ function refreshRunAsReview(f) {
 test('provider-fixed Run As proof must pin the exact reader and actual client configuration, not app membership',async()=>{
   const mutations=[r=>r.runAsUsername='other@example.invalid',r=>r.runAsUserId='005000000000002AAA',r=>r.orgId='00D000000000000AAA',
     r=>r.clientId='other-client-0000000000000',r=>r.serverEnforcedRunAs=false,r=>r.clientCredentialsEnabled=false,
-    r=>r.jwtBearerEnabled=true,r=>r.otherFlowsEnabled=true,r=>r.clientConfigurationReadbackSha256='b'.repeat(64),
+    r=>r.jwtBearerEnabled=true,r=>r.credentialAloneUserSelectionEnabled=true,r=>r.interactiveAuthorizationRequiresUserAuthentication=false,r=>r.clientConfigurationReadbackSha256='b'.repeat(64),
     r=>r.capturedAt='2020-01-01T00:00:00Z',r=>r.capturedAt='2999-01-01T00:00:00Z',r=>r.memberOnly=true];
   for(const mutate of mutations){const f=fixture();mutate(f.runAsAcceptance);refreshRunAsReview(f);
     await assert.rejects(createSalesforceRecipeReader(f).admit(),{code:'SALESFORCE_READ_FIXED_RUN_AS_PROOF_REQUIRED'});assert.equal(f.calls.length,0);

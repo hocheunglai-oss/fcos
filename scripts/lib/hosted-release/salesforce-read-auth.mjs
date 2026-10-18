@@ -59,12 +59,12 @@ export function validateSalesforceReadAcceptance(binding, setup, options) {
     && review.environment === SALESFORCE_READ_ENVIRONMENT && review.environmentOnly === true
     && exact(review.credential, credentialFields) && canonical(review.credential) === canonical(Object.fromEntries(credentialFields.map(key => [key, binding[key]]))), 'SALESFORCE_READ_SETUP_PROOF_REQUIRED');
   const runAs = review.runAsAcceptance;
-  need(exact(runAs, ['schemaVersion','kind','orgId','clientId','runAsUsername','runAsUserId','capturedAt','clientConfigurationReadbackSha256','serverEnforcedRunAs','clientCredentialsEnabled','jwtBearerEnabled','otherFlowsEnabled'])
+  need(exact(runAs, ['schemaVersion','kind','orgId','clientId','runAsUsername','runAsUserId','capturedAt','clientConfigurationReadbackSha256','serverEnforcedRunAs','clientCredentialsEnabled','jwtBearerEnabled','credentialAloneUserSelectionEnabled','interactiveAuthorizationRequiresUserAuthentication'])
     && runAs.schemaVersion === 1 && runAs.kind === 'fcos_salesforce_eca_client_credentials_run_as_acceptance'
     && runAs.orgId === binding.orgId && runAs.clientId === binding.clientId
     && runAs.runAsUsername === binding.username && runAs.runAsUserId === binding.userId
     && runAs.serverEnforcedRunAs === true && runAs.clientCredentialsEnabled === true
-    && runAs.jwtBearerEnabled === false && runAs.otherFlowsEnabled === false
+    && runAs.jwtBearerEnabled === false && runAs.credentialAloneUserSelectionEnabled === false && runAs.interactiveAuthorizationRequiresUserAuthentication === true
     && runAs.clientConfigurationReadbackSha256 === binding.clientConfigurationReadbackSha256
     && Number.isFinite(Date.parse(runAs.capturedAt)) && Date.parse(runAs.capturedAt) >= binding.issuedAt - 30000
     && Date.parse(runAs.capturedAt) <= Date.parse(review.reviewedAt)
