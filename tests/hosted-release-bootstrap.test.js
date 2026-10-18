@@ -25,17 +25,17 @@ const forwarding = names => Object.fromEntries(names.map(name => [name, `\${{ se
 test('qualification bootstrap stays inactive and calls the same immutable controller', () => {
   assert.deepEqual(Object.keys(definition.on), ['workflow_dispatch']);
   assert.deepEqual(definition.permissions, {});
-  assert.deepEqual(Object.keys(definition.jobs), ['toolchain', 'setup_discovery', 'preservation_preflight', 'manifest', 'release']);
-  assert.equal(definition.jobs.manifest.if, "${{ inputs.bootstrap_phase == 'qualification' && vars.FCOS_HOSTED_QUALIFICATION_ADMITTED == 'true' }}");
+  assert.deepEqual(Object.keys(definition.jobs), ['toolchain', 'setup_discovery', 'preservation_preflight', 'manifest', 'release', 'xero_owner_readback']);
+  assert.equal(definition.jobs.manifest.if, "${{ inputs.xero_recovery_mode == 'disabled' && inputs.bootstrap_phase == 'qualification' && vars.FCOS_HOSTED_QUALIFICATION_ADMITTED == 'true' }}");
   assert.equal(definition.jobs.manifest.environment, 'fcos-hosted-verification');
   assert.deepEqual(definition.jobs.manifest.permissions, { contents: 'read', actions: 'read' });
-  assert.equal(template.split('__FCOS_CONTROLLER_SHA__').length - 1, 9);
+  assert.equal(template.split('__FCOS_CONTROLLER_SHA__').length - 1, 11);
   const sha = 'a'.repeat(40), rendered = yaml.load(template.replaceAll('__FCOS_CONTROLLER_SHA__', sha));
   assert.equal(rendered.jobs.manifest.env.FCOS_CONTROLLER_SHA, sha);
   assert.equal(rendered.jobs.manifest.steps[0].with.ref, sha);
   assert.equal(rendered.jobs.release.uses, `hocheunglai-oss/fcos/.github/workflows/hosted-release-controller.yml@${sha}`);
   assert.deepEqual(rendered.jobs.release.secrets, forwarding(qualificationSecrets));
-  assert.equal(rendered.jobs.toolchain.if, "${{ inputs.bootstrap_phase == 'toolchain' }}");
+  assert.equal(rendered.jobs.toolchain.if, "${{ inputs.xero_recovery_mode == 'disabled' && inputs.bootstrap_phase == 'toolchain' }}");
   assert.equal(rendered.jobs.toolchain.uses, `hocheunglai-oss/fcos/.github/workflows/hosted-release-toolchain.yml@${sha}`);
   assert.equal(rendered.jobs.toolchain.with.source_sha, sha);
   assert.equal(rendered.jobs.toolchain.secrets, undefined);
@@ -80,7 +80,8 @@ test('bootstrap checks scope and live read-only admission before candidate check
   assert.equal(steps[dependencies].env, undefined);
   assert.deepEqual(Object.keys(steps[admission].env).sort(), ['FCOS_HOSTED_GITHUB_READ_TOKEN', 'GITHUB_TOKEN']);
   assert.ok(steps[admission].run.includes('node controller/scripts/hosted-release-manifest.mjs --validate-dispatch-only'));
-  const secrets = [...JSON.stringify(definition).matchAll(/secrets\.([A-Z0-9_]+)/g)].map(match => match[1]);
+  const qualification = {...definition,jobs:Object.fromEntries(Object.entries(definition.jobs).filter(([id])=>id!=='xero_owner_readback'))};
+  const secrets = [...JSON.stringify(qualification).matchAll(/secrets\.([A-Z0-9_]+)/g)].map(match => match[1]);
   assert.deepEqual([...new Set(secrets)].sort(), environmentSecrets.map(name=>fallbackSources[name]||name).sort());
   assert.ok(!secrets.includes('FCOS_HOSTED_VERCEL_PRODUCTION_TOKEN'));
 });
@@ -113,4 +114,21 @@ test('actual bootstrap shell refuses release scopes before invoking the controll
       assert.equal(existsSync(marker), scenario.allowed);
     }
   } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+
+test('actual rendered bootstrap wires exactly three public readback inputs to immutable GET-only carrier and preserves default qualification',()=>{
+  const sha='f'.repeat(40),rendered=yaml.load(template.replaceAll('__FCOS_CONTROLLER_SHA__',sha)),input=rendered.on.workflow_dispatch.inputs,job=rendered.jobs.xero_owner_readback;
+  assert.equal(input.bootstrap_phase.default,'qualification');assert.equal(input.xero_recovery_mode.default,'disabled');assert.deepEqual(input.xero_recovery_mode.options,['disabled','owner-readback']);
+  assert.equal(job.uses,`hocheunglai-oss/fcos/.github/workflows/hosted-xero-recovery-carrier.yml@${sha}`);assert.equal(job.with.controller_sha,sha);assert.equal(job.with.mode,'owner-readback');
+  assert.equal(job.with.template_base64,'${{ inputs.xero_recovery_template_base64 }}');assert.equal(job.with.owner_readback_base64,'${{ inputs.xero_recovery_readback_base64 }}');
+  assert.deepEqual(job.permissions,{contents:'read',actions:'read','id-token':'write'});assert.notEqual(job.secrets,'inherit');assert.deepEqual(Object.keys(job.secrets).sort(),['FCOS_HOSTED_VERCEL_READ_TOKEN','FCOS_HOSTED_RUNTIME_EMAIL','FCOS_HOSTED_RUNTIME_PASSWORD','FCOS_PRODUCTION_VERIFICATION_BYPASS','FCOS_XERO_RECOVERY_REQUEST_NONCE'].sort());
+  const evaluate=(expression,inputs)=>Function('inputs','vars',`return (${expression.slice(3,-2)});`)(new Proxy(inputs,{get:(o,k)=>o[k]??''}),{FCOS_HOSTED_QUALIFICATION_ADMITTED:'true',FCOS_HOSTED_SETUP_DISCOVERY_ADMITTED:'true',FCOS_HOSTED_PRESERVATION_PREFLIGHT_ADMITTED:'true'});
+  for(const mode of ['disabled','owner-readback','submit','foreign'])for(const phase of input.bootstrap_phase.options){const inputs={bootstrap_phase:phase,xero_recovery_mode:mode,xero_recovery_template_base64:'SYNTHETIC-PUBLIC-TEMPLATE',xero_recovery_readback_base64:'SYNTHETIC-PUBLIC-READBACK'};
+    assert.equal(evaluate(job.if,inputs),mode==='owner-readback'&&phase==='qualification');
+    for(const [id,other]of Object.entries(rendered.jobs))if(id!=='xero_owner_readback')assert.equal(evaluate(other.if,inputs),mode==='disabled'&&phase===({toolchain:'toolchain',setup_discovery:'setup-discovery',preservation_preflight:'preservation-preflight',manifest:'qualification',release:'qualification'}[id]));
+  }
+  assert.equal(evaluate(job.if,{bootstrap_phase:'qualification',xero_recovery_mode:'owner-readback'}),false);
+  const carrier=yaml.load(readFileSync(new URL('../.github/workflows/hosted-xero-recovery-carrier.yml',import.meta.url),'utf8')),step=carrier.jobs['xero-recovery-carrier'].steps.at(-1);
+  assert.equal(step.env.FCOS_XERO_CARRIER_MODE,'${{ inputs.mode }}');assert.equal(step.env.FCOS_XERO_OWNER_READBACK_BASE64,'${{ inputs.owner_readback_base64 }}');assert.match(step.with.script,/carrierMain/);
 });

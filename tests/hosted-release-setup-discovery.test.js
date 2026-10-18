@@ -395,8 +395,9 @@ test('CLI emits sanitized admission failure artifact and never a release output 
 test('bootstrap discovery is read-only, minimally credentialed, always saves disposition and never calls release',()=>{
   const yaml=createRequire(import.meta.url)('js-yaml'),workflow=yaml.load(template),job=workflow.jobs.setup_discovery;
   assert.ok(workflow.on.workflow_dispatch.inputs.bootstrap_phase.options.includes('setup-discovery'));assert.equal(job.name,'Setup discovery');assert.equal(job.environment,'fcos-hosted-verification');
-  assert.deepEqual(job.permissions,{contents:'read',actions:'read'});assert.equal(job.uses,undefined);assert.equal(job.outputs,undefined);assert.equal(workflow.jobs.release.if,"${{ inputs.bootstrap_phase == 'qualification' }}");
-  assert.equal(workflow.jobs.manifest.if,"${{ inputs.bootstrap_phase == 'qualification' && vars.FCOS_HOSTED_QUALIFICATION_ADMITTED == 'true' }}");
+  assert.deepEqual(job.permissions,{contents:'read',actions:'read'});assert.equal(job.uses,undefined);assert.equal(job.outputs,undefined);assert.equal(workflow.jobs.release.if,"${{ inputs.xero_recovery_mode == 'disabled' && inputs.bootstrap_phase == 'qualification' }}");
+  assert.equal(workflow.jobs.manifest.if,"${{ inputs.xero_recovery_mode == 'disabled' && inputs.bootstrap_phase == 'qualification' && vars.FCOS_HOSTED_QUALIFICATION_ADMITTED == 'true' }}");
+  assert.equal(job.if,"${{ inputs.xero_recovery_mode == 'disabled' && inputs.bootstrap_phase == 'setup-discovery' && vars.FCOS_HOSTED_SETUP_DISCOVERY_ADMITTED == 'true' }}");
   assert.doesNotMatch(JSON.stringify(job),/SALESFORCE|COORDINATOR|PRESERVATION|FCOS_HOSTED_VERCEL_TOKEN|id-token|secrets: inherit|hosted-release-controller/);
   assert.deepEqual(job.steps.filter(step=>step.env?.FCOS_HOSTED_RUNTIME_PASSWORD).map(step=>step.name),['Discover public setup baseline']);
   assert.ok(job.steps.findIndex(step=>step.name==='Admit discovery before candidate checkout')<job.steps.findIndex(step=>step.with?.path==='candidate'));

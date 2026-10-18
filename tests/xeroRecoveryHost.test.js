@@ -12,7 +12,8 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { generateKeyPair, exportJWK, SignJWT, jwtVerify } from 'jose';
 import { PGlite } from '@electric-sql/pglite';
-import { createXeroRecoveryHost } from '../scripts/lib/hosted-release/xero-recovery-host.mjs';
+import { validateOwnerReadbackResult } from '../scripts/lib/hosted-release/xero-recovery-native-relay.mjs';
+import { createXeroRecoveryHost, xeroOwnerReadbackAudience } from '../scripts/lib/hosted-release/xero-recovery-host.mjs';
 import { recoveryStepCanonicalJson as canonical, recoveryStepSha256 as hash, prepareXeroRecoveryStepRequest } from '../scripts/lib/hosted-release/xero-recovery-step-protocol.mjs';
 import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier } from '../config/fcosConnections.js';
 import { readXeroSharedControlFixture } from './helpers/xero-recovery-fixture.mjs';
@@ -160,7 +161,7 @@ async function fixture(t, change = {}) {
 }
 
 test('physical TLS entrypoint uses real actor/SQL/native modules; normal request end never aborts following calls', async t => {
-  const f = await fixture(t), first = await f.send();
+  const f = await fixture(t), first = await f.send({extra:{'x-vercel-protection-bypass':'FIXTURE_PRIVATE_BYPASS'}});
   assert.equal(first.status, 200, canonical({ calls: f.calls, diagnostics: f.diagnostics })); assert.equal(first.headers['cache-control'], 'no-store');
   assert.equal(first.body.step, 'preflight'); assert.equal(first.body.nextStep, 'custodyPrepare');
   assert.equal(first.body.qualificationAccepted, false); assert.equal(first.body.executionAuthorityGranted, false);
@@ -308,4 +309,19 @@ test('verified Supabase session expiry during held SQL claim cancels ordinary co
     assert.equal((await f.db.query('select count(*)::int n from public.xero_recovery_step_acknowledgements')).rows[0].n, 0);
     assert.equal((await f.send()).status, 403); assert.equal(f.calls.length, before);
   } finally { t.mock.timers.reset(); }
+});
+
+for(const lost of ['xero_recovery_step_complete','xero_recovery_step_claim'])test(`separate signed owner reader after lost ${lost} can GET original SQL state and never POST`,async t=>{
+  const f=await fixture(t,{lose:lost});assert.equal((await f.send()).status,503);
+  const original=JSON.parse(Buffer.from(f.headers.authorization.split('.')[1],'base64url')),planSha256=hash(f.planJson),aud=xeroOwnerReadbackAudience(PUBLIC,f.options.caller.runId,planSha256);
+  const sign=patch=>new SignJWT({...original,run_id:'987654321',aud,...patch}).setProtectedHeader({alg:'RS256',kid:'carrier'}).sign(keys.privateKey);
+  const reader=await sign({});let before=f.calls.length;
+  assert.equal((await f.send({extra:{authorization:`Bearer ${reader}`}})).status,403);assert.equal(f.calls.slice(before).some(c=>c.method==='POST'),false);
+  for(const patch of [{aud:f.options.caller.audience},{aud:aud.replace(planSha256,'0'.repeat(64))},{run_id:f.options.caller.runId},{actor_id:'1'},{sha:'0'.repeat(40)},{job_workflow_sha:'0'.repeat(40)},{run_attempt:'2'}]){
+    before=f.calls.length;assert.equal((await f.send({method:'GET',extra:{authorization:`Bearer ${await sign(patch)}`}})).status,403);assert.equal(f.calls.slice(before).some(c=>c.path.endsWith('xero_recovery_step_readback')),false);
+  }
+  before=f.calls.length;const result=await f.send({method:'GET',extra:{authorization:`Bearer ${reader}`}});assert.equal(result.status,200);assert.equal(result.body.state,lost.endsWith('_claim')?'submitted_unknown':'ready');
+  assert.equal(validateOwnerReadbackResult(result.body,{plan:JSON.parse(f.planJson),planSha256}).state,result.body.state);assert.equal(result.body.operationId,f.binding.operationId);assert.equal(result.body.planSha256,planSha256);assert.equal(result.body.executionAuthorityGranted,false);
+  assert.ok(f.calls.slice(before).every(c=>c.method==='GET'));assert.equal(f.calls.slice(before).filter(c=>c.path.endsWith('xero_recovery_step_readback')).length,1);
+  assert.equal((await f.send()).status,403); // stopped original POST stays stopped
 });

@@ -102,6 +102,8 @@ function safeResult(result, secrets) {
  * No live job metadata credential is assumed: signed run identity is checked,
  * but current job status/continued execution is not independently observed.
  */
+export const xeroOwnerReadbackAudience = (origin, originalRunId, planSha256) => `${origin}/xero-recovery/owner-readback/${originalRunId}/${planSha256}`;
+
 export function createXeroRecoveryHost(options = {}) {
   try {
     need(exact(options, ['planJson', 'actorBinding', 'ownership', 'caller', 'publicOrigin', 'requestNonceSha256', 'privateEnvironment',
@@ -171,15 +173,23 @@ export function createXeroRecoveryHost(options = {}) {
         const rawRequestJson = req.method === 'POST' ? requestJson(bytes, plan, planSha256) : null;
         const keySignal = AbortSignal.any([signal, AbortSignal.timeout(15000)]);
         const key = githubJwks === undefined ? await waitFor(readKeys(fetchImpl, keySignal), keySignal, 15000) : githubJwks;
-        const { payload: claims } = await waitFor(jwtVerify(oidc, key, { issuer: ISSUER, audience: carrier.audience,
+        // Purpose binds a new reader to this immutable original operation. GitHub
+        // does not attest workflow inputs: the separately admitted immutable
+        // carrier enforces readback mode; this host enforces GET-only capability.
+        const readAudience = xeroOwnerReadbackAudience(publicOrigin, carrier.runId, planSha256);
+        const audiences = req.method === 'GET' ? [carrier.audience, readAudience] : carrier.audience;
+        const { payload: claims } = await waitFor(jwtVerify(oidc, key, { issuer: ISSUER, audience: audiences,
           algorithms: ['RS256'], currentDate: new Date(now()) }), signal, 15000);
         const seconds = Math.floor(now() / 1000);
-        need(!signal.aborted && claims.aud === carrier.audience && claims.sub === carrier.subject && claims.environment === carrier.environment
+        const originalRun = claims.run_id === carrier.runId && claims.aud === carrier.audience;
+        const newReader = req.method === 'GET' && claims.aud === readAudience
+          && typeof claims.run_id === 'string' && /^[1-9][0-9]{0,19}$/.test(claims.run_id) && claims.run_id !== carrier.runId;
+        need(!signal.aborted && (originalRun || newReader) && claims.sub === carrier.subject && claims.environment === carrier.environment
           && claims.repository === REPOSITORY && claims.repository_id === '1278654816' && claims.repository_owner === 'hocheunglai-oss'
           && claims.actor === 'hocheunglai-oss' && claims.actor_id === '265701760' && claims.ref === carrier.ref && claims.ref_type === 'branch'
           && [true, 'true'].includes(claims.ref_protected) && claims.sha === carrier.sha && claims.workflow_sha === carrier.workflowSha
           && claims.workflow_ref === carrier.workflowRef && claims.job_workflow_ref === carrier.jobWorkflowRef && claims.job_workflow_sha === carrier.jobWorkflowSha
-          && claims.run_id === carrier.runId && claims.run_attempt === '1' && claims.event_name === 'workflow_dispatch' && claims.runner_environment === 'github-hosted'
+          && claims.run_attempt === '1' && claims.event_name === 'workflow_dispatch' && claims.runner_environment === 'github-hosted'
           && typeof claims.jti === 'string' && claims.jti.length > 0 && claims.jti.length <= 500
           && Number.isSafeInteger(claims.iat) && Number.isSafeInteger(claims.exp) && claims.iat > 0 && claims.exp > seconds
           && claims.exp > claims.iat && claims.exp - claims.iat <= 300 && claims.iat <= seconds + 30 && seconds - claims.iat <= 300);

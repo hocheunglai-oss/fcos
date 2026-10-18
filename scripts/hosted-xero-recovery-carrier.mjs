@@ -4,11 +4,13 @@ import { mkdtempSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { validateXeroRecoverySourceInventory } from './lib/hosted-release/xero-recovery-source-inventory.mjs';
+import { xeroOwnerReadbackAudience } from './lib/hosted-release/xero-recovery-host.mjs';
 import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
 import { loginLegacyHostedRuntime, validateLegacyRuntimePublicAuth } from './lib/hosted-release/legacy-hosted-runtime-login.mjs';
 import { createVercelReadTransport, validateVercelReadAcceptance } from './lib/hosted-release/vercel-read-auth.mjs';
 import { createCourierReadBudget, parseCourierTemplate, parseCourierRequest, courierPrefix, courierRequestRef, courierArtifactName, assertCourierRun,
-  readCourierGitFile, assertCourierAck, hash, bytesHash, exact, need, refusal, safeCode, REPOSITORY, RUNTIME_MATERIAL_FILENAME } from './lib/hosted-release/xero-recovery-native-relay.mjs';
+  readCourierGitFile, assertCourierAck, parseOwnerReadbackCarrier, assertOwnerReadbackAck, validateOwnerReadbackResult, ownerReadbackArtifactName, hash, bytesHash, exact, need, refusal, safeCode, REPOSITORY, RUNTIME_MATERIAL_FILENAME } from './lib/hosted-release/xero-recovery-native-relay.mjs';
 const TEAM = fcosConnectionIdentifier('vercel','Team ID'), PROJECT = fcosConnectionIdentifier('vercel','Project ID');
 const targets = { vercelTeam: TEAM, vercelProject: PROJECT };
 const GH_ISSUER = 'https://token.actions.githubusercontent.com';
@@ -58,27 +60,23 @@ export async function verifyCourierOidc({token,t,runId,audience,fetchImpl=fetch,
     return { expiresAt:p.exp*1000 };
   } catch { throw refusal('XERO_COURIER_OIDC_INVALID'); }
 }
-// No metadata attestation substitute: lambda/opaque trees, omitted files, or
-// unavailable original bytes remain source_bytes_unproven. The actual mapping
-// for prebuilt .func sources has NOT been demonstrated with the approved reader.
+// Actual provider src/out mapping is strict: exact3 uploaded source files and
+// the exact expected compiled route. OUT lambda/UID is never a source-byte
+// substitute: all3 original source contents must independently match below.
 export async function verifyCourierDeploymentBytes({t,locator,expectedFiles,env,fetchImpl=fetch,signal,now=Date.now}) {
   need(exact(locator,['schemaVersion','kind','deploymentId','url']) && locator.schemaVersion===1 && locator.kind==='fcos_xero_host_locator_v1'
     && /^dpl_[A-Za-z0-9]+$/.test(locator.deploymentId) && /^https:\/\/[a-z0-9-]+\.vercel\.app$/.test(locator.url), 'XERO_COURIER_LOCATOR_INVALID');
   validateVercelReadAcceptance(t.readCredential,t.readAcceptance,{targets,now:now()});
   const transport=createVercelReadTransport({binding:t.readCredential,targets,env,fetchImpl:async(u,o)=>{const r=await fetchImpl(u,{...o,signal:AbortSignal.any([signal,o.signal,AbortSignal.timeout(15000)].filter(Boolean))});Object.defineProperty(r,'json',{value:async()=>JSON.parse((await bounded(r,262144)).toString('utf8'))});return r;},now}); await transport.configuration();
   const d=await transport.get(`/v13/deployments/${locator.deploymentId}`);
-  need(d.id===locator.deploymentId && d.projectId===PROJECT && d.teamId===TEAM && d.readyState==='READY' && `https://${d.url}`===locator.url
+  need(d.id===locator.deploymentId && d.projectId===PROJECT && (Object.hasOwn(d,'teamId')?d.teamId===TEAM:d.ownerId===TEAM)
+    && (!Object.hasOwn(d,'ownerId')||d.ownerId===TEAM) && d.readyState==='READY' && `https://${d.url}`===locator.url
     && (d.customEnvironment?.id===t.hostConfiguration.target.customEnvironment || d.customEnvironment?.slug===t.hostConfiguration.target.customEnvironment), 'XERO_COURIER_DEPLOYMENT_MISMATCH');
   async function read(path, maximum) { need(!signal.aborted); const u=new URL(`https://api.vercel.com${path}`);u.searchParams.set('teamId',TEAM);
     const r=await fetchImpl(u,{method:'GET',redirect:'error',signal,cache:'no-store',headers:{authorization:`Bearer ${env.FCOS_HOSTED_VERCEL_READ_TOKEN}`}});
     need(r.ok && !r.redirected && (!r.url || r.url===u.href), 'XERO_COURIER_SOURCE_BYTES_UNPROVEN'); return bounded(r,maximum); }
   let tree; try { tree=JSON.parse((await read(`/v6/deployments/${locator.deploymentId}/files`,262144)).toString('utf8')); } catch { throw refusal('XERO_COURIER_SOURCE_BYTES_UNPROVEN'); }
-  const files=[];
-  function visit(rows,prefix='') { need(Array.isArray(rows) && rows.length<=100, 'XERO_COURIER_SOURCE_BYTES_UNPROVEN');
-    for(const row of rows) { need(typeof row.name==='string' && row.name.length<200 && !/[/\\\0]/.test(row.name) && !['.','..'].includes(row.name), 'XERO_COURIER_SOURCE_BYTES_UNPROVEN');
-      const path=prefix+row.name; if(row.type==='directory')visit(row.children,`${path}/`);else{need(row.type==='file' && typeof row.uid==='string' && /^[A-Za-z0-9_-]{1,128}$/.test(row.uid), 'XERO_COURIER_SOURCE_BYTES_UNPROVEN');files.push({path,uid:row.uid});} }
-  }
-  visit(tree); files.sort((a,b)=>a.path.localeCompare(b.path));
+  let files;try{files=validateXeroRecoverySourceInventory({tree,expectedFiles,mode:'host'}).sourceFiles;}catch{throw refusal('XERO_COURIER_SOURCE_BYTES_UNPROVEN');}
   need(Array.isArray(expectedFiles) && expectedFiles.length===3 && files.length===3 && new Set(files.map(f=>f.path)).size===3
     && files.every((f,i)=>f.path===expectedFiles[i].path && HASH.test(expectedFiles[i].sha256)), 'XERO_COURIER_SOURCE_BYTES_UNPROVEN');
   for(let i=0;i<files.length;i++) { const raw=await read(`/v8/deployments/${locator.deploymentId}/files/${files[i].uid}`,4194304), expected=expectedFiles[i];
@@ -104,13 +102,13 @@ async function loginProtection(origin,env) {
 }
 // Called only with the actual HTTP acknowledgement already validated above.
 // Deadline/cancellation after HTTP success still forbids a new capture write.
-export async function captureCourierAck({ack,t,runId,submissionId,signal,now=Date.now}) {
-  active(signal,t,now);
+export async function captureCourierAck({ack,t,runId,submissionId,signal,now=Date.now,artifactName}) {
+  active(signal,t,now);need(artifactName===undefined||/^fcos-xero-readback-[1-9][0-9]{0,19}-[1-9][0-9]{0,19}-[a-f0-9]{16}$/.test(artifactName));
   const directory=mkdtempSync(join(tmpdir(),'fcos-xero-ack-'));
   try { const path=join(directory,RUNTIME_MATERIAL_FILENAME);writeFileSync(path,JSON.stringify(ack),{mode:0o600,flag:'wx'});
     const {DefaultArtifactClient}=await import('@actions/artifact');active(signal,t,now);
     const client=new DefaultArtifactClient(),originalOut=process.stdout.write,originalErr=process.stderr.write;
-    let uploaded;try{active(signal,t,now);process.stdout.write=()=>true;process.stderr.write=()=>true;uploaded=await client.uploadArtifact(courierArtifactName(runId,submissionId),[path],directory,{retentionDays:7,compressionLevel:0});}
+    let uploaded;try{active(signal,t,now);process.stdout.write=()=>true;process.stderr.write=()=>true;uploaded=await client.uploadArtifact(artifactName || courierArtifactName(runId,submissionId),[path],directory,{retentionDays:7,compressionLevel:0});}
     finally{process.stdout.write=originalOut;process.stderr.write=originalErr;}
     need(Number.isSafeInteger(uploaded.id) && uploaded.id>0 && typeof uploaded.digest==='string','XERO_COURIER_CAPTURE_UNKNOWN');
   } catch(e) { if(safeCode(e)==='XERO_COURIER_AUTHORITY_EXPIRED')throw e;throw refusal('XERO_COURIER_CAPTURE_UNKNOWN'); }
@@ -150,11 +148,14 @@ export async function runWarmXeroRecoveryCarrier({templateJson,env=process.env,f
     const auth=await loginLegacyHostedRuntime({origin:t.login.origin,credentials,mode:'runtime',publicAuth:t.login.publicAuth,
       protectionState:await loginProtection(t.login.origin,env),fetchImpl:(u,o)=>{active(signal,t,now);return fetchImpl(u,{...o,signal:AbortSignal.any([signal,o.signal].filter(Boolean))});},now,ownerRecoveryProviderToken:true});
     active(signal,t,now);await verifyCourierOidc({token:oidc,t,runId,audience,fetchImpl,jwks,signal,now});
+    need(typeof env.FCOS_PRODUCTION_VERIFICATION_BYPASS==='string'&&env.FCOS_PRODUCTION_VERIFICATION_BYPASS.length>0&&env.FCOS_PRODUCTION_VERIFICATION_BYPASS.length<=16384&&!/[\r\n]/.test(env.FCOS_PRODUCTION_VERIFICATION_BYPASS),'XERO_COURIER_LOGIN_PROTECTION_REQUIRED');
     need(typeof env.FCOS_XERO_RECOVERY_REQUEST_NONCE==='string' && hash(env.FCOS_XERO_RECOVERY_REQUEST_NONCE)===t.hostConfiguration.requestNonceSha256,'XERO_COURIER_NONCE_REQUIRED');
+    // Existing verification-environment bypass goes only to the source/target-
+    // verified project host, as one header. No cookie or bypass creation call.
     // Exactly one HTTP attempt. Any thrown/lost/non-200 result ends this job;
     // no failure marker, host GET, refresh, cleanup request or next POST follows.
     const response=await fetchImpl(`${host.origin}/xero-recovery`,{method:'POST',redirect:'error',signal:AbortSignal.any([signal,AbortSignal.timeout(120000)]),cache:'no-store',
-      headers:{authorization:`Bearer ${oidc}`,'x-fcos-owner-bearer':auth.token,'x-fcos-provider-access-token':auth.providerAccessToken,'x-fcos-recovery-nonce':env.FCOS_XERO_RECOVERY_REQUEST_NONCE,'content-type':'application/json'},body:found.raw});
+      headers:{'x-vercel-protection-bypass':env.FCOS_PRODUCTION_VERIFICATION_BYPASS,authorization:`Bearer ${oidc}`,'x-fcos-owner-bearer':auth.token,'x-fcos-provider-access-token':auth.providerAccessToken,'x-fcos-recovery-nonce':env.FCOS_XERO_RECOVERY_REQUEST_NONCE,'content-type':'application/json'},body:found.raw});
     need(response.status===200 && !response.redirected && (!response.url || response.url===`${host.origin}/xero-recovery`),'XERO_COURIER_HTTP_OUTCOME_UNKNOWN');
     const resultJson=(await bounded(response,16384)).toString('utf8'),ack={schemaVersion:1,kind:'fcos_xero_recovery_actual_http_ack_v1',templateSha256,runId,jobId:actual.job.id,requestRef:found.ref,commitSha:found.commitSha,
       requestSha256:hash(found.raw),hostOrigin:host.origin,deploymentId:host.deploymentId,httpStatus:200,resultJson,resultSha256:bytesHash(resultJson),receivedAt:now()};
@@ -167,10 +168,43 @@ export async function runWarmXeroRecoveryCarrier({templateJson,env=process.env,f
   }
   return {status:'complete',operationId:plan.binding.operationId,executionAuthorityGranted:false,qualificationAccepted:false};
 }
+/** New invocation, never an error handler. Root admits a finite dispatch;
+ * immutable caller supplies exact reviewed public inputs. OIDC authenticates
+ * same protected source/run, not these input values or financial approval.
+ * The original package is rebuilt using ORIGINAL runId even in this new job.
+ */
+export async function runXeroRecoveryOwnerReadback({templateJson,readbackJson,env=process.env,fetchImpl=fetch,now=Date.now,jwks,signal,wait=ms=>new Promise(r=>setTimeout(r,ms))}={}) {
+  const parsed=parseCourierTemplate(templateJson),{template:t,templateSha256,plan,planSha256}=parsed,r=parseOwnerReadbackCarrier(readbackJson,parsed);active(signal,r,now);
+  need(env.GITHUB_REPOSITORY===REPOSITORY&&env.GITHUB_RUN_ATTEMPT==='1'&&/^[1-9][0-9]{0,19}$/.test(env.GITHUB_RUN_ID)&&env.GITHUB_RUN_ID!==r.originalBinding.runId,'XERO_COURIER_RUN_MISMATCH');
+  const runId=env.GITHUB_RUN_ID,read=courierGithubReader({env,fetchImpl,signal,now,wait}),original=await assertCourierRun(read,t,r.originalBinding.runId,{allowCompleted:true});
+  need(original.run.status==='completed'&&original.job.status==='completed'&&original.job.id===r.originalBinding.jobId,'XERO_COURIER_RUN_MISMATCH');
+  const actual=await assertCourierRun(read,t,runId),audience=xeroOwnerReadbackAudience(r.originalBinding.hostOrigin,r.originalBinding.runId,planSha256);
+  const oidc=await ownOidc(env,audience,fetchImpl,signal);await verifyCourierOidc({token:oidc,t,runId,audience,fetchImpl,jwks,signal,now});active(signal,r,now);
+  const expectedFiles=await buildCourierExpectedFiles({t,runId:r.originalBinding.runId}),host=await verifyCourierDeploymentBytes({t,locator:{schemaVersion:1,kind:'fcos_xero_host_locator_v1',deploymentId:r.originalBinding.deploymentId,url:r.originalBinding.hostOrigin},expectedFiles,env,fetchImpl,signal,now});
+  active(signal,r,now);const credentials={email:env.FCOS_HOSTED_RUNTIME_EMAIL,password:env.FCOS_HOSTED_RUNTIME_PASSWORD,expectedRole:t.login.publicAuth.identity.role};
+  validateLegacyRuntimePublicAuth({origin:t.login.origin,...credentials,publicAuth:t.login.publicAuth,now:now()});
+  const auth=await loginLegacyHostedRuntime({origin:t.login.origin,credentials,mode:'runtime',publicAuth:t.login.publicAuth,protectionState:await loginProtection(t.login.origin,env),fetchImpl:(u,o)=>{active(signal,r,now);return fetchImpl(u,{...o,signal:AbortSignal.any([signal,o.signal].filter(Boolean))});},now,ownerRecoveryProviderToken:true});
+  active(signal,r,now);await verifyCourierOidc({token:oidc,t,runId,audience,fetchImpl,jwks,signal,now});
+  need(typeof env.FCOS_PRODUCTION_VERIFICATION_BYPASS==='string'&&env.FCOS_PRODUCTION_VERIFICATION_BYPASS.length>0&&env.FCOS_PRODUCTION_VERIFICATION_BYPASS.length<=16384&&!/[\r\n]/.test(env.FCOS_PRODUCTION_VERIFICATION_BYPASS),'XERO_COURIER_LOGIN_PROTECTION_REQUIRED');
+  need(typeof env.FCOS_XERO_RECOVERY_REQUEST_NONCE==='string'&&hash(env.FCOS_XERO_RECOVERY_REQUEST_NONCE)===t.hostConfiguration.requestNonceSha256,'XERO_COURIER_NONCE_REQUIRED');
+  // Same existing verification-environment protection header; no new secret
+  // slot, cookie or bypass provisioning. Source/target was verified above.
+  // ONE explicit GET, no body/query, no financial execute, retry, dispatch,
+  // ref publication, failure marker or cleanup request follows uncertainty.
+  const response=await fetchImpl(`${host.origin}/xero-recovery`,{method:'GET',redirect:'error',cache:'no-store',signal:AbortSignal.any([signal,AbortSignal.timeout(60000)]),headers:{'x-vercel-protection-bypass':env.FCOS_PRODUCTION_VERIFICATION_BYPASS,authorization:`Bearer ${oidc}`,'x-fcos-owner-bearer':auth.token,'x-fcos-provider-access-token':auth.providerAccessToken,'x-fcos-recovery-nonce':env.FCOS_XERO_RECOVERY_REQUEST_NONCE}});
+  need(response.status===200&&!response.redirected&&(!response.url||response.url===`${host.origin}/xero-recovery`),'XERO_COURIER_HTTP_OUTCOME_UNKNOWN');
+  const resultJson=(await bounded(response,16384)).toString('utf8');active(signal,r,now);validateOwnerReadbackResult(JSON.parse(resultJson),{plan,planSha256,now:now()});
+  const ack={schemaVersion:1,kind:'fcos_xero_owner_readback_actual_http_ack_v1',templateSha256,planSha256,admissionScopeSha256:r.admissionScopeSha256,dispatchId:r.dispatchId,originalRunId:r.originalBinding.runId,readerRunId:runId,readerJobId:actual.job.id,hostOrigin:host.origin,deploymentId:host.deploymentId,httpStatus:200,resultJson,resultSha256:bytesHash(resultJson),receivedAt:now()};
+  const result=assertOwnerReadbackAck(ack,{parsed,readback:r,readerRunId:runId,readerJobId:actual.job.id,now:now()});
+  await captureCourierAck({ack,t:r,runId,signal,now,artifactName:ownerReadbackArtifactName(r.originalBinding.runId,runId,plan.binding.operationId)});
+  return{status:result.state==='submitted_unknown'?'unknown_owner_readback_required':'durable_owner_readback_observed_no_replay',originalOutcomeResolved:false,retryable:false,executionAuthorityGranted:false,qualificationAccepted:false};
+}
 export async function carrierMain(env=process.env,options={}) {
   try { need(typeof env.FCOS_XERO_CARRIER_TEMPLATE_BASE64==='string');const bytes=Buffer.from(env.FCOS_XERO_CARRIER_TEMPLATE_BASE64,'base64');need(bytes.length<=65536 && bytes.toString('base64')===env.FCOS_XERO_CARRIER_TEMPLATE_BASE64);
-    const controller=new AbortController();const stop=()=>controller.abort();const parsed=parseCourierTemplate(bytes.toString('utf8'));const deadline=setTimeout(stop,Math.max(0,parsed.template.notAfter-(options.now||Date.now)()));deadline.unref?.();process.once('SIGTERM',stop);process.once('SIGINT',stop);
-    try{return await runWarmXeroRecoveryCarrier({templateJson:bytes.toString('utf8'),env,signal:controller.signal,...options});}finally{clearTimeout(deadline);process.removeListener('SIGTERM',stop);process.removeListener('SIGINT',stop);}
+    const mode=env.FCOS_XERO_CARRIER_MODE||'submit';need(['submit','owner-readback'].includes(mode));const templateJson=bytes.toString('utf8'),parsed=parseCourierTemplate(templateJson);
+    let readbackJson;const window=mode==='owner-readback'?(()=>{need(typeof env.FCOS_XERO_OWNER_READBACK_BASE64==='string');const raw=Buffer.from(env.FCOS_XERO_OWNER_READBACK_BASE64,'base64');need(raw.length<=4096&&raw.toString('base64')===env.FCOS_XERO_OWNER_READBACK_BASE64);readbackJson=raw.toString('utf8');return parseOwnerReadbackCarrier(readbackJson,parsed);})():parsed.template;
+    const controller=new AbortController();const stop=()=>controller.abort();const deadline=setTimeout(stop,Math.max(0,window.notAfter-(options.now||Date.now)()));deadline.unref?.();process.once('SIGTERM',stop);process.once('SIGINT',stop);
+    try{return await (mode==='owner-readback'?runXeroRecoveryOwnerReadback:runWarmXeroRecoveryCarrier)({templateJson,readbackJson,env,signal:controller.signal,...options});}finally{clearTimeout(deadline);process.removeListener('SIGTERM',stop);process.removeListener('SIGINT',stop);}
   }catch(e){throw refusal(safeCode(e));}
 }
 if(process.argv[1] && resolve(process.argv[1])===fileURLToPath(import.meta.url))carrierMain().then(v=>process.stdout.write(JSON.stringify(v)+'\n')).catch(e=>{process.stderr.write(safeCode(e)+'\n');process.exitCode=1;});

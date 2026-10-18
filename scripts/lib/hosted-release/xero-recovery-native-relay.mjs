@@ -20,7 +20,7 @@ const plain = v => v !== null && typeof v === 'object' && Object.getPrototypeOf(
 export const exact = (v, keys) => plain(v) && Object.keys(v).length === keys.length && keys.every(k => Object.hasOwn(v, k));
 export const refusal = code => Object.assign(new Error(code), { code });
 export const need = (v, code = 'XERO_COURIER_REFUSED') => { if (!v) throw refusal(code); };
-const SAFE_CODES = new Set(['XERO_COURIER_LOCAL_REPOSITORY_MISMATCH','XERO_COURIER_PACKAGE_BUILD_REFUSED','XERO_COURIER_CANONICAL_STATE_REQUIRED','XERO_COURIER_ROOT_ADMISSION_REQUIRED','XERO_COURIER_ORIGINAL_CLAIM_REQUIRED','XERO_COURIER_SOURCE_BYTES_UNPROVEN','XERO_COURIER_OIDC_INVALID','XERO_COURIER_AUTHORITY_EXPIRED','XERO_COURIER_CONSUMED_GET_ONLY','XERO_COURIER_REMOTE_OUTCOME_UNKNOWN','XERO_COURIER_ACK_TIMEOUT_UNKNOWN','XERO_COURIER_NATIVE_COMMAND_UNKNOWN','XERO_COURIER_GITHUB_READ_UNKNOWN','XERO_COURIER_HTTP_OUTCOME_UNKNOWN','XERO_COURIER_CAPTURE_UNKNOWN','XERO_COURIER_RUN_MISMATCH','XERO_COURIER_REQUEST_INVALID','XERO_COURIER_TEMPLATE_INVALID','XERO_COURIER_NONCE_REQUIRED','XERO_COURIER_ACK_MISMATCH','XERO_COURIER_RESULT_MISMATCH']);
+const SAFE_CODES = new Set(['XERO_COURIER_READBACK_ADMISSION_REQUIRED','XERO_COURIER_READBACK_RESULT_INVALID','XERO_COURIER_READBACK_DISPATCH_UNKNOWN','XERO_COURIER_LOCAL_REPOSITORY_MISMATCH','XERO_COURIER_PACKAGE_BUILD_REFUSED','XERO_COURIER_CANONICAL_STATE_REQUIRED','XERO_COURIER_ROOT_ADMISSION_REQUIRED','XERO_COURIER_ORIGINAL_CLAIM_REQUIRED','XERO_COURIER_SOURCE_BYTES_UNPROVEN','XERO_COURIER_OIDC_INVALID','XERO_COURIER_AUTHORITY_EXPIRED','XERO_COURIER_CONSUMED_GET_ONLY','XERO_COURIER_REMOTE_OUTCOME_UNKNOWN','XERO_COURIER_ACK_TIMEOUT_UNKNOWN','XERO_COURIER_NATIVE_COMMAND_UNKNOWN','XERO_COURIER_GITHUB_READ_UNKNOWN','XERO_COURIER_HTTP_OUTCOME_UNKNOWN','XERO_COURIER_CAPTURE_UNKNOWN','XERO_COURIER_RUN_MISMATCH','XERO_COURIER_REQUEST_INVALID','XERO_COURIER_TEMPLATE_INVALID','XERO_COURIER_NONCE_REQUIRED','XERO_COURIER_ACK_MISMATCH','XERO_COURIER_RESULT_MISMATCH']);
 export const safeCode = e => { try { return SAFE_CODES.has(e?.code) ? e.code : 'XERO_COURIER_STOPPED_OWNER_READBACK_REQUIRED'; } catch { return 'XERO_COURIER_STOPPED_OWNER_READBACK_REQUIRED'; } };
 export const bytesHash = value => createHash('sha256').update(value).digest('hex');
 const gitHash = (kind, b) => createHash('sha1').update(`${kind} ${b.length}\0`).update(b).digest('hex');
@@ -119,9 +119,10 @@ function record(path, value) {
   const d = openSync(dirname(path), constants.O_RDONLY); try { fsyncSync(d); } finally { closeSync(d); }
 }
 const completed = value => ({ exit_code: 0, output: JSON.stringify(value) });
-// The actual accepted Python class owns its OS mutex and persistent lease. The
-// current historical class statically rejects Features for reconciliation; that
-// is an explicit setup dependency, never a reason to use production/old owner.
+// Actual accepted Features successor owns the SAME OS mutex and persistent
+// lease. Historical source/owner/unknown intents remain immutable. Canonical
+// active objective and current acceptance are still required; no production or
+// historical-owner fallback can supply financial authority.
 const PYTHON = String.raw`import json,sys,hashlib,types,os,stat
 from pathlib import Path
 v=json.load(sys.stdin)
@@ -134,7 +135,7 @@ def raw(p):
   if not stat.S_ISREG(s.st_mode) or s.st_nlink!=1: raise ValueError('file')
   return f.read()
 c=json.loads(raw(v['workflow']))['unifiedCoordinator'];g=c['writeLeaseHelper'];source=raw(g['path'])
-if g['sha256']!='24758c4191afae79fa4b149a166c450ac1cac20951a5f648f3cc3853969aa31d' or hashlib.sha256(source).hexdigest()!=g['sha256'] or not g['localCoordinationGuardAccepted'] or g['independentReviewPending'] or g['providerAuthority']: raise ValueError('guard')
+if g['sha256']!='8ed4eda312b62c3b02c3a0a768ddd024a2a819af5f0f1194da47ef2a2d62fd38' or hashlib.sha256(source).hexdigest()!=g['sha256'] or not g['localCoordinationGuardAccepted'] or g['independentReviewPending'] or g['providerAuthority']: raise ValueError('guard')
 for key in ['rootAcceptance','independentRevisionReview','independentFinalScopeAddendum']:
  if hashlib.sha256(raw(g[key]['path'])).hexdigest()!=g[key]['sha256']: raise ValueError('review')
 m=types.ModuleType('actual_guard');m.__file__=g['path'];exec(compile(source,g['path'],'exec'),m.__dict__)
@@ -163,7 +164,7 @@ export function createCourierReadBudget({now=Date.now,wait=ms=>new Promise(r=>se
     await wait(Math.max(1,reads[0]+60000-at));}};
 }
 export const canonicalCourierStateDirectory=(operationId,controlRoot=ROOT)=>{need(HASH.test(operationId));return join(controlRoot,'.fcos-cli/outputs/hosted-xero-recovery-courier',operationId);};
-export function nativeCourierSourcePins(){return Object.fromEntries(['scripts/lib/hosted-release/xero-recovery-native-relay.mjs','scripts/hosted-xero-recovery-carrier.mjs','.github/workflows/hosted-xero-recovery-carrier.yml','scripts/lib/guarded-provider-write.mjs'].map(p=>[p,bytesHash(regular(fileURLToPath(new URL('../../../'+p,import.meta.url))))]));}
+export function nativeCourierSourcePins(){return Object.fromEntries(['scripts/lib/hosted-release/xero-recovery-native-relay.mjs','scripts/hosted-xero-recovery-carrier.mjs','.github/workflows/hosted-xero-recovery-carrier.yml','.github/qualification/hosted-release-bootstrap.yml','scripts/lib/hosted-release/xero-recovery-source-inventory.mjs','scripts/lib/guarded-provider-write.mjs'].map(p=>[p,bytesHash(regular(fileURLToPath(new URL('../../../'+p,import.meta.url))))]));}
 export function assertNativeCourierAdmission({template:t,templateSha256,plan,planSha256,binding,stateDirectory,controlRoot=ROOT,coordinatorEpoch}) {
   const fixed=canonicalCourierStateDirectory(plan.binding.operationId,controlRoot);need(stateDirectory===fixed,'XERO_COURIER_CANONICAL_STATE_REQUIRED');
   need(existsSync(join(fixed,'root-native-admission.json')),'XERO_COURIER_ROOT_ADMISSION_REQUIRED');const raw=regular(join(fixed,'root-native-admission.json'),65536);need(bytesHash(raw)===binding.rootAdmissionSha256,'XERO_COURIER_ROOT_ADMISSION_REQUIRED');const a=JSON.parse(raw);
@@ -182,12 +183,52 @@ export function assertNativeCourierAdmission({template:t,templateSha256,plan,pla
   const q=documents.coordinationQuota;need(q?.kind==='fcos_actual_xero_courier_shared_get_quota_v1' && q.accepted===true && q.repository===REPOSITORY && q.nativeGetsPerMinute===20 && q.carrierGetsPerMinute===20 && q.sharedMaximum===45 && q.maximumConcurrentClients===2 && q.actualSharedPreflightReviewed===true,'XERO_COURIER_ROOT_ADMISSION_REQUIRED');
   return a;
 }
-export async function createNativeXeroRecoveryRelay({ templateJson, binding, stateDirectory, cwd = process.cwd(), capture, now = Date.now, controlRoot = ROOT, wait = ms => new Promise(r => setTimeout(r, ms)) } = {}) {
+// Readback is an explicitly admitted orchestration write followed by separately
+// requested GETs. It never resolves the original unknown claim or issues a
+// financial host POST. The one GitHub dispatch POST is separately guarded.
+export const ownerReadbackArtifactName = (originalRunId, readerRunId, operationId) => {
+  need([originalRunId,readerRunId].every(v=>/^[1-9][0-9]{0,19}$/.test(v)) && originalRunId!==readerRunId && HASH.test(operationId));
+  return `fcos-xero-readback-${originalRunId}-${readerRunId}-${operationId.slice(0,16)}`;
+};
+export function parseOwnerReadbackCarrier(text, parsed) {
+  need(typeof text==='string' && Buffer.byteLength(text)<=4096,'XERO_COURIER_READBACK_ADMISSION_REQUIRED');const r=JSON.parse(text),b=r.originalBinding;
+  need(exact(r,['schemaVersion','kind','templateSha256','planSha256','originalBinding','requestSha256','originalClaimSha256','originalStoppedSha256','originalUncertainSha256','admissionScopeSha256','dispatchId','issuedAt','notAfter'])
+    && r.schemaVersion===1 && r.kind==='fcos_xero_owner_readback_carrier_v1' && r.templateSha256===parsed.templateSha256 && r.planSha256===parsed.planSha256
+    && exact(b,['runId','jobId','hostOrigin','deploymentId','rootAdmissionSha256']) && /^[1-9][0-9]{0,19}$/.test(b.runId) && Number.isSafeInteger(b.jobId) && b.jobId>0
+    && /^https:\/\/[a-z0-9-]+\.vercel\.app$/.test(b.hostOrigin) && /^dpl_[A-Za-z0-9]+$/.test(b.deploymentId) && HASH.test(b.rootAdmissionSha256)
+    && ['requestSha256','originalClaimSha256','originalStoppedSha256','originalUncertainSha256','admissionScopeSha256'].every(k=>HASH.test(r[k])) && UUID.test(r.dispatchId)
+    && Number.isSafeInteger(r.issuedAt) && Number.isSafeInteger(r.notAfter) && r.issuedAt>=parsed.template.issuedAt && r.notAfter>r.issuedAt && r.notAfter-r.issuedAt<=900000,
+  'XERO_COURIER_READBACK_ADMISSION_REQUIRED');return r;
+}
+export function validateOwnerReadbackResult(value, {plan,planSha256,now=Date.now()}) {
+  need(exact(value,['kind','operationId','planSha256','state','nextStep','currentStep','submissionId','lastResultSha256','checkpoint','executionAuthorityGranted','qualificationAccepted'])
+    && value.kind==='fcos_xero_recovery_step_readback_v1' && value.operationId===plan.binding.operationId && value.planSha256===planSha256
+    && ['ready','complete','submitted_unknown'].includes(value.state) && XERO_RECOVERY_STEPS.includes(value.currentStep) && UUID.test(value.submissionId)
+    && (value.lastResultSha256===null||HASH.test(value.lastResultSha256)) && (value.state==='ready'?XERO_RECOVERY_STEPS.includes(value.nextStep):value.nextStep===null)
+    && value.executionAuthorityGranted===false && value.qualificationAccepted===false && plain(value.checkpoint) && Object.keys(value.checkpoint).every(k=>XERO_RECOVERY_STEPS.includes(k)), 'XERO_COURIER_READBACK_RESULT_INVALID');
+  let next='preflight',last=null,lastStep=null;
+  for(const step of XERO_RECOVERY_STEPS)if(Object.hasOwn(value.checkpoint,step)){const v=value.checkpoint[step];need(plain(v)&&step===next,'XERO_COURIER_READBACK_RESULT_INVALID');
+    const at=step==='preflight'?Date.parse(v.observedAt):['sessionVerify','probeGrant'].includes(step)?Date.parse(v.expiresAt)-1:step==='probeAdmission'?Date.parse(v.deadlineAt)-1:now;
+    validateXeroRecoveryStepResult(step,v,plan.binding,value.checkpoint,at);last=hash(canonical(v));lastStep=step;next=nextXeroRecoveryStep(step,value.checkpoint);}
+  need(value.lastResultSha256===last && (value.state==='submitted_unknown'?value.currentStep===next:value.currentStep===lastStep)
+    &&(value.state==='complete'?next===null:value.state==='ready'?next!==null&&value.nextStep===next:next!==null),'XERO_COURIER_READBACK_RESULT_INVALID');
+  need(Buffer.byteLength(JSON.stringify(value))<=16384,'XERO_COURIER_READBACK_RESULT_INVALID');return value;
+}
+export function assertOwnerReadbackAck(value,{parsed,readback,readerRunId,readerJobId,now=Date.now()}) {
+  need(exact(value,['schemaVersion','kind','templateSha256','planSha256','admissionScopeSha256','dispatchId','originalRunId','readerRunId','readerJobId','hostOrigin','deploymentId','httpStatus','resultJson','resultSha256','receivedAt'])
+    &&value.schemaVersion===1&&value.kind==='fcos_xero_owner_readback_actual_http_ack_v1'&&value.templateSha256===parsed.templateSha256&&value.planSha256===parsed.planSha256
+    &&value.admissionScopeSha256===readback.admissionScopeSha256&&value.dispatchId===readback.dispatchId&&value.originalRunId===readback.originalBinding.runId
+    &&value.readerRunId===readerRunId&&value.readerRunId!==value.originalRunId&&value.readerJobId===readerJobId&&value.hostOrigin===readback.originalBinding.hostOrigin&&value.deploymentId===readback.originalBinding.deploymentId
+    &&value.httpStatus===200&&typeof value.resultJson==='string'&&Buffer.byteLength(value.resultJson)<=16384&&value.resultSha256===bytesHash(value.resultJson)
+    &&Number.isSafeInteger(value.receivedAt)&&value.receivedAt>=readback.issuedAt&&value.receivedAt<readback.notAfter&&value.receivedAt<=now+30000,'XERO_COURIER_READBACK_RESULT_INVALID');
+  return validateOwnerReadbackResult(JSON.parse(value.resultJson),{...parsed,now:value.receivedAt});
+}
+export async function createNativeXeroRecoveryRelay({ templateJson, binding, stateDirectory, cwd = process.cwd(), capture, nativeRuntime, now = Date.now, controlRoot = ROOT, wait = ms => new Promise(r => setTimeout(r, ms)) } = {}) {
   const parsed = parseCourierTemplate(templateJson), { template: t, templateSha256, plan, planSha256 } = parsed;
   need(exact(binding, ['runId','jobId','hostOrigin','deploymentId','rootAdmissionSha256']) && /^[1-9][0-9]{0,19}$/.test(binding.runId)
     && Number.isSafeInteger(binding.jobId) && binding.jobId > 0 && /^https:\/\/[a-z0-9-]+\.vercel\.app$/.test(binding.hostOrigin)
     && /^dpl_[A-Za-z0-9]+$/.test(binding.deploymentId) && HASH.test(binding.rootAdmissionSha256));
-  need(typeof now === 'function' && typeof wait === 'function');
+  need(typeof now === 'function' && typeof wait === 'function' && (nativeRuntime===undefined || typeof capture==='function'));
   const derived=canonicalCourierStateDirectory(plan.binding.operationId,controlRoot);need(stateDirectory===undefined||stateDirectory===derived,'XERO_COURIER_CANONICAL_STATE_REQUIRED');stateDirectory=derived;
   const nav = JSON.parse(regular(join(controlRoot, '.fcos-cli/release-state.json'))), board = JSON.parse(regular(nav.workboardPath)), workflow = board.checkpointPaths.workflow;
   const state = JSON.parse(regular(workflow)).unifiedCoordinator;
@@ -199,7 +240,7 @@ export async function createNativeXeroRecoveryRelay({ templateJson, binding, sta
   const nativeFailure = kind => { if (activeSubmission && !existsSync(statePath(`${activeSubmission}.tool-error`))) record(statePath(`${activeSubmission}.tool-error`), { kind, code: 'XERO_COURIER_NATIVE_COMMAND_UNKNOWN', outcome: 'unknown', ownerReadbackRequired: true }); throw refusal('XERO_COURIER_NATIVE_COMMAND_UNKNOWN'); };
   const runCommand = (command, args, options = {}) => {
     let r; try { r = capture ? capture(command, args, options) : spawnSync(command, args, { timeout: 30000, maxBuffer: 131072, stdio: ['pipe','pipe','pipe'], ...options }); } catch { nativeFailure('tool_exception'); }
-    if (!r || Object.hasOwn(r, 'session_id')) nativeFailure('missing_or_pending_result');
+    if (!r || Object.hasOwn(r, 'session_id') || Object.hasOwn(r, 'sessionId')) nativeFailure('missing_or_pending_result');
     if (r.signal != null) nativeFailure('tool_signal');
     if (r.error) nativeFailure('tool_error');
     if (r.status !== 0) nativeFailure('tool_nonzero_exit');
@@ -213,7 +254,8 @@ export async function createNativeXeroRecoveryRelay({ templateJson, binding, sta
     return { exit_code: 0, output: String(actual) };
   };
   const { providerRuntime } = await import('../../fcos-connections.mjs');
-  let runtime;
+  // Trusted command fixture only. CLI entrypoint cannot supply runtime overrides.
+  let runtime=nativeRuntime;
   const gh = (args, input, binary = false) => {
     runtime ||= providerRuntime('github'); need(runtime.credentialAvailable, 'XERO_COURIER_GITHUB_REQUIRED');
     return runCommand(runtime.command, args, { input, cwd, ...(binary ? {} : { encoding: 'utf8' }), env: { PATH: runtime.env.PATH, HOME: runtime.env.HOME, GH_CONFIG_DIR: runtime.env.GH_CONFIG_DIR, GH_HOST: 'github.com', GH_REPO: REPOSITORY, GH_PROMPT_DISABLED: '1' } });
@@ -283,6 +325,51 @@ export async function createNativeXeroRecoveryRelay({ templateJson, binding, sta
         record(statePath(`${request.step}.ack`), ack); return { status: 'submitted_acknowledged', result: ack.result, artifactId: ack.artifactId };
       } catch (error) { if (!existsSync(statePath('stopped'))) record(statePath('stopped'), { readbackOnly: true, code: safeCode(error), requestSha256: hash(raw) }); throw refusal(safeCode(error)); }
     },
+    async dispatchOwnerReadback(raw, admissionPath) {
+      try {
+      const request=parseCourierRequest(raw,t),fixed=join(stateDirectory,'root-owner-readback-admission.json');
+      need(admissionPath===fixed&&!existsSync(statePath('owner-readback.attempt')),'XERO_COURIER_READBACK_ADMISSION_REQUIRED');
+      const heldBytes=regular(statePath('held-lease')),held=JSON.parse(heldBytes),stoppedBytes=regular(statePath('stopped')),stopped=JSON.parse(stoppedBytes),uncertainBytes=regular(statePath(`${request.step}.uncertain`)),uncertain=JSON.parse(uncertainBytes),intent=JSON.parse(regular(statePath(`${request.step}.submitting`)));
+      need(canonical(held.binding)===canonical(binding)&&held.templateSha256===templateSha256&&held.planSha256===planSha256&&stopped.readbackOnly===true&&stopped.requestSha256===hash(raw)
+        &&uncertain.state==='uncertain'&&uncertain.durable===true&&canonical(uncertain.lease)===canonical(held.lease)&&intent.rawRequestJson===raw&&canonical(intent.lease)===canonical(held.lease),'XERO_COURIER_ORIGINAL_CLAIM_REQUIRED');
+      const a=JSON.parse(regular(fixed,65536)),scope={currentExecutorThreadId:FEATURES_OWNER,historicalOwnerThreadId:plan.binding.ownerThreadId,capability:{maximumDispatchPosts:1,maximumHostGets:1,maximumHostPosts:0,maximumSanitizedAckUploads:1,originalOutcomeMayResolve:false},templateSha256,planSha256,binding,requestSha256:hash(raw),originalClaimSha256:bytesHash(heldBytes),originalStoppedSha256:bytesHash(stoppedBytes),originalUncertainSha256:bytesHash(uncertainBytes),sourcePins:nativeCourierSourcePins(),dispatchId:a.dispatchId,issuedAt:a.issuedAt,notAfter:a.notAfter};
+      need(exact(a,['schemaVersion','kind','accepted','reviewerId','scope','scopeSha256','rootReview','independentReview','dispatchId','issuedAt','notAfter'])&&a.schemaVersion===1&&a.kind==='fcos_root_admitted_xero_owner_readback_dispatch_v1'&&a.accepted===true&&a.reviewerId==='/root'
+        &&canonical(a.scope)===canonical(scope)&&a.scopeSha256===hash(canonical(scope)),'XERO_COURIER_READBACK_ADMISSION_REQUIRED');
+      for(const [key,role]of [['rootReview','root'],['independentReview','independent']]){const ref=a[key];need(exact(ref,['path','sha256'])&&HASH.test(ref.sha256));const bytes=regular(ref.path,262144),r=JSON.parse(bytes);
+        need(bytesHash(bytes)===ref.sha256&&r.kind==='fcos_actual_xero_owner_readback_dispatch_review_v1'&&r.accepted===true&&r.role===role&&r.scopeSha256===a.scopeSha256
+          &&r.actualOriginalSuccessfulClaimReviewed===true&&r.actualStoppedUnknownOutcomeReviewed===true&&r.actualOriginalAuthorityAndReadbackScopeReviewed===true&&r.actualSharedCoordinationQuotaReviewed===true
+          &&typeof r.reviewedAt==='string'&&Number.isFinite(Date.parse(r.reviewedAt))&&Date.parse(r.reviewedAt)>=a.issuedAt-30000&&Date.parse(r.reviewedAt)<=now()+30000&&now()-Date.parse(r.reviewedAt)<=300000
+          &&(role==='root'?r.reviewerId==='/root':typeof r.reviewerId==='string'&&/^\/root\/[a-z0-9_]+(?:\/[a-z0-9_]+)*$/.test(r.reviewerId)&&r.reviewerId!=='/root/xero_host_actor_auth'&&!r.reviewerId.startsWith('/root/xero_host_actor_auth/')),'XERO_COURIER_READBACK_ADMISSION_REQUIRED');}
+      const publicReadback={schemaVersion:1,kind:'fcos_xero_owner_readback_carrier_v1',templateSha256,planSha256,originalBinding:binding,requestSha256:scope.requestSha256,originalClaimSha256:scope.originalClaimSha256,originalStoppedSha256:scope.originalStoppedSha256,originalUncertainSha256:scope.originalUncertainSha256,admissionScopeSha256:a.scopeSha256,dispatchId:a.dispatchId,issuedAt:a.issuedAt,notAfter:a.notAfter};
+      parseOwnerReadbackCarrier(JSON.stringify(publicReadback),parsed);need(now()>=a.issuedAt&&now()<a.notAfter,'XERO_COURIER_AUTHORITY_EXPIRED');
+      // Native records prove original success/unknown only after real root and
+      // independent provenance review. Matching lease alone is never adopted.
+      record(statePath('owner-readback.attempt'),{scopeSha256:a.scopeSha256,readback:publicReadback,dispatchConsumed:true});
+      activeSubmission='owner-readback';
+      const outcome=await runGuardedProviderWrite({expected,claim:()=>lease('assert',held.lease),assertLease:({lease:current})=>lease('assert',current),
+        recordIntent:({lease:current,phase})=>{const v={lease:current,state:phase,durable:true};record(statePath(`owner-readback.${phase}`),{...v,scopeSha256:a.scopeSha256,readback:publicReadback,maximumDispatchPosts:1,maximumHostGets:1,maximumHostPosts:0});return completed(v);},
+        submit:async()=>{need(now()<a.notAfter,'XERO_COURIER_AUTHORITY_EXPIRED');const actual=await identity();need(actual.job.id===binding.jobId&&actual.run.status==='completed'&&actual.job.status==='completed','XERO_COURIER_RUN_MISMATCH');
+          const currentRef=await read(`repos/${REPOSITORY}/git/ref/${t.caller.ref.slice(5)}`);need(currentRef.ref===t.caller.ref&&currentRef.object?.type==='commit'&&currentRef.object.sha===t.caller.sha,'XERO_COURIER_RUN_MISMATCH');
+          const inputs={xero_recovery_mode:'owner-readback',xero_recovery_template_base64:Buffer.from(templateJson).toString('base64'),xero_recovery_readback_base64:Buffer.from(JSON.stringify(publicReadback)).toString('base64')};need(Buffer.byteLength(JSON.stringify(inputs))<=60000);
+          need(now()<a.notAfter,'XERO_COURIER_AUTHORITY_EXPIRED');const output=String(gh(['api',`repos/${REPOSITORY}/actions/workflows/authenticated-release.yml/dispatches`,'--method','POST','--include','--input','-'],JSON.stringify({ref:t.caller.ref.slice(11),inputs})));
+          need(/^HTTP\/[0-9.]+ 204(?: |\r?\n)/.test(output)&&!/^HTTP\/[0-9.]+ (?!204)[0-9]{3}/m.test(output),'XERO_COURIER_READBACK_DISPATCH_UNKNOWN');return completed({dispatchAccepted:true,scopeSha256:a.scopeSha256,providerCompletionProven:false});},
+        validateProviderResult:r=>{try{return JSON.parse(r.output).dispatchAccepted===true;}catch{return false;}},recordOutcome:({lease:current,outcome:o})=>{const v={lease:current,state:o.state,durable:true};record(statePath(`owner-readback.${o.state}`),{...v,reason:o.reason});return completed(v);}});
+      need(outcome.status==='submitted_acknowledged','XERO_COURIER_READBACK_DISPATCH_UNKNOWN');return{status:'owner_readback_dispatched_result_pending',dispatchId:a.dispatchId,originalOutcomeResolved:false,retryable:false};
+      }catch(error){throw refusal(safeCode(error));}
+    },
+    async ownerReadbackResult(raw,readerRunId,readerJobId) {
+      try {
+      const request=parseCourierRequest(raw,t),attempt=JSON.parse(regular(statePath('owner-readback.attempt'))),r=parseOwnerReadbackCarrier(JSON.stringify(attempt.readback),parsed);
+      need(request&&r.requestSha256===hash(raw)&&existsSync(statePath('owner-readback.submitting'))&&typeof readerRunId==='string'&&/^[1-9][0-9]{0,19}$/.test(readerRunId)&&Number.isSafeInteger(Number(readerRunId))&&readerRunId!==binding.runId&&Number.isSafeInteger(readerJobId)&&readerJobId>0,'XERO_COURIER_ORIGINAL_CLAIM_REQUIRED');
+      const u=await read('user');need(u.id===ACTOR_ID&&u.login==='hocheunglai-oss');const actual=await assertCourierRun(read,t,readerRunId,{allowCompleted:true});need(actual.job.id===readerJobId,'XERO_COURIER_RUN_MISMATCH');
+      const list=await read(`repos/${REPOSITORY}/actions/runs/${readerRunId}/artifacts?per_page=100`);need(Array.isArray(list.artifacts)&&list.total_count===list.artifacts.length&&list.artifacts.length<=100);
+      const matches=list.artifacts.filter(v=>v.name===ownerReadbackArtifactName(binding.runId,readerRunId,op));need(matches.length<=1);if(!matches.length)return{status:'unknown_owner_readback_required',originalOutcomeResolved:false,retryable:false};
+      const a=matches[0];need(Number.isSafeInteger(a.id)&&a.expired===false&&a.workflow_run?.id===Number(readerRunId)&&a.workflow_run.head_sha===t.caller.sha&&a.workflow_run.repository_id===REPO_ID&&a.workflow_run.head_repository_id===REPO_ID&&/^sha256:[a-f0-9]{64}$/.test(a.digest)&&a.size_in_bytes>0&&a.size_in_bytes<=131072
+        &&Date.parse(a.created_at)>=Date.parse(actual.job.started_at)&&Date.parse(a.created_at)<=now()+30000,'XERO_COURIER_READBACK_RESULT_INVALID');await reserveGet();const archive=gh(['api',`repos/${REPOSITORY}/actions/artifacts/${a.id}/zip`,'--method','GET'],undefined,true);
+      need(Buffer.isBuffer(archive)&&archive.length===a.size_in_bytes&&`sha256:${bytesHash(archive)}`===a.digest,'XERO_COURIER_READBACK_RESULT_INVALID');const envelope=decodeRuntimeMaterialArchive(archive),result=assertOwnerReadbackAck(envelope,{parsed,readback:r,readerRunId,readerJobId,now:now()});
+      return{status:result.state==='submitted_unknown'?'unknown_owner_readback_required':'durable_owner_readback_observed_no_replay',result,originalOutcomeResolved:false,retryable:false};
+      }catch(error){throw refusal(safeCode(error));}
+    },
     async readback(raw) {
       const r = parseCourierRequest(raw, t); need(existsSync(statePath(`${r.step}.publication`)), 'XERO_COURIER_ORIGINAL_PUBLICATION_REQUIRED');
       const p = JSON.parse(regular(statePath(`${r.step}.publication`))); need(p.requestSha256 === hash(raw));
@@ -293,9 +380,11 @@ export async function createNativeXeroRecoveryRelay({ templateJson, binding, sta
 }
 export async function nativeRelayMain(args = process.argv.slice(2)) {
   try {
-    need(args.length === 4 && ['submit','readback'].includes(args[0]), 'XERO_COURIER_MODE_REQUIRED');
+    need((args.length===4&&['submit','readback'].includes(args[0]))||(args.length===5&&args[0]==='owner-readback-dispatch')||(args.length===6&&args[0]==='owner-readback-result'),'XERO_COURIER_MODE_REQUIRED');
     const input = JSON.parse(regular(resolve(args[1]))), raw = regular(resolve(args[2]), 2048).toString('utf8');
     need(exact(input, ['templateJson','binding'])); const relay = await createNativeXeroRecoveryRelay({ ...input, stateDirectory: resolve(args[3]) });
+    if(args[0]==='owner-readback-dispatch')return await relay.dispatchOwnerReadback(raw,resolve(args[4]));
+    if(args[0]==='owner-readback-result')return await relay.ownerReadbackResult(raw,args[4],Number(args[5]));
     return await relay[args[0]](raw);
   } catch (e) { throw refusal(safeCode(e)); }
 }

@@ -8,6 +8,12 @@ on:
       template_base64:
         required: true
         type: string
+      mode:
+        type: string
+        default: submit
+      owner_readback_base64:
+        type: string
+        default: ''
     secrets:
       FCOS_HOSTED_VERCEL_READ_TOKEN:
         required: true
@@ -79,6 +85,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           FCOS_XERO_CARRIER_TEMPLATE_BASE64: ${{ inputs.template_base64 }}
+          FCOS_XERO_CARRIER_MODE: ${{ inputs.mode }}
+          FCOS_XERO_OWNER_READBACK_BASE64: ${{ inputs.owner_readback_base64 }}
           FCOS_HOSTED_VERCEL_READ_TOKEN: ${{ secrets.FCOS_HOSTED_VERCEL_READ_TOKEN }}
           FCOS_HOSTED_RUNTIME_EMAIL: ${{ secrets.FCOS_HOSTED_RUNTIME_EMAIL }}
           FCOS_HOSTED_RUNTIME_PASSWORD: ${{ secrets.FCOS_HOSTED_RUNTIME_PASSWORD }}

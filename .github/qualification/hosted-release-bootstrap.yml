@@ -2,6 +2,8 @@
 # Replace every controller placeholder with the admitted immutable controller.
 # Publish only as authenticated-release.yml on the separately admitted protected qualification branch.
 # Admission binds that branch/commit/candidate/setup; Production authority is never available.
+# Owner readback is a separate root-admitted finite orchestration dispatch. It
+# cannot submit a financial step; OIDC authenticates source/run, not input mode.
 name: FCOS hosted qualification bootstrap
 run-name: ${{ inputs.bootstrap_phase == 'toolchain' && format('FCOS toolchain {0}', inputs.intent_sha256) || format('FCOS hosted qualification {0}', inputs.candidate_sha || 'resume saved manifest') }}
 'on':
@@ -32,10 +34,25 @@ run-name: ${{ inputs.bootstrap_phase == 'toolchain' && format('FCOS toolchain {0
         description: Saved unchanged release manifest for recovery. Do not generate a new release ID.
         type: string
         required: false
+      xero_recovery_mode:
+        description: Separately admitted original-owner GET recovery only; disabled for qualification.
+        type: choice
+        default: disabled
+        options:
+          - disabled
+          - owner-readback
+      xero_recovery_template_base64:
+        description: Exact original trusted public carrier template from the native readback admission.
+        type: string
+        required: false
+      xero_recovery_readback_base64:
+        description: Exact finite public owner-readback scope; contains no credential or request authority.
+        type: string
+        required: false
 permissions: {}
 jobs:
   toolchain:
-    if: ${{ inputs.bootstrap_phase == 'toolchain' }}
+    if: ${{ inputs.xero_recovery_mode == 'disabled' && inputs.bootstrap_phase == 'toolchain' }}
     permissions:
       contents: read
       actions: read
@@ -46,7 +63,7 @@ jobs:
       intent_sha256: ${{ inputs.intent_sha256 }}
   setup_discovery:
     name: Setup discovery
-    if: ${{ inputs.bootstrap_phase == 'setup-discovery' && vars.FCOS_HOSTED_SETUP_DISCOVERY_ADMITTED == 'true' }}
+    if: ${{ inputs.xero_recovery_mode == 'disabled' && inputs.bootstrap_phase == 'setup-discovery' && vars.FCOS_HOSTED_SETUP_DISCOVERY_ADMITTED == 'true' }}
     runs-on: ubuntu-24.04
     environment: fcos-hosted-verification
     timeout-minutes: 15
@@ -115,7 +132,7 @@ jobs:
           overwrite: false
   preservation_preflight:
     name: Preservation preflight
-    if: ${{ inputs.bootstrap_phase == 'preservation-preflight' && vars.FCOS_HOSTED_PRESERVATION_PREFLIGHT_ADMITTED == 'true' }}
+    if: ${{ inputs.xero_recovery_mode == 'disabled' && inputs.bootstrap_phase == 'preservation-preflight' && vars.FCOS_HOSTED_PRESERVATION_PREFLIGHT_ADMITTED == 'true' }}
     runs-on: ubuntu-24.04
     environment: fcos-hosted-dependency-verification
     timeout-minutes: 15
@@ -176,7 +193,7 @@ jobs:
           overwrite: false
   manifest:
     name: Prepare immutable release manifest
-    if: ${{ inputs.bootstrap_phase == 'qualification' && vars.FCOS_HOSTED_QUALIFICATION_ADMITTED == 'true' }}
+    if: ${{ inputs.xero_recovery_mode == 'disabled' && inputs.bootstrap_phase == 'qualification' && vars.FCOS_HOSTED_QUALIFICATION_ADMITTED == 'true' }}
     runs-on: ubuntu-24.04
     environment: fcos-hosted-verification
     timeout-minutes: 15
@@ -261,7 +278,7 @@ jobs:
     name: release
     needs:
       - manifest
-    if: ${{ inputs.bootstrap_phase == 'qualification' }}
+    if: ${{ inputs.xero_recovery_mode == 'disabled' && inputs.bootstrap_phase == 'qualification' }}
     permissions:
       contents: read
       actions: read
@@ -288,3 +305,24 @@ jobs:
       FCOS_HOSTED_SCHEMA_DATABASE_URL: ${{ secrets.FCOS_HOSTED_SCHEMA_DATABASE_URL }}
       FCOS_HOSTED_VERCEL_READ_TOKEN: ${{ secrets.FCOS_HOSTED_VERCEL_READ_TOKEN }}
       FCOS_HOSTED_VERCEL_TOKEN: ${{ secrets.FCOS_HOSTED_VERCEL_TOKEN }}
+
+  xero_owner_readback:
+    name: xero-owner-readback
+    if: ${{ inputs.xero_recovery_mode == 'owner-readback' && inputs.bootstrap_phase == 'qualification' && inputs.xero_recovery_template_base64 != '' && inputs.xero_recovery_readback_base64 != '' }}
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    uses: hocheunglai-oss/fcos/.github/workflows/hosted-xero-recovery-carrier.yml@__FCOS_CONTROLLER_SHA__
+    with:
+      controller_sha: __FCOS_CONTROLLER_SHA__
+      template_base64: ${{ inputs.xero_recovery_template_base64 }}
+      # Hardcoded purpose: no dispatch input can select the POST entrypoint.
+      mode: owner-readback
+      owner_readback_base64: ${{ inputs.xero_recovery_readback_base64 }}
+    secrets:
+      FCOS_HOSTED_VERCEL_READ_TOKEN: ${{ secrets.FCOS_HOSTED_VERCEL_READ_TOKEN }}
+      FCOS_HOSTED_RUNTIME_EMAIL: ${{ secrets.FCOS_HOSTED_RUNTIME_EMAIL }}
+      FCOS_HOSTED_RUNTIME_PASSWORD: ${{ secrets.FCOS_HOSTED_RUNTIME_PASSWORD }}
+      FCOS_PRODUCTION_VERIFICATION_BYPASS: ${{ secrets.FCOS_PRODUCTION_VERIFICATION_BYPASS }}
+      FCOS_XERO_RECOVERY_REQUEST_NONCE: ${{ secrets.FCOS_XERO_RECOVERY_REQUEST_NONCE }}
