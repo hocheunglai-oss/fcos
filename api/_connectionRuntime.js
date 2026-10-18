@@ -3,6 +3,7 @@ import { isDeploymentReadOnly } from './_deploymentReadOnly.js';
 import { externalActionGates } from './_externalActionGates.js';
 import { fcunoFederationConfig } from './_fcunoIdentityFederation.js';
 import { serverSupabaseConfig } from './_supabaseConfig.js';
+import { getAccessToken, getApiVersion, getInstanceUrl } from './_salesforce.js';
 
 const unknown = (target = '', mode = '', code = 'AUTHENTICATION_UNOBSERVED') => ({ state: 'unknown', target, mode, code });
 const authenticated = (target, mode) => ({ state: 'authenticated', target, mode });
@@ -43,7 +44,9 @@ export function runtimeDeploymentBinding(env, receipt) {
   return { deploymentId, sha, sourceDigest };
 }
 
-/** No refresh, POST, RPC, reconciliation, publication or persisted evidence. */
+/** Provider data reads are GET/SELECT only. Salesforce uses application auth,
+ * which may acquire/renew a session through the existing OAuth grant helper.
+ * No business mutations, RPC, reconciliation, publication or persisted evidence. */
 export async function probeRuntimeConnections({ env = process.env, client, receipt, fetchImpl = fetch, now = Date.now() }) {
   const binding = runtimeDeploymentBinding(env, receipt);
   const fetchJson = async (url, headers) => {
@@ -67,13 +70,31 @@ export async function probeRuntimeConnections({ env = process.env, client, recei
         const rows = await fetchJson(`${supabaseUrl}/rest/v1/user_profiles?select=id&limit=1`, headers);
         return Array.isArray(rows);
       }) : unknown(supabaseRef, '', 'TARGET_OR_CREDENTIAL_UNVERIFIED'),
-    clean(env.SALESFORCE_INSTANCE_URL) === sf.instanceUrl && clean(env.SALESFORCE_ACCESS_TOKEN)
-      ? attempt(sf.orgId, 'oauth', async () => {
-        const version = /^v\d+\.\d+$/.test(clean(env.SALESFORCE_API_VERSION)) ? clean(env.SALESFORCE_API_VERSION) : 'v67.0';
+    (!clean(env.SALESFORCE_INSTANCE_URL) || clean(env.SALESFORCE_INSTANCE_URL) === sf.instanceUrl)
+      && clean(getInstanceUrl()) === sf.instanceUrl
+      ? attempt(sf.orgId, 'application', async () => {
+        // Application provenance is observed; the helper does not expose the
+        // selected grant type or whether it reused an existing session.
+        // Bound our wait, not the shared helper: its OAuth call has no abort
+        // API and may finish/cache a session later. A timeout never resumes this
+        // probe, retries authentication or issues a later Organization query.
+        const authDeadline = performance.now() + 5000;
+        let authTimer, accessToken;
+        try {
+          const deadline = new Promise((_, reject) => {
+            authTimer = setTimeout(() => reject(new Error('Salesforce authentication deadline exceeded.')), 5000);
+          });
+          accessToken = await Promise.race([Promise.resolve().then(() => getAccessToken()), deadline]);
+        } finally {
+          clearTimeout(authTimer);
+        }
+        if (performance.now() >= authDeadline || !clean(accessToken) || clean(getInstanceUrl()) !== sf.instanceUrl) return false;
+        const apiVersion = clean(getApiVersion());
+        const version = /^v\d+\.\d+$/.test(apiVersion) ? apiVersion : 'v67.0';
         const data = await fetchJson(`${sf.instanceUrl}/services/data/${version}/query?q=${encodeURIComponent('SELECT Id, IsSandbox FROM Organization LIMIT 1')}`,
-          { authorization: `Bearer ${env.SALESFORCE_ACCESS_TOKEN}` });
+          { authorization: `Bearer ${accessToken}` });
         return data?.records?.length === 1 && data.records[0].Id === sf.orgId && data.records[0].IsSandbox === false;
-      }) : unknown(sf.orgId, '', 'EXISTING_ACCESS_SESSION_UNAVAILABLE'),
+      }) : unknown(sf.orgId, 'application', 'TARGET_OR_CREDENTIAL_UNVERIFIED'),
     (async () => {
       const expectedTenant = clean(env.XERO_TENANT_ID);
       if (!uuid(expectedTenant) || !client) return unknown('', '', 'TENANT_UNVERIFIED');

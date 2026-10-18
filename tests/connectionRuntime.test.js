@@ -1,9 +1,27 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { fcosConnectionIdentifier, fcosSalesforceEnvironment } from '../config/fcosConnections.js';
 import { probeRuntimeConnections, runtimeDeploymentBinding, supabaseDiagnosticCredentialMode } from '../api/_connectionRuntime.js';
 import { authorizeRuntimeProbe, createRuntimeProbeHandler } from '../api/connection-runtime.js';
 import { FCOS_READ_ONLY_CI } from '../config/fcosCiIdentity.js';
+
+// The real application auth helper reads process.env. Run all regressions in
+// a child with only synthetic Salesforce configuration, never inherited secrets.
+if (!process.argv.includes('--synthetic-runtime-child')) {
+  test('runtime regressions execute against real app auth in a synthetic process', t => {
+    const child = spawnSync(process.execPath, [fileURLToPath(import.meta.url), '--synthetic-runtime-child'], {
+      env: { SALESFORCE_INSTANCE_URL: fcosSalesforceEnvironment('production').instanceUrl,
+        SALESFORCE_ACCESS_TOKEN: 'private-synthetic-app-session' },
+      encoding: 'utf8', timeout: 15000, maxBuffer: 1024 * 1024,
+    });
+    t.diagnostic(child.stdout || '');
+    assert.equal(child.error, undefined);
+    assert.equal(child.status, 0, child.stderr || child.stdout);
+  });
+} else {
+  globalThis.fetch = async () => { throw new Error('Unexpected unmocked network request'); };
 
 const sha = 'a'.repeat(40), digest = 'b'.repeat(64), tenant = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 const env = { VERCEL_ENV:'preview', VERCEL_DEPLOYMENT_ID:'dpl_fixture', VERCEL_GIT_COMMIT_SHA:sha,
@@ -34,7 +52,7 @@ test('runtime probe validates independent source and deployment binding', () => 
     assert.throws(() => runtimeDeploymentBinding(env,r), /binding/);
   }
 });
-test('runtime probes issue only bounded GETs; outputs contain no tokens or rows', async () => {
+test('runtime provider data probes issue only bounded GETs; outputs contain no tokens or rows', async () => {
   const f=clientFixture(), calls=[];
   const result=await probeRuntimeConnections({ env, receipt, client:f.client, now:time, fetchImpl:async (url,init) => {
     calls.push({url,init}); assert.equal(init.method,'GET'); assert.equal(init.redirect,'error');
@@ -75,7 +93,8 @@ test('Supabase server env labels cannot promote anon or publishable keys to serv
     const calls=[];
     const result=await probeRuntimeConnections({ env:{...env,SUPABASE_SECRET_KEY:key,SALESFORCE_ACCESS_TOKEN:'',XERO_TENANT_ID:''},receipt,now:time,
       fetchImpl:async url=>{calls.push(url);return {ok:true,json:async()=>[]};} });
-    assert.equal(result.auth.supabase.state,'unknown'); assert.deepEqual(calls,[]);
+    assert.equal(result.auth.supabase.state,'unknown');
+    assert.ok(calls.every(url => !url.includes('.supabase.co/')), 'Rejected Supabase keys must never reach Supabase');
   }
 });
 test('anonymous, inactive and restricted CI profiles cannot probe', async () => {
@@ -115,3 +134,5 @@ test('runtime accepts only explicitly attested source archives and rejects malfo
     assert.throws(()=>runtimeDeploymentBinding(env,{...archive,provenance:{...archive.provenance,...change}}), /binding/);
   }
 });
+
+}
