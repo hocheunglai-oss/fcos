@@ -96,17 +96,19 @@ function safeResult(result, secrets) {
  * approval. All policy inputs come from immutable trusted deployment code.
  * OIDC authenticates the exact GitHub carrier only; original approval, source,
  * owner lineage, real own actor admission and durable SQL CAS remain separate.
- * TLS must reach req.socket; forwarded headers cannot attest transport. A TLS
- * terminating platform needs a separately reviewed ingress adapter/host binding.
+ * Native TLS must reach req.socket; forwarded headers cannot attest transport.
+ * A trusted constructor adapter can instead assert its explicitly reviewed
+ * hosting/TLS termination contract without modifying the request or socket.
  * No live job metadata credential is assumed: signed run identity is checked,
  * but current job status/continued execution is not independently observed.
  */
 export function createXeroRecoveryHost(options = {}) {
   try {
     need(exact(options, ['planJson', 'actorBinding', 'ownership', 'caller', 'publicOrigin', 'requestNonceSha256', 'privateEnvironment',
-      ...['fetchImpl', 'now', 'githubJwks', 'fcunoJwks'].filter(key => Object.hasOwn(options, key))]));
+      ...['fetchImpl', 'now', 'githubJwks', 'fcunoJwks', 'verifyTransport'].filter(key => Object.hasOwn(options, key))]));
     const { planJson, actorBinding, ownership, caller, publicOrigin, requestNonceSha256, privateEnvironment,
-      fetchImpl = fetch, now = Date.now, githubJwks, fcunoJwks } = options;
+      fetchImpl = fetch, now = Date.now, githubJwks, fcunoJwks, verifyTransport } = options;
+    need(verifyTransport === undefined || typeof verifyTransport === 'function');
     const { plan, planSha256 } = parseXeroRecoveryStepPlan(planJson), b = plan.binding;
     need(exact(actorBinding, ['actorId', 'emailSha256', 'accessRevision']) && actorBinding.actorId === b.actorId
       && HASH.test(actorBinding.emailSha256) && Number.isSafeInteger(actorBinding.accessRevision) && actorBinding.accessRevision > 0);
@@ -143,7 +145,8 @@ export function createXeroRecoveryHost(options = {}) {
       const deadline = setTimeout(cancel, 60000);
       let locked = false, submitted = false, identityDeadline;
       try {
-        need(req.socket?.encrypted === true && !signal.aborted && req.url === PATH && ['GET', 'POST'].includes(req.method));
+        // Trusted constructor hook only; requests can never choose a transport policy.
+        need((verifyTransport ? verifyTransport(req) === true : req.socket?.encrypted === true) && !signal.aborted && req.url === PATH && ['GET', 'POST'].includes(req.method));
         need(Array.isArray(req.rawHeaders) && req.rawHeaders.length <= 100);
         const headers = new Map(); let headerBytes = 0;
         for (let i = 0; i < req.rawHeaders.length; i += 2) {
