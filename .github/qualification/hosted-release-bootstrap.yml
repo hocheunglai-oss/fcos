@@ -8,12 +8,13 @@ run-name: ${{ inputs.bootstrap_phase == 'toolchain' && format('FCOS toolchain {0
   workflow_dispatch:
     inputs:
       bootstrap_phase:
-        description: One-time image publication or actual qualification; never Production.
+        description: Read-only setup discovery, one-time image publication or actual qualification; never Production.
         type: choice
         default: qualification
         options:
           - qualification
           - toolchain
+          - setup-discovery
       intent_sha256:
         description: Exact held legacy publication intent; required only for the toolchain phase.
         type: string
@@ -42,6 +43,75 @@ jobs:
     with:
       source_sha: __FCOS_CONTROLLER_SHA__
       intent_sha256: ${{ inputs.intent_sha256 }}
+  setup_discovery:
+    name: Setup discovery
+    if: ${{ inputs.bootstrap_phase == 'setup-discovery' && vars.FCOS_HOSTED_SETUP_DISCOVERY_ADMITTED == 'true' }}
+    runs-on: ubuntu-24.04
+    environment: fcos-hosted-verification
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    env:
+      FCOS_SETUP_DISCOVERY_BOOTSTRAP: 'true'
+      FCOS_HOSTED_SETUP_DISCOVERY_ADMITTED: ${{ vars.FCOS_HOSTED_SETUP_DISCOVERY_ADMITTED }}
+      FCOS_HOSTED_ENVIRONMENT: fcos-hosted-verification
+      FCOS_CONTROLLER_DIRECTORY: controller
+      FCOS_CANDIDATE_DIRECTORY: candidate
+      FCOS_CONTROLLER_SHA: __FCOS_CONTROLLER_SHA__
+      FCOS_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      FCOS_ADMITTED_DISCOVERY_SETUP: ${{ vars.FCOS_ADMITTED_DISCOVERY_SETUP }}
+      FCOS_ADMITTED_DISCOVERY_SETUP_SHA256: ${{ vars.FCOS_ADMITTED_DISCOVERY_SETUP_SHA256 }}
+      FCOS_DISCOVERY_OUTPUT: setup-discovery.json
+    steps:
+      - name: Check out admitted controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: __FCOS_CONTROLLER_SHA__
+          path: controller
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - name: Install admitted controller dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Admit discovery before candidate checkout
+        run: node controller/scripts/hosted-release-manifest.mjs --discover-setup --validate-dispatch-only
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ env.FCOS_CANDIDATE_SHA }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install trusted runtime browser
+        run: npx --no-install playwright install --with-deps chromium
+        working-directory: controller
+      - name: Discover public setup baseline
+        run: node controller/scripts/hosted-release-manifest.mjs --discover-setup
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+          FCOS_HOSTED_VERCEL_READ_TOKEN: ${{ secrets.FCOS_HOSTED_VERCEL_READ_TOKEN }}
+          FCOS_HOSTED_SCHEMA_DATABASE_URL: ${{ secrets.FCOS_HOSTED_SCHEMA_DATABASE_URL }}
+          FCOS_PRODUCTION_VERIFICATION_BYPASS: ${{ secrets.FCOS_PRODUCTION_VERIFICATION_BYPASS }}
+          FCOS_HOSTED_RUNTIME_EMAIL: ${{ secrets.FCOS_HOSTED_RUNTIME_EMAIL }}
+          FCOS_HOSTED_RUNTIME_PASSWORD: ${{ secrets.FCOS_HOSTED_RUNTIME_PASSWORD }}
+          FCOS_HOSTED_RUNTIME_EXPECTED_ROLE: ${{ vars.FCOS_HOSTED_RUNTIME_EXPECTED_ROLE }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ always() }}
+        with:
+          name: ${{ format('fcos-setup-discovery-{0}', github.run_id) }}
+          path: setup-discovery.json
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: false
   manifest:
     name: Prepare immutable release manifest
     if: ${{ inputs.bootstrap_phase == 'qualification' && vars.FCOS_HOSTED_QUALIFICATION_ADMITTED == 'true' }}
@@ -129,6 +199,7 @@ jobs:
     name: release
     needs:
       - manifest
+    if: ${{ inputs.bootstrap_phase == 'qualification' }}
     permissions:
       contents: read
       actions: read

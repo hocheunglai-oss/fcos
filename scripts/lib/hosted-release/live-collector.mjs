@@ -5,8 +5,9 @@ import { FCOS_CONNECTION_POLICY } from '../../../config/fcosConnections.js';
 import { createHostedRuntimeTokenProvider } from './browser.mjs';
 import { prepareCandidateProtection } from '../../e2e-protection-state.mjs';
 import { request } from '@playwright/test';
-import { createVercelAdapter, createVercelReadAdapter } from './vercel.mjs';
-import { collectSchemaObservation, hostedProof } from './observations.mjs';
+import { collectRuntimeObservation } from '../../collect-preview-parity.mjs';
+import { createVercelAdapter, createVercelReadAdapter, createVercelProductionObserver } from './vercel.mjs';
+import { collectSchemaSnapshot, collectSchemaObservation, hostedProof } from './observations.mjs';
 import { digest, fail } from './contract.mjs';
 
 export async function collectFcunoContract({ env = process.env, fetchImpl = fetch, now = Date.now }) {
@@ -74,4 +75,32 @@ export async function collectRuntimeProtectionState({ origin, sha, bypass, reque
     verify: async () => ({ candidateUrl: origin, commit: sha }), writeState: async ({ state: result }) => { state = result; } });
   if (!state) fail('RUNTIME_PROTECTION_UNOBSERVED');
   return state;
+}
+
+/** Dedicated discovery collectors return observations, never hosted check evidence. */
+export function createSetupDiscoveryCollector({ setup, env = process.env, fetchImpl = fetch, now = Date.now,
+  Client, login, protection = collectRuntimeProtectionState } = {}) {
+  const provider = createVercelProductionObserver({ setup, env, fetchImpl, now });
+  const tokenProvider = createHostedRuntimeTokenProvider({ env, login, verifyTarget: async ({ origin, deployment }) => {
+    const actual = await provider.inspect(deployment.id);
+    if (actual.url !== origin || actual.sha !== deployment.sha || actual.state !== 'READY') fail('DISCOVERY_RUNTIME_TARGET');
+    return { verified: true, origin, deploymentId: actual.id, sha: actual.sha, sourceSha256: deployment.sourceSha256 };
+  } });
+  return {
+    production: provider.observe,
+    schema: () => collectSchemaSnapshot({ targets: setup.targets, env, now, ...(Client ? { Client } : {}) }),
+    runtime: async production => {
+      const email = env.FCOS_HOSTED_RUNTIME_EMAIL?.trim().toLowerCase();
+      if (!email || digest(email) !== setup.runtimeIdentity.emailSha256
+        || env.FCOS_HOSTED_RUNTIME_EXPECTED_ROLE !== setup.runtimeIdentity.role) fail('DISCOVERY_RUNTIME_IDENTITY');
+      if (!env.FCOS_PRODUCTION_VERIFICATION_BYPASS) fail('DISCOVERY_RUNTIME_PROTECTION');
+      const deployment = production.deployment, origin = deployment.url;
+      const protectionState = await protection({ origin, sha: deployment.sha, bypass: env.FCOS_PRODUCTION_VERIFICATION_BYPASS });
+      const token = await tokenProvider({ origin, deployment, protectionState });
+      const observation = await collectRuntimeObservation({ url: origin, deployment, sourceDigest: deployment.sourceSha256,
+        token, protectionBypass: env.FCOS_PRODUCTION_VERIFICATION_BYPASS, fetchImpl, now: now() });
+      if (!observation) fail('DISCOVERY_RUNTIME_UNOBSERVED');
+      return observation;
+    },
+  };
 }

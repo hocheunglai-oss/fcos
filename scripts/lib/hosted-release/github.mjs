@@ -42,10 +42,11 @@ export async function validateHostedIdentity(token, { controllerSha, repositoryI
 export function githubClient({ token, fetchImpl = fetch, repositoryId } = {}) {
   if (!token) fail('GITHUB_METADATA_CREDENTIAL_MISSING');
   const repository = releaseTargets().repository;
-  async function read(path, { bytes = false } = {}) {
+  async function read(path, { bytes = false, timeoutMs = 30000 } = {}) {
     if (!path.startsWith(`/repos/${repository}/`) && path !== `/repos/${repository}`) fail('GITHUB_TARGET_MISMATCH');
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30000) fail('GITHUB_READ_TIMEOUT_INVALID');
     let response;
-    try { response = await fetchImpl(`https://api.github.com${path}`, { headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28' }, redirect: 'manual', signal: AbortSignal.timeout(30000) }); }
+    try { response = await fetchImpl(`https://api.github.com${path}`, { headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28' }, redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) }); }
     catch { fail('GITHUB_READ_UNAVAILABLE', 'github.read', 'Retry this target-locked read; no provider write was attempted.'); }
     if (bytes && response.status === 302) {
       let location;

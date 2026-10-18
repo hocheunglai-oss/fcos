@@ -7,7 +7,7 @@ import { collectRuntimeObservation } from '../../collect-preview-parity.mjs';
 import { assertProductionRuntimeReadback } from '../release-production.mjs';
 import { canonicalFcosE2eCandidateUrl } from '../../verify-e2e-candidate.mjs';
 import { canonical, digest, fail, validateManifest } from './contract.mjs';
-import { createVercelIntegrationReader } from './vercel-read-auth.mjs';
+import { createVercelReadTransport, createVercelIntegrationReader } from './vercel-read-auth.mjs';
 import { assertHostedSetup, assertHostedSourceContext } from './admission.mjs';
 import { assertVercelPreviewWriterSecret } from './vercel-writer-auth.mjs';
 
@@ -205,3 +205,67 @@ export function createVercelAdapter({ manifest, candidateDirectory, env = proces
 }
 
 export function createVercelReadAdapter(options) { return createVercelAdapter({...options,readOnly:true}); }
+
+/** Purpose-specific observation API: no full manifest, writer token, CLI or write methods. */
+export function createVercelProductionObserver({ setup, env = process.env, fetchImpl = fetch, now = Date.now } = {}) {
+  const target = setup.targets;
+  const transport = createVercelReadTransport({ binding: setup.vercelReadCredential, targets: target, env, fetchImpl, now });
+  const read = async path => { await transport.configuration(); return transport.get(path); };
+  const inspect = async id => {
+    if (!/^dpl_[A-Za-z0-9]+$/.test(id || '')) fail('DISCOVERY_PRODUCTION_BINDING');
+    const value = await read(`/v13/deployments/${id}`);
+    if (value.id !== id || value.projectId !== target.vercelProject || value.ownerId !== target.vercelTeam
+      || Object.hasOwn(value,'teamId') && value.teamId !== target.vercelTeam
+      || value.target !== 'production' || value.readyState !== 'READY' || !/^[a-f0-9]{40}$/.test(value.meta?.githubCommitSha || '')) fail('DISCOVERY_PRODUCTION_BINDING');
+    return { id: value.id, url: canonicalFcosE2eCandidateUrl(`https://${value.url}`), projectId: value.projectId, ownerId: value.ownerId, teamId: value.ownerId,
+      sha: value.meta.githubCommitSha, state: value.readyState, target: value.target, createdAt: value.createdAt };
+  };
+  const projectAndAlias = async () => {
+    const project = await read(`/v9/projects/${target.vercelProject}`);
+    await transport.configuration();
+    const alias = await transport.getProductionAlias();
+    if (project.id !== target.vercelProject || project.accountId !== target.vercelTeam
+      || project.name !== fcosConnectionIdentifier('vercel','Project') || project.link?.type !== 'github'
+      || `${project.link.org}/${project.link.repo}` !== target.repository
+      || alias.alias !== new URL(target.productionOrigin).hostname || alias.projectId !== target.vercelProject
+      || alias.deletedAt != null || alias.redirect != null || alias.deploymentId !== project.targets?.production?.id
+      || alias.deployment?.id !== alias.deploymentId) fail('DISCOVERY_PRODUCTION_BINDING');
+    return { id: alias.deploymentId, url: alias.deployment.url };
+  };
+  const version = async origin => {
+    const endpoint = `${origin}/app-version.json`;
+    let response;
+    const headers = origin !== target.productionOrigin && env.FCOS_PRODUCTION_VERIFICATION_BYPASS
+      ? { 'x-vercel-protection-bypass': env.FCOS_PRODUCTION_VERIFICATION_BYPASS } : {};
+    try { response = await fetchImpl(endpoint, { method: 'GET', headers, redirect: 'error', signal: AbortSignal.timeout(20000) }); }
+    catch { fail('DISCOVERY_PUBLIC_VERSION'); }
+    if (!response.ok || response.redirected || response.url && response.url !== endpoint
+      || Number(response.headers?.get('content-length')) > 131072) fail('DISCOVERY_PUBLIC_VERSION');
+    try { const text = await response.text(); if (Buffer.byteLength(text) > 131072) fail('DISCOVERY_PUBLIC_VERSION'); return JSON.parse(text); }
+    catch { fail('DISCOVERY_PUBLIC_VERSION'); }
+  };
+  return { inspect, observe: async () => {
+    const before = await projectAndAlias(), deployment = await inspect(before.id);
+    if (before.url !== new URL(deployment.url).hostname) fail('DISCOVERY_PRODUCTION_BINDING');
+    const publicVersion = await version(target.productionOrigin), immutableVersion = await version(deployment.url);
+    const sourceSha256 = publicVersion.provenance?.sourceDigest, versionSha256 = digest(publicVersion);
+    if (versionSha256 !== digest(immutableVersion) || publicVersion.commit !== deployment.sha
+      || publicVersion.provenance?.commit !== deployment.sha || !/^[a-f0-9]{64}$/.test(sourceSha256 || '')
+      || publicVersion.provenance?.sourceDigestAlgorithm !== 'sha256:fcos-vercel-source-v1') fail('DISCOVERY_PUBLIC_VERSION');
+    let bindingMode = 'deployment_id';
+    if (publicVersion.deploymentId !== deployment.id || publicVersion.provenance.sourceAttested !== true) {
+      const legacy = setup.legacyProductionBinding;
+      if (!legacy || legacy.deploymentId !== deployment.id || legacy.immutableUrl !== deployment.url
+        || legacy.commit !== deployment.sha || legacy.sourceDigest !== sourceSha256 || legacy.publicVersionSha256 !== versionSha256
+        || publicVersion.deploymentId !== null || publicVersion.provenance.sourceAttested !== false) fail('DISCOVERY_LEGACY_VERSION');
+      bindingMode = 'exact_legacy_public_version';
+    }
+    const after = await projectAndAlias();
+    if (after.id !== before.id || after.url !== before.url) fail('DISCOVERY_PRODUCTION_MOVED');
+    return { readOnly: true, capturedAt: new Date(now()).toISOString(), deployment: { ...deployment, sourceSha256 },
+      publicVersion: { sha256: versionSha256, commit: publicVersion.commit, deploymentId: publicVersion.deploymentId,
+        sourceAttested: publicVersion.provenance.sourceAttested, builtAt: typeof publicVersion.builtAt === 'string' && /^\d{4}-\d{2}-\d{2}T[\d:.+-]+Z$/.test(publicVersion.builtAt) && publicVersion.builtAt.length <= 40 ? publicVersion.builtAt : null },
+      bindingMode, ...(bindingMode === 'exact_legacy_public_version' ? { originalBinding: setup.legacyProductionBinding } : {}),
+      qualificationAccepted: false, automaticRollbackEligible: false };
+  } };
+}

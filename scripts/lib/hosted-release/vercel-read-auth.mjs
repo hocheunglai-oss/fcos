@@ -1,5 +1,5 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { fcosConnectionIdentifier } from '../../../config/fcosConnections.js';
+import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier } from '../../../config/fcosConnections.js';
 
 export const VERCEL_READ_SCOPES = Object.freeze(['read:deployment', 'read:integration-configuration', 'read:project']);
 /** notAfter is the admitted local use horizon, not a claim of provider expiry.
@@ -63,8 +63,8 @@ export function assertVercelReadConfiguration(configuration,binding) {
 
 /** Only a previously admitted ORIGINAL exchange credential can reach these GETs.
  * No OAuth client secret, write credential, caller URL or arbitrary API route. */
-export function createVercelIntegrationReader({ manifest,env=process.env,fetchImpl=fetch,now=Date.now }) {
-  const binding=validateVercelReadBinding(manifest?.verification?.vercelReadCredential,{targets:manifest?.targets,now:now()});
+export function createVercelReadTransport({ binding, targets, env=process.env, fetchImpl=fetch, now=Date.now }) {
+  validateVercelReadBinding(binding,{targets,now:now()});
   need(!['FCOS_HOSTED_VERCEL_TOKEN','VERCEL_TOKEN','VERCEL_OIDC_TOKEN'].some(key=>env[key])
     && !Object.entries(env).some(([key,value])=>value && /(?:VERCEL|OAUTH|INTEGRATION).*(?:CLIENT_SECRET|PRIVATE_KEY)/.test(key)),'VERCEL_READ_WRITE_CREDENTIAL_FORBIDDEN');
   const token=env.FCOS_HOSTED_VERCEL_READ_TOKEN;
@@ -77,18 +77,33 @@ export function createVercelIntegrationReader({ manifest,env=process.env,fetchIm
     need(response.ok && !response.redirected && (!response.url || response.url===url.href),'VERCEL_READ_UNAVAILABLE');
     try { return await response.json(); } catch { refuse('VERCEL_READ_UNAVAILABLE'); }
   };
-  const admit=async()=>{
-    const { assertHostedSetup, assertHostedSourceContext }=await import('./admission.mjs');
-    assertHostedSetup({manifest,env});
-    assertHostedSourceContext({manifest,env});
-    validateVercelReadBinding(binding,{targets:manifest.targets,now:now()});
+  const configuration = async () => {
+    validateVercelReadBinding(binding,{targets,now:now()});
     return assertVercelReadConfiguration(await fixedGet(`/v1/integrations/configuration/${binding.configurationId}`),binding);
   };
-  return {admit,get:async path=>{
+  const assertPath = path => {
     const project=`/v9/projects/${binding.projectId}`;
     need(path===project || path===`/v9/projects?limit=100`
       || /^\/v13\/deployments\/(?:dpl_[A-Za-z0-9]+|[a-z0-9-]+\.vercel\.app)$/.test(path)
       || new RegExp(`^/v6/deployments\\?projectId=${binding.projectId}&limit=100(?:&until=[0-9]+)?$`).test(path),'VERCEL_READ_ROUTE_FORBIDDEN');
-    await admit();return fixedGet(path);
-  }};
+  };
+  const get = async path => {
+    assertPath(path);
+    return fixedGet(path);
+  };
+  // Discovery alone exposes this single canonical alias GET. No caller-supplied alias.
+  const getProductionAlias = () => fixedGet(`/v4/aliases/${new URL(FCOS_CONNECTION_POLICY.attestation.endpoint).hostname}?projectId=${binding.projectId}`);
+  return { configuration, assertPath, get, getProductionAlias };
+}
+
+/** Normal release admission remains mandatory around the shared fixed transport. */
+export function createVercelIntegrationReader({ manifest,env=process.env,fetchImpl=fetch,now=Date.now }) {
+  const transport=createVercelReadTransport({binding:manifest?.verification?.vercelReadCredential,targets:manifest?.targets,env,fetchImpl,now});
+  const admit=async()=>{
+    const { assertHostedSetup, assertHostedSourceContext }=await import('./admission.mjs');
+    assertHostedSetup({manifest,env});
+    assertHostedSourceContext({manifest,env});
+    return transport.configuration();
+  };
+  return {admit,get:async path=>{transport.assertPath(path);await admit();return transport.get(path);}};
 }

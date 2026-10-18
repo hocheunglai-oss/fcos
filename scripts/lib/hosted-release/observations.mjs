@@ -40,9 +40,9 @@ export function assertObserverTarget(connectionString, project) {
   if (!connectionString) fail('SCHEMA_OBSERVER_SETUP_REQUIRED');
   try { return assertObserverConnection(connectionString, project); } catch { fail('SCHEMA_OBSERVER_TARGET'); }
 }
-export async function collectSchemaObservation({ manifest, env = process.env, Client = pg.Client, now = Date.now }) {
-  assertObserverTarget(env.FCOS_HOSTED_SCHEMA_DATABASE_URL, manifest.targets.supabaseProject);
-  const client = new Client({ ...observerClientConfiguration(env.FCOS_HOSTED_SCHEMA_DATABASE_URL, manifest.targets.supabaseProject), connectionTimeoutMillis: 10000,
+export async function collectSchemaSnapshot({ targets, env = process.env, Client = pg.Client, now = Date.now }) {
+  assertObserverTarget(env.FCOS_HOSTED_SCHEMA_DATABASE_URL, targets.supabaseProject);
+  const client = new Client({ ...observerClientConfiguration(env.FCOS_HOSTED_SCHEMA_DATABASE_URL, targets.supabaseProject), connectionTimeoutMillis: 10000,
     statement_timeout: 15000, application_name: 'fcos-hosted-schema-read' });
   try {
     await client.connect();
@@ -59,10 +59,16 @@ export async function collectSchemaObservation({ manifest, env = process.env, Cl
     const { rows: [result] } = await client.query(SCHEMA_QUERY);
     await client.query('commit');
     const sha256 = digest(result.snapshot);
-    if (sha256 !== manifest.migration.expectedSchemaSha256) fail('LIVE_SCHEMA_CHANGED', 'live_schema', 'Reconcile the actual schema against the separately approved migration proof.');
-    return { sha256, capturedAt: new Date(now()).toISOString(), target: manifest.targets.supabaseProject, readOnly: true };
+    return { sha256, capturedAt: new Date(now()).toISOString(), target: targets.supabaseProject, readOnly: true };
   } catch (error) { if (error.code?.startsWith?.('SCHEMA_') || error.code === 'LIVE_SCHEMA_CHANGED') throw error; fail('SCHEMA_OBSERVATION_UNAVAILABLE', 'live_schema'); }
   finally { await client.end().catch(() => {}); }
+}
+
+/** Release comparison is unchanged; discovery collects only the actual catalog digest. */
+export async function collectSchemaObservation({ manifest, ...options }) {
+  const result = await collectSchemaSnapshot({ targets: manifest.targets, ...options });
+  if (result.sha256 !== manifest.migration.expectedSchemaSha256) fail('LIVE_SCHEMA_CHANGED', 'live_schema', 'Reconcile the actual schema against the separately approved migration proof.');
+  return result;
 }
 
 export function hostedProof({ manifest, checkId, result, inputs, capturedAt, kind = 'volatile', env = process.env }) {
