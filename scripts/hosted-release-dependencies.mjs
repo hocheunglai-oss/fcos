@@ -4,9 +4,9 @@ import { fileURLToPath } from 'node:url';
 import { collectFinancialPreservation, dependencyHash, importAcceptedNomB } from './lib/hosted-release/dependencies.mjs';
 import { loadDependencySetup, measureHostedNomBInputs } from './lib/hosted-release/dependency-publisher.mjs';
 
-const permittedCredentials = new Set(['GITHUB_TOKEN','FCOS_HOSTED_GITHUB_READ_TOKEN','FCOS_HOSTED_SALESFORCE_READ_TOKEN','FCOS_HOSTED_SALESFORCE_JWT_PRIVATE_KEY']);
+const permittedCredentials = new Set(['GITHUB_TOKEN','FCOS_HOSTED_GITHUB_READ_TOKEN','FCOS_HOSTED_SALESFORCE_READ_TOKEN','FCOS_HOSTED_SALESFORCE_CLIENT_SECRET']);
 function requireProducerEnvironment(env) {
-  if (Object.entries(env).some(([key, value]) => value && (key.startsWith('ACTIONS_ID_TOKEN_REQUEST_')
+  if (Object.hasOwn(env, 'FCOS_HOSTED_SALESFORCE_JWT_PRIVATE_KEY') || Object.entries(env).some(([key, value]) => value && (key.startsWith('ACTIONS_ID_TOKEN_REQUEST_')
     || /(?:TOKEN|SECRET|PASSWORD|PRIVATE_KEY|API_KEY|CREDENTIAL)/.test(key) && !permittedCredentials.has(key)))) {
     const error = new Error('DEPENDENCY_PRODUCER_CREDENTIAL_FORBIDDEN'); error.code = error.message; throw error;
   }

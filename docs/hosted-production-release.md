@@ -38,7 +38,7 @@ Complete qualification **before merging the consolidation PR**, using the narrow
 | --- | --- | --- |
 | `fcos-hosted-preview` | FCOS Preview deployment credential and dedicated runtime diagnostic identity | None after qualification |
 | `fcos-hosted-verification` | Read-only Vercel metadata, schema observer, FCUNO contract read and runtime diagnostic identity | None after qualification |
-| `fcos-hosted-dependency-verification` | Dedicated renewable DEVEE JWT recipe reader and preservation-only database role; no coordinator or Vercel write access | None after qualification |
+| `fcos-hosted-dependency-verification` | Dedicated renewable DEVEE fixed Run As client-credentials recipe reader and preservation-only database role; no coordinator or Vercel write access | None after qualification |
 | `fcos-hosted-restricted-verification` | Restricted CI identity and read-only Preview metadata/protection | None after qualification |
 | `fcos-hosted-normal-verification` | Separate normal business role, read-only Preview metadata/protection | None after qualification |
 | `fcos-production-release` | Approval metadata only; no Vercel deployment credential | One required operator |

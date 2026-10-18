@@ -1,34 +1,31 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { generateKeyPairSync, verify } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { createSalesforceRecipeReader, SALESFORCE_JWT_AUDIENCE, salesforceRecipePath, salesforcePermissionRecipePaths, validateSalesforceReadAcceptance, validateSalesforceReadBinding } from '../scripts/lib/hosted-release/salesforce-read-auth.mjs';
+import { createSalesforceRecipeReader, salesforceRecipePath, salesforcePermissionRecipePaths, validateSalesforceReadAcceptance, validateSalesforceReadBinding } from '../scripts/lib/hosted-release/salesforce-read-auth.mjs';
 import { digest } from '../scripts/lib/hosted-release/contract.mjs';
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
-import { pair, salesforceReaderFixture as fixture } from './helpers/hosted-salesforce-read.mjs';
+import { salesforceReaderFixture as fixture, salesforcePermissionSnapshotHashes } from './helpers/hosted-salesforce-read.mjs';
 
-test('real RS256 JWT has dedicated issuer/user, fixed sandbox audience, short expiry and unique replay ID; API is fixed GET only',async()=>{
+test('fixed Run As client credentials uses only the exact My Domain endpoint and three body fields; API is fixed GET only',async()=>{
   const f=fixture(),reader=createSalesforceRecipeReader(f);await reader.readRecipe(0);await reader.readRecipe(0);
-  assert.equal(f.calls.length,15);assert.equal(f.calls.filter(c=>c.options.method==='POST').length,1);
-  const post=f.calls[0],params=new URLSearchParams(post.options.body),jwt=params.get('assertion'),parts=jwt.split('.');
-  assert.equal(post.url,`${SALESFORCE_JWT_AUDIENCE}/services/oauth2/token`);assert.equal(params.get('grant_type'),'urn:ietf:params:oauth:grant-type:jwt-bearer');assert.equal(params.size,2);
-  assert.deepEqual(JSON.parse(Buffer.from(parts[0],'base64url')),{alg:'RS256'});
-  const claims=JSON.parse(Buffer.from(parts[1],'base64url'));
-  assert.equal(claims.iss,f.binding.clientId);assert.equal(claims.sub,f.binding.username);assert.equal(claims.aud,SALESFORCE_JWT_AUDIENCE);assert.equal(claims.exp,Math.floor(f.now()/1000)+120);assert.match(claims.jti,/^[a-f0-9-]{36}$/);
-  assert.ok(verify('RSA-SHA256',Buffer.from(parts.slice(0,2).join('.')),pair.publicKey,Buffer.from(parts[2],'base64url')));
+  assert.equal(f.calls.length,16);assert.equal(f.calls.filter(c=>c.options.method==='POST').length,1);
+  const post=f.calls[0],params=new URLSearchParams(post.options.body);
+  assert.equal(post.url,`${f.binding.instanceUrl}/services/oauth2/token`);assert.equal(params.get('grant_type'),'client_credentials');
+  assert.deepEqual([...params.keys()].sort(),['client_id','client_secret','grant_type']);
+  assert.equal(params.get('client_id'),f.binding.clientId);assert.equal(params.get('client_secret'),f.env.FCOS_HOSTED_SALESFORCE_CLIENT_SECRET);
+  assert.ok(!['sub','prn','username','assertion','scope'].some(key=>params.has(key)));
   assert.ok(f.calls.slice(1).every(c=>c.options.method==='GET'&&c.url.startsWith(`${f.binding.instanceUrl}/services/`)&&c.options.redirect==='error'));
   assert.deepEqual(Object.keys(reader).sort(),['admit','readRecipe']);assert.ok(!JSON.stringify(reader).includes('fixture-access-token'));
+  assert.ok(!JSON.stringify(reader).includes(f.env.FCOS_HOSTED_SALESFORCE_CLIENT_SECRET));
 });
 test('each job creates a new session; current session is reused and expiry renews with fresh identity before next recipe read',async()=>{
   const f=fixture(),reader=createSalesforceRecipeReader(f);await reader.readRecipe(0);f.advance(301000);await reader.readRecipe(0);
-  assert.equal(f.calls.length,28);assert.equal(f.calls.filter(c=>c.options.method==='POST').length,2);
+  assert.equal(f.calls.length,30);assert.equal(f.calls.filter(c=>c.options.method==='POST').length,2);
   const second=createSalesforceRecipeReader(f);await second.readRecipe(0);assert.equal(f.calls.filter(c=>c.options.method==='POST').length,3);
-  const jtis=f.calls.filter(c=>c.options.method==='POST').map(c=>JSON.parse(Buffer.from(new URLSearchParams(c.options.body).get('assertion').split('.')[1],'base64url')).jti);assert.equal(new Set(jtis).size,3);
   const exp=fixture();exp.exchange.expires_in=60;const short=createSalesforceRecipeReader(exp);await short.readRecipe(0);exp.advance(31000);await short.readRecipe(0);assert.equal(exp.calls.filter(c=>c.options.method==='POST').length,2);
 });
-test('wrong key, setup, protected source, environment and actual job refuse before token exchange',async()=>{
-  const wrong=generateKeyPairSync('rsa',{modulusLength:2048}).privateKey.export({type:'pkcs8',format:'pem'});
-  for(const mutate of [f=>f.env.FCOS_HOSTED_SALESFORCE_JWT_PRIVATE_KEY=wrong,f=>f.env.FCOS_HOSTED_ENVIRONMENT='fcos-hosted-preview',f=>f.env.GITHUB_REF='refs/heads/attacker',f=>f.env.GITHUB_REPOSITORY='other/fcos',f=>f.env.GITHUB_JOB='candidate_checks',f=>delete f.env.FCOS_VERIFIED_JOB_ID,f=>f.env.FCOS_ADMITTED_RELEASE_SETUP_SHA256='b'.repeat(64),f=>f.env.FCOS_HOSTED_SALESFORCE_READ_TOKEN='opaque-legacy']){
+test('missing secret, obsolete JWT, setup, protected source, environment and actual job refuse before token exchange',async()=>{
+  for(const mutate of [f=>delete f.env.FCOS_HOSTED_SALESFORCE_CLIENT_SECRET,f=>f.env.FCOS_HOSTED_SALESFORCE_CLIENT_SECRET='',f=>f.env.FCOS_HOSTED_SALESFORCE_JWT_PRIVATE_KEY='',f=>f.env.FCOS_HOSTED_ENVIRONMENT='fcos-hosted-preview',f=>f.env.GITHUB_REF='refs/heads/attacker',f=>f.env.GITHUB_REPOSITORY='other/fcos',f=>f.env.GITHUB_JOB='candidate_checks',f=>delete f.env.FCOS_VERIFIED_JOB_ID,f=>f.env.FCOS_ADMITTED_RELEASE_SETUP_SHA256='b'.repeat(64),f=>f.env.FCOS_HOSTED_SALESFORCE_READ_TOKEN='opaque-legacy']){
     const f=fixture();mutate(f);await assert.rejects(createSalesforceRecipeReader(f).readRecipe(0));assert.equal(f.calls.length,0);
   }
 });
@@ -46,24 +43,24 @@ test('HTTP failure, redirect, invalid JSON, response bounds and lost authenticat
 });
 test('public setup and independent root acceptance are exact and have no private substitutions',()=>{
   const f=fixture();validateSalesforceReadAcceptance(f.binding,f.setup);
-  for(const mutate of [b=>b.username='other',b=>b.orgId='00D000000000000AAA',b=>b.apiVersion='v68.0',b=>b.audience='https://login.salesforce.com',b=>b.publicKeySha256='b'.repeat(64),b=>b.providerPermissionMode='read_only',b=>b.scopes=['full'],b=>b.notAfter=1,b=>b.privateKey='private']){const b=structuredClone(f.binding);mutate(b);assert.throws(()=>validateSalesforceReadBinding(b));}
+  for(const mutate of [b=>b.username='other',b=>b.orgId='00D000000000000AAA',b=>b.apiVersion='v68.0',b=>b.audience='https://login.salesforce.com',b=>b.clientConfigurationReadbackSha256='wrong',b=>b.authenticationProtocol='jwt-bearer',b=>b.kind='fcos_salesforce_jwt_recipe_reader',b=>b.schemaVersion=2,b=>b.providerPermissionMode='read_only',b=>b.scopes=['full'],b=>b.notAfter=1,b=>b.privateKey='private']){const b=structuredClone(f.binding);mutate(b);assert.throws(()=>validateSalesforceReadBinding(b));}
   for(const mutate of [s=>s.salesforceReadCredentialAcceptance.sha256='b'.repeat(64),s=>s.salesforceReadCredentialAcceptance.json='{}']){const s=structuredClone(f.setup);mutate(s);assert.throws(()=>validateSalesforceReadAcceptance(f.binding,s));}
 });
 test('adapter has no arbitrary URL/method/instance and bounds complete recipe reads at sixteen',async()=>{
   for(const read of [{kind:'query',object:'User; DELETE',tooling:false,fields:['Id'],limit:1},{kind:'query',object:'User',tooling:false,fields:['Id'],limit:1,where:{field:'Id',values:["x' OR Id!='"]}},{kind:'describe',object:'User',tooling:false,url:'https://attacker.invalid'},{kind:'POST',object:'User',tooling:false}])assert.throws(()=>salesforceRecipePath(read,'v67.0'));
   const f=fixture(),reader=createSalesforceRecipeReader(f);await assert.rejects(reader.readRecipe('https://attacker.invalid'));assert.equal(f.calls.length,0);
-  for(let i=0;i<16;i++)await reader.readRecipe(0);await assert.rejects(reader.readRecipe(0));assert.equal(f.calls.length,29);
+  for(let i=0;i<16;i++)await reader.readRecipe(0);await assert.rejects(reader.readRecipe(0));assert.equal(f.calls.length,30);
 });
-test('workflow private key slot is forwarded explicitly and exposed only to the two protected dependency producers',()=>{
+test('workflow client secret slot is forwarded explicitly and exposed only to the two protected dependency producers',()=>{
   const controller=readFileSync(new URL('../.github/workflows/hosted-release-controller.yml',import.meta.url),'utf8');
-  assert.equal((controller.match(/FCOS_HOSTED_SALESFORCE_JWT_PRIVATE_KEY: \$\{\{ secrets\./g)||[]).length,2);
-  assert.ok(!controller.includes('FCOS_HOSTED_SALESFORCE_READ_TOKEN'));
-  for(const path of ['../.github/workflows/hosted-release.yml','../.github/qualification/hosted-release-bootstrap.yml'])assert.equal((readFileSync(new URL(path,import.meta.url),'utf8').match(/FCOS_HOSTED_SALESFORCE_JWT_PRIVATE_KEY: \$\{\{ secrets\./g)||[]).length,1);
+  assert.equal((controller.match(/FCOS_HOSTED_SALESFORCE_CLIENT_SECRET: \$\{\{ secrets\./g)||[]).length,2);
+  assert.ok(!controller.includes('FCOS_HOSTED_SALESFORCE_READ_TOKEN')&&!controller.includes('FCOS_HOSTED_SALESFORCE_JWT_PRIVATE_KEY'));
+  for(const path of ['../.github/workflows/hosted-release.yml','../.github/qualification/hosted-release-bootstrap.yml'])assert.equal((readFileSync(new URL(path,import.meta.url),'utf8').match(/FCOS_HOSTED_SALESFORCE_CLIENT_SECRET: \$\{\{ secrets\./g)||[]).length,1);
 });
 
 test('original recipe bytes and current data must both match the admitted immutable pin before authentication', async()=>{
   for(const mutate of [f=>{f.recipeBytes=Buffer.from('{}');},f=>{f.recipe.observations[0].reads[0].object='User';},f=>{f.recipeBytes=undefined;}]){const f=fixture();mutate(f);assert.throws(()=>createSalesforceRecipeReader(f));assert.equal(f.calls.length,0);}
-  const f=fixture(),reader=createSalesforceRecipeReader(f);const results=await Promise.allSettled(Array.from({length:17},()=>reader.readRecipe(0)));assert.equal(results.filter(row=>row.status==='fulfilled').length,16);assert.equal(f.calls.length,29);
+  const f=fixture(),reader=createSalesforceRecipeReader(f);const results=await Promise.allSettled(Array.from({length:17},()=>reader.readRecipe(0)));assert.equal(results.filter(row=>row.status==='fulfilled').length,16);assert.equal(f.calls.length,30);
 });
 
 function refreshPermissionReview(f) {
@@ -96,9 +93,9 @@ test('old admin username/profile and fixture-identity substitution are ineligibl
 });
 test('root review cannot accept effective writes, incomplete sources or missing capability readbacks even under matching hashes',async()=>{
   const mutations=[p=>p.businessRecordWrites=true,p=>p.metadataWrites=true,p=>p.administrativePermissions=true,p=>p.executableWritePaths=true,
-    p=>p.allPermissionSourcesReviewed=false,p=>p.clientPreauthorizedOnlyForReader=false,p=>p.username='substituted@example.invalid',
+    p=>p.allPermissionSourcesReviewed=false,p=>p.providerFixedRunAs=false,p=>p.username='substituted@example.invalid',
     p=>p.profileName='System Administrator',p=>p.userLicenseId='100000000000002AAA',p=>p.capturedAt='2020-01-01T00:00:00Z',p=>p.capturedAt='2999-01-01T00:00:00Z'];
-  for(const key of ['profileReadbackSha256','permissionAssignmentsReadbackSha256','permissionSetGroupsReadbackSha256','effectiveSystemPermissionsReadbackSha256','effectiveObjectPermissionsReadbackSha256','effectiveFieldPermissionsReadbackSha256','executableAccessReadbackSha256','licenceReadbackSha256','clientPreauthorizationReadbackSha256'])mutations.push(p=>delete p[key]);
+  for(const key of ['profileReadbackSha256','permissionAssignmentsReadbackSha256','permissionSetGroupsReadbackSha256','effectiveSystemPermissionsReadbackSha256','effectiveObjectPermissionsReadbackSha256','effectiveFieldPermissionsReadbackSha256','executableAccessReadbackSha256','licenceReadbackSha256','clientRunAsReadbackSha256'])mutations.push(p=>delete p[key]);
   for(const mutate of mutations){const f=fixture();mutate(f.permission);refreshPermissionReview(f);
     assert.throws(()=>validateSalesforceReadAcceptance(f.binding,f.setup),{code:'SALESFORCE_READ_PROVIDER_READ_ONLY_PROOF_REQUIRED'});
     await assert.rejects(createSalesforceRecipeReader(f).admit());assert.equal(f.calls.length,0);
@@ -211,7 +208,7 @@ test('automatic profile-owned assignment and exact admitted direct assignments a
   baseline.permissionValues[1].records.splice(1);baseline.permissionValues[1].totalSize=1;
   baseline.permissionValues[2].records.splice(1);baseline.permissionValues[2].totalSize=1;
   for(const index of [3,4])baseline.permissionValues[index]={done:true,totalSize:0,records:[]};
-  refreshIntrospectionReview(baseline);await createSalesforceRecipeReader(baseline).readRecipe(0);
+  acceptPermissionSnapshots(baseline);await createSalesforceRecipeReader(baseline).readRecipe(0);
   assert.equal(baseline.permissionValues[1].records.length,1);
   assert.equal(baseline.permissionValues[1].records[0].PermissionSetId,baseline.permissionIntrospection.permissionSets[0].id);
   for(const mutate of [f=>{f.permissionValues[1].records.splice(0,1);f.permissionValues[1].totalSize--;},
@@ -245,4 +242,137 @@ test('file absence cannot qualify from a sharing-filtered reader even under new 
     f.permissionValues[2].records[1][missing]=false;refreshIntrospectionReview(f);
     await assert.rejects(createSalesforceRecipeReader(f).admit(),{code:'SALESFORCE_READ_FILE_VISIBILITY_REQUIRED'});assert.equal(f.calls.length,0);
   }
+});
+
+function refreshRunAsReview(f) {
+  f.binding.runAsAcceptanceSha256=digest(f.runAsAcceptance);
+  f.review.credential.runAsAcceptanceSha256=f.binding.runAsAcceptanceSha256;
+  refreshPermissionReview(f);
+}
+test('provider-fixed Run As proof must pin the exact reader and actual client configuration, not app membership',async()=>{
+  const mutations=[r=>r.runAsUsername='other@example.invalid',r=>r.runAsUserId='005000000000002AAA',r=>r.orgId='00D000000000000AAA',
+    r=>r.clientId='other-client-0000000000000',r=>r.serverEnforcedRunAs=false,r=>r.clientCredentialsEnabled=false,
+    r=>r.jwtBearerEnabled=true,r=>r.otherFlowsEnabled=true,r=>r.clientConfigurationReadbackSha256='b'.repeat(64),
+    r=>r.capturedAt='2020-01-01T00:00:00Z',r=>r.capturedAt='2999-01-01T00:00:00Z',r=>r.memberOnly=true];
+  for(const mutate of mutations){const f=fixture();mutate(f.runAsAcceptance);refreshRunAsReview(f);
+    await assert.rejects(createSalesforceRecipeReader(f).admit(),{code:'SALESFORCE_READ_FIXED_RUN_AS_PROOF_REQUIRED'});assert.equal(f.calls.length,0);
+  }
+  for(const mutate of [r=>r.schemaVersion=2,r=>r.kind='fcos_root_accepted_salesforce_jwt_setup',r=>delete r.runAsAcceptance,
+    r=>r.clientConfigurationReadbackSha256='b'.repeat(64)]){
+    const f=fixture();mutate(f.review);refreshPermissionReview(f);await assert.rejects(createSalesforceRecipeReader(f).admit());assert.equal(f.calls.length,0);
+  }
+});
+test('only canonical My Domain token endpoint is admitted; documented identity origin is validated and never fetched',async()=>{
+  for(const origin of ['https://test.salesforce.com','https://login.salesforce.com','http://fratellicosulich--devee.sandbox.my.salesforce.com','https://attacker.invalid']){
+    const f=fixture();f.binding.instanceUrl=origin;assert.throws(()=>createSalesforceRecipeReader(f));assert.equal(f.calls.length,0);
+  }
+  for(const origin of ['https://login.salesforce.com',fixture().binding.instanceUrl]){
+    const f=fixture();f.exchange.id=`${origin}/id/${f.binding.orgId.slice(0,15)}/${f.binding.userId.slice(0,15)}`;
+    await createSalesforceRecipeReader(f).readRecipe(0);assert.ok(f.calls.every(c=>new URL(c.url).origin===f.binding.instanceUrl));
+  }
+  for(const suffix of ['?x=1','#part']){const f=fixture();f.exchange.id+=suffix;await assert.rejects(createSalesforceRecipeReader(f).admit());assert.equal(f.calls.length,1);}
+  const f=fixture();f.exchange.id=`https://test.salesforce.com/id/${f.binding.orgId}/${f.binding.userId}`;await assert.rejects(createSalesforceRecipeReader(f).admit());assert.equal(f.calls.length,1);
+});
+test('wrong secret, stale issuance and forged or absent HMAC fail closed before identity GET and never retry',async()=>{
+  const mutations=[f=>f.env.FCOS_HOSTED_SALESFORCE_CLIENT_SECRET='different-secret-for-fixture-only',
+    f=>f.exchange.issued_at=String(f.now()-31000),f=>f.exchange.issued_at=String(f.now()+31000),
+    f=>f.exchange.issued_at=1,f=>f.exchange.signature='',f=>f.exchange.signature='A'.repeat(43)+'=',
+    f=>f.exchange.refresh_token='',f=>f.exchange.scope='api id openid',f=>f.exchange.id=f.exchange.id.replace(f.binding.userId,'005000000000002AAA')];
+  for(const mutate of mutations){const f=fixture();mutate(f);const reader=createSalesforceRecipeReader(f);await assert.rejects(reader.admit());await assert.rejects(reader.admit());assert.equal(f.calls.length,1);}
+});
+
+test('openid is accepted only when explicitly pinned by the independently accepted client setup',async()=>{
+  const f=fixture();f.binding.scopes.push('openid');f.exchange.scope='openid api id';refreshPermissionReview(f);
+  await createSalesforceRecipeReader(f).admit();assert.equal(f.calls.filter(row=>row.options.method==='POST').length,1);
+});
+
+function acceptPermissionSnapshots(f) {
+  Object.assign(f.permissionIntrospection,salesforcePermissionSnapshotHashes(f.permissionValues));
+  f.permission.effectiveObjectPermissionsReadbackSha256=f.permissionIntrospection.objectPermissionsSha256;
+  f.permission.effectiveFieldPermissionsReadbackSha256=f.permissionIntrospection.fieldPermissionsSha256;
+  refreshIntrospectionReview(f);
+}
+function materializedPermissionFixture() {
+  const f=fixture(), r=f.permissionIntrospection;
+  r.readableObjects=Array.from({length:135},(_,i)=>`BusinessObject${String(i).padStart(3,'0')}__c`);
+  f.permissionValues[3].records=r.readableObjects.map((SobjectType,i)=>({Id:`110${String(i+1).padStart(12,'0')}AAA`,ParentId:r.permissionSets[1].id,SobjectType,
+    PermissionsCreate:false,PermissionsRead:true,PermissionsEdit:false,PermissionsDelete:false,PermissionsViewAllRecords:i<128,PermissionsModifyAllRecords:false,PermissionsViewAllFields:false}));
+  f.permissionValues[3].totalSize=135;
+  f.permissionValues[4].records=Array.from({length:334},(_,i)=>({Id:`01k${String(i+1).padStart(12,'0')}AAA`,ParentId:r.permissionSets[0].id,
+    SobjectType:i===333?'NoObjectGrant__c':r.readableObjects[i%135],Field:`${i===333?'NoObjectGrant__c':r.readableObjects[i%135]}.Field${String(i).padStart(3,'0')}__c`,
+    PermissionsEdit:i<241,PermissionsRead:true,SystemModstamp:'2024-02-20T12:54:23.000+0000'}));
+  f.permissionValues[4].totalSize=334;
+  acceptPermissionSnapshots(f);return f;
+}
+test('complete 135-object and 334-field profile snapshot permits 241 ineffective inherited FLS edits only after all object writes are denied',async()=>{
+  const f=materializedPermissionFixture();await createSalesforceRecipeReader(f).readRecipe(0);
+  assert.equal(f.permissionValues[4].records.filter(row=>row.PermissionsEdit).length,241);
+  assert.equal(f.permissionValues[3].records.filter(row=>row.PermissionsViewAllRecords).length,128);
+  assert.equal(f.permissionValues[6].fields.length,7);assert.equal(f.permissionIntrospection.schemaVersion,2);
+  assert.ok(!Object.hasOwn(f.permissionIntrospection,'readableFields'));
+  assert.match(decodeURIComponent(f.permissionIntrospection.paths[4]),/SELECT Id,ParentId,SobjectType,Field,PermissionsEdit,PermissionsRead,SystemModstamp FROM FieldPermissions .* ORDER BY Id LIMIT 500$/);
+  assert.ok(f.permissionIntrospection.paths[3].includes('LIMIT%20200'));
+  assert.equal(f.permissionIntrospection.paths[6],'/services/data/v67.0/sobjects/FieldPermissions/describe');
+  assert.equal(f.calls.length,15);assert.equal(f.calls.filter(row=>row.options.method==='POST').length,1);
+});
+test('complete semantic hashes reject changed, extra, missing, duplicate, foreign and hidden rows before any NomB read',async()=>{
+  const mutations=[f=>f.permissionValues[4].records[0].PermissionsEdit=false,
+    f=>f.permissionValues[4].records[0].PermissionsRead=false,
+    f=>f.permissionValues[4].records[0].SystemModstamp='2025-01-01T00:00:00.000+0000',
+    f=>f.permissionValues[4].records[0].Field+='Changed',f=>f.permissionValues[4].records[0].ParentId=f.permissionIntrospection.permissionSets[1].id,
+    f=>f.permissionValues[4].records[0].SobjectType='Other__c',f=>delete f.permissionValues[4].records[0].PermissionsRead,
+    f=>f.permissionValues[4].records[0].ExtraColumn=false,
+    f=>f.permissionValues[3].records[0].PermissionsRead=false,f=>f.permissionValues[3].records[0].PermissionsViewAllRecords=false,
+    f=>f.permissionValues[3].records[0].ParentId=f.permissionIntrospection.permissionSets[0].id];
+  for(const index of [3,4]){
+    mutations.push(f=>{f.permissionValues[index].records.pop();f.permissionValues[index].totalSize--;},
+      f=>{f.permissionValues[index].records.push({...f.permissionValues[index].records[0],Id:'01k999999999999AAA'});f.permissionValues[index].totalSize++;},
+      f=>f.permissionValues[index].records[1].Id=f.permissionValues[index].records[0].Id,
+      f=>f.permissionValues[index].done=false,f=>f.permissionValues[index].totalSize++,
+      f=>f.permissionValues[index].nextRecordsUrl='/services/data/v67.0/query/next');
+  }
+  for(const mutate of mutations){const f=materializedPermissionFixture();mutate(f);const reader=createSalesforceRecipeReader(f);
+    await assert.rejects(reader.readRecipe(0),{code:'SALESFORCE_READ_EFFECTIVE_PERMISSIONS_CHANGED'});
+    assert.ok(!f.calls.some(row=>row.url.includes('FROM%20ApexClass')));const calls=f.calls.length;await assert.rejects(reader.admit());assert.equal(f.calls.length,calls);
+  }
+  const reordered=materializedPermissionFixture();reordered.permissionValues[3].records.reverse();reordered.permissionValues[4].records.reverse();
+  await createSalesforceRecipeReader(reordered).readRecipe(0); // Canonical Id sorting preserves exact semantic content.
+});
+test('rewritten root snapshot hashes cannot admit direct FLS edit, any object CRUD or unknown permission, or administrative system grants',async()=>{
+  const mutations=[f=>f.permissionValues[4].records[0].ParentId=f.permissionIntrospection.permissionSets[1].id,
+    f=>f.permissionValues[3].records[0].PermissionsFutureWrite=true];
+  for(const name of ['PermissionsCreate','PermissionsEdit','PermissionsDelete','PermissionsModifyAllRecords'])mutations.push(f=>f.permissionValues[3].records[0][name]=true);
+  for(const mutate of mutations){const f=materializedPermissionFixture();mutate(f);acceptPermissionSnapshots(f);
+    await assert.rejects(createSalesforceRecipeReader(f).readRecipe(0),{code:'SALESFORCE_READ_EFFECTIVE_PERMISSIONS_CHANGED'});
+    assert.ok(!f.calls.some(row=>row.url.includes('FROM%20ApexClass')));
+  }
+  for(const flag of ['PermissionsModifyAllData','PermissionsAuthorApex','PermissionsCustomizeApplication','PermissionsFutureWrite']){
+    const f=materializedPermissionFixture();f.permissionIntrospection.permissionSets[0].trueSystemPermissions.push(flag);refreshIntrospectionReview(f);
+    await assert.rejects(createSalesforceRecipeReader(f).admit(),{code:'SALESFORCE_READ_PERMISSION_RECIPE_REQUIRED'});assert.equal(f.calls.length,0);
+  }
+});
+test('FLS full schema names and types, 500 sentinel and 4 MiB response cap remain source-owned',async()=>{
+  const mutations=[f=>f.permissionValues[6].fields.pop(),f=>f.permissionValues[6].fields.push({name:'PermissionsFutureWrite',type:'boolean'}),
+    f=>f.permissionValues[6].fields[1].type='string',f=>f.permissionValues[6].fields[1].name='ForeignParentId',
+    f=>f.permissionValues[6].fields[1].name='Id',f=>f.permissionValues[4].records[0].PermissionsRead='true',
+    f=>{const row=f.permissionValues[4].records[0];f.permissionValues[4].records=Array.from({length:500},(_,i)=>({...row,Id:`01k${String(i).padStart(12,'0')}AAA`}));f.permissionValues[4].totalSize=500;}];
+  for(const mutate of mutations){const f=materializedPermissionFixture();mutate(f);acceptPermissionSnapshots(f);
+    await assert.rejects(createSalesforceRecipeReader(f).readRecipe(0),{code:'SALESFORCE_READ_EFFECTIVE_PERMISSIONS_CHANGED'});
+  }
+  for(const slot of [4,6]){const f=materializedPermissionFixture(),original=f.fetchImpl;
+    f.fetchImpl=async(url,options)=>url===`${f.binding.instanceUrl}${f.permissionIntrospection.paths[slot]}`
+      ?new Response('{}',{headers:{'content-length':String(4*1024*1024+1)}}):original(url,options);
+    await assert.rejects(createSalesforceRecipeReader(f).readRecipe(0));assert.ok(!f.calls.some(row=>row.url.includes('FROM%20ApexClass')));
+  }
+});
+test('object and field semantic snapshot digests must both equal the independently accepted permission proof',async()=>{
+  for(const key of ['objectPermissionsSha256','fieldPermissionsSha256']){const f=materializedPermissionFixture();f.permissionIntrospection[key]='b'.repeat(64);refreshIntrospectionReview(f);
+    await assert.rejects(createSalesforceRecipeReader(f).admit(),{code:'SALESFORCE_READ_PERMISSION_RECIPE_REQUIRED'});assert.equal(f.calls.length,0);
+  }
+  for(const mutate of [r=>r.schemaVersion=1,r=>r.readableFields=[],r=>r.readableObjects=Array.from({length:200},(_,i)=>`Object${i}__c`),
+    r=>r.paths[4]=r.paths[4].replace('LIMIT%20500','LIMIT%205000'),r=>r.paths.pop()]){
+    const f=materializedPermissionFixture();mutate(f.permissionIntrospection);refreshIntrospectionReview(f);await assert.rejects(createSalesforceRecipeReader(f).admit());assert.equal(f.calls.length,0);
+  }
+  const f=materializedPermissionFixture();f.setup.salesforceReadCredentialAcceptance.json=' '.repeat(32769);f.setup.salesforceReadCredentialAcceptance.sha256=digest(f.setup.salesforceReadCredentialAcceptance.json);f.binding.rootAcceptanceSha256=f.setup.salesforceReadCredentialAcceptance.sha256;
+  assert.throws(()=>validateSalesforceReadAcceptance(f.binding,f.setup),{code:'SALESFORCE_READ_SETUP_PROOF_REQUIRED'});
 });

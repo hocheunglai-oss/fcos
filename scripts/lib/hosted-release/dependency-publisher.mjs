@@ -1,4 +1,4 @@
-import { createSalesforceRecipeReader, salesforceRecipePath } from './salesforce-read-auth.mjs';
+import { createSalesforceRecipeReader, salesforceRecipePath, validateSalesforceReadBinding } from './salesforce-read-auth.mjs';
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fcosSalesforceEnvironment } from '../../../config/fcosConnections.js';
@@ -167,10 +167,10 @@ export async function measureHostedNomBInputs({ manifest, handoff, readArtifact,
   env = process.env, fetchImpl = globalThis.fetch, now = Date.now }) {
   const renewable = manifest.verification?.salesforceReadCredential;
   const legacyBearer = !renewable && manifest.stage !== 'qualification' && env.GITHUB_ACTIONS !== 'true' && env.FCOS_HOSTED_SALESFORCE_LEGACY_BEARER_ALLOWED === 'true';
-  if (renewable && renewable.providerPermissionMode !== 'provider_business_data_read_only') return { status: 'waiting_dependency', missing: ['admitted_business_data_read_only_devee_jwt_reader_setup'] };
-  if (!renewable && !legacyBearer) return { status: 'waiting_dependency', missing: ['admitted_dedicated_devee_jwt_reader_setup'] };
-  if (renewable && !env.FCOS_HOSTED_SALESFORCE_JWT_PRIVATE_KEY || legacyBearer && !env.FCOS_HOSTED_SALESFORCE_READ_TOKEN)
-    return { status: 'waiting_dependency', missing: ['dedicated_devee_jwt_private_input'] };
+  if (renewable && (renewable.schemaVersion !== 3 || renewable.kind !== 'fcos_salesforce_client_credentials_recipe_reader' || renewable.providerPermissionMode !== 'provider_business_data_read_only')) return { status: 'waiting_dependency', missing: ['admitted_business_data_read_only_devee_client_credentials_reader_setup'] };
+  if (!renewable && !legacyBearer) return { status: 'waiting_dependency', missing: ['admitted_dedicated_devee_client_credentials_reader_setup'] };
+  if (renewable && !env.FCOS_HOSTED_SALESFORCE_CLIENT_SECRET || legacyBearer && !env.FCOS_HOSTED_SALESFORCE_READ_TOKEN)
+    return { status: 'waiting_dependency', missing: ['dedicated_devee_client_secret_input'] };
   try {
     const devee = validateRecipe(recipe, handoff);
     const legacy = await loadNomBLegacyAssumptions({ handoff, readArtifact }), checks = validateLegacyRecipe(recipe, handoff, legacy);
@@ -231,7 +231,8 @@ export function validateNomBMeasurementReceipt({ receipt, recipe, recipeSha256, 
   validateRecipe(recipe, handoff); validateLegacyRecipe(recipe, handoff, legacy);
   if (manifest.verification?.salesforceReadCredential || manifest.stage === 'qualification') {
     const binding = manifest.verification?.salesforceReadCredential, permission = receipt?.authentication?.permissionObservation;
-    need(binding && receipt?.authentication?.kind === 'fcos_salesforce_jwt_recipe_reader' && receipt.authentication.credentialBindingSha256 === dependencyHash(binding)
+    validateSalesforceReadBinding(binding, { now: Date.parse(receipt?.capturedAt) });
+    need(binding && receipt?.authentication?.kind === 'fcos_salesforce_client_credentials_recipe_reader' && receipt.authentication.credentialBindingSha256 === dependencyHash(binding)
       && exact(permission, ['schemaVersion','kind','recipeSha256','observedSha256','capturedAt'])
       && permission.schemaVersion === 1 && permission.kind === 'fcos_salesforce_fresh_business_data_read_only_permission_observation'
       && permission.recipeSha256 === binding.permissionRecipeSha256 && hash(permission.observedSha256)
