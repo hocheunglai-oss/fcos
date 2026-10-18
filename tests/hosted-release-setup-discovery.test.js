@@ -402,3 +402,38 @@ test('bootstrap discovery is read-only, minimally credentialed, always saves dis
   assert.ok(job.steps.findIndex(step=>step.name==='Admit discovery before candidate checkout')<job.steps.findIndex(step=>step.with?.path==='candidate'));
   const upload=job.steps.find(step=>step.uses?.startsWith('actions/upload-artifact@'));assert.equal(upload.if,'${{ always() }}');assert.equal(upload.with.path,'setup-discovery.json');assert.equal(upload.with.overwrite,false);
 });
+
+
+const legacySalesforceIdentityBinding=()=>({...legacySalesforceBinding(),kind:'fcos_legacy_salesforce_identity_read_v1',path:'/api/functions/missingNomBList'});
+function admitIdentityDiscovery(f){
+ f.setup.legacySalesforceIdentityObservation=legacySalesforceIdentityBinding();f.setup.legacyRuntimeAuth=legacyRuntimeAuthFixture();
+ f.setup.runtimeIdentity.role='general_manager';f.setup.legacyRuntimeAuth.identity.role='general_manager';f.env.FCOS_HOSTED_RUNTIME_EXPECTED_ROLE='general_manager';
+}
+test('bounded legacy Salesforce identity read is separately admitted and cannot inherit the earlier schema-read binding',t=>{
+ const f=fixture(t);providerFixture(f,{legacy:true,firstRuntime:true});admitIdentityDiscovery(f);
+ assert.equal(validateDiscoverySetup(f.setup,{controllerSha:f.C,candidateSha:FROZEN_COMPATIBILITY_SHA,now}),f.setup);
+ for(const change of [s=>s.legacySalesforceIdentityObservation.path='/api/functions/salesforceSchema',s=>s.legacySalesforceIdentityObservation.kind='fcos_legacy_salesforce_app_read_v1',
+  s=>s.legacySalesforceIdentityObservation.origin='https://foreign.vercel.app',s=>s.legacySalesforceIdentityObservation.extra=true,s=>s.runtimeIdentity.role='administrator',
+  s=>s.firstRuntimeBaseline=firstRuntimeFixture({now}).reference]){
+  const setup=clone(f.setup);change(setup);assert.throws(()=>validateDiscoverySetup(setup,{controllerSha:f.C,candidateSha:FROZEN_COMPATIBILITY_SHA,now}),{code:'DISCOVERY_LEGACY_SALESFORCE_IDENTITY_BINDING_INVALID'});
+ }
+ const absent=clone(f.setup);delete absent.legacyRuntimeAuth;
+ assert.throws(()=>validateDiscoverySetup(absent,{controllerSha:f.C,candidateSha:FROZEN_COMPATIBILITY_SHA,now}),{code:'DISCOVERY_LEGACY_RUNTIME_AUTH_INVALID'});
+});
+test('actual discovery routes identity-only admission to its distinct observer and reuses the completed schema action without calling it',async t=>{
+ const f=fixture(t),p=providerFixture(f,{legacy:true,firstRuntime:true}),db=schemaClient();admitIdentityDiscovery(f);repin(f);let observed=0;
+ const proof={kind:'fcos_legacy_salesforce_identity_read_observation_v1',status:'observed',baselineAccepted:false,qualificationAccepted:false,
+  identityGuard:{state:'passed',rawOrganizationFieldsObserved:false},appOwnedAuth:{state:'authenticated',selectedMode:'unknown',orgId:null,isSandbox:null}};
+ const result=await discoverHostedSetup({...f.options,createCollector:options=>createSetupDiscoveryCollector({...options,fetchImpl:p.fetchImpl,Client:db.Client,login,protection:async()=>({}),
+  verifyLegacySource:()=>({sourceAbsent:true}),observeLegacySalesforce:()=>assert.fail('a consumed schema read must not be repeated by identity-only admission'),
+  observeLegacySalesforceIdentity:async args=>{observed++;assert.deepEqual(args.binding,f.setup.legacySalesforceIdentityObservation);assert.deepEqual(args.publicAuth,f.setup.legacyRuntimeAuth);
+   assert.equal(typeof args.tokenProvider,'function');assert.equal(typeof args.recheckProduction,'function');assert.equal(args.bypass,'PRIVATE_BYPASS');return proof;}})});
+ assert.equal(observed,1);assert.equal(result.status,'baseline_required');assert.equal(result.qualificationAccepted,false);
+ assert.deepEqual(result.observations.runtime.result.legacySalesforceIdentityObservation,proof);assert.equal(result.observations.runtime.result.legacySalesforceAppObservation,undefined);
+ assert.deepEqual(result.observations.runtime.result.auth,{});assert.doesNotMatch(readFileSync(f.env.FCOS_DISCOVERY_OUTPUT,'utf8'),/PRIVATE_/);
+});
+test('an identity observer is never invoked merely because a schema observer was admitted',async t=>{
+ const f=fixture(t),p=providerFixture(f,{legacy:true,firstRuntime:true}),db=schemaClient();f.setup.legacySalesforceAppObservation=legacySalesforceBinding();f.setup.legacyRuntimeAuth=legacyRuntimeAuthFixture();repin(f);
+ await discoverHostedSetup({...f.options,createCollector:options=>createSetupDiscoveryCollector({...options,fetchImpl:p.fetchImpl,Client:db.Client,login,protection:async()=>({}),verifyLegacySource:()=>({sourceAbsent:true}),
+  observeLegacySalesforce:async()=>({status:'observed',baselineAccepted:false}),observeLegacySalesforceIdentity:()=>assert.fail('no new POST without exact opt-in')})});
+});

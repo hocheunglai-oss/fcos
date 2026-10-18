@@ -61,7 +61,7 @@ export function validateDiscoverySetup(setup, { controllerSha, candidateSha, now
   const isHash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
   const keys=['schemaVersion','kind','controllerSha','candidateSha','sourceProfile','targets','qualificationSource',
     'environment','issuedAt','notAfter','runtimeIdentity','vercelReadCredential','vercelReadCredentialAcceptance','legacyProductionBinding'];
-  if (!exact(setup, [...keys,...['firstRuntimeBaseline','legacySalesforceAppObservation','legacyRuntimeAuth'].filter(k=>Object.hasOwn(setup||{},k))])
+  if (!exact(setup, [...keys,...['firstRuntimeBaseline','legacySalesforceAppObservation','legacySalesforceIdentityObservation','legacyRuntimeAuth'].filter(k=>Object.hasOwn(setup||{},k))])
     || setup.schemaVersion !== 1 || setup.kind !== 'fcos_hosted_setup_discovery'
     || setup.controllerSha !== controllerSha || setup.candidateSha !== candidateSha
     || setup.candidateSha !== FROZEN_COMPATIBILITY_SHA || setup.sourceProfile !== 'frozen_04ee'
@@ -93,7 +93,16 @@ export function validateDiscoverySetup(setup, { controllerSha, candidateSha, now
       ||!legacy||legacy.deploymentId!==binding.deploymentId||legacy.commit!==binding.sha||legacy.immutableUrl!==binding.origin
       ||legacy.sourceDigest!==binding.sourceSha256||setup.firstRuntimeBaseline)fail('DISCOVERY_LEGACY_SALESFORCE_BINDING_INVALID');
   }
-  if(Boolean(setup.legacySalesforceAppObservation)!==Boolean(setup.legacyRuntimeAuth))fail('DISCOVERY_LEGACY_RUNTIME_AUTH_INVALID');
+  if(Object.hasOwn(setup,'legacySalesforceIdentityObservation')) {
+    const binding=setup.legacySalesforceIdentityObservation;
+    if(!exact(binding,['kind','deploymentId','sha','sourceSha256','origin','path'])
+      ||binding.kind!=='fcos_legacy_salesforce_identity_read_v1'||binding.deploymentId!==FIRST_RUNTIME.previousDeploymentId
+      ||binding.sha!==FIRST_RUNTIME.previousSha||binding.sourceSha256!==FIRST_RUNTIME.sourceSha256
+      ||binding.origin!==FIRST_RUNTIME.previousUrl||binding.path!=='/api/functions/missingNomBList'
+      ||!legacy||legacy.deploymentId!==binding.deploymentId||legacy.commit!==binding.sha||legacy.immutableUrl!==binding.origin
+      ||legacy.sourceDigest!==binding.sourceSha256||setup.firstRuntimeBaseline||setup.runtimeIdentity.role!=='general_manager')fail('DISCOVERY_LEGACY_SALESFORCE_IDENTITY_BINDING_INVALID');
+  }
+  if(Boolean(setup.legacySalesforceAppObservation||setup.legacySalesforceIdentityObservation)!==Boolean(setup.legacyRuntimeAuth))fail('DISCOVERY_LEGACY_RUNTIME_AUTH_INVALID');
   if(setup.legacyRuntimeAuth){
     try {
       validateLegacyRuntimePublicAuth({publicAuth:setup.legacyRuntimeAuth,email:setup.legacyRuntimeAuth.identity?.email,

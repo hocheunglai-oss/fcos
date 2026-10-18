@@ -12,6 +12,7 @@ import { digest, fail } from './contract.mjs';
 import { admittedFirstRuntimeBaseline, assertFirstRuntimeSetup, FIRST_RUNTIME, firstRuntimePrevious, firstRuntimeLegacyBinding, firstRuntimeSourceAbsence, isFirstRuntimePair } from './first-runtime.mjs';
 import { PREVIEW_PARITY_POLICY } from '../preview-parity.mjs';
 import { observeLegacySalesforceApp } from './legacy-salesforce-app-observation.mjs';
+import { observeLegacySalesforceIdentity as observeLegacySalesforceIdentityRead } from './legacy-salesforce-identity-observation.mjs';
 import { loginLegacyHostedRuntime } from './legacy-hosted-runtime-login.mjs';
 
 /** Read-only pre-manifest transport. It has no complete-manifest seed, writer
@@ -118,9 +119,9 @@ export async function collectRuntimeProtectionState({ origin, sha, bypass, reque
 /** Dedicated discovery collectors return observations, never hosted check evidence. */
 export function createSetupDiscoveryCollector({ setup, env = process.env, fetchImpl = fetch, now = Date.now,
   Client, login, protection = collectRuntimeProtectionState,controllerDirectory=env.FCOS_CONTROLLER_DIRECTORY,
-  verifyLegacySource=firstRuntimeSourceAbsence,observeLegacySalesforce=observeLegacySalesforceApp } = {}) {
+  verifyLegacySource=firstRuntimeSourceAbsence,observeLegacySalesforce=observeLegacySalesforceApp,observeLegacySalesforceIdentity=observeLegacySalesforceIdentityRead } = {}) {
   const provider = createVercelProductionObserver({ setup, env, fetchImpl, now });
-  const discoveryLogin=login||(setup.legacySalesforceAppObservation
+  const discoveryLogin=login||((setup.legacySalesforceAppObservation||setup.legacySalesforceIdentityObservation)
     ? options=>loginLegacyHostedRuntime({...options,publicAuth:setup.legacyRuntimeAuth,fetchImpl,now}) : undefined);
   const tokenProvider = createHostedRuntimeTokenProvider({ env, login:discoveryLogin, verifyTarget: async ({ origin, deployment }) => {
     const actual = await provider.inspect(deployment.id);
@@ -148,20 +149,22 @@ export function createSetupDiscoveryCollector({ setup, env = process.env, fetchI
             endpointAbsent=true;endpointObservation={url,method:'GET',httpStatus:404,redirected:false,capturedAt:new Date(now()).toISOString()};
           }
         } catch { /* Source absence alone never proves the deployed HTTP route. */ }
-        let legacySalesforceAppObservation;
-        if(setup.legacySalesforceAppObservation) {
+        let legacySalesforceAppObservation,legacySalesforceIdentityObservation;
+        if(setup.legacySalesforceAppObservation||setup.legacySalesforceIdentityObservation) {
           const email=env.FCOS_HOSTED_RUNTIME_EMAIL?.trim().toLowerCase();
           if(!email||digest(email)!==setup.runtimeIdentity.emailSha256||env.FCOS_HOSTED_RUNTIME_EXPECTED_ROLE!==setup.runtimeIdentity.role)fail('DISCOVERY_RUNTIME_IDENTITY');
           if(!env.FCOS_PRODUCTION_VERIFICATION_BYPASS)fail('DISCOVERY_RUNTIME_PROTECTION');
-          legacySalesforceAppObservation=await observeLegacySalesforce({binding:setup.legacySalesforceAppObservation,production,controllerDirectory,
+          if(setup.legacySalesforceAppObservation)legacySalesforceAppObservation=await observeLegacySalesforce({binding:setup.legacySalesforceAppObservation,production,controllerDirectory,
             tokenProvider,protection,recheckProduction:provider.observe,bypass:env.FCOS_PRODUCTION_VERIFICATION_BYPASS,fetchImpl,now});
+          if(setup.legacySalesforceIdentityObservation)legacySalesforceIdentityObservation=await observeLegacySalesforceIdentity({binding:setup.legacySalesforceIdentityObservation,production,controllerDirectory,
+            publicAuth:setup.legacyRuntimeAuth,tokenProvider,protection,recheckProduction:provider.observe,bypass:env.FCOS_PRODUCTION_VERIFICATION_BYPASS,fetchImpl,now});
           const after=await provider.observe();
           if(after.deployment.id!==production.deployment.id||after.deployment.sha!==production.deployment.sha
             ||after.deployment.sourceSha256!==production.deployment.sourceSha256||after.publicVersion.sha256!==production.publicVersion.sha256)fail('DISCOVERY_PRODUCTION_MOVED');
         }
         return {kind:endpointAbsent?'first_runtime_endpoint_absent':'first_runtime_source_absent',readOnly:true,sourceAbsent:true,endpointAbsent,endpointObservation,baselineRequired:true,qualificationAccepted:false,automaticRollbackEligible:false,
           deploymentId:previous.deploymentId,sha:previous.sha,flags:Object.fromEntries(PREVIEW_PARITY_POLICY.runtimeFlags.map(k=>[k,{state:'unknown'}])),safety:{readOnly:null},auth:{},
-          ...(legacySalesforceAppObservation?{legacySalesforceAppObservation}:{})};
+          ...(legacySalesforceAppObservation?{legacySalesforceAppObservation}:{}),...(legacySalesforceIdentityObservation?{legacySalesforceIdentityObservation}:{})};
       }
       const email = env.FCOS_HOSTED_RUNTIME_EMAIL?.trim().toLowerCase();
       if (!email || digest(email) !== setup.runtimeIdentity.emailSha256
