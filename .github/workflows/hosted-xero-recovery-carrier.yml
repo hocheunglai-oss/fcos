@@ -34,7 +34,9 @@ jobs:
   xero-recovery-carrier:
     name: xero-recovery-carrier
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # V2 allows 30 minutes total preparation plus execution; v1 still expires
+    # at its immutable 15-minute template deadline. Individual calls stay bounded.
+    timeout-minutes: 30
     environment: fcos-hosted-verification
     steps:
       # No application credentials are present in this bootstrap. The checkout

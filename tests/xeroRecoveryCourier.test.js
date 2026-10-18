@@ -17,9 +17,9 @@ import {xeroHostPackageSourcePins} from '../scripts/package-xero-recovery-host.m
 import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
 const T=Date.now(),id=n=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`,SHA='1'.repeat(40),CONTROLLER='2'.repeat(40),H='a'.repeat(64);
 const binding={operationId:hash('original operation'),ownerThreadId:id(1),tenantId:id(2),actorId:id(3),expectedVersion:449,refreshLeaseId:id(4),probeId:id(5),requestId:id(6),approvalSha256:H,sourceSha256:H,bindingSha256:H,organisationIdentitySha256:null,issuedAt:T-1000,notAfter:T+899000,credentialPreservationCompositeApproved:true};
-function template(){return {schemaVersion:1,kind:'fcos_xero_recovery_carrier_template_v1',planJson:canonical({schemaVersion:1,kind:'fcos_xero_recovery_step_plan_v1',binding}),controllerSha:CONTROLLER,
+function template(version=1){return {schemaVersion:version,kind:`fcos_xero_recovery_carrier_template_v${version}`,planJson:canonical({schemaVersion:version,kind:`fcos_xero_recovery_step_plan_v${version}`,binding:{...binding,notAfter:T+(version===2?1799000:899000)}}),controllerSha:CONTROLLER,
  caller:{ref:'refs/heads/fcos-reviewed-carrier',sha:SHA,workflowRef:`${REPOSITORY}/.github/workflows/authenticated-release.yml@refs/heads/fcos-reviewed-carrier`,workflowSha:SHA,jobWorkflowRef:`${REPOSITORY}/.github/workflows/hosted-xero-recovery-carrier.yml@${CONTROLLER}`,jobWorkflowSha:CONTROLLER,jobName:'xero-recovery-carrier',environment:'fcos-hosted-verification',subject:`repo:${REPOSITORY}:environment:fcos-hosted-verification`},
- hostConfiguration:{target:{customEnvironment:'fcos-xero-recovery-111111111111'}},readCredential:{},readAcceptance:{},login:{origin:'https://legacy.vercel.app',publicAuth:{}},issuedAt:T-1000,notAfter:T+899000,artifactCaptureAuthoritySha256:H};}
+ hostConfiguration:{target:{customEnvironment:'fcos-xero-recovery-111111111111'}},readCredential:{},readAcceptance:{},login:{origin:'https://legacy.vercel.app',publicAuth:{}},issuedAt:T-1000,notAfter:T+(version===2?1799000:899000),artifactCaptureAuthoritySha256:H};}
 const request=t=>prepareXeroRecoveryStepRequest({planJson:t.planJson,step:'preflight',submissionId:id(7),previousResultSha256:null}).requestJson;
 const json=v=>new Response(JSON.stringify(v),{headers:{'content-type':'application/json'}});
 function claims(t){return {repository_id:'1278654816',repository:REPOSITORY,repository_owner:'hocheunglai-oss',actor_id:'265701760',actor:'hocheunglai-oss',event_name:'workflow_dispatch',run_attempt:'1',run_id:'123',runner_environment:'github-hosted',ref_protected:'true',ref:t.caller.ref,sha:t.caller.sha,workflow_ref:t.caller.workflowRef,workflow_sha:t.caller.workflowSha,job_workflow_ref:t.caller.jobWorkflowRef,job_workflow_sha:t.caller.jobWorkflowSha,environment:t.caller.environment,sub:t.caller.subject,iat:Math.floor(T/1000),exp:Math.floor(T/1000)+299,jti:'actual-signed-fixture'};}
@@ -91,7 +91,7 @@ test('source inventory cannot omit or add bytes, substitute metadata digest, or 
 // Inert admission fixtures exercise byte/tuple binding only; they are never
 // actual root/human/provider provenance. Python refusal is an explicit synthetic
 // completed nonzero fixture, not execution of the operational guard source.
-function nativeFixture(){const controlRoot=realpathSync(mkdtempSync(join(tmpdir(),'fcos-native-courier-'))),t=template(),parsed=parseCourierTemplate(JSON.stringify(t)),stateDirectory=canonicalCourierStateDirectory(binding.operationId,controlRoot);
+function nativeFixture(version=1){const controlRoot=realpathSync(mkdtempSync(join(tmpdir(),'fcos-native-courier-'))),t=template(version),parsed=parseCourierTemplate(JSON.stringify(t)),stateDirectory=canonicalCourierStateDirectory(binding.operationId,controlRoot);
  mkdirSync(stateDirectory,{recursive:true,mode:0o700});const workflow=join(controlRoot,'workflow.json'),board=join(controlRoot,'workboard.json');
  writeFileSync(workflow,JSON.stringify({unifiedCoordinator:{epoch:'production-reconciliation-20261005'}}));writeFileSync(board,JSON.stringify({checkpointPaths:{workflow}}));
  writeFileSync(join(controlRoot,'.fcos-cli/release-state.json'),JSON.stringify({workboardPath:board}));
@@ -155,7 +155,7 @@ test('native and carrier rolling GET allocations total40/min with cancellation a
  let at=0;const sleeps=[],c=new AbortController(),budget=createCourierReadBudget({now:()=>at,wait:async ms=>{sleeps.push(ms);at+=ms;},signal:c.signal});
  for(let i=0;i<21;i++)await budget();assert.deepEqual(sleeps,[60000]);assert.equal(at,60000);c.abort();await assert.rejects(budget());
 });
-function packageTemplate(){const t=template(),sourcePins=xeroHostPackageSourcePins(),caller=Object.fromEntries(Object.entries(t.caller).filter(([k])=>k!=='jobName'));caller.runId=null;
+function packageTemplate(version=1){const t=template(version),sourcePins=xeroHostPackageSourcePins(),caller=Object.fromEntries(Object.entries(t.caller).filter(([k])=>k!=='jobName'));caller.runId=null;
  t.hostConfiguration={schemaVersion:1,kind:'fcos_compiled_xero_vercel_host_v1',target:{teamId:fcosConnectionIdentifier('vercel','Team ID'),projectId:fcosConnectionIdentifier('vercel','Project ID'),customEnvironment:'fcos-xero-recovery-111111111111',controllerSha:CONTROLLER,hostSourceSha256:hash(JSON.stringify(sourcePins))},planJson:t.planJson,actorBinding:{actorId:binding.actorId,emailSha256:H,accessRevision:5},ownership:{featuresOwnerThreadId:'01a0f08b-7fcb-7870-9edc-343e16052b62',historicalOwnerThreadIds:[binding.ownerThreadId],approvalSha256:binding.approvalSha256,sourceSha256:binding.sourceSha256,controllerSha:CONTROLLER},caller,requestNonceSha256:H};return t;}
 test('actual carrier packaging invokes real builder with nonexistent child output then verifies all actual package bytes',async()=>{
  const t=packageTemplate(),files=await buildCourierExpectedFiles({t,runId:'123'});assert.equal(files.length,3);assert.ok(files.some(f=>f.path.endsWith('/index.mjs')&&f.bytes>1000));
@@ -256,10 +256,10 @@ test('deployment source admission accepts exact ownerId-only team and refuses ev
 
 // These are synthetic provenance/command records for the actual native entrypoint;
 // no test grants authority, executes the operational Python source or reads Macs.
-function warmFixture(){
- const f=nativeFixture(),templateJson=f.options.templateJson,variable={name:ORIGINAL_WARM_TEMPLATE_VARIABLE,value:Buffer.from(templateJson).toString('base64'),created_at:new Date(T-1000).toISOString(),updated_at:new Date(T-1000).toISOString()},metadata=originalWarmVariable(variable,templateJson,T);
+function warmFixture(version=1){
+ const f=nativeFixture(version),templateJson=f.options.templateJson,variable={name:ORIGINAL_WARM_TEMPLATE_VARIABLE,value:Buffer.from(templateJson).toString('base64'),created_at:new Date(T-1000).toISOString(),updated_at:new Date(T-1000).toISOString()},metadata=originalWarmVariable(variable,templateJson,T);
  const evidence={publicTemplateInstallation:f.save('synthetic-public-variable-installation.json',{kind:'fcos_root_actual_original_carrier_public_template_installation_v1',accepted:true,reviewerId:'/root',templateSha256:f.parsed.templateSha256,variable:metadata,actualNativeReceiptProvenanceReviewed:true}),originalAuthority:f.admission.evidence.originalAuthority,artifactCaptureAuthority:f.admission.evidence.artifactCaptureAuthority,coordinationQuota:f.admission.evidence.coordinationQuota};
- const scope={currentExecutorThreadId:'01a0f08b-7fcb-7870-9edc-343e16052b62',historicalOwnerThreadId:binding.ownerThreadId,epoch:'production-reconciliation-20261005',templateSha256:f.parsed.templateSha256,planSha256:f.parsed.planSha256,caller:f.t.caller,controllerSha:CONTROLLER,actorId:binding.actorId,originalApprovalSha256:binding.approvalSha256,sourcePins:nativeCourierSourcePins(),variable:metadata,workflowId:77,capability:{maximumGithubDispatchPosts:1,maximumRequestPublications:0,maximumHostPosts:0,maximumOwnerLogins:0,financialAuthorityGranted:false},evidence,dispatchId:id(40),issuedAt:T,notAfter:T+600000},scopeSha256=hash(canonical(scope)),reviews={};
+ const scope={currentExecutorThreadId:'01a0f08b-7fcb-7870-9edc-343e16052b62',historicalOwnerThreadId:binding.ownerThreadId,epoch:'production-reconciliation-20261005',templateSha256:f.parsed.templateSha256,planSha256:f.parsed.planSha256,caller:f.t.caller,controllerSha:CONTROLLER,actorId:binding.actorId,originalApprovalSha256:binding.approvalSha256,sourcePins:nativeCourierSourcePins(),variable:metadata,workflowId:77,capability:{maximumGithubDispatchPosts:1,maximumRequestPublications:0,maximumHostPosts:0,maximumOwnerLogins:0,financialAuthorityGranted:false},evidence,dispatchId:id(40),issuedAt:T,notAfter:T+(version===2?1799000:600000)},scopeSha256=hash(canonical(scope)),reviews={};
  for(const[key,role,reviewerId]of[['rootReview','root','/root'],['independentReview','independent','/root/other_reviewer']])reviews[key]=f.save('synthetic-warm-'+key+'.json',{kind:'fcos_actual_original_xero_warm_dispatch_review_v1',accepted:true,role,reviewerId,scopeSha256,reviewedAt:new Date(T).toISOString(),actualPublicTemplateInstallationReviewed:true,actualProtectedCallerSourceReviewed:true,originalAuthorityAndCaptureProvenanceReviewed:true,actualSharedCoordinationQuotaReviewed:true,financialAuthorityGranted:false});
  const admission={schemaVersion:1,kind:'fcos_root_admitted_original_xero_warm_dispatch_v1',accepted:true,reviewerId:'/root',scope,scopeSha256,...reviews};f.save('root-original-warm-admission.json',admission);
  const runtime={command:'synthetic-gh',credentialAvailable:true,env:{PATH:'/usr/bin:/bin',HOME:f.controlRoot,GH_CONFIG_DIR:f.controlRoot}},calls=[];let held;
@@ -332,8 +332,8 @@ test('actual reusable carrier error boundary preserves only trusted safe phase c
 });
 // The physical git repository and real JS guards run. Python/GitHub completion
 // records are explicitly synthetic command fixtures, not actual owner/authority.
-function nativePublicationFixture({pushFailure,statusFailure,missingArtifact=false}={}){
- const f=nativeFixture(),raw=request(f.t),calls=[],runtime={credentialAvailable:true,command:'fixture-gh',env:{PATH:'/usr/bin:/bin',HOME:f.controlRoot,GH_CONFIG_DIR:f.controlRoot}};
+function nativePublicationFixture({pushFailure,statusFailure,missingArtifact=false,version=1}={}){
+ const f=nativeFixture(version),raw=request(f.t),calls=[],runtime={credentialAvailable:true,command:'fixture-gh',env:{PATH:'/usr/bin:/bin',HOME:f.controlRoot,GH_CONFIG_DIR:f.controlRoot}};
  const init=spawnSync('/usr/bin/git',['init','--initial-branch=codex/fixture'],{cwd:f.controlRoot,encoding:'utf8',env:{PATH:'/usr/bin:/bin',HOME:f.controlRoot,GIT_CONFIG_GLOBAL:'/dev/null',GIT_CONFIG_NOSYSTEM:'1'}});assert.equal(init.status,0);
  let held,commitSha,archive,claims=0;
  const repository={id:1278654816,full_name:REPOSITORY},run={id:123,run_attempt:1,repository,head_repository:repository,actor:{id:265701760,login:'hocheunglai-oss'},event:'workflow_dispatch',head_sha:SHA,head_branch:'fcos-reviewed-carrier',path:'.github/workflows/authenticated-release.yml',status:'in_progress'};
@@ -378,4 +378,64 @@ test('whole warm carrier waits without status and refuses forged or late status 
 });
 test('native action admission requires exact root AND peer review of added publisher status scope and consumers before commands',async()=>{
  for(const name of ['rootReview','independentReview']){const f=nativeFixture();try{const review=JSON.parse(readFileSync(f.admission.evidence[name].path));delete review.actualPublisherStatusScopeAndConsumersReviewed;f.admission.evidence[name]=f.save('missing-status-scope-'+name+'.json',review);f.b.rootAdmissionSha256=f.save('root-native-admission.json',f.admission).sha256;await assert.rejects(createNativeXeroRecoveryRelay({...f.options,capture:()=>assert.fail('No command before actual scope review')}),{code:'XERO_COURIER_ROOT_ADMISSION_REQUIRED'});}finally{f.clean();}}
+});
+
+
+test('v2 requires matching plan/template versions and leaves every v1 ceiling and raw hash unchanged',()=>{
+ const legacy=template(),raw=JSON.stringify(legacy),digest=hash(raw),v2=template(2);
+ assert.equal(parseCourierTemplate(JSON.stringify(v2)).maximumWindowMs,1800000);
+ assert.equal(parseCourierTemplate(raw).maximumWindowMs,900000);
+ for(const change of [t=>t.schemaVersion=1,t=>t.kind='fcos_xero_recovery_carrier_template_v1',t=>{const p=JSON.parse(t.planJson);p.schemaVersion=1;p.kind='fcos_xero_recovery_step_plan_v1';t.planJson=canonical(p);},t=>{t.notAfter++;const p=JSON.parse(t.planJson);p.binding.notAfter++;t.planJson=canonical(p);},t=>t.issuedAt--]){
+  const t=structuredClone(v2);change(t);assert.throws(()=>parseCourierTemplate(JSON.stringify(t)));
+ }
+ assert.equal(hash(JSON.stringify(legacy)),digest);assert.equal(JSON.stringify(legacy),raw);
+ const extended=structuredClone(legacy);extended.notAfter=T+1799000;assert.throws(()=>parseCourierTemplate(JSON.stringify(extended)));
+});
+
+test('actual v2 native warm factory dispatches after minute15 only inside its original30minute envelope, with one consumed intent',async()=>{
+ const f=warmFixture(2);try{
+  const warm=await createNativeXeroRecoveryWarmDispatcher({...f.options,now:()=>T+900001});
+  assert.equal((await warm.dispatch()).status,'original_warm_dispatched_run_pending');
+  assert.equal(f.calls.filter(c=>c.args.includes('POST')).length,1);
+  await assert.rejects(warm.dispatch(),{code:'XERO_COURIER_CONSUMED_GET_ONLY'});
+ }finally{f.clean();}
+ const expired=warmFixture(2);try{
+  const warm=await createNativeXeroRecoveryWarmDispatcher({...expired.options,now:()=>expired.t.notAfter,capture:()=>assert.fail('No claim/credential/write at original expiry')});
+  await assert.rejects(warm.dispatch(),{code:'XERO_COURIER_AUTHORITY_EXPIRED'});
+ }finally{expired.clean();}
+ const workflow=readFileSync(new URL('../.github/workflows/hosted-xero-recovery-carrier.yml',import.meta.url),'utf8');
+ assert.match(workflow,/timeout-minutes: 30/);assert.match(workflow,/v1 still expires/);
+});
+
+
+test('actual v2 carrier builds the new compiled host with its exact unmodified v2 plan',async()=>{
+ const t=packageTemplate(2),original=t.planJson,files=await buildCourierExpectedFiles({t,runId:'123'});
+ assert.equal(files.length,3);assert.equal(t.planJson,original);assert.equal(t.hostConfiguration.planJson,original);
+ assert.equal(JSON.parse(original).schemaVersion,2);assert(files.some(f=>f.path.endsWith('/index.mjs')&&f.bytes>1000));
+});
+
+
+test('late v2 first financial preflight refuses before any claim, intent, credential or provider access',async()=>{
+ for(const remaining of [899999,1]){const f=nativeFixture(2);try{
+  let commands=0,credentials=0;const runtime={};Object.defineProperty(runtime,'credentialAvailable',{get(){credentials++;assert.fail('No credential access before runway admission');}});
+  const before=Object.fromEntries(readdirSync(f.stateDirectory).map(n=>[n,hash(readFileSync(join(f.stateDirectory,n)))]));
+  const relay=await createNativeXeroRecoveryRelay({...f.options,now:()=>f.t.notAfter-remaining,nativeRuntime:runtime,capture:()=>{commands++;assert.fail('No claim or provider command before runway admission');}});
+  await assert.rejects(relay.submit(request(f.t)),{code:'XERO_COURIER_AUTHORITY_EXPIRED'});
+  assert.equal(commands,0);assert.equal(credentials,0);
+  assert.deepEqual(Object.fromEntries(readdirSync(f.stateDirectory).map(n=>[n,hash(readFileSync(join(f.stateDirectory,n)))])),before);
+ }finally{f.clean();}}
+});
+
+test('v2 runway is inclusive at900000ms and v1 retains its prior admission behavior',async()=>{
+ for(const [version,remaining]of [[2,900000],[1,1]]){const f=nativeFixture(version);try{
+  const commands=[],relay=await createNativeXeroRecoveryRelay({...f.options,now:()=>f.t.notAfter-remaining,capture:command=>{commands.push(command);assert.equal(command,'/usr/bin/python3');return{status:1,stdout:''};}});
+  // This synthetic completed Python refusal deliberately stops after admission;
+  // it is not an actual operational lease or provider proof.
+  await assert.rejects(relay.submit(request(f.t)),{code:'XERO_COURIER_STOPPED_OWNER_READBACK_REQUIRED'});
+  assert.deepEqual(commands,['/usr/bin/python3']);assert(readdirSync(f.stateDirectory).some(n=>n.endsWith('.claim-attempt.json')));
+ }finally{f.clean();}}
+ const f=nativePublicationFixture({version:2});try{
+  const relay=await createNativeXeroRecoveryRelay(f.options),result=await relay.submit(f.raw);
+  assert.equal(result.status,'submitted_acknowledged');assert.equal(result.result.nextStep,'custodyPrepare');assert.equal(f.claims(),1);
+ }finally{f.clean();}
 });

@@ -29,9 +29,11 @@ export function parseCourierTemplate(text) {
   need(typeof text === 'string' && Buffer.byteLength(text) <= 65536);
   const t = JSON.parse(text);
   need(exact(t, ['schemaVersion','kind','planJson','controllerSha','caller','hostConfiguration','readCredential','readAcceptance','login','issuedAt','notAfter','artifactCaptureAuthoritySha256'])
-    && t.schemaVersion === 1 && t.kind === 'fcos_xero_recovery_carrier_template_v1' && SHA.test(t.controllerSha)
+    && ((t.schemaVersion === 1 && t.kind === 'fcos_xero_recovery_carrier_template_v1')
+      || (t.schemaVersion === 2 && t.kind === 'fcos_xero_recovery_carrier_template_v2')) && SHA.test(t.controllerSha)
     && HASH.test(t.artifactCaptureAuthoritySha256), 'XERO_COURIER_TEMPLATE_INVALID');
-  const { plan, planSha256 } = parseXeroRecoveryStepPlan(t.planJson), c = t.caller;
+  const { plan, planSha256, maximumWindowMs } = parseXeroRecoveryStepPlan(t.planJson), c = t.caller;
+  need(t.schemaVersion === plan.schemaVersion, 'XERO_COURIER_TEMPLATE_INVALID');
   need(exact(c, ['ref','sha','workflowRef','workflowSha','jobWorkflowRef','jobWorkflowSha','jobName','environment','subject'])
     && /^refs\/heads\/[A-Za-z0-9][A-Za-z0-9_./-]{0,150}$/.test(c.ref) && !c.ref.includes('..') && SHA.test(c.sha) && c.sha === c.workflowSha
     && c.jobWorkflowSha === t.controllerSha && c.jobWorkflowRef === `${REPOSITORY}/.github/workflows/hosted-xero-recovery-carrier.yml@${t.controllerSha}`
@@ -39,9 +41,9 @@ export function parseCourierTemplate(text) {
     && c.jobName === 'xero-recovery-carrier' && c.environment === 'fcos-hosted-verification'
     && c.subject === `repo:${REPOSITORY}:environment:${c.environment}`, 'XERO_COURIER_CALLER_INVALID');
   need(Number.isSafeInteger(t.issuedAt) && Number.isSafeInteger(t.notAfter) && t.issuedAt >= plan.binding.issuedAt
-    && t.notAfter > t.issuedAt && t.notAfter <= plan.binding.notAfter && t.notAfter - t.issuedAt <= 900000
+    && t.notAfter > t.issuedAt && t.notAfter <= plan.binding.notAfter && t.notAfter - t.issuedAt <= maximumWindowMs
     && exact(t.login, ['origin','publicAuth']) && plain(t.hostConfiguration), 'XERO_COURIER_TEMPLATE_INVALID');
-  return { template: JSON.parse(JSON.stringify(t)), templateSha256: bytesHash(text), plan, planSha256 };
+  return { template: JSON.parse(JSON.stringify(t)), templateSha256: bytesHash(text), plan, planSha256, maximumWindowMs };
 }
 export function courierPrefix(t, runId) {
   const { plan } = parseCourierTemplate(typeof t === 'string' ? t : JSON.stringify(t));
@@ -203,7 +205,7 @@ export async function createNativeXeroRecoveryWarmDispatcher({ templateJson, cwd
   need(exact(a, ['schemaVersion','kind','accepted','reviewerId','scope','scopeSha256','rootReview','independentReview']) && a.schemaVersion === 1 && a.kind === 'fcos_root_admitted_original_xero_warm_dispatch_v1'
     && a.accepted === true && a.reviewerId === '/root' && canonical(a.scope) === canonical(scope) && a.scopeSha256 === hash(canonical(scope))
     && UUID.test(scope.dispatchId) && Number.isSafeInteger(scope.workflowId) && scope.workflowId > 0 && Number.isSafeInteger(scope.issuedAt) && Number.isSafeInteger(scope.notAfter)
-    && scope.issuedAt >= t.issuedAt && scope.notAfter <= t.notAfter && scope.notAfter > scope.issuedAt && scope.notAfter - scope.issuedAt <= 900000
+    && scope.issuedAt >= t.issuedAt && scope.notAfter <= t.notAfter && scope.notAfter > scope.issuedAt && scope.notAfter - scope.issuedAt <= parsed.maximumWindowMs
     && exact(scope.evidence, ['publicTemplateInstallation','originalAuthority','artifactCaptureAuthority','coordinationQuota']), 'XERO_COURIER_ROOT_ADMISSION_REQUIRED');
   const documents = {};
   for (const [key, ref] of Object.entries({ ...scope.evidence, rootReview: a.rootReview, independentReview: a.independentReview })) {
@@ -450,6 +452,11 @@ export async function createNativeXeroRecoveryRelay({ templateJson, binding, sta
       const request = parseCourierRequest(raw, t), ref = courierRequestRef(t, binding.runId, raw), chain = lineage();
       need((request.step!=='preflight'||!existsSync(statePath('claim-attempt'))) && !existsSync(statePath('stopped')) && !existsSync(statePath(`${request.step}.prepared`)) && request.step === chain.nextStep && request.previousResultSha256 === chain.previous, 'XERO_COURIER_CONSUMED_GET_ONLY');
       need(now() >= t.issuedAt && now() < t.notAfter, 'XERO_COURIER_AUTHORITY_EXPIRED');
+      // Admit a NEW v2 financial sequence only while its original immutable
+      // envelope still has15minutes. No claim/intent/credential write precedes
+      // this check; later steps retain the same original deadline.
+      need(plan.schemaVersion !== 2 || request.step !== 'preflight' || t.notAfter - now() >= 900000,
+        'XERO_COURIER_AUTHORITY_EXPIRED');
       // Before credential access, fail closed on the actual accepted guard/owner.
       let commitSha;
       try {

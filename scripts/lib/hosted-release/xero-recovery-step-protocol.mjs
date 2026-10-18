@@ -15,6 +15,13 @@ export const XERO_RECOVERY_STEPS = Object.freeze(['preflight', 'custodyPrepare',
 const BINDING = ['operationId', 'ownerThreadId', 'tenantId', 'actorId', 'expectedVersion', 'refreshLeaseId', 'probeId', 'requestId',
   'approvalSha256', 'sourceSha256', 'bindingSha256', 'organisationIdentitySha256', 'issuedAt', 'notAfter', 'credentialPreservationCompositeApproved'];
 const REQUEST = ['schemaVersion', 'operationId', 'planSha256', 'step', 'submissionId', 'previousResultSha256'];
+// A v2 envelope adds preparation runway. It does not restart an execution
+// clock, renew an old plan or alter the independent per-call/grant deadlines.
+export function recoveryStepPlanMaximumWindowMs(plan) {
+  if (plan?.schemaVersion === 1 && plan.kind === 'fcos_xero_recovery_step_plan_v1') return 900000;
+  if (plan?.schemaVersion === 2 && plan.kind === 'fcos_xero_recovery_step_plan_v2') return 1800000;
+  need(false);
+}
 function parsed(text, limit) {
   need(typeof text === 'string' && Buffer.byteLength(text) <= limit);
   const value = JSON.parse(text); need(recoveryStepCanonicalJson(value) === text); return value;
@@ -23,17 +30,17 @@ function parsed(text, limit) {
  * the exact compiled plan/source/destination/nonce independently. No lease JSON
  * or client-selected plan is accepted as proof of the original Mac lease. */
 export function parseXeroRecoveryStepPlan(planJson) {
-  const plan = parsed(planJson, 16384), b = plan?.binding;
-  need(exact(plan, ['schemaVersion', 'kind', 'binding']) && plan.schemaVersion === 1 && plan.kind === 'fcos_xero_recovery_step_plan_v1'
+  const plan = parsed(planJson, 16384), b = plan?.binding, maximumWindowMs = recoveryStepPlanMaximumWindowMs(plan);
+  need(exact(plan, ['schemaVersion', 'kind', 'binding'])
     && exact(b, BINDING) && HASH.test(b.operationId)
     && ['ownerThreadId', 'tenantId', 'actorId', 'refreshLeaseId', 'probeId', 'requestId'].every(k => UUID.test(b[k]))
     && ['approvalSha256', 'sourceSha256', 'bindingSha256'].every(k => HASH.test(b[k]))
     && (b.organisationIdentitySha256 === null || HASH.test(b.organisationIdentitySha256))
     && Number.isSafeInteger(b.expectedVersion) && b.expectedVersion > 0 && b.expectedVersion < 2147483647
     && Number.isSafeInteger(b.issuedAt) && Number.isSafeInteger(b.notAfter) && b.issuedAt > 0
-    && b.notAfter > b.issuedAt && b.notAfter - b.issuedAt <= 900000 && b.credentialPreservationCompositeApproved === true);
+    && b.notAfter > b.issuedAt && b.notAfter - b.issuedAt <= maximumWindowMs && b.credentialPreservationCompositeApproved === true);
   Object.freeze(b); Object.freeze(plan);
-  return { plan, planSha256: recoveryStepSha256(planJson) };
+  return { plan, planSha256: recoveryStepSha256(planJson), maximumWindowMs };
 }
 export function prepareXeroRecoveryStepRequest({ planJson, step, submissionId, previousResultSha256 } = {}) {
   const { plan, planSha256 } = parseXeroRecoveryStepPlan(planJson);

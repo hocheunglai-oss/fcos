@@ -24,9 +24,9 @@ const outcome = (step, renew) => ({
 // This in-memory backend is a deterministic failure fixture, NOT native DB,
 // actor or lease proof. Separate SQL tests cover the actual service-only CAS.
 function fixture(options = {}) {
-  const binding = { ...base(), ...options.binding }, planJson = json({ schemaVersion: 1, kind: 'fcos_xero_recovery_step_plan_v1', binding });
+  const binding = { ...base(), ...options.binding }, planJson = json({ schemaVersion: options.planVersion || 1, kind: `fcos_xero_recovery_step_plan_v${options.planVersion || 1}`, binding });
   const planSha256 = sha(planJson), steps = sequence(options.renew !== false), calls = [], actions = [];
-  let clock = T, record = null, faults = options.faults || {}, bearerAllowed = true;
+  let clock = options.now ?? T, record = null, faults = options.faults || {}, bearerAllowed = true;
   const controller = new AbortController();
   const store = {
     async claim(args) {
@@ -65,6 +65,7 @@ function fixture(options = {}) {
       actions.push(step); if (options.abortDuring === 'action') controller.abort(); assert.equal(claim.state, 'submitted_unknown'); assert.deepEqual(checkpoint, record.checkpoint);
       if (faults.action) throw Error('fixture unknown after possible provider submission');
       const result = structuredClone(outcome(step, options.renew !== false));
+      if (step === 'preflight' && options.currentObservation) result.observedAt = new Date(clock).toISOString();
       if (options.secretResult) result.accessToken = 'PRIVATE_TOKEN';
       if (options.advanceDuringAction) clock += options.advanceDuringAction;
       return result;
@@ -192,4 +193,29 @@ test('invalid request diagnostics cannot reflect unvalidated arbitrary fields', 
     assert.equal(e.step, null); assert.equal(e.submissionId, null); assert(!JSON.stringify(e).includes('PASTED')); return true;
   });
   assert.equal(f.calls.length, 0);
+});
+
+
+test('v2 provides only a new bounded envelope and never widens v1 or mismatched plan versions', () => {
+  const v1 = { schemaVersion: 1, kind: 'fcos_xero_recovery_step_plan_v1', binding: base() };
+  const v1Raw = json(v1), v1Hash = sha(v1Raw);
+  assert.equal(parseXeroRecoveryStepPlan(v1Raw).maximumWindowMs, 900000);
+  const v2 = { ...v1, schemaVersion: 2, kind: 'fcos_xero_recovery_step_plan_v2', binding: { ...base(), notAfter: T + 1800000 } };
+  assert.equal(parseXeroRecoveryStepPlan(json(v2)).maximumWindowMs, 1800000);
+  for (const invalid of [{ ...v1, binding: v2.binding }, { ...v2, schemaVersion: 1 }, { ...v2, kind: v1.kind },
+    { ...v2, schemaVersion: 3 }, { ...v2, binding: { ...v2.binding, notAfter: T + 1800001 } }])
+    assert.throws(() => parseXeroRecoveryStepPlan(json(invalid)));
+  assert.equal(json(v1), v1Raw); assert.equal(sha(v1Raw), v1Hash);
+});
+
+test('v2 admits fresh work after minute15 but a possible action at its original deadline stays unknown', async () => {
+  const fresh = fixture({ planVersion: 2, binding: { notAfter: T + 1800000 }, now: T + 900001, currentObservation: true });
+  assert.equal((await fresh.submit()).nextStep, 'custodyPrepare');
+  assert.deepEqual(fresh.actions, ['preflight']); assert(fresh.calls.includes('complete'));
+  // A larger envelope cannot promote old preparation metadata to a live result.
+  const stale = fixture({ planVersion: 2, binding: { notAfter: T + 1800000 }, now: T + 900001 });
+  await assert.rejects(stale.submit()); assert(!stale.calls.includes('complete')); assert.equal(stale.record.state, 'submitted_unknown');
+  const expired = fixture({ planVersion: 2, binding: { notAfter: T + 1800000 }, advanceDuringAction: 1800001 });
+  await assert.rejects(expired.submit()); assert.deepEqual(expired.actions, ['preflight']);
+  assert(!expired.calls.includes('complete')); assert.equal(expired.record.state, 'submitted_unknown');
 });

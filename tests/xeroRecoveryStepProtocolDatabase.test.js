@@ -10,15 +10,16 @@ import { PGlite } from '@electric-sql/pglite';
 import pg from 'pg';
 
 const MIGRATION = '20261018103446_xero_recovery_durable_step_protocol.sql';
+const WINDOW_MIGRATION = '20261019190000_xero_recovery_v2_window.sql';
 const TABLES = ['xero_recovery_step_operations', 'xero_recovery_step_attempts', 'xero_recovery_step_acknowledgements'];
 const TENANT = '10000000-0000-4000-8000-000000000001';
 const OTHER = '20000000-0000-4000-8000-000000000002';
 const canonical = value => JSON.stringify(value && typeof value === 'object' && !Array.isArray(value)
   ? Object.fromEntries(Object.keys(value).sort().map(key => [key, JSON.parse(canonical(value[key]))])) : value);
 const hash = value => createHash('sha256').update(value).digest('hex');
-const plan = changes => {
+const plan = (changes, version = 1) => {
   const now = Date.now();
-  const value = { schemaVersion: 1, kind: 'fcos_xero_recovery_step_plan_v1', binding: {
+  const value = { schemaVersion: version, kind: `fcos_xero_recovery_step_plan_v${version}`, binding: {
     operationId: 'a'.repeat(64), ownerThreadId: OTHER, tenantId: TENANT, actorId: '30000000-0000-4000-8000-000000000003',
     expectedVersion: 7, refreshLeaseId: '40000000-0000-4000-8000-000000000004', probeId: '50000000-0000-4000-8000-000000000005',
     requestId: '60000000-0000-4000-8000-000000000006', approvalSha256: 'b'.repeat(64), sourceSha256: 'c'.repeat(64),
@@ -64,6 +65,10 @@ async function fixture(t, native) {
     create table public.xero_contact_sync_connections(id text primary key,tenant_id text,token_version integer,expires_at timestamptz);
     grant select on public.xero_contact_sync_connections to service_role;`);
   await exec(await readFile(new URL(`../supabase/migrations/${MIGRATION}`, import.meta.url), 'utf8'));
+  const metadataSql = `select oid::text,proowner::text,proacl::text,prosecdef,proconfig from pg_proc where oid='public.xero_recovery_step_input(text,text,text,text)'::regprocedure`;
+  const originalInputMetadata = (await query(metadataSql)).rows;
+  await exec(await readFile(new URL(`../supabase/migrations/${WINDOW_MIGRATION}`, import.meta.url), 'utf8'));
+  assert.deepEqual((await query(metadataSql)).rows, originalInputMetadata, 'Additive replacement preserves function identity, owner, ACL, invoker and search_path');
   const role = async (name, sql, values = [], client = { query }) => {
     assert.ok(['anon', 'authenticated', 'service_role'].includes(name));
     await client.query(`set role ${name}`);
@@ -127,6 +132,42 @@ for (const native of [false, true]) {
       if (native) assert.ok(nativeAvailable, 'Native PostgreSQL is required by the explicit fixture gate.');
       const f = await fixture(t, native);
       const scenario = async (name, run, renewal = false, changes = {}) => t.test(name, async () => { await f.reset(renewal, changes); await run(); });
+
+      await scenario('v1 unknown and its original raw plan cannot be converted to an extended v2 plan', async () => {
+        const original = f.plan, q = request(original); await f.rpc('claim', original, q);
+        const converted = plan({ ...original.value.binding, notAfter: original.value.binding.issuedAt + 1800000 }, 2);
+        await refused(() => f.rpc('claim', converted, request(converted)));
+        await refused(() => f.rpc('complete', converted, request(converted, 'preflight', null, { submissionId: q.value.submissionId }), canonical(f.result('preflight'))));
+        const saved = await f.rpc('readback', original); assert.equal(saved.state, 'submitted_unknown');
+        const row = (await f.query('select plan_json,plan_sha256 from public.xero_recovery_step_operations where operation_id=$1', [original.value.binding.operationId])).rows[0];
+        assert.equal(row.plan_json, original.json); assert.equal(row.plan_sha256, original.sha);
+        assert.deepEqual(await f.counts(), { operations: 1, attempts: 1, acknowledgements: 0 });
+      });
+
+      await scenario('v2 alone admits a 30-minute envelope while v1 and mixed versions retain their old refusal', async () => {
+        const now = Date.now(), later = { issuedAt: now - 901000, notAfter: now + 899000 };
+        const v1 = plan(later), v2 = plan(later, 2), excessive = plan({ issuedAt: now, notAfter: now + 1800001 }, 2);
+        await refused(() => f.rpc('claim', v1, request(v1)));
+        await refused(() => f.rpc('claim', excessive, request(excessive)));
+        for (const change of [{ schemaVersion: 1 }, { schemaVersion: 3 }, { schemaVersion: null }, { schemaVersion: '2' },
+          { kind: null }, { kind: 2 }, { kind: true }, { kind: [] }, { kind: {} }, { kind: '' }]) {
+          const value = { ...v2.value, ...change }, json = canonical(value), mixed = { value, json, sha: hash(json) };
+          await refused(() => f.rpc('claim', mixed, request(mixed)));
+        }
+        assert.deepEqual(await f.counts(), { operations: 0, attempts: 0, acknowledgements: 0 });
+        const q = request(v2); assert.equal((await f.rpc('claim', v2, q)).decision, 'execute');
+        assert.equal((await f.rpc('readback', v2)).state, 'submitted_unknown');
+        await refused(() => f.rpc('claim', v2, q));
+        // Existing approval uniqueness blocks a new v2 operation adopting this
+        // outcome, and a changed deadline cannot acknowledge its original claim.
+        const other = plan({ ...later, operationId: 'e'.repeat(64) }, 2);
+        await refused(() => f.rpc('claim', other, request(other)));
+        const changed = plan({ ...later, notAfter: later.notAfter - 1 }, 2);
+        await refused(() => f.rpc('complete', changed, request(changed, 'preflight', null, { submissionId: q.value.submissionId }), canonical(f.result('preflight'))));
+        assert.deepEqual(await f.counts(), { operations: 1, attempts: 1, acknowledgements: 0 });
+        const complete = await f.rpc('complete', v2, q, canonical(f.result('preflight')));
+        assert.equal(complete.state, 'ready'); assert.equal(complete.nextStep, 'custodyPrepare');
+      });
 
       for (const renew of [false, true]) await scenario(`fixed ${renew ? 'renewal' : 'fresh-session'} branch completes without a replay route`, async () => {
         for (const step of f.steps()) await f.accept(step);

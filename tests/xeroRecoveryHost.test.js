@@ -44,8 +44,8 @@ async function fixture(t, change = {}) {
   const binding = { operationId: 'a'.repeat(64), ownerThreadId: owner, tenantId, actorId, expectedVersion: 7,
     refreshLeaseId: '40000000-0000-4000-8000-000000000004', probeId: '50000000-0000-4000-8000-000000000005',
     requestId: '60000000-0000-4000-8000-000000000006', approvalSha256: 'b'.repeat(64), sourceSha256: 'c'.repeat(64), bindingSha256: 'd'.repeat(64),
-    organisationIdentitySha256: null, issuedAt: at - 1000, notAfter: at + 600000, credentialPreservationCompositeApproved: true };
-  const planJson = canonical({ schemaVersion: 1, kind: 'fcos_xero_recovery_step_plan_v1', binding });
+    organisationIdentitySha256: null, issuedAt: at - 1000, notAfter: at + 600000, credentialPreservationCompositeApproved: true, ...change.planBinding };
+  const planJson = canonical({ schemaVersion: change.planVersion || 1, kind: `fcos_xero_recovery_step_plan_v${change.planVersion || 1}`, binding });
   const caller = { ref: 'refs/heads/features', sha: 'e'.repeat(40), workflowSha: 'e'.repeat(40),
     workflowRef: 'hocheunglai-oss/fcos/.github/workflows/xero-carrier.yml@refs/heads/features',
     jobWorkflowRef: `hocheunglai-oss/fcos/.github/workflows/xero-private.yml@${'f'.repeat(40)}`, jobWorkflowSha: 'f'.repeat(40),
@@ -75,7 +75,7 @@ async function fixture(t, change = {}) {
     revoke all on public.xero_contact_sync_connections from public,anon,authenticated,service_role;
     grant select,insert,update on public.xero_contact_sync_connections to service_role;`);
   await db.exec(await readXeroSharedControlFixture());
-  for (const name of ['20261018100701_xero_recovery_private_returned_token_custody.sql', '20261018103446_xero_recovery_durable_step_protocol.sql']) {
+  for (const name of ['20261018100701_xero_recovery_private_returned_token_custody.sql', '20261018103446_xero_recovery_durable_step_protocol.sql', '20261019190000_xero_recovery_v2_window.sql']) {
     await db.exec(await readFile(new URL(`../supabase/migrations/${name}`, import.meta.url), 'utf8'));
   }
   await db.query("insert into public.user_profiles values($1,true,'administrator')", [actorId]);
@@ -324,4 +324,17 @@ for(const lost of ['xero_recovery_step_complete','xero_recovery_step_claim'])tes
   assert.equal(validateOwnerReadbackResult(result.body,{plan:JSON.parse(f.planJson),planSha256}).state,result.body.state);assert.equal(result.body.operationId,f.binding.operationId);assert.equal(result.body.planSha256,planSha256);assert.equal(result.body.executionAuthorityGranted,false);
   assert.ok(f.calls.slice(before).every(c=>c.method==='GET'));assert.equal(f.calls.slice(before).filter(c=>c.path.endsWith('xero_recovery_step_readback')).length,1);
   assert.equal((await f.send()).status,403); // stopped original POST stays stopped
+});
+
+
+test('physical v2 TLS host admits its original plan after minute15 with fresh real JWTs and actual SQL', async t => {
+  const at = Date.now(), f = await fixture(t, { planVersion: 2, planBinding: { issuedAt: at - 901000, notAfter: at + 899000 } });
+  const result = await f.send(); assert.equal(result.status, 200);
+  assert.equal(result.body.step, 'preflight'); assert.equal(result.body.nextStep, 'custodyPrepare');
+  assert.equal(f.calls.filter(c => c.path === '/rest/v1/rpc/xero_recovery_step_claim').length, 1);
+  assert.equal(f.calls.filter(c => c.path === '/rest/v1/rpc/xero_recovery_step_complete').length, 1);
+  assert(f.calls.every(c => !c.path.includes('Organisations') && !c.path.includes('/connect/token')));
+  const rows = (await f.db.query('select plan_json from public.xero_recovery_step_operations')).rows;
+  assert.equal(rows.length, 1); assert.equal(rows[0].plan_json, f.planJson);
+  assert.equal(JSON.parse(rows[0].plan_json).binding.issuedAt, at - 901000);
 });
