@@ -439,3 +439,14 @@ test('v2 runway is inclusive at900000ms and v1 retains its prior admission behav
   assert.equal(result.status,'submitted_acknowledged');assert.equal(result.result.nextStep,'custodyPrepare');assert.equal(f.claims(),1);
  }finally{f.clean();}
 });
+
+test('first downloaded-source mismatch stops before further source reads or owner access',async()=>{
+ const t=packageTemplate(),files=await buildCourierExpectedFiles({t,runId:'123'}),{tree}=providerInventory(files),f=readerFixture(tree);
+ t.readCredential=f.t.readCredential;t.readAcceptance=f.t.readAcceptance;
+ let downloaded=0;const original=f.fetchImpl;
+ await assert.rejects(verifyCourierDeploymentBytes({...f,t,locator:{schemaVersion:1,kind:'fcos_xero_host_locator_v1',deploymentId:'dpl_fixture',url:'https://fixed.vercel.app'},expectedFiles:files,signal:new AbortController().signal,now:()=>T,fetchImpl:async(u,o)=>{
+  if(new URL(u).pathname.startsWith('/v8/')){downloaded++;return new Response('SYNTHETIC_SUBSTITUTED_BYTES');}
+  return original(u,o);
+ }}),{code:'XERO_COURIER_SOURCE_BYTES_UNPROVEN'});
+ assert.equal(downloaded,1);assert(f.calls.every(u=>new URL(u).hostname==='api.vercel.com'));
+});

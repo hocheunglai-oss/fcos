@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {validateXeroRecoverySourceInventory} from '../scripts/lib/hosted-release/xero-recovery-source-inventory.mjs';
+import {validateXeroRecoverySourceInventory,validateXeroRecoverySourceContents} from '../scripts/lib/hosted-release/xero-recovery-source-inventory.mjs';
 
 // Exact shape observed from the actual credential-free Vercel deployment.
 // File contents below are harmless synthetic fixtures, never provider proof.
@@ -50,3 +50,23 @@ test('unknown properties, types, modes and hostile path names fail with no paylo
   for(const change of [r=>r.secret='PRIVATE-MUST-NOT-REFLECT',r=>r.mode=33188,r=>r.type='symlink',r=>r.name='..',r=>r.name='x\nPRIVATE-MUST-NOT-REFLECT']){const f=fixture();change(rowsAt(f.tree,'src/.vercel/output')[0]);assert.throws(()=>validateXeroRecoverySourceInventory(f),e=>e.code==='XERO_RECOVERY_SOURCE_INVENTORY_REFUSED'&&!e.message.includes('PRIVATE'));}
 });
 test('untrusted leaf order is irrelevant but complete exact layout remains mandatory',()=>{const f=fixture();f.tree.reverse();rowsAt(f.tree,'src/.vercel/output').reverse();assert.equal(validateXeroRecoverySourceInventory(f).sourceFiles.length,3);rejected({...f,mode:'anything'});});
+
+test('shared downloaded-byte receipt accepts provider encodings and never claims compiled bytes or authority',()=>{
+  for(const mode of ['probe','host'])for(const encoding of ['raw','string','data']){
+    const f=fixture(mode),inventory=validateXeroRecoverySourceInventory(f);
+    const contents=inventory.sourceFiles.map(file=>({uid:file.uid,responseBytes:encoding==='raw'?Buffer.from(file.contentBase64,'base64'):Buffer.from(JSON.stringify(encoding==='string'?file.contentBase64:{data:file.contentBase64}))}));
+    const proof=validateXeroRecoverySourceContents({...f,contents});
+    assert.equal(proof.kind,'fcos_vercel_source_contents_v1');assert.equal(proof.sourceBytesProven,true);
+    assert.equal(proof.compiledOutputBytesProven,false);assert.equal(proof.executionAuthorityGranted,false);
+    assert.equal(proof.sourceFiles.length,3);assert.ok(Object.isFrozen(proof));assert.ok(Object.isFrozen(proof.sourceFiles));
+    assert.ok(proof.sourceFiles.every(file=>Object.isFrozen(file)&&Object.keys(file).sort().join(',')==='bytes,path,sha256,uid'));
+    assert.doesNotMatch(JSON.stringify(proof),/SYNTHETIC|contentBase64|OriginalSourceBytes|SourceContentBytes/);
+  }
+});
+test('downloaded source contract denies stale boolean receipts, missing/duplicate/foreign UIDs and altered bytes',()=>{
+  const f=fixture('host'),inventory=validateXeroRecoverySourceInventory(f);
+  const contents=inventory.sourceFiles.map(file=>({uid:file.uid,responseBytes:Buffer.from(file.contentBase64,'base64')}));
+  const cases=[undefined,[],contents.slice(1),[contents[0],contents[0],contents[2]],contents.map((row,i)=>i?row:{...row,uid:'a'.repeat(40)}),contents.map((row,i)=>i?row:{...row,responseBytes:Buffer.concat([row.responseBytes,Buffer.from('x')])}),contents.map((row,i)=>i?row:{...row,responseBytes:Buffer.from(JSON.stringify({data:row.responseBytes.toString('base64'),sourceBytesProven:true}))})];
+  for(const rows of cases)assert.throws(()=>validateXeroRecoverySourceContents({...f,contents:rows,allThreeOriginalSourceBytesProven:true}),{code:'XERO_RECOVERY_SOURCE_INVENTORY_REFUSED'});
+  assert.throws(()=>validateXeroRecoverySourceContents({...f,tree:[],contents}),{code:'XERO_RECOVERY_SOURCE_INVENTORY_REFUSED'});
+});

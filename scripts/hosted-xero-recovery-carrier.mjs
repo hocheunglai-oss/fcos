@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { validateXeroRecoverySourceInventory } from './lib/hosted-release/xero-recovery-source-inventory.mjs';
+import { validateXeroRecoverySourceInventory, validateXeroRecoverySourceContent } from './lib/hosted-release/xero-recovery-source-inventory.mjs';
 import { xeroOwnerReadbackAudience } from './lib/hosted-release/xero-recovery-host.mjs';
 import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
 import { loginLegacyHostedRuntime, validateLegacyRuntimePublicAuth } from './lib/hosted-release/legacy-hosted-runtime-login.mjs';
@@ -82,11 +82,11 @@ export async function verifyCourierDeploymentBytes({t,locator,expectedFiles,env,
   let files;try{files=validateXeroRecoverySourceInventory({tree,expectedFiles,mode:'host'}).sourceFiles;}catch{throw refusal('XERO_COURIER_SOURCE_BYTES_UNPROVEN');}
   need(Array.isArray(expectedFiles) && expectedFiles.length===3 && files.length===3 && new Set(files.map(f=>f.path)).size===3
     && files.every((f,i)=>f.path===expectedFiles[i].path && HASH.test(expectedFiles[i].sha256)), 'XERO_COURIER_SOURCE_BYTES_UNPROVEN');
-  for(let i=0;i<files.length;i++) { const raw=await read(`/v8/deployments/${locator.deploymentId}/files/${files[i].uid}`,4194304), expected=expectedFiles[i];
-    // Documented JSON/base64 as well as exact raw source bytes are safe only
-    // because the final comparison uses the independently rebuilt exact bytes.
-    const candidates=[raw];try{const j=JSON.parse(raw.toString('utf8'));if(typeof j==='string')candidates.push(Buffer.from(j,'base64'));if(exact(j,['data'])&&typeof j.data==='string')candidates.push(Buffer.from(j.data,'base64'));}catch{}
-    need(candidates.some(b=>b.length===expected.bytes && bytesHash(b)===expected.sha256 && b.toString('base64')===expected.contentBase64), 'XERO_COURIER_SOURCE_BYTES_UNPROVEN'); }
+  for(const file of files){
+    const responseBytes=await read(`/v8/deployments/${locator.deploymentId}/files/${file.uid}`,4194304);
+    try{validateXeroRecoverySourceContent({file,responseBytes});}
+    catch{throw refusal('XERO_COURIER_SOURCE_BYTES_UNPROVEN');}
+  }
   need(!signal.aborted); return {origin:locator.url,deploymentId:locator.deploymentId};
 }
 async function ownOidc(env,audience,fetchImpl,signal) {

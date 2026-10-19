@@ -37,3 +37,37 @@ metadata/artifact freshness remains independently at most 1,800 seconds from its
 actual capture; the v2 envelope cannot extend that evidence. The reusable job has
 an outer30-minute timeout, while v1 templates and owner-readback scopes still stop
 at their own immutable shorter deadlines.
+
+## Qualify the transport before opening the envelope
+
+Complete source review and the joined local transport check before arming a new
+plan. The native relay publishes the locator through its fixed `publish-locator`
+entrypoint. It constructs the Git ref and GitHub status body internally; do not
+POST the `courierPublicationStatus` descriptor as a GitHub request. The status
+requires the authenticated platform creator and exact run, source, payload and
+commit binding. A GitHub status is publication evidence, not financial authority.
+
+The locator uses the separately reviewed Production orchestration lease. It
+cannot claim, resolve or adopt the financial lease. Each publication phase has a
+consumed durable intent. An unknown push stops before status publication, and an
+unknown status stops before requests; neither may be retried. Actual host and
+financial admission still require their own original exact scopes and evidence.
+
+Hosted verification and native material review share
+`validateXeroRecoverySourceContent` / `validateXeroRecoverySourceContents`.
+Inventory UIDs or boolean fields in historical receipts do not establish source
+contents. Compare every downloaded file against the exact rebuilt inventory,
+length, SHA1, SHA256 and bytes. The sanitized versioned source-content receipt
+explicitly proves no compiled lambda bytes and grants no execution authority.
+Failing the first file stops before reading another file. Preserve historical
+receipt fields and original timestamps rather than rewriting old evidence to
+match the current contract.
+
+One local success fixture must connect the real request publication, carrier, host,
+artifact and native acknowledgement entrypoints. It must use the same returned
+HTTP acknowledgement for artifact upload and native decoding, then stop before
+any next financial request. The fixed native locator command is checked separately;
+the joined fixture seeds its locator as synthetic provider input. Inert
+browser/provider fixtures and local SQL checks
+are regression evidence only: actual hosted source, identity, credentials,
+quota, outcome, preservation and cleanup checks remain required.

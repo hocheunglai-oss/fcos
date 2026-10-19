@@ -54,3 +54,37 @@ export function validateXeroRecoverySourceInventory({tree,expectedFiles,mode}={}
     compiledOutput:Object.freeze({path:outputPath,type:'lambda',uid:actualLeaves.get(outputPath).uid}),
     sourceBytesProven:false,compiledOutputBytesProven:false,executionAuthorityGranted:false});
 }
+
+// Shared source-content contract for hosted admission and native reviews.
+// This is a byte comparison, never an authority or compiled-output receipt.
+export function validateXeroRecoverySourceContent({file,responseBytes}={}) {
+  need(exact(file,['path','sha256','bytes','contentBase64','uid','inventoryPath'])
+    &&typeof file.path==='string'&&file.inventoryPath==='src/'+file.path
+    &&/^[a-f0-9]{40}$/.test(file.uid)&&/^[a-f0-9]{64}$/.test(file.sha256)
+    &&Number.isSafeInteger(file.bytes)&&file.bytes>0&&file.bytes<2*1024*1024
+    &&typeof file.contentBase64==='string'&&Buffer.isBuffer(responseBytes)
+    &&responseBytes.length>0&&responseBytes.length<=4194304);
+  // Vercel may return raw bytes or documented JSON/base64 envelopes.
+  const candidates=[responseBytes];
+  try{const value=JSON.parse(responseBytes.toString('utf8'));
+    if(typeof value==='string')candidates.push(Buffer.from(value,'base64'));
+    if(exact(value,['data'])&&typeof value.data==='string')candidates.push(Buffer.from(value.data,'base64'));
+  }catch{/* Raw source need not be JSON. */}
+  need(candidates.some(bytes=>bytes.length===file.bytes&&hash('sha1',bytes)===file.uid
+    &&hash('sha256',bytes)===file.sha256&&bytes.toString('base64')===file.contentBase64));
+  return Object.freeze({path:file.path,uid:file.uid,bytes:file.bytes,sha256:file.sha256});
+}
+export function validateXeroRecoverySourceContents({tree,expectedFiles,mode,contents}={}) {
+  // Revalidate the full exact inventory; do not accept a forged inventory result.
+  const inventory=validateXeroRecoverySourceInventory({tree,expectedFiles,mode});
+  need(Array.isArray(contents)&&contents.length===inventory.sourceFiles.length);
+  const downloaded=new Map();
+  for(const row of contents){
+    need(exact(row,['uid','responseBytes'])&&typeof row.uid==='string'&&!downloaded.has(row.uid));
+    downloaded.set(row.uid,row.responseBytes);
+  }
+  const sourceFiles=inventory.sourceFiles.map(file=>validateXeroRecoverySourceContent({file,responseBytes:downloaded.get(file.uid)}));
+  return Object.freeze({schemaVersion:1,kind:'fcos_vercel_source_contents_v1',mode,
+    sourceFiles:Object.freeze(sourceFiles),sourceBytesProven:true,
+    compiledOutputBytesProven:false,executionAuthorityGranted:false});
+}

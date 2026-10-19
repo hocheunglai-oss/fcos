@@ -9,6 +9,7 @@ import { parseXeroRecoveryStepPlan, recoveryStepCanonicalJson as canonical, reco
   validateXeroRecoveryStepResult, nextXeroRecoveryStep, XERO_RECOVERY_STEPS } from './xero-recovery-step-protocol.mjs';
 import { decodeRuntimeMaterialArchive, RUNTIME_MATERIAL_FILENAME } from '../runtime-compatibility-material-transport.mjs';
 import { fcosConnectionIdentifier } from '../../../config/fcosConnections.js';
+import { validateVercelIngressTarget } from './xero-recovery-vercel-ingress.mjs';
 export { canonical, hash, RUNTIME_MATERIAL_FILENAME };
 export const REPOSITORY = fcosConnectionIdentifier('github', 'Repository');
 export const FEATURES_OWNER = '01a0f08b-7fcb-7870-9edc-343e16052b62';
@@ -21,7 +22,7 @@ const plain = v => v !== null && typeof v === 'object' && Object.getPrototypeOf(
 export const exact = (v, keys) => plain(v) && Object.keys(v).length === keys.length && keys.every(k => Object.hasOwn(v, k));
 export const refusal = code => Object.assign(new Error(code), { code });
 export const need = (v, code = 'XERO_COURIER_REFUSED') => { if (!v) throw refusal(code); };
-const SAFE_CODES = new Set(['XERO_COURIER_RESPONSE_REFUSED','XERO_COURIER_PUBLICATION_INVALID','XERO_COURIER_PUBLICATION_UNKNOWN','XERO_COURIER_READBACK_ADMISSION_REQUIRED','XERO_COURIER_READBACK_RESULT_INVALID','XERO_COURIER_READBACK_DISPATCH_UNKNOWN','XERO_COURIER_LOCAL_REPOSITORY_MISMATCH','XERO_COURIER_PACKAGE_BUILD_REFUSED','XERO_COURIER_CANONICAL_STATE_REQUIRED','XERO_COURIER_ROOT_ADMISSION_REQUIRED','XERO_COURIER_ORIGINAL_CLAIM_REQUIRED','XERO_COURIER_SOURCE_BYTES_UNPROVEN','XERO_COURIER_OIDC_INVALID','XERO_COURIER_AUTHORITY_EXPIRED','XERO_COURIER_CONSUMED_GET_ONLY','XERO_COURIER_REMOTE_OUTCOME_UNKNOWN','XERO_COURIER_ACK_TIMEOUT_UNKNOWN','XERO_COURIER_NATIVE_COMMAND_UNKNOWN','XERO_COURIER_GITHUB_READ_UNKNOWN','XERO_COURIER_HTTP_OUTCOME_UNKNOWN','XERO_COURIER_CAPTURE_UNKNOWN','XERO_COURIER_RUN_MISMATCH','XERO_COURIER_REQUEST_INVALID','XERO_COURIER_TEMPLATE_INVALID','XERO_COURIER_NONCE_REQUIRED','XERO_COURIER_ACK_MISMATCH','XERO_COURIER_RESULT_MISMATCH']);
+const SAFE_CODES = new Set(['XERO_COURIER_RESPONSE_REFUSED','XERO_COURIER_PUBLICATION_INVALID','XERO_COURIER_PUBLICATION_UNKNOWN','XERO_COURIER_READBACK_ADMISSION_REQUIRED','XERO_COURIER_READBACK_RESULT_INVALID','XERO_COURIER_READBACK_DISPATCH_UNKNOWN','XERO_COURIER_LOCAL_REPOSITORY_MISMATCH','XERO_COURIER_PACKAGE_BUILD_REFUSED','XERO_COURIER_CANONICAL_STATE_REQUIRED','XERO_COURIER_ROOT_ADMISSION_REQUIRED','XERO_COURIER_ORIGINAL_CLAIM_REQUIRED','XERO_COURIER_SOURCE_BYTES_UNPROVEN','XERO_COURIER_OIDC_INVALID','XERO_COURIER_AUTHORITY_EXPIRED','XERO_COURIER_CONSUMED_GET_ONLY','XERO_COURIER_REMOTE_OUTCOME_UNKNOWN','XERO_COURIER_ACK_TIMEOUT_UNKNOWN','XERO_COURIER_NATIVE_COMMAND_UNKNOWN','XERO_COURIER_GITHUB_READ_UNKNOWN','XERO_COURIER_HTTP_OUTCOME_UNKNOWN','XERO_COURIER_CAPTURE_UNKNOWN','XERO_COURIER_RUN_MISMATCH','XERO_COURIER_REQUEST_INVALID','XERO_COURIER_TEMPLATE_INVALID','XERO_COURIER_NONCE_REQUIRED','XERO_COURIER_ACK_MISMATCH','XERO_COURIER_RESULT_MISMATCH','XERO_COURIER_LOCATOR_CONSUMED','XERO_COURIER_LOCATOR_LEASE_REQUIRED','XERO_COURIER_LOCATOR_TARGET_MISMATCH']);
 export const safeCode = e => { try { const code=e?.code;return SAFE_CODES.has(code) ? code : 'XERO_COURIER_STOPPED_OWNER_READBACK_REQUIRED'; } catch { return 'XERO_COURIER_STOPPED_OWNER_READBACK_REQUIRED'; } };
 export const bytesHash = value => createHash('sha256').update(value).digest('hex');
 const gitHash = (kind, b) => createHash('sha1').update(`${kind} ${b.length}\0`).update(b).digest('hex');
@@ -324,7 +325,7 @@ export function createCourierReadBudget({now=Date.now,wait=ms=>new Promise(r=>se
     await wait(Math.max(1,reads[0]+60000-at));}};
 }
 export const canonicalCourierStateDirectory=(operationId,controlRoot=ROOT)=>{need(HASH.test(operationId));return join(controlRoot,'.fcos-cli/outputs/hosted-xero-recovery-courier',operationId);};
-export function nativeCourierSourcePins(){return Object.fromEntries(['scripts/lib/hosted-release/xero-recovery-native-relay.mjs','scripts/hosted-xero-recovery-carrier.mjs','.github/workflows/hosted-xero-recovery-carrier.yml','.github/qualification/hosted-release-bootstrap.yml','scripts/lib/hosted-release/xero-recovery-source-inventory.mjs','scripts/lib/guarded-provider-write.mjs'].map(p=>[p,bytesHash(regular(fileURLToPath(new URL('../../../'+p,import.meta.url))))]));}
+export function nativeCourierSourcePins(){return Object.fromEntries(['scripts/lib/hosted-release/xero-recovery-native-relay.mjs','scripts/hosted-xero-recovery-carrier.mjs','.github/workflows/hosted-xero-recovery-carrier.yml','.github/qualification/hosted-release-bootstrap.yml','scripts/lib/hosted-release/xero-recovery-source-inventory.mjs','scripts/lib/guarded-provider-write.mjs','scripts/lib/hosted-release/xero-recovery-vercel-ingress.mjs'].map(p=>[p,bytesHash(regular(fileURLToPath(new URL('../../../'+p,import.meta.url))))]));}
 export function assertNativeCourierAdmission({template:t,templateSha256,plan,planSha256,binding,stateDirectory,controlRoot=ROOT,coordinatorEpoch}) {
   const fixed=canonicalCourierStateDirectory(plan.binding.operationId,controlRoot);need(stateDirectory===fixed,'XERO_COURIER_CANONICAL_STATE_REQUIRED');
   need(existsSync(join(fixed,'root-native-admission.json')),'XERO_COURIER_ROOT_ADMISSION_REQUIRED');const raw=regular(join(fixed,'root-native-admission.json'),65536);need(bytesHash(raw)===binding.rootAdmissionSha256,'XERO_COURIER_ROOT_ADMISSION_REQUIRED');const a=JSON.parse(raw);
@@ -560,8 +561,116 @@ export async function createNativeXeroRecoveryRelay({ templateJson, binding, sta
     }
   });
 }
-export async function nativeRelayMain(args = process.argv.slice(2)) {
+
+// Production orchestration only. This path can assert an existing8ed lease;
+// it cannot claim/adopt/renew/resolve a lease or grant financial authority.
+const LOCATOR_PYTHON = String.raw`import json,sys,hashlib,types,os,stat
+from pathlib import Path
+v=json.load(sys.stdin)
+def raw(p):
+ p=Path(p)
+ if any(x.is_symlink() for x in [p,*p.parents]): raise ValueError('path')
+ fd=os.open(p,os.O_RDONLY|os.O_NOFOLLOW)
+ with os.fdopen(fd,'rb') as f:
+  s=os.fstat(f.fileno())
+  if not stat.S_ISREG(s.st_mode) or s.st_nlink!=1: raise ValueError('file')
+  return f.read()
+c=json.loads(raw(v['workflow']))['unifiedCoordinator'];g=c['writeLeaseHelper'];source=raw(g['path'])
+if g['sha256']!='8ed4eda312b62c3b02c3a0a768ddd024a2a819af5f0f1194da47ef2a2d62fd38' or hashlib.sha256(source).hexdigest()!=g['sha256'] or not g['localCoordinationGuardAccepted'] or g['independentReviewPending'] or g['providerAuthority']: raise ValueError('guard')
+for key in ['rootAcceptance','independentRevisionReview','independentFinalScopeAddendum']:
+ if hashlib.sha256(raw(g[key]['path'])).hexdigest()!=g[key]['sha256']: raise ValueError('review')
+m=types.ModuleType('actual_guard');m.__file__=g['path'];exec(compile(source,g['path'],'exec'),m.__dict__)
+e=v['expected'];item=c['objectives']['production']
+if v['mode']!='assert' or e['objective']!='production' or e['epoch']!=c['epoch'] or e['ownerThreadId']!=v['features'] or not e['operationId'].startswith('xero-locator-publication-'): raise ValueError('scope')
+if m.OWNERS.get('production')!=v['features'] or c['ownerThreadId']!=v['features'] or item['ownerThreadId']!=v['features']: raise ValueError('owner')
+if c['status']!='active' or item['status']!='active' or item['retired']: raise ValueError('inactive')
+base=Path(c['writeLeasePath']).parent
+if Path(g['path']).parent.parent!=base or Path(c['writeLeasePath'])!=base/'live-provider-write-lease.json': raise ValueError('lease_path')
+lease=json.loads(raw(c['writeLeasePath']))
+if lease!=v['lease'] or any(lease.get(k)!=e[k] for k in e): raise ValueError('assert')
+print(json.dumps(lease))
+`;
+export function prepareNativeXeroLocatorPublication({templateJson,binding,epoch}) {
+  const {template:t,templateSha256,plan,planSha256}=parseCourierTemplate(templateJson);
+  try{validateVercelIngressTarget(t.hostConfiguration.target);}catch{throw refusal('XERO_COURIER_LOCATOR_TARGET_MISMATCH');}
+  need(t.hostConfiguration.target.controllerSha===t.controllerSha,'XERO_COURIER_LOCATOR_TARGET_MISMATCH');
+  need(exact(binding,['runId','jobId','hostOrigin','deploymentId']) && /^[1-9][0-9]{0,19}$/.test(binding.runId)
+    && Number.isSafeInteger(Number(binding.runId)) && Number.isSafeInteger(binding.jobId) && binding.jobId>0
+    && /^https:\/\/[a-z0-9-]+\.vercel\.app$/.test(binding.hostOrigin) && /^dpl_[A-Za-z0-9]+$/.test(binding.deploymentId)
+    && typeof epoch==='string' && /^[A-Za-z0-9_-]{1,128}$/.test(epoch),'XERO_COURIER_LOCATOR_TARGET_MISMATCH');
+  const locatorJson=canonical({schemaVersion:1,kind:'fcos_xero_host_locator_v1',deploymentId:binding.deploymentId,url:binding.hostOrigin});
+  const ref=`${courierPrefix(t,binding.runId)}/locator`,scope={schemaVersion:1,kind:'fcos_native_xero_locator_publication_scope_v1',templateSha256,planSha256,binding:{...binding},
+    sourcePins:nativeCourierSourcePins(),maximumRefPushes:1,maximumStatusPosts:1,financialAuthorityGranted:false};
+  const scopeSha256=hash(canonical(scope));return {scope,scopeSha256,locatorJson,ref,expected:{epoch,objective:'production',ownerThreadId:FEATURES_OWNER,operationId:`xero-locator-publication-${plan.binding.operationId}`,bindingSha256:scopeSha256}};
+}
+function nativeIncludedJson(output,status,{complete=false}={}) {
+  need(typeof output==='string' && Buffer.byteLength(output)<=262144 && new RegExp(`^HTTP/[0-9.]+ ${status}(?: |\\r?\\n)`).test(output),'XERO_COURIER_PUBLICATION_UNKNOWN');
+  const separator=output.match(/\r?\n\r?\n/);need(separator,'XERO_COURIER_PUBLICATION_UNKNOWN');
+  if(complete)need(!/^link\s*:/im.test(output.slice(0,separator.index)),'XERO_COURIER_PUBLICATION_INVALID');
+  return JSON.parse(output.slice(separator.index+separator[0].length));
+}
+export async function createNativeXeroRecoveryLocatorPublisher({templateJson,binding,lease:held,cwd=process.cwd(),controlRoot=ROOT,capture,nativeRuntime,vercelRuntime,now=Date.now,wait=ms=>new Promise(r=>setTimeout(r,ms))}={}) {
+  need(typeof now==='function'&&typeof wait==='function'&&((nativeRuntime===undefined&&vercelRuntime===undefined)||typeof capture==='function'));
+  const {template:t,templateSha256,plan,planSha256}=parseCourierTemplate(templateJson);
+  const nav=JSON.parse(regular(join(controlRoot,'.fcos-cli/release-state.json'))),board=JSON.parse(regular(nav.workboardPath)),workflow=board.checkpointPaths.workflow;
+  const coordinator=JSON.parse(regular(workflow)).unifiedCoordinator,prepared=prepareNativeXeroLocatorPublication({templateJson,binding,epoch:coordinator.epoch});
+  binding=JSON.parse(JSON.stringify(binding));held=JSON.parse(JSON.stringify(held));const {expected,scopeSha256,locatorJson,ref}=prepared;
+  need(exact(held,[...Object.keys(expected),'leaseId','coordinationOnly','providerAuthorityGranted','uncertainOutcomeRequiresReadback'])
+    &&Object.entries(expected).every(([k,v])=>held[k]===v)&&UUID.test(held.leaseId)&&held.coordinationOnly===true&&held.providerAuthorityGranted===false&&held.uncertainOutcomeRequiresReadback===true,'XERO_COURIER_LOCATOR_LEASE_REQUIRED');
+  need(bytesHash(regular(fileURLToPath(new URL('../guarded-provider-write.mjs',import.meta.url))))===WRITE_GUARD_SHA,'XERO_COURIER_WRITE_GUARD_CHANGED');
+  const directory=canonicalCourierStateDirectory(plan.binding.operationId,controlRoot);privateDir(directory);
+  const path=name=>join(directory,`${plan.binding.operationId}.${name}.json`),reserveGet=createCourierReadBudget({now,wait});
+  let attempted=false,writeMayHaveOccurred=false,githubRuntime=nativeRuntime,vercel=vercelRuntime;
+  const run=(command,args,options={})=>{let r;try{r=capture?capture(command,args,options):spawnSync(command,args,{timeout:30000,maxBuffer:262144,stdio:['pipe','pipe','pipe'],...options});}catch{throw refusal('XERO_COURIER_NATIVE_COMMAND_UNKNOWN');}
+    need(r&&!Object.hasOwn(r,'session_id')&&!Object.hasOwn(r,'sessionId')&&r.signal==null&&!r.error&&r.status===0&&(typeof r.stdout==='string'||Buffer.isBuffer(r.stdout)),'XERO_COURIER_NATIVE_COMMAND_UNKNOWN');return r.stdout;};
+  const assertLease=()=>completed(JSON.parse(String(run('/usr/bin/python3',['-I','-c',LOCATOR_PYTHON],{input:JSON.stringify({mode:'assert',workflow,expected,features:FEATURES_OWNER,lease:held}),encoding:'utf8',env:{PATH:'/usr/bin:/bin'}}))));
+  const active=()=>need(now()>=t.issuedAt&&now()<t.notAfter,'XERO_COURIER_AUTHORITY_EXPIRED');
+  const {providerRuntime,githubConfigDirectory}=await import('../../fcos-connections.mjs');
+  const githubConfig=githubConfigDirectory({repoRoot:controlRoot,commonDirectory:join(controlRoot,'.git')});
+  const gh=(args,input)=>{githubRuntime||=providerRuntime('github');need(githubRuntime.credentialAvailable,'XERO_COURIER_GITHUB_REQUIRED');need(typeof githubRuntime.env?.GH_CONFIG_DIR==='string'&&resolve(githubRuntime.env.GH_CONFIG_DIR)===resolve(githubConfig),'XERO_COURIER_LOCATOR_TARGET_MISMATCH');return String(run(githubRuntime.command,args,{cwd,input,encoding:'utf8',env:{PATH:githubRuntime.env.PATH,HOME:githubRuntime.env.HOME,GH_CONFIG_DIR:githubRuntime.env.GH_CONFIG_DIR,GH_HOST:'github.com',GH_REPO:REPOSITORY,GH_PROMPT_DISABLED:'1'}}));};
+  const read=async route=>{active();await reserveGet();return JSON.parse(gh(['api',route,'--method','GET']));};
+  const vercelRead=route=>{active();vercel||=providerRuntime('vercel');need(vercel.credentialAvailable,'XERO_COURIER_LOCATOR_TARGET_MISMATCH');return JSON.parse(String(run(vercel.command,[...vercel.injectedArgs,'api',route,'--method','GET','--raw'],{cwd,encoding:'utf8',env:vercel.env})));};
+  return Object.freeze({async publish(){try{
+    active();need(plan.schemaVersion!==2||t.notAfter-now()>=900000,'XERO_COURIER_AUTHORITY_EXPIRED');
+    need(!['locator.attempt','locator.stopped','claim-attempt','held-lease','stopped'].some(n=>existsSync(path(n))),'XERO_COURIER_LOCATOR_CONSUMED');
+    need(canonical(JSON.parse(assertLease().output))===canonical(held),'XERO_COURIER_LOCATOR_LEASE_REQUIRED');
+    record(path('locator.attempt'),{scopeSha256,templateSha256,planSha256,binding,lease:held,maximumRefPushes:1,maximumStatusPosts:1,at:now()});attempted=true;
+    const user=await read('user');need(user.login==='hocheunglai-oss'&&user.id===ACTOR_ID,'XERO_COURIER_GITHUB_ACTOR_MISMATCH');
+    const actual=await assertCourierRun(read,t,binding.runId);need(actual.job.id===binding.jobId,'XERO_COURIER_RUN_MISMATCH');
+    const callerRef=await read(`repos/${REPOSITORY}/git/ref/${t.caller.ref.slice(5)}`);need(callerRef.ref===t.caller.ref&&callerRef.object?.type==='commit'&&callerRef.object.sha===t.caller.sha,'XERO_COURIER_RUN_MISMATCH');
+    const teamId=fcosConnectionIdentifier('vercel','Team ID'),projectId=fcosConnectionIdentifier('vercel','Project ID'),account=vercelRead('/v2/user');
+    need(account.user?.username===fcosConnectionIdentifier('vercel','Account'),'XERO_COURIER_LOCATOR_TARGET_MISMATCH');
+    const team=vercelRead(`/v2/teams/${teamId}`);need(team.id===teamId&&team.slug===fcosConnectionIdentifier('vercel','Team')&&team.membership?.role==='OWNER','XERO_COURIER_LOCATOR_TARGET_MISMATCH');
+    const project=vercelRead(`/v9/projects/${projectId}?teamId=${teamId}`);need(project.id===projectId&&project.accountId===teamId&&project.name===fcosConnectionIdentifier('vercel','Project'),'XERO_COURIER_LOCATOR_TARGET_MISMATCH');
+    const d=vercelRead(`/v13/deployments/${binding.deploymentId}?teamId=${teamId}`);
+    need(d.id===binding.deploymentId&&d.projectId===projectId&&(Object.hasOwn(d,'teamId')?d.teamId===teamId:d.ownerId===teamId)&&(!Object.hasOwn(d,'ownerId')||d.ownerId===teamId)
+      &&d.readyState==='READY'&&`https://${d.url}`===binding.hostOrigin&&(d.customEnvironment?.id===t.hostConfiguration.target.customEnvironment||d.customEnvironment?.slug===t.hostConfiguration.target.customEnvironment),'XERO_COURIER_LOCATOR_TARGET_MISMATCH');
+    const env={PATH:githubRuntime.env.PATH,HOME:githubRuntime.env.HOME,GH_CONFIG_DIR:githubRuntime.env.GH_CONFIG_DIR,GH_HOST:'github.com',GH_REPO:REPOSITORY,GH_PROMPT_DISABLED:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_CONFIG_NOSYSTEM:'1',GIT_AUTHOR_NAME:'FCOS native recovery',GIT_AUTHOR_EMAIL:'fcos-native@example.invalid',GIT_COMMITTER_NAME:'FCOS native recovery',GIT_COMMITTER_EMAIL:'fcos-native@example.invalid'};
+    const git=(args,input)=>String(run('/usr/bin/git',args,{cwd,input,encoding:'utf8',env})).trim();
+    need(realpathSync(git(['rev-parse','--path-format=absolute','--git-common-dir']))===realpathSync(join(controlRoot,'.git'))&&git(['rev-parse','--show-object-format'])==='sha1'&&git(['rev-parse','HEAD'])===t.controllerSha,'XERO_COURIER_LOCAL_REPOSITORY_MISMATCH');
+    active();const blob=git(['hash-object','-w','--stdin'],locatorJson);need(blob===gitHash('blob',Buffer.from(locatorJson)));
+    const tree=git(['mktree'],`100644 blob ${blob}\tlocator.json\n`),commitSha=git(['commit-tree',tree],'FCOS exact public recovery locator\n');need(SHA.test(tree)&&SHA.test(commitSha));
+    const publication=courierPublicationStatus({templateJson,runId:binding.runId,ref,commitSha,raw:locatorJson,kind:'locator'});
+    record(path('locator.publication'),{scopeSha256,ref,commitSha,locatorSha256:hash(locatorJson),bindingSha256:publication.bindingSha256});
+    const phase=async(name,submit,validate)=>{const result=await runGuardedProviderWrite({expected,claim:assertLease,assertLease,
+      recordIntent:({lease,phase:state})=>{const value={lease,state,durable:true};record(path(`locator.${name}.${state}`),{...value,scopeSha256,publication:publication.binding,maximumProviderWrites:1});return completed(value);},
+      submit:()=>{active();writeMayHaveOccurred=true;return submit();},validateProviderResult:validate,
+      recordOutcome:({lease,outcome})=>{const value={lease,state:outcome.state,durable:true};record(path(`locator.${name}.${outcome.state}`),{...value,reason:outcome.reason,scopeSha256});return completed(value);}});need(result.status==='submitted_acknowledged','XERO_COURIER_PUBLICATION_UNKNOWN');};
+    await phase('ref',()=>{git(['-c','credential.helper=','-c',`credential.https://github.com.helper=!${githubRuntime.command} auth git-credential`,'push',`--force-with-lease=${ref}:`,`https://github.com/${REPOSITORY}.git`,`${commitSha}:${ref}`]);return completed({ref,commitSha,nativeRefPushCompleted:true});},v=>{try{const x=JSON.parse(v.output);return x.ref===ref&&x.commitSha===commitSha&&x.nativeRefPushCompleted===true;}catch{return false;}});
+    const remote=await read(`repos/${REPOSITORY}/git/ref/${ref.slice(5)}`);need(remote.ref===ref&&remote.object?.type==='commit'&&remote.object.sha===commitSha,'XERO_COURIER_PUBLICATION_INVALID');
+    let statusReceipt;
+    await phase('status',()=>{const output=gh(['api',publication.route,'--method','POST','--include','--input','-'],JSON.stringify(publication.body));statusReceipt=nativeGithubCreatedStatus(output,publication,now());record(path('locator.status.provider-ack'),{...statusReceipt,httpStatus:201,nativeCompleted:true,nativeOutputSha256:bytesHash(output)});return completed(statusReceipt);},v=>{try{return JSON.parse(v.output).bindingSha256===publication.bindingSha256;}catch{return false;}});
+    // ONE complete GET is allowed only after known guarded201. Unknown push or
+    // status exits above, without another GET/write/cleanup or automatic replay.
+    active();await reserveGet();const statuses=nativeIncludedJson(gh(['api',publication.readRoute,'--method','GET','--include']),200,{complete:true});
+    need(Array.isArray(statuses)&&statuses.length<100,'XERO_COURIER_PUBLICATION_INVALID');const matching=statuses.filter(v=>typeof v?.context==='string'&&v.context.toLowerCase()===publication.body.context);need(matching.length===1,'XERO_COURIER_PUBLICATION_INVALID');const observed=assertCourierPublicationStatus(matching[0],publication,now());need(observed.id===statusReceipt.id,'XERO_COURIER_PUBLICATION_INVALID');
+    const ack={schemaVersion:1,kind:'fcos_native_xero_locator_publication_ack_v1',scopeSha256,templateSha256,planSha256,operationId:plan.binding.operationId,...binding,ref,commitSha,publicationBindingSha256:publication.bindingSha256,httpStatus:201,publisher:statusReceipt.creator,statusId:statusReceipt.id,statusCreatedAt:statusReceipt.createdAt,completeStatusListRows:statuses.length,matchingContextRows:1,observedAt:now(),financialAuthorityGranted:false};record(path('locator.ack'),ack);return ack;
+  }catch(error){const code=safeCode(error);if(attempted&&!existsSync(path('locator.stopped')))record(path('locator.stopped'),{code,writeMayHaveOccurred,readbackOnly:true,replay:false});if(writeMayHaveOccurred&&!existsSync(path('stopped')))record(path('stopped'),{code,phase:'locator',readbackOnly:true,replay:false});throw refusal(code);}}});
+}
+
+export async function nativeRelayMain(args = process.argv.slice(2), locatorOptions = {}) {
   try {
+    if(args.length===2&&args[0]==='publish-locator'){const input=JSON.parse(regular(resolve(args[1]),131072));need(exact(input,['templateJson','binding','lease']),'XERO_COURIER_LOCATOR_TARGET_MISMATCH');const publisher=await createNativeXeroRecoveryLocatorPublisher({...input,...locatorOptions});return publisher.publish();}
     if ((args.length === 2 && args[0] === 'original-warm-dispatch') || (args.length === 3 && args[0] === 'original-warm-run')) {
       const warm = await createNativeXeroRecoveryWarmDispatcher({ templateJson: regular(resolve(args[1]), 65536).toString('utf8') });
       return args[0] === 'original-warm-dispatch' ? await warm.dispatch() : await warm.observeRun(args[2]);
