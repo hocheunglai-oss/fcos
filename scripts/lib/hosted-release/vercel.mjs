@@ -26,6 +26,7 @@ export function deploymentArguments(manifest, operationId, production) {
     '--meta', `githubCommitSha=${manifest.candidate.sha}`, '--meta', `fcosHostedOperation=${operationId}`,
     '--meta', `fcosHostedManifest=${digest(manifest)}`, '--meta', `fcosVerificationSha256=${digest(manifest.verification)}`, '--meta', `fcosSourceSha256=${manifest.candidate.sourceSha256}`, '--build-env', `FCOS_BUILD_COMMIT_SHA=${manifest.candidate.sha}`,
     '--build-env', `FCOS_EXPECTED_SOURCE_SHA256=${manifest.candidate.sourceSha256}`, '--env', `FCOS_BUILD_COMMIT_SHA=${manifest.candidate.sha}`,
+    ...(!production ? ['--env', 'FCOS_ENABLE_READ_ONLY_CI=true'] : []),
     ...Object.entries(manifest.verification.publicBuildEnvironment).flatMap(([key,value]) => ['--build-env',`${key}=${value}`])];
 }
 

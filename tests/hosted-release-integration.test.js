@@ -118,6 +118,11 @@ test('deployment binds remote build settings and public build values to determin
   const args=deploymentArguments(manifest,`${manifest.releaseId}-production-stage`,true);
   assert.ok(args.includes('--skip-domain'));assert.ok(args.includes('VITE_FCOS_ENABLE_FCUNO_OIDC=true'));
   assert.ok(args.includes(`fcosVerificationSha256=${digest(manifest.verification)}`));
+  assert.ok(!args.some(value=>value.startsWith('FCOS_ENABLE_READ_ONLY_CI=')));
+  const preview=deploymentArguments(manifest,`${manifest.releaseId}-preview-create`,false);
+  const ci=preview.indexOf('FCOS_ENABLE_READ_ONLY_CI=true');
+  assert.ok(ci>0);assert.equal(preview[ci-1],'--env');
+  assert.ok(!preview.includes('--prod')&&!preview.includes('--skip-domain'));
 });
 test('runtime protection uses the actual host-cookie helper without a private file',async()=>{
   const origin='https://fcos-observed1-hocheunglai-6535s-projects.vercel.app',sha='a'.repeat(40);let disposed=false;
