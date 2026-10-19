@@ -85,6 +85,7 @@ export function createVercelReadTransport({ binding, targets, env=process.env, f
     const project=`/v9/projects/${binding.projectId}`;
     need(path===project || path===`/v9/projects?limit=100`
       || /^\/v13\/deployments\/(?:dpl_[A-Za-z0-9]+|[a-z0-9-]+\.vercel\.app)$/.test(path)
+      || /^\/v3\/deployments\/dpl_[A-Za-z0-9]+\/events\?direction=forward&follow=0&limit=-1&builds=1$/.test(path)
       || new RegExp(`^/v6/deployments\\?projectId=${binding.projectId}&limit=100(?:&until=[0-9]+)?$`).test(path),'VERCEL_READ_ROUTE_FORBIDDEN');
   };
   const get = async path => {

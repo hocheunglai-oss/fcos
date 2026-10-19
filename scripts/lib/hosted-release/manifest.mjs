@@ -27,6 +27,7 @@ function releaseManifestDraft({ plan, setup, previousProduction, candidateDirect
     authorization: { validitySeconds: 86400, actions: [...WRITE_PHASES], rollback: { mode: 'compatible_previous_only', schemaRollback: false } },
     migration: plan.migration, runtime: plan.runtime, changes: plan.changes, verification: setup.verification,
     ...(qualificationSource ? { qualificationSource: { ...qualificationSource } } : {}),
+    ...(setup.legacyReleaseContainment ? {legacyReleaseContainment:setup.legacyReleaseContainment} : {}),
     ...(setup.dependencies ? { dependencies: setup.dependencies } : {}) };
   return manifest;
 }

@@ -50,20 +50,20 @@ test('a collector cannot dispatch more GETs than its reserved bundle',async()=>{
   bundle.finish();assert.equal(reads,1);
 });
 
-test('actual Request handler returns exact pending before any SQL or metadata dispatch for every admission collector',async()=>{
+test('actual Request handler returns exact pending before consequential SQL or metadata dispatch; only consumed-operation lookup may precede it',async()=>{
   for(const [action,principal,payload,weight] of [
     ['approve',{kind:'github',environment:'fcos-production-release'},scope,8],
     ['resume',{kind:'github',environment:'fcos-hosted-production-resume'},scope,7],
     ['register',qPrincipal,{...scope,manifest},5],['begin',qPrincipal,scope,5],['claim',qPrincipal,scope,5],
   ]) {
-    let sql=0,metadata=0;const gate=createMetadataAdmission({now:()=>0});gate.admit(45).finish();
-    const handler=createCoordinatorHandler({store:{request:()=>{sql++;throw Error('SQL must not run');}},authenticateGithub:()=>principal,
+    let metadata=0;const sql=[];const gate=createMetadataAdmission({now:()=>0});gate.admit(45).finish();
+    const handler=createCoordinatorHandler({store:{request:action=>{sql.push(action);if(action==='snapshot')return {};throw Error('Consequential SQL must not run');}},authenticateGithub:()=>principal,
       admitMetadata:({weight:actual,action:actualAction,principal:actualPrincipal})=>{
         assert.equal(actual,weight);assert.equal(actualAction,action);assert.equal(actualPrincipal,principal);return gate.admit(actual);
       },validateApproval:()=>{metadata++;},validateResume:()=>{metadata++;},validateQualification:()=>{metadata++;}});
     const response=await handler(request(action,payload));assert.equal(response.status,429);
     assert.equal(response.headers.get('retry-after'),'60');assert.equal(response.headers.get('cache-control'),'no-store');
-    assert.deepEqual(await response.json(),{error:'COORDINATION_METADATA_PENDING'});assert.equal(sql,0);assert.equal(metadata,0);
+    assert.deepEqual(await response.json(),{error:'COORDINATION_METADATA_PENDING'});assert.deepEqual(sql,['begin','claim'].includes(action)?['snapshot']:[]);assert.equal(metadata,0);
   }
 });
 

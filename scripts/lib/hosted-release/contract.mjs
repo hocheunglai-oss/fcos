@@ -1,3 +1,4 @@
+import { validateLegacyReleaseContainment } from '../../../config/legacyReleaseContainment.js';
 import { createHash } from 'node:crypto';
 import { isFirstRuntimeCandidateSha, firstRuntimeCandidateProfile } from '../../../config/hostedCompatibilityCorrection.js';
 import { qualificationSourceBinding } from '../../../config/hostedReleaseQualification.js';
@@ -62,6 +63,7 @@ export function validateManifest(manifest) {
     || manifest.scope.handoffs.some(item => !hash(item.sha256))
     || !manifest.requiredChecks?.includes('compatibility_production_observation'))) fail('APPLICATION_SUCCESSOR_ORDER');
   qualificationSourceBinding(manifest);
+  if(manifest.legacyReleaseContainment !== undefined) validateLegacyReleaseContainment(manifest.legacyReleaseContainment);
   const prior = manifest.previousProduction;
   if (!/^dpl_[A-Za-z0-9]+$/.test(prior?.deploymentId || '') || !sha(prior.sha)
     || !['sourceSha256', 'schemaSha256', 'runtimeSha256'].every(key => hash(prior[key]))) fail('PREVIOUS_PRODUCTION_BINDING');
@@ -128,5 +130,6 @@ export function renderReleaseSummary(manifest, evidence = {}) {
     `Candidate: \`${manifest.candidate.sha}\``, `Controller: \`${manifest.controller.sha}\``, `Current Production: \`${manifest.previousProduction.deploymentId}\` (${manifest.previousProduction.sha})`,
     `Migration: ${manifest.migration.mode}`, manifest.previousProduction.firstRuntime ? 'Rollback: legacy previous build is not automatically eligible; failed live verification requires intervention unless compatibility is independently established.' : `Rollback: previous build only after current schema/runtime compatibility is reverified.`, '', 'Included changes:', ...manifest.changes.map(text => `- ${text.replace(/[\r\n]/g, ' ')}`), '', 'Required checks:', ...manifest.requiredChecks.map(id => `- ${id}: ${evidence[id]?.status || 'pending'}`), '',
     'This approval authorizes staging, same-build promotion and compatible automatic rollback for this immutable manifest for 24 hours after protected execution begins. It does not authorize financial changes or schema rollback.'];
+  if(manifest.legacyReleaseContainment) lines.push('', 'Historical submissions remain UNKNOWN and consumed. This manifest uses independently admitted release-only effect containment; it grants no financial or authentication-maintenance exception.', ...manifest.legacyReleaseContainment.effects.map(row=>`- ${row.importId}: ${row.kind} (${row.effectSha256})`));
   return `${lines.join('\n')}\n`;
 }

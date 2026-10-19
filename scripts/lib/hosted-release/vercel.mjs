@@ -1,3 +1,4 @@
+import { selectionBuildGuard, assertSelectionSource, collectSelectionEnvironment, assertSelectionBuildEvidence } from './configuration-selection.mjs';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -27,6 +28,7 @@ export function deploymentArguments(manifest, operationId, production) {
     '--meta', `fcosHostedManifest=${digest(manifest)}`, '--meta', `fcosVerificationSha256=${digest(manifest.verification)}`, '--meta', `fcosSourceSha256=${manifest.candidate.sourceSha256}`, '--build-env', `FCOS_BUILD_COMMIT_SHA=${manifest.candidate.sha}`,
     '--build-env', `FCOS_EXPECTED_SOURCE_SHA256=${manifest.candidate.sourceSha256}`, '--env', `FCOS_BUILD_COMMIT_SHA=${manifest.candidate.sha}`,
     ...(!production ? ['--env', 'FCOS_ENABLE_READ_ONLY_CI=true'] : []),
+    ...(manifest.legacyReleaseContainment ? ['--meta', `fcosConfigurationSelectionSha256=${digest(selectionBuildGuard(manifest).nodeOptions)}`, '--build-env', `NODE_OPTIONS=${selectionBuildGuard(manifest).nodeOptions}`] : []),
     ...Object.entries(manifest.verification.publicBuildEnvironment).flatMap(([key,value]) => ['--build-env',`${key}=${value}`])];
 }
 
@@ -61,6 +63,7 @@ export function createVercelAdapter({ manifest, candidateDirectory, env = proces
     if(readOnly)fail('VERCEL_READ_WRITE_FORBIDDEN','vercel.read');
     // No await or provider read may separate this pure boundary check from the
     // actual CLI invocation. Keep its precise pre-launch error outside catch.
+    if(args[0]==='deploy'&&manifest.legacyReleaseContainment)assertSelectionSource(cwd,manifest);
     if(args[0]==='promote'||args[0]==='deploy'&&args.includes('--prod'))assertCurrentFirstRuntimeOwnerRefresh(manifest);
     if (args[0] === 'promote' || args[0] === 'rollback' || args[0] === 'deploy' && args.includes('--prod')) assertProductionWriterContext(manifest);
     try { return execute('vercel', [...args, '--scope', fcosConnectionIdentifier('vercel', 'Team'), '--cwd', cwd, '--no-color'], {
@@ -87,7 +90,9 @@ export function createVercelAdapter({ manifest, candidateDirectory, env = proces
     const url = canonicalFcosE2eCandidateUrl(`https://${value.url}`);
     return { id: value.id, url, projectId: value.projectId, teamId: value.teamId || target.vercelTeam,
       sha: value.meta?.githubCommitSha, sourceSha256: value.meta?.fcosSourceSha256, target: value.target || 'preview', state: value.readyState,
-      projectSettings: value.projectSettings, verificationSha256: value.meta?.fcosVerificationSha256, createdAt: value.createdAt, operationId: value.meta?.fcosHostedOperation, manifestHash: value.meta?.fcosHostedManifest };
+      projectSettings: value.projectSettings, verificationSha256: value.meta?.fcosVerificationSha256, createdAt: value.createdAt, operationId: value.meta?.fcosHostedOperation, manifestHash: value.meta?.fcosHostedManifest,
+      ...(manifest.legacyReleaseContainment ? {gitCommitRef:value.meta?.gitCommitRef,gitCommitSha:value.meta?.gitCommitSha,
+        customEnvironment:value.customEnvironment??null,prebuilt:value.prebuilt,selectionGuardSha256:value.meta?.fcosConfigurationSelectionSha256} : {}) };
   };
   async function verifyArtifact(value, release, phase) {
     const exact = await deployment(value.id);
@@ -95,6 +100,8 @@ export function createVercelAdapter({ manifest, candidateDirectory, env = proces
       || exact.target !== (phase === 'preview' ? 'preview' : 'production')) fail('ARTIFACT_IDENTITY', phase);
     if (exact.verificationSha256 !== digest(release.verification)) fail('ARTIFACT_BUILD_CONFIGURATION_MISMATCH', phase);
     assertProjectConfiguration(exact.projectSettings, release.verification.projectSettings);
+    const selection = release.legacyReleaseContainment ? assertSelectionBuildEvidence(
+      await api(`/v3/deployments/${exact.id}/events?direction=forward&follow=0&limit=-1&builds=1`),exact,release) : undefined;
     const origin = phase === 'live' ? target.productionOrigin : exact.url;
     const bypass = phase === 'preview' ? env.FCOS_E2E_VERCEL_BYPASS : phase === 'staged' ? env.FCOS_PRODUCTION_VERIFICATION_BYPASS : undefined;
     const headers = bypass ? { 'x-vercel-protection-bypass': bypass } : {};
@@ -119,7 +126,7 @@ export function createVercelAdapter({ manifest, candidateDirectory, env = proces
       try { assertProductionRuntimeReadback(runtime, { expectedRuntimeFlags: expected.flags, expectedRuntimeSafety: expected.safety, expectedRuntimeAuth: expected.auth }); }
       catch { fail('PRODUCTION_RUNTIME_MISMATCH', phase); }
     }
-    return { deployment: exact, version, runtime };
+    return { deployment: exact, version, runtime, ...(selection?{configurationSelection:selection}:{}) };
   }
   async function admit(release, phase) {
     validateManifest(release);
@@ -145,6 +152,7 @@ export function createVercelAdapter({ manifest, candidateDirectory, env = proces
     if (run(['--version']).replace(/^Vercel CLI /i, '') !== '54.20.1') fail('VERCEL_CLI_VERSION', phase);
     const p = await project();
     assertProjectConfiguration(p, release.verification.projectSettings);
+    if(release.legacyReleaseContainment){assertSelectionSource(cwd,release);await collectSelectionEnvironment({read:api,project:p,manifest:release});}
     const originalWriter = production ? productionBinding : previewBinding;
     const token = originalWriter ? null : (await api('/v5/user/tokens/current', { scopeTeam: false })).token;
     if (p.id !== target.vercelProject || p.accountId !== target.vercelTeam || p.name !== fcosConnectionIdentifier('vercel', 'Project')

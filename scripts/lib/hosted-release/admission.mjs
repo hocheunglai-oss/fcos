@@ -68,6 +68,7 @@ export function assertHostedSetup({ manifest, env = process.env }) {
     || setup.controllerSha !== manifest.controller.sha || setup.epoch !== manifest.epoch
     || setup.targetsSha256 !== digest(manifest.targets)
     || canonical(setup.verification) !== canonical(manifest.verification)
+    || canonical(setup.legacyReleaseContainment || null) !== canonical(manifest.legacyReleaseContainment || null)
     || canonical(setup.dependencies || null) !== canonical(manifest.dependencies || null)
     || manifest.qualificationSource !== undefined && canonical(setup.qualificationSource || null) !== canonical(manifest.qualificationSource)) fail('ADMITTED_SETUP_CHANGED');
   if(manifest.stage==='qualification' || manifest.verification?.vercelReadCredential)

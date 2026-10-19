@@ -23,7 +23,7 @@ export function validateEnvelope(body) {
     && /^[a-zA-Z0-9._:-]{1,200}$/.test(p.releaseId)
     && /^[a-f0-9]{64}$/.test(p.manifestHash), 'COORDINATION_SCOPE_INVALID', 400);
   // Server-authored authentication/approval material cannot be supplied through the API.
-  need(!Object.hasOwn(p,'approvalReceipt') && !Object.hasOwn(p,'resumeReceipt') && !Object.hasOwn(p,'principal') && !Object.hasOwn(p,'notificationDelivery') && !Object.hasOwn(p,'notificationChallenge') && !Object.hasOwn(p,'qualificationOnly') && !Object.hasOwn(p,'qualificationAdmission'), 'COORDINATION_SERVER_FIELD_FORBIDDEN',400);
+  need(!['legacyContainmentBoundary','passedContainment','containmentBoundary'].some(key=>Object.hasOwn(p,key)) && !Object.hasOwn(p,'approvalReceipt') && !Object.hasOwn(p,'resumeReceipt') && !Object.hasOwn(p,'principal') && !Object.hasOwn(p,'notificationDelivery') && !Object.hasOwn(p,'notificationChallenge') && !Object.hasOwn(p,'qualificationOnly') && !Object.hasOwn(p,'qualificationAdmission'), 'COORDINATION_SERVER_FIELD_FORBIDDEN',400);
   return {action:body.action, payload:p};
 }
 export function createSqlStore(query) {

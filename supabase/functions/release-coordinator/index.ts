@@ -1,3 +1,4 @@
+import { createLegacyContainmentValidator } from './legacy-containment.mjs';
 import { ACTIONS, CoordinatorError, createSqlStore, digest, need, validateEnvelope, assertQualificationScope, createMetadataAdmission } from './core.mjs';
 import { createGithubAuthenticator, createFinancialAuthenticator, validatePolicy } from './auth.mjs';
 import { coordinatorDatabaseOptions, verifyDatabaseIdentity } from './runtime.mjs';
@@ -7,7 +8,7 @@ export { createGithubAuthenticator, createFinancialAuthenticator } from './auth.
 export { createGithubApprovalValidator, createGithubResumeValidator, validateGithubApproval, validateGithubResume, createGithubQualificationValidator, validateGithubQualification } from './approval.mjs';
 
 /** The same request entrypoint runs in an isolated host and disposable database tests. */
-export function createCoordinatorHandler({store,authenticateGithub,authenticateFinancial,validateApproval,validateResume,validateQualification,admitMetadata}) {
+export function createCoordinatorHandler({store,authenticateGithub,authenticateFinancial,validateApproval,validateResume,validateQualification,validateLegacyContainment,admitMetadata}) {
   need(store&&typeof store.request==='function'&&typeof authenticateGithub==='function','COORDINATION_CONFIGURATION_REQUIRED',500);
   return async request=>{
     let metadataReservation;
@@ -27,7 +28,7 @@ export function createCoordinatorHandler({store,authenticateGithub,authenticateF
       need(/^Bearer [^\s]+$/.test(authorization),'COORDINATION_AUTHENTICATION_REQUIRED',401);
       const financial=request.headers.get('x-fcos-coordination-adapter')==='financial';
       need(!financial||typeof authenticateFinancial==='function','COORDINATION_FINANCIAL_ADAPTER_DISABLED',403);
-      const principal=await (financial?authenticateFinancial:authenticateGithub)(authorization.slice(7));
+      let principal=await (financial?authenticateFinancial:authenticateGithub)(authorization.slice(7));
       need(principal?.kind===(financial?'financial':'github'),'COORDINATION_AUTHENTICATION_REQUIRED',401);
       need(payload.owner.kind===(financial?'financial':'release')&&(!financial||payload.owner.id===principal.ownerId),'COORDINATION_OWNER_MISMATCH',403);
       assertQualificationScope(principal,payload,action);
@@ -36,12 +37,23 @@ export function createCoordinatorHandler({store,authenticateGithub,authenticateF
         need(payload.manifest.epoch===payload.epoch,'COORDINATION_STALE_EPOCH');
         if(!financial) need(!principal.environment||principal.environment==='fcos-hosted-preview','COORDINATION_REGISTER_BEFORE_APPROVAL_REQUIRED');
       }
-      const qualificationBoundary=principal.qualificationOnly===true&&['register','begin','claim'].includes(action);
-      const metadataWeight=qualificationBoundary?5:!financial&&action==='approve'?8:!financial&&action==='resume'?7:0;
+      let containmentRegistration, consumedPhase=false;
+      if(!financial&&['begin','claim'].includes(action)){
+        const current=await store.request('snapshot',payload,principal);
+        // A consumed operation is always handled by its original SQL readback path.
+        consumedPhase=Boolean(current?.operations?.[payload.phase]);
+        if(!consumedPhase&&current?.registration?.manifest?.legacyReleaseContainment)containmentRegistration=current.registration;
+      }
+      const qualificationBoundary=!consumedPhase&&principal.qualificationOnly===true&&['register','begin','claim'].includes(action);
+      const metadataWeight=(qualificationBoundary?5:!financial&&action==='approve'?8:!financial&&action==='resume'?7:0)+(containmentRegistration?3:0);
       if(metadataWeight&&admitMetadata) metadataReservation=await admitMetadata({weight:metadataWeight,action,principal});
       if(qualificationBoundary) {
         need(typeof validateQualification==='function','COORDINATION_QUALIFICATION_VALIDATOR_REQUIRED',403);
         await validateQualification({principal,metadataReservation});
+      }
+      if(containmentRegistration){
+        need(typeof validateLegacyContainment==='function','COORDINATION_CONTAINMENT_VALIDATOR_REQUIRED',403);
+        principal={...principal,legacyContainmentBoundary:await validateLegacyContainment({principal,registration:containmentRegistration,manifestHash:payload.manifestHash,metadataReservation})};
       }
       if(action==='approve') {
         need(principal.environment==='fcos-production-release','COORDINATION_APPROVAL_ENVIRONMENT_REQUIRED',403);
@@ -82,6 +94,7 @@ export function createConfiguredCoordinator({env,query,fetchImpl=globalThis.fetc
   return createCoordinatorHandler({store:createSqlStore(query),authenticateGithub:createGithubAuthenticator({policy}),
     admitMetadata:({weight})=>metadataAdmission.admit(weight),
     authenticateFinancial:financialPolicy?createFinancialAuthenticator({policy:financialPolicy}):undefined,
+    validateLegacyContainment:createLegacyContainmentValidator({policy,token:get('FCOS_COORDINATOR_GITHUB_METADATA_TOKEN'),fetchImpl}),
     validateApproval:createGithubApprovalValidator({policy,token:get('FCOS_COORDINATOR_GITHUB_METADATA_TOKEN'),fetchImpl,metadataAdmission}),
     validateResume:createGithubResumeValidator({policy,token:get('FCOS_COORDINATOR_GITHUB_METADATA_TOKEN'),fetchImpl,metadataAdmission}),
     validateQualification:policy.qualificationAdmission?createGithubQualificationValidator({policy,token:get('FCOS_COORDINATOR_GITHUB_METADATA_TOKEN'),fetchImpl,metadataAdmission}):undefined});
