@@ -140,7 +140,7 @@ async function fixture(t, change = {}) {
   const options = { planJson, actorBinding: { actorId, emailSha256: hash(email), accessRevision: 5 },
     ownership: { featuresOwnerThreadId: features, historicalOwnerThreadIds: [owner], approvalSha256: binding.approvalSha256, sourceSha256: binding.sourceSha256, controllerSha: caller.jobWorkflowSha },
     caller, publicOrigin: PUBLIC, requestNonceSha256: hash(nonce),
-    privateEnvironment: { VITE_SUPABASE_URL: ORIGIN, SUPABASE_SERVICE_ROLE_KEY: secret, XERO_CLIENT_ID: 'fixture-client', XERO_CLIENT_SECRET: 'FIXTURE_PRIVATE_CLIENT_SECRET' }, fetchImpl };
+    privateEnvironment: { VITE_SUPABASE_URL: ORIGIN, SUPABASE_SERVICE_ROLE_KEY: secret, XERO_CLIENT_ID: 'fixture-client', XERO_CLIENT_SECRET: 'FIXTURE_PRIVATE_CLIENT_SECRET' }, fetchImpl, ...(change.now === undefined ? {} : { now: change.now }) };
   const handler = createXeroRecoveryHost(options);
   const server = createServer({ ...tls, maxHeaderSize: 65536 }, handler);
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -188,21 +188,46 @@ test('missing authentication, wrong nonce/URL/body and duplicate headers cause z
 });
 
 test('signed wrong GitHub run/workflow/actor/branch/environment claims cannot reach owner or CAS', async t => {
-  const f = await fixture(t);
+  let clock = Date.now();
+  const f = await fixture(t, { now: () => clock });
+  const original = JSON.parse(Buffer.from(f.headers.authorization.split('.')[1], 'base64url'));
+  clock = original.iat * 1000;
+  // All claims are evaluated at one explicit host time. Wall-clock time spent
+  // on earlier TLS requests must not turn iat+31 into the allowed+30 boundary.
   for (const patch of [{ run_id: '999' }, { actor_id: '1' }, { repository_id: '7' }, { repository: 'other/fcos' }, { ref_protected: 'false' },
     { ref: 'refs/heads/main' }, { sha: '0'.repeat(40) }, { job_workflow_sha: '0'.repeat(40) }, { workflow_ref: 'wrong' },
     { run_attempt: '2' }, { runner_environment: 'self-hosted' }, { event_name: 'push' }, { environment: 'fcos-production-release' }, { aud: 'fcos-production-release' },
     { sub: 'repo:hocheunglai-oss/fcos:environment:fcos-production-release' }, { iss: 'https://wrong.invalid' },
-    { exp: Math.floor(Date.now() / 1000) - 1 }, { exp: Math.floor(Date.now() / 1000) + 301 }, { iat: Math.floor(Date.now() / 1000) + 31 }, { jti: '' }]) {
-    const original = JSON.parse(Buffer.from(f.headers.authorization.split('.')[1], 'base64url'));
+    { exp: original.iat - 1 }, { exp: original.iat + 301 }, { iat: original.iat + 31 }, { jti: '' }]) {
     const token = await new SignJWT({ ...original, ...patch }).setProtectedHeader({ alg: 'RS256', kid: 'carrier' }).sign(keys.privateKey);
-    assert.equal((await f.send({ extra: { authorization: `Bearer ${token}` } })).status, 403);
+    assert.equal((await f.send({ extra: { authorization: `Bearer ${token}` } })).status, 403, `Signed GitHub claim patch: ${Object.keys(patch).join(',')}`);
   }
   const pieces = f.headers.authorization.slice(7).split('.');
   const payload = JSON.parse(Buffer.from(pieces[1], 'base64url'));
   pieces[1] = Buffer.from(JSON.stringify({ ...payload, forged: true })).toString('base64url');
   assert.equal((await f.send({ extra: { authorization: `Bearer ${pieces.join('.')}` } })).status, 403);
   assert.ok(f.calls.every(call => call.path === '/.well-known/jwks'));
+});
+
+test('same signed GitHub token crosses only the existing31-to30-second future-iat boundary', async t => {
+  let clock = Date.now();
+  const f = await fixture(t, { now: () => clock });
+  const original = JSON.parse(Buffer.from(f.headers.authorization.split('.')[1], 'base64url'));
+  clock = original.iat * 1000;
+  const claims = { ...original, iat: original.iat + 31 };
+  const token = await new SignJWT(claims).setProtectedHeader({ alg: 'RS256', kid: 'carrier' }).sign(keys.privateKey);
+  assert.equal(claims.jti, original.jti);
+  assert.equal((await f.send({ extra: { authorization: `Bearer ${token}` } })).status, 403);
+  assert.ok(f.calls.every(call => call.path === '/.well-known/jwks'));
+  clock += 1000;
+  const accepted = await f.send({ extra: { authorization: `Bearer ${token}` } });
+  assert.equal(accepted.status, 200); assert.equal(accepted.body.step, 'preflight');
+  assert.equal(accepted.body.nextStep, 'custodyPrepare');
+  assert.equal(accepted.body.executionAuthorityGranted, false);
+  const before = f.calls.length;
+  const wrongRun = await new SignJWT({ ...claims, run_id: '999' }).setProtectedHeader({ alg: 'RS256', kid: 'carrier' }).sign(keys.privateKey);
+  assert.equal((await f.send({ extra: { authorization: `Bearer ${wrongRun}` } })).status, 403);
+  assert.ok(f.calls.slice(before).every(call => call.path === '/.well-known/jwks'));
 });
 
 test('actual own actor mismatch is denied before durable action claim', async t => {
