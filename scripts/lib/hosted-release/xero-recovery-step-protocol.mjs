@@ -20,7 +20,20 @@ const REQUEST = ['schemaVersion', 'operationId', 'planSha256', 'step', 'submissi
 export function recoveryStepPlanMaximumWindowMs(plan) {
   if (plan?.schemaVersion === 1 && plan.kind === 'fcos_xero_recovery_step_plan_v1') return 900000;
   if (plan?.schemaVersion === 2 && plan.kind === 'fcos_xero_recovery_step_plan_v2') return 1800000;
+  if (plan?.schemaVersion === 3 && plan.kind === 'fcos_xero_recovery_step_plan_v3') return 1800000;
   need(false);
+}
+export const recoveryStepPreparationWindow = plan => plan.schemaVersion === 3
+  ? { issuedAt: plan.binding.preparedAt, notAfter: plan.binding.absoluteNotAfter }
+  : { issuedAt: plan.binding.issuedAt, notAfter: plan.binding.notAfter };
+export function validateRecoveryExecutionClock(clock, plan, now, { historical = false } = {}) {
+  const b = plan.binding;
+  need(plan.schemaVersion === 3 && exact(clock, ['firstStartedAt', 'executionDeadlineAt'])
+    && integer(clock.firstStartedAt) && clock.firstStartedAt >= b.preparedAt && clock.firstStartedAt < b.armBefore
+    && clock.executionDeadlineAt === Math.min(clock.firstStartedAt + b.executionWindowMs, b.absoluteNotAfter)
+    && clock.executionDeadlineAt - clock.firstStartedAt >= 900000
+    && (historical || clock.firstStartedAt <= now && now < clock.executionDeadlineAt), 'XERO_STEP_CLOCK_INVALID');
+  return Object.freeze({ ...clock });
 }
 function parsed(text, limit) {
   need(typeof text === 'string' && Buffer.byteLength(text) <= limit);
@@ -32,13 +45,17 @@ function parsed(text, limit) {
 export function parseXeroRecoveryStepPlan(planJson) {
   const plan = parsed(planJson, 16384), b = plan?.binding, maximumWindowMs = recoveryStepPlanMaximumWindowMs(plan);
   need(exact(plan, ['schemaVersion', 'kind', 'binding'])
-    && exact(b, BINDING) && HASH.test(b.operationId)
+    && exact(b, plan.schemaVersion === 3 ? [...BINDING.filter(k => !['issuedAt','notAfter'].includes(k)), 'preparedAt','armBefore','absoluteNotAfter','executionWindowMs'] : BINDING) && HASH.test(b.operationId)
     && ['ownerThreadId', 'tenantId', 'actorId', 'refreshLeaseId', 'probeId', 'requestId'].every(k => UUID.test(b[k]))
     && ['approvalSha256', 'sourceSha256', 'bindingSha256'].every(k => HASH.test(b[k]))
     && (b.organisationIdentitySha256 === null || HASH.test(b.organisationIdentitySha256))
     && Number.isSafeInteger(b.expectedVersion) && b.expectedVersion > 0 && b.expectedVersion < 2147483647
-    && Number.isSafeInteger(b.issuedAt) && Number.isSafeInteger(b.notAfter) && b.issuedAt > 0
-    && b.notAfter > b.issuedAt && b.notAfter - b.issuedAt <= maximumWindowMs && b.credentialPreservationCompositeApproved === true);
+    && (plan.schemaVersion === 3
+      ? [b.preparedAt,b.armBefore,b.absoluteNotAfter,b.executionWindowMs].every(integer) && b.preparedAt > 0
+        && b.armBefore > b.preparedAt && b.absoluteNotAfter >= b.armBefore + 900000
+        && b.absoluteNotAfter - b.preparedAt <= 86400000 && b.executionWindowMs >= 900000 && b.executionWindowMs <= maximumWindowMs
+      : Number.isSafeInteger(b.issuedAt) && Number.isSafeInteger(b.notAfter) && b.issuedAt > 0
+        && b.notAfter > b.issuedAt && b.notAfter - b.issuedAt <= maximumWindowMs) && b.credentialPreservationCompositeApproved === true);
   Object.freeze(b); Object.freeze(plan);
   return { plan, planSha256: recoveryStepSha256(planJson), maximumWindowMs };
 }
@@ -113,8 +130,10 @@ export function createXeroRecoveryStepProtocol({ planJson, authenticate, store, 
   const { plan, planSha256 } = parseXeroRecoveryStepPlan(planJson), b = plan.binding;
   need(typeof authenticate === 'function' && ['claim', 'complete', 'readback'].every(k => typeof store?.[k] === 'function')
     && typeof execute === 'function' && typeof now === 'function');
-  let busy = false, terminal = false;
-  const active = signal => need(signal instanceof AbortSignal && !signal.aborted && !terminal && Number.isSafeInteger(now()) && now() >= b.issuedAt && now() < b.notAfter, 'XERO_STEP_TERMINAL');
+  let busy = false, terminal = false, execution;
+  const window = recoveryStepPreparationWindow(plan);
+  const active = signal => need(signal instanceof AbortSignal && !signal.aborted && !terminal && Number.isSafeInteger(now())
+    && now() >= window.issuedAt && now() < (execution?.executionDeadlineAt ?? window.notAfter), 'XERO_STEP_TERMINAL');
   async function actor(bearer, signal) {
     need(signal instanceof AbortSignal && !signal.aborted);
     need(typeof bearer === 'string' && bearer.length > 0);
@@ -138,7 +157,10 @@ export function createXeroRecoveryStepProtocol({ planJson, authenticate, store, 
         await actor(bearer, signal); active(signal);
         const requestSha256 = recoveryStepSha256(rawRequestJson);
         const args = { planJson, planSha256, requestJson: rawRequestJson, requestSha256, signal };
-        const claim = await store.claim(args); active(signal);
+        if (plan.schemaVersion === 3 && request.step === 'preflight') need(now() < b.armBefore, 'XERO_STEP_TERMINAL');
+        const claim = await store.claim(args);
+        if (plan.schemaVersion === 3) execution = validateRecoveryExecutionClock(claim.execution, plan, now());
+        active(signal);
         need(matches(claim, request, requestSha256) && claim.decision === 'execute' && claim.state === 'submitted_unknown'
           && claim.nextStep === null && claim.lastResultSha256 === request.previousResultSha256, 'XERO_STEP_CLAIM_UNKNOWN');
         validateCheckpoint(claim.checkpoint, b, now());
@@ -146,13 +168,14 @@ export function createXeroRecoveryStepProtocol({ planJson, authenticate, store, 
         active(signal); validateXeroRecoveryStepResult(request.step, result, b, claim.checkpoint, now());
         const resultJson = recoveryStepCanonicalJson(result), resultSha256 = recoveryStepSha256(resultJson);
         const ack = await store.complete({ ...args, resultJson }); active(signal);
+        if (plan.schemaVersion === 3) need(recoveryStepCanonicalJson(validateRecoveryExecutionClock(ack.execution, plan, now())) === recoveryStepCanonicalJson(execution), 'XERO_STEP_CLOCK_INVALID');
         const checkpoint = { ...claim.checkpoint, [request.step]: result }, nextStep = nextXeroRecoveryStep(request.step, checkpoint);
         need(matches(ack, request, requestSha256) && ack.state === (nextStep === null ? 'complete' : 'ready')
           && ack.nextStep === nextStep && ack.resultSha256 === resultSha256 && ack.lastResultSha256 === resultSha256,
         'XERO_STEP_COMPLETION_UNKNOWN');
         validateCheckpoint(ack.checkpoint, b, now());
         need(recoveryStepCanonicalJson(ack.checkpoint) === recoveryStepCanonicalJson(checkpoint), 'XERO_STEP_CHECKPOINT_CHANGED');
-        return { kind: 'fcos_xero_recovery_step_result_v1', operationId: b.operationId, planSha256, requestSha256,
+        return { kind: plan.schemaVersion === 3 ? 'fcos_xero_recovery_step_result_v3' : 'fcos_xero_recovery_step_result_v1', ...(execution ? { execution } : {}), operationId: b.operationId, planSha256, requestSha256,
           step: request.step, submissionId: request.submissionId, state: ack.state, nextStep, resultSha256, result,
           executionAuthorityGranted: false, qualificationAccepted: false };
       } catch {
@@ -174,9 +197,10 @@ export function createXeroRecoveryStepProtocol({ planJson, authenticate, store, 
           && XERO_RECOVERY_STEPS.includes(value.currentStep) && UUID.test(value.submissionId)
           && (value.lastResultSha256 === null || HASH.test(value.lastResultSha256))
           && (value.state === 'ready' ? XERO_RECOVERY_STEPS.includes(value.nextStep) : value.nextStep === null), 'XERO_STEP_READBACK_UNKNOWN');
+        if (plan.schemaVersion === 3) execution = validateRecoveryExecutionClock(value.execution, plan, now(), { historical: true });
         validateCheckpoint(value.checkpoint, b, now());
         // Return a newly selected safe projection, never arbitrary backend keys.
-        return { kind: 'fcos_xero_recovery_step_readback_v1', operationId: b.operationId, planSha256, state: value.state,
+        return { kind: plan.schemaVersion === 3 ? 'fcos_xero_recovery_step_readback_v3' : 'fcos_xero_recovery_step_readback_v1', ...(execution ? { execution } : {}), operationId: b.operationId, planSha256, state: value.state,
           nextStep: value.nextStep, currentStep: value.currentStep, submissionId: value.submissionId,
           lastResultSha256: value.lastResultSha256, checkpoint: value.checkpoint, executionAuthorityGranted: false, qualificationAccepted: false };
       } catch {

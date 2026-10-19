@@ -450,3 +450,27 @@ test('first downloaded-source mismatch stops before further source reads or owne
  }}),{code:'XERO_COURIER_SOURCE_BYTES_UNPROVEN'});
  assert.equal(downloaded,1);assert(f.calls.every(u=>new URL(u).hostname==='api.vercel.com'));
 });
+
+test('preparation bootstrap verifies real branch-purpose OIDC without an environment principal or owner secret', async () => {
+  const yaml = createRequire(import.meta.url)('js-yaml');
+  const workflow = yaml.load(readFileSync(new URL('../.github/workflows/hosted-xero-recovery-carrier.yml', import.meta.url), 'utf8'));
+  const job = workflow.jobs['xero-recovery-preparation'], script = job.steps[0].with.script;
+  assert.equal(job.environment, undefined);
+  const original = claims(template()); delete original.environment;
+  original.sub = `repo:${REPOSITORY}:ref:${original.ref}`;
+  const audience = 'urn:fcos:xero-recovery-carrier-bootstrap:v1';
+  for (const delta of [null, { environment: 'fcos-hosted-verification' }, { sub: `repo:${REPOSITORY}:environment:fcos-hosted-verification` },
+    { run_id: '124' }, { job_workflow_sha: SHA }, { ref_protected: 'false' }]) {
+    const token = await new SignJWT({ ...original, ...delta }).setProtectedHeader({ alg: 'RS256', kid: 'fixture' })
+      .setIssuer('https://token.actions.githubusercontent.com').setAudience(audience).sign(key.privateKey);
+    const outputs = [];
+    const execute = () => runInNewContext(`(async()=>{${script}})()`, {
+      require: () => crypto, Buffer, Date, AbortSignal,
+      process: { env: { GITHUB_RUN_ID: '123', EXPECTED_CONTROLLER_SHA: CONTROLLER } },
+      fetch: async () => json({ keys: [jwk] }),
+      core: { getIDToken: async supplied => { assert.equal(supplied, audience); return token; }, setOutput: (name, value) => outputs.push([name, value]) },
+    });
+    if (delta === null) { await execute(); assert.deepEqual(outputs, [['controller_sha', CONTROLLER]]); }
+    else { await assert.rejects(execute(), /XERO_COURIER_CONTROLLER_BOOTSTRAP_REFUSED/); assert.deepEqual(outputs, []); }
+  }
+});

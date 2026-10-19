@@ -31,11 +31,79 @@ permissions:
   statuses: read
   id-token: write
 jobs:
+  xero-recovery-preparation:
+    name: xero-recovery-preparation
+    if: ${{ inputs.mode == 'submit' }}
+    runs-on: ubuntu-24.04
+    # V3 preparation uses only read-only GitHub access, with no protected environment.
+    # Root reviews the source before locator publication; execution rechecks actual bytes.
+    # Legacy templates return immediately and retain their immutable deadlines.
+    timeout-minutes: 30
+    steps:
+      # No application credentials are present in this bootstrap. The checkout
+      # ref must equal the cryptographically verified reusable workflow SHA.
+      - uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        id: admitted-controller
+        env:
+          EXPECTED_CONTROLLER_SHA: ${{ inputs.controller_sha }}
+        with:
+          script: |
+            try {
+              const crypto = require('node:crypto');
+              const audience = 'urn:fcos:xero-recovery-carrier-bootstrap:v1';
+              const token = await core.getIDToken(audience);
+              if (token.length > 16384) throw 0;
+              const parts = token.split('.');
+              if (parts.length !== 3) throw 0;
+              const h = JSON.parse(Buffer.from(parts[0], 'base64url'));
+              const p = JSON.parse(Buffer.from(parts[1], 'base64url'));
+              const response = await fetch('https://token.actions.githubusercontent.com/.well-known/jwks', { redirect: 'error', signal: AbortSignal.timeout(15000) });
+              const text = await response.text();
+              if (!response.ok || text.length > 65536) throw 0;
+              const keys = JSON.parse(text).keys.filter(k => k.kid === h.kid && k.kty === 'RSA');
+              if (h.alg !== 'RS256' || keys.length !== 1 || !crypto.verify('RSA-SHA256', Buffer.from(parts[0] + '.' + parts[1]), crypto.createPublicKey({ key: keys[0], format: 'jwk' }), Buffer.from(parts[2], 'base64url'))) throw 0;
+              const now = Math.floor(Date.now() / 1000);
+              if (p.iss !== 'https://token.actions.githubusercontent.com' || p.aud !== audience || p.repository_id !== '1278654816' || p.repository !== 'hocheunglai-oss/fcos'
+                || p.actor_id !== '265701760' || p.actor !== 'hocheunglai-oss' || p.run_id !== process.env.GITHUB_RUN_ID || p.run_attempt !== '1'
+                || p.event_name !== 'workflow_dispatch' || p.runner_environment !== 'github-hosted' || p.ref_protected !== 'true'
+                || Object.hasOwn(p, 'environment') || p.sub !== 'repo:hocheunglai-oss/fcos:ref:' + p.ref
+                || !/^[a-f0-9]{40}$/.test(p.job_workflow_sha) || p.job_workflow_sha !== process.env.EXPECTED_CONTROLLER_SHA
+                || p.job_workflow_ref !== 'hocheunglai-oss/fcos/.github/workflows/hosted-xero-recovery-carrier.yml@' + p.job_workflow_sha
+                || !Number.isSafeInteger(p.iat) || !Number.isSafeInteger(p.exp) || p.iat > now || p.exp <= now || p.exp - p.iat > 300 || now - p.iat > 300) throw 0;
+              core.setOutput('controller_sha', p.job_workflow_sha);
+            } catch { throw new Error('XERO_COURIER_CONTROLLER_BOOTSTRAP_REFUSED'); }
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ steps.admitted-controller.outputs.controller_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - run: npm ci --ignore-scripts
+      # The immutable caller must pin this reusable workflow SHA and the exact
+      # trusted public template. Inputs are setup, never request-ref authority.
+      # This source does not provision the proposed nonce destination or grant
+      # financial/capture authority. Root must admit both before activation.
+      - uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_XERO_CARRIER_TEMPLATE_BASE64: ${{ inputs.template_base64 }}
+          FCOS_XERO_CARRIER_MODE: submit
+          FCOS_XERO_CARRIER_PHASE: preparation
+          FCOS_XERO_OWNER_READBACK_BASE64: ${{ inputs.owner_readback_base64 }}
+        with:
+          script: |
+            const { carrierMain } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/hosted-xero-recovery-carrier.mjs`);
+            const { safeCode } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/lib/hosted-release/xero-recovery-native-relay.mjs`);
+            try { await carrierMain(); } catch (error) { throw new Error(safeCode(error)); }
   xero-recovery-carrier:
     name: xero-recovery-carrier
+    needs: xero-recovery-preparation
+    if: ${{ always() && (needs.xero-recovery-preparation.result == 'success' || inputs.mode == 'owner-readback' && needs.xero-recovery-preparation.result == 'skipped') }}
     runs-on: ubuntu-24.04
-    # V2 allows 30 minutes total preparation plus execution; v1 still expires
-    # at its immutable 15-minute template deadline. Individual calls stay bounded.
+    # V3 gets a fresh bounded execution job after preparation. The original
+    # first SQL preflight claim starts its one-time clock; old clocks never change.
+    # v1 still expires at its immutable15-minute template deadline; v2 keeps its30-minute envelope.
     timeout-minutes: 30
     environment: fcos-hosted-verification
     steps:

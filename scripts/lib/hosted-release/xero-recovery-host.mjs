@@ -78,7 +78,7 @@ function requestJson(bytes, plan, planSha256) {
 }
 function safeResult(result, secrets) {
   const allowed = new Set(['kind', 'operationId', 'planSha256', 'requestSha256', 'step', 'submissionId', 'state', 'nextStep',
-    'resultSha256', 'result', 'executionAuthorityGranted', 'qualificationAccepted', 'currentStep', 'lastResultSha256', 'checkpoint',
+    'resultSha256', 'result', 'execution', 'firstStartedAt', 'executionDeadlineAt', 'executionAuthorityGranted', 'qualificationAccepted', 'currentStep', 'lastResultSha256', 'checkpoint',
     ...XERO_RECOVERY_STEPS, 'renewalRequired', 'tokenVersion', 'expiresAt', 'observedAt', 'notBefore', 'deadlineAt', 'status', 'snapshot',
     'organisationIdentitySha256', 'storedTenantNameMatches', 'rateLimitProblem', 'retryAfterSeconds', 'retryAt', 'dayResetAt',
     'minuteRemaining', 'dayRemaining', 'appMinuteRemaining', 'appDayRemaining', 'recorded', 'allowanceKnown', 'availableCalls', 'spendableCalls', 'reserve']);

@@ -347,6 +347,8 @@ jobs:
     with:
       controller_sha: __FCOS_CONTROLLER_SHA__
       # Repository public setup, never a dispatch-selected submit template.
+      # A paired v3 descriptor uses the reusable same-run public preparation job;
+      # only the later real execution job may consume admitted requests.
       template_base64: ${{ vars.FCOS_XERO_ORIGINAL_CARRIER_TEMPLATE_BASE64 }}
       mode: submit
     secrets:

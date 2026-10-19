@@ -68,6 +68,7 @@ async function fixture(t, native) {
   const metadataSql = `select oid::text,proowner::text,proacl::text,prosecdef,proconfig from pg_proc where oid='public.xero_recovery_step_input(text,text,text,text)'::regprocedure`;
   const originalInputMetadata = (await query(metadataSql)).rows;
   await exec(await readFile(new URL(`../supabase/migrations/${WINDOW_MIGRATION}`, import.meta.url), 'utf8'));
+  await exec(await readFile(new URL('../supabase/migrations/20261020140000_xero_recovery_v3_late_arm.sql', import.meta.url), 'utf8'));
   assert.deepEqual((await query(metadataSql)).rows, originalInputMetadata, 'Additive replacement preserves function identity, owner, ACL, invoker and search_path');
   const role = async (name, sql, values = [], client = { query }) => {
     assert.ok(['anon', 'authenticated', 'service_role'].includes(name));
@@ -257,6 +258,33 @@ for (const native of [false, true]) {
         assert.deepEqual(await f.counts(), { operations: 1, attempts: 1, acknowledgements: 0 });
       });
 
+      await scenario('v3 starts once at the durable original preflight claim after long preparation', async () => {
+        const value=structuredClone(f.plan.value),now=Date.now();value.schemaVersion=3;value.kind='fcos_xero_recovery_step_plan_v3';
+        delete value.binding.issuedAt;delete value.binding.notAfter;
+        Object.assign(value.binding,{preparedAt:now-3600000,armBefore:now+600000,absoluteNotAfter:now+3600000,executionWindowMs:1800000});
+        const json=canonical(value),p={value,json,sha:hash(json)},q=request(p);
+        const first=await f.rpc('claim',p,q),clock=first.execution;
+        assert.ok(clock.firstStartedAt>=now && clock.firstStartedAt<=Date.now());
+        assert.equal(clock.executionDeadlineAt,clock.firstStartedAt+1800000);
+        const saved=await f.rpc('readback',p);assert.deepEqual(saved.execution,clock);assert.equal(saved.state,'submitted_unknown');
+        // The first receipt is intentionally treated as lost: no replay/rearm.
+        await refused(()=>f.rpc('claim',p,q));await refused(()=>f.rpc('claim',p,request(p)));
+        const ack=await f.rpc('complete',p,q,canonical(f.result('preflight')));assert.deepEqual(ack.execution,clock);
+        const next=await f.rpc('claim',p,request(p,'custodyPrepare',ack.resultSha256));assert.deepEqual(next.execution,clock);
+        assert.deepEqual(await f.counts(),{operations:1,attempts:2,acknowledgements:1});
+      });
+      await scenario('v3 rejects late arm, mixed fields and an alternate operation under the original approval', async () => {
+        const value=structuredClone(f.plan.value),now=Date.now();value.schemaVersion=3;value.kind='fcos_xero_recovery_step_plan_v3';
+        delete value.binding.issuedAt;delete value.binding.notAfter;
+        Object.assign(value.binding,{preparedAt:now-3600000,armBefore:now-1,absoluteNotAfter:now+1800000,executionWindowMs:1800000});
+        const wrap=v=>{const json=canonical(v);return{value:v,json,sha:hash(json)};};
+        let p=wrap(value);await refused(()=>f.rpc('claim',p,request(p)));
+        value.binding.armBefore=now+600000;value.binding.issuedAt=now; p=wrap(value);await refused(()=>f.rpc('claim',p,request(p)));
+        delete value.binding.issuedAt;p=wrap(value);await f.rpc('claim',p,request(p));
+        value.binding.operationId='e'.repeat(64);const other=wrap(value);await refused(()=>f.rpc('claim',other,request(other)));
+        assert.deepEqual(await f.counts(),{operations:1,attempts:1,acknowledgements:0});
+      });
+
       await scenario('strict canonical plan/request bytes, raw SHA and schemas reject client fields and duplicates', async () => {
         const q = request(f.plan);
         const badPlanJson = f.plan.json.replace('"binding":', '"accessToken":"PRIVATE_SECRET","binding":');
@@ -348,6 +376,17 @@ for (const native of [false, true]) {
           assert.deepEqual(settled.map(x => x.status).sort(), ['fulfilled', 'rejected']);
           assert.deepEqual(await f.counts(), { operations: 1, attempts: 1, acknowledgements: 0 });
         });
+        await scenario('v3 independent sessions establish only one immutable first-start clock',async()=>{
+          const value=structuredClone(f.plan.value),now=Date.now();value.schemaVersion=3;value.kind='fcos_xero_recovery_step_plan_v3';
+          delete value.binding.issuedAt;delete value.binding.notAfter;
+          Object.assign(value.binding,{preparedAt:now-3600000,armBefore:now+600000,absoluteNotAfter:now+3600000,executionWindowMs:1800000});
+          const json=canonical(value),p={value,json,sha:hash(json)};
+          const settled=await race([client=>f.rpc('claim',p,request(p),undefined,client),client=>f.rpc('claim',p,request(p),undefined,client)]);
+          assert.deepEqual(settled.map(x=>x.status).sort(),['fulfilled','rejected']);
+          const receipt=settled.find(x=>x.status==='fulfilled').value;
+          assert.deepEqual((await f.rpc('readback',p)).execution,receipt.execution);
+          assert.deepEqual(await f.counts(),{operations:1,attempts:1,acknowledgements:0});
+        });
         await scenario('independent complete calls append only one acknowledgement', async () => {
           const q = request(f.plan); await f.rpc('claim', f.plan, q); const raw = canonical(f.result('preflight'));
           const settled = await race([client => f.rpc('complete', f.plan, q, raw, client), client => f.rpc('complete', f.plan, q, raw, client)]);
@@ -363,6 +402,16 @@ for (const native of [false, true]) {
             await new Promise(resolve => setTimeout(resolve, 260)); await blocker.query('commit'); await refused(() => pending);
           } finally { await blocker.end(); await waiting.end(); }
           assert.deepEqual(await f.counts(), { operations: 0, attempts: 0, acknowledgements: 0 });
+        });
+        await scenario('v3 arm is rechecked after the actual operation lock wait',async()=>{
+          const value=structuredClone(f.plan.value),now=Date.now();value.schemaVersion=3;value.kind='fcos_xero_recovery_step_plan_v3';
+          delete value.binding.issuedAt;delete value.binding.notAfter;
+          Object.assign(value.binding,{preparedAt:now-3600000,armBefore:now+220,absoluteNotAfter:now+1800000,executionWindowMs:1800000});
+          const json=canonical(value),p={value,json,sha:hash(json)},blocker=await f.newClient(),waiting=await f.newClient();
+          try{await blocker.query('begin');await blocker.query("select pg_advisory_xact_lock(hashtextextended('xero.recovery.step.'||$1,0))",[value.binding.operationId]);
+            const pending=f.rpc('claim',p,request(p),undefined,waiting);await new Promise(resolve=>setTimeout(resolve,260));await blocker.query('commit');await refused(()=>pending);
+          }finally{await blocker.end();await waiting.end();}
+          assert.deepEqual(await f.counts(),{operations:0,attempts:0,acknowledgements:0});
         });
         await scenario('a rolled-back global submission collision cannot return execute after the deadline', async () => {
           const short = plan({ issuedAt: Date.now() - 1000, notAfter: Date.now() + 240 });

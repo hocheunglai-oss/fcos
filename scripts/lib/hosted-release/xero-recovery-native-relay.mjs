@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { runGuardedProviderWrite } from '../guarded-provider-write.mjs';
 import { parseXeroRecoveryStepPlan, recoveryStepCanonicalJson as canonical, recoveryStepSha256 as hash,
-  validateXeroRecoveryStepResult, nextXeroRecoveryStep, XERO_RECOVERY_STEPS } from './xero-recovery-step-protocol.mjs';
+  validateXeroRecoveryStepResult, nextXeroRecoveryStep, XERO_RECOVERY_STEPS, recoveryStepPreparationWindow, validateRecoveryExecutionClock } from './xero-recovery-step-protocol.mjs';
 import { decodeRuntimeMaterialArchive, RUNTIME_MATERIAL_FILENAME } from '../runtime-compatibility-material-transport.mjs';
 import { fcosConnectionIdentifier } from '../../../config/fcosConnections.js';
 import { validateVercelIngressTarget } from './xero-recovery-vercel-ingress.mjs';
@@ -31,7 +31,8 @@ export function parseCourierTemplate(text) {
   const t = JSON.parse(text);
   need(exact(t, ['schemaVersion','kind','planJson','controllerSha','caller','hostConfiguration','readCredential','readAcceptance','login','issuedAt','notAfter','artifactCaptureAuthoritySha256'])
     && ((t.schemaVersion === 1 && t.kind === 'fcos_xero_recovery_carrier_template_v1')
-      || (t.schemaVersion === 2 && t.kind === 'fcos_xero_recovery_carrier_template_v2')) && SHA.test(t.controllerSha)
+      || (t.schemaVersion === 2 && t.kind === 'fcos_xero_recovery_carrier_template_v2')
+      || (t.schemaVersion === 3 && t.kind === 'fcos_xero_recovery_carrier_template_v3')) && SHA.test(t.controllerSha)
     && HASH.test(t.artifactCaptureAuthoritySha256), 'XERO_COURIER_TEMPLATE_INVALID');
   const { plan, planSha256, maximumWindowMs } = parseXeroRecoveryStepPlan(t.planJson), c = t.caller;
   need(t.schemaVersion === plan.schemaVersion, 'XERO_COURIER_TEMPLATE_INVALID');
@@ -41,10 +42,41 @@ export function parseCourierTemplate(text) {
     && c.workflowRef === `${REPOSITORY}/.github/workflows/authenticated-release.yml@${c.ref}`
     && c.jobName === 'xero-recovery-carrier' && c.environment === 'fcos-hosted-verification'
     && c.subject === `repo:${REPOSITORY}:environment:${c.environment}`, 'XERO_COURIER_CALLER_INVALID');
-  need(Number.isSafeInteger(t.issuedAt) && Number.isSafeInteger(t.notAfter) && t.issuedAt >= plan.binding.issuedAt
-    && t.notAfter > t.issuedAt && t.notAfter <= plan.binding.notAfter && t.notAfter - t.issuedAt <= maximumWindowMs
+  const window = recoveryStepPreparationWindow(plan);
+  need(Number.isSafeInteger(t.issuedAt) && Number.isSafeInteger(t.notAfter) && t.issuedAt >= window.issuedAt
+    && t.notAfter > t.issuedAt && t.notAfter <= window.notAfter
+    && (plan.schemaVersion === 3 ? t.issuedAt === window.issuedAt && t.notAfter === window.notAfter : t.notAfter - t.issuedAt <= maximumWindowMs)
     && exact(t.login, ['origin','publicAuth']) && plain(t.hostConfiguration), 'XERO_COURIER_TEMPLATE_INVALID');
   return { template: JSON.parse(JSON.stringify(t)), templateSha256: bytesHash(text), plan, planSha256, maximumWindowMs };
+}
+export function parseExecutionPreflight(raw, t, now = Date.now()) {
+  const parsed = parseCourierTemplate(JSON.stringify(t)), identity = t.login.publicAuth.identity;
+  need(parsed.plan.schemaVersion === 3 && typeof raw === 'string' && Buffer.byteLength(raw) <= 16384, 'XERO_COURIER_TEMPLATE_INVALID');
+  const value = JSON.parse(raw);
+  need(canonical(value) === raw && exact(value, ['schemaVersion','kind','operationId','planSha256','preflight'])
+    && value.schemaVersion === 1 && value.kind === 'fcos_xero_execution_preflight_v1'
+    && value.operationId === parsed.plan.binding.operationId && value.planSha256 === parsed.planSha256, 'XERO_COURIER_TEMPLATE_INVALID');
+  const publicAuth = { ...t.login.publicAuth, preflight: value.preflight };
+  const fields=['kind','accepted','reviewerId','capturedAt','sourceSha','sourceSha256','origin','deploymentId','profileRlsOwnSelect','authenticatedSelectOnly',
+    'effectiveAccessSourceVerified','effectiveAdmin','profileExisting','linkExisting','linkBoundToProfile','linkSourceActive','linkUseFcos','linkRevokedBefore','issuer','effectiveAccessSourceSha256','evidenceSha256'];
+  const p=value.preflight,original=t.login.publicAuth.preflight;
+  need(exact(p,fields) && exact(original,fields) && p.kind==='fcos_legacy_runtime_own_profile_preflight_v1' && p.accepted===true && p.reviewerId==='/root'
+    && fields.filter(k=>!['capturedAt','evidenceSha256','linkRevokedBefore'].includes(k)).every(k=>p[k]===original[k])
+    && ['profileRlsOwnSelect','authenticatedSelectOnly','effectiveAccessSourceVerified','effectiveAdmin','profileExisting','linkExisting','linkBoundToProfile','linkSourceActive','linkUseFcos'].every(k=>p[k]===true)
+    && identity.profileId===parsed.plan.binding.actorId && identity.accessRevision===t.hostConfiguration.actorBinding.accessRevision
+    && HASH.test(p.evidenceSha256) && typeof p.capturedAt==='string' && Number.isFinite(Date.parse(p.capturedAt))
+    && Date.parse(p.capturedAt)<=now+30000 && Date.parse(p.capturedAt)>=now-1800000
+    && (p.linkRevokedBefore===null || typeof p.linkRevokedBefore==='string' && Number.isFinite(Date.parse(p.linkRevokedBefore)))
+    && (original.linkRevokedBefore===null || Date.parse(p.linkRevokedBefore)>=Date.parse(original.linkRevokedBefore)), 'XERO_COURIER_TEMPLATE_INVALID');
+  return publicAuth;
+}
+export function validateCourierLocator(raw, t) {
+  const value = JSON.parse(raw), v3 = t.schemaVersion === 3;
+  need(exact(value, ['schemaVersion','kind','deploymentId','url', ...(v3 ? ['executionPreflightSha256'] : [])])
+    && value.schemaVersion === (v3 ? 3 : 1) && value.kind === `fcos_xero_host_locator_v${v3 ? 3 : 1}`
+    && /^dpl_[A-Za-z0-9]+$/.test(value.deploymentId) && /^https:\/\/[a-z0-9-]+\.vercel\.app$/.test(value.url)
+    && (!v3 || canonical(value) === raw && HASH.test(value.executionPreflightSha256)), 'XERO_COURIER_PUBLICATION_INVALID');
+  return value;
 }
 export function courierPrefix(t, runId) {
   const { plan } = parseCourierTemplate(typeof t === 'string' ? t : JSON.stringify(t));
@@ -70,8 +102,7 @@ export function courierPublicationStatus({templateJson,runId,ref,commitSha,raw,k
   need(typeof raw==='string'&&Buffer.byteLength(raw)<=2048&&SHA.test(commitSha)&&['locator','request'].includes(kind),'XERO_COURIER_PUBLICATION_INVALID');
   const prefix=courierPrefix(t,runId);
   if(kind==='request')need(ref===courierRequestRef(t,runId,raw),'XERO_COURIER_PUBLICATION_INVALID');
-  else {const v=JSON.parse(raw);need(ref===`${prefix}/locator`&&exact(v,['schemaVersion','kind','deploymentId','url'])&&v.schemaVersion===1&&v.kind==='fcos_xero_host_locator_v1'
-    &&/^dpl_[A-Za-z0-9]+$/.test(v.deploymentId)&&/^https:\/\/[a-z0-9-]+\.vercel\.app$/.test(v.url),'XERO_COURIER_PUBLICATION_INVALID');}
+  else { need(ref===`${prefix}/locator`, 'XERO_COURIER_PUBLICATION_INVALID'); validateCourierLocator(raw,t); }
   const binding={schemaVersion:1,kind:'fcos_native_xero_courier_publication_v1',repository:REPOSITORY,repositoryId:REPO_ID,publisherId:ACTOR_ID,publisherLogin:'hocheunglai-oss',
     templateSha256,planSha256,operationId:plan.binding.operationId,runId:String(runId),publicationKind:kind,ref,commitSha,rawPayloadSha256:hash(raw)};
   const bindingSha256=hash(canonical(binding)),body={state:'success',context:`fcos/xero-courier/v1/${bindingSha256}`,description:`${kind} ${binding.rawPayloadSha256}`,
@@ -92,7 +123,7 @@ function nativeGithubCreatedStatus(output,expected,now) {
   return assertCourierPublicationStatus(JSON.parse(output.slice(separator.index+separator[0].length)),expected,now);
 }
 export const courierArtifactName = (runId, submissionId) => { need(/^[1-9][0-9]{0,19}$/.test(String(runId)) && UUID.test(submissionId)); return `fcos-xero-ack-${runId}-${submissionId}`; };
-export async function assertCourierRun(read, t, runId, { allowCompleted = false } = {}) {
+export async function assertCourierRun(read, t, runId, { allowCompleted = false, phase = 'execution' } = {}) {
   const repository = await read(`repos/${REPOSITORY}`), run = await read(`repos/${REPOSITORY}/actions/runs/${runId}`);
   need(Number.isSafeInteger(Number(runId)) && repository.id === REPO_ID && repository.full_name === REPOSITORY && run.id === Number(runId) && run.run_attempt === 1
     && run.repository?.id === REPO_ID && run.head_repository?.id === REPO_ID && run.actor?.id === ACTOR_ID && run.actor.login === 'hocheunglai-oss'
@@ -101,13 +132,18 @@ export async function assertCourierRun(read, t, runId, { allowCompleted = false 
     && (run.status === 'in_progress' || allowCompleted && run.status === 'completed'), 'XERO_COURIER_RUN_MISMATCH');
   const jobs = await read(`repos/${REPOSITORY}/actions/runs/${runId}/attempts/1/jobs?per_page=100`);
   need(Array.isArray(jobs.jobs) && jobs.total_count === jobs.jobs.length && jobs.jobs.length <= 100, 'XERO_COURIER_JOBS_INCOMPLETE');
-  const selected = jobs.jobs.filter(j => j.name === t.caller.jobName || j.name.endsWith(` / ${t.caller.jobName}`));
+  const name = t.schemaVersion === 3 && phase === 'preparation' ? 'xero-recovery-preparation' : t.caller.jobName;
+  const selected = jobs.jobs.filter(j => j.name === name || j.name.endsWith(` / ${name}`));
+  if (t.schemaVersion === 3 && phase === 'execution') {
+    const prep = jobs.jobs.filter(j => j.name === 'xero-recovery-preparation' || j.name.endsWith(' / xero-recovery-preparation'));
+    need(prep.length === 1 && prep[0].run_id === Number(runId) && prep[0].status === 'completed' && prep[0].conclusion === 'success', 'XERO_COURIER_JOB_MISMATCH');
+  }
   need(selected.length === 1 && Number.isSafeInteger(selected[0].id) && selected[0].run_id === Number(runId)
     && Array.isArray(selected[0].labels) && !selected[0].labels.includes('self-hosted') && selected[0].labels.includes('ubuntu-24.04')
     && (selected[0].status === 'in_progress' || allowCompleted && selected[0].status === 'completed'), 'XERO_COURIER_JOB_MISMATCH');
   return { run, job: selected[0] };
 }
-export async function readCourierGitFile(read, ref, filename, limit) {
+export async function readCourierGitFile(read, ref, filename, limit, { allowExecutionPreflight = false } = {}) {
   need(/^refs\/heads\/codex\/fcos-xero-[a-f0-9]{16}-[1-9][0-9]{0,19}\/(?:locator|request-[A-Za-z]+-[a-f0-9-]{36})$/.test(ref));
   need(['request.json','locator.json'].includes(filename));
   const record = await read(`repos/${REPOSITORY}/git/ref/${ref.slice(5)}`, true);
@@ -116,16 +152,29 @@ export async function readCourierGitFile(read, ref, filename, limit) {
   const commit = await read(`repos/${REPOSITORY}/git/commits/${record.object.sha}`);
   need(commit.sha === record.object.sha && Array.isArray(commit.parents) && commit.parents.length === 0 && SHA.test(commit.tree?.sha), 'XERO_COURIER_COMMIT_MISMATCH');
   const tree = await read(`repos/${REPOSITORY}/git/trees/${commit.tree.sha}`);
-  need(tree.sha === commit.tree.sha && tree.truncated === false && tree.tree?.length === 1 && tree.tree[0].path === filename && tree.tree[0].mode === '100644'
-    && tree.tree[0].type === 'blob' && SHA.test(tree.tree[0].sha), 'XERO_COURIER_TREE_MISMATCH');
-  const blob = await read(`repos/${REPOSITORY}/git/blobs/${tree.tree[0].sha}`);
-  need(blob.sha === tree.tree[0].sha && blob.encoding === 'base64' && typeof blob.content === 'string');
+  need(tree.sha === commit.tree.sha && tree.truncated === false && Array.isArray(tree.tree)
+    && tree.tree.length === (allowExecutionPreflight && filename === 'locator.json' ? 2 : 1)
+    && (!allowExecutionPreflight || filename === 'locator.json' && tree.tree.some(v => v.path === 'execution-preflight.json'))
+    && tree.tree.every(v => [filename, ...(filename === 'locator.json' ? ['execution-preflight.json'] : [])].includes(v.path) && v.mode === '100644' && v.type === 'blob' && SHA.test(v.sha))
+    && new Set(tree.tree.map(v => v.path)).size === tree.tree.length, 'XERO_COURIER_TREE_MISMATCH');
+  const selected = tree.tree.find(v => v.path === filename); need(selected, 'XERO_COURIER_TREE_MISMATCH');
+  const blob = await read(`repos/${REPOSITORY}/git/blobs/${selected.sha}`);
+  need(blob.sha === selected.sha && blob.encoding === 'base64' && typeof blob.content === 'string');
   const data = Buffer.from(blob.content.replace(/\n/g, ''), 'base64');
   need(data.length <= limit && blob.size === data.length && gitHash('blob', data) === blob.sha && Buffer.from(data.toString('utf8')).equals(data), 'XERO_COURIER_BLOB_MISMATCH');
-  return { ref, commitSha: commit.sha, raw: data.toString('utf8') };
+  let executionPreflightJson;
+  const sidecar = tree.tree.find(v => v.path === 'execution-preflight.json');
+  if (sidecar) {
+    const value = await read(`repos/${REPOSITORY}/git/blobs/${sidecar.sha}`), bytes = Buffer.from(value.content || '', 'base64');
+    need(value.encoding === 'base64' && value.sha === sidecar.sha && value.size === bytes.length && bytes.length <= 16384
+      && gitHash('blob',bytes) === sidecar.sha && Buffer.from(bytes.toString('utf8')).equals(bytes), 'XERO_COURIER_BLOB_MISMATCH');
+    executionPreflightJson = bytes.toString('utf8');
+  }
+  return { ref, commitSha: commit.sha, raw: data.toString('utf8'), ...(sidecar ? { executionPreflightJson } : {}) };
 }
-export function assertCourierAck(value, { templateSha256, runId, jobId, request, requestRef, commitSha, hostOrigin, deploymentId, plan, planSha256, checkpoint = {}, now = Date.now() }) {
-  need(exact(value, ['schemaVersion','kind','templateSha256','runId','jobId','requestRef','commitSha','requestSha256','hostOrigin','deploymentId','httpStatus','resultJson','resultSha256','receivedAt'])
+export function assertCourierAck(value, { templateSha256, runId, jobId, request, requestRef, commitSha, hostOrigin, deploymentId, plan, planSha256, checkpoint = {}, execution, executionPreflightSha256, now = Date.now() }) {
+  need(exact(value, ['schemaVersion','kind','templateSha256','runId','jobId','requestRef','commitSha','requestSha256','hostOrigin','deploymentId','httpStatus','resultJson','resultSha256','receivedAt',...(plan.schemaVersion===3?['executionPreflightSha256']:[])])
+    && (plan.schemaVersion!==3 || HASH.test(executionPreflightSha256) && value.executionPreflightSha256===executionPreflightSha256)
     && value.schemaVersion === 1 && value.kind === 'fcos_xero_recovery_actual_http_ack_v1' && value.templateSha256 === templateSha256
     && value.runId === String(runId) && value.jobId === jobId && value.requestRef === requestRef && value.commitSha === commitSha
     && value.requestSha256 === hash(canonical(request)) && value.hostOrigin === hostOrigin && value.deploymentId === deploymentId
@@ -133,9 +182,11 @@ export function assertCourierAck(value, { templateSha256, runId, jobId, request,
     && value.resultSha256 === bytesHash(value.resultJson) && Number.isSafeInteger(value.receivedAt) && value.receivedAt <= now + 30000,
   'XERO_COURIER_ACK_MISMATCH');
   const result = JSON.parse(value.resultJson);
-  need(exact(result, ['kind','operationId','planSha256','requestSha256','step','submissionId','state','nextStep','resultSha256','result','executionAuthorityGranted','qualificationAccepted']) && result.kind === 'fcos_xero_recovery_step_result_v1' && result.operationId === plan.binding.operationId && result.planSha256 === planSha256
+  need(exact(result, ['kind','operationId','planSha256','requestSha256','step','submissionId','state','nextStep','resultSha256','result','executionAuthorityGranted','qualificationAccepted', ...(plan.schemaVersion === 3 ? ['execution'] : [])]) && result.kind === `fcos_xero_recovery_step_result_v${plan.schemaVersion === 3 ? 3 : 1}` && result.operationId === plan.binding.operationId && result.planSha256 === planSha256
     && result.requestSha256 === value.requestSha256 && result.step === request.step && result.submissionId === request.submissionId
     && result.executionAuthorityGranted === false && result.qualificationAccepted === false && result.state !== 'submitted_unknown', 'XERO_COURIER_RESULT_MISMATCH');
+  if (plan.schemaVersion === 3) { validateRecoveryExecutionClock(result.execution, plan, value.receivedAt);
+    need(execution === undefined || canonical(execution) === canonical(result.execution), 'XERO_COURIER_RESULT_MISMATCH'); }
   validateXeroRecoveryStepResult(request.step, result.result, plan.binding, checkpoint, value.receivedAt);
   const next = nextXeroRecoveryStep(request.step, { ...checkpoint, [request.step]: result.result });
   need(result.resultSha256 === hash(canonical(result.result)) && result.nextStep === next && result.state === (next === null ? 'complete' : 'ready'), 'XERO_COURIER_RESULT_MISMATCH');
@@ -273,7 +324,7 @@ export async function createNativeXeroRecoveryWarmDispatcher({ templateJson, cwd
         && Object.entries(expected).every(([k,v]) => ack.lease?.[k] === v) && UUID.test(ack.lease?.leaseId) && ack.lease.coordinationOnly === true && ack.lease.providerAuthorityGranted === false
         && ack.lease.uncertainOutcomeRequiresReadback === true && !existsSync(path('uncertain')), 'XERO_COURIER_ORIGINAL_CLAIM_REQUIRED');
       for (const phase of ['prepared','submitting','submitted']) { const receipt = JSON.parse(regular(path(phase))); need(receipt.state === phase && receipt.durable === true && receipt.scopeSha256 === a.scopeSha256 && canonical(receipt.lease) === canonical(ack.lease), 'XERO_COURIER_ORIGINAL_CLAIM_REQUIRED'); }
-      await identity(); const actual = await assertCourierRun(read, t, runId, { allowCompleted: true });
+      await identity(); const actual = await assertCourierRun(read, t, runId, { allowCompleted: true, phase: t.schemaVersion === 3 ? 'preparation' : 'execution' });
       need(actual.run.display_title === `FCOS original Xero carrier ${scope.dispatchId}` && Date.parse(actual.run.created_at) >= attempt.at - 1000 && Date.parse(actual.run.created_at) <= now() + 30000, 'XERO_COURIER_RUN_MISMATCH');
       return { status: 'actual_original_warm_run_observed', dispatchId: scope.dispatchId, runId, jobId: actual.job.id, templateSha256, planSha256, orchestrationLeaseResolved: false, financialAuthorityGranted: false };
       } catch (error) { throw refusal(safeCode(error)); }
@@ -325,21 +376,23 @@ export function createCourierReadBudget({now=Date.now,wait=ms=>new Promise(r=>se
     await wait(Math.max(1,reads[0]+60000-at));}};
 }
 export const canonicalCourierStateDirectory=(operationId,controlRoot=ROOT)=>{need(HASH.test(operationId));return join(controlRoot,'.fcos-cli/outputs/hosted-xero-recovery-courier',operationId);};
-export function nativeCourierSourcePins(){return Object.fromEntries(['scripts/lib/hosted-release/xero-recovery-native-relay.mjs','scripts/hosted-xero-recovery-carrier.mjs','.github/workflows/hosted-xero-recovery-carrier.yml','.github/qualification/hosted-release-bootstrap.yml','scripts/lib/hosted-release/xero-recovery-source-inventory.mjs','scripts/lib/guarded-provider-write.mjs','scripts/lib/hosted-release/xero-recovery-vercel-ingress.mjs'].map(p=>[p,bytesHash(regular(fileURLToPath(new URL('../../../'+p,import.meta.url))))]));}
-export function assertNativeCourierAdmission({template:t,templateSha256,plan,planSha256,binding,stateDirectory,controlRoot=ROOT,coordinatorEpoch}) {
+export function nativeCourierSourcePins(){return Object.fromEntries(['scripts/lib/hosted-release/xero-recovery-native-relay.mjs','scripts/lib/hosted-release/xero-recovery-step-protocol.mjs','scripts/hosted-xero-recovery-carrier.mjs','.github/workflows/hosted-xero-recovery-carrier.yml','.github/qualification/hosted-release-bootstrap.yml','scripts/lib/hosted-release/xero-recovery-source-inventory.mjs','scripts/lib/guarded-provider-write.mjs','scripts/lib/hosted-release/xero-recovery-vercel-ingress.mjs'].map(p=>[p,bytesHash(regular(fileURLToPath(new URL('../../../'+p,import.meta.url))))]));}
+export function assertNativeCourierAdmission({template:t,templateSha256,plan,planSha256,binding,stateDirectory,controlRoot=ROOT,coordinatorEpoch,now=Date.now()}) {
   const fixed=canonicalCourierStateDirectory(plan.binding.operationId,controlRoot);need(stateDirectory===fixed,'XERO_COURIER_CANONICAL_STATE_REQUIRED');
   need(existsSync(join(fixed,'root-native-admission.json')),'XERO_COURIER_ROOT_ADMISSION_REQUIRED');const raw=regular(join(fixed,'root-native-admission.json'),65536);need(bytesHash(raw)===binding.rootAdmissionSha256,'XERO_COURIER_ROOT_ADMISSION_REQUIRED');const a=JSON.parse(raw);
   const target={epoch:coordinatorEpoch,featuresOwnerThreadId:FEATURES_OWNER,artifactCaptureAuthoritySha256:t.artifactCaptureAuthoritySha256,runId:binding.runId,jobId:binding.jobId,hostOrigin:binding.hostOrigin,deploymentId:binding.deploymentId,ownerThreadId:plan.binding.ownerThreadId,actorId:plan.binding.actorId,
-    approvalSha256:plan.binding.approvalSha256,sourceSha256:plan.binding.sourceSha256,controllerSha:t.controllerSha};
+    approvalSha256:plan.binding.approvalSha256,sourceSha256:plan.binding.sourceSha256,controllerSha:t.controllerSha,...(plan.schemaVersion===3?{executionPreflightSha256:binding.executionPreflightSha256,executionJobStartedAt:binding.executionJobStartedAt}:{})};
   need(exact(a,['schemaVersion','kind','reviewerId','accepted','templateSha256','planSha256','target','sourcePins','evidence','scopeSha256']) && a.schemaVersion===1 && a.kind==='fcos_root_admitted_native_xero_courier_v1'
     && a.reviewerId==='/root' && a.accepted===true && a.templateSha256===templateSha256 && a.planSha256===planSha256 && canonical(a.target)===canonical(target)
     && canonical(a.sourcePins)===canonical(nativeCourierSourcePins()) && a.sourcePins['scripts/lib/guarded-provider-write.mjs']===WRITE_GUARD_SHA
-    && exact(a.evidence,['originalAuthority','artifactCaptureAuthority','hostDeploymentSourceReceipt','coordinationQuota','rootReview','independentReview']),'XERO_COURIER_ROOT_ADMISSION_REQUIRED');
+    && exact(a.evidence,['originalAuthority','artifactCaptureAuthority','hostDeploymentSourceReceipt','coordinationQuota','rootReview','independentReview',...(plan.schemaVersion===3?['executionPreflight']:[])]),'XERO_COURIER_ROOT_ADMISSION_REQUIRED');
   const documents={};for(const [key,ref] of Object.entries(a.evidence)){need(exact(ref,['path','sha256'])&&typeof ref.path==='string'&&HASH.test(ref.sha256));const bytes=regular(ref.path,262144);need(bytesHash(bytes)===ref.sha256,'XERO_COURIER_ROOT_ADMISSION_REQUIRED');documents[key]=JSON.parse(bytes);}
-  const scope={templateSha256,planSha256,target,sourcePins:a.sourcePins,evidence:{originalAuthority:a.evidence.originalAuthority,artifactCaptureAuthority:a.evidence.artifactCaptureAuthority,hostDeploymentSourceReceipt:a.evidence.hostDeploymentSourceReceipt,coordinationQuota:a.evidence.coordinationQuota}};
+  const scope={templateSha256,planSha256,target,sourcePins:a.sourcePins,evidence:{originalAuthority:a.evidence.originalAuthority,artifactCaptureAuthority:a.evidence.artifactCaptureAuthority,hostDeploymentSourceReceipt:a.evidence.hostDeploymentSourceReceipt,coordinationQuota:a.evidence.coordinationQuota,...(plan.schemaVersion===3?{executionPreflight:a.evidence.executionPreflight}:{})}};
+  if(plan.schemaVersion===3){ need(a.evidence.executionPreflight.sha256===binding.executionPreflightSha256,'XERO_COURIER_ROOT_ADMISSION_REQUIRED');
+    parseExecutionPreflight(regular(a.evidence.executionPreflight.path,16384).toString('utf8'),t,now); }
   need(a.scopeSha256===hash(canonical(scope)),'XERO_COURIER_ROOT_ADMISSION_REQUIRED');
   for(const [key,role] of [['rootReview','root'],['independentReview','independent']]){const r=documents[key];need(r?.kind==='fcos_actual_native_xero_courier_action_review_v1' && r.accepted===true && r.role===role && r.scopeSha256===a.scopeSha256
-    && r.originalHumanAuthorityProvenanceReviewed===true && r.actualDeploymentSourceProvenanceReviewed===true && r.actualSharedCoordinationQuotaReviewed===true && r.actualPublisherStatusScopeAndConsumersReviewed===true
+    && r.originalHumanAuthorityProvenanceReviewed===true && r.actualDeploymentSourceProvenanceReviewed===true && r.actualSharedCoordinationQuotaReviewed===true && r.actualPublisherStatusScopeAndConsumersReviewed===true && (plan.schemaVersion!==3||r.actualExecutionPreflightReviewed===true)
     && (role==='root'?r.reviewerId==='/root':typeof r.reviewerId==='string'&&/^\/root\/[a-z0-9_]+(?:\/[a-z0-9_]+)*$/.test(r.reviewerId)&&r.reviewerId!=='/root/xero_host_actor_auth'&&!r.reviewerId.startsWith('/root/xero_host_actor_auth/')),'XERO_COURIER_ROOT_ADMISSION_REQUIRED');}
   const q=documents.coordinationQuota;need(q?.kind==='fcos_actual_xero_courier_shared_get_quota_v1' && q.accepted===true && q.repository===REPOSITORY && q.nativeGetsPerMinute===20 && q.carrierGetsPerMinute===20 && q.sharedMaximum===45 && q.maximumConcurrentClients===2 && q.actualSharedPreflightReviewed===true,'XERO_COURIER_ROOT_ADMISSION_REQUIRED');
   return a;
@@ -353,20 +406,23 @@ export const ownerReadbackArtifactName = (originalRunId, readerRunId, operationI
 };
 export function parseOwnerReadbackCarrier(text, parsed) {
   need(typeof text==='string' && Buffer.byteLength(text)<=4096,'XERO_COURIER_READBACK_ADMISSION_REQUIRED');const r=JSON.parse(text),b=r.originalBinding;
-  need(exact(r,['schemaVersion','kind','templateSha256','planSha256','originalBinding','requestSha256','originalClaimSha256','originalStoppedSha256','originalUncertainSha256','admissionScopeSha256','dispatchId','issuedAt','notAfter'])
+  need(exact(r,['schemaVersion','kind','templateSha256','planSha256','originalBinding','requestSha256','originalClaimSha256','originalStoppedSha256','originalUncertainSha256','admissionScopeSha256','dispatchId','issuedAt','notAfter',...(parsed.plan.schemaVersion===3?['executionPreflightJson']:[])])
     && r.schemaVersion===1 && r.kind==='fcos_xero_owner_readback_carrier_v1' && r.templateSha256===parsed.templateSha256 && r.planSha256===parsed.planSha256
-    && exact(b,['runId','jobId','hostOrigin','deploymentId','rootAdmissionSha256']) && /^[1-9][0-9]{0,19}$/.test(b.runId) && Number.isSafeInteger(b.jobId) && b.jobId>0
+    && exact(b,['runId','jobId','hostOrigin','deploymentId','rootAdmissionSha256',...(parsed.plan.schemaVersion===3?['executionPreflightSha256','executionJobStartedAt']:[])]) && /^[1-9][0-9]{0,19}$/.test(b.runId) && Number.isSafeInteger(b.jobId) && b.jobId>0
     && /^https:\/\/[a-z0-9-]+\.vercel\.app$/.test(b.hostOrigin) && /^dpl_[A-Za-z0-9]+$/.test(b.deploymentId) && HASH.test(b.rootAdmissionSha256)
     && ['requestSha256','originalClaimSha256','originalStoppedSha256','originalUncertainSha256','admissionScopeSha256'].every(k=>HASH.test(r[k])) && UUID.test(r.dispatchId)
     && Number.isSafeInteger(r.issuedAt) && Number.isSafeInteger(r.notAfter) && r.issuedAt>=parsed.template.issuedAt && r.notAfter>r.issuedAt && r.notAfter-r.issuedAt<=900000,
-  'XERO_COURIER_READBACK_ADMISSION_REQUIRED');return r;
+  'XERO_COURIER_READBACK_ADMISSION_REQUIRED');
+  if(parsed.plan.schemaVersion===3){need(HASH.test(b.executionPreflightSha256) && Number.isSafeInteger(b.executionJobStartedAt) && b.executionJobStartedAt>0 && r.notAfter<=parsed.plan.binding.absoluteNotAfter,'XERO_COURIER_READBACK_ADMISSION_REQUIRED');parseExecutionPreflight(r.executionPreflightJson,parsed.template,r.issuedAt);}
+  return r;
 }
 export function validateOwnerReadbackResult(value, {plan,planSha256,now=Date.now()}) {
-  need(exact(value,['kind','operationId','planSha256','state','nextStep','currentStep','submissionId','lastResultSha256','checkpoint','executionAuthorityGranted','qualificationAccepted'])
-    && value.kind==='fcos_xero_recovery_step_readback_v1' && value.operationId===plan.binding.operationId && value.planSha256===planSha256
+  need(exact(value,['kind','operationId','planSha256','state','nextStep','currentStep','submissionId','lastResultSha256','checkpoint','executionAuthorityGranted','qualificationAccepted',...(plan.schemaVersion===3?['execution']:[])])
+    && value.kind===`fcos_xero_recovery_step_readback_v${plan.schemaVersion===3?3:1}` && value.operationId===plan.binding.operationId && value.planSha256===planSha256
     && ['ready','complete','submitted_unknown'].includes(value.state) && XERO_RECOVERY_STEPS.includes(value.currentStep) && UUID.test(value.submissionId)
     && (value.lastResultSha256===null||HASH.test(value.lastResultSha256)) && (value.state==='ready'?XERO_RECOVERY_STEPS.includes(value.nextStep):value.nextStep===null)
     && value.executionAuthorityGranted===false && value.qualificationAccepted===false && plain(value.checkpoint) && Object.keys(value.checkpoint).every(k=>XERO_RECOVERY_STEPS.includes(k)), 'XERO_COURIER_READBACK_RESULT_INVALID');
+  if(plan.schemaVersion===3)validateRecoveryExecutionClock(value.execution,plan,now,{historical:true});
   let next='preflight',last=null,lastStep=null;
   for(const step of XERO_RECOVERY_STEPS)if(Object.hasOwn(value.checkpoint,step)){const v=value.checkpoint[step];need(plain(v)&&step===next,'XERO_COURIER_READBACK_RESULT_INVALID');
     const at=step==='preflight'?Date.parse(v.observedAt):['sessionVerify','probeGrant'].includes(step)?Date.parse(v.expiresAt)-1:step==='probeAdmission'?Date.parse(v.deadlineAt)-1:now;
@@ -386,14 +442,16 @@ export function assertOwnerReadbackAck(value,{parsed,readback,readerRunId,reader
 }
 export async function createNativeXeroRecoveryRelay({ templateJson, binding, stateDirectory, cwd = process.cwd(), capture, nativeRuntime, now = Date.now, controlRoot = ROOT, wait = ms => new Promise(r => setTimeout(r, ms)) } = {}) {
   const parsed = parseCourierTemplate(templateJson), { template: t, templateSha256, plan, planSha256 } = parsed;
-  need(exact(binding, ['runId','jobId','hostOrigin','deploymentId','rootAdmissionSha256']) && /^[1-9][0-9]{0,19}$/.test(binding.runId)
+  need(exact(binding, ['runId','jobId','hostOrigin','deploymentId','rootAdmissionSha256',...(plan.schemaVersion===3?['executionPreflightSha256','executionJobStartedAt']:[])]) && /^[1-9][0-9]{0,19}$/.test(binding.runId)
     && Number.isSafeInteger(binding.jobId) && binding.jobId > 0 && /^https:\/\/[a-z0-9-]+\.vercel\.app$/.test(binding.hostOrigin)
     && /^dpl_[A-Za-z0-9]+$/.test(binding.deploymentId) && HASH.test(binding.rootAdmissionSha256));
   need(typeof now === 'function' && typeof wait === 'function' && (nativeRuntime===undefined || typeof capture==='function'));
   const derived=canonicalCourierStateDirectory(plan.binding.operationId,controlRoot);need(stateDirectory===undefined||stateDirectory===derived,'XERO_COURIER_CANONICAL_STATE_REQUIRED');stateDirectory=derived;
   const nav = JSON.parse(regular(join(controlRoot, '.fcos-cli/release-state.json'))), board = JSON.parse(regular(nav.workboardPath)), workflow = board.checkpointPaths.workflow;
   const state = JSON.parse(regular(workflow)).unifiedCoordinator;
-  assertNativeCourierAdmission({...parsed,binding,stateDirectory,controlRoot,coordinatorEpoch:state.epoch});privateDir(stateDirectory);const reserveGet=createCourierReadBudget({now,wait});
+  const admission=assertNativeCourierAdmission({...parsed,binding,stateDirectory,controlRoot,coordinatorEpoch:state.epoch,now:now()});
+  const metadataNotAfter=plan.schemaVersion===3?Date.parse(JSON.parse(regular(admission.evidence.executionPreflight.path,16384)).preflight.capturedAt)+1800000:null;
+  privateDir(stateDirectory);const reserveGet=createCourierReadBudget({now,wait});
   const op = plan.binding.operationId, statePath = name => join(stateDirectory, `${op}.${name}.json`);
   const expected = { epoch: '', objective: 'reconciliation', ownerThreadId: FEATURES_OWNER, operationId: `xero-recovery-${op}`,
     bindingSha256: hash(canonical({ templateSha256, binding })) };
@@ -423,7 +481,7 @@ export async function createNativeXeroRecoveryRelay({ templateJson, binding, sta
   };
   const read = async route => { await reserveGet();try { return JSON.parse(gh(['api', route, '--method', 'GET'])); } catch { throw refusal('XERO_COURIER_GITHUB_READ_UNKNOWN'); } };
   const identity = async () => { const u = await read('user'); need(u.login === 'hocheunglai-oss' && u.id === ACTOR_ID, 'XERO_COURIER_GITHUB_ACTOR_MISMATCH'); return assertCourierRun(read, t, binding.runId, { allowCompleted: true }); };
-  async function acknowledgement(request, ref, commitSha, checkpoint) {
+  async function acknowledgement(request, ref, commitSha, checkpoint, execution) {
     const list = await read(`repos/${REPOSITORY}/actions/runs/${binding.runId}/artifacts?per_page=100`);
     need(Array.isArray(list.artifacts) && list.total_count === list.artifacts.length && list.artifacts.length <= 100, 'XERO_COURIER_ARTIFACTS_INCOMPLETE');
     const matches = list.artifacts.filter(a => a.name === courierArtifactName(binding.runId, request.submissionId));
@@ -435,18 +493,19 @@ export async function createNativeXeroRecoveryRelay({ templateJson, binding, sta
       && Date.parse(a.created_at) >= Date.parse(actual.job.started_at) && Date.parse(a.created_at) <= now() + 30000, 'XERO_COURIER_ARTIFACT_MISMATCH');
     await reserveGet();const archive = gh(['api', `repos/${REPOSITORY}/actions/artifacts/${a.id}/zip`, '--method','GET'], undefined, true);
     need(Buffer.isBuffer(archive) && archive.length === a.size_in_bytes && `sha256:${bytesHash(archive)}` === a.digest, 'XERO_COURIER_ARCHIVE_MISMATCH');
-    const envelope = decodeRuntimeMaterialArchive(archive), result = assertCourierAck(envelope, { templateSha256, ...binding, request, requestRef: ref, commitSha, plan, planSha256, checkpoint, now: now() });
+    const envelope = decodeRuntimeMaterialArchive(archive), result = assertCourierAck(envelope, { templateSha256, ...binding, request, requestRef: ref, commitSha, plan, planSha256, checkpoint, execution, now: now() });
     return { envelope, result, artifactId: a.id, archiveSha256: a.digest.slice(7) };
   }
   const lineage = () => {
-    const checkpoint = {}; let previous = null, nextStep = 'preflight';
+    const checkpoint = {}; let previous = null, nextStep = 'preflight', execution;
     for (const step of XERO_RECOVERY_STEPS) if (existsSync(statePath(`${step}.ack`))) {
       const ack=JSON.parse(regular(statePath(`${step}.ack`))),intent=JSON.parse(regular(statePath(`${step}.prepared`))),publication=JSON.parse(regular(statePath(`${step}.publication`))),request=parseCourierRequest(intent.rawRequestJson,t);
       need(request.step===nextStep && request.previousResultSha256===previous && publication.requestSha256===hash(intent.rawRequestJson),'XERO_COURIER_NATIVE_LINEAGE_CHANGED');
-      const checked=assertCourierAck(ack.envelope,{templateSha256,...binding,request,requestRef:publication.ref,commitSha:publication.commitSha,plan,planSha256,checkpoint,now:ack.envelope.receivedAt});need(canonical(checked)===canonical(ack.result),'XERO_COURIER_NATIVE_LINEAGE_CHANGED');
+      const checked=assertCourierAck(ack.envelope,{templateSha256,...binding,request,requestRef:publication.ref,commitSha:publication.commitSha,plan,planSha256,checkpoint,execution,now:ack.envelope.receivedAt});need(canonical(checked)===canonical(ack.result),'XERO_COURIER_NATIVE_LINEAGE_CHANGED');
+      if(plan.schemaVersion===3) execution=checked.execution;
       checkpoint[step] = ack.result.result; previous = ack.result.resultSha256; nextStep = ack.result.nextStep;
     }
-    return { checkpoint, previous, nextStep };
+    return { checkpoint, previous, nextStep, execution };
   };
   return Object.freeze({
     async submit(raw) {
@@ -458,6 +517,13 @@ export async function createNativeXeroRecoveryRelay({ templateJson, binding, sta
       // this check; later steps retain the same original deadline.
       need(plan.schemaVersion !== 2 || request.step !== 'preflight' || t.notAfter - now() >= 900000,
         'XERO_COURIER_AUTHORITY_EXPIRED');
+      if(plan.schemaVersion===3){
+        need(now()<metadataNotAfter && (request.step!=='preflight'||now()<plan.binding.armBefore && plan.binding.absoluteNotAfter-now()>=900000 && metadataNotAfter-now()>=900000),'XERO_COURIER_AUTHORITY_EXPIRED');
+        if(chain.execution)validateRecoveryExecutionClock(chain.execution,plan,now());
+        // The root+peer admitted genuine observation is checked before even GH credential access; live identity is rechecked inside the original guard.
+        need(Number.isSafeInteger(binding.executionJobStartedAt) && binding.executionJobStartedAt<=now()
+          && now()<binding.executionJobStartedAt+1800000 && (request.step!=='preflight'||binding.executionJobStartedAt+1800000-now()>=900000),'XERO_COURIER_AUTHORITY_EXPIRED');
+      }
       // Before credential access, fail closed on the actual accepted guard/owner.
       let commitSha;
       try {
@@ -470,7 +536,9 @@ export async function createNativeXeroRecoveryRelay({ templateJson, binding, sta
           recordIntent: ({ lease: held, phase }) => { const v = { lease: held, state: phase, durable: true }; record(statePath(`${request.step}.${phase}`), { ...v, rawRequestJson: raw, requestSha256: hash(raw), ref, binding, maximumRefPushes: 1, maximumPublisherStatusPosts: 1, maximumHostPosts: 1, maximumSanitizedAckUploads: 1 }); return completed(v); },
           submit: async ({lease:held}) => {
             activeSubmission = request.step;
-            await identity();
+            const current=await identity();
+            if(plan.schemaVersion===3)need(current.job.id===binding.jobId && current.job.status==='in_progress'
+              && Date.parse(current.job.started_at)===binding.executionJobStartedAt,'XERO_COURIER_RUN_MISMATCH');
             const env = { PATH: runtime.env.PATH, HOME: runtime.env.HOME, GH_CONFIG_DIR: runtime.env.GH_CONFIG_DIR, GH_HOST: 'github.com', GH_REPO: REPOSITORY, GH_PROMPT_DISABLED: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: 'FCOS native recovery', GIT_AUTHOR_EMAIL: 'fcos-native@example.invalid', GIT_COMMITTER_NAME: 'FCOS native recovery', GIT_COMMITTER_EMAIL: 'fcos-native@example.invalid' };
             const git = (args, input) => String(runCommand('/usr/bin/git', args, { cwd, env, encoding: 'utf8', input })).trim();
             need(realpathSync(git(['rev-parse','--path-format=absolute','--git-common-dir']))===realpathSync(join(controlRoot,'.git')) && git(['rev-parse','--show-object-format'])==='sha1','XERO_COURIER_LOCAL_REPOSITORY_MISMATCH');
@@ -483,7 +551,8 @@ export async function createNativeXeroRecoveryRelay({ templateJson, binding, sta
             // matching-lease adoption. The OUTER step guard below still requires
             // the actual HTTP artifact; publication ACKs cannot complete a step.
             const publication=courierPublicationStatus({templateJson,runId:binding.runId,ref,commitSha,raw,kind:'request'});
-            const active=()=>need(now()>=t.issuedAt&&now()<t.notAfter&&!existsSync(statePath('stopped')),'XERO_COURIER_AUTHORITY_EXPIRED');
+            const ordinaryDeadline=plan.schemaVersion===3?(request.step==='preflight'?plan.binding.armBefore:chain.execution.executionDeadlineAt):t.notAfter;
+            const active=()=>need(now()>=t.issuedAt&&now()<ordinaryDeadline&&!existsSync(statePath('stopped')),'XERO_COURIER_AUTHORITY_EXPIRED');
             const guardedPublication=async(phase,submit,validate)=>{
               const outcome=await runGuardedProviderWrite({expected,claim:()=>lease('assert',held),assertLease:()=>lease('assert',held),
                 recordIntent:({lease:actual,phase:state})=>{const v={lease:actual,state,durable:true};record(statePath(`${request.step}.publication-${phase}.${state}`),{...v,publication:publication.binding,bindingSha256:publication.bindingSha256,maximumProviderWrites:1});return completed(v);},
@@ -498,8 +567,8 @@ export async function createNativeXeroRecoveryRelay({ templateJson, binding, sta
             await guardedPublication('status',()=>{const output=gh(['api',publication.route,'--method','POST','--include','--input','-'],JSON.stringify(publication.body)),receipt=nativeGithubCreatedStatus(output,publication,now());
               record(statePath(`${request.step}.publication-status.provider-ack`),{...receipt,nativeCompleted:true,httpStatus:201,nativeOutputSha256:bytesHash(output)});return completed(receipt);},
               value=>{try{return JSON.parse(value.output).bindingSha256===publication.bindingSha256;}catch{return false;}});
-            active();const end = Math.min(t.notAfter, now() + 120000);
-            while (now() < end) { const ack = await acknowledgement(request, ref, commitSha, chain.checkpoint); if (ack) return completed(ack); await wait(10000); }
+            active();const end = Math.min(ordinaryDeadline, now() + 120000);
+            while (now() < end) { const ack = await acknowledgement(request, ref, commitSha, chain.checkpoint, chain.execution); if (ack) return completed(ack); await wait(10000); }
             throw refusal('XERO_COURIER_ACK_TIMEOUT_UNKNOWN');
           }, validateProviderResult: value => { try { return plain(JSON.parse(value.output)?.envelope); } catch { return false; } },
           recordOutcome: ({ lease: held, outcome }) => { const v = { lease: held, state: outcome.state, durable: true }; record(statePath(`${request.step}.${outcome.state}`), { ...v, reason: outcome.reason }); return completed(v); } });
@@ -515,15 +584,15 @@ export async function createNativeXeroRecoveryRelay({ templateJson, binding, sta
       const heldBytes=regular(statePath('held-lease')),held=JSON.parse(heldBytes),stoppedBytes=regular(statePath('stopped')),stopped=JSON.parse(stoppedBytes),uncertainBytes=regular(statePath(`${request.step}.uncertain`)),uncertain=JSON.parse(uncertainBytes),intent=JSON.parse(regular(statePath(`${request.step}.submitting`)));
       need(canonical(held.binding)===canonical(binding)&&held.templateSha256===templateSha256&&held.planSha256===planSha256&&stopped.readbackOnly===true&&stopped.requestSha256===hash(raw)
         &&uncertain.state==='uncertain'&&uncertain.durable===true&&canonical(uncertain.lease)===canonical(held.lease)&&intent.rawRequestJson===raw&&canonical(intent.lease)===canonical(held.lease),'XERO_COURIER_ORIGINAL_CLAIM_REQUIRED');
-      const a=JSON.parse(regular(fixed,65536)),scope={currentExecutorThreadId:FEATURES_OWNER,historicalOwnerThreadId:plan.binding.ownerThreadId,capability:{maximumDispatchPosts:1,maximumHostGets:1,maximumHostPosts:0,maximumSanitizedAckUploads:1,originalOutcomeMayResolve:false},templateSha256,planSha256,binding,requestSha256:hash(raw),originalClaimSha256:bytesHash(heldBytes),originalStoppedSha256:bytesHash(stoppedBytes),originalUncertainSha256:bytesHash(uncertainBytes),sourcePins:nativeCourierSourcePins(),dispatchId:a.dispatchId,issuedAt:a.issuedAt,notAfter:a.notAfter};
-      need(exact(a,['schemaVersion','kind','accepted','reviewerId','scope','scopeSha256','rootReview','independentReview','dispatchId','issuedAt','notAfter'])&&a.schemaVersion===1&&a.kind==='fcos_root_admitted_xero_owner_readback_dispatch_v1'&&a.accepted===true&&a.reviewerId==='/root'
+      const a=JSON.parse(regular(fixed,65536)),scope={currentExecutorThreadId:FEATURES_OWNER,historicalOwnerThreadId:plan.binding.ownerThreadId,capability:{maximumDispatchPosts:1,maximumHostGets:1,maximumHostPosts:0,maximumSanitizedAckUploads:1,originalOutcomeMayResolve:false},templateSha256,planSha256,binding,requestSha256:hash(raw),originalClaimSha256:bytesHash(heldBytes),originalStoppedSha256:bytesHash(stoppedBytes),originalUncertainSha256:bytesHash(uncertainBytes),sourcePins:nativeCourierSourcePins(),dispatchId:a.dispatchId,issuedAt:a.issuedAt,notAfter:a.notAfter,...(plan.schemaVersion===3?{executionPreflightSha256:hash(a.executionPreflightJson)}:{})};
+      need(exact(a,['schemaVersion','kind','accepted','reviewerId','scope','scopeSha256','rootReview','independentReview','dispatchId','issuedAt','notAfter',...(plan.schemaVersion===3?['executionPreflightJson']:[])])&&a.schemaVersion===1&&a.kind==='fcos_root_admitted_xero_owner_readback_dispatch_v1'&&a.accepted===true&&a.reviewerId==='/root'
         &&canonical(a.scope)===canonical(scope)&&a.scopeSha256===hash(canonical(scope)),'XERO_COURIER_READBACK_ADMISSION_REQUIRED');
       for(const [key,role]of [['rootReview','root'],['independentReview','independent']]){const ref=a[key];need(exact(ref,['path','sha256'])&&HASH.test(ref.sha256));const bytes=regular(ref.path,262144),r=JSON.parse(bytes);
         need(bytesHash(bytes)===ref.sha256&&r.kind==='fcos_actual_xero_owner_readback_dispatch_review_v1'&&r.accepted===true&&r.role===role&&r.scopeSha256===a.scopeSha256
-          &&r.actualOriginalSuccessfulClaimReviewed===true&&r.actualStoppedUnknownOutcomeReviewed===true&&r.actualOriginalAuthorityAndReadbackScopeReviewed===true&&r.actualSharedCoordinationQuotaReviewed===true
+          &&r.actualOriginalSuccessfulClaimReviewed===true&&r.actualStoppedUnknownOutcomeReviewed===true&&r.actualOriginalAuthorityAndReadbackScopeReviewed===true&&r.actualSharedCoordinationQuotaReviewed===true&&(plan.schemaVersion!==3||r.actualExecutionPreflightReviewed===true)
           &&typeof r.reviewedAt==='string'&&Number.isFinite(Date.parse(r.reviewedAt))&&Date.parse(r.reviewedAt)>=a.issuedAt-30000&&Date.parse(r.reviewedAt)<=now()+30000&&now()-Date.parse(r.reviewedAt)<=300000
           &&(role==='root'?r.reviewerId==='/root':typeof r.reviewerId==='string'&&/^\/root\/[a-z0-9_]+(?:\/[a-z0-9_]+)*$/.test(r.reviewerId)&&r.reviewerId!=='/root/xero_host_actor_auth'&&!r.reviewerId.startsWith('/root/xero_host_actor_auth/')),'XERO_COURIER_READBACK_ADMISSION_REQUIRED');}
-      const publicReadback={schemaVersion:1,kind:'fcos_xero_owner_readback_carrier_v1',templateSha256,planSha256,originalBinding:binding,requestSha256:scope.requestSha256,originalClaimSha256:scope.originalClaimSha256,originalStoppedSha256:scope.originalStoppedSha256,originalUncertainSha256:scope.originalUncertainSha256,admissionScopeSha256:a.scopeSha256,dispatchId:a.dispatchId,issuedAt:a.issuedAt,notAfter:a.notAfter};
+      const publicReadback={schemaVersion:1,kind:'fcos_xero_owner_readback_carrier_v1',templateSha256,planSha256,originalBinding:binding,requestSha256:scope.requestSha256,originalClaimSha256:scope.originalClaimSha256,originalStoppedSha256:scope.originalStoppedSha256,originalUncertainSha256:scope.originalUncertainSha256,admissionScopeSha256:a.scopeSha256,dispatchId:a.dispatchId,issuedAt:a.issuedAt,notAfter:a.notAfter,...(plan.schemaVersion===3?{executionPreflightJson:a.executionPreflightJson}:{})};
       parseOwnerReadbackCarrier(JSON.stringify(publicReadback),parsed);need(now()>=a.issuedAt&&now()<a.notAfter,'XERO_COURIER_AUTHORITY_EXPIRED');
       // Native records prove original success/unknown only after real root and
       // independent provenance review. Matching lease alone is never adopted.
@@ -544,7 +613,7 @@ export async function createNativeXeroRecoveryRelay({ templateJson, binding, sta
       try {
       const request=parseCourierRequest(raw,t),attempt=JSON.parse(regular(statePath('owner-readback.attempt'))),r=parseOwnerReadbackCarrier(JSON.stringify(attempt.readback),parsed);
       need(request&&r.requestSha256===hash(raw)&&existsSync(statePath('owner-readback.submitting'))&&typeof readerRunId==='string'&&/^[1-9][0-9]{0,19}$/.test(readerRunId)&&Number.isSafeInteger(Number(readerRunId))&&readerRunId!==binding.runId&&Number.isSafeInteger(readerJobId)&&readerJobId>0,'XERO_COURIER_ORIGINAL_CLAIM_REQUIRED');
-      const u=await read('user');need(u.id===ACTOR_ID&&u.login==='hocheunglai-oss');const actual=await assertCourierRun(read,t,readerRunId,{allowCompleted:true});need(actual.job.id===readerJobId,'XERO_COURIER_RUN_MISMATCH');
+      const u=await read('user');need(u.id===ACTOR_ID&&u.login==='hocheunglai-oss');const actual=await assertCourierRun(read,t,readerRunId,{allowCompleted:true,phase:'owner-readback'});need(actual.job.id===readerJobId,'XERO_COURIER_RUN_MISMATCH');
       const list=await read(`repos/${REPOSITORY}/actions/runs/${readerRunId}/artifacts?per_page=100`);need(Array.isArray(list.artifacts)&&list.total_count===list.artifacts.length&&list.artifacts.length<=100);
       const matches=list.artifacts.filter(v=>v.name===ownerReadbackArtifactName(binding.runId,readerRunId,op));need(matches.length<=1);if(!matches.length)return{status:'unknown_owner_readback_required',originalOutcomeResolved:false,retryable:false};
       const a=matches[0];need(Number.isSafeInteger(a.id)&&a.expired===false&&a.workflow_run?.id===Number(readerRunId)&&a.workflow_run.head_sha===t.caller.sha&&a.workflow_run.repository_id===REPO_ID&&a.workflow_run.head_repository_id===REPO_ID&&/^sha256:[a-f0-9]{64}$/.test(a.digest)&&a.size_in_bytes>0&&a.size_in_bytes<=131072
@@ -556,7 +625,7 @@ export async function createNativeXeroRecoveryRelay({ templateJson, binding, sta
     async readback(raw) {
       const r = parseCourierRequest(raw, t); need(existsSync(statePath(`${r.step}.publication`)), 'XERO_COURIER_ORIGINAL_PUBLICATION_REQUIRED');
       const p = JSON.parse(regular(statePath(`${r.step}.publication`))); need(p.requestSha256 === hash(raw));
-      await identity();const ack = await acknowledgement(r, p.ref, p.commitSha, lineage().checkpoint);
+      await identity();const chain=lineage(),ack = await acknowledgement(r, p.ref, p.commitSha, chain.checkpoint, chain.execution);
       return ack ? { status: 'original_actual_ack_observed_no_replay', ...ack } : { status: 'unknown_owner_readback_required', retryable: false };
     }
   });
@@ -590,15 +659,16 @@ lease=json.loads(raw(c['writeLeasePath']))
 if lease!=v['lease'] or any(lease.get(k)!=e[k] for k in e): raise ValueError('assert')
 print(json.dumps(lease))
 `;
-export function prepareNativeXeroLocatorPublication({templateJson,binding,epoch}) {
+export function prepareNativeXeroLocatorPublication({templateJson,binding,epoch,executionPreflightJson,now=Date.now()}) {
   const {template:t,templateSha256,plan,planSha256}=parseCourierTemplate(templateJson);
   try{validateVercelIngressTarget(t.hostConfiguration.target);}catch{throw refusal('XERO_COURIER_LOCATOR_TARGET_MISMATCH');}
   need(t.hostConfiguration.target.controllerSha===t.controllerSha,'XERO_COURIER_LOCATOR_TARGET_MISMATCH');
-  need(exact(binding,['runId','jobId','hostOrigin','deploymentId']) && /^[1-9][0-9]{0,19}$/.test(binding.runId)
+  need(exact(binding,['runId','jobId','hostOrigin','deploymentId',...(plan.schemaVersion===3?['executionPreflightSha256']:[])]) && /^[1-9][0-9]{0,19}$/.test(binding.runId)
     && Number.isSafeInteger(Number(binding.runId)) && Number.isSafeInteger(binding.jobId) && binding.jobId>0
     && /^https:\/\/[a-z0-9-]+\.vercel\.app$/.test(binding.hostOrigin) && /^dpl_[A-Za-z0-9]+$/.test(binding.deploymentId)
     && typeof epoch==='string' && /^[A-Za-z0-9_-]{1,128}$/.test(epoch),'XERO_COURIER_LOCATOR_TARGET_MISMATCH');
-  const locatorJson=canonical({schemaVersion:1,kind:'fcos_xero_host_locator_v1',deploymentId:binding.deploymentId,url:binding.hostOrigin});
+  if(plan.schemaVersion===3){ need(hash(executionPreflightJson)===binding.executionPreflightSha256,'XERO_COURIER_LOCATOR_TARGET_MISMATCH');parseExecutionPreflight(executionPreflightJson,t,now); }
+  const locatorJson=canonical({schemaVersion:plan.schemaVersion===3?3:1,kind:`fcos_xero_host_locator_v${plan.schemaVersion===3?3:1}`,deploymentId:binding.deploymentId,url:binding.hostOrigin,...(plan.schemaVersion===3?{executionPreflightSha256:binding.executionPreflightSha256}:{})});
   const ref=`${courierPrefix(t,binding.runId)}/locator`,scope={schemaVersion:1,kind:'fcos_native_xero_locator_publication_scope_v1',templateSha256,planSha256,binding:{...binding},
     sourcePins:nativeCourierSourcePins(),maximumRefPushes:1,maximumStatusPosts:1,financialAuthorityGranted:false};
   const scopeSha256=hash(canonical(scope));return {scope,scopeSha256,locatorJson,ref,expected:{epoch,objective:'production',ownerThreadId:FEATURES_OWNER,operationId:`xero-locator-publication-${plan.binding.operationId}`,bindingSha256:scopeSha256}};
@@ -609,11 +679,11 @@ function nativeIncludedJson(output,status,{complete=false}={}) {
   if(complete)need(!/^link\s*:/im.test(output.slice(0,separator.index)),'XERO_COURIER_PUBLICATION_INVALID');
   return JSON.parse(output.slice(separator.index+separator[0].length));
 }
-export async function createNativeXeroRecoveryLocatorPublisher({templateJson,binding,lease:held,cwd=process.cwd(),controlRoot=ROOT,capture,nativeRuntime,vercelRuntime,now=Date.now,wait=ms=>new Promise(r=>setTimeout(r,ms))}={}) {
+export async function createNativeXeroRecoveryLocatorPublisher({templateJson,binding,executionPreflightJson,lease:held,cwd=process.cwd(),controlRoot=ROOT,capture,nativeRuntime,vercelRuntime,now=Date.now,wait=ms=>new Promise(r=>setTimeout(r,ms))}={}) {
   need(typeof now==='function'&&typeof wait==='function'&&((nativeRuntime===undefined&&vercelRuntime===undefined)||typeof capture==='function'));
   const {template:t,templateSha256,plan,planSha256}=parseCourierTemplate(templateJson);
   const nav=JSON.parse(regular(join(controlRoot,'.fcos-cli/release-state.json'))),board=JSON.parse(regular(nav.workboardPath)),workflow=board.checkpointPaths.workflow;
-  const coordinator=JSON.parse(regular(workflow)).unifiedCoordinator,prepared=prepareNativeXeroLocatorPublication({templateJson,binding,epoch:coordinator.epoch});
+  const coordinator=JSON.parse(regular(workflow)).unifiedCoordinator,prepared=prepareNativeXeroLocatorPublication({templateJson,binding,epoch:coordinator.epoch,executionPreflightJson,now:now()});
   binding=JSON.parse(JSON.stringify(binding));held=JSON.parse(JSON.stringify(held));const {expected,scopeSha256,locatorJson,ref}=prepared;
   need(exact(held,[...Object.keys(expected),'leaseId','coordinationOnly','providerAuthorityGranted','uncertainOutcomeRequiresReadback'])
     &&Object.entries(expected).every(([k,v])=>held[k]===v)&&UUID.test(held.leaseId)&&held.coordinationOnly===true&&held.providerAuthorityGranted===false&&held.uncertainOutcomeRequiresReadback===true,'XERO_COURIER_LOCATOR_LEASE_REQUIRED');
@@ -636,7 +706,7 @@ export async function createNativeXeroRecoveryLocatorPublisher({templateJson,bin
     need(canonical(JSON.parse(assertLease().output))===canonical(held),'XERO_COURIER_LOCATOR_LEASE_REQUIRED');
     record(path('locator.attempt'),{scopeSha256,templateSha256,planSha256,binding,lease:held,maximumRefPushes:1,maximumStatusPosts:1,at:now()});attempted=true;
     const user=await read('user');need(user.login==='hocheunglai-oss'&&user.id===ACTOR_ID,'XERO_COURIER_GITHUB_ACTOR_MISMATCH');
-    const actual=await assertCourierRun(read,t,binding.runId);need(actual.job.id===binding.jobId,'XERO_COURIER_RUN_MISMATCH');
+    const actual=await assertCourierRun(read,t,binding.runId,{phase:plan.schemaVersion===3?'preparation':'execution'});need(actual.job.id===binding.jobId,'XERO_COURIER_RUN_MISMATCH');
     const callerRef=await read(`repos/${REPOSITORY}/git/ref/${t.caller.ref.slice(5)}`);need(callerRef.ref===t.caller.ref&&callerRef.object?.type==='commit'&&callerRef.object.sha===t.caller.sha,'XERO_COURIER_RUN_MISMATCH');
     const teamId=fcosConnectionIdentifier('vercel','Team ID'),projectId=fcosConnectionIdentifier('vercel','Project ID'),account=vercelRead('/v2/user');
     need(account.user?.username===fcosConnectionIdentifier('vercel','Account'),'XERO_COURIER_LOCATOR_TARGET_MISMATCH');
@@ -649,7 +719,9 @@ export async function createNativeXeroRecoveryLocatorPublisher({templateJson,bin
     const git=(args,input)=>String(run('/usr/bin/git',args,{cwd,input,encoding:'utf8',env})).trim();
     need(realpathSync(git(['rev-parse','--path-format=absolute','--git-common-dir']))===realpathSync(join(controlRoot,'.git'))&&git(['rev-parse','--show-object-format'])==='sha1'&&git(['rev-parse','HEAD'])===t.controllerSha,'XERO_COURIER_LOCAL_REPOSITORY_MISMATCH');
     active();const blob=git(['hash-object','-w','--stdin'],locatorJson);need(blob===gitHash('blob',Buffer.from(locatorJson)));
-    const tree=git(['mktree'],`100644 blob ${blob}\tlocator.json\n`),commitSha=git(['commit-tree',tree],'FCOS exact public recovery locator\n');need(SHA.test(tree)&&SHA.test(commitSha));
+    let treeInput=`100644 blob ${blob}\tlocator.json\n`;
+    if(plan.schemaVersion===3){const metadataBlob=git(['hash-object','-w','--stdin'],executionPreflightJson);need(metadataBlob===gitHash('blob',Buffer.from(executionPreflightJson)));treeInput=`100644 blob ${metadataBlob}\texecution-preflight.json\n`+treeInput;}
+    const tree=git(['mktree'],treeInput),commitSha=git(['commit-tree',tree],'FCOS exact public recovery locator\n');need(SHA.test(tree)&&SHA.test(commitSha));
     const publication=courierPublicationStatus({templateJson,runId:binding.runId,ref,commitSha,raw:locatorJson,kind:'locator'});
     record(path('locator.publication'),{scopeSha256,ref,commitSha,locatorSha256:hash(locatorJson),bindingSha256:publication.bindingSha256});
     const phase=async(name,submit,validate)=>{const result=await runGuardedProviderWrite({expected,claim:assertLease,assertLease,
@@ -670,7 +742,7 @@ export async function createNativeXeroRecoveryLocatorPublisher({templateJson,bin
 
 export async function nativeRelayMain(args = process.argv.slice(2), locatorOptions = {}) {
   try {
-    if(args.length===2&&args[0]==='publish-locator'){const input=JSON.parse(regular(resolve(args[1]),131072));need(exact(input,['templateJson','binding','lease']),'XERO_COURIER_LOCATOR_TARGET_MISMATCH');const publisher=await createNativeXeroRecoveryLocatorPublisher({...input,...locatorOptions});return publisher.publish();}
+    if(args.length===2&&args[0]==='publish-locator'){const input=JSON.parse(regular(resolve(args[1]),131072));need(exact(input,['templateJson','binding','lease',...(Object.hasOwn(input,'executionPreflightJson')?['executionPreflightJson']:[])]),'XERO_COURIER_LOCATOR_TARGET_MISMATCH');const publisher=await createNativeXeroRecoveryLocatorPublisher({...input,...locatorOptions});return publisher.publish();}
     if ((args.length === 2 && args[0] === 'original-warm-dispatch') || (args.length === 3 && args[0] === 'original-warm-run')) {
       const warm = await createNativeXeroRecoveryWarmDispatcher({ templateJson: regular(resolve(args[1]), 65536).toString('utf8') });
       return args[0] === 'original-warm-dispatch' ? await warm.dispatch() : await warm.observeRun(args[2]);

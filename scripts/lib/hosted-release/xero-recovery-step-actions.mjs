@@ -1,6 +1,6 @@
 import { serverSupabaseConfig } from '../../../api/_supabaseConfig.js';
 import { fcosConnectionIdentifier } from '../../../config/fcosConnections.js';
-import { parseXeroRecoveryStepPlan, recoveryStepSha256, recoveryStepCanonicalJson } from './xero-recovery-step-protocol.mjs';
+import { parseXeroRecoveryStepPlan, recoveryStepSha256, recoveryStepCanonicalJson, recoveryStepPreparationWindow, validateRecoveryExecutionClock } from './xero-recovery-step-protocol.mjs';
 
 const TOKEN = 'https://identity.xero.com/connect/token';
 const ORGANISATIONS = 'https://api.xero.com/api.xro/2.0/Organisations';
@@ -25,16 +25,18 @@ export function createXeroRecoveryStepResources({ planJson, privateEnvironment, 
   const headers = Object.freeze({ apikey: storage.key, authorization: `Bearer ${storage.key}`, accept: 'application/json',
     'content-type': 'application/json', 'accept-profile': 'public', 'content-profile': 'public' });
   const counts = { databaseRequests: 0, oauthPosts: 0, accountingGets: 0 };
-  const claims = new WeakMap();
-  const active = () => need(Number.isSafeInteger(now()) && now() >= b.issuedAt && now() < b.notAfter, 'XERO_STEP_EXPIRED');
-  async function http(url, init, { preserveBody = false, captureOnly = false, deadlineAt = b.notAfter, readback = false, callerSignal } = {}) {
+  const claims = new WeakMap(), window = recoveryStepPreparationWindow(plan);
+  let execution;
+  const deadline = () => execution?.executionDeadlineAt ?? window.notAfter;
+  const active = () => need(Number.isSafeInteger(now()) && now() >= window.issuedAt && now() < deadline(), 'XERO_STEP_EXPIRED');
+  async function http(url, init, { preserveBody = false, captureOnly = false, deadlineAt = deadline(), readback = false, callerSignal } = {}) {
     need(callerSignal instanceof AbortSignal);
     if (!captureOnly) need(!callerSignal.aborted, 'XERO_STEP_CANCELLED');
     if (!captureOnly && !readback) active();
     need(!preserveBody || url === TOKEN && init.method === 'POST');
     need(!captureOnly || url === `${origin}/rest/v1/rpc/xero_recovery_custody_capture` && init.method === 'POST');
     need(!readback || url.startsWith(`${origin}/rest/v1/rpc/xero_recovery_step_readback?`) && init.method === 'GET');
-    const ms = captureOnly ? 15000 : preserveBody || readback ? 30000 : Math.min(30000, b.notAfter - now(), deadlineAt - now());
+    const ms = captureOnly ? 15000 : preserveBody || readback ? 30000 : Math.min(30000, deadline() - now(), deadlineAt - now());
     need(ms > 0 && Number.isFinite(ms), 'XERO_STEP_EXPIRED');
     let timer, reader, cancel; const abort = new AbortController();
     // Only an already-dispatched token POST and its single capture may finish
@@ -91,6 +93,7 @@ export function createXeroRecoveryStepResources({ planJson, privateEnvironment, 
     async claim(input) {
       const result = await rpc('xero_recovery_step_claim', args(input), { callerSignal: input.signal });
       const request = JSON.parse(input.requestJson);
+      if (plan.schemaVersion === 3) execution = validateRecoveryExecutionClock(result.execution, plan, now());
       need(result?.decision === 'execute' && result.state === 'submitted_unknown' && result.operationId === b.operationId
         && result.planSha256 === planSha256 && result.requestSha256 === input.requestSha256
         && result.step === request.step && result.submissionId === request.submissionId && plain(result.checkpoint));
@@ -109,7 +112,9 @@ export function createXeroRecoveryStepResources({ planJson, privateEnvironment, 
   });
   return Object.freeze({ store, metrics: () => ({ ...counts }),
     async execute({ step, checkpoint, claim, signal }) {
-      need(signal instanceof AbortSignal && !signal.aborted); active();
+      need(signal instanceof AbortSignal && !signal.aborted);
+      if (plan.schemaVersion === 3) execution = validateRecoveryExecutionClock(claim?.execution, plan, now());
+      active();
       const actionRpc = (name, args, options = {}) => rpc(name, args, { ...options, callerSignal: signal });
       const actionRows = (table, select, filters) => rows(table, select, filters, signal);
       const actionConnection = (version, credentials = false) => connection(version, credentials, signal); need(plain(checkpoint));

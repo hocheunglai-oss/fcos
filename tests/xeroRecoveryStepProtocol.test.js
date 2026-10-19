@@ -24,7 +24,9 @@ const outcome = (step, renew) => ({
 // This in-memory backend is a deterministic failure fixture, NOT native DB,
 // actor or lease proof. Separate SQL tests cover the actual service-only CAS.
 function fixture(options = {}) {
-  const binding = { ...base(), ...options.binding }, planJson = json({ schemaVersion: options.planVersion || 1, kind: `fcos_xero_recovery_step_plan_v${options.planVersion || 1}`, binding });
+  const binding = { ...base(), ...options.binding };
+  if(options.planVersion===3){delete binding.issuedAt;delete binding.notAfter;Object.assign(binding,{preparedAt:T-3600000,armBefore:T+600000,absoluteNotAfter:T+3600000,executionWindowMs:1800000,...options.binding});}
+  const planJson = json({ schemaVersion: options.planVersion || 1, kind: `fcos_xero_recovery_step_plan_v${options.planVersion || 1}`, binding });
   const planSha256 = sha(planJson), steps = sequence(options.renew !== false), calls = [], actions = [];
   let clock = options.now ?? T, record = null, faults = options.faults || {}, bearerAllowed = true;
   const controller = new AbortController();
@@ -37,6 +39,8 @@ function fixture(options = {}) {
       assert.equal(record.lastResultSha256, request.previousResultSha256);
       record = { ...record, operationId: binding.operationId, planSha256, requestSha256: args.requestSha256, step: request.step,
         submissionId: request.submissionId, state: 'submitted_unknown', nextStep: null };
+      if(options.planVersion===3)record.execution ||= {firstStartedAt:clock,executionDeadlineAt:Math.min(clock+binding.executionWindowMs,binding.absoluteNotAfter)};
+      if(options.badClock)record.execution={...record.execution,...options.badClock};
       if (faults.claimAfter) throw Error('fixture lost claim acknowledgment');
       return { ...structuredClone(record), decision: options.claimDecision || 'execute' };
     },
@@ -218,4 +222,22 @@ test('v2 admits fresh work after minute15 but a possible action at its original 
   const expired = fixture({ planVersion: 2, binding: { notAfter: T + 1800000 }, advanceDuringAction: 1800001 });
   await assert.rejects(expired.submit()); assert.deepEqual(expired.actions, ['preflight']);
   assert(!expired.calls.includes('complete')); assert.equal(expired.record.state, 'submitted_unknown');
+});
+
+
+test('v3 delayed preparation starts once and cold protocol instances retain the durable clock',async()=>{
+  const f=fixture({planVersion:3,currentObservation:true});
+  const first=await f.submit();assert.equal(first.kind,'fcos_xero_recovery_step_result_v3');
+  assert.deepEqual(first.execution,{firstStartedAt:T,executionDeadlineAt:T+1800000});
+  f.advance(1000);const second=await f.submit();assert.deepEqual(second.execution,first.execution);
+  const read=await f.create().readback({bearer:'test-own-bearer',signal:f.controller.signal});assert.deepEqual(read.execution,first.execution);
+});
+for(const badClock of [{firstStartedAt:T+1},{executionDeadlineAt:T+1800001},{firstStartedAt:T-4000000}])test('v3 forged clock fails before any action or completion',async()=>{
+  const f=fixture({planVersion:3,badClock});await assert.rejects(f.submit(),{code:'XERO_STEP_STOPPED_OWNER_READBACK_REQUIRED'});
+  assert.deepEqual(f.actions,[]);assert.equal(f.calls.includes('complete'),false);assert.equal(f.record.state,'submitted_unknown');
+});
+test('v3 missed arm refuses before claim and expiry after action preserves unknown',async()=>{
+  const late=fixture({planVersion:3,now:T+600001});await assert.rejects(late.submit());assert.equal(late.calls.includes('claim'),false);
+  const expired=fixture({planVersion:3,currentObservation:true,advanceDuringAction:1800001});await assert.rejects(expired.submit());
+  assert.deepEqual(expired.actions,['preflight']);assert.equal(expired.calls.includes('complete'),false);assert.equal(expired.record.state,'submitted_unknown');
 });

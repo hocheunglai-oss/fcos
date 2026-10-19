@@ -5,24 +5,29 @@ import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,readdirSync,rmSync,real
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {nativeRelayMain,prepareNativeXeroLocatorPublication,courierPublicationStatus,canonical,hash,REPOSITORY,FEATURES_OWNER} from '../scripts/lib/hosted-release/xero-recovery-native-relay.mjs';
+import {createJoinedBrowserBoundary} from './helpers/xero-recovery-joined-browser.mjs';
 import {fcosConnectionIdentifier} from '../config/fcosConnections.js';
 const T=Date.now(),H='a'.repeat(64),S='1'.repeat(40),id=n=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
 // Actual CLI parser, physical Git objects and5818 guards; provider/Python
 // commands are explicit inert fixtures, never actual credentials/authority.
-function fixture(mode='success'){
+function fixture(mode='success',version=2){
  const root=realpathSync(mkdtempSync(join(tmpdir(),'fcos-native-locator-'))),calls=[];
  const gitEnv={PATH:'/usr/bin:/bin',HOME:root,GIT_CONFIG_GLOBAL:'/dev/null',GIT_CONFIG_NOSYSTEM:'1',GIT_AUTHOR_NAME:'Synthetic fixture',GIT_AUTHOR_EMAIL:'fixture@example.invalid',GIT_COMMITTER_NAME:'Synthetic fixture',GIT_COMMITTER_EMAIL:'fixture@example.invalid'};
  const git=args=>{const r=spawnSync('/usr/bin/git',args,{cwd:root,env:gitEnv,encoding:'utf8'});assert.equal(r.status,0,r.stderr);return r.stdout.trim();};
  git(['init','--initial-branch=codex/fixture']);git(['commit','--allow-empty','-m','synthetic controller']);const controller=git(['rev-parse','HEAD']);
  const planBinding={operationId:hash('synthetic-locator-operation'),ownerThreadId:id(1),tenantId:id(2),actorId:id(3),expectedVersion:449,refreshLeaseId:id(4),probeId:id(5),requestId:id(6),approvalSha256:H,sourceSha256:H,bindingSha256:H,organisationIdentitySha256:null,issuedAt:T-1000,notAfter:T+1799000,credentialPreservationCompositeApproved:true};
- const t={schemaVersion:2,kind:'fcos_xero_recovery_carrier_template_v2',planJson:canonical({schemaVersion:2,kind:'fcos_xero_recovery_step_plan_v2',binding:planBinding}),controllerSha:controller,
+ if(version===3){delete planBinding.issuedAt;delete planBinding.notAfter;Object.assign(planBinding,{preparedAt:T-3600000,armBefore:T+600000,absoluteNotAfter:T+3600000,executionWindowMs:1800000});}
+ const t={schemaVersion:version,kind:`fcos_xero_recovery_carrier_template_v${version}`,planJson:canonical({schemaVersion:version,kind:`fcos_xero_recovery_step_plan_v${version}`,binding:planBinding}),controllerSha:controller,
  caller:{ref:'refs/heads/codex/fixture-caller',sha:S,workflowRef:`${REPOSITORY}/.github/workflows/authenticated-release.yml@refs/heads/codex/fixture-caller`,workflowSha:S,jobWorkflowRef:`${REPOSITORY}/.github/workflows/hosted-xero-recovery-carrier.yml@${controller}`,jobWorkflowSha:controller,jobName:'xero-recovery-carrier',environment:'fcos-hosted-verification',subject:`repo:${REPOSITORY}:environment:fcos-hosted-verification`},
  hostConfiguration:{target:{teamId:fcosConnectionIdentifier('vercel','Team ID'),projectId:fcosConnectionIdentifier('vercel','Project ID'),customEnvironment:'fcos-xero-recovery-abcdef123456',controllerSha:controller,hostSourceSha256:H}},readCredential:{},readAcceptance:{},login:{origin:'https://legacy.vercel.app',publicAuth:{}},issuedAt:T-1000,notAfter:T+1799000,artifactCaptureAuthoritySha256:H};
- const templateJson=JSON.stringify(t),binding={runId:'123',jobId:22,hostOrigin:'https://fixed.vercel.app',deploymentId:'dpl_fixture'},prepared=prepareNativeXeroLocatorPublication({templateJson,binding,epoch:'production-reconciliation-20261005'});
+ let executionPreflightJson;
+ if(version===3){const browser=createJoinedBrowserBoundary({now:T,id:id(3),email:'owner@example.invalid',subject:'fixture-subject'});t.login.publicAuth=browser.publicAuth;t.login.origin=browser.publicAuth.preflight.origin;t.hostConfiguration.actorBinding={accessRevision:5};t.issuedAt=planBinding.preparedAt;t.notAfter=planBinding.absoluteNotAfter;
+  executionPreflightJson=canonical({schemaVersion:1,kind:'fcos_xero_execution_preflight_v1',operationId:planBinding.operationId,planSha256:hash(t.planJson),preflight:browser.publicAuth.preflight});}
+ const templateJson=JSON.stringify(t),binding={runId:'123',jobId:22,hostOrigin:'https://fixed.vercel.app',deploymentId:'dpl_fixture',...(version===3?{executionPreflightSha256:hash(executionPreflightJson)}:{})},prepared=prepareNativeXeroLocatorPublication({templateJson,binding,epoch:'production-reconciliation-20261005',executionPreflightJson,now:T});
  const lease={...prepared.expected,leaseId:id(9),coordinationOnly:true,providerAuthorityGranted:false,uncertainOutcomeRequiresReadback:true};
  mkdirSync(join(root,'.fcos-cli/outputs/hosted-xero-recovery-courier'),{recursive:true,mode:0o700});const workflow=join(root,'workflow.json'),board=join(root,'board.json');
  writeFileSync(workflow,JSON.stringify({unifiedCoordinator:{epoch:lease.epoch}}));writeFileSync(board,JSON.stringify({checkpointPaths:{workflow}}));writeFileSync(join(root,'.fcos-cli/release-state.json'),JSON.stringify({workboardPath:board}));
- const inputPath=join(root,'input.json'),input={templateJson,binding,lease};writeFileSync(inputPath,JSON.stringify(input));
+ const inputPath=join(root,'input.json'),input={templateJson,binding,lease,...(version===3?{executionPreflightJson}:{})};writeFileSync(inputPath,JSON.stringify(input));
  const team=fcosConnectionIdentifier('vercel','Team ID'),project=fcosConnectionIdentifier('vercel','Project ID');let commitSha,status;
  const repository={id:1278654816,full_name:REPOSITORY};
  const capture=(command,args,options={})=>{
@@ -51,7 +56,7 @@ function fixture(mode='success'){
    if(route==='user')value={id:265701760,login:mode==='foreign-actor'?'foreign':'hocheunglai-oss'};
    else if(route===`repos/${REPOSITORY}`)value=repository;
    else if(route.endsWith('/actions/runs/123'))value={id:123,run_attempt:1,repository,head_repository:repository,actor:{id:265701760,login:'hocheunglai-oss'},event:'workflow_dispatch',head_sha:S,head_branch:'codex/fixture-caller',path:'.github/workflows/authenticated-release.yml',status:'in_progress'};
-   else if(route.endsWith('/attempts/1/jobs?per_page=100'))value={total_count:1,jobs:[{id:mode==='foreign-job'?23:22,run_id:123,name:'xero-recovery-carrier',labels:['ubuntu-24.04'],status:'in_progress'}]};
+   else if(route.endsWith('/attempts/1/jobs?per_page=100'))value={total_count:1,jobs:[{id:mode==='foreign-job'?23:22,run_id:123,name:version===3?'xero-recovery-preparation':'xero-recovery-carrier',labels:['ubuntu-24.04'],status:'in_progress'}]};
    else if(route.endsWith('/git/ref/'+t.caller.ref.slice(5)))value={ref:t.caller.ref,object:{type:'commit',sha:S}};
    else if(route.endsWith('/git/ref/'+prepared.ref.slice(5)))value={ref:prepared.ref,object:{type:'commit',sha:commitSha}};
    else if(route.includes('/statuses?per_page=100')){assert.ok(status);const list=mode==='duplicate-status'?[status,status]:[{context:'unrelated'},status];return{status:0,stdout:'HTTP/2.0 200 OK\r\n'+(mode==='pagination'?'Link: <https://api.github.com/next>; rel="next"\r\n':'')+'content-type: application/json\r\n\r\n'+JSON.stringify(list)};}
@@ -82,3 +87,24 @@ test('caller-selected raw body, wrong lease binding and insufficient v2 runway r
 test('foreign GitHub config is refused before any GitHub or Vercel read',async()=>{const f=fixture();try{f.options.nativeRuntime.env.GH_CONFIG_DIR=f.root;await assert.rejects(nativeRelayMain(['publish-locator',f.inputPath],f.options),{code:'XERO_COURIER_LOCATOR_TARGET_MISMATCH'});assert.ok(f.calls.every(c=>c.command==='/usr/bin/python3'));}finally{f.cleanup();}});
 
 test('missing, malformed, foreign or mismatched custom-environment target is refused before native calls',async()=>{for(const change of [t=>delete t.hostConfiguration.target,t=>delete t.hostConfiguration.target.customEnvironment,t=>t.hostConfiguration.target.customEnvironment='production',t=>t.hostConfiguration.target.projectId='foreign',t=>t.hostConfiguration.target.controllerSha='f'.repeat(40)]){const f=fixture();try{const t=JSON.parse(f.input.templateJson);change(t);f.input.templateJson=JSON.stringify(t);writeFileSync(f.inputPath,JSON.stringify(f.input));await assert.rejects(nativeRelayMain(['publish-locator',f.inputPath],f.options),{code:'XERO_COURIER_LOCATOR_TARGET_MISMATCH'});assert.equal(f.calls.length,0);}finally{f.cleanup();}}});
+
+
+test('v3 actual locator CLI publishes both exact public files in the same single guarded push/status',async()=>{
+ const f=fixture('success',3);try{
+  const ack=await nativeRelayMain(['publish-locator',f.inputPath],f.options);
+  assert.equal(ack.httpStatus,201);assert.equal(ack.financialAuthorityGranted,false);
+  const tree=f.git(['ls-tree','--name-only',ack.commitSha]).split('\n');
+  assert.deepEqual(tree,['execution-preflight.json','locator.json']);
+  assert.equal(f.git(['show',ack.commitSha+':execution-preflight.json']),f.input.executionPreflightJson);
+  assert.equal(JSON.parse(f.git(['show',ack.commitSha+':locator.json'])).executionPreflightSha256,hash(f.input.executionPreflightJson));
+  assert.equal(f.calls.filter(c=>c.args.includes('push')).length,1);assert.equal(f.calls.filter(c=>c.args.includes('POST')).length,1);
+ }finally{f.cleanup();}
+});
+test('v3 lost status result remains consumed with no readback/next write or fabricated ACK',async()=>{
+ const f=fixture('lost-status',3);try{
+  await assert.rejects(nativeRelayMain(['publish-locator',f.inputPath],f.options));
+  assert.equal(f.calls.filter(c=>c.args.includes('push')).length,1);assert.equal(f.calls.filter(c=>c.args.includes('POST')).length,1);
+  assert.ok(!f.calls.some(c=>c.args[1]?.includes('/statuses?')));
+  const before=f.calls.length;await assert.rejects(nativeRelayMain(['publish-locator',f.inputPath],f.options));assert.equal(f.calls.length,before);
+ }finally{f.cleanup();}
+});

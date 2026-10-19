@@ -24,10 +24,13 @@ const json = value => Response.json(value);
 // Host/actor/login/protocol/SQL, package reconstruction, status validation,
 // Python claim/assert, JS guards and native archive consumption remain real.
 test('joined preflight succeeds once without Xero or overall release qualification', { timeout: 90000 }, async t => {
-  const host = await createJoinedHostFixture(t, { planVersion: 2 });
-  const now = () => host.at;
+  const host = await createJoinedHostFixture(t, { planVersion: process.env.XERO_JOINED_PLAN_VERSION === '3' ? 3 : 2 });
+  const v3 = process.env.XERO_JOINED_PLAN_VERSION === '3';
+  const now = v3 ? Date.now : () => host.at;
   const runId = host.options.caller.runId;
   const jobId = 22;
+  const lateRunway = v3 && process.env.XERO_JOINED_LATE_RUNWAY === '1';
+  const jobStartedAt = host.at - (lateRunway ? 900001 : 1000);
   const browser = createJoinedBrowserBoundary({ now: host.at, id: host.binding.actorId,
     email: host.email, subject: host.subject,
     token: host.headers['x-fcos-owner-bearer'],
@@ -76,7 +79,7 @@ test('joined preflight succeeds once without Xero or overall release qualificati
     originalExchangeReceiptSha256: 'a'.repeat(64), configurationReadbackSha256: 'a'.repeat(64),
     credential: readCredential });
   const template = {
-    schemaVersion: 2, kind: 'fcos_xero_recovery_carrier_template_v2', planJson: host.planJson,
+    schemaVersion: v3 ? 3 : 2, kind: `fcos_xero_recovery_carrier_template_v${v3 ? 3 : 2}`, planJson: host.planJson,
     controllerSha: caller.jobWorkflowSha, caller: { ...caller, jobName: 'xero-recovery-carrier' },
     hostConfiguration: { schemaVersion: 1, kind: 'fcos_compiled_xero_vercel_host_v1',
       target: { teamId, projectId, customEnvironment: 'fcos-xero-recovery-111111111111',
@@ -88,7 +91,7 @@ test('joined preflight succeeds once without Xero or overall release qualificati
       oauthExchangeReceiptSha256: 'a'.repeat(64), rootAcceptanceSha256: hash(readerReview) },
     readAcceptance: { vercelReadCredentialAcceptance: { json: readerReview, sha256: hash(readerReview) } },
     login: { origin: FIRST_RUNTIME.previousUrl, publicAuth: browser.publicAuth },
-    issuedAt: host.binding.issuedAt, notAfter: host.binding.notAfter,
+    issuedAt: v3 ? host.binding.preparedAt : host.binding.issuedAt, notAfter: v3 ? host.binding.absoluteNotAfter : host.binding.notAfter,
     artifactCaptureAuthoritySha256: 'b'.repeat(64),
   };
   const templateJson = JSON.stringify(template);
@@ -96,11 +99,14 @@ test('joined preflight succeeds once without Xero or overall release qualificati
   const prefix = courierPrefix(template, runId);
   const statuses = new Map();
   const publishedRefs = new Map();
-  const locator = { schemaVersion: 1, kind: 'fcos_xero_host_locator_v1',
+  const executionPreflightJson = canonical({ schemaVersion: 1, kind: 'fcos_xero_execution_preflight_v1', operationId: host.binding.operationId, planSha256: parsed.planSha256, preflight: browser.publicAuth.preflight });
+  const locator = { schemaVersion: v3 ? 3 : 1, kind: `fcos_xero_host_locator_v${v3 ? 3 : 1}`, ...(v3 ? { executionPreflightSha256: hash(executionPreflightJson) } : {}),
     deploymentId: 'dpl_joinedfixture', url: 'https://fixed.vercel.app' };
   const makePublicCommit = (filename, raw) => {
     const blob = git(['hash-object', '-w', '--stdin'], raw);
-    const tree = git(['mktree'], `100644 blob ${blob}\t${filename}\n`);
+    let treeInput = `100644 blob ${blob}\t${filename}\n`;
+    if (v3 && filename === 'locator.json') { const metadataBlob = git(['hash-object','-w','--stdin'],executionPreflightJson); treeInput = `100644 blob ${metadataBlob}\texecution-preflight.json\n` + treeInput; }
+    const tree = git(['mktree'], treeInput);
     return git(['commit-tree', tree], 'Inert exact public courier fixture\n');
   };
   const publishStatus = (ref, commitSha, raw, kind) => {
@@ -114,7 +120,7 @@ test('joined preflight succeeds once without Xero or overall release qualificati
   };
   // The already published locator is synthetic provider input in this test.
   // Its new native publication entrypoint is covered by a separate focused test.
-  const locatorRaw = JSON.stringify(locator);
+  const locatorRaw = v3 ? canonical(locator) : JSON.stringify(locator);
   const locatorCommit = makePublicCommit('locator.json', locatorRaw);
   publishedRefs.set(`${prefix}/locator`, locatorCommit);
   publishStatus(`${prefix}/locator`, locatorCommit, locatorRaw, 'locator');
@@ -140,7 +146,7 @@ test('joined preflight succeeds once without Xero or overall release qualificati
       return { id: artifact.id, digest: hash(artifactBytes) };
     }
   } } });
-  const { runWarmXeroRecoveryCarrier, buildCourierExpectedFiles } = await import('../../scripts/hosted-xero-recovery-carrier.mjs');
+  const { runWarmXeroRecoveryCarrier, prepareWarmXeroRecoveryCarrier, buildCourierExpectedFiles } = await import('../../scripts/hosted-xero-recovery-carrier.mjs');
   const expectedFiles = await buildCourierExpectedFiles({ t: template, runId });
   const inventory = [], sourceByUid = new Map();
   const directories = parts => {
@@ -169,7 +175,8 @@ test('joined preflight succeeds once without Xero or overall release qualificati
     display_title: `FCOS original Xero carrier ${randomUUID()}` };
   const jobs = { total_count: 1, jobs: [{ id: jobId, run_id: Number(runId),
     name: 'xero-recovery-carrier', labels: ['ubuntu-24.04'], status: 'in_progress',
-    started_at: new Date(host.at - 1000).toISOString() }] };
+    started_at: new Date(jobStartedAt).toISOString() }] };
+  if (v3) { jobs.jobs.push({ id: 21, run_id: Number(runId), name: 'xero-recovery-preparation', labels: ['ubuntu-24.04'], status: 'completed', conclusion: 'success' }); jobs.total_count = 2; }
   const githubRead = route => {
     if (route === 'user') return { id: 265701760, login: 'hocheunglai-oss' };
     if (route === `repos/${REPOSITORY}`) return repository;
@@ -190,9 +197,8 @@ test('joined preflight succeeds once without Xero or overall release qualificati
       return { sha, parents: [], tree: { sha: git(['show', '-s', '--format=%T', sha]) } };
     }
     if (route.includes('/git/trees/')) {
-      const sha = route.split('/').at(-1), match = /^(\d+) (\w+) ([a-f0-9]{40})\t([^\n]+)$/.exec(git(['ls-tree', sha]));
-      assert.ok(match);
-      return { sha, truncated: false, tree: [{ mode: match[1], type: match[2], sha: match[3], path: match[4] }] };
+      const sha = route.split('/').at(-1), rows = git(['ls-tree',sha]).split('\n').map(line => { const match = /^(\d+) (\w+) ([a-f0-9]{40})\t([^\n]+)$/.exec(line); assert.ok(match); return { mode:match[1],type:match[2],sha:match[3],path:match[4] }; });
+      return { sha, truncated: false, tree: rows };
     }
     if (route.includes('/git/blobs/')) {
       const sha = route.split('/').at(-1), bytes = Buffer.from(git(['cat-file', 'blob', sha]));
@@ -275,26 +281,27 @@ test('joined preflight succeeds once without Xero or overall release qualificati
   writeFileSync(workboard, JSON.stringify({ checkpointPaths: { workflow: workflowPath } }));
   mkdirSync(join(controlRoot, '.fcos-cli'), { recursive: true });
   writeFileSync(join(controlRoot, '.fcos-cli/release-state.json'), JSON.stringify({ workboardPath: workboard }));
-  const binding = { runId, jobId, hostOrigin: locator.url, deploymentId: locator.deploymentId, rootAdmissionSha256: '' };
+  const binding = { runId, jobId, hostOrigin: locator.url, deploymentId: locator.deploymentId, rootAdmissionSha256: '', ...(v3 ? { executionPreflightSha256: hash(executionPreflightJson), executionJobStartedAt: jobStartedAt } : {}) };
   const target = { epoch: 'joined-fixture-epoch', featuresOwnerThreadId: FEATURES_OWNER,
     artifactCaptureAuthoritySha256: template.artifactCaptureAuthoritySha256,
     runId, jobId, hostOrigin: locator.url, deploymentId: locator.deploymentId,
     ownerThreadId: host.binding.ownerThreadId, actorId: host.binding.actorId,
     approvalSha256: host.binding.approvalSha256, sourceSha256: host.binding.sourceSha256,
-    controllerSha: template.controllerSha };
+    controllerSha: template.controllerSha, ...(v3 ? { executionPreflightSha256: hash(executionPreflightJson), executionJobStartedAt: jobStartedAt } : {}) };
   const evidence = {};
   for (const name of ['originalAuthority', 'artifactCaptureAuthority', 'hostDeploymentSourceReceipt']) evidence[name] = save(`synthetic-${name}.json`, { fixture: 'INERT_NO_LIVE_AUTHORITY' });
   evidence.coordinationQuota = save('synthetic-coordination-quota.json', {
     kind: 'fcos_actual_xero_courier_shared_get_quota_v1', accepted: true, repository: REPOSITORY,
     nativeGetsPerMinute: 20, carrierGetsPerMinute: 20, sharedMaximum: 45,
     maximumConcurrentClients: 2, actualSharedPreflightReviewed: true });
+  if (v3) { const path = join(stateDirectory,'execution-preflight.json'); writeFileSync(path,executionPreflightJson,{mode:0o600}); evidence.executionPreflight = {path,sha256:hash(executionPreflightJson)}; }
   const nativeSourcePins = nativeCourierSourcePins();
   const scopeSha256 = hash(canonical({ templateSha256: parsed.templateSha256, planSha256: parsed.planSha256,
     target, sourcePins: nativeSourcePins, evidence }));
   for (const [name, role, reviewerId] of [['rootReview', 'root', '/root'], ['independentReview', 'independent', '/root/synthetic_fixture_peer']]) evidence[name] = save(`synthetic-${name}.json`, {
     kind: 'fcos_actual_native_xero_courier_action_review_v1', accepted: true, role, reviewerId, scopeSha256,
     originalHumanAuthorityProvenanceReviewed: true, actualDeploymentSourceProvenanceReviewed: true,
-    actualSharedCoordinationQuotaReviewed: true, actualPublisherStatusScopeAndConsumersReviewed: true });
+    actualSharedCoordinationQuotaReviewed: true, actualPublisherStatusScopeAndConsumersReviewed: true, ...(v3 ? { actualExecutionPreflightReviewed: true } : {}) });
   binding.rootAdmissionSha256 = save('root-native-admission.json', {
     schemaVersion: 1, kind: 'fcos_root_admitted_native_xero_courier_v1', reviewerId: '/root', accepted: true,
     templateSha256: parsed.templateSha256, planSha256: parsed.planSha256, target,
@@ -331,6 +338,22 @@ test('joined preflight succeeds once without Xero or overall release qualificati
     nativeRuntime: { credentialAvailable: true, command: 'fixture-gh',
       env: { PATH: process.env.PATH, HOME: controlRoot, GH_CONFIG_DIR: controlRoot } },
     wait: async () => Promise.race([artifactReady, carrierStopped.then(error => { throw error; })]) });
+  if (lateRunway) {
+    await assert.rejects(native.submit(host.request('preflight',null)),{code:'XERO_COURIER_AUTHORITY_EXPIRED'});
+    assert.equal(nativeCalls.length,0);assert.ok(!readdirSync(stateDirectory).some(name=>name.includes('claim-attempt')||name.includes('.prepared.')));
+    assert.equal((await host.db.query('select count(*)::int n from public.xero_recovery_step_attempts')).rows[0].n,0);
+    return;
+  }
+  if (v3) {
+    const executionJob=jobs.jobs[0],prepJob=jobs.jobs[1];
+    jobs.jobs=[{...prepJob,status:'in_progress',conclusion:null}];jobs.total_count=1;
+    const prepared=await prepareWarmXeroRecoveryCarrier({templateJson,fetchImpl,now,signal:controller.signal,
+      env:{GITHUB_REPOSITORY:REPOSITORY,GITHUB_RUN_ID:runId,GITHUB_RUN_ATTEMPT:'1',GITHUB_TOKEN:'FIXTURE_PRIVATE_GITHUB_TOKEN_12345'},wait:async()=>assert.fail('Already published fixture locator')});
+    assert.equal(prepared.status,'actual_publisher_preparation_complete');
+    assert.equal(calls.filter(call=>call.origin===locator.url || call.origin==='https://api.vercel.com').length,0);
+    assert.equal((await host.db.query('select count(*)::int n from public.xero_recovery_step_attempts')).rows[0].n,0);
+    jobs.jobs=[executionJob,prepJob];jobs.total_count=2;
+  }
   const carrier = runWarmXeroRecoveryCarrier({ templateJson, fetchImpl, now, signal: controller.signal,
     env: { GITHUB_REPOSITORY: REPOSITORY, GITHUB_RUN_ID: runId, GITHUB_RUN_ATTEMPT: '1',
       GITHUB_TOKEN: 'FIXTURE_PRIVATE_GITHUB_TOKEN_12345', FCOS_HOSTED_VERCEL_READ_TOKEN: readToken,
@@ -348,6 +371,7 @@ test('joined preflight succeeds once without Xero or overall release qualificati
   const result = await Promise.race([nativeSubmission, carrierStopped.then(error => { throw error; })]);
   assert.equal(result.status, 'submitted_acknowledged');
   assert.equal(result.result.step, 'preflight');
+  if (v3) { assert.equal(result.result.kind,'fcos_xero_recovery_step_result_v3'); assert.ok(result.result.execution.firstStartedAt > host.binding.preparedAt + 3500000); assert.equal(result.result.execution.executionDeadlineAt,result.result.execution.firstStartedAt+1800000); }
   assert.equal(result.result.nextStep, 'custodyPrepare');
   assert.equal(result.result.executionAuthorityGranted, false);
   assert.equal(result.result.qualificationAccepted, false);
