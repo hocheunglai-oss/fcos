@@ -1,115 +1,357 @@
-name: FCOS authenticated release evidence
-
-on:
+# One-time qualification bootstrap template, not an installed Actions workflow.
+# Replace every controller placeholder with the admitted immutable controller.
+# Publish only as authenticated-release.yml on the separately admitted protected qualification branch.
+# Admission binds that branch/commit/candidate/setup; Production authority is never available.
+# Original warm start only waits on public fixed refs/source proof until a
+# separately guarded native request exists. Its dispatch never approves a step.
+# Owner readback is a separate root-admitted finite orchestration dispatch. It
+# cannot submit a financial step; OIDC authenticates source/run, not input mode.
+name: FCOS hosted qualification bootstrap
+run-name: ${{ inputs.xero_recovery_mode == 'original-warm' && format('FCOS original Xero carrier {0}', inputs.xero_original_warm_dispatch_id) || inputs.bootstrap_phase == 'toolchain' && format('FCOS toolchain {0}', inputs.intent_sha256) || format('FCOS hosted qualification {0}', inputs.candidate_sha || 'resume saved manifest') }}
+'on':
   workflow_dispatch:
     inputs:
-      expected_commit:
-        description: Full lowercase SHA of the reviewed PR candidate.
-        required: true
+      bootstrap_phase:
+        description: Read-only setup discovery, one-time image publication or actual qualification; never Production.
+        type: choice
+        default: qualification
+        options:
+          - qualification
+          - toolchain
+          - setup-discovery
+          - preservation-preflight
+      intent_sha256:
+        description: Exact held legacy publication intent; required only for the toolchain phase.
         type: string
-      candidate_url:
-        description: Exact immutable Vercel candidate origin for that SHA.
-        required: true
+        required: false
+      candidate_sha:
+        description: Exact reviewed candidate SHA for a new release.
         type: string
-
-# The trusted harness receives read-only deployment metadata access and never
-# creates a check-run. It publishes non-secret evidence only after acceptance.
-permissions:
-  contents: read
-
+        required: false
+      plan:
+        description: Reviewed JSON business release plan. Required for a new release.
+        type: string
+        required: false
+      resume_manifest:
+        description: Saved unchanged release manifest for recovery. Do not generate a new release ID.
+        type: string
+        required: false
+      xero_recovery_mode:
+        description: Separate finite orchestration purposes; disabled for qualification. No financial authority.
+        type: choice
+        default: disabled
+        options:
+          - disabled
+          - owner-readback
+          - original-warm
+      xero_original_warm_dispatch_id:
+        description: Native one-time public correlation UUID, never authority; original template comes only from the admitted repository variable.
+        type: string
+        required: false
+      xero_recovery_template_base64:
+        description: Exact original trusted public carrier template from the native readback admission.
+        type: string
+        required: false
+      xero_recovery_readback_base64:
+        description: Exact finite public owner-readback scope; contains no credential or request authority.
+        type: string
+        required: false
+permissions: {}
 jobs:
-  require-default-branch-dispatch:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Reject a non-default-branch dispatch
-        env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          TRUSTED_REF_PROTECTED: ${{ github.ref_protected }}
-        run: |
-          if [ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]; then
-            echo "::error::Run this workflow from the protected default branch only."
-            exit 1
-          fi
-          if [ "$TRUSTED_REF_PROTECTED" != "true" ]; then
-            echo "::error::Protect the default branch and require workflow-owner review before enabling authenticated release evidence."
-            exit 1
-          fi
-
-  authenticated-candidate:
-    needs: require-default-branch-dispatch
-    runs-on: ubuntu-latest
-    # This protected environment must require a human reviewer before any
-    # environment secret is exposed. Its name is deliberately fixed here.
-    environment: fcos-ci-readonly
+  toolchain:
+    if: ${{ inputs.xero_recovery_mode == 'disabled' && inputs.bootstrap_phase == 'toolchain' }}
     permissions:
       contents: read
-      deployments: read
+      actions: read
+      packages: write
+    uses: hocheunglai-oss/fcos/.github/workflows/hosted-release-toolchain.yml@c291a6e1b0a00644c60467003505b41506d69dad
+    with:
+      source_sha: c291a6e1b0a00644c60467003505b41506d69dad
+      intent_sha256: ${{ inputs.intent_sha256 }}
+  setup_discovery:
+    name: Setup discovery
+    if: ${{ inputs.xero_recovery_mode == 'disabled' && inputs.bootstrap_phase == 'setup-discovery' && vars.FCOS_HOSTED_SETUP_DISCOVERY_ADMITTED == 'true' }}
+    runs-on: ubuntu-24.04
+    environment: fcos-hosted-verification
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
     env:
-      FCOS_E2E_EXPECTED_COMMIT: ${{ inputs.expected_commit }}
-      FCOS_E2E_CANDIDATE_URL: ${{ inputs.candidate_url }}
+      FCOS_SETUP_DISCOVERY_BOOTSTRAP: 'true'
+      FCOS_HOSTED_SETUP_DISCOVERY_ADMITTED: ${{ vars.FCOS_HOSTED_SETUP_DISCOVERY_ADMITTED }}
+      FCOS_HOSTED_ENVIRONMENT: fcos-hosted-verification
+      FCOS_CONTROLLER_DIRECTORY: controller
+      FCOS_CANDIDATE_DIRECTORY: candidate
+      FCOS_CONTROLLER_SHA: c291a6e1b0a00644c60467003505b41506d69dad
+      FCOS_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      FCOS_ADMITTED_DISCOVERY_SETUP: ${{ vars.FCOS_ADMITTED_DISCOVERY_SETUP }}
+      FCOS_ADMITTED_DISCOVERY_SETUP_SHA256: ${{ vars.FCOS_ADMITTED_DISCOVERY_SETUP_SHA256 }}
+      FCOS_DISCOVERY_OUTPUT: setup-discovery.json
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out admitted controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          # Never checkout, install, or execute PR-head repository code.
-          ref: ${{ github.sha }}
+          repository: hocheunglai-oss/fcos
+          ref: c291a6e1b0a00644c60467003505b41506d69dad
+          path: controller
+          fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 24
-          cache: npm
-      - name: Configure private state paths on the runner
-        run: |
-          state_dir="$RUNNER_TEMP/fcos-e2e-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          echo "FCOS_E2E_STATE_DIR=$state_dir" >> "$GITHUB_ENV"
-          echo "FCOS_E2E_STORAGE_STATE=$state_dir/auth.json" >> "$GITHUB_ENV"
-          echo "FCOS_E2E_PROTECTION_STATE=$state_dir/protection.json" >> "$GITHUB_ENV"
-      - name: Create private state directory
-        run: node scripts/e2e-private-state.mjs prepare
-      - name: Verify the exact immutable candidate before test authentication
+          node-version: 24.18.0
+      - name: Install admitted controller dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Admit discovery before candidate checkout
+        run: node controller/scripts/hosted-release-manifest.mjs --discover-setup --validate-dispatch-only
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          FCOS_E2E_VERCEL_BYPASS: ${{ secrets.FCOS_E2E_VERCEL_BYPASS }}
-        run: node scripts/verify-e2e-candidate.mjs
-      - name: Require the governed renewable FCUNO identity
-        env:
-          FCOS_AUTH_E2E_ENABLED: ${{ vars.FCOS_AUTH_E2E_ENABLED }}
-          FCOS_E2E_EMAIL: ${{ secrets.FCOS_E2E_EMAIL }}
-          FCOS_E2E_PASSWORD: ${{ secrets.FCOS_E2E_PASSWORD }}
-        run: |
-          if [ "$FCOS_AUTH_E2E_ENABLED" != "true" ]; then
-            echo "::error::Authenticated browser verification is disabled. Provision and enable the governed renewable test identity."
-            exit 1
-          fi
-          test -n "$FCOS_E2E_EMAIL"
-          test -n "$FCOS_E2E_PASSWORD"
-      - run: npm ci
-      - run: npx playwright install --with-deps chrome
-      - id: browser
-        name: Run the trusted read-only browser harness
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ env.FCOS_CANDIDATE_SHA }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install trusted runtime browser
+        run: npx --no-install playwright install --with-deps chromium
+        working-directory: controller
+      - name: Discover public setup baseline
+        run: node controller/scripts/hosted-release-manifest.mjs --discover-setup
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          FCOS_REQUIRE_AUTH_E2E: 1
-          FCOS_E2E_VERCEL_BYPASS: ${{ secrets.FCOS_E2E_VERCEL_BYPASS }}
-          FCOS_E2E_EMAIL: ${{ secrets.FCOS_E2E_EMAIL }}
-          FCOS_E2E_PASSWORD: ${{ secrets.FCOS_E2E_PASSWORD }}
-        # Screenshot/video suppression is configured for every authenticated
-        # project in playwright.config.js; screenshot is not a CLI option.
-        run: npm run test:e2e -- --trace=off
-      - name: Record non-secret authenticated candidate evidence
-        if: ${{ steps.browser.outcome == 'success' }}
-        env:
-          FCOS_E2E_HARNESS_SHA: ${{ github.sha }}
-        run: |
-          umask 077
-          node -e 'const fs = require("node:fs"); fs.writeFileSync(`${process.env.RUNNER_TEMP}/fcos-ci-evidence.json`, `${JSON.stringify({ candidateSha: process.env.FCOS_E2E_EXPECTED_COMMIT, candidateUrl: process.env.FCOS_E2E_BASE_URL, harnessSha: process.env.FCOS_E2E_HARNESS_SHA })}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });'
-      - name: Upload authenticated candidate evidence
-        if: ${{ steps.browser.outcome == 'success' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: fcos-ci-evidence-${{ inputs.expected_commit }}
-          path: ${{ runner.temp }}/fcos-ci-evidence.json
-          if-no-files-found: error
-          retention-days: 7
-      - name: Remove private browser state
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+          FCOS_HOSTED_VERCEL_READ_TOKEN: ${{ secrets.FCOS_HOSTED_VERCEL_READ_TOKEN }}
+          FCOS_HOSTED_SCHEMA_DATABASE_URL: ${{ secrets.FCOS_HOSTED_SCHEMA_DATABASE_URL }}
+          FCOS_PRODUCTION_VERIFICATION_BYPASS: ${{ secrets.FCOS_PRODUCTION_VERIFICATION_BYPASS }}
+          FCOS_HOSTED_RUNTIME_EMAIL: ${{ secrets.FCOS_HOSTED_RUNTIME_EMAIL }}
+          FCOS_HOSTED_RUNTIME_PASSWORD: ${{ secrets.FCOS_HOSTED_RUNTIME_PASSWORD }}
+          FCOS_HOSTED_RUNTIME_EXPECTED_ROLE: ${{ vars.FCOS_HOSTED_RUNTIME_EXPECTED_ROLE }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: ${{ always() }}
-        run: node scripts/e2e-private-state.mjs cleanup
+        with:
+          name: ${{ format('fcos-setup-discovery-{0}', github.run_id) }}
+          path: setup-discovery.json
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: false
+  preservation_preflight:
+    name: Preservation preflight
+    if: ${{ inputs.xero_recovery_mode == 'disabled' && inputs.bootstrap_phase == 'preservation-preflight' && vars.FCOS_HOSTED_PRESERVATION_PREFLIGHT_ADMITTED == 'true' }}
+    runs-on: ubuntu-24.04
+    environment: fcos-hosted-dependency-verification
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    env:
+      FCOS_SETUP_DISCOVERY_BOOTSTRAP: 'true'
+      FCOS_HOSTED_PRESERVATION_PREFLIGHT_ADMITTED: ${{ vars.FCOS_HOSTED_PRESERVATION_PREFLIGHT_ADMITTED }}
+      FCOS_HOSTED_ENVIRONMENT: fcos-hosted-dependency-verification
+      FCOS_CONTROLLER_DIRECTORY: controller
+      FCOS_CANDIDATE_DIRECTORY: candidate
+      FCOS_CONTROLLER_SHA: c291a6e1b0a00644c60467003505b41506d69dad
+      FCOS_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      FCOS_ADMITTED_PRESERVATION_PREFLIGHT: ${{ vars.FCOS_ADMITTED_PRESERVATION_PREFLIGHT }}
+      FCOS_ADMITTED_PRESERVATION_PREFLIGHT_SHA256: ${{ vars.FCOS_ADMITTED_PRESERVATION_PREFLIGHT_SHA256 }}
+      FCOS_PRESERVATION_PREFLIGHT_OUTPUT: preservation-preflight.json
+    steps:
+      - name: Check out admitted controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: c291a6e1b0a00644c60467003505b41506d69dad
+          path: controller
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - name: Install admitted controller dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Admit preservation preflight before candidate checkout
+        run: node controller/scripts/hosted-preservation-preflight.mjs --validate-dispatch-only
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ env.FCOS_CANDIDATE_SHA }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Observe preservation without release authority
+        run: node controller/scripts/hosted-preservation-preflight.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+          FCOS_HOSTED_PRESERVATION_DATABASE_URL: ${{ secrets.FCOS_HOSTED_PRESERVATION_DATABASE_URL }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ always() }}
+        with:
+          name: ${{ format('fcos-preservation-preflight-{0}', github.run_id) }}
+          path: preservation-preflight.json
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: false
+  manifest:
+    name: Prepare immutable release manifest
+    if: ${{ inputs.xero_recovery_mode == 'disabled' && inputs.bootstrap_phase == 'qualification' && vars.FCOS_HOSTED_QUALIFICATION_ADMITTED == 'true' }}
+    runs-on: ubuntu-24.04
+    environment: fcos-hosted-verification
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      manifest: ${{ steps.manifest.outputs.manifest }}
+    env:
+      FCOS_QUALIFICATION_BOOTSTRAP: 'true'
+      FCOS_HOSTED_QUALIFICATION_ADMITTED: ${{ vars.FCOS_HOSTED_QUALIFICATION_ADMITTED }}
+      FCOS_CONTROLLER_DIRECTORY: controller
+      FCOS_CANDIDATE_DIRECTORY: candidate
+      FCOS_CONTROLLER_SHA: c291a6e1b0a00644c60467003505b41506d69dad
+      FCOS_ADMITTED_RELEASE_SETUP: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP }}
+      FCOS_ADMITTED_RELEASE_SETUP_SHA256: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP_SHA256 }}
+      FCOS_CANDIDATE_SHA: ${{ fromJSON(inputs.resume_manifest || '{}').candidate.sha || inputs.candidate_sha }}
+      FCOS_RELEASE_PLAN: ${{ inputs.plan }}
+      FCOS_RESUME_MANIFEST: ${{ inputs.resume_manifest }}
+    steps:
+      - name: Check out admitted controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: c291a6e1b0a00644c60467003505b41506d69dad
+          path: controller
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - name: Install admitted controller dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Admit qualification dispatch before candidate checkout
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          const resume = process.env.FCOS_RESUME_MANIFEST;
+          const plan = process.env.FCOS_RELEASE_PLAN;
+          if (!!resume === !!plan) throw new Error('Exactly one qualification plan or unchanged recovery manifest required');
+          const value = JSON.parse(resume || plan);
+          if (value.stage !== 'qualification' || (resume && value.executionMode !== 'qualification')
+            || (value.executionMode !== undefined && value.executionMode !== 'qualification')) {
+            throw new Error('Qualification-only bootstrap');
+          }
+          NODE
+          node controller/scripts/hosted-release-manifest.mjs --validate-dispatch-only
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ env.FCOS_CANDIDATE_SHA }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install trusted runtime browser
+        run: npx --no-install playwright install --with-deps chromium
+        working-directory: controller
+      - name: Prepare actual qualification manifest
+        id: manifest
+        run: node controller/scripts/hosted-release-manifest.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+          FCOS_HOSTED_VERCEL_READ_TOKEN: ${{ secrets.FCOS_HOSTED_VERCEL_READ_TOKEN }}
+          FCOS_HOSTED_SCHEMA_DATABASE_URL: ${{ secrets.FCOS_HOSTED_SCHEMA_DATABASE_URL }}
+          FCOS_PRODUCTION_VERIFICATION_BYPASS: ${{ secrets.FCOS_PRODUCTION_VERIFICATION_BYPASS }}
+          FCOS_HOSTED_RUNTIME_EMAIL: ${{ secrets.FCOS_HOSTED_RUNTIME_EMAIL }}
+          FCOS_HOSTED_RUNTIME_PASSWORD: ${{ secrets.FCOS_HOSTED_RUNTIME_PASSWORD }}
+          FCOS_HOSTED_RUNTIME_EXPECTED_ROLE: ${{ vars.FCOS_HOSTED_RUNTIME_EXPECTED_ROLE }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ format('fcos-release-manifest-{0}', github.run_id) }}
+          path: release-manifest.json
+          if-no-files-found: error
+          retention-days: 90
+  release:
+    name: release
+    needs:
+      - manifest
+    if: ${{ inputs.xero_recovery_mode == 'disabled' && inputs.bootstrap_phase == 'qualification' }}
+    permissions:
+      contents: read
+      actions: read
+      packages: read
+      id-token: write
+    uses: hocheunglai-oss/fcos/.github/workflows/hosted-release-controller.yml@c291a6e1b0a00644c60467003505b41506d69dad
+    with:
+      manifest: ${{ needs.manifest.outputs.manifest }}
+    # Values remain in each called job's protected environment; no secrets: inherit.
+    secrets:
+      FCOS_E2E_VERCEL_BYPASS: ${{ secrets.FCOS_E2E_VERCEL_BYPASS }}
+      FCOS_HOSTED_FCUNO_READ_TOKEN: ${{ secrets.FCOS_HOSTED_FCUNO_READ_TOKEN }}
+      FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+      FCOS_HOSTED_NORMAL_EMAIL: ${{ secrets.FCOS_HOSTED_NORMAL_EMAIL }}
+      FCOS_HOSTED_NORMAL_PASSWORD: ${{ secrets.FCOS_HOSTED_NORMAL_PASSWORD }}
+      FCOS_HOSTED_PRESERVATION_DATABASE_URL: ${{ secrets.FCOS_HOSTED_PRESERVATION_DATABASE_URL }}
+      FCOS_HOSTED_RESTRICTED_EMAIL: ${{ secrets.FCOS_HOSTED_RESTRICTED_EMAIL }}
+      FCOS_HOSTED_RESTRICTED_FALLBACK_EMAIL: ${{ secrets.FCOS_E2E_EMAIL }}
+      FCOS_HOSTED_RESTRICTED_FALLBACK_PASSWORD: ${{ secrets.FCOS_E2E_PASSWORD }}
+      FCOS_HOSTED_RESTRICTED_PASSWORD: ${{ secrets.FCOS_HOSTED_RESTRICTED_PASSWORD }}
+      FCOS_HOSTED_RUNTIME_EMAIL: ${{ secrets.FCOS_HOSTED_RUNTIME_EMAIL }}
+      FCOS_HOSTED_RUNTIME_PASSWORD: ${{ secrets.FCOS_HOSTED_RUNTIME_PASSWORD }}
+      FCOS_HOSTED_SALESFORCE_CLIENT_SECRET: ${{ secrets.FCOS_HOSTED_SALESFORCE_CLIENT_SECRET }}
+      FCOS_HOSTED_SCHEMA_DATABASE_URL: ${{ secrets.FCOS_HOSTED_SCHEMA_DATABASE_URL }}
+      FCOS_HOSTED_VERCEL_READ_TOKEN: ${{ secrets.FCOS_HOSTED_VERCEL_READ_TOKEN }}
+      FCOS_HOSTED_VERCEL_TOKEN: ${{ secrets.FCOS_HOSTED_VERCEL_TOKEN }}
+
+  xero_owner_readback:
+    name: xero-owner-readback
+    if: ${{ inputs.xero_recovery_mode == 'owner-readback' && inputs.bootstrap_phase == 'qualification' && inputs.xero_recovery_template_base64 != '' && inputs.xero_recovery_readback_base64 != '' }}
+    permissions:
+      contents: read
+      actions: read
+      statuses: read
+      id-token: write
+    uses: hocheunglai-oss/fcos/.github/workflows/hosted-xero-recovery-carrier.yml@c291a6e1b0a00644c60467003505b41506d69dad
+    with:
+      controller_sha: c291a6e1b0a00644c60467003505b41506d69dad
+      template_base64: ${{ inputs.xero_recovery_template_base64 }}
+      # Hardcoded purpose: no dispatch input can select the POST entrypoint.
+      mode: owner-readback
+      owner_readback_base64: ${{ inputs.xero_recovery_readback_base64 }}
+    secrets:
+      FCOS_HOSTED_VERCEL_READ_TOKEN: ${{ secrets.FCOS_HOSTED_VERCEL_READ_TOKEN }}
+      FCOS_HOSTED_RUNTIME_EMAIL: ${{ secrets.FCOS_HOSTED_RUNTIME_EMAIL }}
+      FCOS_HOSTED_RUNTIME_PASSWORD: ${{ secrets.FCOS_HOSTED_RUNTIME_PASSWORD }}
+      FCOS_PRODUCTION_VERIFICATION_BYPASS: ${{ secrets.FCOS_PRODUCTION_VERIFICATION_BYPASS }}
+      FCOS_XERO_RECOVERY_REQUEST_NONCE: ${{ secrets.FCOS_XERO_RECOVERY_REQUEST_NONCE }}
+
+  xero_original_warm:
+    name: xero-original-warm
+    if: ${{ inputs.xero_recovery_mode == 'original-warm' && inputs.bootstrap_phase == 'qualification' && inputs.xero_original_warm_dispatch_id != '' && vars.FCOS_XERO_ORIGINAL_CARRIER_TEMPLATE_BASE64 != '' }}
+    permissions:
+      contents: read
+      actions: read
+      statuses: read
+      id-token: write
+    uses: hocheunglai-oss/fcos/.github/workflows/hosted-xero-recovery-carrier.yml@c291a6e1b0a00644c60467003505b41506d69dad
+    with:
+      controller_sha: c291a6e1b0a00644c60467003505b41506d69dad
+      # Repository public setup, never a dispatch-selected submit template.
+      template_base64: ${{ vars.FCOS_XERO_ORIGINAL_CARRIER_TEMPLATE_BASE64 }}
+      mode: submit
+    secrets:
+      FCOS_HOSTED_VERCEL_READ_TOKEN: ${{ secrets.FCOS_HOSTED_VERCEL_READ_TOKEN }}
+      FCOS_HOSTED_RUNTIME_EMAIL: ${{ secrets.FCOS_HOSTED_RUNTIME_EMAIL }}
+      FCOS_HOSTED_RUNTIME_PASSWORD: ${{ secrets.FCOS_HOSTED_RUNTIME_PASSWORD }}
+      FCOS_PRODUCTION_VERIFICATION_BYPASS: ${{ secrets.FCOS_PRODUCTION_VERIFICATION_BYPASS }}
+      FCOS_XERO_RECOVERY_REQUEST_NONCE: ${{ secrets.FCOS_XERO_RECOVERY_REQUEST_NONCE }}
