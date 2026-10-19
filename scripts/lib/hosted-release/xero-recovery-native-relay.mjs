@@ -313,8 +313,9 @@ export async function createNativeXeroRecoveryWarmDispatcher({ templateJson, cwd
       return { status: 'original_warm_dispatched_run_pending', dispatchId: scope.dispatchId, financialAuthorityGranted: false, retryable: false };
       } catch (error) { throw refusal(safeCode(error)); }
     },
-    async observeRun(runId) {
+    async observeRun(runId, { phase = 'preparation' } = {}) {
       try {
+      need(['preparation','execution'].includes(phase),'XERO_COURIER_RUN_MISMATCH');
       need(typeof runId === 'string' && /^[1-9][0-9]{0,19}$/.test(runId) && Number.isSafeInteger(Number(runId)) && existsSync(path('ack')), 'XERO_COURIER_ORIGINAL_CLAIM_REQUIRED');
       const attempt = JSON.parse(regular(path('attempt'))), ack = JSON.parse(regular(path('ack'))), provider = JSON.parse(regular(path('provider-ack')));
       need(attempt.scopeSha256 === a.scopeSha256 && attempt.dispatchId === scope.dispatchId && Number.isSafeInteger(attempt.at) && ack.scopeSha256 === a.scopeSha256 && ack.dispatchId === scope.dispatchId
@@ -324,9 +325,13 @@ export async function createNativeXeroRecoveryWarmDispatcher({ templateJson, cwd
         && Object.entries(expected).every(([k,v]) => ack.lease?.[k] === v) && UUID.test(ack.lease?.leaseId) && ack.lease.coordinationOnly === true && ack.lease.providerAuthorityGranted === false
         && ack.lease.uncertainOutcomeRequiresReadback === true && !existsSync(path('uncertain')), 'XERO_COURIER_ORIGINAL_CLAIM_REQUIRED');
       for (const phase of ['prepared','submitting','submitted']) { const receipt = JSON.parse(regular(path(phase))); need(receipt.state === phase && receipt.durable === true && receipt.scopeSha256 === a.scopeSha256 && canonical(receipt.lease) === canonical(ack.lease), 'XERO_COURIER_ORIGINAL_CLAIM_REQUIRED'); }
-      await identity(); const actual = await assertCourierRun(read, t, runId, { allowCompleted: true, phase: t.schemaVersion === 3 ? 'preparation' : 'execution' });
+      await identity(); const actual = await assertCourierRun(read, t, runId, { allowCompleted: true, phase: t.schemaVersion === 3 ? phase : 'execution' });
       need(actual.run.display_title === `FCOS original Xero carrier ${scope.dispatchId}` && Date.parse(actual.run.created_at) >= attempt.at - 1000 && Date.parse(actual.run.created_at) <= now() + 30000, 'XERO_COURIER_RUN_MISMATCH');
-      return { status: 'actual_original_warm_run_observed', dispatchId: scope.dispatchId, runId, jobId: actual.job.id, templateSha256, planSha256, orchestrationLeaseResolved: false, financialAuthorityGranted: false };
+      const execution = t.schemaVersion === 3 && phase === 'execution';
+      if(execution)need(actual.run.status==='in_progress' && actual.job.status==='in_progress' && Number.isFinite(Date.parse(actual.job.started_at))
+        && Date.parse(actual.job.started_at)<=now()+30000,'XERO_COURIER_RUN_MISMATCH');
+      return { status: execution ? 'actual_original_warm_execution_run_observed' : 'actual_original_warm_run_observed',
+        ...(execution ? { executionJobStartedAt: Date.parse(actual.job.started_at) } : {}), dispatchId: scope.dispatchId, runId, jobId: actual.job.id, templateSha256, planSha256, orchestrationLeaseResolved: false, financialAuthorityGranted: false };
       } catch (error) { throw refusal(safeCode(error)); }
     }
   });
@@ -743,9 +748,11 @@ export async function createNativeXeroRecoveryLocatorPublisher({templateJson,bin
 export async function nativeRelayMain(args = process.argv.slice(2), locatorOptions = {}) {
   try {
     if(args.length===2&&args[0]==='publish-locator'){const input=JSON.parse(regular(resolve(args[1]),131072));need(exact(input,['templateJson','binding','lease',...(Object.hasOwn(input,'executionPreflightJson')?['executionPreflightJson']:[])]),'XERO_COURIER_LOCATOR_TARGET_MISMATCH');const publisher=await createNativeXeroRecoveryLocatorPublisher({...input,...locatorOptions});return publisher.publish();}
-    if ((args.length === 2 && args[0] === 'original-warm-dispatch') || (args.length === 3 && args[0] === 'original-warm-run')) {
-      const warm = await createNativeXeroRecoveryWarmDispatcher({ templateJson: regular(resolve(args[1]), 65536).toString('utf8') });
-      return args[0] === 'original-warm-dispatch' ? await warm.dispatch() : await warm.observeRun(args[2]);
+    if ((args.length === 2 && args[0] === 'original-warm-dispatch') || (args.length === 3 && ['original-warm-run','original-warm-execution-run'].includes(args[0]))) {
+      const templateJson=regular(resolve(args[1]),65536).toString('utf8');
+      if(args[0]==='original-warm-execution-run')need(parseCourierTemplate(templateJson).plan.schemaVersion===3,'XERO_COURIER_TEMPLATE_INVALID');
+      const warm = await createNativeXeroRecoveryWarmDispatcher({ templateJson });
+      return args[0] === 'original-warm-dispatch' ? await warm.dispatch() : await warm.observeRun(args[2],{phase:args[0]==='original-warm-execution-run'?'execution':'preparation'});
     }
     need((args.length===4&&['submit','readback'].includes(args[0]))||(args.length===5&&args[0]==='owner-readback-dispatch')||(args.length===6&&args[0]==='owner-readback-result'),'XERO_COURIER_MODE_REQUIRED');
     const input = JSON.parse(regular(resolve(args[1]))), raw = regular(resolve(args[2]), 2048).toString('utf8');

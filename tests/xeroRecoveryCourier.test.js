@@ -17,9 +17,11 @@ import {xeroHostPackageSourcePins} from '../scripts/package-xero-recovery-host.m
 import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
 const T=Date.now(),id=n=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`,SHA='1'.repeat(40),CONTROLLER='2'.repeat(40),H='a'.repeat(64);
 const binding={operationId:hash('original operation'),ownerThreadId:id(1),tenantId:id(2),actorId:id(3),expectedVersion:449,refreshLeaseId:id(4),probeId:id(5),requestId:id(6),approvalSha256:H,sourceSha256:H,bindingSha256:H,organisationIdentitySha256:null,issuedAt:T-1000,notAfter:T+899000,credentialPreservationCompositeApproved:true};
-function template(version=1){return {schemaVersion:version,kind:`fcos_xero_recovery_carrier_template_v${version}`,planJson:canonical({schemaVersion:version,kind:`fcos_xero_recovery_step_plan_v${version}`,binding:{...binding,notAfter:T+(version===2?1799000:899000)}}),controllerSha:CONTROLLER,
+function template(version=1){const value={schemaVersion:version,kind:`fcos_xero_recovery_carrier_template_v${version}`,planJson:canonical({schemaVersion:version,kind:`fcos_xero_recovery_step_plan_v${version}`,binding:{...binding,notAfter:T+(version===2?1799000:899000)}}),controllerSha:CONTROLLER,
  caller:{ref:'refs/heads/fcos-reviewed-carrier',sha:SHA,workflowRef:`${REPOSITORY}/.github/workflows/authenticated-release.yml@refs/heads/fcos-reviewed-carrier`,workflowSha:SHA,jobWorkflowRef:`${REPOSITORY}/.github/workflows/hosted-xero-recovery-carrier.yml@${CONTROLLER}`,jobWorkflowSha:CONTROLLER,jobName:'xero-recovery-carrier',environment:'fcos-hosted-verification',subject:`repo:${REPOSITORY}:environment:fcos-hosted-verification`},
- hostConfiguration:{target:{customEnvironment:'fcos-xero-recovery-111111111111'}},readCredential:{},readAcceptance:{},login:{origin:'https://legacy.vercel.app',publicAuth:{}},issuedAt:T-1000,notAfter:T+(version===2?1799000:899000),artifactCaptureAuthoritySha256:H};}
+ hostConfiguration:{target:{customEnvironment:'fcos-xero-recovery-111111111111'}},readCredential:{},readAcceptance:{},login:{origin:'https://legacy.vercel.app',publicAuth:{}},issuedAt:T-1000,notAfter:T+(version===2?1799000:899000),artifactCaptureAuthoritySha256:H};
+ if(version===3){const p=JSON.parse(value.planJson);delete p.binding.issuedAt;delete p.binding.notAfter;Object.assign(p.binding,{preparedAt:T-3600000,armBefore:T+600000,absoluteNotAfter:T+3600000,executionWindowMs:1800000});value.planJson=canonical(p);value.issuedAt=p.binding.preparedAt;value.notAfter=p.binding.absoluteNotAfter;}
+ return value;}
 const request=t=>prepareXeroRecoveryStepRequest({planJson:t.planJson,step:'preflight',submissionId:id(7),previousResultSha256:null}).requestJson;
 const json=v=>new Response(JSON.stringify(v),{headers:{'content-type':'application/json'}});
 function claims(t){return {repository_id:'1278654816',repository:REPOSITORY,repository_owner:'hocheunglai-oss',actor_id:'265701760',actor:'hocheunglai-oss',event_name:'workflow_dispatch',run_attempt:'1',run_id:'123',runner_environment:'github-hosted',ref_protected:'true',ref:t.caller.ref,sha:t.caller.sha,workflow_ref:t.caller.workflowRef,workflow_sha:t.caller.workflowSha,job_workflow_ref:t.caller.jobWorkflowRef,job_workflow_sha:t.caller.jobWorkflowSha,environment:t.caller.environment,sub:t.caller.subject,iat:Math.floor(T/1000),exp:Math.floor(T/1000)+299,jti:'actual-signed-fixture'};}
@@ -275,7 +277,7 @@ function warmFixture(version=1){
   else if(route.includes('/contents/')){const bytes=Buffer.from(readFileSync(new URL('../.github/qualification/hosted-release-bootstrap.yml',import.meta.url),'utf8').replaceAll('__FCOS_CONTROLLER_SHA__',CONTROLLER));value={encoding:'base64',content:bytes.toString('base64'),size:bytes.length,sha:crypto.createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex')};}
   else if(route.includes('/actions/variables/'))value=variable;
   else if(route.endsWith('/actions/runs/123')){const repository={id:1278654816,full_name:REPOSITORY};value={id:123,run_attempt:1,repository,head_repository:repository,actor:{id:265701760,login:'hocheunglai-oss'},event:'workflow_dispatch',head_sha:SHA,head_branch:'fcos-reviewed-carrier',path:'.github/workflows/authenticated-release.yml',status:'in_progress',display_title:`FCOS original Xero carrier ${scope.dispatchId}`,created_at:new Date(T).toISOString()};}
-  else if(route.includes('/attempts/1/jobs'))value={total_count:1,jobs:[{id:22,run_id:123,name:'xero-original-warm / xero-recovery-carrier',labels:['ubuntu-24.04'],status:'in_progress'}]};
+  else if(route.includes('/attempts/1/jobs'))value=version===3?{total_count:2,jobs:[{id:22,run_id:123,name:'xero-original-warm / xero-recovery-preparation',labels:['ubuntu-24.04'],status:'completed',conclusion:'success'},{id:23,run_id:123,name:'xero-original-warm / xero-recovery-carrier',labels:['ubuntu-24.04'],status:'in_progress',started_at:new Date(T-1000).toISOString()}]}:{total_count:1,jobs:[{id:22,run_id:123,name:'xero-original-warm / xero-recovery-carrier',labels:['ubuntu-24.04'],status:'in_progress'}]};
   else assert.fail('unexpected fixture route '+route);return{status:0,stdout:JSON.stringify(value)};
  };
  return{...f,scope,variable,admission,calls,capture,options:{templateJson,controlRoot:f.controlRoot,capture,nativeRuntime:runtime,now:()=>T,wait:()=>assert.fail('No quota wait in this bounded fixture')}};
@@ -473,4 +475,21 @@ test('preparation bootstrap verifies real branch-purpose OIDC without an environ
     if (delta === null) { await execute(); assert.deepEqual(outputs, [['controller_sha', CONTROLLER]]); }
     else { await assert.rejects(execute(), /XERO_COURIER_CONTROLLER_BOOTSTRAP_REFUSED/); assert.deepEqual(outputs, []); }
   }
+});
+
+
+test('v3 actual dispatcher observes the distinct execution job only after its original known204 and completed preparation',async()=>{
+ const f=warmFixture(3);try{
+  let at=T;const warm=await createNativeXeroRecoveryWarmDispatcher({...f.options,now:()=>at,wait:async ms=>{at+=ms;}});
+  await assert.rejects(warm.observeRun('123',{phase:'execution'}),{code:'XERO_COURIER_ORIGINAL_CLAIM_REQUIRED'});
+  assert.equal(f.calls.length,0);
+  await warm.dispatch();
+  const preparation=await warm.observeRun('123');assert.equal(preparation.jobId,22);assert.equal(preparation.status,'actual_original_warm_run_observed');
+  const before=f.calls.length,execution=await warm.observeRun('123',{phase:'execution'});
+  assert.equal(execution.status,'actual_original_warm_execution_run_observed');assert.equal(execution.jobId,23);assert.equal(execution.executionJobStartedAt,T-1000);
+  assert.equal(execution.financialAuthorityGranted,false);assert.equal(execution.orchestrationLeaseResolved,false);
+  assert.ok(f.calls.slice(before).every(c=>c.command==='synthetic-gh'&&c.args.includes('GET')));
+  assert.equal(f.calls.filter(c=>c.args.includes('POST')).length,1);
+  assert.ok(!readdirSync(f.stateDirectory).some(n=>n.includes('.claim-attempt')||n.includes('.held-lease')));
+ }finally{f.clean();}
 });

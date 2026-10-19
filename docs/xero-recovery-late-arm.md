@@ -105,3 +105,12 @@ the original locator, resetting the SQL clock or granting a POST. The original
 4096-byte readback bound and absolute credential/cleanup expiry still apply. A
 reader job uses the same protected source but does not impersonate the original
 execution job or require a financial preparation job in the new reader run.
+
+The existing native dispatcher supplies both real job observations.
+`original-warm-run <template.json> <runId>` observes preparation for v3.
+After locator release,
+`original-warm-execution-run <template.json> <runId>` revalidates the same known
+204 dispatch, public variable and protected source, requires successful
+preparation plus a genuinely running execution job, and returns its exact
+`jobId` and `executionJobStartedAt`. This command is GET-only; it cannot claim,
+resolve the orchestration lease, log in, publish a request or grant authority.
