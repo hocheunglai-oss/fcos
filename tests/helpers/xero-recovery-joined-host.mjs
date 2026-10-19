@@ -43,7 +43,7 @@ export async function createJoinedHostFixture(t, change = {}) {
     refreshLeaseId: '40000000-0000-4000-8000-000000000004', probeId: '50000000-0000-4000-8000-000000000005',
     requestId: '60000000-0000-4000-8000-000000000006', approvalSha256: 'b'.repeat(64), sourceSha256: 'c'.repeat(64), bindingSha256: 'd'.repeat(64),
     organisationIdentitySha256: null, issuedAt: at - 1000, notAfter: at + (change.planVersion === 2 ? 1799000 : 600000), credentialPreservationCompositeApproved: true, ...change.planBinding };
-  if (change.planVersion === 3) { delete binding.issuedAt; delete binding.notAfter; Object.assign(binding, { preparedAt: at - 3600000, armBefore: at + 600000, absoluteNotAfter: at + 3600000, executionWindowMs: 1800000 }); }
+  if (change.planVersion === 3) { delete binding.issuedAt; delete binding.notAfter; Object.assign(binding, { preparedAt: at - 3600000, armBefore: at + 600000, absoluteNotAfter: at + 3600000, executionWindowMs: change.executionWindowMs ?? 1800000 }); }
   const planJson = canonical({ schemaVersion: change.planVersion || 1, kind: `fcos_xero_recovery_step_plan_v${change.planVersion || 1}`, binding });
   const caller = { ref: 'refs/heads/codex/joined-carrier', sha: 'e'.repeat(40), workflowSha: 'e'.repeat(40),
     workflowRef: 'hocheunglai-oss/fcos/.github/workflows/authenticated-release.yml@refs/heads/codex/joined-carrier',

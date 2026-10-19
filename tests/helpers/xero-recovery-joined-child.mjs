@@ -24,9 +24,12 @@ const json = value => Response.json(value);
 // Host/actor/login/protocol/SQL, package reconstruction, status validation,
 // Python claim/assert, JS guards and native archive consumption remain real.
 test('joined preflight succeeds once without Xero or overall release qualification', { timeout: 90000 }, async t => {
-  const host = await createJoinedHostFixture(t, { planVersion: process.env.XERO_JOINED_PLAN_VERSION === '3' ? 3 : 2 });
   const v3 = process.env.XERO_JOINED_PLAN_VERSION === '3';
-  const now = v3 ? Date.now : () => host.at;
+  const crossDeadline = v3 && process.env.XERO_JOINED_CROSS_DEADLINE === '1';
+  const host = await createJoinedHostFixture(t, { planVersion: v3 ? 3 : 2,
+    ...(crossDeadline ? { executionWindowMs: 900000 } : {}) });
+  let clockOffset = 0;
+  const now = v3 ? () => Date.now() + clockOffset : () => host.at;
   const runId = host.options.caller.runId;
   const jobId = 22;
   const lateRunway = v3 && process.env.XERO_JOINED_LATE_RUNWAY === '1';
@@ -125,7 +128,10 @@ test('joined preflight succeeds once without Xero or overall release qualificati
   publishedRefs.set(`${prefix}/locator`, locatorCommit);
   publishStatus(`${prefix}/locator`, locatorCommit, locatorRaw, 'locator');
 
-  let artifact, artifactBytes, uploadedAck;
+  let artifact, artifactBytes, uploadedAck, loginUserReads = 0, callsAtDeadline;
+  let releaseFirstRequest, releaseSecondRequest;
+  const firstRequestPublished = new Promise(resolve => { releaseFirstRequest = resolve; });
+  const secondRequestPublished = new Promise(resolve => { releaseSecondRequest = resolve; });
   let releaseArtifact;
   const artifactReady = new Promise(resolve => { releaseArtifact = resolve; });
   mock.module('@actions/artifact', { namedExports: { DefaultArtifactClient: class {
@@ -230,6 +236,14 @@ test('joined preflight succeeds once without Xero or overall release qualificati
     if (u.origin === 'https://api.github.com') {
       assert.equal(init.method, 'GET');
       const value = githubRead(u.pathname.slice(1) + u.search);
+      if (crossDeadline && uploadedAck && u.pathname.endsWith('/attempts/1/jobs')) {
+        // The first actual SQL/HTTP/artifact ACK supplies this immutable clock.
+        // Finish an already dispatched second-step run check just after its
+        // deadline. No OIDC/login/read/host POST may follow that response.
+        const deadline = JSON.parse(uploadedAck.resultJson).execution.executionDeadlineAt;
+        clockOffset = deadline - Date.now() + 1;
+        callsAtDeadline = calls.length;
+      }
       return value === null ? new Response(null, { status: 404 }) : json(value);
     }
     if (u.origin === 'https://token.actions.githubusercontent.com') return json(host.githubKeys);
@@ -250,6 +264,7 @@ test('joined preflight succeeds once without Xero or overall release qualificati
     if (u.origin === locator.url) { assert.equal(init.method, 'POST'); return hostPost(url, init); }
     const headers = { ...init.headers };
     if (headers.apikey === browser.publicAuth.publicAnonKey) headers.apikey = host.secret;
+    if (u.pathname === '/auth/v1/user') loginUserReads++;
     return host.options.fetchImpl(url, { ...init, headers });
   };
 
@@ -318,6 +333,8 @@ test('joined preflight succeeds once without Xero or overall release qualificati
       assert.equal(publishedRefs.has(ref), false);
       assert.equal(git(['cat-file', '-t', commitSha]), 'commit');
       publishedRefs.set(ref, commitSha);
+      if (ref.includes('/request-preflight-')) releaseFirstRequest();
+      if (crossDeadline && ref.includes('/request-custodyPrepare-')) releaseSecondRequest();
       return { status: 0, stdout: '' };
     }
     assert.equal(command, 'fixture-gh');
@@ -337,7 +354,13 @@ test('joined preflight succeeds once without Xero or overall release qualificati
     cwd: controlRoot, controlRoot, capture, now,
     nativeRuntime: { credentialAvailable: true, command: 'fixture-gh',
       env: { PATH: process.env.PATH, HOME: controlRoot, GH_CONFIG_DIR: controlRoot } },
-    wait: async () => Promise.race([artifactReady, carrierStopped.then(error => { throw error; })]) });
+    wait: async ms => {
+      // The second-step variant exercises both real read-budget entrypoints.
+      // Advance only their logical quota wait; do not spend a wall-clock minute.
+      if (crossDeadline && ms > 10000) clockOffset += ms;
+      await new Promise(setImmediate);
+      return Promise.race([artifactReady, carrierStopped.then(error => { throw error; })]);
+    } });
   if (lateRunway) {
     await assert.rejects(native.submit(host.request('preflight',null)),{code:'XERO_COURIER_AUTHORITY_EXPIRED'});
     assert.equal(nativeCalls.length,0);assert.ok(!readdirSync(stateDirectory).some(name=>name.includes('claim-attempt')||name.includes('.prepared.')));
@@ -361,7 +384,13 @@ test('joined preflight succeeds once without Xero or overall release qualificati
       ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'FIXTURE_PRIVATE_OIDC_REQUEST',
       FCOS_HOSTED_RUNTIME_EMAIL: host.email, FCOS_HOSTED_RUNTIME_PASSWORD: 'PRIVATE_APPROVED_PASSWORD',
       FCOS_PRODUCTION_VERIFICATION_BYPASS: 'FIXTURE_PRIVATE_BYPASS', FCOS_XERO_RECOVERY_REQUEST_NONCE: host.nonce },
-    wait: async () => new Promise(resolve => controller.signal.addEventListener('abort', resolve, { once: true })),
+    wait: async ms => {
+      if (crossDeadline && ms > 10000) { clockOffset += ms; return; }
+      return Promise.race([
+        uploadedAck ? secondRequestPublished : firstRequestPublished,
+        new Promise(resolve => controller.signal.addEventListener('abort', resolve, { once: true })),
+      ]);
+    },
   });
   // Observe rejection immediately; explicit cancellation happens only after
   // the successful native consumer below has persisted its real ACK.
@@ -371,7 +400,7 @@ test('joined preflight succeeds once without Xero or overall release qualificati
   const result = await Promise.race([nativeSubmission, carrierStopped.then(error => { throw error; })]);
   assert.equal(result.status, 'submitted_acknowledged');
   assert.equal(result.result.step, 'preflight');
-  if (v3) { assert.equal(result.result.kind,'fcos_xero_recovery_step_result_v3'); assert.ok(result.result.execution.firstStartedAt > host.binding.preparedAt + 3500000); assert.equal(result.result.execution.executionDeadlineAt,result.result.execution.firstStartedAt+1800000); }
+  if (v3) { assert.equal(result.result.kind,'fcos_xero_recovery_step_result_v3'); assert.ok(result.result.execution.firstStartedAt > host.binding.preparedAt + 3500000); assert.equal(result.result.execution.executionDeadlineAt,result.result.execution.firstStartedAt+host.binding.executionWindowMs); }
   assert.equal(result.result.nextStep, 'custodyPrepare');
   assert.equal(result.result.executionAuthorityGranted, false);
   assert.equal(result.result.qualificationAccepted, false);
@@ -395,6 +424,25 @@ test('joined preflight succeeds once without Xero or overall release qualificati
   const before = nativeCalls.length;
   await assert.rejects(native.submit(rawRequest), { code: 'XERO_COURIER_CONSUMED_GET_ONLY' });
   assert.equal(nativeCalls.length, before);
+  if (crossDeadline) {
+    const second = native.submit(host.request('custodyPrepare', result.result.resultSha256));
+    await assert.rejects(second);
+    await carrierStopped;
+    assert.ok(Number.isSafeInteger(callsAtDeadline), 'The second real run check reached its deadline');
+    assert.equal(loginUserReads, 1, 'No second owner login follows the deadline');
+    assert.equal(calls.length, callsAtDeadline, 'No ordinary fetch follows the derived deadline');
+    assert.equal(calls.filter(call => call.origin === locator.url && call.method === 'POST').length, 1);
+    assert.equal(host.calls.filter(call => call.path.endsWith('/xero_recovery_step_claim')).length, 1);
+    assert.equal((await host.db.query('select count(*)::int n from public.xero_recovery_step_attempts')).rows[0].n, 1);
+    assert.equal((await host.db.query('select count(*)::int n from public.xero_recovery_step_acknowledgements')).rows[0].n, 1);
+    assert.ok(readdirSync(stateDirectory).includes(`${host.binding.operationId}.custodyPrepare.uncertain.json`));
+    assert.ok(!readdirSync(stateDirectory).includes(`${host.binding.operationId}.custodyPrepare.ack.json`));
+    assert.equal(JSON.parse(readFileSync(join(stateDirectory,`${host.binding.operationId}.stopped.json`))).readbackOnly, true);
+    assert.deepEqual(JSON.parse(readFileSync(join(coordinatorRoot, 'live-provider-write-lease.json'))), heldLease);
+    assert.equal(protectionDisposed, 1);
+    assert.deepEqual(browser.calls.slice(-2), ['context-close', 'browser-close']);
+    return;
+  }
   controller.abort();
   assert.equal((await carrierStopped).code, 'XERO_COURIER_AUTHORITY_EXPIRED');
 });
