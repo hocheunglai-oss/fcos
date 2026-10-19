@@ -22,7 +22,7 @@ const plain = v => v !== null && typeof v === 'object' && Object.getPrototypeOf(
 export const exact = (v, keys) => plain(v) && Object.keys(v).length === keys.length && keys.every(k => Object.hasOwn(v, k));
 export const refusal = code => Object.assign(new Error(code), { code });
 export const need = (v, code = 'XERO_COURIER_REFUSED') => { if (!v) throw refusal(code); };
-const SAFE_CODES = new Set(['XERO_COURIER_RESPONSE_REFUSED','XERO_COURIER_PUBLICATION_INVALID','XERO_COURIER_PUBLICATION_UNKNOWN','XERO_COURIER_READBACK_ADMISSION_REQUIRED','XERO_COURIER_READBACK_RESULT_INVALID','XERO_COURIER_READBACK_DISPATCH_UNKNOWN','XERO_COURIER_LOCAL_REPOSITORY_MISMATCH','XERO_COURIER_PACKAGE_BUILD_REFUSED','XERO_COURIER_CANONICAL_STATE_REQUIRED','XERO_COURIER_ROOT_ADMISSION_REQUIRED','XERO_COURIER_ORIGINAL_CLAIM_REQUIRED','XERO_COURIER_SOURCE_BYTES_UNPROVEN','XERO_COURIER_OIDC_INVALID','XERO_COURIER_AUTHORITY_EXPIRED','XERO_COURIER_CONSUMED_GET_ONLY','XERO_COURIER_REMOTE_OUTCOME_UNKNOWN','XERO_COURIER_ACK_TIMEOUT_UNKNOWN','XERO_COURIER_NATIVE_COMMAND_UNKNOWN','XERO_COURIER_GITHUB_READ_UNKNOWN','XERO_COURIER_HTTP_OUTCOME_UNKNOWN','XERO_COURIER_CAPTURE_UNKNOWN','XERO_COURIER_RUN_MISMATCH','XERO_COURIER_REQUEST_INVALID','XERO_COURIER_TEMPLATE_INVALID','XERO_COURIER_NONCE_REQUIRED','XERO_COURIER_ACK_MISMATCH','XERO_COURIER_RESULT_MISMATCH','XERO_COURIER_LOCATOR_CONSUMED','XERO_COURIER_LOCATOR_LEASE_REQUIRED','XERO_COURIER_LOCATOR_TARGET_MISMATCH']);
+const SAFE_CODES = new Set(['XERO_COURIER_RESPONSE_REFUSED','XERO_COURIER_PREPARATION_METADATA_PENDING_EXHAUSTED','XERO_COURIER_PUBLICATION_INVALID','XERO_COURIER_PUBLICATION_UNKNOWN','XERO_COURIER_READBACK_ADMISSION_REQUIRED','XERO_COURIER_READBACK_RESULT_INVALID','XERO_COURIER_READBACK_DISPATCH_UNKNOWN','XERO_COURIER_LOCAL_REPOSITORY_MISMATCH','XERO_COURIER_PACKAGE_BUILD_REFUSED','XERO_COURIER_CANONICAL_STATE_REQUIRED','XERO_COURIER_ROOT_ADMISSION_REQUIRED','XERO_COURIER_ORIGINAL_CLAIM_REQUIRED','XERO_COURIER_SOURCE_BYTES_UNPROVEN','XERO_COURIER_OIDC_INVALID','XERO_COURIER_AUTHORITY_EXPIRED','XERO_COURIER_CONSUMED_GET_ONLY','XERO_COURIER_REMOTE_OUTCOME_UNKNOWN','XERO_COURIER_ACK_TIMEOUT_UNKNOWN','XERO_COURIER_NATIVE_COMMAND_UNKNOWN','XERO_COURIER_GITHUB_READ_UNKNOWN','XERO_COURIER_HTTP_OUTCOME_UNKNOWN','XERO_COURIER_CAPTURE_UNKNOWN','XERO_COURIER_RUN_MISMATCH','XERO_COURIER_REQUEST_INVALID','XERO_COURIER_TEMPLATE_INVALID','XERO_COURIER_NONCE_REQUIRED','XERO_COURIER_ACK_MISMATCH','XERO_COURIER_RESULT_MISMATCH','XERO_COURIER_LOCATOR_CONSUMED','XERO_COURIER_LOCATOR_LEASE_REQUIRED','XERO_COURIER_LOCATOR_TARGET_MISMATCH']);
 export const safeCode = e => { try { const code=e?.code;return SAFE_CODES.has(code) ? code : 'XERO_COURIER_STOPPED_OWNER_READBACK_REQUIRED'; } catch { return 'XERO_COURIER_STOPPED_OWNER_READBACK_REQUIRED'; } };
 export const bytesHash = value => createHash('sha256').update(value).digest('hex');
 const gitHash = (kind, b) => createHash('sha1').update(`${kind} ${b.length}\0`).update(b).digest('hex');
@@ -123,13 +123,16 @@ function nativeGithubCreatedStatus(output,expected,now) {
   return assertCourierPublicationStatus(JSON.parse(output.slice(separator.index+separator[0].length)),expected,now);
 }
 export const courierArtifactName = (runId, submissionId) => { need(/^[1-9][0-9]{0,19}$/.test(String(runId)) && UUID.test(submissionId)); return `fcos-xero-ack-${runId}-${submissionId}`; };
-export async function assertCourierRun(read, t, runId, { allowCompleted = false, phase = 'execution' } = {}) {
+export async function assertCourierRun(read, t, runId, { allowCompleted = false, phase = 'execution', allowPendingPreparation = false } = {}) {
+  need(!allowPendingPreparation || t.schemaVersion===3 && phase==='preparation' && !allowCompleted,'XERO_COURIER_TEMPLATE_INVALID');
   const repository = await read(`repos/${REPOSITORY}`), run = await read(`repos/${REPOSITORY}/actions/runs/${runId}`);
   need(Number.isSafeInteger(Number(runId)) && repository.id === REPO_ID && repository.full_name === REPOSITORY && run.id === Number(runId) && run.run_attempt === 1
     && run.repository?.id === REPO_ID && run.head_repository?.id === REPO_ID && run.actor?.id === ACTOR_ID && run.actor.login === 'hocheunglai-oss'
     && run.event === 'workflow_dispatch' && run.head_sha === t.caller.sha && `refs/heads/${run.head_branch}` === t.caller.ref
-    && [t.caller.workflowRef.split(`${REPOSITORY}/`)[1].split('@')[0], t.caller.workflowRef.split(`${REPOSITORY}/`)[1]].includes(run.path)
-    && (run.status === 'in_progress' || allowCompleted && run.status === 'completed'), 'XERO_COURIER_RUN_MISMATCH');
+    && [t.caller.workflowRef.split(`${REPOSITORY}/`)[1].split('@')[0], t.caller.workflowRef.split(`${REPOSITORY}/`)[1]].includes(run.path), 'XERO_COURIER_RUN_MISMATCH');
+  if(allowPendingPreparation)need(run.conclusion===null,'XERO_COURIER_RUN_MISMATCH');
+  const pendingRun=allowPendingPreparation && run.status==='queued';
+  need(run.status==='in_progress' || allowCompleted && run.status==='completed' || pendingRun,'XERO_COURIER_RUN_MISMATCH');
   const jobs = await read(`repos/${REPOSITORY}/actions/runs/${runId}/attempts/1/jobs?per_page=100`);
   need(Array.isArray(jobs.jobs) && jobs.total_count === jobs.jobs.length && jobs.jobs.length <= 100, 'XERO_COURIER_JOBS_INCOMPLETE');
   const name = t.schemaVersion === 3 && phase === 'preparation' ? 'xero-recovery-preparation' : t.caller.jobName;
@@ -138,10 +141,13 @@ export async function assertCourierRun(read, t, runId, { allowCompleted = false,
     const prep = jobs.jobs.filter(j => j.name === 'xero-recovery-preparation' || j.name.endsWith(' / xero-recovery-preparation'));
     need(prep.length === 1 && prep[0].run_id === Number(runId) && prep[0].status === 'completed' && prep[0].conclusion === 'success', 'XERO_COURIER_JOB_MISMATCH');
   }
+  if(allowPendingPreparation && selected.length===0)return {run,job:null,preparationPending:true};
   need(selected.length === 1 && Number.isSafeInteger(selected[0].id) && selected[0].run_id === Number(runId)
-    && Array.isArray(selected[0].labels) && !selected[0].labels.includes('self-hosted') && selected[0].labels.includes('ubuntu-24.04')
-    && (selected[0].status === 'in_progress' || allowCompleted && selected[0].status === 'completed'), 'XERO_COURIER_JOB_MISMATCH');
-  return { run, job: selected[0] };
+    && Array.isArray(selected[0].labels) && !selected[0].labels.includes('self-hosted') && selected[0].labels.includes('ubuntu-24.04'), 'XERO_COURIER_JOB_MISMATCH');
+  if(allowPendingPreparation)need(selected[0].conclusion===null,'XERO_COURIER_JOB_MISMATCH');
+  const pendingJob=allowPendingPreparation && selected[0].status==='queued';
+  need(selected[0].status==='in_progress' || allowCompleted && selected[0].status==='completed' || pendingJob,'XERO_COURIER_JOB_MISMATCH');
+  return {run,job:selected[0],...(allowPendingPreparation?{preparationPending:pendingRun||pendingJob}:{})};
 }
 export async function readCourierGitFile(read, ref, filename, limit, { allowExecutionPreflight = false } = {}) {
   need(/^refs\/heads\/codex\/fcos-xero-[a-f0-9]{16}-[1-9][0-9]{0,19}\/(?:locator|request-[A-Za-z]+-[a-f0-9-]{36})$/.test(ref));

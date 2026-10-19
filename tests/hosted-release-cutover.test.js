@@ -1,11 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, realpath } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, realpath, link } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
+import { spawn, execFileSync } from 'node:child_process';
+import { once } from 'node:events';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { createNotificationChallenge } from '../supabase/functions/release-coordinator/core.mjs';
-import { inspectReviewedCutover, installPermanentLegacyFence, reviewedInstallEpochPlan, HOSTED_CUTOVER_LEGACY_GUARD, assertHostedCutoverLegacyGuard } from '../scripts/hosted-release-cutover.mjs';
+import { inspectReviewedCutover, installPermanentLegacyFence, reviewedInstallEpochPlan, HOSTED_CUTOVER_LEGACY_GUARD, assertHostedCutoverLegacyGuard, snapshotLegacyJournalTree, legacyProducerInventoryEntriesSha256 } from '../scripts/hosted-release-cutover.mjs';
 const sha=raw=>createHash('sha256').update(raw).digest('hex'),H='a'.repeat(64);
 const HISTORICAL_OWNER='01a0b0e2-b1af-7bf0-963d-3138c42648e3';
 async function fixture(t,{consolidated=false,historical=false}={}){
@@ -138,4 +140,124 @@ test('original provider journal without dispatch schema retains the hash-bound o
  const bad=await f.put('claim-kind-readback.json',{kind:'fcos_legacy_owner_readback',intentKind:'invented',operationId:intent.operationId,ownerThreadId:HISTORICAL_OWNER,intentSha256:evidence.sha256,outcome:'unknown'});
  const mismatch=await f.put('claim-kind-review.json',{...review,uncertainIntents:[{...intent,evidence,ownerReadback:bad}]});
  assert.throws(()=>inspectReviewedCutover({...f.options,reviewPath:mismatch.path,reviewSha256:mismatch.sha256}),/INTENT_IDENTITY_MISMATCH/);
+});
+
+async function treeFixture(t){
+ const f=await fixture(t,{consolidated:true,historical:true}),directory=f.review.intentInventories[0].directory;
+ const old=f.review.uncertainIntents[0],original=await readFile(old.evidence.path);await rm(old.evidence.path);
+ await mkdir(path.join(directory,'journal'),{mode:0o700});await mkdir(path.join(directory,'swift-cache','empty'),{recursive:true,mode:0o700});
+ const intentName='journal/original.intent.json',intent={...old,evidence:{path:path.join(directory,intentName),sha256:sha(original)}};
+ await writeFile(intent.evidence.path,original,{mode:0o600});
+ const journalName='journal/one.submitting.intent.json',journalPath=path.join(directory,journalName);
+ await writeFile(journalPath,JSON.stringify({state:'uncertain',durable:true,lease:{ownerThreadId:intent.ownerThreadId,operationId:intent.operationId}}),{mode:0o600});
+ await writeFile(path.join(directory,'swift-cache','module.pcm'),Buffer.from([0,255,1,128]),{mode:0o600});
+ await writeFile(path.join(directory,'root-admission.json'),JSON.stringify({kind:'fixture_root_admission',accepted:false}),{mode:0o600});
+ const producer=await f.put('producer.mjs','// Fixture producer: original intent + durable submitting record, explicit admission and cache companions.');
+ const journalEvidence=[{path:journalPath,sha256:sha(await readFile(journalPath))}];intent.journalEvidence=journalEvidence;
+ intent.ownerReadback=await f.put('tree-owner-readback.json',{kind:'fcos_legacy_owner_readback',ownerThreadId:intent.ownerThreadId,operationId:intent.operationId,intentSha256:intent.evidence.sha256,outcome:'unknown',journalEvidence});
+ const entries=snapshotLegacyJournalTree(directory).map(item=>item.type==='directory'?item:item.name===intentName?{...item,role:'intent'}:item.name===journalName?
+  {...item,role:'journal',intentName,intentSha256:intent.evidence.sha256,producerSourceSha256:producer.sha256}:
+  {...item,role:'companion',category:item.name.startsWith('swift-cache/')?'build_cache':'admission',producerSourceSha256:producer.sha256});
+ const proof={kind:'fcos_root_accepted_legacy_producer_inventory_v1',accepted:true,reviewerId:'/root',reviewedAt:new Date().toISOString(),directory,writerId:'production',writerSourceSha256:H,entriesSha256:legacyProducerInventoryEntriesSha256(entries),producerSources:[producer],completeSubmissionCoverageReviewed:true,providerOutcomesInferred:false,providerAuthorityGranted:false};
+ const classification=await f.put('tree-classification.json',proof),inventory={kind:'fcos_legacy_producer_tree_inventory_v1',directory,writerId:'production',entries,classification};
+ const review={...f.review,intentInventories:[inventory],uncertainIntents:[intent]},ref=await f.put('tree-review.json',review);
+ return {...f,directory,producer,intent,journalPath,entries,proof,inventory,review,options:{...f.options,reviewPath:ref.path,reviewSha256:ref.sha256}};
+}
+async function changedTreeReview(f,entries,proofPatch={},reviewPatch={}){
+ const classification=await f.put('changed-classification.json',{...f.proof,entriesSha256:legacyProducerInventoryEntriesSha256(entries),...proofPatch});
+ const ref=await f.put('changed-tree-review.json',{...f.review,...reviewPatch,intentInventories:[{...f.inventory,entries,classification}]});
+ return {...f.options,reviewPath:ref.path,reviewSha256:ref.sha256};
+}
+test('complete mixed producer tree fences original paths and imports one unknown with all phase members unchanged',async t=>{
+ const f=await treeFixture(t),before=await readFile(f.intent.evidence.path),member=await readFile(f.journalPath);
+ const checked=inspectReviewedCutover(f.options);assert.equal(checked.uncertainties.length,1);assert.equal(checked.inventories[0].journals.length,1);
+ assert.equal(legacyProducerInventoryEntriesSha256([...f.entries].reverse()),f.proof.entriesSha256);
+ assert.ok(checked.inventories[0].tree.some(e=>e.name==='swift-cache/empty'&&e.type==='directory'));
+ const fence=installPermanentLegacyFence(f.options),plan=reviewedInstallEpochPlan(f.options,{expectedFenceSha256:fence.proofHash});
+ assert.equal(plan.parameters[1].uncertainties.length,1);assert.equal(plan.parameters[1].uncertainties[0].ownerThreadId,HISTORICAL_OWNER);
+ assert.equal(plan.parameters[1].uncertainties[0].evidenceHash,sha(before));assert.equal(plan.parameters[1].uncertainties[0].ownerReadbackHash,f.intent.ownerReadback.sha256);
+ assert.deepEqual(await readFile(f.intent.evidence.path),before);assert.deepEqual(await readFile(f.journalPath),member);assert.equal(plan.providerAuthorityGranted,false);
+});
+test('nested new intent, changed cache/companion bytes and empty directory removal all refuse complete tree',async t=>{
+ for(const mutation of ['new-intent','cache','admission','directory']){
+  const f=await treeFixture(t);
+  if(mutation==='new-intent')await writeFile(path.join(f.directory,'swift-cache','late.attempt.json'),'unknown',{mode:0o600});
+  if(mutation==='cache')await writeFile(path.join(f.directory,'swift-cache','module.pcm'),'changed',{mode:0o600});
+  if(mutation==='admission')await writeFile(path.join(f.directory,'root-admission.json'),'changed',{mode:0o600});
+  if(mutation==='directory')await rm(path.join(f.directory,'swift-cache','empty'),{recursive:true});
+  assert.throws(()=>installPermanentLegacyFence(f.options),/INVENTORY_CHANGED/,mutation);
+ }
+});
+test('root classification cannot hide durable intents or phase journals as companions, even with a recomputed approved hash',async t=>{
+ const f=await treeFixture(t);
+ for(const role of ['intent','journal']){
+  const entries=f.entries.map(item=>item.role===role?{name:item.name,type:item.type,sha256:item.sha256,role:'companion',category:'receipt',producerSourceSha256:f.producer.sha256}:item);
+  const options=await changedTreeReview(f,entries);assert.throws(()=>inspectReviewedCutover(options),/SUBMISSION_CANNOT_BE_COMPANION/,role);
+ }
+ // A generic filename cannot disguise a recognizable durable record either.
+ const file=path.join(f.directory,'root-admission.json');await writeFile(file,JSON.stringify({durable:true,state:'uncertain'}),{mode:0o600});
+ const entries=f.entries.map(item=>item.name==='root-admission.json'?{...item,sha256:sha(JSON.stringify({durable:true,state:'uncertain'}))}:item);
+ const options=await changedTreeReview(f,entries);assert.throws(()=>inspectReviewedCutover(options),/SUBMISSION_CANNOT_BE_COMPANION/);
+});
+test('mixed inventory requires actual root/source/writer acceptance and exact member readback, with no missing intent classification',async t=>{
+ const f=await treeFixture(t);
+ for(const patch of [{accepted:false},{reviewerId:'/rootbad'},{directory:path.dirname(f.directory)},{writerId:'reconciliation'},{writerSourceSha256:'b'.repeat(64)},{producerSources:[]},{completeSubmissionCoverageReviewed:false},{providerOutcomesInferred:true},{providerAuthorityGranted:true}]){
+  const options=await changedTreeReview(f,f.entries,patch);assert.throws(()=>inspectReviewedCutover(options),/PRODUCER_CLASSIFICATION_REQUIRED/);
+ }
+ for(const patch of [{category:'unreviewed'},{producerSourceSha256:'b'.repeat(64)},{role:undefined}]){
+  const entries=f.entries.map(item=>item.role==='companion'?{...item,...patch}:item);
+  const options=await changedTreeReview(f,entries);assert.throws(()=>inspectReviewedCutover(options),/SUBMISSION_CANNOT_BE_COMPANION|CLASSIFICATION_REQUIRED/);
+ }
+ const missing=await f.put('missing-owner-members.json',{...JSON.parse(await readFile(f.intent.ownerReadback.path)),journalEvidence:[]});
+ let options=await changedTreeReview(f,f.entries,{}, {uncertainIntents:[{...f.intent,ownerReadback:missing}]});assert.throws(()=>inspectReviewedCutover(options),/JOURNAL_READBACK_REQUIRED/);
+ options=await changedTreeReview(f,f.entries,{}, {uncertainIntents:[]});assert.throws(()=>inspectReviewedCutover(options),/UNCLASSIFIED_INTENT/);
+ options=await changedTreeReview(f,[...f.entries,f.entries[0]]);assert.throws(()=>inspectReviewedCutover(options),/INVENTORY_REQUIRED/);
+ await writeFile(f.producer.path,'changed',{mode:0o600});assert.throws(()=>inspectReviewedCutover(f.options),/REFERENCE_CHANGED/);
+});
+test('mixed tree rejects traversal, wrong entry type, symlinks, hardlinks and directory-shaped intent claims',async t=>{
+ for(const change of ['traversal','type','symlink','hardlink','directory','fifo']){
+  const f=await treeFixture(t);let entries=f.entries;
+  if(change==='traversal')entries=entries.map(item=>item.role==='intent'?{...item,name:'../outside.intent.json'}:item);
+  if(change==='type')entries=entries.map(item=>item.role==='intent'?{...item,type:'directory'}:item);
+  if(change==='symlink'){await rm(f.journalPath);await symlink(f.intent.evidence.path,f.journalPath);}
+  if(change==='hardlink'){await rm(f.journalPath);await link(f.intent.evidence.path,f.journalPath);}
+  if(change==='directory'){await rm(f.journalPath);await mkdir(f.journalPath,{mode:0o700});}
+  if(change==='fifo'){await rm(f.journalPath);execFileSync('/usr/bin/mkfifo',[f.journalPath]);}
+  if(['traversal','type'].includes(change)){const options=await changedTreeReview(f,entries);assert.throws(()=>inspectReviewedCutover(options),/NAME_INVALID|ENTRY_TYPE_INVALID/);}
+  else assert.throws(()=>inspectReviewedCutover(f.options),/SYMLINK|REGULAR_OWNER_FILE|INVENTORY_CHANGED/);
+ }
+});
+test('late nested attempt appearing while the canonical mutex is held refuses fencing after the initial JS inspection',async t=>{
+ const f=await treeFixture(t),late=path.join(f.directory,'swift-cache','late.attempt.json');
+ const code=`import fcntl,os,sys,time
+fd=os.open(sys.argv[1],os.O_CREAT|os.O_RDWR,0o600)
+fcntl.flock(fd,fcntl.LOCK_EX)
+print('held',flush=True)
+time.sleep(1)
+open(sys.argv[2],'w').write('unknown')
+fcntl.flock(fd,fcntl.LOCK_UN)
+`;
+ const child=spawn('/usr/bin/python3',['-I','-c',code,path.join(f.base,'coordination-mutex.lock'),late],{stdio:['ignore','pipe','pipe']});
+ t.after(()=>child.kill());await once(child.stdout,'data');assert.doesNotThrow(()=>inspectReviewedCutover(f.options));
+ assert.throws(()=>installPermanentLegacyFence(f.options),/FENCE_REFUSED/);
+ await assert.rejects(readFile(f.leasePath),{code:'ENOENT'});
+});
+
+test('submission member groups reject missing, foreign and contradictory identities without inventing phase operations',async t=>{
+ for(const change of ['missing-member','foreign-owner','foreign-operation','foreign-target','duplicate-operation']){
+  const f=await treeFixture(t);let entries=f.entries,patch={};
+  if(change==='missing-member')patch={uncertainIntents:[{...f.intent,journalEvidence:[]}]};
+  if(['foreign-owner','foreign-operation'].includes(change)){
+   const lease={ownerThreadId:change==='foreign-owner'?f.review.existingOwners.production:HISTORICAL_OWNER,operationId:change==='foreign-operation'?'foreign-op':'old-op'};
+   const raw=JSON.stringify({state:'uncertain',durable:true,lease});await writeFile(f.journalPath,raw,{mode:0o600});
+   const evidence=[{path:f.journalPath,sha256:sha(raw)}];entries=entries.map(item=>item.role==='journal'?{...item,sha256:sha(raw)}:item);
+   const readback=await f.put('member-readback.json',{...JSON.parse(await readFile(f.intent.ownerReadback.path)),journalEvidence:evidence});patch={uncertainIntents:[{...f.intent,journalEvidence:evidence,ownerReadback:readback}]};
+  }
+  if(change==='foreign-target')entries=entries.map(item=>item.role==='journal'?{...item,intentSha256:H}:item);
+  if(change==='duplicate-operation'){
+   const extra=await f.put('second-original.json',{operationId:'old-op'}),readback=await f.put('second-readback.json',{kind:'fcos_legacy_owner_readback',operationId:'old-op',ownerThreadId:HISTORICAL_OWNER,intentSha256:extra.sha256,outcome:'unknown'});
+   patch={uncertainIntents:[f.intent,{operationId:'old-op',ownerThreadId:HISTORICAL_OWNER,evidence:extra,ownerReadback:readback}]};
+  }
+  const options=await changedTreeReview(f,entries,{},patch);assert.throws(()=>inspectReviewedCutover(options),/JOURNAL_READBACK_REQUIRED|IDENTITY_MISMATCH|JOURNAL_BINDING_REQUIRED|DUPLICATE_INTENT/,change);
+ }
 });

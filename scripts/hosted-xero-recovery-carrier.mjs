@@ -131,8 +131,26 @@ export async function prepareWarmXeroRecoveryCarrier({templateJson,env=process.e
   const {template:t,plan}=parseCourierTemplate(templateJson);
   if(plan.schemaVersion!==3)return {status:'legacy_preparation_not_required',executionAuthorityGranted:false};
   need(!env.FCOS_HOSTED_VERCEL_READ_TOKEN && !env.FCOS_HOSTED_RUNTIME_PASSWORD && !env.FCOS_XERO_RECOVERY_REQUEST_NONCE,'XERO_COURIER_TEMPLATE_INVALID');
-  active(signal,t,now);const runId=env.GITHUB_RUN_ID,read=courierGithubReader({env,fetchImpl,signal,now,wait});
-  await assertCourierRun(read,t,runId,{phase:'preparation'});
+  need(env.GITHUB_REPOSITORY===REPOSITORY && env.GITHUB_RUN_ATTEMPT==='1' && /^[1-9][0-9]{0,19}$/.test(env.GITHUB_RUN_ID),'XERO_COURIER_RUN_MISMATCH');
+  let metadataPending=true;
+  const preparing=()=>{
+    if(metadataPending)need(!signal?.aborted && now()<plan.binding.armBefore,'XERO_COURIER_PREPARATION_METADATA_PENDING_EXHAUSTED');
+    active(signal,t,now);need(now()<plan.binding.armBefore,'XERO_COURIER_AUTHORITY_EXPIRED');
+  };
+  // GitHub can expose a queued REST snapshot while this actual job runs.
+  // Pending is not admission. Keep all immutable checks and share the original
+  // carrier GET budget/deadline; never proceed to locator/login/host while pending.
+  preparing();const runId=env.GITHUB_RUN_ID;
+  const transport=courierGithubReader({env,signal,now,wait,fetchImpl:async(url,options)=>{
+    preparing();try{return await fetchImpl(url,{...options,signal:AbortSignal.any([options.signal,AbortSignal.timeout(plan.binding.armBefore-now())])});}
+    finally{preparing();}
+  }});
+  const read=async(...args)=>{preparing();try{return await transport(...args);}finally{preparing();}};
+  while(true){
+    const actual=await assertCourierRun(read,t,runId,{phase:'preparation',allowPendingPreparation:true});preparing();
+    if(!actual.preparationPending){metadataPending=false;break;}
+    try{await wait(Math.min(10000,plan.binding.armBefore-now()));}finally{preparing();}
+  }
   const prefix=courierPrefix(t,runId);let found;
   while(!found){active(signal,t,now);need(now()<plan.binding.armBefore,'XERO_COURIER_AUTHORITY_EXPIRED');
     const candidate=await readCourierGitFile(read,`${prefix}/locator`,'locator.json',2048,{allowExecutionPreflight:plan.schemaVersion===3});

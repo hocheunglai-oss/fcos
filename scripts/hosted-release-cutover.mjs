@@ -30,7 +30,7 @@ function noSymlinks(path) {
 }
 function regular(path) {
   noSymlinks(path);
-  const fd=openSync(path,constants.O_RDONLY|constants.O_NOFOLLOW);
+  const fd=openSync(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
   try{const info=fstatSync(fd);need(info.isFile()&&info.nlink===1&&info.uid===process.getuid(),'CUTOVER_REGULAR_OWNER_FILE_REQUIRED');return readFileSync(fd);}finally{closeSync(fd);}
 }
 function reference(ref) {need(ref&&validHash(ref.sha256),'CUTOVER_REFERENCE_REQUIRED');const raw=regular(ref.path);need(hash(raw)===ref.sha256,'CUTOVER_REFERENCE_CHANGED');return raw;}
@@ -69,6 +69,81 @@ function assertExposedIntentIdentity(raw,intent,readback) {
   if(Object.hasOwn(original,'kind')) need(typeof original.kind==='string'&&original.kind.length>0,'CUTOVER_INTENT_IDENTITY_MISMATCH');
   if(Object.hasOwn(readback,'intentKind')) need(readback.intentKind===original.kind,'CUTOVER_INTENT_IDENTITY_MISMATCH');
 }
+// A complete snapshot is evidence only. It does not classify outcomes or grant
+// permission to ignore producer records. Empty directories remain in the tree.
+export function snapshotLegacyJournalTree(directory) {
+  need(typeof directory==='string'&&resolve(directory)===directory,'CUTOVER_INVENTORY_PATH_INVALID');
+  const entries=[];
+  const walk=(path,prefix)=>{
+    noSymlinks(path);const before=lstatSync(path,{bigint:true});
+    need(before.isDirectory()&&before.uid===BigInt(process.getuid())&&(before.mode&0o022n)===0n,'CUTOVER_PRIVATE_DIRECTORY_REQUIRED');
+    const names=readdirSync(path).sort();
+    for(const name of names){
+      need(/^[a-zA-Z0-9._-]+$/.test(name)&&name!=='.'&&name!=='..','CUTOVER_INTENT_NAME_INVALID');
+      const item=resolve(path,name),relativeName=prefix?`${prefix}/${name}`:name,info=lstatSync(item);
+      need(!info.isSymbolicLink(),'CUTOVER_SYMLINK_FORBIDDEN');
+      if(info.isDirectory()){entries.push({name:relativeName,type:'directory'});walk(item,relativeName);}
+      else {need(info.isFile(),'CUTOVER_REGULAR_OWNER_FILE_REQUIRED');entries.push({name:relativeName,type:'file',sha256:hash(regular(item))});}
+    }
+    const after=lstatSync(path,{bigint:true});
+    need(before.dev===after.dev&&before.ino===after.ino&&before.mtimeNs===after.mtimeNs&&before.ctimeNs===after.ctimeNs
+      &&names.join('\0')===readdirSync(path).sort().join('\0'),'CUTOVER_INTENT_INVENTORY_CHANGED');
+  };
+  walk(directory,'');return entries.sort((a,b)=>a.name<b.name?-1:a.name>b.name?1:0);
+}
+const treeEntry=item=>item.type==='directory'?{name:item.name,type:'directory'}:
+  {name:item.name,type:'file',sha256:item.sha256,role:item.role,...(item.role==='companion'?{category:item.category,producerSourceSha256:item.producerSourceSha256}:item.role==='journal'?{intentName:item.intentName,intentSha256:item.intentSha256,producerSourceSha256:item.producerSourceSha256}:{})};
+export const legacyProducerInventoryEntriesSha256=entries=>hash(JSON.stringify(entries.map(treeEntry).sort((a,b)=>a.name<b.name?-1:a.name>b.name?1:0)));
+const journalName=name=>/(?:^|[.])(?:attempt|prepared|submitting|submitted|uncertain|claim-attempt|held-lease|stopped|tool-error|publication)(?:[.]|$)/.test(name.split('/').at(-1))
+  ||/(?:^|[._-])intent(?:[._-]|$)/.test(name.split('/').at(-1));
+function submissionRecord(raw,name) {
+  if(journalName(name))return true;
+  let value;try{value=JSON.parse(raw);}catch{return false;}
+  if(!value||typeof value!=='object'||Array.isArray(value))return false;
+  return (Object.hasOwn(value,'kind')&&typeof value.kind!=='string')
+    ||/(?:^|_)(?:intent|attempt|submission)(?:_|$)/.test(value.kind??'')
+    ||['prepared','submitting','submitted','uncertain','unknown'].includes(value.state)
+    ||['pending_native_send','submitting','submitted','uncertain','unknown'].includes(value.status)||value.originalIntentConsumedGetOnly===true
+    ||Object.hasOwn(value,'rawRequestJson')||Object.hasOwn(value,'passwordSubmissionMayHaveOccurred');
+}
+function inspectProducerInventory(inventory,writers,refs) {
+  need(Array.isArray(inventory.entries)&&inventory.entries.every(item=>item&&typeof item.name==='string')
+    &&new Set(inventory.entries.map(item=>item.name)).size===inventory.entries.length,'CUTOVER_INTENT_INVENTORY_REQUIRED');
+  const observed=snapshotLegacyJournalTree(inventory.directory),entries=inventory.entries.map(item=>{
+    need(item.name.split('/').every(name=>/^[a-zA-Z0-9._-]+$/.test(name)&&name!=='.'&&name!=='..'),'CUTOVER_INTENT_NAME_INVALID');
+    need(['directory','file'].includes(item.type),'CUTOVER_INVENTORY_ENTRY_TYPE_INVALID');
+    if(item.type==='file')need(validHash(item.sha256)&&['intent','journal','companion'].includes(item.role),'CUTOVER_INVENTORY_CLASSIFICATION_REQUIRED');
+    else need(item.role===undefined&&item.sha256===undefined,'CUTOVER_INVENTORY_ENTRY_TYPE_INVALID');
+    const normalized=treeEntry(item);
+    need(Object.keys(item).sort().join(',')===Object.keys(normalized).sort().join(','),'CUTOVER_INVENTORY_ENTRY_TYPE_INVALID');
+    return normalized;
+  }).sort((a,b)=>a.name<b.name?-1:a.name>b.name?1:0);
+  const physical=entries.map(({name,type,sha256})=>type==='directory'?{name,type}:{name,type,sha256});
+  need(JSON.stringify(observed)===JSON.stringify(physical),'CUTOVER_INTENT_INVENTORY_CHANGED');
+  const proof=JSON.parse(reference(inventory.classification));refs.push(inventory.classification);
+  const writer=writers.find(item=>item.id===inventory.writerId);
+  need(writer&&proof.kind==='fcos_root_accepted_legacy_producer_inventory_v1'&&proof.accepted===true&&proof.reviewerId==='/root'
+    &&proof.directory===inventory.directory&&proof.writerId===writer.id&&proof.writerSourceSha256===writer.sourceSha256
+    &&proof.entriesSha256===legacyProducerInventoryEntriesSha256(entries)&&proof.completeSubmissionCoverageReviewed===true
+    &&proof.providerOutcomesInferred===false&&proof.providerAuthorityGranted===false
+    &&typeof proof.reviewedAt==='string'&&Number.isFinite(Date.parse(proof.reviewedAt))
+    &&Array.isArray(proof.producerSources)&&proof.producerSources.length>0,'CUTOVER_PRODUCER_CLASSIFICATION_REQUIRED');
+  for(const ref of proof.producerSources){reference(ref);refs.push(ref);}
+  const sources=new Set(proof.producerSources.map(ref=>ref.sha256));
+  for(const item of entries)if(item.role==='companion')need(!journalName(item.name),'CUTOVER_SUBMISSION_CANNOT_BE_COMPANION');
+  const intentEntries=[],journals=[];
+  for(const item of entries.filter(item=>item.type==='file')){
+    const ref={path:resolve(inventory.directory,item.name),sha256:item.sha256},raw=reference(ref);refs.push(ref);
+    if(item.role==='companion')need(['source','admission','receipt','metadata','build_cache'].includes(item.category)
+      &&sources.has(item.producerSourceSha256)&&!submissionRecord(raw,item.name),'CUTOVER_SUBMISSION_CANNOT_BE_COMPANION');
+    else if(item.role==='journal'){
+      const target=entries.find(entry=>entry.name===item.intentName&&entry.type==='file'&&entry.role==='intent'&&entry.sha256===item.intentSha256);
+      need(target&&sources.has(item.producerSourceSha256),'CUTOVER_SUBMISSION_JOURNAL_BINDING_REQUIRED');
+      journals.push({...ref,intent:{path:resolve(inventory.directory,target.name),sha256:target.sha256}});
+    }else intentEntries.push(ref);
+  }
+  return {directory:inventory.directory,kind:inventory.kind,tree:observed,entries:intentEntries,journals};
+}
 /** Hash-reviewed input is data. The operator separately authenticates actual owner/provider evidence. */
 export function inspectReviewedCutover({reviewPath,reviewSha256,expectedHelperSha256,fixtureRoot}) {
   need(validHash(reviewSha256)&&validHash(expectedHelperSha256),'CUTOVER_EXPLICIT_HASH_PINS_REQUIRED');
@@ -95,18 +170,20 @@ export function inspectReviewedCutover({reviewPath,reviewSha256,expectedHelperSh
   need(Array.isArray(review.requiredWriterIds)&&review.requiredWriterIds.includes('production')&&review.requiredWriterIds.includes('reconciliation')
     &&new Set(review.requiredWriterIds).size===review.requiredWriterIds.length&&Array.isArray(review.writers)
     &&review.writers.length===review.requiredWriterIds.length&&new Set(review.writers.map(w=>w.id)).size===review.writers.length,'CUTOVER_COMPLETE_WRITER_INVENTORY_REQUIRED');
-  const refs=[review.helper,review.workflow,...proofRefs],writers=[];
+  const refs=[{path:reviewPath,sha256:reviewSha256},review.helper,review.workflow,...proofRefs],writers=[];
   for(const writer of review.writers){
     need(review.requiredWriterIds.includes(writer.id)&&Object.values(owners).includes(writer.ownerThreadId)
       &&(!Object.hasOwn(owners,writer.id)||writer.ownerThreadId===owners[writer.id]),'CUTOVER_FOREIGN_WRITER');
     const proof=JSON.parse(reference(writer.disabledEvidence));refs.push(writer.disabledEvidence);
     need(proof.kind==='fcos_legacy_writer_fence'&&proof.writerId===writer.id&&proof.ownerThreadId===writer.ownerThreadId
       &&proof.disabled===true&&validHash(proof.sourceSha256),'CUTOVER_WRITER_NOT_FENCED');
-    writers.push({id:writer.id,disabled:true,proofHash:writer.disabledEvidence.sha256});
+    writers.push({id:writer.id,disabled:true,proofHash:writer.disabledEvidence.sha256,sourceSha256:proof.sourceSha256});
   }
   need(Array.isArray(review.intentInventories)&&review.intentInventories.length>0&&Array.isArray(review.uncertainIntents),'CUTOVER_INTENT_INVENTORY_REQUIRED');
   const inventories=[];
   for(const inventory of review.intentInventories){
+    if(inventory.kind==='fcos_legacy_producer_tree_inventory_v1'){inventories.push(inspectProducerInventory(inventory,writers,refs));continue;}
+    need(inventory.kind===undefined,'CUTOVER_INVENTORY_KIND_INVALID');
     need(Array.isArray(inventory.entries),'CUTOVER_INTENT_INVENTORY_REQUIRED');noSymlinks(inventory.directory);const names=readdirSync(inventory.directory).sort();
     need(names.join('\0')===inventory.entries.map(e=>e.name).sort().join('\0'),'CUTOVER_INTENT_INVENTORY_CHANGED');
     const entries=[];
@@ -115,7 +192,11 @@ export function inspectReviewedCutover({reviewPath,reviewSha256,expectedHelperSh
   }
   const uncertainties=[];
   const reviewedIntents=[...review.uncertainIntents,...(review.resolvedIntents??[])];
-  for(const entry of inventories.flatMap(i=>i.entries)) need(reviewedIntents.some(i=>i.evidence.path===entry.path&&i.evidence.sha256===entry.sha256),'CUTOVER_UNCLASSIFIED_INTENT');
+  for(const inventory of inventories)for(const entry of inventory.entries){
+    const matches=reviewedIntents.filter(i=>i.evidence.path===entry.path&&i.evidence.sha256===entry.sha256);
+    need(matches.length>0,'CUTOVER_UNCLASSIFIED_INTENT');
+    if(inventory.tree)need(matches.length===1,'CUTOVER_DUPLICATE_INTENT');
+  }
   for(const intent of reviewedIntents){
     need(typeof intent.operationId==='string'&&intent.operationId,'CUTOVER_INTENT_OWNER_INVALID');
     assertIntentOwner(intent.ownerThreadId,owners,review.helper);
@@ -123,6 +204,13 @@ export function inspectReviewedCutover({reviewPath,reviewSha256,expectedHelperSh
     need(readback.kind==='fcos_legacy_owner_readback'&&readback.operationId===intent.operationId&&readback.ownerThreadId===intent.ownerThreadId
       &&readback.intentSha256===intent.evidence.sha256&&['applied','not_applied','unknown'].includes(readback.outcome),'CUTOVER_ACTUAL_OWNER_READBACK_REQUIRED');
     assertExposedIntentIdentity(original,intent,readback);
+    const journals=inventories.flatMap(inventory=>inventory.journals??[]).filter(item=>item.intent.path===intent.evidence.path&&item.intent.sha256===intent.evidence.sha256);
+    if(journals.length){
+      const expected=journals.map(({path,sha256})=>({path,sha256})).sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0);
+      const matches=values=>Array.isArray(values)&&values.length===expected.length&&JSON.stringify(values.map(({path,sha256})=>({path,sha256})).sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0))===JSON.stringify(expected);
+      need(matches(intent.journalEvidence)&&matches(readback.journalEvidence),'CUTOVER_SUBMISSION_JOURNAL_READBACK_REQUIRED');
+      for(const journal of journals)assertExposedIntentIdentity(reference(journal),intent,{});
+    }
     if(readback.outcome==='unknown') uncertainties.push({operationId:intent.operationId,evidenceHash:intent.evidence.sha256,ownerThreadId:intent.ownerThreadId,ownerReadbackHash:intent.ownerReadback.sha256});
   }
   need(new Set(uncertainties.map(i=>i.operationId)).size===uncertainties.length,'CUTOVER_DUPLICATE_INTENT');
@@ -130,7 +218,7 @@ export function inspectReviewedCutover({reviewPath,reviewSha256,expectedHelperSh
   else need(review.leasePath===resolve(CANONICAL_LEGACY_DIRECTORY,'live-provider-write-lease.json')
     &&review.workflow.path===resolve(CANONICAL_LEGACY_DIRECTORY,'../workflow-state.json')
     &&review.helper.path===HOSTED_CUTOVER_LEGACY_GUARD.path,'CUTOVER_CANONICAL_LOCAL_PATH_REQUIRED');
-  return {review,reviewSha256,refs,inventories,writers,uncertainties,existingOwners:owners,base};
+  return {review,reviewSha256,refs,inventories,writers:writers.map(({sourceSha256:_sourceSha256,...writer})=>writer),uncertainties,existingOwners:owners,base};
 }
 const fenceProgram=String.raw`
 import os,sys,json,hashlib,stat,fcntl
@@ -138,7 +226,7 @@ v=json.load(sys.stdin)
 def raw(p):
  for x in [p,*list(__import__('pathlib').Path(p).parents)]:
   if __import__('pathlib').Path(x).is_symlink(): raise ValueError('path')
- fd=os.open(p,os.O_RDONLY|os.O_NOFOLLOW)
+ fd=os.open(p,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
  with os.fdopen(fd,'rb') as f:
   i=os.fstat(f.fileno())
   if not stat.S_ISREG(i.st_mode) or i.st_nlink!=1 or i.st_uid!=os.getuid(): raise ValueError('file')
@@ -152,8 +240,25 @@ try:
  if os.path.lexists(v['leasePath']): raise ValueError('existing lease requires original owner readback')
  for ref in v['refs']:
   if hashlib.sha256(raw(ref['path'])).hexdigest()!=ref['sha256']: raise ValueError('changed proof')
+ def tree(directory):
+  found=[]
+  def walk(p,prefix):
+   for x in [p,*list(__import__('pathlib').Path(p).parents)]:
+    if __import__('pathlib').Path(x).is_symlink(): raise ValueError('path')
+   before=os.stat(p,follow_symlinks=False)
+   if not stat.S_ISDIR(before.st_mode) or before.st_uid!=os.getuid() or before.st_mode&0o022: raise ValueError('directory')
+   names=sorted(os.listdir(p))
+   for name in names:
+    target=os.path.join(p,name); rel=prefix+'/'+name if prefix else name; info=os.lstat(target)
+    if stat.S_ISDIR(info.st_mode): found.append({'name':rel,'type':'directory'});walk(target,rel)
+    else: found.append({'name':rel,'type':'file','sha256':hashlib.sha256(raw(target)).hexdigest()})
+   after=os.stat(p,follow_symlinks=False)
+   if (before.st_dev,before.st_ino,before.st_mtime_ns,before.st_ctime_ns)!=(after.st_dev,after.st_ino,after.st_mtime_ns,after.st_ctime_ns) or names!=sorted(os.listdir(p)): raise ValueError('changed directory')
+  walk(directory,'');return sorted(found,key=lambda x:x['name'])
  for inv in v['inventories']:
-  if sorted(os.listdir(inv['directory']))!=sorted(os.path.basename(x['path']) for x in inv['entries']): raise ValueError('inventory')
+  if 'tree' in inv:
+   if tree(inv['directory'])!=inv['tree']: raise ValueError('inventory')
+  elif sorted(os.listdir(inv['directory']))!=sorted(os.path.basename(x['path']) for x in inv['entries']): raise ValueError('inventory')
  out=os.open(v['leasePath'],os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
  with os.fdopen(out,'w') as f:
   json.dump(v['sentinel'],f,sort_keys=True,separators=(',',':'));f.write('\n');f.flush();os.fsync(f.fileno())

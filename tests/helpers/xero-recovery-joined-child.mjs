@@ -177,7 +177,7 @@ test('joined preflight succeeds once without Xero or overall release qualificati
   const run = { id: Number(runId), run_attempt: 1, repository, head_repository: repository,
     actor: { id: 265701760, login: 'hocheunglai-oss' }, event: 'workflow_dispatch',
     head_sha: caller.sha, head_branch: caller.ref.slice('refs/heads/'.length),
-    path: '.github/workflows/authenticated-release.yml', status: 'in_progress',
+    path: '.github/workflows/authenticated-release.yml', status: 'in_progress', conclusion: null,
     display_title: `FCOS original Xero carrier ${randomUUID()}` };
   const jobs = { total_count: 1, jobs: [{ id: jobId, run_id: Number(runId),
     name: 'xero-recovery-carrier', labels: ['ubuntu-24.04'], status: 'in_progress',
@@ -368,6 +368,7 @@ test('joined preflight succeeds once without Xero or overall release qualificati
     return;
   }
   if (v3) {
+    assert.equal(run.conclusion,null,'Actual nonterminal GitHub run metadata has a null conclusion; missing is not running proof.');
     const executionJob=jobs.jobs[0],prepJob=jobs.jobs[1];
     jobs.jobs=[{...prepJob,status:'in_progress',conclusion:null}];jobs.total_count=1;
     const prepared=await prepareWarmXeroRecoveryCarrier({templateJson,fetchImpl,now,signal:controller.signal,
