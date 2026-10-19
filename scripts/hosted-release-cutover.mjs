@@ -13,6 +13,10 @@ export const HOSTED_CUTOVER_LEGACY_GUARD=Object.freeze({
   path:resolve(CANONICAL_LEGACY_DIRECTORY,'features-reconciliation-owner-transition-v1/coordinator_guard.py'),
   sha256:'8ed4eda312b62c3b02c3a0a768ddd024a2a819af5f0f1194da47ef2a2d62fd38',
 });
+// This is the immutable reconciliation lineage of the pinned 8ed guard, not a
+// current writer/claim owner and not a caller-provided ownership transition.
+const FEATURES_OWNER='01a0f08b-7fcb-7870-9edc-343e16052b62';
+const HISTORICAL_RECONCILIATION_OWNER='01a0b0e2-b1af-7bf0-963d-3138c42648e3';
 const validHash=value=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value);
 const fail=code=>{throw Object.assign(new Error(code),{code});};
 const need=(value,code)=>{if(!value)fail(code);};
@@ -31,6 +35,40 @@ function regular(path) {
 }
 function reference(ref) {need(ref&&validHash(ref.sha256),'CUTOVER_REFERENCE_REQUIRED');const raw=regular(ref.path);need(hash(raw)===ref.sha256,'CUTOVER_REFERENCE_CHANGED');return raw;}
 function inside(root,path) {const p=relative(resolve(root),resolve(path));return p!==''&&!p.startsWith('..')&&!isAbsolute(p);}
+function assertIntentOwner(owner,owners,helper) {
+  if(Object.values(owners).includes(owner)) return;
+  need(owner===HISTORICAL_RECONCILIATION_OWNER
+    &&helper.sha256===HOSTED_CUTOVER_LEGACY_GUARD.sha256
+    &&owners.production===FEATURES_OWNER&&owners.reconciliation===FEATURES_OWNER,
+    'CUTOVER_INTENT_OWNER_INVALID');
+}
+function assertExposedIntentIdentity(raw,intent,readback) {
+  // Some original provider journals are opaque rather than dispatch envelopes.
+  // Keep the existing hash-bound owner-readback contract; do not invent a new
+  // intent schema or infer provider provenance from a parseable object.
+  let original;try{original=JSON.parse(raw);}catch{
+    need(!Object.hasOwn(readback,'intentKind'),'CUTOVER_INTENT_IDENTITY_MISMATCH');return;
+  }
+  if(!original||typeof original!=='object'||Array.isArray(original)) {
+    need(!Object.hasOwn(readback,'intentKind'),'CUTOVER_INTENT_IDENTITY_MISMATCH');return;
+  }
+  if(Object.hasOwn(original,'ownerThreadId')) need(original.ownerThreadId===intent.ownerThreadId,'CUTOVER_INTENT_IDENTITY_MISMATCH');
+  if(Object.hasOwn(original,'operationId')) need(original.operationId===intent.operationId,'CUTOVER_INTENT_IDENTITY_MISMATCH');
+  // `operation` can be a provider verb. These two existing dispatch kinds give
+  // it an actual worker-operation identity; they do not restrict other journals.
+  if(['source_bound_financial_decision_owner_mission_intent_v1','bounded_local_worker_dispatch_intent_v1'].includes(original.kind)) {
+    need(original.operation===intent.operationId,'CUTOVER_INTENT_IDENTITY_MISMATCH');
+    const ownerKey=original.kind==='bounded_local_worker_dispatch_intent_v1'?'threadId':'ownerThreadId';
+    need(original[ownerKey]===intent.ownerThreadId,'CUTOVER_INTENT_IDENTITY_MISMATCH');
+    if(Object.hasOwn(original,'threadId')) need(original.threadId===intent.ownerThreadId,'CUTOVER_INTENT_IDENTITY_MISMATCH');
+  }
+  if(original.lease&&typeof original.lease==='object'&&!Array.isArray(original.lease)) {
+    if(Object.hasOwn(original.lease,'ownerThreadId')) need(original.lease.ownerThreadId===intent.ownerThreadId,'CUTOVER_INTENT_IDENTITY_MISMATCH');
+    if(Object.hasOwn(original.lease,'operationId')) need(original.lease.operationId===intent.operationId,'CUTOVER_INTENT_IDENTITY_MISMATCH');
+  }
+  if(Object.hasOwn(original,'kind')) need(typeof original.kind==='string'&&original.kind.length>0,'CUTOVER_INTENT_IDENTITY_MISMATCH');
+  if(Object.hasOwn(readback,'intentKind')) need(readback.intentKind===original.kind,'CUTOVER_INTENT_IDENTITY_MISMATCH');
+}
 /** Hash-reviewed input is data. The operator separately authenticates actual owner/provider evidence. */
 export function inspectReviewedCutover({reviewPath,reviewSha256,expectedHelperSha256,fixtureRoot}) {
   need(validHash(reviewSha256)&&validHash(expectedHelperSha256),'CUTOVER_EXPLICIT_HASH_PINS_REQUIRED');
@@ -50,6 +88,8 @@ export function inspectReviewedCutover({reviewPath,reviewSha256,expectedHelperSh
   const owners=Object.fromEntries(Object.entries(c.objectives).map(([id,value])=>[id,value.ownerThreadId]));
   need(Object.keys(owners).sort().join(',')==='production,reconciliation'
     &&Object.keys(owners).every(id=>review.existingOwners?.[id]===owners[id]),'CUTOVER_EXISTING_OWNER_CHANGED');
+  if(review.helper.sha256===HOSTED_CUTOVER_LEGACY_GUARD.sha256)
+    need(owners.production===FEATURES_OWNER&&owners.reconciliation===FEATURES_OWNER,'CUTOVER_EXISTING_OWNER_CHANGED');
   const proofRefs=Object.entries(c.writeLeaseHelper).filter(([key,value])=>key!=='path'&&value&&typeof value==='object'&&value.path&&value.sha256).map(([,value])=>value);
   for(const ref of proofRefs) reference(ref);
   need(Array.isArray(review.requiredWriterIds)&&review.requiredWriterIds.includes('production')&&review.requiredWriterIds.includes('reconciliation')
@@ -57,7 +97,8 @@ export function inspectReviewedCutover({reviewPath,reviewSha256,expectedHelperSh
     &&review.writers.length===review.requiredWriterIds.length&&new Set(review.writers.map(w=>w.id)).size===review.writers.length,'CUTOVER_COMPLETE_WRITER_INVENTORY_REQUIRED');
   const refs=[review.helper,review.workflow,...proofRefs],writers=[];
   for(const writer of review.writers){
-    need(review.requiredWriterIds.includes(writer.id)&&Object.values(owners).includes(writer.ownerThreadId),'CUTOVER_FOREIGN_WRITER');
+    need(review.requiredWriterIds.includes(writer.id)&&Object.values(owners).includes(writer.ownerThreadId)
+      &&(!Object.hasOwn(owners,writer.id)||writer.ownerThreadId===owners[writer.id]),'CUTOVER_FOREIGN_WRITER');
     const proof=JSON.parse(reference(writer.disabledEvidence));refs.push(writer.disabledEvidence);
     need(proof.kind==='fcos_legacy_writer_fence'&&proof.writerId===writer.id&&proof.ownerThreadId===writer.ownerThreadId
       &&proof.disabled===true&&validHash(proof.sourceSha256),'CUTOVER_WRITER_NOT_FENCED');
@@ -76,10 +117,12 @@ export function inspectReviewedCutover({reviewPath,reviewSha256,expectedHelperSh
   const reviewedIntents=[...review.uncertainIntents,...(review.resolvedIntents??[])];
   for(const entry of inventories.flatMap(i=>i.entries)) need(reviewedIntents.some(i=>i.evidence.path===entry.path&&i.evidence.sha256===entry.sha256),'CUTOVER_UNCLASSIFIED_INTENT');
   for(const intent of reviewedIntents){
-    need(typeof intent.operationId==='string'&&intent.operationId&&Object.values(owners).includes(intent.ownerThreadId),'CUTOVER_INTENT_OWNER_INVALID');
-    reference(intent.evidence);const readback=JSON.parse(reference(intent.ownerReadback));refs.push(intent.evidence,intent.ownerReadback);
+    need(typeof intent.operationId==='string'&&intent.operationId,'CUTOVER_INTENT_OWNER_INVALID');
+    assertIntentOwner(intent.ownerThreadId,owners,review.helper);
+    const original=reference(intent.evidence),readback=JSON.parse(reference(intent.ownerReadback));refs.push(intent.evidence,intent.ownerReadback);
     need(readback.kind==='fcos_legacy_owner_readback'&&readback.operationId===intent.operationId&&readback.ownerThreadId===intent.ownerThreadId
       &&readback.intentSha256===intent.evidence.sha256&&['applied','not_applied','unknown'].includes(readback.outcome),'CUTOVER_ACTUAL_OWNER_READBACK_REQUIRED');
+    assertExposedIntentIdentity(original,intent,readback);
     if(readback.outcome==='unknown') uncertainties.push({operationId:intent.operationId,evidenceHash:intent.evidence.sha256,ownerThreadId:intent.ownerThreadId,ownerReadbackHash:intent.ownerReadback.sha256});
   }
   need(new Set(uncertainties.map(i=>i.operationId)).size===uncertainties.length,'CUTOVER_DUPLICATE_INTENT');
