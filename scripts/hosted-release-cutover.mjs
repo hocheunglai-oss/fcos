@@ -5,12 +5,21 @@ import { dirname, resolve, relative, isAbsolute } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { assertNotificationChallenge } from '../supabase/functions/release-coordinator/core.mjs';
-import { RELEASE_COORDINATION_CANONICAL } from './lib/release-coordination.mjs';
 const hash=value=>createHash('sha256').update(value).digest('hex');
 export const CANONICAL_LEGACY_DIRECTORY='/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/schedule-consolidation-20261004/production-reconciliation-coordinator-20261005';
+// Cutover fences the currently accepted Features-owned guard. Historical release
+// and attestation protocols retain their original immutable guard pins.
+export const HOSTED_CUTOVER_LEGACY_GUARD=Object.freeze({
+  path:resolve(CANONICAL_LEGACY_DIRECTORY,'features-reconciliation-owner-transition-v1/coordinator_guard.py'),
+  sha256:'8ed4eda312b62c3b02c3a0a768ddd024a2a819af5f0f1194da47ef2a2d62fd38',
+});
 const validHash=value=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value);
 const fail=code=>{throw Object.assign(new Error(code),{code});};
 const need=(value,code)=>{if(!value)fail(code);};
+export function assertHostedCutoverLegacyGuard(helper,expectedHelperSha256) {
+  need(expectedHelperSha256===HOSTED_CUTOVER_LEGACY_GUARD.sha256
+    &&helper?.sha256===expectedHelperSha256&&helper.path===HOSTED_CUTOVER_LEGACY_GUARD.path,'CUTOVER_CANONICAL_HELPER_REQUIRED');
+}
 function noSymlinks(path) {
   need(isAbsolute(path),'CUTOVER_ABSOLUTE_PATH_REQUIRED');
   for(let p=resolve(path);;p=dirname(p)){need(!lstatSync(p).isSymbolicLink(),'CUTOVER_SYMLINK_FORBIDDEN');if(dirname(p)===p)break;}
@@ -30,7 +39,7 @@ export function inspectReviewedCutover({reviewPath,reviewSha256,expectedHelperSh
     &&Number.isSafeInteger(review.nextEpoch)&&review.nextEpoch>0,'CUTOVER_REVIEW_INVALID');
   try{assertNotificationChallenge(review.notificationChallenge);}catch{fail('CUTOVER_NOTIFICATION_CHALLENGE_REQUIRED');}
   if(fixtureRoot) need([realpathSync(tmpdir()),realpathSync('/tmp')].some(root=>inside(root,fixtureRoot))&&inside(fixtureRoot,reviewPath),'CUTOVER_FIXTURE_MUST_BE_TEMPORARY');
-  else need(expectedHelperSha256===RELEASE_COORDINATION_CANONICAL.helperSha256,'CUTOVER_CANONICAL_HELPER_REQUIRED');
+  else assertHostedCutoverLegacyGuard(review.helper,expectedHelperSha256);
   need(review.helper.sha256===expectedHelperSha256&&hash(reference(review.helper))===expectedHelperSha256,'CUTOVER_HELPER_CHANGED');
   const workflow=JSON.parse(reference(review.workflow)),c=workflow.unifiedCoordinator;
   need(c&&c.epoch===review.legacyEpoch&&c.writeLeasePath===review.leasePath
@@ -77,7 +86,7 @@ export function inspectReviewedCutover({reviewPath,reviewSha256,expectedHelperSh
   if(fixtureRoot) for(const p of [review.leasePath,...refs.map(r=>r.path),...inventories.map(i=>i.directory)]) need(inside(fixtureRoot,p),'CUTOVER_FIXTURE_ESCAPED');
   else need(review.leasePath===resolve(CANONICAL_LEGACY_DIRECTORY,'live-provider-write-lease.json')
     &&review.workflow.path===resolve(CANONICAL_LEGACY_DIRECTORY,'../workflow-state.json')
-    &&review.helper.path===resolve(CANONICAL_LEGACY_DIRECTORY,'public-runtime-material-upload-cancellation-v1/coordinator_guard.py'),'CUTOVER_CANONICAL_LOCAL_PATH_REQUIRED');
+    &&review.helper.path===HOSTED_CUTOVER_LEGACY_GUARD.path,'CUTOVER_CANONICAL_LOCAL_PATH_REQUIRED');
   return {review,reviewSha256,refs,inventories,writers,uncertainties,existingOwners:owners,base};
 }
 const fenceProgram=String.raw`
