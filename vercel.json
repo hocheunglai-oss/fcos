@@ -1,9 +1,20 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "installCommand": "npm ci",
-  "git": { "deploymentEnabled": { "main": false, "codex/compatibility-successor-source-gate-20261005": false, "codex/preview-coordination-bridge-source-20261009": false,
-      "codex/rapid-release-workflow-20261009": false, "codex/runtime-material-transport-20261011": false, "codex/runtime-material-diagnostics-20261012": false } },
-  "regions": ["sin1"],
+  "git": {
+    "deploymentEnabled": {
+      "main": false,
+      "codex/compatibility-successor-source-gate-20261005": false,
+      "codex/preview-coordination-bridge-source-20261009": false,
+      "codex/rapid-release-workflow-20261009": false,
+      "codex/runtime-material-transport-20261011": false,
+      "codex/runtime-material-diagnostics-20261012": false,
+      "codex/hosted-qualification-682706f7-v3-20261021": false
+    }
+  },
+  "regions": [
+    "sin1"
+  ],
   "crons": [
     {
       "path": "/api/functions/outstandingBuyerInvoicesEmailCron",
