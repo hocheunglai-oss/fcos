@@ -5,11 +5,11 @@ import {materialZip} from './helpers/runtimeMaterialTransport.mjs';
 import {createRequire} from 'node:module';
 import {runInNewContext} from 'node:vm';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, readdirSync, realpathSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, readdirSync, realpathSync, writeFileSync, mkdirSync, lstatSync, readlinkSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { generateKeyPair, SignJWT, createLocalJWKSet, exportJWK } from 'jose';
-import { parseCourierTemplate, parseCourierRequest, courierRequestRef, courierPrefix, canonicalCourierStateDirectory, nativeCourierSourcePins, createCourierReadBudget, assertNativeCourierAdmission, createNativeXeroRecoveryRelay, createNativeXeroRecoveryWarmDispatcher, originalWarmVariable, ORIGINAL_WARM_TEMPLATE_VARIABLE, assertCourierAck, assertCourierRun, parseOwnerReadbackCarrier, assertOwnerReadbackAck, ownerReadbackArtifactName,
+import { parseCourierTemplate, parseCourierRequest, courierRequestRef, courierPrefix, canonicalCourierStateDirectory, nativeCourierSourcePins, createCourierReadBudget, assertNativeCourierAdmission, createNativeXeroRecoveryRelay, createNativeXeroRecoveryWarmDispatcher, inspectNativeXeroCoordinatorAdmission, nativeRelayMain, FEATURES_OWNER, originalWarmVariable, ORIGINAL_WARM_TEMPLATE_VARIABLE, assertCourierAck, assertCourierRun, parseOwnerReadbackCarrier, assertOwnerReadbackAck, ownerReadbackArtifactName,
   courierPublicationStatus, assertCourierPublicationStatus, canonical, hash, safeCode, REPOSITORY } from '../scripts/lib/hosted-release/xero-recovery-native-relay.mjs';
 import { carrierMain, prepareWarmXeroRecoveryCarrier, runWarmXeroRecoveryCarrier, runXeroRecoveryOwnerReadback, buildCourierExpectedFiles, captureCourierAck, verifyCourierOidc, verifyCourierDeploymentBytes, courierPublicationObserved, courierGithubReader } from '../scripts/hosted-xero-recovery-carrier.mjs';
 import { prepareXeroRecoveryStepRequest, validateRecoveryExecutionClock } from '../scripts/lib/hosted-release/xero-recovery-step-protocol.mjs';
@@ -91,8 +91,8 @@ test('source inventory cannot omit or add bytes, substitute metadata digest, or 
  for(const tree of [[],[{name:'../index.mjs',type:'file',uid:'x'}],[{name:'index.mjs',type:'file',uid:'x',meta:{sourceDigest:H}}]]){const f=readerFixture(tree);await assert.rejects(verifyCourierDeploymentBytes({...f,locator:{schemaVersion:1,kind:'fcos_xero_host_locator_v1',deploymentId:'dpl_fixture',url:'https://fixed.vercel.app'},expectedFiles:[],signal:new AbortController().signal,now:()=>T}));assert.equal(f.calls.length,3);}
 });
 // Inert admission fixtures exercise byte/tuple binding only; they are never
-// actual root/human/provider provenance. Python refusal is an explicit synthetic
-// completed nonzero fixture, not execution of the operational guard source.
+// actual root/human/provider provenance. Most command completions are synthetic;
+// coordinatorPythonFixture below executes the actual inline Python checks.
 function nativeFixture(version=1){const controlRoot=realpathSync(mkdtempSync(join(tmpdir(),'fcos-native-courier-'))),t=template(version),parsed=parseCourierTemplate(JSON.stringify(t)),stateDirectory=canonicalCourierStateDirectory(binding.operationId,controlRoot);
  mkdirSync(stateDirectory,{recursive:true,mode:0o700});const workflow=join(controlRoot,'workflow.json'),board=join(controlRoot,'workboard.json');
  writeFileSync(workflow,JSON.stringify({unifiedCoordinator:{epoch:'production-reconciliation-20261005'}}));writeFileSync(board,JSON.stringify({checkpointPaths:{workflow}}));
@@ -104,9 +104,54 @@ function nativeFixture(version=1){const controlRoot=realpathSync(mkdtempSync(joi
  for(const [name,role,reviewerId] of [['rootReview','root','/root'],['independentReview','independent','/root/other_reviewer']])evidence[name]=save(name+'.json',{kind:'fcos_actual_native_xero_courier_action_review_v1',accepted:true,role,reviewerId,scopeSha256,originalHumanAuthorityProvenanceReviewed:true,actualDeploymentSourceProvenanceReviewed:true,actualSharedCoordinationQuotaReviewed:true,actualPublisherStatusScopeAndConsumersReviewed:true});
  const admission={schemaVersion:1,kind:'fcos_root_admitted_native_xero_courier_v1',reviewerId:'/root',accepted:true,templateSha256:parsed.templateSha256,planSha256:parsed.planSha256,target,sourcePins,evidence,scopeSha256};b.rootAdmissionSha256=save('root-native-admission.json',admission).sha256;
  return{controlRoot,t,parsed,stateDirectory,b,admission,save,options:{templateJson:JSON.stringify(t),binding:b,stateDirectory,controlRoot,now:()=>T},clean:()=>rmSync(controlRoot,{recursive:true,force:true})};}
-test('synthetic completed Python refusal stops native boundary before credential reads or Git publication',async()=>{
- const f=nativeFixture();try{const commands=[];const relay=await createNativeXeroRecoveryRelay({...f.options,capture:(command)=>{commands.push(command);assert.equal(command,'/usr/bin/python3');return{status:1,stdout:'',stderr:'synthetic guard refusal'};}});await assert.rejects(relay.submit(request(f.t)),{code:'XERO_COURIER_STOPPED_OWNER_READBACK_REQUIRED'});
- assert.deepEqual(commands,['/usr/bin/python3']);const files=readdirSync(f.stateDirectory);assert.ok(files.some(n=>n.endsWith('.claim-attempt.json')));const stopped=JSON.parse(readFileSync(join(f.stateDirectory,`${binding.operationId}.stopped.json`)));assert.equal(stopped.readbackOnly,true);
+const syntheticCoordinatorAdmission=v=>({kind:'fcos_native_xero_coordinator_read_only_admission_v1',admitted:true,epoch:v.expected.epoch,objective:'reconciliation',ownerThreadId:FEATURES_OWNER,coordinatorStatus:'active',objectiveStatus:'active',retired:false,leasePresent:false,coordinationOnly:true,providerAuthorityGranted:false,financialAuthorityGranted:false});
+function treeSnapshot(root){const result=[];const visit=(dir,prefix='')=>{for(const name of readdirSync(dir).sort()){const path=join(dir,name),relative=prefix+name,s=lstatSync(path);result.push([relative,s.mode,s.isDirectory()?'directory':s.isSymbolicLink()?['symlink',readlinkSync(path)]:hash(readFileSync(path))]);if(s.isDirectory())visit(path,relative+'/');}};visit(root);return result;}
+function coordinatorPythonFixture(f){
+ const base=join(f.controlRoot,'coordinator'),guard=join(base,'features-reconciliation-owner-transition-v1','coordinator_guard.py'),workflow=join(f.controlRoot,'workflow.json'),calls=[];
+ mkdirSync(join(base,'features-reconciliation-owner-transition-v1'),{recursive:true});
+ // Only the fixed trust-anchor hash is substituted for this inert module in
+ // subprocess argv. The operational Python path/status/owner/review checks run
+ // unchanged under /usr/bin/python3 -I; no production override is introduced.
+ const source=`OWNERS={'reconciliation':'${FEATURES_OWNER}'}\nclass WriteLease:\n def __init__(self,*args,**kwargs):\n  raise AssertionError('Read-only admission must never instantiate WriteLease')\n`;
+ writeFileSync(guard,source);const guardSha=hash(source),ref=name=>{const path=join(base,name+'.json'),bytes=JSON.stringify({fixture:'SYNTHETIC_NOT_ROOT_ACCEPTANCE',name});writeFileSync(path,bytes);return{path,sha256:hash(bytes)};};
+ const c={epoch:'production-reconciliation-20261005',ownerThreadId:FEATURES_OWNER,reconciliationExecutionOwnerThreadId:FEATURES_OWNER,status:'active',writeLeasePath:join(base,'live-provider-write-lease.json'),writeLeaseHelper:{path:guard,sha256:guardSha,localCoordinationGuardAccepted:true,independentReviewPending:false,providerAuthority:false,rootAcceptance:ref('root'),independentRevisionReview:ref('peer'),independentFinalScopeAddendum:ref('scope')},objectives:{reconciliation:{ownerThreadId:FEATURES_OWNER,status:'active',retired:false}}};
+ const save=()=>writeFileSync(workflow,JSON.stringify({unifiedCoordinator:c}));save();
+ const capture=(command,args,options)=>{assert.equal(command,'/usr/bin/python3');assert.deepEqual(args.slice(0,2),['-I','-c']);const anchor='8ed4eda312b62c3b02c3a0a768ddd024a2a819af5f0f1194da47ef2a2d62fd38';assert.equal(args[2].split(anchor).length,2);calls.push(JSON.parse(options.input).mode);return spawnSync(command,[...args.slice(0,2),args[2].replace(anchor,guardSha)],options);};
+ return{base,guard,workflow,c,calls,save,capture};
+}
+test('cold coordinator CLI entry executes actual Python admission without template, run, clock, credentials or filesystem mutation',async()=>{
+ const f=nativeFixture();try{const p=coordinatorPythonFixture(f);rmSync(f.stateDirectory,{recursive:true});const before=treeSnapshot(f.controlRoot);
+ const value=await nativeRelayMain(['inspect-coordinator'],{controlRoot:f.controlRoot,capture:p.capture});
+ assert.equal(value.admitted,true);assert.equal(value.objectiveStatus,'active');assert.equal(value.providerAuthorityGranted,false);assert.equal(value.financialAuthorityGranted,false);assert.deepEqual(p.calls,['check']);assert.deepEqual(treeSnapshot(f.controlRoot),before);
+ }finally{f.clean();}
+});
+test('actual Python waiting_dependency rejection precedes claim-attempt, prepared markers and credential access',async()=>{
+ const f=nativeFixture();try{const p=coordinatorPythonFixture(f);p.c.objectives.reconciliation.status='waiting_dependency';p.save();const before=treeSnapshot(f.controlRoot),runtime={};Object.defineProperty(runtime,'credentialAvailable',{get(){assert.fail('No credentials before coordinator admission');}});
+ const relay=await createNativeXeroRecoveryRelay({...f.options,capture:p.capture,nativeRuntime:runtime});await assert.rejects(relay.submit(request(f.t)),{code:'XERO_COURIER_COORDINATOR_ADMISSION_REQUIRED',reason:'inactive'});
+ assert.deepEqual(p.calls,['check']);assert.deepEqual(treeSnapshot(f.controlRoot),before);assert(!readdirSync(f.stateDirectory).some(n=>/claim-attempt|held-lease|prepared|stopped/.test(n)));
+ }finally{f.clean();}
+});
+test('actual CLI failure formatter reports the bounded inactive reason without raw Python errors',async()=>{
+ const f=nativeFixture();try{const p=coordinatorPythonFixture(f);p.c.objectives.reconciliation.status='waiting_dependency';p.save();const before=treeSnapshot(f.controlRoot),stderr=[],process={argv:['node','cli'],stdout:{write:()=>assert.fail('No successful cold admission')},stderr:{write:value=>stderr.push(value)},exitCode:0};
+ const source=readFileSync(new URL('../scripts/lib/hosted-release/xero-recovery-native-relay.mjs',import.meta.url),'utf8'),entry=source.slice(source.lastIndexOf('if (process.argv[1] &&')).replaceAll('import.meta.url',JSON.stringify(import.meta.url));
+ await runInNewContext(entry,{process,resolve:()=> 'cli',fileURLToPath:()=> 'cli',nativeRelayMain:()=>nativeRelayMain(['inspect-coordinator'],{controlRoot:f.controlRoot,capture:p.capture}),safeCode});
+ assert.equal(process.exitCode,1);assert.deepEqual(JSON.parse(stderr.join('')),{code:'XERO_COURIER_COORDINATOR_ADMISSION_REQUIRED',reason:'inactive'});assert.deepEqual(treeSnapshot(f.controlRoot),before);
+ }finally{f.clean();}
+});
+test('actual Python cold admission rejects owner, status, guard, review, lease and physical path conflicts without writes',()=>{
+ const cases=[['coordinator inactive','inactive',p=>p.c.status='waiting_human'],['retired objective','inactive',p=>p.c.objectives.reconciliation.retired=true],['wrong objective owner','owner',p=>p.c.objectives.reconciliation.ownerThreadId=id(99)],['wrong execution owner','owner',p=>p.c.reconciliationExecutionOwnerThreadId=id(99)],['guard not accepted','guard',p=>p.c.writeLeaseHelper.localCoordinationGuardAccepted=false],['guard bytes changed','guard',p=>writeFileSync(p.guard,readFileSync(p.guard)+'\n# changed')],['review bytes changed','review',p=>writeFileSync(p.c.writeLeaseHelper.rootAcceptance.path,'{}')],['wrong lease path','lease_path',p=>p.c.writeLeasePath=join(p.base,'other.json')],['any existing lease','lease_present',p=>writeFileSync(p.c.writeLeasePath,JSON.stringify({objective:'reconciliation',ownerThreadId:FEATURES_OWNER}))],['symlink lease','path',p=>symlinkSync(p.guard,p.c.writeLeasePath)],['symlink mutex','path',p=>symlinkSync(p.guard,join(p.base,'coordination-mutex.lock'))]];
+ for(const [name,reason,mutate]of cases){const f=nativeFixture();try{const p=coordinatorPythonFixture(f);mutate(p);p.save();const before=treeSnapshot(f.controlRoot);assert.throws(()=>inspectNativeXeroCoordinatorAdmission({controlRoot:f.controlRoot,capture:p.capture}),{code:'XERO_COURIER_COORDINATOR_ADMISSION_REQUIRED',reason},name);assert.deepEqual(p.calls,['check'],name);assert.deepEqual(treeSnapshot(f.controlRoot),before,name);}finally{f.clean();}}
+});
+test('actual Python claim rechecks a raced inactive objective and preserves consumed GET-only ambiguity',async()=>{
+ const f=nativeFixture();try{const p=coordinatorPythonFixture(f),capture=(command,args,options)=>{const result=p.capture(command,args,options);if(JSON.parse(options.input).mode==='check'){assert.equal(result.status,0);p.c.objectives.reconciliation.status='waiting_dependency';p.save();}return result;};
+ const relay=await createNativeXeroRecoveryRelay({...f.options,capture});await assert.rejects(relay.submit(request(f.t)),{code:'XERO_COURIER_STOPPED_OWNER_READBACK_REQUIRED'});assert.deepEqual(p.calls,['check','claim']);
+ assert(readdirSync(f.stateDirectory).some(n=>n.endsWith('.claim-attempt.json')));assert(!readdirSync(f.stateDirectory).some(n=>/held-lease|prepared/.test(n)));assert.equal(JSON.parse(readFileSync(join(f.stateDirectory,`${binding.operationId}.stopped.json`))).readbackOnly,true);
+ p.c.objectives.reconciliation.status='active';p.save();await assert.rejects(relay.submit(request(f.t)),{code:'XERO_COURIER_CONSUMED_GET_ONLY'});assert.deepEqual(p.calls,['check','claim']);
+ }finally{f.clean();}
+});
+test('synthetic completed claim refusal after read-only admission stops before credential reads or Git publication',async()=>{
+ const f=nativeFixture();try{const commands=[];const relay=await createNativeXeroRecoveryRelay({...f.options,capture:(command,args,options)=>{assert.equal(command,'/usr/bin/python3');const v=JSON.parse(options.input);commands.push(v.mode);return v.mode==='check'?{status:0,stdout:JSON.stringify(syntheticCoordinatorAdmission(v))}:{status:1,stdout:'',stderr:'synthetic guard refusal'};}});await assert.rejects(relay.submit(request(f.t)),{code:'XERO_COURIER_STOPPED_OWNER_READBACK_REQUIRED'});
+ assert.deepEqual(commands,['check','claim']);const files=readdirSync(f.stateDirectory);assert.ok(files.some(n=>n.endsWith('.claim-attempt.json')));const stopped=JSON.parse(readFileSync(join(f.stateDirectory,`${binding.operationId}.stopped.json`)));assert.equal(stopped.readbackOnly,true);
  await assert.rejects(relay.submit(request(f.t)),{code:'XERO_COURIER_CONSUMED_GET_ONLY'});await assert.rejects(relay.readback(request(f.t)));assert.doesNotMatch(JSON.stringify(stopped),/PRIVATE_|access_token|password/);
  }finally{f.clean();}
 });
@@ -343,7 +388,7 @@ function nativePublicationFixture({pushFailure,statusFailure,missingArtifact=fal
   const ack={schemaVersion:1,kind:'fcos_xero_recovery_actual_http_ack_v1',templateSha256:f.parsed.templateSha256,runId:'123',jobId:22,requestRef:courierRequestRef(f.t,'123',raw),commitSha,requestSha256:hash(raw),hostOrigin:f.b.hostOrigin,deploymentId:f.b.deploymentId,httpStatus:200,resultJson,resultSha256:hash(resultJson),receivedAt:T};archive=materialZip(ack);
   return{id:91,name:'fcos-xero-ack-123-'+id(7),expired:false,workflow_run:{id:123,head_sha:SHA,repository_id:1278654816,head_repository_id:1278654816},digest:'sha256:'+hash(archive),size_in_bytes:archive.length,created_at:new Date(T).toISOString()};};
  const capture=(command,args,options)=>{calls.push({command,args,input:options.input});
-  if(command==='/usr/bin/python3'){const v=JSON.parse(options.input);if(v.mode==='claim'){claims++;held={...v.expected,leaseId:id(55),coordinationOnly:true,providerAuthorityGranted:false,uncertainOutcomeRequiresReadback:true};}else assert.deepEqual(v.lease,held);return{status:0,stdout:JSON.stringify(held)};}
+  if(command==='/usr/bin/python3'){const v=JSON.parse(options.input);if(v.mode==='check')return{status:0,stdout:JSON.stringify(syntheticCoordinatorAdmission(v))};if(v.mode==='claim'){claims++;held={...v.expected,leaseId:id(55),coordinationOnly:true,providerAuthorityGranted:false,uncertainOutcomeRequiresReadback:true};}else assert.deepEqual(v.lease,held);return{status:0,stdout:JSON.stringify(held)};}
   if(command==='/usr/bin/git'){if(args.includes('push')){commitSha=args.at(-1).split(':')[0];return pushFailure?pushFailure():{status:0,stdout:''};}return spawnSync(command,args,options);}
   assert.equal(command,'fixture-gh');const route=args[1];let value;
   if(args.includes('POST')){assert.equal(route,`repos/${REPOSITORY}/statuses/${commitSha}`);const expected=courierPublicationStatus({templateJson:f.options.templateJson,runId:'123',ref:courierRequestRef(f.t,'123',raw),commitSha,raw,kind:'request'});assert.deepEqual(JSON.parse(options.input),expected.body);if(statusFailure)return statusFailure(expected);return{status:0,stdout:'HTTP/2.0 201 Created\r\ncontent-type: application/json\r\n\r\n'+JSON.stringify(publicationValue(expected))};}
@@ -430,11 +475,11 @@ test('late v2 first financial preflight refuses before any claim, intent, creden
 
 test('v2 runway is inclusive at900000ms and v1 retains its prior admission behavior',async()=>{
  for(const [version,remaining]of [[2,900000],[1,1]]){const f=nativeFixture(version);try{
-  const commands=[],relay=await createNativeXeroRecoveryRelay({...f.options,now:()=>f.t.notAfter-remaining,capture:command=>{commands.push(command);assert.equal(command,'/usr/bin/python3');return{status:1,stdout:''};}});
+  const commands=[],relay=await createNativeXeroRecoveryRelay({...f.options,now:()=>f.t.notAfter-remaining,capture:(command,args,options)=>{assert.equal(command,'/usr/bin/python3');const v=JSON.parse(options.input);commands.push(v.mode);return v.mode==='check'?{status:0,stdout:JSON.stringify(syntheticCoordinatorAdmission(v))}:{status:1,stdout:''};}});
   // This synthetic completed Python refusal deliberately stops after admission;
   // it is not an actual operational lease or provider proof.
   await assert.rejects(relay.submit(request(f.t)),{code:'XERO_COURIER_STOPPED_OWNER_READBACK_REQUIRED'});
-  assert.deepEqual(commands,['/usr/bin/python3']);assert(readdirSync(f.stateDirectory).some(n=>n.endsWith('.claim-attempt.json')));
+  assert.deepEqual(commands,['check','claim']);assert(readdirSync(f.stateDirectory).some(n=>n.endsWith('.claim-attempt.json')));
  }finally{f.clean();}}
  const f=nativePublicationFixture({version:2});try{
   const relay=await createNativeXeroRecoveryRelay(f.options),result=await relay.submit(f.raw);

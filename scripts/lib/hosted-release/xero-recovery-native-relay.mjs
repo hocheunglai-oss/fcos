@@ -22,7 +22,7 @@ const plain = v => v !== null && typeof v === 'object' && Object.getPrototypeOf(
 export const exact = (v, keys) => plain(v) && Object.keys(v).length === keys.length && keys.every(k => Object.hasOwn(v, k));
 export const refusal = code => Object.assign(new Error(code), { code });
 export const need = (v, code = 'XERO_COURIER_REFUSED') => { if (!v) throw refusal(code); };
-const SAFE_CODES = new Set(['XERO_COURIER_RESPONSE_REFUSED','XERO_COURIER_PREPARATION_METADATA_PENDING_EXHAUSTED','XERO_COURIER_PUBLICATION_INVALID','XERO_COURIER_PUBLICATION_UNKNOWN','XERO_COURIER_READBACK_ADMISSION_REQUIRED','XERO_COURIER_READBACK_RESULT_INVALID','XERO_COURIER_READBACK_DISPATCH_UNKNOWN','XERO_COURIER_LOCAL_REPOSITORY_MISMATCH','XERO_COURIER_PACKAGE_BUILD_REFUSED','XERO_COURIER_CANONICAL_STATE_REQUIRED','XERO_COURIER_ROOT_ADMISSION_REQUIRED','XERO_COURIER_ORIGINAL_CLAIM_REQUIRED','XERO_COURIER_SOURCE_BYTES_UNPROVEN','XERO_COURIER_OIDC_INVALID','XERO_COURIER_AUTHORITY_EXPIRED','XERO_COURIER_CONSUMED_GET_ONLY','XERO_COURIER_REMOTE_OUTCOME_UNKNOWN','XERO_COURIER_ACK_TIMEOUT_UNKNOWN','XERO_COURIER_NATIVE_COMMAND_UNKNOWN','XERO_COURIER_GITHUB_READ_UNKNOWN','XERO_COURIER_HTTP_OUTCOME_UNKNOWN','XERO_COURIER_CAPTURE_UNKNOWN','XERO_COURIER_RUN_MISMATCH','XERO_COURIER_REQUEST_INVALID','XERO_COURIER_TEMPLATE_INVALID','XERO_COURIER_NONCE_REQUIRED','XERO_COURIER_ACK_MISMATCH','XERO_COURIER_RESULT_MISMATCH','XERO_COURIER_LOCATOR_CONSUMED','XERO_COURIER_LOCATOR_LEASE_REQUIRED','XERO_COURIER_LOCATOR_TARGET_MISMATCH']);
+const SAFE_CODES = new Set(['XERO_COURIER_COORDINATOR_ADMISSION_REQUIRED','XERO_COURIER_RESPONSE_REFUSED','XERO_COURIER_PREPARATION_METADATA_PENDING_EXHAUSTED','XERO_COURIER_PUBLICATION_INVALID','XERO_COURIER_PUBLICATION_UNKNOWN','XERO_COURIER_READBACK_ADMISSION_REQUIRED','XERO_COURIER_READBACK_RESULT_INVALID','XERO_COURIER_READBACK_DISPATCH_UNKNOWN','XERO_COURIER_LOCAL_REPOSITORY_MISMATCH','XERO_COURIER_PACKAGE_BUILD_REFUSED','XERO_COURIER_CANONICAL_STATE_REQUIRED','XERO_COURIER_ROOT_ADMISSION_REQUIRED','XERO_COURIER_ORIGINAL_CLAIM_REQUIRED','XERO_COURIER_SOURCE_BYTES_UNPROVEN','XERO_COURIER_OIDC_INVALID','XERO_COURIER_AUTHORITY_EXPIRED','XERO_COURIER_CONSUMED_GET_ONLY','XERO_COURIER_REMOTE_OUTCOME_UNKNOWN','XERO_COURIER_ACK_TIMEOUT_UNKNOWN','XERO_COURIER_NATIVE_COMMAND_UNKNOWN','XERO_COURIER_GITHUB_READ_UNKNOWN','XERO_COURIER_HTTP_OUTCOME_UNKNOWN','XERO_COURIER_CAPTURE_UNKNOWN','XERO_COURIER_RUN_MISMATCH','XERO_COURIER_REQUEST_INVALID','XERO_COURIER_TEMPLATE_INVALID','XERO_COURIER_NONCE_REQUIRED','XERO_COURIER_ACK_MISMATCH','XERO_COURIER_RESULT_MISMATCH','XERO_COURIER_LOCATOR_CONSUMED','XERO_COURIER_LOCATOR_LEASE_REQUIRED','XERO_COURIER_LOCATOR_TARGET_MISMATCH']);
 export const safeCode = e => { try { const code=e?.code;return SAFE_CODES.has(code) ? code : 'XERO_COURIER_STOPPED_OWNER_READBACK_REQUIRED'; } catch { return 'XERO_COURIER_STOPPED_OWNER_READBACK_REQUIRED'; } };
 export const bytesHash = value => createHash('sha256').update(value).digest('hex');
 const gitHash = (kind, b) => createHash('sha1').update(`${kind} ${b.length}\0`).update(b).digest('hex');
@@ -346,9 +346,16 @@ export async function createNativeXeroRecoveryWarmDispatcher({ templateJson, cwd
 // lease. Historical source/owner/unknown intents remain immutable. Canonical
 // active objective and current acceptance are still required; no production or
 // historical-owner fallback can supply financial authority.
-const PYTHON = String.raw`import json,sys,hashlib,types,os,stat
+const PYTHON = String.raw`import sys
+sys.dont_write_bytecode=True
+import json,hashlib,types,os,stat
 from pathlib import Path
 v=json.load(sys.stdin)
+if v['mode']=='check':
+ def refused(kind,value,traceback):
+  reason=str(value) if isinstance(value,ValueError) and str(value) in {'path','file','guard','review','scope','features_not_admitted','owner','inactive','lease_path','lease_present','mutex'} else 'unproven'
+  print(json.dumps({'kind':'fcos_native_xero_coordinator_read_only_admission_v1','admitted':False,'reason':reason}))
+ sys.excepthook=refused
 def raw(p):
  p=Path(p)
  if any(x.is_symlink() for x in [p,*p.parents]): raise ValueError('path')
@@ -369,13 +376,47 @@ if c['ownerThreadId']!=v['features'] or c['reconciliationExecutionOwnerThreadId'
 if c['status']!='active' or item['status']!='active' or item['retired']: raise ValueError('inactive')
 base=Path(c['writeLeasePath']).parent
 if Path(g['path']).parent.parent!=base or Path(c['writeLeasePath'])!=base/'live-provider-write-lease.json': raise ValueError('lease_path')
-if v['mode']=='claim':
+if v['mode']=='check':
+ lock=base/'coordination-mutex.lock'
+ if os.path.lexists(lock): raw(lock)
+ if os.path.lexists(c['writeLeasePath']):
+  raw(c['writeLeasePath'])
+  raise ValueError('lease_present')
+ print(json.dumps({'kind':'fcos_native_xero_coordinator_read_only_admission_v1','admitted':True,
+  'epoch':c['epoch'],'objective':'reconciliation','ownerThreadId':v['features'],
+  'coordinatorStatus':c['status'],'objectiveStatus':item['status'],'retired':item['retired'],
+  'leasePresent':False,'coordinationOnly':True,'providerAuthorityGranted':False,'financialAuthorityGranted':False}))
+elif v['mode']=='claim':
  lease=m.WriteLease(v['workflow'],base).claim('reconciliation',v['features'],expected['operationId'],expected['bindingSha256'])
-else:
+ print(json.dumps(lease))
+elif v['mode']=='assert':
  lease=json.loads(raw(c['writeLeasePath']))
  if lease!=v['lease']: raise ValueError('assert')
-print(json.dumps(lease))
+ print(json.dumps(lease))
+else: raise ValueError('mode')
 `;
+
+// Cold preparation: node scripts/lib/hosted-release/xero-recovery-native-relay.mjs inspect-coordinator
+// Invoke before any public template, warm dispatch, host or execution clock.
+// This snapshot creates no mutex, lease, journal or credential access; submission repeats this snapshot
+// check, then the unchanged claim still arbitrates races under its OS mutex.
+export function inspectNativeXeroCoordinatorAdmission({ controlRoot = ROOT, capture } = {}) {
+  const blocked = reason => { throw Object.assign(refusal('XERO_COURIER_COORDINATOR_ADMISSION_REQUIRED'), { reason }); };
+  try {
+    const nav=JSON.parse(regular(join(controlRoot,'.fcos-cli/release-state.json'))),board=JSON.parse(regular(nav.workboardPath)),workflow=board.checkpointPaths.workflow;
+    const state=JSON.parse(regular(workflow)).unifiedCoordinator;
+    const expected={epoch:state.epoch,objective:'reconciliation',ownerThreadId:FEATURES_OWNER};
+    const options={input:JSON.stringify({mode:'check',workflow,expected,features:FEATURES_OWNER}),encoding:'utf8',env:{PATH:'/usr/bin:/bin'},timeout:30000,maxBuffer:131072,stdio:['pipe','pipe','pipe']};
+    const result=capture?capture('/usr/bin/python3',['-I','-c',PYTHON],options):spawnSync('/usr/bin/python3',['-I','-c',PYTHON],options);
+    if(!result||Object.hasOwn(result,'session_id')||Object.hasOwn(result,'sessionId')||result.error||result.signal||typeof result.stdout!=='string')blocked('unproven');
+    let value;try{value=JSON.parse(result.stdout);}catch{blocked('unproven');}
+    if(result.status!==0||value.admitted!==true){const reasons=['path','file','guard','review','scope','features_not_admitted','owner','inactive','lease_path','lease_present','mutex'];blocked(reasons.includes(value.reason)?value.reason:'unproven');}
+    need(exact(value,['kind','admitted','epoch','objective','ownerThreadId','coordinatorStatus','objectiveStatus','retired','leasePresent','coordinationOnly','providerAuthorityGranted','financialAuthorityGranted'])
+      &&value.kind==='fcos_native_xero_coordinator_read_only_admission_v1'&&value.epoch===expected.epoch&&value.objective==='reconciliation'&&value.ownerThreadId===FEATURES_OWNER
+      &&value.coordinatorStatus==='active'&&value.objectiveStatus==='active'&&value.retired===false&&value.leasePresent===false&&value.coordinationOnly===true&&value.providerAuthorityGranted===false&&value.financialAuthorityGranted===false,'XERO_COURIER_COORDINATOR_ADMISSION_REQUIRED');
+    return value;
+  }catch(error){if(error?.code==='XERO_COURIER_COORDINATOR_ADMISSION_REQUIRED')throw error;blocked('unproven');}
+}
 
 // One native + one warm carrier allocate at most 20 GET/min each, leaving five
 // of the shared 45/min coordination envelope unused. Actual shared quota still
@@ -535,6 +576,7 @@ export async function createNativeXeroRecoveryRelay({ templateJson, binding, sta
         need(Number.isSafeInteger(binding.executionJobStartedAt) && binding.executionJobStartedAt<=now()
           && now()<binding.executionJobStartedAt+1800000 && (request.step!=='preflight'||binding.executionJobStartedAt+1800000-now()>=900000),'XERO_COURIER_AUTHORITY_EXPIRED');
       }
+      if(request.step==='preflight')inspectNativeXeroCoordinatorAdmission({controlRoot,capture});
       // Before credential access, fail closed on the actual accepted guard/owner.
       let commitSha;
       try {
@@ -752,6 +794,7 @@ export async function createNativeXeroRecoveryLocatorPublisher({templateJson,bin
 }
 
 export async function nativeRelayMain(args = process.argv.slice(2), locatorOptions = {}) {
+  if(args.length===1&&args[0]==='inspect-coordinator')return inspectNativeXeroCoordinatorAdmission(locatorOptions);
   try {
     if(args.length===2&&args[0]==='publish-locator'){const input=JSON.parse(regular(resolve(args[1]),131072));need(exact(input,['templateJson','binding','lease',...(Object.hasOwn(input,'executionPreflightJson')?['executionPreflightJson']:[])]),'XERO_COURIER_LOCATOR_TARGET_MISMATCH');const publisher=await createNativeXeroRecoveryLocatorPublisher({...input,...locatorOptions});return publisher.publish();}
     if ((args.length === 2 && args[0] === 'original-warm-dispatch') || (args.length === 3 && ['original-warm-run','original-warm-execution-run'].includes(args[0]))) {
@@ -768,4 +811,10 @@ export async function nativeRelayMain(args = process.argv.slice(2), locatorOptio
     return await relay[args[0]](raw);
   } catch (e) { throw refusal(safeCode(e)); }
 }
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) nativeRelayMain().then(r => process.stdout.write(JSON.stringify(r) + '\n')).catch(e => { process.stderr.write(safeCode(e) + '\n'); process.exitCode = 1; });
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) nativeRelayMain().then(r => process.stdout.write(JSON.stringify(r) + '\n')).catch(e => {
+  const code=safeCode(e);
+  let reason='unproven';
+  if(code==='XERO_COURIER_COORDINATOR_ADMISSION_REQUIRED')try{const value=e?.reason;if(['path','file','guard','review','scope','features_not_admitted','owner','inactive','lease_path','lease_present','mutex'].includes(value))reason=value;}catch{}
+  process.stderr.write((code==='XERO_COURIER_COORDINATOR_ADMISSION_REQUIRED'?JSON.stringify({code,reason}):code)+'\n');
+  process.exitCode = 1;
+});
