@@ -34,7 +34,7 @@ function regular(path) {
   try{const info=fstatSync(fd);need(info.isFile()&&info.nlink===1&&info.uid===process.getuid(),'CUTOVER_REGULAR_OWNER_FILE_REQUIRED');return readFileSync(fd);}finally{closeSync(fd);}
 }
 function reference(ref) {need(ref&&validHash(ref.sha256),'CUTOVER_REFERENCE_REQUIRED');const raw=regular(ref.path);need(hash(raw)===ref.sha256,'CUTOVER_REFERENCE_CHANGED');return raw;}
-function inside(root,path) {const p=relative(resolve(root),resolve(path));return p!==''&&!p.startsWith('..')&&!isAbsolute(p);}
+function inside(root,path) {const p=relative(resolve(root),resolve(path));return p!==''&&p!=='..'&&!p.startsWith('../')&&!isAbsolute(p);}
 function assertIntentOwner(owner,owners,helper) {
   if(Object.values(owners).includes(owner)) return;
   need(owner===HISTORICAL_RECONCILIATION_OWNER
@@ -95,8 +95,11 @@ export function snapshotLegacyJournalTree(directory) {
   };
   walk(directory,'');return entries.sort((a,b)=>a.name<b.name?-1:a.name>b.name?1:0);
 }
+const externalLeaseKeys=['epoch','objective','ownerThreadId','operationId','bindingSha256','leaseId'];
+const externalLease=lease=>Object.fromEntries(externalLeaseKeys.map(key=>[key,lease?.[key]]));
 const treeEntry=item=>item.type==='directory'?{name:item.name,type:'directory'}:
-  {name:item.name,type:'file',sha256:item.sha256,role:item.role,...(item.role==='companion'?{category:item.category,producerSourceSha256:item.producerSourceSha256}:item.role==='journal'?{intentName:item.intentName,intentSha256:item.intentSha256,producerSourceSha256:item.producerSourceSha256}:{})};
+  {name:item.name,type:'file',sha256:item.sha256,role:item.role,...(item.role==='companion'?{category:item.category,producerSourceSha256:item.producerSourceSha256}:item.role==='journal'?
+    {...(Object.hasOwn(item,'externalOriginalIntent')?{externalOriginalIntent:{path:item.externalOriginalIntent?.path,sha256:item.externalOriginalIntent?.sha256,lease:externalLease(item.externalOriginalIntent?.lease)}}:{intentName:item.intentName,intentSha256:item.intentSha256}),producerSourceSha256:item.producerSourceSha256}:{})};
 export const legacyProducerInventoryEntriesSha256=entries=>hash(JSON.stringify(entries.map(treeEntry).sort((a,b)=>a.name<b.name?-1:a.name>b.name?1:0)));
 const journalName=name=>/(?:^|[.])(?:attempt|prepared|submitting|submitted|uncertain|claim-attempt|held-lease|stopped|tool-error|publication)(?:[.]|$)/.test(name.split('/').at(-1))
   ||/(?:^|[._-])intent(?:[._-]|$)/.test(name.split('/').at(-1));
@@ -118,6 +121,16 @@ function inspectProducerInventory(inventory,writers,refs) {
     need(['directory','file'].includes(item.type),'CUTOVER_INVENTORY_ENTRY_TYPE_INVALID');
     if(item.type==='file')need(validHash(item.sha256)&&['intent','journal','companion'].includes(item.role),'CUTOVER_INVENTORY_CLASSIFICATION_REQUIRED');
     else need(item.role===undefined&&item.sha256===undefined,'CUTOVER_INVENTORY_ENTRY_TYPE_INVALID');
+    if(item.role==='journal'&&Object.hasOwn(item,'externalOriginalIntent')){
+      const original=item.externalOriginalIntent,lease=original?.lease;
+      need(!Object.hasOwn(item,'intentName')&&!Object.hasOwn(item,'intentSha256')
+        &&original&&Object.keys(original).sort().join(',')==='lease,path,sha256'
+        &&typeof original.path==='string'&&isAbsolute(original.path)&&resolve(original.path)===original.path&&validHash(original.sha256)
+        &&original.path!==inventory.directory&&!inside(inventory.directory,original.path)
+        &&lease&&Object.keys(lease).sort().join(',')===[...externalLeaseKeys].sort().join(',')
+        &&externalLeaseKeys.every(key=>typeof lease[key]==='string'&&lease[key].length>0)&&validHash(lease.bindingSha256),
+        'CUTOVER_EXTERNAL_ORIGINAL_BINDING_REQUIRED');
+    }
     const normalized=treeEntry(item);
     need(Object.keys(item).sort().join(',')===Object.keys(normalized).sort().join(','),'CUTOVER_INVENTORY_ENTRY_TYPE_INVALID');
     return normalized;
@@ -141,12 +154,42 @@ function inspectProducerInventory(inventory,writers,refs) {
     if(item.role==='companion')need(['source','admission','receipt','metadata','build_cache'].includes(item.category)
       &&sources.has(item.producerSourceSha256)&&!submissionRecord(raw,item.name),'CUTOVER_SUBMISSION_CANNOT_BE_COMPANION');
     else if(item.role==='journal'){
-      const target=entries.find(entry=>entry.name===item.intentName&&entry.type==='file'&&entry.role==='intent'&&entry.sha256===item.intentSha256);
-      need(target&&sources.has(item.producerSourceSha256),'CUTOVER_SUBMISSION_JOURNAL_BINDING_REQUIRED');
-      journals.push({...ref,intent:{path:resolve(inventory.directory,target.name),sha256:target.sha256}});
+      need(sources.has(item.producerSourceSha256),'CUTOVER_SUBMISSION_JOURNAL_BINDING_REQUIRED');
+      if(item.externalOriginalIntent)journals.push({...ref,intent:{path:item.externalOriginalIntent.path,sha256:item.externalOriginalIntent.sha256},externalOriginalIntent:item.externalOriginalIntent});
+      else {
+        const target=entries.find(entry=>entry.name===item.intentName&&entry.type==='file'&&entry.role==='intent'&&entry.sha256===item.intentSha256);
+        need(target,'CUTOVER_SUBMISSION_JOURNAL_BINDING_REQUIRED');
+        journals.push({...ref,intent:{path:resolve(inventory.directory,target.name),sha256:target.sha256}});
+      }
     }else intentEntries.push(ref);
   }
-  return {directory:inventory.directory,kind:inventory.kind,tree:observed,entries:intentEntries,journals};
+  return {directory:inventory.directory,kind:inventory.kind,writerId:inventory.writerId,tree:observed,entries:intentEntries,journals};
+}
+function assertExternalOriginalBindings(inventories) {
+  const claimed=new Set();
+  for(const inventory of inventories)for(const item of inventory.tree??inventory.entries){
+    const path=inventory.tree?resolve(inventory.directory,item.name):item.path;
+    need(!claimed.has(path),'CUTOVER_DUPLICATE_INVENTORY_CLAIM');claimed.add(path);
+  }
+  for(const inventory of inventories)for(const journal of inventory.journals??[]){
+    if(!journal.externalOriginalIntent)continue;
+    const targets=inventories.filter(candidate=>candidate.kind==='fcos_legacy_producer_tree_inventory_v1'
+      &&candidate!==inventory&&candidate.entries.some(entry=>entry.path===journal.intent.path&&entry.sha256===journal.intent.sha256));
+    need(targets.length===1&&targets[0].writerId===inventory.writerId,'CUTOVER_EXTERNAL_ORIGINAL_INVENTORY_REQUIRED');
+    let original;try{original=JSON.parse(reference(journal.intent));}catch{fail('CUTOVER_EXTERNAL_ORIGINAL_BINDING_REQUIRED');}
+    need(original?.lease&&JSON.stringify(externalLease(original.lease))===JSON.stringify(journal.externalOriginalIntent.lease),
+      'CUTOVER_EXTERNAL_ORIGINAL_BINDING_REQUIRED');
+    for(const key of externalLeaseKeys)if(Object.hasOwn(original,key))
+      need(original[key]===journal.externalOriginalIntent.lease[key],'CUTOVER_EXTERNAL_ORIGINAL_BINDING_REQUIRED');
+    // The exact root-reviewed assignment supplies provenance for opaque native
+    // journals. Every actual lease field exposed by a member must still agree.
+    let member;try{member=JSON.parse(reference(journal));}catch{continue;}
+    if(member&&typeof member==='object'&&!Array.isArray(member)){
+      if(Object.hasOwn(member,'lease'))need(member.lease&&typeof member.lease==='object'&&!Array.isArray(member.lease),'CUTOVER_EXTERNAL_ORIGINAL_BINDING_REQUIRED');
+      for(const value of [member,member.lease])if(value&&typeof value==='object')for(const key of externalLeaseKeys)
+        if(Object.hasOwn(value,key))need(value[key]===journal.externalOriginalIntent.lease[key],'CUTOVER_EXTERNAL_ORIGINAL_BINDING_REQUIRED');
+    }
+  }
 }
 /** Hash-reviewed input is data. The operator separately authenticates actual owner/provider evidence. */
 export function inspectReviewedCutover({reviewPath,reviewSha256,expectedHelperSha256,fixtureRoot}) {
@@ -184,6 +227,8 @@ export function inspectReviewedCutover({reviewPath,reviewSha256,expectedHelperSh
     writers.push({id:writer.id,disabled:true,proofHash:writer.disabledEvidence.sha256,sourceSha256:proof.sourceSha256});
   }
   need(Array.isArray(review.intentInventories)&&review.intentInventories.length>0&&Array.isArray(review.uncertainIntents),'CUTOVER_INTENT_INVENTORY_REQUIRED');
+  for(const inventory of review.intentInventories)for(const path of [reviewPath,...review.intentInventories.flatMap(item=>item.classification?[item.classification.path]:[])])
+    need(path!==inventory.directory&&!inside(inventory.directory,path),'CUTOVER_REVIEW_OUTSIDE_INVENTORIES_REQUIRED');
   const inventories=[];
   for(const inventory of review.intentInventories){
     if(inventory.kind==='fcos_legacy_producer_tree_inventory_v1'){inventories.push(inspectProducerInventory(inventory,writers,refs));continue;}
@@ -194,6 +239,7 @@ export function inspectReviewedCutover({reviewPath,reviewSha256,expectedHelperSh
     for(const item of inventory.entries){need(/^[a-zA-Z0-9._-]+$/.test(item.name),'CUTOVER_INTENT_NAME_INVALID');const ref={path:resolve(inventory.directory,item.name),sha256:item.sha256};reference(ref);refs.push(ref);entries.push(ref);}
     inventories.push({directory:inventory.directory,entries});
   }
+  assertExternalOriginalBindings(inventories);
   const uncertainties=[];
   const reviewedIntents=[...review.uncertainIntents,...(review.resolvedIntents??[])];
   for(const inventory of inventories)for(const entry of inventory.entries){
@@ -210,6 +256,8 @@ export function inspectReviewedCutover({reviewPath,reviewSha256,expectedHelperSh
     assertExposedIntentIdentity(original,intent,readback);
     const journals=inventories.flatMap(inventory=>inventory.journals??[]).filter(item=>item.intent.path===intent.evidence.path&&item.intent.sha256===intent.evidence.sha256);
     if(journals.length){
+      for(const journal of journals)if(journal.externalOriginalIntent)for(const value of [intent,readback])
+        need(JSON.stringify(externalLease(value))===JSON.stringify(journal.externalOriginalIntent.lease),'CUTOVER_EXTERNAL_ORIGINAL_READBACK_REQUIRED');
       const expected=journals.map(({path,sha256})=>({path,sha256})).sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0);
       const matches=values=>Array.isArray(values)&&values.length===expected.length&&JSON.stringify(values.map(({path,sha256})=>({path,sha256})).sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0))===JSON.stringify(expected);
       need(matches(intent.journalEvidence)&&matches(readback.journalEvidence),'CUTOVER_SUBMISSION_JOURNAL_READBACK_REQUIRED');

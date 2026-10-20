@@ -168,6 +168,147 @@ async function changedTreeReview(f,entries,proofPatch={},reviewPatch={}){
  const ref=await f.put('changed-tree-review.json',{...f.review,...reviewPatch,intentInventories:[{...f.inventory,entries,classification}]});
  return {...f.options,reviewPath:ref.path,reviewSha256:ref.sha256};
 }
+async function externalOriginalFixture(t,{opaque=false,multiple=false,outcome='unknown'}={}){
+ const f=await treeFixture(t);await rm(f.intent.evidence.path);
+ const lease={epoch:'legacy-epoch',objective:'production',ownerThreadId:f.review.existingOwners.production,operationId:'cleanup-op',bindingSha256:'b'.repeat(64),leaseId:'original-cleanup-lease'};
+ const originalDirectory=path.join(f.root,'cycle-cleanup','setup');await mkdir(originalDirectory,{recursive:true,mode:0o700});
+ const original=await f.put('cycle-cleanup/setup/cleanup.prepared.intent.json',{lease,state:'prepared',durable:true,at:'2026-10-20T14:46:03.826828+00:00'});
+ const externalOriginalIntent={...original,lease};
+ const journal=opaque?{kind:'additional_private_host_cleanup_attempt_v1',request:{method:'DELETE',route:'/v13/deployments/fixture-owned-host'},maximumDeleteRequests:1}:
+  {kind:'private_host_setup_attempt_v1',action:'cleanup-association-0',scopeSha256:lease.bindingSha256,lease,request:{method:'PATCH',route:'/v9/projects/fixture/env/fixture',body:{customEnvironmentIds:[]}}};
+ await writeFile(f.journalPath,JSON.stringify(journal),{mode:0o600});
+ if(multiple)await writeFile(path.join(f.directory,'journal','cleanup.submitted.json'),JSON.stringify({kind:'fixture_cleanup_submission',lease,state:'submitted'}),{mode:0o600});
+ const known=new Map(f.entries.map(item=>[item.name,item]));
+ const entries=snapshotLegacyJournalTree(f.directory).map(item=>item.type==='directory'?item:known.get(item.name)?.role==='companion'?known.get(item.name):
+  {...item,role:'journal',externalOriginalIntent,producerSourceSha256:f.producer.sha256});
+ const journalEvidence=entries.filter(item=>item.role==='journal').map(item=>({path:path.join(f.directory,item.name),sha256:item.sha256}));
+ const ownerReadback=await f.put('external-owner-readback.json',{kind:'fcos_legacy_owner_readback',...lease,intentSha256:original.sha256,outcome,journalEvidence});
+ const intent={...lease,evidence:original,ownerReadback,journalEvidence};
+ const originalEntries=snapshotLegacyJournalTree(originalDirectory).map(item=>({...item,role:'intent'}));
+ const originalProof={...f.proof,directory:originalDirectory,entriesSha256:legacyProducerInventoryEntriesSha256(originalEntries)};
+ const originalClassification=await f.put('original-classification.json',originalProof),originalInventory={...f.inventory,directory:originalDirectory,entries:originalEntries,classification:originalClassification};
+ const proof={...f.proof,entriesSha256:legacyProducerInventoryEntriesSha256(entries)},classification=await f.put('external-classification.json',proof),inventory={...f.inventory,entries,classification};
+ const review={...f.review,intentInventories:[inventory,originalInventory],uncertainIntents:outcome==='unknown'?[intent]:[],resolvedIntents:outcome==='unknown'?[]:[intent]};
+ const reviewed=await f.put('external-review.json',review);
+ return {...f,lease,intent,entries,proof,inventory,original,originalDirectory,originalEntries,originalProof,originalInventory,review,
+  options:{...f.options,reviewPath:reviewed.path,reviewSha256:reviewed.sha256}};
+}
+async function changedExternalReview(f,{entries=f.entries,proofPatch={},originalProofPatch={},originalEntries=f.originalEntries,reviewPatch={},inventories}={}){
+ const classification=await f.put('changed-external-classification.json',{...f.proof,entriesSha256:legacyProducerInventoryEntriesSha256(entries),...proofPatch});
+ const originalClassification=await f.put('changed-original-classification.json',{...f.originalProof,entriesSha256:legacyProducerInventoryEntriesSha256(originalEntries),...originalProofPatch});
+ const ref=await f.put('changed-external-review.json',{...f.review,...reviewPatch,intentInventories:inventories??[
+  {...f.inventory,entries,classification},{...f.originalInventory,entries:originalEntries,classification:originalClassification}]});
+ return {...f.options,reviewPath:ref.path,reviewSha256:ref.sha256};
+}
+test('external cleanup originals stay in separately reviewed physical trees through inspect, fence and epoch plan',async t=>{
+ for(const opaque of [false,true]){
+  const f=await externalOriginalFixture(t,{opaque,multiple:true}),original=await readFile(f.original.path),member=await readFile(f.journalPath);
+  const checked=inspectReviewedCutover(f.options);assert.equal(checked.uncertainties.length,1);assert.equal(checked.inventories[0].entries.length,0);
+  assert.equal(checked.inventories[0].journals.length,2);assert.equal(checked.inventories[1].entries[0].path,f.original.path);
+  assert.ok(checked.refs.some(ref=>ref.path===f.original.path&&ref.sha256===f.original.sha256));
+  const proof=installPermanentLegacyFence(f.options),plan=reviewedInstallEpochPlan(f.options,{expectedFenceSha256:proof.proofHash});
+  assert.deepEqual(plan.parameters[1].uncertainties,[{operationId:f.lease.operationId,evidenceHash:f.original.sha256,ownerThreadId:f.lease.ownerThreadId,ownerReadbackHash:f.intent.ownerReadback.sha256}]);
+  assert.equal(plan.providerAuthorityGranted,false);assert.deepEqual(await readFile(f.original.path),original);assert.deepEqual(await readFile(f.journalPath),member);
+ }
+ const resolved=await externalOriginalFixture(t,{opaque:true,outcome:'not_applied'}),proof=installPermanentLegacyFence(resolved.options);
+ assert.deepEqual(reviewedInstallEpochPlan(resolved.options,{expectedFenceSha256:proof.proofHash}).parameters[1].uncertainties,[]);
+});
+test('external references hash the actual original path, bytes and lease tuple and reject ambiguous local references',async t=>{
+ for(const change of ['hash','path','owner','operation','binding','lease-id','missing-binding','extra-binding','local-name','local-hash','inside-root','inside-dot-prefix']){
+  const f=await externalOriginalFixture(t),fence=installPermanentLegacyFence(f.options);
+  const entries=structuredClone(f.entries),journal=entries.find(item=>item.role==='journal'),external=journal.externalOriginalIntent;
+  const prior=legacyProducerInventoryEntriesSha256(entries);
+  if(change==='hash')external.sha256=H;
+  if(change==='path')external.path=path.join(f.root,'unregistered-original.intent.json');
+  if(change==='owner')external.lease.ownerThreadId=HISTORICAL_OWNER;
+  if(change==='operation')external.lease.operationId='foreign-op';
+  if(change==='binding')external.lease.bindingSha256=H;
+  if(change==='lease-id')external.lease.leaseId='foreign-lease';
+  if(change==='missing-binding')delete external.lease.bindingSha256;
+  if(change==='extra-binding')external.lease.providerAuthorityGranted=true;
+  if(change==='local-name')journal.intentName='journal/original.intent.json';
+  if(change==='local-hash')journal.intentSha256=f.original.sha256;
+  if(change==='inside-root')external.path=f.journalPath;
+  if(change==='inside-dot-prefix')external.path=path.join(f.directory,'..not-parent','original.intent.json');
+  if(!['extra-binding','local-name','local-hash'].includes(change))assert.notEqual(legacyProducerInventoryEntriesSha256(entries),prior,change);
+  const options=await changedExternalReview(f,{entries});
+  for(const inspect of [()=>inspectReviewedCutover(options),()=>reviewedInstallEpochPlan(options,{expectedFenceSha256:fence.proofHash})])
+   assert.throws(inspect,/EXTERNAL_ORIGINAL_(BINDING|INVENTORY)_REQUIRED/,change);
+ }
+});
+test('external originals require complete registered root acceptance and a unique matching physical intent claim',async t=>{
+ for(const change of ['missing-root','unaccepted-root','wrong-root-reviewer','wrong-writer','companion-target','duplicate-root','omitted-member','unreviewed-source']){
+  const f=await externalOriginalFixture(t,{opaque:true}),fence=installPermanentLegacyFence(f.options);let params={};
+  if(change==='missing-root')params={inventories:[f.inventory]};
+  if(change==='unaccepted-root')params={originalProofPatch:{accepted:false}};
+  if(change==='wrong-root-reviewer')params={originalProofPatch:{reviewerId:'/other'}};
+  if(change==='wrong-writer'){
+   const classification=await f.put('foreign-writer-classification.json',{...f.originalProof,writerId:'reconciliation'});
+   params={inventories:[f.inventory,{...f.originalInventory,writerId:'reconciliation',classification}]};
+  }
+  if(change==='companion-target')params={originalEntries:f.originalEntries.map(item=>({...item,role:'companion',category:'metadata',producerSourceSha256:f.producer.sha256}))};
+  if(change==='duplicate-root')params={inventories:[f.inventory,f.originalInventory,f.originalInventory]};
+  if(change==='omitted-member')params={originalEntries:[]};
+  if(change==='unreviewed-source')params={entries:f.entries.map(item=>item.role==='journal'?{...item,producerSourceSha256:H}:item)};
+  const options=await changedExternalReview(f,params);
+  for(const inspect of [()=>inspectReviewedCutover(options),()=>reviewedInstallEpochPlan(options,{expectedFenceSha256:fence.proofHash})])
+   assert.throws(inspect,/EXTERNAL_ORIGINAL_INVENTORY_REQUIRED|PRODUCER_CLASSIFICATION_REQUIRED|SUBMISSION_CANNOT_BE_COMPANION|DUPLICATE_INVENTORY_CLAIM|INVENTORY_CHANGED|JOURNAL_BINDING_REQUIRED/,change);
+ }
+});
+test('external originals reject changed bytes, symlinks and unclassified physical additions after fencing',async t=>{
+ for(const change of ['bytes','symlink','parent-symlink','new-file']){
+  const f=await externalOriginalFixture(t),fence=installPermanentLegacyFence(f.options);
+  if(change==='bytes')await writeFile(f.original.path,'changed',{mode:0o600});
+  if(change==='symlink'){await rm(f.original.path);await symlink(f.journalPath,f.original.path);}
+  if(change==='parent-symlink'){
+   const raw=await readFile(f.original.path),target=path.join(f.root,'original-target');await mkdir(target,{mode:0o700});await writeFile(path.join(target,path.basename(f.original.path)),raw,{mode:0o600});
+   await rm(f.originalDirectory,{recursive:true});await symlink(target,f.originalDirectory);
+  }
+  if(change==='new-file')await writeFile(path.join(f.originalDirectory,'late.attempt.json'),'unknown',{mode:0o600});
+  for(const inspect of [()=>inspectReviewedCutover(f.options),()=>reviewedInstallEpochPlan(f.options,{expectedFenceSha256:fence.proofHash})])
+   assert.throws(inspect,/INVENTORY_CHANGED|SYMLINK/,change);
+ }
+});
+test('external final owner readback binds the actual lease and all original journals without inferring outcomes',async t=>{
+ for(const change of ['owner','operation','binding','lease-id','epoch','objective','missing-binding','intent-binding','intent-missing-binding','original-binding','forged-outcome','missing-journal','duplicate-intent','member-binding','member-operation','member-owner']){
+  const f=await externalOriginalFixture(t),fence=installPermanentLegacyFence(f.options);let entries=f.entries,originalEntries=f.originalEntries,intent=structuredClone(f.intent),readback=JSON.parse(await readFile(intent.ownerReadback.path));
+  const keys={owner:'ownerThreadId',operation:'operationId',binding:'bindingSha256','lease-id':'leaseId',epoch:'epoch',objective:'objective'};
+  if(keys[change])readback[keys[change]]=change==='binding'?H:'foreign';
+  if(change==='missing-binding')delete readback.bindingSha256;
+  if(change==='intent-binding')intent.bindingSha256=H;
+  if(change==='intent-missing-binding')delete intent.bindingSha256;
+  if(change==='original-binding'){
+   const raw=JSON.stringify({...JSON.parse(await readFile(f.original.path)),bindingSha256:H});await writeFile(f.original.path,raw,{mode:0o600});
+   intent.evidence={...intent.evidence,sha256:sha(raw)};readback.intentSha256=intent.evidence.sha256;
+   originalEntries=f.originalEntries.map(item=>({...item,sha256:intent.evidence.sha256}));
+   entries=f.entries.map(item=>item.role==='journal'?{...item,externalOriginalIntent:{...item.externalOriginalIntent,sha256:intent.evidence.sha256}}:item);
+  }
+  if(change==='forged-outcome')readback.outcome='verified_complete';
+  if(change==='missing-journal')readback.journalEvidence=[];
+  if(change.startsWith('member-')){
+   const member=JSON.parse(await readFile(f.journalPath)),key=keys[change.slice(7)];member.lease[key]=key==='bindingSha256'?H:'foreign';
+   await writeFile(f.journalPath,JSON.stringify(member),{mode:0o600});
+   const memberRef={path:f.journalPath,sha256:sha(JSON.stringify(member))};entries=f.entries.map(item=>item.role==='journal'?{...item,sha256:memberRef.sha256}:item);
+   intent.journalEvidence=[memberRef];readback.journalEvidence=[memberRef];
+  }
+  intent.ownerReadback=await f.put('external-bad-readback.json',readback);
+  const options=await changedExternalReview(f,{entries,originalEntries,reviewPatch:{uncertainIntents:change==='duplicate-intent'?[intent,intent]:[intent]}});
+  for(const inspect of [()=>inspectReviewedCutover(options),()=>reviewedInstallEpochPlan(options,{expectedFenceSha256:fence.proofHash})])
+   assert.throws(inspect,/ACTUAL_OWNER_READBACK_REQUIRED|EXTERNAL_ORIGINAL_(BINDING|READBACK)_REQUIRED|JOURNAL_READBACK_REQUIRED|DUPLICATE_INTENT/,change);
+ }
+});
+test('classification and final review cannot be stored inside any inventoried producer root',async t=>{
+ for(const change of ['classification','review']){
+  const f=await externalOriginalFixture(t);let options;
+  if(change==='classification'){
+   const classification=await f.put('cycle-cleanup/setup/inside-classification.json',f.proof);
+   options=await changedExternalReview(f,{inventories:[{...f.inventory,classification},f.originalInventory]});
+  }else{
+   const ref=await f.put('cycle-cleanup/setup/inside-review.json',f.review);options={...f.options,reviewPath:ref.path,reviewSha256:ref.sha256};
+  }
+  assert.throws(()=>inspectReviewedCutover(options),/REVIEW_OUTSIDE_INVENTORIES_REQUIRED/);
+ }
+});
 test('complete mixed producer tree fences original paths and imports one unknown with all phase members unchanged',async t=>{
  const f=await treeFixture(t),before=await readFile(f.intent.evidence.path),member=await readFile(f.journalPath);
  const checked=inspectReviewedCutover(f.options);assert.equal(checked.uncertainties.length,1);assert.equal(checked.inventories[0].journals.length,1);
