@@ -86,7 +86,7 @@ export function createLiveCollector({ session, candidateDirectory, production = 
     return tokenProvider({ origin, deployment, protectionState: state });
   };
   const adapter=production || env.FCOS_HOSTED_CREDENTIAL_CLASS==='preview'?createVercelAdapter:createVercelReadAdapter;
-  provider = adapter({ manifest, candidateDirectory, env, fetchImpl, now, runtimeTokenProvider,
+  provider = adapter({ manifest, candidateDirectory, env, fetchImpl, now, runtimeTokenProvider, coordinator: session.coordinator,
     schemaObservation: () => collectSchemaObservation({ manifest, env, now }) });
   let previewObservation;
   async function collect(id, snapshot) {

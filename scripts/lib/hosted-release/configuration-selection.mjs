@@ -67,18 +67,110 @@ export async function collectSelectionEnvironment({read, project, manifest}) {
   return {strategy:CONFIGURATION_SELECTION,recordCount:records.length,complete:true};
 }
 
-/** Native logs remain in memory. Persist only public marker/order proof, never
- * arbitrary candidate output. The marker is evidence of startup, not a signature. */
-export function assertSelectionBuildEvidence(events, deployment, manifest) {
+/** Preserve the provider's field presence. Absence is not a provider false.
+ * GitHub is the native CLI metadata namespace; conflicting generic metadata denies. */
+export function selectionDeploymentMetadata(value) {
+  const meta=value?.meta||{};
+  const choose=(native,generic)=>{
+    if(Object.hasOwn(meta,native)&&Object.hasOwn(meta,generic)&&meta[native]!==meta[generic])fail('CONFIGURATION_SELECTION_METADATA_CONFLICT');
+    return Object.hasOwn(meta,native)?meta[native]:meta[generic];
+  };
+  return {gitCommitRef:choose('githubCommitRef','gitCommitRef'),gitCommitSha:choose('githubCommitSha','gitCommitSha'),
+    source:value?.source??null,prebuiltFieldPresent:Object.hasOwn(value||{},'prebuilt'),prebuiltRaw:Object.hasOwn(value||{},'prebuilt')?value.prebuilt:null};
+}
+const same=(a,b)=>a===undefined||b===undefined?a===b:canonical(a)===canonical(b);
+const validHash=v=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v);
+// Exact existing controller requests, including the staged Production alias hold.
+export function selectionSourceDeployRequest(manifest,production) {
+  return production?{candidate:manifest.candidate,previous:manifest.previousProduction,target:'production',skipDomain:true}
+    :{candidate:manifest.candidate,target:'preview'};
+}
+function sourceArguments(args,manifest,hosted) {
+  if(!Array.isArray(args)||args.some(v=>typeof v!=='string')||args.filter(v=>v==='deploy').length!==1
+    ||args.some(v=>/^--prebuilt(?:=|$)/.test(v)||/^--token(?:=|$)/.test(v)||/^--(?:target|prod|build-env|env|meta)=/.test(v)))fail('CONFIGURATION_SELECTION_SOURCE_BUILD_UNPROVEN');
+  const values=flag=>args.flatMap((v,i)=>v===flag?[args[i+1]]:[]);
+  const exactly=(flag,value)=>values(flag).length===1&&values(flag)[0]===value;
+  const guard=selectionBuildGuard(manifest),meta=values('--meta'),build=values('--build-env');
+  const unique=(list,key,value)=>list.filter(v=>v?.startsWith(key+'=')).length===1&&list.includes(key+'='+value);
+  if(!unique(meta,'githubCommitSha',manifest.candidate.sha)
+    ||!unique(meta,'fcosConfigurationSelectionSha256',digest(guard.nodeOptions))
+    ||!unique(meta,hosted?'fcosHostedManifest':'fcosSelectionObservation',digest(manifest))
+    ||!unique(build,'NODE_OPTIONS',guard.nodeOptions)||!unique(build,'FCOS_BUILD_COMMIT_SHA',manifest.candidate.sha)
+    ||!unique(build,'FCOS_EXPECTED_SOURCE_SHA256',manifest.candidate.sourceSha256)
+    ||(!args.includes('--prod')&&!exactly('--target','preview'))
+    ||(!hosted&&args.includes('--prod')))fail('CONFIGURATION_SELECTION_SOURCE_BUILD_UNPROVEN');
+  return digest(args);
+}
+/** Pure integrity validation only. Hosted callers must read their authenticated
+ * coordinator; native operators must authenticate original local journal/ACK
+ * provenance. A hash or this function never authenticates those providers. */
+export function assertSelectionSourceBuildEvidence(evidence,deployment,manifest) {
+  const bad=()=>fail('CONFIGURATION_SELECTION_SOURCE_BUILD_UNPROVEN');
+  const hosted=evidence?.kind==='fcos_hosted_selection_source_build_v1';
+  if(!hosted&&evidence?.kind!=='fcos_native_selection_source_build_v1')bad();
+  const argsHash=sourceArguments(evidence.arguments,manifest,hosted),bound=digest(manifest);
+  if(hosted){
+    const {registration:r,operation:o}=evidence,result=o?.evidence?.result;
+    const phase=deployment.target==='preview'?'preview.create':'production.stage',operationId=`${manifest.releaseId}-${phase.replaceAll('.','-')}`;
+    const requestHash=digest(selectionSourceDeployRequest(manifest,deployment.target!=='preview'));
+    if(!r||r.release_id!==manifest.releaseId||r.manifest_hash!==bound||r.epoch!==manifest.epoch||!same(r.manifest,manifest)
+      ||!o||o.operationId!==operationId||o.operation_id!==operationId||o.release_id!==manifest.releaseId||o.epoch!==manifest.epoch
+      ||o.phase!==phase||o.manifest_hash!==bound||o.requestHash!==requestHash||o.request_hash!==requestHash
+      ||o.state!=='complete'||o.evidence?.outcome!=='applied'||result?.id!==deployment.id)bad();
+    const receipt={schemaVersion:1,kind:'fcos_hosted_vercel_source_deploy_v1',operationId,phase,requestHash,manifestHash:bound,
+      controllerSha:manifest.controller.sha,candidateSha:manifest.candidate.sha,argumentsSha256:argsHash,cliVersion:'54.20.1'};
+    const readback={...receipt,kind:'fcos_hosted_vercel_source_deploy_readback_v1',basis:'authenticated_provider_owner_readback',deploymentId:deployment.id};
+    const ack=Object.hasOwn(result,'sourceDeploy'),recovered=Object.hasOwn(result,'sourceDeployReadback'),fresh=Object.hasOwn(evidence,'providerReadback');
+    if(Number(ack)+Number(recovered)+Number(fresh)!==1||ack&&!same(result.sourceDeploy,receipt)
+      ||recovered&&!same(result.sourceDeployReadback,readback)||fresh&&!same(evidence.providerReadback,readback))bad();
+    return {kind:evidence.kind,operationId,argumentsSha256:argsHash,basis:ack?'cli_ack':'authenticated_provider_owner_readback'};
+  }
+  if(![null,undefined,'preview'].includes(deployment.target))bad();
+  const {attempt,prepared,submitting,submitted,guardedNative}=evidence,lease=prepared?.lease,native=guardedNative?.native;
+  const at=[prepared?.at,submitting?.at,attempt?.at,submitted?.at].map(v=>Date.parse(v));
+  if(!lease||lease.epoch!=='production-reconciliation-20261005'||lease.objective!=='production'||lease.ownerThreadId!=='01a0f08b-7fcb-7870-9edc-343e16052b62'
+    ||lease.coordinationOnly!==true||lease.providerAuthorityGranted!==false||lease.uncertainOutcomeRequiresReadback!==true
+    ||!validHash(lease.bindingSha256)||!lease.operationId||!lease.leaseId
+    ||!same(lease,submitting?.lease)||!same(lease,submitted?.lease)||!same(lease,guardedNative?.guarded?.lease)
+    ||prepared?.state!=='prepared'||submitting?.state!=='submitting'||submitted?.state!=='submitted'
+    ||[prepared,submitting,submitted].some(v=>v?.durable!==true)||at.some(v=>!Number.isFinite(v))||at.some((v,i)=>i>0&&v<at[i-1])
+    ||attempt?.operationId!==lease.operationId||attempt.leaseId!==lease.leaseId||attempt.packetSha256!==bound
+    ||!validHash(attempt.scriptSha256)||attempt.argsSha256!==argsHash||attempt.consequentialCreateAttempts!==1||attempt.uncertainOutcomeReadbackOnly!==true
+    ||guardedNative?.guarded?.status!=='submitted_acknowledged'||!native||native.exit_code!==0||native.error||native.signal
+    ||Object.hasOwn(native,'session_id')||Object.hasOwn(native,'sessionId')||typeof native.output!=='string'
+    ||!same(guardedNative.guarded.providerResult,native))bad();
+  const action=evidence.actionAdmission;
+  if(typeof action?.json!=='string'||Buffer.byteLength(action.json)>65536||!validHash(action.sha256)
+    ||digest(action.json)!==action.sha256||lease.bindingSha256!==action.sha256)bad();
+  let admission;try{admission=JSON.parse(action.json);}catch{bad();}
+  if(admission.kind!=='root_ordinary_preview_observation_action_acceptance_v1'||admission.accepted!==true||admission.reviewerId!=='/root'
+    ||admission.operationId!==lease.operationId||admission.planPacketSha256!==bound||admission.scriptSha256!==attempt.scriptSha256
+    ||admission.guardedByActualAcceptedJsPythonSequence!==true||admission.existingManagerCredentialOnly!==true
+    ||admission.productionAuthorityGranted!==false||admission.financialAuthorityGranted!==false||admission.hostedQualificationAccepted!==false)bad();
+  let ack;try{ack=JSON.parse(native.output);}catch{bad();}
+  if(ack.kind!=='actual_native_preview_create_ack_v1'||ack.completedNativeExitCode!==0||ack.packetSha256!==bound
+    ||ack.url!==deployment.url||ack.readyProven!==false)bad();
+  return {kind:evidence.kind,operationId:lease.operationId,argumentsSha256:argsHash};
+}
+/** Native logs remain in memory. Persist public marker/order and source-build
+ * provenance only. Neither missing prebuilt metadata nor candidate output proves
+ * a source build. Actual READY remains required independently of these logs. */
+export function assertSelectionBuildEvidence(events, deployment, manifest, sourceBuildEvidence) {
   const {proof}=selectionBuildGuard(manifest);
   if(!Array.isArray(events)||!events.length||deployment.state!=='READY'
     ||deployment.sha!==manifest.candidate.sha||deployment.customEnvironment!==null
-    ||deployment.gitCommitRef!=='HEAD'||deployment.gitCommitSha!==manifest.candidate.sha
-    ||deployment.prebuilt!==false||deployment.selectionGuardSha256!==digest(selectionBuildGuard(manifest).nodeOptions))fail('CONFIGURATION_SELECTION_BUILD_UNPROVEN');
+    ||deployment.gitCommitRef!=='HEAD'||deployment.gitCommitSha!==manifest.candidate.sha||deployment.source!=='cli'
+    ||typeof deployment.prebuiltFieldPresent!=='boolean'||deployment.prebuiltFieldPresent&&deployment.prebuiltRaw!==false
+    ||!deployment.prebuiltFieldPresent&&deployment.prebuiltRaw!==null
+    ||deployment.selectionGuardSha256!==digest(selectionBuildGuard(manifest).nodeOptions))fail('CONFIGURATION_SELECTION_BUILD_UNPROVEN');
+  const provenance=assertSelectionSourceBuildEvidence(sourceBuildEvidence,deployment,manifest);
   const lines=events.map(event=>event?.payload?.text??event?.text??'');
+  const build=lines.findIndex(text=>text.trim()==='Running "vercel build"');
+  const install=lines.findIndex(text=>text.trim()==='Running "install" command: `npm ci`...');
   const marker=lines.findIndex(text=>text.trim()===proof);
-  if(marker<0||lines.some(text=>text.includes('FCOS_CONFIGURATION_SELECTION:')&&text.trim()!==proof)
+  if(build<0||install<=build||marker<=install||lines.some(text=>text.includes('FCOS_CONFIGURATION_SELECTION:')&&text.trim()!==proof)
     ||lines.slice(0,marker).some(text=>/^>\s/.test(text)||/FORGED_SELECTION_SUCCESS/.test(text)))fail('CONFIGURATION_SELECTION_BUILD_UNPROVEN');
   return {strategy:CONFIGURATION_SELECTION,deploymentId:deployment.id,manifestHash:digest(manifest),candidateSha:manifest.candidate.sha,
-    guardSha256:digest(selectionBuildGuard(manifest).nodeOptions),marker:proof,markerIndex:marker,nativeBuildLogVerified:true};
+    guardSha256:digest(selectionBuildGuard(manifest).nodeOptions),marker:proof,markerIndex:marker,nativeBuildLogVerified:true,
+    buildKind:'provider_source_build',prebuiltFieldPresent:deployment.prebuiltFieldPresent,prebuiltRaw:deployment.prebuiltRaw,sourceBuild:provenance};
 }
