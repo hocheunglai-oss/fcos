@@ -26,6 +26,9 @@ const json = value => Response.json(value);
 test('joined preflight succeeds once without Xero or overall release qualification', { timeout: 90000 }, async t => {
   const v3 = process.env.XERO_JOINED_PLAN_VERSION === '3';
   const crossDeadline = v3 && process.env.XERO_JOINED_CROSS_DEADLINE === '1';
+  const httpFailureStatus = Number(process.env.XERO_JOINED_HTTP_FAILURE_STATUS || 0);
+  const runtimeDiagnostics = []; let callsAtHttpFailure, hostCallsAtHttpFailure;
+  if (httpFailureStatus) t.mock.method(console, 'error', line => runtimeDiagnostics.push(JSON.parse(line)));
   const host = await createJoinedHostFixture(t, { planVersion: v3 ? 3 : 2,
     ...(crossDeadline ? { executionWindowMs: 900000 } : {}) });
   let clockOffset = 0;
@@ -261,7 +264,18 @@ test('joined preflight succeeds once without Xero or overall release qualificati
       // Actual observed Vercel file-content response uses this exact envelope.
       return json({ data: bytes.toString('base64') });
     }
-    if (u.origin === locator.url) { assert.equal(init.method, 'POST'); return hostPost(url, init); }
+    if (u.origin === locator.url) {
+      assert.equal(init.method, 'POST');
+      if (httpFailureStatus) {
+        callsAtHttpFailure = calls.length;
+        hostCallsAtHttpFailure = host.calls.length;
+        return { status: httpFailureStatus, redirected: false, url: 'https://FIXTURE_PRIVATE_RESPONSE_URL.invalid',
+          get body() { assert.fail('A non-200 host body must never be read or captured'); },
+          get headers() { assert.fail('Host failure headers must never be read or logged'); },
+          get statusText() { assert.fail('Host failure status text must never be read or logged'); } };
+      }
+      return hostPost(url, init);
+    }
     const headers = { ...init.headers };
     if (headers.apikey === browser.publicAuth.publicAnonKey) headers.apikey = host.secret;
     if (u.pathname === '/auth/v1/user') loginUserReads++;
@@ -398,6 +412,29 @@ test('joined preflight succeeds once without Xero or overall release qualificati
   const carrierStopped = carrier.then(() => assert.fail('Only one step is requested'), error => error);
   const rawRequest = host.request('preflight', null);
   const nativeSubmission = native.submit(rawRequest);
+  if (httpFailureStatus) {
+    const nativeStopped = assert.rejects(nativeSubmission, { code: 'XERO_COURIER_REMOTE_OUTCOME_UNKNOWN' });
+    assert.equal((await carrierStopped).code, 'XERO_COURIER_HTTP_OUTCOME_UNKNOWN'); await nativeStopped;
+    assert.deepEqual(runtimeDiagnostics, [{ kind: 'fcos_xero_recovery_carrier_failure_v1',
+      code: 'XERO_COURIER_HTTP_OUTCOME_UNKNOWN', phase: 'submit_http', reason: 'non_200_response',
+      httpStatus: httpFailureStatus, retryable: false }]);
+    assert.doesNotMatch(JSON.stringify(runtimeDiagnostics), /FIXTURE_PRIVATE_|PRIVATE_APPROVED_PASSWORD|eyJhbGci/);
+    assert.equal(calls.length, callsAtHttpFailure, 'No fetch follows the non-200 host response');
+    assert.equal(uploadedAck, undefined); assert.equal(artifact, undefined);
+    assert.equal(calls.filter(call => call.origin === locator.url).length, 1);
+    assert.equal(host.calls.length, hostCallsAtHttpFailure, 'No host action follows the synthetic preprotocol response');
+    assert(!host.calls.some(call => /\/xero_/.test(call.path)), 'Login reads never execute Xero store/financial actions');
+    for (const table of ['xero_recovery_step_operations', 'xero_recovery_step_attempts', 'xero_shared_probe_grants'])
+      assert.equal((await host.db.query(`select count(*)::int n from public.${table}`)).rows[0].n, 0);
+    assert.equal((await host.db.query('select token_version from public.xero_contact_sync_connections')).rows[0].token_version, 7);
+    const names = readdirSync(stateDirectory);
+    assert(names.includes(`${host.binding.operationId}.preflight.uncertain.json`));
+    assert(!names.includes(`${host.binding.operationId}.preflight.ack.json`));
+    const before = nativeCalls.length;
+    await assert.rejects(native.submit(rawRequest), { code: 'XERO_COURIER_CONSUMED_GET_ONLY' });
+    assert.equal(nativeCalls.length, before); assert.equal(calls.length, callsAtHttpFailure);
+    return;
+  }
   const result = await Promise.race([nativeSubmission, carrierStopped.then(error => { throw error; })]);
   assert.equal(result.status, 'submitted_acknowledged');
   assert.equal(result.result.step, 'preflight');

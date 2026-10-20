@@ -92,6 +92,8 @@ async function fixture(t, change = {}) {
     assert.ok(init.signal instanceof AbortSignal); assert.equal(init.signal.aborted, false); assert.equal(init.redirect, 'error');
     const u = new URL(url); calls.push({ path: u.pathname, method: init.method }); signals.push(init.signal);
     if (u.origin === 'https://token.actions.githubusercontent.com') {
+      if (change.failKeys) throw Object.assign(Error('FIXTURE_PRIVATE_KEY_FAILURE'), {
+        code: 'FIXTURE_PRIVATE_CALLER_CODE', reason: 'FIXTURE_PRIVATE_CALLER_REASON', phase: 'FIXTURE_PRIVATE_CALLER_PHASE' });
       if (change.holdKeys) { holdResolve(); return new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(Error('FIXTURE_PRIVATE_KEY_ABORT')), { once: true })); }
       assert.equal(String(url), 'https://token.actions.githubusercontent.com/.well-known/jwks'); assert.deepEqual(init.headers, { accept: 'application/json' }); return json(githubKeys); }
     if (String(url) === pin.syncJwksEndpoint) { assert.equal(init.headers.authorization, undefined); return json(fcunoJwks); }
@@ -176,6 +178,7 @@ test('physical TLS entrypoint uses real actor/SQL/native modules; normal request
 });
 
 test('missing authentication, wrong nonce/URL/body and duplicate headers cause zero external actions', async t => {
+  const logs = []; t.mock.method(console, 'error', value => logs.push(JSON.parse(value)));
   const f = await fixture(t);
   for (const input of [{ omit: ['authorization'] }, { omit: ['x-fcos-owner-bearer'] }, { omit: ['x-fcos-provider-access-token'] },
     { extra: { 'x-fcos-recovery-nonce': 'wrong_nonce_12345678' } }, { path: '/xero-recovery?plan=other' },
@@ -185,6 +188,32 @@ test('missing authentication, wrong nonce/URL/body and duplicate headers cause z
   }
   assert.equal(f.calls.length, 0);
   assert.equal((await f.send({ method: 'GET', extra: { 'content-type': 'application/json' } })).status, 403);
+  assert.deepEqual(logs.map(({ phase, reason }) => [phase, reason]), [
+    ...Array.from({ length: 3 }, () => ['request_credentials', 'credential_shape_refused']),
+    ['request_credentials', 'nonce_mismatch'], ['request_transport', 'path_mismatch'],
+    ['request_body', 'body_headers_refused'], ['request_headers', 'duplicate_header'],
+    ['request_binding', 'request_binding_refused'], ['request_binding', 'request_binding_refused'],
+    ['request_body', 'body_headers_refused'],
+  ]);
+  for (const log of logs) {
+    assert.deepEqual(Object.keys(log).sort(), ['httpStatus', 'kind', 'ownerReadbackRequired', 'phase', 'reason', 'retryable']);
+    assert.equal(log.kind, 'fcos_xero_recovery_host_failure_v1'); assert.equal(log.httpStatus, 403);
+    assert.equal(log.ownerReadbackRequired, false); assert.equal(log.retryable, false); safe(log);
+    for (const value of [...Object.values(f.headers), f.options.caller.ref, f.options.caller.subject, PUBLIC]) assert.equal(JSON.stringify(log).includes(value), false);
+  }
+  for (const table of ['xero_recovery_step_operations', 'xero_recovery_step_attempts', 'xero_shared_probe_grants'])
+    assert.equal((await f.db.query(`select count(*)::int n from public.${table}`)).rows[0].n, 0);
+  assert.equal((await f.db.query('select token_version from public.xero_contact_sync_connections')).rows[0].token_version, 7);
+});
+
+test('runtime diagnostics never copy external exception text, code or caller-selected diagnostic fields', async t => {
+  const logs = []; t.mock.method(console, 'error', value => logs.push(JSON.parse(value)));
+  const f = await fixture(t, { failKeys: true });
+  assert.equal((await f.send()).status, 403);
+  assert.deepEqual(logs, [{ kind: 'fcos_xero_recovery_host_failure_v1', phase: 'github_jwks',
+    reason: 'phase_failed', httpStatus: 403, ownerReadbackRequired: false, retryable: false }]);
+  safe(logs); assert.deepEqual(f.calls.map(call => call.path), ['/.well-known/jwks']);
+  assert.equal((await f.db.query('select count(*)::int n from public.xero_recovery_step_attempts')).rows[0].n, 0);
 });
 
 test('signed wrong GitHub run/workflow/actor/branch/environment claims cannot reach owner or CAS', async t => {
@@ -210,6 +239,7 @@ test('signed wrong GitHub run/workflow/actor/branch/environment claims cannot re
 });
 
 test('same signed GitHub token crosses only the existing31-to30-second future-iat boundary', async t => {
+  const logs = []; t.mock.method(console, 'error', value => logs.push(JSON.parse(value)));
   let clock = Date.now();
   const f = await fixture(t, { now: () => clock });
   const original = JSON.parse(Buffer.from(f.headers.authorization.split('.')[1], 'base64url'));
@@ -218,6 +248,7 @@ test('same signed GitHub token crosses only the existing31-to30-second future-ia
   const token = await new SignJWT(claims).setProtectedHeader({ alg: 'RS256', kid: 'carrier' }).sign(keys.privateKey);
   assert.equal(claims.jti, original.jti);
   assert.equal((await f.send({ extra: { authorization: `Bearer ${token}` } })).status, 403);
+  assert.equal(logs.at(-1).phase, 'github_claims'); assert.equal(logs.at(-1).reason, 'issued_at_refused');
   assert.ok(f.calls.every(call => call.path === '/.well-known/jwks'));
   clock += 1000;
   const accepted = await f.send({ extra: { authorization: `Bearer ${token}` } });
@@ -227,6 +258,7 @@ test('same signed GitHub token crosses only the existing31-to30-second future-ia
   const before = f.calls.length;
   const wrongRun = await new SignJWT({ ...claims, run_id: '999' }).setProtectedHeader({ alg: 'RS256', kid: 'carrier' }).sign(keys.privateKey);
   assert.equal((await f.send({ extra: { authorization: `Bearer ${wrongRun}` } })).status, 403);
+  assert.equal(logs.at(-1).reason, 'run_or_audience_mismatch'); safe(logs);
   assert.ok(f.calls.slice(before).every(call => call.path === '/.well-known/jwks'));
 });
 
@@ -295,12 +327,18 @@ test('physical incomplete request body has a finite deadline and cannot trigger 
 });
 
 test('canonical JWKS read has a finite deadline and cannot continue to actor admission after expiry', async t => {
+  const logs = []; t.mock.method(console, 'error', value => logs.push(JSON.parse(value)));
   const f = await fixture(t, { holdKeys: true }); t.mock.timers.enable({ apis: ['setTimeout'] });
+  // Exercise a dependency-owned timeout signal, not only waitFor's fallback
+  // timer. Its TimeoutError name is classified; no exception text is logged.
+  t.mock.method(AbortSignal, 'timeout', ms => { const c = new AbortController();
+    setTimeout(() => c.abort(new DOMException('FIXTURE_PRIVATE_TIMEOUT', 'TimeoutError')), ms); return c.signal; });
   try {
     const pending = f.send(); await f.held; t.mock.timers.tick(15001);
     const result = await pending; assert.equal(result.status, 403);
     assert.deepEqual(f.calls.map(call => call.path), ['/.well-known/jwks']);
     assert.equal(f.signals[0].aborted, true);
+    assert.equal(logs.at(-1).phase, 'github_jwks'); assert.equal(logs.at(-1).reason, 'dependency_timeout'); safe(logs);
   } finally { t.mock.timers.reset(); }
 });
 

@@ -16,6 +16,18 @@ const targets = { vercelTeam: TEAM, vercelProject: PROJECT };
 const GH_ISSUER = 'https://token.actions.githubusercontent.com';
 const HASH = /^[a-f0-9]{64}$/;
 const active = (signal, t, now) => need(signal instanceof AbortSignal && !signal.aborted && now() >= t.issuedAt && now() < t.notAfter, 'XERO_COURIER_AUTHORITY_EXPIRED');
+function requireRecoveryHttpSuccess(response, expectedUrl, phase) {
+  if (response.status === 200 && !response.redirected && (!response.url || response.url === expectedUrl)) return;
+  // A received status is diagnostic evidence only, never acknowledgement or
+  // authority to retry/read back. Do not read body, headers, statusText or URL
+  // into diagnostics; the host response remains deliberately opaque.
+  try { console.error(JSON.stringify({ kind: 'fcos_xero_recovery_carrier_failure_v1',
+    code: 'XERO_COURIER_HTTP_OUTCOME_UNKNOWN', phase,
+    reason: response.status !== 200 ? 'non_200_response' : response.redirected ? 'redirected_response' : 'response_url_mismatch',
+    httpStatus: Number.isSafeInteger(response.status) && response.status >= 100 && response.status <= 599 ? response.status : null,
+    retryable: false })); } catch { /* Diagnostics cannot change the terminal stop. */ }
+  throw refusal('XERO_COURIER_HTTP_OUTCOME_UNKNOWN');
+}
 async function bounded(response, maximum) {
   need(response.body && !response.redirected && Number(response.headers.get('content-length') || 0) <= maximum, 'XERO_COURIER_RESPONSE_REFUSED');
   const reader = response.body.getReader(), parts = []; let length = 0;
@@ -223,7 +235,7 @@ export async function runWarmXeroRecoveryCarrier({templateJson,env=process.env,f
     // no failure marker, host GET, refresh, cleanup request or next POST follows.
     const response=await ordinaryFetch(`${host.origin}/xero-recovery`,{method:'POST',redirect:'error',signal:AbortSignal.any([signal,AbortSignal.timeout(120000)]),cache:'no-store',
       headers:{'x-vercel-protection-bypass':env.FCOS_PRODUCTION_VERIFICATION_BYPASS,authorization:`Bearer ${oidc}`,'x-fcos-owner-bearer':auth.token,'x-fcos-provider-access-token':auth.providerAccessToken,'x-fcos-recovery-nonce':env.FCOS_XERO_RECOVERY_REQUEST_NONCE,'content-type':'application/json'},body:found.raw});
-    need(response.status===200 && !response.redirected && (!response.url || response.url===`${host.origin}/xero-recovery`),'XERO_COURIER_HTTP_OUTCOME_UNKNOWN');
+    requireRecoveryHttpSuccess(response, `${host.origin}/xero-recovery`, 'submit_http');
     const resultJson=(await bounded(response,16384)).toString('utf8'),ack={schemaVersion:1,kind:'fcos_xero_recovery_actual_http_ack_v1',templateSha256,runId,jobId:actual.job.id,requestRef:found.ref,commitSha:found.commitSha,
       requestSha256:hash(found.raw),hostOrigin:host.origin,deploymentId:host.deploymentId,httpStatus:200,resultJson,resultSha256:bytesHash(resultJson),receivedAt:now(),...(plan.schemaVersion===3?{executionPreflightSha256:locator.executionPreflightSha256}:{})};
     const result=assertCourierAck(ack,{templateSha256,runId,jobId:actual.job.id,request,requestRef:found.ref,commitSha:found.commitSha,...host,hostOrigin:host.origin,plan,planSha256,checkpoint,execution,executionPreflightSha256:locator.executionPreflightSha256,now:now()});
@@ -262,7 +274,7 @@ export async function runXeroRecoveryOwnerReadback({templateJson,readbackJson,en
   // ONE explicit GET, no body/query, no financial execute, retry, dispatch,
   // ref publication, failure marker or cleanup request follows uncertainty.
   const response=await fetchImpl(`${host.origin}/xero-recovery`,{method:'GET',redirect:'error',cache:'no-store',signal:AbortSignal.any([signal,AbortSignal.timeout(60000)]),headers:{'x-vercel-protection-bypass':env.FCOS_PRODUCTION_VERIFICATION_BYPASS,authorization:`Bearer ${oidc}`,'x-fcos-owner-bearer':auth.token,'x-fcos-provider-access-token':auth.providerAccessToken,'x-fcos-recovery-nonce':env.FCOS_XERO_RECOVERY_REQUEST_NONCE}});
-  need(response.status===200&&!response.redirected&&(!response.url||response.url===`${host.origin}/xero-recovery`),'XERO_COURIER_HTTP_OUTCOME_UNKNOWN');
+  requireRecoveryHttpSuccess(response, `${host.origin}/xero-recovery`, 'owner_readback_http');
   const resultJson=(await bounded(response,16384)).toString('utf8');active(signal,r,now);validateOwnerReadbackResult(JSON.parse(resultJson),{plan,planSha256,now:now()});
   const ack={schemaVersion:1,kind:'fcos_xero_owner_readback_actual_http_ack_v1',templateSha256,planSha256,admissionScopeSha256:r.admissionScopeSha256,dispatchId:r.dispatchId,originalRunId:r.originalBinding.runId,readerRunId:runId,readerJobId:actual.job.id,hostOrigin:host.origin,deploymentId:host.deploymentId,httpStatus:200,resultJson,resultSha256:bytesHash(resultJson),receivedAt:now()};
   const result=assertOwnerReadbackAck(ack,{parsed,readback:r,readerRunId:runId,readerJobId:actual.job.id,now:now()});
