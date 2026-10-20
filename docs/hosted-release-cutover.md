@@ -21,6 +21,61 @@ These are hash-authenticated records, not proof of a human's identity or provide
 
 After successful fence readback, `rpc-plan <review-file> <review-byte-sha256> <accepted-helper-sha256> <fence-byte-sha256>` verifies the same sentinel and emits only parameterized `install_epoch` SQL and arguments. It does not connect to a database or call a provider. The operator executes that reviewed plan through a separately verified privileged Supabase connection. It enables qualification only. Final activation additionally requires the actual iPhone-delivery receipt described below. Imported unknowns block qualification/new writes until definitive original-owner readback is recorded through the privileged reconciliation path. See the [coordinator runbook](hosted-release-coordinator.md) for same-epoch hosted qualification and activation. No local fixture substitutes for hosted qualification.
 
+### Administrative qualification handoff
+
+The permanent sentinel cannot be used as an old write lease. Stage the exact
+public release setup, digest and coordinator qualification policy under the old
+coordinator **before** final quiescence, with the qualification flag `false`.
+Complete their original journals and include them in the fenced inventory.
+After actual `install_epoch` readback, the privileged operator may use the
+one-time `20261020080001_hosted_cutover_bootstrap.sql` handoff. It reserves a
+dedicated bootstrap reference on the same singleton control row; it never
+fabricates a release registration or GitHub principal. Its private append-only
+journal is executable only by `postgres`, not runtime/API users.
+
+The accepted public proof pins the installed epoch, sentinel/inventory hashes,
+current Features owner, canonical repository/operator, immutable `64aa` controller,
+`12bee` protected caller, `2ef733d1` candidate, exact setup/plan, both independently
+reviewed original containment proofs, and exactly two ordered requests: update
+`FCOS_HOSTED_QUALIFICATION_ADMITTED` to `true`, then dispatch the registered
+`authenticated-release.yml` on that protected ref with qualification-only inputs.
+No credential, environment setup, Production, financial or maintenance action is
+available. All other setup metadata is already installed and freshly checked.
+
+`node scripts/hosted-cutover-bootstrap.mjs <admit|intent|record|snapshot|finish>
+<public-proof.json> [<action-or-evidence.json>]` emits exact parameterized SQL for
+the existing target-locked privileged connector. The operator library supplies
+the same fixed request sequence with explicit verified admin and native GitHub
+transports; it does not discover, accept or store another admin credential.
+Commit each intent before the single corresponding native request. An existing
+intent is readback-only. Unknown responses keep the bootstrap lock; authenticate
+owner readback and append it through the same privileged journal. A missing run
+from an eventually consistent list is not proof of no dispatch. There is no
+expiry, resubmission or second bootstrap in the same epoch. Only completion of
+both original requests releases the bootstrap reference.
+
+The configured server returns the existing definitive pre-storage `429
+COORDINATION_METADATA_PENDING` envelope only for the exact reviewed tuple while
+this handoff is held. It rechecks after a definitive SQL lock race as well. The
+unchanged admitted client waits at most 180 seconds; lost responses are never
+retried. After actual registration, the same bounded wait applies while the
+**exact two pre-reviewed** containment admissions are still missing. No metadata
+provider reads are charged while waiting. Privileged root admission remains a
+separate actual action; the server cannot grant it. Foreign, changed, revoked
+or third-unknown evidence refuses instead of waiting. Consumed operations retain
+their original readback path. Wait exhaustion requires inspection/resumption of
+the unchanged manifest, not a new epoch or repeated provider submission. This
+initial bridge cannot dispatch a second run: a later definitive failure may need
+a separately root-admitted recovery dispatch within the existing authorized
+nonfinancial task. It does not introduce another human approval requirement.
+
+Install/read back this migration before deploying the configured coordinator
+server. Its image must include both canonical connection configuration and
+`config/legacyReleaseContainment.js`. Keep the existing main-source admission
+where required; add the actual normal `64aa` caller tuple separately. Qualification
+policy stays restricted to its exact source/setup and supplies no Production
+approval. The two original imported outcomes remain unknown throughout.
+
 The opt-in `createFinancialCoordinationBridge` preserves the existing financial owner, business scope hash, approval fingerprint, request fingerprint, and legacy business-lock scope/fingerprint. It requires the existing engine's fresh authority and lock callbacks before remote `begin`, and uses the same durable coordinator journal/operation ID as release owners. It has no submit, messaging or dispatch method. Its return values explicitly grant coordination only and no provider/mission authority. Original GET-only `recover` remains possible after a runner restart or approval outage; it cannot submit an operation. Existing financial approval, quota, protected amounts/lines/allocations, settlement checks, locks and final engine rechecks remain mandatory. This module does not activate the financial mission or message its owner.
 
 Local verification: `node --test tests/hosted-release-cutover.test.js tests/hosted-release-financial-coordination.test.js`. Tests use temporary files and simulated financial callbacks; they never alter the live canonical lease or financial records.

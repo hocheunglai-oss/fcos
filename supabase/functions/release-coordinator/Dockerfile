@@ -4,6 +4,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --include=dev --no-audit --no-fund && npm cache clean --force
 COPY config/fcosConnections.js ./config/fcosConnections.js
+COPY config/legacyReleaseContainment.js ./config/legacyReleaseContainment.js
 COPY supabase/functions/release-coordinator ./supabase/functions/release-coordinator
 USER node
 ENV NODE_ENV=production PORT=8080

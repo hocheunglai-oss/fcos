@@ -100,7 +100,7 @@ jobs:
       actions: read
       packages: read
       id-token: write
-    uses: hocheunglai-oss/fcos/.github/workflows/hosted-release-controller.yml@4079c569e4576e4432c2877efaabc20180159465
+    uses: hocheunglai-oss/fcos/.github/workflows/hosted-release-controller.yml@64aa338b04cee7e05bde0ca9bfd10b81ac001a65
     with:
       manifest: ${{ needs.manifest.outputs.manifest }}
     # Values remain in each called job's protected environment; no secrets: inherit.

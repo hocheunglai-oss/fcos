@@ -26,9 +26,13 @@ export function validateEnvelope(body) {
   need(!['legacyContainmentBoundary','passedContainment','containmentBoundary'].some(key=>Object.hasOwn(p,key)) && !Object.hasOwn(p,'approvalReceipt') && !Object.hasOwn(p,'resumeReceipt') && !Object.hasOwn(p,'principal') && !Object.hasOwn(p,'notificationDelivery') && !Object.hasOwn(p,'notificationChallenge') && !Object.hasOwn(p,'qualificationOnly') && !Object.hasOwn(p,'qualificationAdmission'), 'COORDINATION_SERVER_FIELD_FORBIDDEN',400);
   return {action:body.action, payload:p};
 }
-export function createSqlStore(query) {
+export function createSqlStore(query,{bootstrapAdmission=false}={}) {
   need(typeof query === 'function','COORDINATION_DATABASE_REQUIRED',500);
-  return { async request(action,payload,principal) {
+  return { ...(bootstrapAdmission?{async admissionPending(action,payload,principal) {
+    const result=await query('select fcos_release_coordination.cutover_bootstrap_pending($1::text,$2::jsonb,$3::jsonb) as pending',
+      [action,JSON.stringify(payload),JSON.stringify(principal)]);
+    return result.rows[0].pending===true;
+  }}:{}), async request(action,payload,principal) {
     const result = await query('select fcos_release_coordination.dispatch($1::text,$2::jsonb,$3::jsonb) as result', [action,JSON.stringify(payload),JSON.stringify(principal)]);
     return result.rows[0].result;
   }};

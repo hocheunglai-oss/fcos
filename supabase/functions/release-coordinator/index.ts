@@ -11,7 +11,7 @@ export { createGithubApprovalValidator, createGithubResumeValidator, validateGit
 export function createCoordinatorHandler({store,authenticateGithub,authenticateFinancial,validateApproval,validateResume,validateQualification,validateLegacyContainment,admitMetadata}) {
   need(store&&typeof store.request==='function'&&typeof authenticateGithub==='function','COORDINATION_CONFIGURATION_REQUIRED',500);
   return async request=>{
-    let metadataReservation;
+    let metadataReservation,bootstrapPendingContext;
     try {
       need(request.method==='POST','COORDINATION_METHOD_FORBIDDEN',405);
       need(request.headers.get('content-type')?.split(';')[0]==='application/json','COORDINATION_CONTENT_TYPE_REQUIRED',415);
@@ -43,6 +43,16 @@ export function createCoordinatorHandler({store,authenticateGithub,authenticateF
         // A consumed operation is always handled by its original SQL readback path.
         consumedPhase=Boolean(current?.operations?.[payload.phase]);
         if(!consumedPhase&&current?.registration?.manifest?.legacyReleaseContainment)containmentRegistration=current.registration;
+      }
+      if(!financial&&!consumedPhase&&principal.qualificationOnly===true&&['register','begin','claim'].includes(action)
+        &&typeof store.admissionPending==='function')bootstrapPendingContext={action,payload,principal};
+      // A definitive pre-storage wait, not a claim or a provider retry. The SQL
+      // predicate binds the exact administrator-admitted epoch/source/setup and
+      // reviewed containment proofs. Invalid/foreign/revoked inputs never wait.
+      if(!financial&&!consumedPhase&&principal.qualificationOnly===true&&['register','begin','claim'].includes(action)
+        &&typeof store.admissionPending==='function'&&await store.admissionPending(action,payload,principal)) {
+        const pending=new CoordinatorError('COORDINATION_METADATA_PENDING',429);
+        pending.retryAfterSeconds=2;throw pending;
       }
       const qualificationBoundary=!consumedPhase&&principal.qualificationOnly===true&&['register','begin','claim'].includes(action);
       const metadataWeight=(qualificationBoundary?5:!financial&&action==='approve'?8:!financial&&action==='resume'?7:0)+(containmentRegistration?3:0);
@@ -78,6 +88,16 @@ export function createCoordinatorHandler({store,authenticateGithub,authenticateF
       const result=await store.request(action,payload,principal);
       return Response.json(result,{status:200,headers:{'cache-control':'no-store'}});
     } catch(error) {
+      // The bootstrap can win the singleton lock after the read-only precheck.
+      // Only a definitive SQL refusal plus the exact pending tuple may retry.
+      if(error?.message==='COORDINATION_BOOTSTRAP_BUSY'&&bootstrapPendingContext) {
+        try {
+          const {action,payload,principal}=bootstrapPendingContext;
+          if(await store.admissionPending(action,payload,principal)) {
+            error=new CoordinatorError('COORDINATION_METADATA_PENDING',429);error.retryAfterSeconds=2;
+          }
+        } catch {error=new CoordinatorError('COORDINATION_UNAVAILABLE',503);}
+      }
       const databaseCode=/^COORDINATION_[A-Z_]+$/.test(error?.message??'')?error.message:null;
       const code=error instanceof CoordinatorError?error.code:databaseCode??'COORDINATION_UNAVAILABLE';
       return Response.json({error:code},{status:error instanceof CoordinatorError?error.status:databaseCode?409:503,headers:{'cache-control':'no-store',
@@ -91,7 +111,7 @@ export function createConfiguredCoordinator({env,query,fetchImpl=globalThis.fetc
   validatePolicy(policy);
   let financialPolicy; if(get('FCOS_FINANCIAL_COORDINATOR_POLICY')) financialPolicy=JSON.parse(get('FCOS_FINANCIAL_COORDINATOR_POLICY'));
   const metadataAdmission=createMetadataAdmission();
-  return createCoordinatorHandler({store:createSqlStore(query),authenticateGithub:createGithubAuthenticator({policy}),
+  return createCoordinatorHandler({store:createSqlStore(query,{bootstrapAdmission:true}),authenticateGithub:createGithubAuthenticator({policy}),
     admitMetadata:({weight})=>metadataAdmission.admit(weight),
     authenticateFinancial:financialPolicy?createFinancialAuthenticator({policy:financialPolicy}):undefined,
     validateLegacyContainment:createLegacyContainmentValidator({policy,token:get('FCOS_COORDINATOR_GITHUB_METADATA_TOKEN'),fetchImpl}),
