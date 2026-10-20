@@ -12,7 +12,7 @@ import { generateKeyPair, SignJWT, createLocalJWKSet, exportJWK } from 'jose';
 import { parseCourierTemplate, parseCourierRequest, courierRequestRef, courierPrefix, canonicalCourierStateDirectory, nativeCourierSourcePins, createCourierReadBudget, assertNativeCourierAdmission, createNativeXeroRecoveryRelay, createNativeXeroRecoveryWarmDispatcher, originalWarmVariable, ORIGINAL_WARM_TEMPLATE_VARIABLE, assertCourierAck, assertCourierRun, parseOwnerReadbackCarrier, assertOwnerReadbackAck, ownerReadbackArtifactName,
   courierPublicationStatus, assertCourierPublicationStatus, canonical, hash, safeCode, REPOSITORY } from '../scripts/lib/hosted-release/xero-recovery-native-relay.mjs';
 import { carrierMain, prepareWarmXeroRecoveryCarrier, runWarmXeroRecoveryCarrier, runXeroRecoveryOwnerReadback, buildCourierExpectedFiles, captureCourierAck, verifyCourierOidc, verifyCourierDeploymentBytes, courierPublicationObserved, courierGithubReader } from '../scripts/hosted-xero-recovery-carrier.mjs';
-import { prepareXeroRecoveryStepRequest } from '../scripts/lib/hosted-release/xero-recovery-step-protocol.mjs';
+import { prepareXeroRecoveryStepRequest, validateRecoveryExecutionClock } from '../scripts/lib/hosted-release/xero-recovery-step-protocol.mjs';
 import {xeroHostPackageSourcePins} from '../scripts/package-xero-recovery-host.mjs';
 import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
 const T=Date.now(),id=n=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`,SHA='1'.repeat(40),CONTROLLER='2'.repeat(40),H='a'.repeat(64);
@@ -499,13 +499,13 @@ test('v3 actual dispatcher observes the distinct execution job only after its or
 // reproduce the predicate mechanism; the hosted script's exact response was not retained.
 const lagRun={id:39284805202,run_attempt:1,repository:{id:1278654816},head_repository:{id:1278654816},actor:{id:265701760,login:'hocheunglai-oss'},event:'workflow_dispatch',head_sha:'e47493968690cccc5bcef61aa26e8b5e1e84f53e',head_branch:'codex/hosted-qualification-2f2e683f-v3-20261019',path:'.github/workflows/authenticated-release.yml',status:'queued',conclusion:null};
 const lagJob={id:118167630233,run_id:39284805202,name:'xero-original-warm / xero-recovery-preparation',labels:['ubuntu-24.04'],status:'queued',conclusion:null};
-function preparationLagFixture({pendingCycles=1,runPatch={},jobPatch={},missingJob=false,armMs=600000}={}){
+function preparationLagFixture({pendingCycles=1,runPatch={},jobPatch={},missingJob=false,armMs=600000,locatorDelayMs=0,metadataCapturedAt=T+locatorDelayMs}={}){
  const t=template(3),controller='2f2e683fcbf08d137bc65d195058b335dd593807';t.controllerSha=controller;
  Object.assign(t.caller,{ref:`refs/heads/${lagRun.head_branch}`,sha:lagRun.head_sha,workflowSha:lagRun.head_sha,workflowRef:`${REPOSITORY}/${lagRun.path}@refs/heads/${lagRun.head_branch}`,jobWorkflowRef:`${REPOSITORY}/.github/workflows/hosted-xero-recovery-carrier.yml@${controller}`,jobWorkflowSha:controller});
  const plan=JSON.parse(t.planJson);plan.binding.armBefore=T+armMs;t.planJson=canonical(plan);
  const p={kind:'fcos_legacy_runtime_own_profile_preflight_v1',accepted:true,reviewerId:'/root',capturedAt:new Date(T).toISOString(),sourceSha:SHA,sourceSha256:H,origin:t.login.origin,deploymentId:'dpl_fixture',profileRlsOwnSelect:true,authenticatedSelectOnly:true,effectiveAccessSourceVerified:true,effectiveAdmin:true,profileExisting:true,linkExisting:true,linkBoundToProfile:true,linkSourceActive:true,linkUseFcos:true,linkRevokedBefore:null,issuer:'https://fixture.invalid',effectiveAccessSourceSha256:H,evidenceSha256:H};
  t.login.publicAuth={identity:{profileId:binding.actorId,accessRevision:5},preflight:p};t.hostConfiguration.actorBinding={accessRevision:5};
- const templateJson=JSON.stringify(t),parsed=parseCourierTemplate(templateJson),preflightJson=canonical({schemaVersion:1,kind:'fcos_xero_execution_preflight_v1',operationId:plan.binding.operationId,planSha256:parsed.planSha256,preflight:p});
+ const templateJson=JSON.stringify(t),parsed=parseCourierTemplate(templateJson),preflightJson=canonical({schemaVersion:1,kind:'fcos_xero_execution_preflight_v1',operationId:plan.binding.operationId,planSha256:parsed.planSha256,preflight:{...p,capturedAt:new Date(metadataCapturedAt).toISOString()}});
  const raw=canonical({schemaVersion:3,kind:'fcos_xero_host_locator_v3',deploymentId:'dpl_fixture',url:'https://fixed.vercel.app',executionPreflightSha256:hash(preflightJson)}),ref=`${courierPrefix(t,String(lagRun.id))}/locator`,commit='3'.repeat(40),tree='4'.repeat(40);
  const blobs=Object.fromEntries([['locator.json',raw],['execution-preflight.json',preflightJson]].map(([path,raw])=>[path,{path,raw,sha:crypto.createHash('sha1').update(`blob ${Buffer.byteLength(raw)}\0`).update(raw).digest('hex')}]))
  const publication=courierPublicationStatus({templateJson,runId:String(lagRun.id),ref,commitSha:commit,raw,kind:'locator'});
@@ -516,7 +516,7 @@ function preparationLagFixture({pendingCycles=1,runPatch={},jobPatch={},missingJ
    if(route===`/repos/${REPOSITORY}`)value={id:1278654816,full_name:REPOSITORY};
    else if(route===`/repos/${REPOSITORY}/actions/runs/${lagRun.id}`){runReads++;value={...lagRun,status:runReads<=pendingCycles?'queued':'in_progress',...runPatch};}
    else if(route.endsWith('/attempts/1/jobs'))value={total_count:missingJob?0:1,jobs:missingJob?[]:[{...lagJob,status:runReads<=pendingCycles?'queued':'in_progress',...jobPatch}]};
-   else if(route.includes('/git/ref/')){assert(runReads>pendingCycles,'No locator read while metadata pending');value={ref,object:{type:'commit',sha:commit}};}
+   else if(route.includes('/git/ref/')){assert(runReads>pendingCycles,'No locator read while metadata pending');if(clock<T+locatorDelayMs)return new Response('',{status:404});value={ref,object:{type:'commit',sha:commit}};}
    else if(route.endsWith(`/git/commits/${commit}`))value={sha:commit,parents:[],tree:{sha:tree}};
    else if(route.endsWith(`/git/trees/${tree}`))value={sha:tree,truncated:false,tree:Object.values(blobs).map(b=>({path:b.path,mode:'100644',type:'blob',sha:b.sha}))};
    else if(route.includes('/git/blobs/')){const b=Object.values(blobs).find(b=>route.endsWith(b.sha));assert(b);value={sha:b.sha,encoding:'base64',content:Buffer.from(b.raw).toString('base64'),size:Buffer.byteLength(b.raw)};}
@@ -533,6 +533,38 @@ test('saved queued identity reproduces strict refusal but v3 preparation waits f
  const result=await carrierMain(f.env,{fetchImpl:f.fetchImpl,now:f.now,wait:f.wait});
  assert.deepEqual(result,{status:'actual_publisher_preparation_complete',executionAuthorityGranted:false});assert.deepEqual(f.waits,[10000]);assert.equal(f.maximumInflight(),1);
  assert(f.calls.slice(0,6).every(c=>!c.url.includes('/git/')&&!c.url.includes('/statuses')));assert(f.calls.every(c=>c.url.startsWith('https://api.github.com/')));
+});
+test('credential-free preparation survives a locator after minute30 before a distinct execution job with the original bounded clock',async()=>{
+ const workflow=createRequire(import.meta.url)('js-yaml').load(readFileSync(new URL('../.github/workflows/hosted-xero-recovery-carrier.yml',import.meta.url),'utf8'));
+ const preparation=workflow.jobs['xero-recovery-preparation'],execution=workflow.jobs['xero-recovery-carrier'];
+ assert.equal(preparation['timeout-minutes'],360);assert.equal(preparation.environment,undefined);
+ assert.equal(execution['timeout-minutes'],30);assert.equal(execution.needs,'xero-recovery-preparation');
+ const f=preparationLagFixture({pendingCycles:0,armMs:2400000,locatorDelayMs:1860000}),original=JSON.stringify(f.t),runId=String(lagRun.id);
+ let completed=false;
+ const read=async route=>route.endsWith('/attempts/1/jobs?per_page=100')?{total_count:completed?2:1,jobs:[{...lagJob,status:completed?'completed':'in_progress',conclusion:completed?'success':null},
+  ...(completed?[{id:lagJob.id+1,run_id:lagRun.id,name:'xero-original-warm / xero-recovery-carrier',labels:['ubuntu-24.04'],status:'in_progress',started_at:new Date(f.now()).toISOString()}]:[])]}:
+  (await f.fetchImpl('https://api.github.com/'+route,{method:'GET'})).json();
+ assert.equal((await assertCourierRun(read,f.t,runId,{phase:'preparation'})).job.id,lagJob.id);
+ await assert.rejects(assertCourierRun(read,f.t,runId,{phase:'execution'}),{code:'XERO_COURIER_JOB_MISMATCH'});
+ assert.deepEqual(await carrierMain(f.env,{fetchImpl:f.fetchImpl,now:f.now,wait:f.wait}),{status:'actual_publisher_preparation_complete',executionAuthorityGranted:false});
+ assert(f.now()-T>30*60000);assert(f.now()-T<preparation['timeout-minutes']*60000);
+ assert.equal(JSON.stringify(f.t),original);assert(f.calls.every(call=>new URL(call.url).hostname==='api.github.com'));
+ assert(f.calls.filter(call=>call.url.includes('/git/ref/')).length>180);assert.equal(f.maximumInflight(),1);
+ completed=true;const observed=await assertCourierRun(read,f.t,runId,{phase:'execution'});
+ assert.equal(observed.job.id,lagJob.id+1);assert.notEqual(observed.job.id,lagJob.id);
+ const {plan}=parseCourierTemplate(original),firstStartedAt=Date.parse(observed.job.started_at),clock={firstStartedAt,executionDeadlineAt:plan.binding.absoluteNotAfter};
+ assert.deepEqual(validateRecoveryExecutionClock(clock,plan,f.now()),clock);
+ assert.equal(plan.binding.executionWindowMs,1800000);assert(clock.executionDeadlineAt-firstStartedAt<=execution['timeout-minutes']*60000);
+ assert.throws(()=>validateRecoveryExecutionClock({...clock,executionDeadlineAt:firstStartedAt+1800000},plan,f.now()),{code:'XERO_STEP_CLOCK_INVALID'});
+ assert.throws(()=>validateRecoveryExecutionClock({...clock,executionDeadlineAt:firstStartedAt+preparation['timeout-minutes']*60000},plan,f.now()),{code:'XERO_STEP_CLOCK_INVALID'});
+ assert.throws(()=>validateRecoveryExecutionClock(clock,plan,clock.executionDeadlineAt),{code:'XERO_STEP_CLOCK_INVALID'});
+});
+test('long preparation allowance cannot renew the original armBefore or accept stale locator metadata',async()=>{
+ for(const [options,code]of [[{armMs:600000},'XERO_COURIER_AUTHORITY_EXPIRED'],[{armMs:2400000,metadataCapturedAt:T},'XERO_COURIER_TEMPLATE_INVALID']]){
+  const f=preparationLagFixture({pendingCycles:0,locatorDelayMs:1860000,...options}),original=JSON.stringify(f.t);
+  await assert.rejects(carrierMain(f.env,{fetchImpl:f.fetchImpl,now:f.now,wait:f.wait}),{code});
+  assert.equal(JSON.stringify(f.t),original);assert(f.calls.every(call=>new URL(call.url).hostname==='api.github.com'));
+ }
 });
 test('pending preparation never delays an immutable identity mismatch, contradictory state or failed HTTP read',async()=>{
  for(const patch of [{runPatch:{id:123}},{runPatch:{run_attempt:2}},{runPatch:{actor:{id:1,login:'hocheunglai-oss'}}},{runPatch:{repository:{id:1}}},{runPatch:{head_repository:{id:1}}},{runPatch:{event:'push'}},{runPatch:{head_sha:SHA}},{runPatch:{head_branch:'foreign'}},{runPatch:{path:'.github/workflows/other.yml'}},{runPatch:{conclusion:'failure'}}]){

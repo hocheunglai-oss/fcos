@@ -38,7 +38,8 @@ jobs:
     # V3 preparation uses only read-only GitHub access, with no protected environment.
     # Root reviews the source before locator publication; execution rechecks actual bytes.
     # Legacy templates return immediately and retain their immutable deadlines.
-    timeout-minutes: 30
+    # Waiting for reviewed locator publication remains bounded by the original armBefore.
+    timeout-minutes: 360
     steps:
       # No application credentials are present in this bootstrap. The checkout
       # ref must equal the cryptographically verified reusable workflow SHA.
