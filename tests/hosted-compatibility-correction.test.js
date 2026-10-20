@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {COMPATIBILITY_CORRECTION as C,isFirstRuntimeCandidateSha,firstRuntimeCandidateProfile} from '../config/hostedCompatibilityCorrection.js';
+import {COMPATIBILITY_CORRECTION as C,COMPATIBILITY_CONFIGURATION_CORRECTION as V,isFirstRuntimeCandidateSha,firstRuntimeCandidateProfile} from '../config/hostedCompatibilityCorrection.js';
 import {loadReleaseCheckManifest,requiredReleaseChecks} from '../scripts/lib/hosted-release/checks.mjs';
 import {validateManifest} from '../scripts/lib/hosted-release/contract.mjs';
 import {fixtureManifest} from './helpers/hosted-release-manifest.mjs';
@@ -31,4 +31,38 @@ test('compatibility manifest requires exact new SHA/profile and retains independ
   }
   assert.equal(isFirstRuntimeCandidateSha('e'.repeat(40)),false);assert.equal(firstRuntimeCandidateProfile('e'.repeat(40)),null);
   assert.equal(firstRuntimeCandidateProfile(C.baseSha),'frozen_04ee');assert.equal(firstRuntimeCandidateProfile(C.candidateSha),C.sourceProfile);
+});
+test('configuration successor has the exact observed idempotent bytes and only one changed file',()=>{
+  assert.equal(V.baseSha,C.candidateSha);
+  assert.equal(git('rev-parse',`${V.candidateSha}^`),V.baseSha);
+  assert.deepEqual(git('diff-tree','--no-commit-id','--name-only','-r',V.baseSha,V.candidateSha).split('\n'),['vercel.json']);
+  const read=sha=>execFileSync('git',['show',`${sha}:vercel.json`],{cwd:ROOT});
+  const prior=JSON.parse(read(V.baseSha)),bytes=read(V.candidateSha),value=JSON.parse(bytes);
+  assert.equal(bytes.length,1216);
+  assert.equal(createHash('sha256').update(bytes).digest('hex'),V.files[0].sha256);
+  assert.equal(git('rev-parse',`${V.candidateSha}:vercel.json`),V.files[0].gitBlob);
+  const canonicalize=value=>JSON.stringify({...value,name:'fcos',version:2})+'\n';
+  assert.equal(bytes.toString(),canonicalize(prior));
+  assert.equal(bytes.toString(),canonicalize(value));
+  const {name,version,...unchanged}=value;
+  assert.equal(name,'fcos');assert.equal(version,2);assert.deepEqual(unchanged,prior);
+  assert.equal(value.crons.length,11);
+  for(const key of ['existingUi','salesforceMetadataChanged','cronSchedulesChanged'])assert.equal(V[key],false);
+  assert.deepEqual(V.handoffs,[]);
+});
+test('configuration successor preserves all31 checks, original profiles and manifest scope restrictions',()=>{
+  const {manifest}=loadReleaseCheckManifest(ROOT),old=requiredReleaseChecks(manifest,C.sourceProfile),next=requiredReleaseChecks(manifest,V.sourceProfile);
+  assert.equal(old.length,31);assert.deepEqual(next.map(x=>x.id),old.map(x=>x.id));
+  for(let i=0;i<old.length;i++)assert.deepEqual(next[i].profileCommands?.[V.sourceProfile]||next[i].commands,old[i].profileCommands?.[C.sourceProfile]||old[i].commands);
+  assert.equal(manifest.sourceProfiles[V.sourceProfile].candidateSha,V.candidateSha);
+  assert.equal(manifest.sourceProfiles[C.sourceProfile].candidateSha,C.candidateSha);
+  assert.equal(firstRuntimeCandidateProfile(C.baseSha),'frozen_04ee');
+  assert.equal(firstRuntimeCandidateProfile(C.candidateSha),C.sourceProfile);
+  assert.equal(firstRuntimeCandidateProfile(V.candidateSha),V.sourceProfile);
+  assert.equal(isFirstRuntimeCandidateSha(V.candidateSha),true);
+  const m=fixtureManifest();m.candidate.sha=V.candidateSha;m.candidate.sourceProfile=V.sourceProfile;
+  assert.doesNotThrow(()=>validateManifest(m));
+  for(const change of [v=>v.candidate.sha=C.candidateSha,v=>v.candidate.sourceProfile=C.sourceProfile,v=>delete v.candidate.sourceProfile,v=>v.scope.existingUi=true,v=>v.scope.handoffs=[{kind:'status19',sha256:'a'.repeat(64)}],v=>v.scope.financialAuthority=true]){
+    const changed=structuredClone(m);change(changed);assert.throws(()=>validateManifest(changed));
+  }
 });

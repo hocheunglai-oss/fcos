@@ -71,6 +71,10 @@ function assertExposedIntentIdentity(raw,intent,readback) {
 }
 // A complete snapshot is evidence only. It does not classify outcomes or grant
 // permission to ignore producer records. Empty directories remain in the tree.
+// Producer trees include literal public source names; flat intent envelopes keep
+// their older strict grammar. Validate segments without trimming or normalizing.
+const producerPathSegment=name=>typeof name==='string'&&name.length>0&&name.length<=255
+  &&/^[a-zA-Z0-9._ [\]-]+$/.test(name)&&name!=='.'&&name!=='..'&&name.trim()===name;
 export function snapshotLegacyJournalTree(directory) {
   need(typeof directory==='string'&&resolve(directory)===directory,'CUTOVER_INVENTORY_PATH_INVALID');
   const entries=[];
@@ -79,7 +83,7 @@ export function snapshotLegacyJournalTree(directory) {
     need(before.isDirectory()&&before.uid===BigInt(process.getuid())&&(before.mode&0o022n)===0n,'CUTOVER_PRIVATE_DIRECTORY_REQUIRED');
     const names=readdirSync(path).sort();
     for(const name of names){
-      need(/^[a-zA-Z0-9._-]+$/.test(name)&&name!=='.'&&name!=='..','CUTOVER_INTENT_NAME_INVALID');
+      need(producerPathSegment(name),'CUTOVER_INTENT_NAME_INVALID');
       const item=resolve(path,name),relativeName=prefix?`${prefix}/${name}`:name,info=lstatSync(item);
       need(!info.isSymbolicLink(),'CUTOVER_SYMLINK_FORBIDDEN');
       if(info.isDirectory()){entries.push({name:relativeName,type:'directory'});walk(item,relativeName);}
@@ -110,7 +114,7 @@ function inspectProducerInventory(inventory,writers,refs) {
   need(Array.isArray(inventory.entries)&&inventory.entries.every(item=>item&&typeof item.name==='string')
     &&new Set(inventory.entries.map(item=>item.name)).size===inventory.entries.length,'CUTOVER_INTENT_INVENTORY_REQUIRED');
   const observed=snapshotLegacyJournalTree(inventory.directory),entries=inventory.entries.map(item=>{
-    need(item.name.split('/').every(name=>/^[a-zA-Z0-9._-]+$/.test(name)&&name!=='.'&&name!=='..'),'CUTOVER_INTENT_NAME_INVALID');
+    need(item.name.split('/').every(producerPathSegment),'CUTOVER_INTENT_NAME_INVALID');
     need(['directory','file'].includes(item.type),'CUTOVER_INVENTORY_ENTRY_TYPE_INVALID');
     if(item.type==='file')need(validHash(item.sha256)&&['intent','journal','companion'].includes(item.role),'CUTOVER_INVENTORY_CLASSIFICATION_REQUIRED');
     else need(item.role===undefined&&item.sha256===undefined,'CUTOVER_INVENTORY_ENTRY_TYPE_INVALID');
@@ -221,7 +225,7 @@ export function inspectReviewedCutover({reviewPath,reviewSha256,expectedHelperSh
   return {review,reviewSha256,refs,inventories,writers:writers.map(({sourceSha256:_sourceSha256,...writer})=>writer),uncertainties,existingOwners:owners,base};
 }
 const fenceProgram=String.raw`
-import os,sys,json,hashlib,stat,fcntl
+import os,sys,json,hashlib,stat,fcntl,re
 v=json.load(sys.stdin)
 def raw(p):
  for x in [p,*list(__import__('pathlib').Path(p).parents)]:
@@ -249,6 +253,7 @@ try:
    if not stat.S_ISDIR(before.st_mode) or before.st_uid!=os.getuid() or before.st_mode&0o022: raise ValueError('directory')
    names=sorted(os.listdir(p))
    for name in names:
+    if not 0<len(name)<=255 or not re.fullmatch(r'[a-zA-Z0-9._ \[\]-]+',name) or name in ('.','..') or name.strip()!=name: raise ValueError('name')
     target=os.path.join(p,name); rel=prefix+'/'+name if prefix else name; info=os.lstat(target)
     if stat.S_ISDIR(info.st_mode): found.append({'name':rel,'type':'directory'});walk(target,rel)
     else: found.append({'name':rel,'type':'file','sha256':hashlib.sha256(raw(target)).hexdigest()})

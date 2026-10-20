@@ -261,3 +261,38 @@ test('submission member groups reject missing, foreign and contradictory identit
   const options=await changedTreeReview(f,entries,{},patch);assert.throws(()=>inspectReviewedCutover(options),/JOURNAL_READBACK_REQUIRED|IDENTITY_MISMATCH|JOURNAL_BINDING_REQUIRED|DUPLICATE_INTENT/,change);
  }
 });
+
+test('producer source names retain literal brackets and internal spaces through inspection, mutex fence and epoch plan',async t=>{
+ const f=await treeFixture(t),names=['archive/api/functions/[name].js','archive/force-app/layouts/Invoice__c-Invoice Layout.layout-meta.xml'];
+ const originals=[];
+ for(const name of names){const file=path.join(f.directory,name);await mkdir(path.dirname(file),{recursive:true,mode:0o700});const raw=Buffer.from('Public source companion: '+name);await writeFile(file,raw,{mode:0o600});originals.push({file,raw});}
+ const known=new Map(f.entries.map(item=>[item.name,item])),entries=snapshotLegacyJournalTree(f.directory).map(item=>known.get(item.name)??(item.type==='directory'?item:{...item,role:'companion',category:'build_cache',producerSourceSha256:f.producer.sha256}));
+ const options=await changedTreeReview(f,entries),checked=inspectReviewedCutover(options);
+ assert.deepEqual(checked.inventories[0].tree.filter(item=>names.includes(item.name)).map(item=>item.name),names);
+ const proof=installPermanentLegacyFence(options),plan=reviewedInstallEpochPlan(options,{expectedFenceSha256:proof.proofHash});
+ assert.equal(plan.parameters[1].uncertainties.length,1);assert.equal(plan.parameters[1].uncertainties[0].ownerThreadId,HISTORICAL_OWNER);assert.equal(plan.providerAuthorityGranted,false);
+ for(const {file,raw}of originals)assert.deepEqual(await readFile(file),raw);
+});
+
+test('producer path segments reject traversal, controls, aliases and glob spellings without normalizing them',async t=>{
+ const f=await treeFixture(t),target=f.entries.find(item=>item.role==='companion');
+ for(const name of ['../escape','/absolute','journal/./original.intent.json','journal//original.intent.json','journal/../original.intent.json','journal\\original.intent.json','source\nfile','source\tfile','source\x00file','source\x7ffile','source\u202efile',' leading.js','trailing.js ','source*.js','source?.js','%2e%2e/escape']){
+  const entries=f.entries.map(item=>item===target?{...item,name}:item),options=await changedTreeReview(f,entries);
+  assert.throws(()=>inspectReviewedCutover(options),/NAME_INVALID/,JSON.stringify(name));
+ }
+ const entries=[...f.entries,{...target}],duplicate=await changedTreeReview(f,entries);assert.throws(()=>inspectReviewedCutover(duplicate),/INVENTORY_REQUIRED/);
+});
+
+test('actual control-character producer filenames are rejected by recursive snapshot',async t=>{
+ for(const name of ['source\nfile.js','source\tfile.js','source\x7ffile.js']){
+  const f=await treeFixture(t);await writeFile(path.join(f.directory,name),'public fixture',{mode:0o600});
+  assert.throws(()=>snapshotLegacyJournalTree(f.directory),/NAME_INVALID/,JSON.stringify(name));
+ }
+});
+
+test('legacy flat intent envelopes keep their original strict filename contract',async t=>{
+ const f=await fixture(t),intent=f.review.uncertainIntents[0],raw=await readFile(intent.evidence.path),name='one [name].json',file=path.join(path.dirname(intent.evidence.path),name);
+ await rm(intent.evidence.path);await writeFile(file,raw,{mode:0o600});
+ const evidence={path:file,sha256:sha(raw)},ref=await f.put('flat-name-review.json',{...f.review,intentInventories:[{directory:path.dirname(file),entries:[{name,sha256:evidence.sha256}]}],uncertainIntents:[{...intent,evidence}]});
+ assert.throws(()=>inspectReviewedCutover({...f.options,reviewPath:ref.path,reviewSha256:ref.sha256}),/NAME_INVALID/);
+});
