@@ -1,5 +1,6 @@
 import { validateLegacyReleaseContainment } from '../../../config/legacyReleaseContainment.js';
-import { createHash } from 'node:crypto';
+import { canonical, digest, fail } from './json-contract.mjs';
+export { canonical, digest, fail, ReleaseError } from './json-contract.mjs';
 import { isFirstRuntimeCandidateSha, firstRuntimeCandidateProfile } from '../../../config/hostedCompatibilityCorrection.js';
 import { qualificationSourceBinding } from '../../../config/hostedReleaseQualification.js';
 import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier } from '../../../config/fcosConnections.js';
@@ -18,20 +19,6 @@ export const REQUIRED_LIVE_CHECKS = Object.freeze(['preview_binding', 'server_bu
 export const NORMAL_MODULES = Object.freeze(['dashboard', 'markets', 'review', 'disputes', 'buyer_invoices', 'unofficial_compensation', 'incoming_payments', 'cashflow_forecast', 'brokers', 'master_contracts', 'special_terms', 'hedge_desk', 'xero_portal', 'email_router', 'settings']);
 export const sha = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
 export const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
-export class ReleaseError extends Error {
-  constructor(code, phase, recovery, detail = {}) {
-    super(code); this.name = 'ReleaseError'; this.code = code; this.phase = phase; this.recovery = recovery; this.detail = detail;
-  }
-}
-export function fail(code, phase = 'admission', recovery = 'Correct the bound inputs before starting a new operation.') { throw new ReleaseError(code, phase, recovery); }
-export function canonical(value) {
-  if (value === null || typeof value === 'boolean' || typeof value === 'string') return JSON.stringify(value);
-  if (typeof value === 'number' && Number.isFinite(value)) return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
-  if (value && Object.getPrototypeOf(value) === Object.prototype) return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}`;
-  fail('NON_JSON_CONTRACT');
-}
-export const digest = value => createHash('sha256').update(typeof value === 'string' || Buffer.isBuffer(value) ? value : canonical(value)).digest('hex');
 export function releaseTargets() {
   return {
     repository: fcosConnectionIdentifier('github', 'Repository'),

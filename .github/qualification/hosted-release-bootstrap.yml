@@ -12,12 +12,14 @@ run-name: ${{ inputs.xero_recovery_mode == 'original-warm' && format('FCOS origi
   workflow_dispatch:
     inputs:
       bootstrap_phase:
-        description: Read-only setup discovery, one-time image publication or actual qualification; never Production.
+        description: Read-only setup discovery, one-time immutable dependency archive/image publication or actual qualification; never Production.
         type: choice
         default: qualification
         options:
           - qualification
           - toolchain
+          - dependency-key
+          - dependency-setup
           - setup-discovery
           - preservation-preflight
       intent_sha256:
@@ -68,6 +70,101 @@ jobs:
     with:
       source_sha: __FCOS_CONTROLLER_SHA__
       intent_sha256: ${{ inputs.intent_sha256 }}
+  dependency_setup:
+    name: Dependency setup archive
+    if: ${{ inputs.xero_recovery_mode == 'disabled' && inputs.bootstrap_phase == 'dependency-setup' && vars.FCOS_ADMITTED_DEPENDENCY_SEED != '' && vars.FCOS_ADMITTED_DEPENDENCY_SEED_SHA256 != '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    env:
+      FCOS_CONTROLLER_DIRECTORY: controller
+      FCOS_CONTROLLER_SHA: __FCOS_CONTROLLER_SHA__
+      FCOS_ADMITTED_DEPENDENCY_SEED: ${{ vars.FCOS_ADMITTED_DEPENDENCY_SEED }}
+      FCOS_ADMITTED_DEPENDENCY_SEED_SHA256: ${{ vars.FCOS_ADMITTED_DEPENDENCY_SEED_SHA256 }}
+      FCOS_DEPENDENCY_SEED_SOURCE: bootstrap/.github/qualification/dependency-setup
+      FCOS_DEPENDENCY_SEED_OUTPUT: dependency-setup
+      FCOS_DEPENDENCY_SEED_RECEIPT: dependency-setup-receipt.json
+      GITHUB_WORKFLOW_REF: ${{ github.workflow_ref }}
+      GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}
+    steps:
+      - name: Check out admitted controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: __FCOS_CONTROLLER_SHA__
+          path: controller
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check out immutable dependency source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ github.sha }}
+          path: bootstrap
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: .github/qualification/dependency-setup
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - name: Stage verified dependency setup
+        run: node controller/scripts/hosted-release-dependency-seed.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ format('fcos-dependency-setup-{0}', github.run_id) }}
+          path: dependency-setup
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: false
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ format('fcos-dependency-setup-receipt-{0}', github.run_id) }}
+          path: dependency-setup-receipt.json
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: false
+  dependency_key:
+    name: Dependency recipient key
+    if: ${{ inputs.xero_recovery_mode == 'disabled' && inputs.bootstrap_phase == 'dependency-key' && vars.FCOS_ADMITTED_DEPENDENCY_SEED != '' && vars.FCOS_ADMITTED_DEPENDENCY_SEED_SHA256 != '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    env:
+      FCOS_CONTROLLER_DIRECTORY: controller
+      FCOS_CONTROLLER_SHA: __FCOS_CONTROLLER_SHA__
+      FCOS_ADMITTED_DEPENDENCY_SEED: ${{ vars.FCOS_ADMITTED_DEPENDENCY_SEED }}
+      FCOS_ADMITTED_DEPENDENCY_SEED_SHA256: ${{ vars.FCOS_ADMITTED_DEPENDENCY_SEED_SHA256 }}
+      FCOS_DEPENDENCY_KEY_OUTPUT: dependency-recipient.json
+      GITHUB_WORKFLOW_REF: ${{ github.workflow_ref }}
+      GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}
+    steps:
+      - name: Check out admitted controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: __FCOS_CONTROLLER_SHA__
+          path: controller
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - name: Derive admitted recipient public key
+        run: node controller/scripts/hosted-release-dependency-seed.mjs --recipient
+        env:
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ format('fcos-dependency-key-{0}', github.run_id) }}
+          path: dependency-recipient.json
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: false
   setup_discovery:
     name: Setup discovery
     if: ${{ inputs.xero_recovery_mode == 'disabled' && inputs.bootstrap_phase == 'setup-discovery' && vars.FCOS_HOSTED_SETUP_DISCOVERY_ADMITTED == 'true' }}

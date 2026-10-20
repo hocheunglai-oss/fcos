@@ -25,11 +25,11 @@ const forwarding = names => Object.fromEntries(names.map(name => [name, `\${{ se
 test('qualification bootstrap stays inactive and calls the same immutable controller', () => {
   assert.deepEqual(Object.keys(definition.on), ['workflow_dispatch']);
   assert.deepEqual(definition.permissions, {});
-  assert.deepEqual(Object.keys(definition.jobs), ['toolchain', 'setup_discovery', 'preservation_preflight', 'manifest', 'release', 'xero_owner_readback', 'xero_original_warm']);
+  assert.deepEqual(Object.keys(definition.jobs), ['toolchain', 'dependency_setup', 'dependency_key', 'setup_discovery', 'preservation_preflight', 'manifest', 'release', 'xero_owner_readback', 'xero_original_warm']);
   assert.equal(definition.jobs.manifest.if, "${{ inputs.xero_recovery_mode == 'disabled' && inputs.bootstrap_phase == 'qualification' && vars.FCOS_HOSTED_QUALIFICATION_ADMITTED == 'true' }}");
   assert.equal(definition.jobs.manifest.environment, 'fcos-hosted-verification');
   assert.deepEqual(definition.jobs.manifest.permissions, { contents: 'read', actions: 'read' });
-  assert.equal(template.split('__FCOS_CONTROLLER_SHA__').length - 1, 13);
+  assert.equal(template.split('__FCOS_CONTROLLER_SHA__').length - 1, 17);
   const sha = 'a'.repeat(40), rendered = yaml.load(template.replaceAll('__FCOS_CONTROLLER_SHA__', sha));
   assert.equal(rendered.jobs.manifest.env.FCOS_CONTROLLER_SHA, sha);
   assert.equal(rendered.jobs.manifest.steps[0].with.ref, sha);
@@ -40,6 +40,13 @@ test('qualification bootstrap stays inactive and calls the same immutable contro
   assert.equal(rendered.jobs.toolchain.with.source_sha, sha);
   assert.equal(rendered.jobs.toolchain.secrets, undefined);
   assert.deepEqual(rendered.jobs.toolchain.permissions, { contents: 'read', actions: 'read', packages: 'write' });
+  assert.equal(rendered.jobs.dependency_setup.environment, undefined);
+  assert.deepEqual(rendered.jobs.dependency_setup.permissions, { contents: 'read', actions: 'read' });
+  assert.equal(rendered.jobs.dependency_setup.steps.find(step => step.name === 'Check out immutable dependency source').with['sparse-checkout'], '.github/qualification/dependency-setup');
+  assert.equal(rendered.jobs.dependency_setup.steps.find(step => step.name === 'Stage verified dependency setup').run, 'node controller/scripts/hosted-release-dependency-seed.mjs');
+  assert.equal(rendered.jobs.dependency_key.environment, undefined);
+  assert.deepEqual(rendered.jobs.dependency_key.permissions, { contents: 'read', actions: 'read' });
+  assert.equal(rendered.jobs.dependency_key.steps.find(step => step.name === 'Derive admitted recipient public key').run, 'node controller/scripts/hosted-release-dependency-seed.mjs --recipient');
   assert.equal(rendered.jobs.manifest.env.FCOS_QUALIFICATION_BOOTSTRAP, 'true');
   const controller = yaml.load(readFileSync(new URL('../.github/workflows/hosted-release-controller.yml', import.meta.url), 'utf8'));
   assert.deepEqual(controller.on.workflow_call.secrets, Object.fromEntries(environmentSecrets.map(name =>
@@ -123,10 +130,10 @@ test('actual rendered bootstrap wires exactly three public readback inputs to im
   assert.equal(job.uses,`hocheunglai-oss/fcos/.github/workflows/hosted-xero-recovery-carrier.yml@${sha}`);assert.equal(job.with.controller_sha,sha);assert.equal(job.with.mode,'owner-readback');
   assert.equal(job.with.template_base64,'${{ inputs.xero_recovery_template_base64 }}');assert.equal(job.with.owner_readback_base64,'${{ inputs.xero_recovery_readback_base64 }}');
   assert.deepEqual(job.permissions,{contents:'read',actions:'read',statuses:'read','id-token':'write'});assert.notEqual(job.secrets,'inherit');assert.deepEqual(Object.keys(job.secrets).sort(),['FCOS_HOSTED_VERCEL_READ_TOKEN','FCOS_HOSTED_RUNTIME_EMAIL','FCOS_HOSTED_RUNTIME_PASSWORD','FCOS_PRODUCTION_VERIFICATION_BYPASS','FCOS_XERO_RECOVERY_REQUEST_NONCE'].sort());
-  const evaluate=(expression,inputs)=>Function('inputs','vars',`return (${expression.slice(3,-2)});`)(new Proxy(inputs,{get:(o,k)=>o[k]??''}),{FCOS_HOSTED_QUALIFICATION_ADMITTED:'true',FCOS_HOSTED_SETUP_DISCOVERY_ADMITTED:'true',FCOS_HOSTED_PRESERVATION_PREFLIGHT_ADMITTED:'true'});
+  const evaluate=(expression,inputs)=>Function('inputs','vars',`return (${expression.slice(3,-2)});`)(new Proxy(inputs,{get:(o,k)=>o[k]??''}),{FCOS_HOSTED_QUALIFICATION_ADMITTED:'true',FCOS_HOSTED_SETUP_DISCOVERY_ADMITTED:'true',FCOS_HOSTED_PRESERVATION_PREFLIGHT_ADMITTED:'true',FCOS_ADMITTED_DEPENDENCY_SEED:'public',FCOS_ADMITTED_DEPENDENCY_SEED_SHA256:'public'});
   for(const mode of ['disabled','owner-readback','original-warm','submit','foreign'])for(const phase of input.bootstrap_phase.options){const inputs={bootstrap_phase:phase,xero_recovery_mode:mode,xero_recovery_template_base64:'SYNTHETIC-PUBLIC-TEMPLATE',xero_recovery_readback_base64:'SYNTHETIC-PUBLIC-READBACK'};
     assert.equal(evaluate(job.if,inputs),mode==='owner-readback'&&phase==='qualification');
-    for(const [id,other]of Object.entries(rendered.jobs))if(!['xero_owner_readback','xero_original_warm'].includes(id))assert.equal(evaluate(other.if,inputs),mode==='disabled'&&phase===({toolchain:'toolchain',setup_discovery:'setup-discovery',preservation_preflight:'preservation-preflight',manifest:'qualification',release:'qualification'}[id]));
+    for(const [id,other]of Object.entries(rendered.jobs))if(!['xero_owner_readback','xero_original_warm'].includes(id))assert.equal(evaluate(other.if,inputs),mode==='disabled'&&phase===({toolchain:'toolchain',dependency_setup:'dependency-setup',dependency_key:'dependency-key',setup_discovery:'setup-discovery',preservation_preflight:'preservation-preflight',manifest:'qualification',release:'qualification'}[id]));
   }
   assert.equal(evaluate(job.if,{bootstrap_phase:'qualification',xero_recovery_mode:'owner-readback'}),false);
   const carrier=yaml.load(readFileSync(new URL('../.github/workflows/hosted-xero-recovery-carrier.yml',import.meta.url),'utf8')),step=carrier.jobs['xero-recovery-carrier'].steps.at(-1);

@@ -425,7 +425,7 @@ jobs:
       FCOS_HOSTED_COORDINATOR_URL: ${{ vars.FCOS_HOSTED_COORDINATOR_URL }}
       FCOS_VERIFICATION_PHASE: before
       FCOS_HOSTED_ENVIRONMENT: fcos-hosted-dependency-verification
-      FCOS_HOSTED_DEPENDENCY_SETUP_DIRECTORY: dependency-setup
+      FCOS_HOSTED_DEPENDENCY_SETUP_DIRECTORY: dependency-setup-opened
       FCOS_RELEASE_OUTPUT: dependencies.json
     steps:
       - name: Check out admitted controller
@@ -458,6 +458,13 @@ jobs:
           name: ${{ fromJSON(vars.FCOS_ADMITTED_RELEASE_SETUP).dependencyArtifact.name }}
           path: dependency-setup
           github-token: ${{ github.token }}
+      - name: Open admitted dependency seed
+        run: node controller/scripts/hosted-release-dependency-seed.mjs --open
+        env:
+          FCOS_CONTROLLER_SHA: ${{ job.workflow_sha }}
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+          FCOS_HOSTED_DEPENDENCY_SETUP_DIRECTORY: dependency-setup
+          FCOS_HOSTED_DEPENDENCY_SETUP_OPENED_DIRECTORY: dependency-setup-opened
       - name: Run admitted checks
         run: node controller/scripts/hosted-release-dependencies.mjs
         env:
@@ -583,7 +590,7 @@ jobs:
       FCOS_CANDIDATE_DIRECTORY: candidate
       FCOS_HOSTED_COORDINATOR_URL: ${{ vars.FCOS_HOSTED_COORDINATOR_URL }}
       FCOS_VERIFICATION_PHASE: before
-      FCOS_HOSTED_DEPENDENCY_SETUP_DIRECTORY: dependency-setup
+      FCOS_HOSTED_DEPENDENCY_SETUP_DIRECTORY: dependency-setup-opened
     steps:
       - name: Check out admitted controller
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -615,6 +622,13 @@ jobs:
           name: ${{ fromJSON(vars.FCOS_ADMITTED_RELEASE_SETUP).dependencyArtifact.name }}
           path: dependency-setup
           github-token: ${{ github.token }}
+      - name: Open admitted dependency seed
+        run: node controller/scripts/hosted-release-dependency-seed.mjs --open
+        env:
+          FCOS_CONTROLLER_SHA: ${{ job.workflow_sha }}
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+          FCOS_HOSTED_DEPENDENCY_SETUP_DIRECTORY: dependency-setup
+          FCOS_HOSTED_DEPENDENCY_SETUP_OPENED_DIRECTORY: dependency-setup-opened
       - name: Run admitted checks
         id: run
         run: node controller/scripts/hosted-release.mjs publish
@@ -773,7 +787,7 @@ jobs:
       FCOS_HOSTED_COORDINATOR_URL: ${{ vars.FCOS_HOSTED_COORDINATOR_URL }}
       FCOS_VERIFICATION_PHASE: after
       FCOS_HOSTED_ENVIRONMENT: fcos-hosted-dependency-verification
-      FCOS_HOSTED_DEPENDENCY_SETUP_DIRECTORY: dependency-setup
+      FCOS_HOSTED_DEPENDENCY_SETUP_DIRECTORY: dependency-setup-opened
       FCOS_RELEASE_OUTPUT: dependencies.json
     steps:
       - name: Check out admitted controller
@@ -806,6 +820,13 @@ jobs:
           name: ${{ fromJSON(vars.FCOS_ADMITTED_RELEASE_SETUP).dependencyArtifact.name }}
           path: dependency-setup
           github-token: ${{ github.token }}
+      - name: Open admitted dependency seed
+        run: node controller/scripts/hosted-release-dependency-seed.mjs --open
+        env:
+          FCOS_CONTROLLER_SHA: ${{ job.workflow_sha }}
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+          FCOS_HOSTED_DEPENDENCY_SETUP_DIRECTORY: dependency-setup
+          FCOS_HOSTED_DEPENDENCY_SETUP_OPENED_DIRECTORY: dependency-setup-opened
       - name: Run admitted checks
         run: node controller/scripts/hosted-release-dependencies.mjs
         env:
@@ -929,7 +950,7 @@ jobs:
       FCOS_CANDIDATE_DIRECTORY: candidate
       FCOS_HOSTED_COORDINATOR_URL: ${{ vars.FCOS_HOSTED_COORDINATOR_URL }}
       FCOS_VERIFICATION_PHASE: after
-      FCOS_HOSTED_DEPENDENCY_SETUP_DIRECTORY: dependency-setup
+      FCOS_HOSTED_DEPENDENCY_SETUP_DIRECTORY: dependency-setup-opened
     steps:
       - name: Check out admitted controller
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -961,6 +982,13 @@ jobs:
           name: ${{ fromJSON(vars.FCOS_ADMITTED_RELEASE_SETUP).dependencyArtifact.name }}
           path: dependency-setup
           github-token: ${{ github.token }}
+      - name: Open admitted dependency seed
+        run: node controller/scripts/hosted-release-dependency-seed.mjs --open
+        env:
+          FCOS_CONTROLLER_SHA: ${{ job.workflow_sha }}
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+          FCOS_HOSTED_DEPENDENCY_SETUP_DIRECTORY: dependency-setup
+          FCOS_HOSTED_DEPENDENCY_SETUP_OPENED_DIRECTORY: dependency-setup-opened
       - name: Run admitted checks
         id: run
         run: node controller/scripts/hosted-release.mjs publish
