@@ -26,7 +26,7 @@ function fixture(){
  const guard=selectionBuildGuard(m),url='https://fcos-source123-hocheunglai-6535s-projects.vercel.app',d={id:'dpl_syntheticready',state:'READY',sha,source:'cli',target:'preview',customEnvironment:null,
  gitCommitRef:'HEAD',gitCommitSha:sha,prebuiltFieldPresent:false,prebuiltRaw:null,selectionGuardSha256:digest(guard.nodeOptions),url};
  const logs=[{type:'command',payload:{text:'Running "vercel build"'}},{type:'command',payload:{text:'Running "install" command: `npm ci`...'}},
- {type:'stdout',payload:{text:guard.proof}},{type:'stdout',payload:{text:'> fcos@0.0.0 build'}},{type:'stdout',payload:{text:guard.proof}}];
+ {type:'stderr',payload:{text:guard.proof}},{type:'stdout',payload:{text:'> fcos@0.0.0 build'}},{type:'stderr',payload:{text:guard.proof}}];
  const args=['deploy','--target','preview','--yes','--no-wait','--meta','githubCommitSha='+sha,'--meta','fcosSelectionObservation='+digest(m),
  '--meta','fcosConfigurationSelectionSha256='+digest(guard.nodeOptions),'--build-env','NODE_OPTIONS='+guard.nodeOptions,
  '--build-env','FCOS_BUILD_COMMIT_SHA='+sha,'--build-env','FCOS_EXPECTED_SOURCE_SHA256='+m.candidate.sourceSha256];
@@ -80,11 +80,11 @@ test('actual adapter reads the coordinator journal on every verification and nev
  await assert.rejects(adapter.verifyArtifact({...f.d,providerSourceBuild:true},f.m,'preview'),{code:'ARTIFACT_READ_FAILED'});assert.equal(calls.filter(v=>v==='coordinator').length,1);
  operation={...p.operation,state:'uncertain'};calls.length=0;await assert.rejects(adapter.verifyArtifact(f.d,f.m,'preview'),{code:'CONFIGURATION_SELECTION_SOURCE_BUILD_UNPROVEN'});assert.equal(calls.some(v=>v==='/app-version.json'),false);
 });
-test('generated pre-candidate Node guard bytes remain exactly the original implementation',()=>{
+test('generated pre-candidate Node guard pins the reviewed stderr-only successor',()=>{
  const source=readFileSync(new URL('../scripts/lib/hosted-release/configuration-selection.mjs',import.meta.url),'utf8');
  const body=source.slice(source.indexOf('export function selectionBuildGuard'),source.indexOf('/** No execution of repository code'));
- // Exact body frozen from6fb79b9f, independent of newly added proof helpers.
- assert.equal(digest(body),'f1ca97f49d56dc5da950b03c2def3aa5a4332fd8604c18c005e1124d5f8cec0e');
+ // Explicit successor changes only proof output; historical native metadata above retains its original guard hash.
+ assert.equal(digest(body),'aa4195a744b213701a242f520f23972ce0bc1dfd056f11c6db111ded024df118');
 });
 
 function controllerFixture(t,{lostResponse=false}={}){

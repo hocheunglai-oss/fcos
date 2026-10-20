@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { firstRuntimeCandidateProfile } from '../config/hostedCompatibilityCorrection.js';
 import { assertAdmittedSetup, prepareReleaseManifest, validateDiscoverySetup } from './lib/hosted-release/manifest.mjs';
 import { createPreviousProductionObserver, createSetupDiscoveryCollector } from './lib/hosted-release/live-collector.mjs';
 import { digest, fail, releaseTargets, sha } from './lib/hosted-release/contract.mjs';
@@ -23,9 +24,11 @@ export async function validateHostedDispatch({ env = process.env, createGithub =
   if (!['compatibility', 'application', 'qualification'].includes(plan.stage)
     || (plan.stage === 'qualification') !== (mode === 'qualification') || !['release', 'qualification'].includes(mode)) fail('MANIFEST_SCHEMA');
   const manifest = resumed || { stage: plan.stage, executionMode: mode, candidate: { sha: env.FCOS_CANDIDATE_SHA,
-    sourceProfile:plan.stage==='compatibility'?'frozen_04ee':plan.stage==='application'?'application_v2':plan.sourceProfile },scope:plan.scope,
+    sourceProfile:plan.stage==='compatibility'?firstRuntimeCandidateProfile(env.FCOS_CANDIDATE_SHA):plan.stage==='application'?'application_v2':plan.sourceProfile },scope:plan.scope,
     controller: { sha: env.FCOS_CONTROLLER_SHA }, setupSha256: digest(setup), epoch: setup.epoch, targets: releaseTargets(),
+    runtime: plan.runtime, migration: plan.migration,
     verification: setup.verification, ...(setup.dependencies ? { dependencies: setup.dependencies } : {}),
+    ...(setup.legacyReleaseContainment ? { legacyReleaseContainment: setup.legacyReleaseContainment } : {}),
     ...(plan.stage === 'qualification' && setup.qualificationSource ? { qualificationSource: setup.qualificationSource } : {}) };
   if (manifest.controller.sha !== env.FCOS_CONTROLLER_SHA || manifest.candidate.sha !== env.FCOS_CANDIDATE_SHA) fail('RESUME_MANIFEST_CHANGED');
   assertHostedController({ controllerDirectory, controllerSha: env.FCOS_CONTROLLER_SHA, manifest, env });

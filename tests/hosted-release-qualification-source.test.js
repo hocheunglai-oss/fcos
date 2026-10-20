@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { generateKeyPair, SignJWT } from 'jose';
@@ -9,9 +9,13 @@ import { qualificationSourceBinding, validateQualificationSource } from '../conf
 import { assertHostedController, assertHostedSetup } from '../scripts/lib/hosted-release/admission.mjs';
 import { validateHostedIdentity, validateQualificationRun } from '../scripts/lib/hosted-release/github.mjs';
 import { assertHostedJob } from '../scripts/lib/hosted-release/publisher.mjs';
-import { buildReleaseManifest } from '../scripts/lib/hosted-release/manifest.mjs';
+import { buildReleaseManifest, prepareReleaseManifest } from '../scripts/lib/hosted-release/manifest.mjs';
 import { digest, validateManifest } from '../scripts/lib/hosted-release/contract.mjs';
-import { prepareHostedManifest } from '../scripts/hosted-release-manifest.mjs';
+import { prepareHostedManifest, validateHostedDispatch } from '../scripts/hosted-release-manifest.mjs';
+import { COMPATIBILITY_CONFIGURATION_CORRECTION } from '../config/hostedCompatibilityCorrection.js';
+import { LEGACY_RELEASE_EFFECTS } from '../config/legacyReleaseContainment.js';
+import { firstRuntimeDigest, firstRuntimePrevious } from '../scripts/lib/hosted-release/first-runtime.mjs';
+import { typedFirstRuntimeFixture } from './helpers/hosted-first-runtime-v2.mjs';
 import { runQualification } from '../scripts/hosted-release-qualification.mjs';
 import { fixtureManifest } from './helpers/hosted-release-manifest.mjs';
 import { vercelReadFixture } from './helpers/hosted-vercel-read.mjs';
@@ -81,6 +85,113 @@ test('actual dispatch entrypoint validates admitted bootstrap before candidate c
   assert.equal(f.calls.length, 4);
   f.branch.commit.sha = 'e'.repeat(40);
   await assert.rejects(prepareHostedManifest({ env: f.env, validateDispatchOnly: true, createGithub: () => f.github }), { code: 'QUALIFICATION_SOURCE_DRIFT' });
+});
+
+function typedSuccessorDispatchFixture(t, stage = 'qualification') {
+  const f = fixture(t), first = typedFirstRuntimeFixture();
+  first.value.candidateSha = COMPATIBILITY_CONFIGURATION_CORRECTION.candidateSha;
+  first.value.candidateSourceProfile = COMPATIBILITY_CONFIGURATION_CORRECTION.sourceProfile;
+  first.reference = first.referenceFor();
+  Object.assign(f.manifest.candidate, { sha: first.value.candidateSha, sourceProfile: first.value.candidateSourceProfile });
+  f.source.candidateSha = first.value.candidateSha;
+  f.manifest.previousProduction = firstRuntimePrevious(first.reference, { now: first.now });
+  f.manifest.runtime = { expectedProduction: first.desiredRuntime, expectedPreview: first.desiredRuntime,
+    expectedSha256: firstRuntimeDigest(first.desiredRuntime) };
+  f.manifest.migration = { mode: 'none', expectedSchemaSha256: first.value.schema.sha256 };
+  f.setup.firstRuntimeBaseline = first.reference;
+  f.setup.previousProduction = f.manifest.previousProduction;
+  f.setup.legacyReleaseContainment = { schemaVersion: 1, policy: 'legacy_control_plane_effects_v1',
+    selection: 'detached_node24_before_candidate_v1', effects: LEGACY_RELEASE_EFFECTS.map(row => ({ ...row, effectSha256: H })) };
+  f.manifest.legacyReleaseContainment = f.setup.legacyReleaseContainment;
+  f.manifest.stage = stage; f.manifest.executionMode = stage === 'qualification' ? 'qualification' : 'release';
+  if (stage === 'compatibility') {
+    delete f.setup.qualificationSource; delete f.manifest.qualificationSource;
+    Object.assign(f.env, { GITHUB_REF: 'refs/heads/main', FCOS_QUALIFICATION_BOOTSTRAP: '', FCOS_HOSTED_QUALIFICATION_ADMITTED: '' });
+  }
+  f.plan = { schemaVersion: 2, releaseId: f.manifest.releaseId, stage, executionMode: f.manifest.executionMode,
+    sourceProfile: first.value.candidateSourceProfile, branch: f.manifest.candidate.branch, scope: f.manifest.scope,
+    migration: f.manifest.migration, runtime: f.manifest.runtime, changes: f.manifest.changes };
+  Object.assign(f.env, { FCOS_CANDIDATE_SHA: first.value.candidateSha, FCOS_RELEASE_PLAN: JSON.stringify(f.plan),
+    FCOS_ADMITTED_RELEASE_SETUP: JSON.stringify(f.setup), FCOS_ADMITTED_RELEASE_SETUP_SHA256: digest(f.setup),
+    GITHUB_OUTPUT: join(f.directory, 'workflow-output') });
+  f.manifest.setupSha256 = digest(f.setup);
+  return { ...f, first };
+}
+
+test('real dispatch admits the joined typed runtime, configuration successor and exact containment context', async t => {
+  for (const stage of ['qualification', 'compatibility']) {
+    const f = typedSuccessorDispatchFixture(t, stage);
+    const createGithub = () => stage === 'qualification' ? f.github : assert.fail('main dispatch needs no alternate-source metadata');
+    const admitted = await validateHostedDispatch({ env: f.env, createGithub });
+    assert.deepEqual(admitted.plan.runtime, f.plan.runtime);
+    assert.deepEqual(admitted.plan.migration, f.plan.migration);
+    assert.deepEqual(admitted.setup.legacyReleaseContainment, f.setup.legacyReleaseContainment);
+    assert.deepEqual(await prepareHostedManifest({ env: f.env, validateDispatchOnly: true, createGithub,
+      prepareManifest: () => assert.fail('dispatch cannot prepare or observe a candidate') }),
+    { status: 'passed', phase: 'dispatch.admission', executionMode: f.manifest.executionMode });
+    assert.equal(existsSync(f.env.FCOS_CANDIDATE_DIRECTORY), false);
+    assert.equal(existsSync(f.env.FCOS_RELEASE_OUTPUT), false);
+  }
+});
+
+test('real hosted preparation retains the joined dispatch context through the final manifest and saved output', async t => {
+  for (const stage of ['qualification', 'compatibility']) {
+    const f = typedSuccessorDispatchFixture(t, stage); let observations = 0, sourceReads = 0;
+    const options = { env: f.env, createGithub: () => f.github,
+      prepareManifest: options => prepareReleaseManifest({ ...options, now: () => f.first.now, collectSource: source => {
+        sourceReads++;
+        assert.equal(source.candidateSha, COMPATIBILITY_CONFIGURATION_CORRECTION.candidateSha);
+        assert.equal(source.sourceProfile, COMPATIBILITY_CONFIGURATION_CORRECTION.sourceProfile);
+        return { candidate: f.manifest.candidate, controller: f.manifest.controller, checks: [{ id: 'unit' }] };
+      } }),
+      createPreviousObserver: ({ context }) => ({ observePreviousProduction: async () => {
+        observations++;
+        assert.deepEqual(context.runtime, f.plan.runtime);
+        assert.deepEqual(context.migration, f.plan.migration);
+        assert.deepEqual(context.legacyReleaseContainment, f.setup.legacyReleaseContainment);
+        return { readOnly: true, capturedAt: new Date(f.first.now).toISOString(), previousProduction: f.manifest.previousProduction };
+      } }) };
+    const actual = await prepareHostedManifest(options);
+    assert.equal(sourceReads, 1); assert.equal(observations, 1);
+    assert.equal(actual.candidate.sourceProfile, COMPATIBILITY_CONFIGURATION_CORRECTION.sourceProfile);
+    assert.deepEqual(actual.runtime, f.plan.runtime);
+    assert.deepEqual(actual.migration, f.plan.migration);
+    assert.deepEqual(actual.legacyReleaseContainment, f.setup.legacyReleaseContainment);
+    assert.equal(actual.previousProduction.firstRuntime.rollbackEligible, false);
+    assert.deepEqual(JSON.parse(readFileSync(f.env.FCOS_RELEASE_OUTPUT, 'utf8')), actual);
+    assert.doesNotThrow(() => validateManifest(actual));
+    f.plan.migration.expectedSchemaSha256 = 'f'.repeat(64);
+    f.env.FCOS_RELEASE_PLAN = JSON.stringify(f.plan);
+    await assert.rejects(prepareHostedManifest(options), { code: 'FIRST_RUNTIME_BASELINE_CHANGED' });
+    assert.deepEqual(JSON.parse(readFileSync(f.env.FCOS_RELEASE_OUTPUT, 'utf8')), actual, 'refusal cannot overwrite the prior valid output');
+  }
+});
+
+test('joined dispatch still refuses runtime, source, setup, caller and resumed containment tampering', async t => {
+  const f = typedSuccessorDispatchFixture(t);
+  for (const mutate of [
+    plan => { plan.runtime.expectedSha256 = 'f'.repeat(64); },
+    plan => { plan.runtime.expectedProduction.auth.xero.state = 'unknown'; },
+    plan => { delete plan.runtime; },
+    plan => { plan.sourceProfile = 'frozen_04ee'; },
+  ]) {
+    const plan = structuredClone(f.plan); mutate(plan);
+    await assert.rejects(validateHostedDispatch({ env: { ...f.env, FCOS_RELEASE_PLAN: JSON.stringify(plan) },
+      createGithub: () => assert.fail('invalid first-runtime context precedes metadata') }), { code: 'FIRST_RUNTIME_SCOPE_CHANGED' });
+  }
+  const setup = structuredClone(f.setup); setup.legacyReleaseContainment.effects[0].effectSha256 = 'f'.repeat(64);
+  await assert.rejects(validateHostedDispatch({ env: { ...f.env, FCOS_ADMITTED_RELEASE_SETUP: JSON.stringify(setup) } }),
+    { code: 'SETUP_BINDING_CHANGED' });
+  const resumed = structuredClone(f.manifest); resumed.legacyReleaseContainment.effects[0].effectSha256 = 'f'.repeat(64);
+  await assert.rejects(validateHostedDispatch({ env: { ...f.env, FCOS_RELEASE_PLAN: '', FCOS_RESUME_MANIFEST: JSON.stringify(resumed) },
+    createGithub: () => assert.fail('changed resumed containment precedes metadata') }), { code: 'ADMITTED_SETUP_CHANGED' });
+  await assert.rejects(validateHostedDispatch({ env: { ...f.env, FCOS_CANDIDATE_SHA: 'e'.repeat(40) }, createGithub: () => f.github }),
+    { code: 'QUALIFICATION_SOURCE_INVALID' });
+  await assert.rejects(validateHostedDispatch({ env: { ...f.env, GITHUB_SHA: 'e'.repeat(40) }, createGithub: () => f.github }),
+    { code: 'QUALIFICATION_SOURCE_CONTEXT' });
+  f.run.triggering_actor.login = 'foreign-actor';
+  await assert.rejects(validateHostedDispatch({ env: f.env, createGithub: () => f.github }), { code: 'QUALIFICATION_SOURCE_DRIFT' });
+  assert.equal(existsSync(f.env.FCOS_RELEASE_OUTPUT), false);
 });
 
 test('bootstrap CLI rejects release-mode and mismatched resume without metadata or candidate access', async t => {

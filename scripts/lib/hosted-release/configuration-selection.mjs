@@ -10,7 +10,9 @@ const forbidden = /^(?:NODE_OPTIONS|BASH_ENV|ENV|PATH|SHELL|SHELLOPTS|BASHOPTS|B
 export function selectionBuildGuard(manifest) {
   if(!/^[a-f0-9]{40}$/.test(manifest?.candidate?.sha||'')) fail('CONFIGURATION_SELECTION_SOURCE_INVALID');
   const proof = `FCOS_CONFIGURATION_SELECTION:${digest(manifest)}:HEAD:${manifest.candidate.sha}`;
-  const source = `if(process.versions.node.split('.')[0]!=='24'||process.env.VERCEL_GIT_COMMIT_REF!=='HEAD'||process.env.VERCEL_GIT_COMMIT_SHA!==${JSON.stringify(manifest.candidate.sha)})throw Error('FCOS_CONFIGURATION_SELECTION_REFUSED');console.log(${JSON.stringify(proof)});`;
+  // Inherited Node version probes parse stdout. Keep the proof synchronous and
+  // on stderr so the guard cannot become a framework/package version value.
+  const source = `import{writeSync}from'node:fs';if(process.versions.node.split('.')[0]!=='24'||process.env.VERCEL_GIT_COMMIT_REF!=='HEAD'||process.env.VERCEL_GIT_COMMIT_SHA!==${JSON.stringify(manifest.candidate.sha)})throw Error('FCOS_CONFIGURATION_SELECTION_REFUSED');writeSync(2,${JSON.stringify(proof+'\n')});`;
   return { proof, nodeOptions: `--import=data:text/javascript,${encodeURIComponent(source)}` };
 }
 /** No execution of repository code here. No shell before the pinned npm entry. */
