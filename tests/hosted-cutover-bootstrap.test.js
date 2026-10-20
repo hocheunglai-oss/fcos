@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
 import path from 'node:path';
+import { tmpdir } from 'node:os';
 import pg from 'pg';
 import {createCoordinatorHandler,createSqlStore} from '../supabase/functions/release-coordinator/index.ts';
 import {createCoordinatorClient} from '../scripts/lib/hosted-release/coordinator-client.mjs';
@@ -32,7 +33,7 @@ function inputs(){
 }
 
 test('native PostgreSQL admin handoff uses the existing singleton and keeps authority/unknown history private',async t=>{
- const bin=execFileSync('pg_config',['--bindir'],{encoding:'utf8'}).trim(),dir=await mkdtemp('/private/tmp/fcos-cutover-bootstrap-pg-'),data=path.join(dir,'data'),port=54629;
+ const bin=execFileSync('pg_config',['--bindir'],{encoding:'utf8'}).trim(),dir=await mkdtemp(path.join(tmpdir(),'fcos-cutover-bootstrap-pg-')),data=path.join(dir,'data'),port=54629;
  let started=false,db,admin;
  t.after(async()=>{await db?.end();await admin?.end();if(started)execFileSync(path.join(bin,'pg_ctl'),['-D',data,'-m','immediate','-w','stop'],{stdio:'pipe'});await rm(dir,{recursive:true,force:true});});
  execFileSync(path.join(bin,'initdb'),['-D',data,'--username=fcos_test_bootstrap','--auth=trust','--no-locale','--encoding=UTF8'],{stdio:'pipe'});
@@ -176,7 +177,7 @@ test('existing client exhausts only bounded definitive pending; an unknown respo
 });
 
 test('actual credential-free operator CLI emits the exact parameterized intent and rejects arbitrary commands',async t=>{
- const dir=await mkdtemp('/private/tmp/fcos-bootstrap-cli-');t.after(()=>rm(dir,{recursive:true,force:true}));
+ const dir=await mkdtemp(path.join(tmpdir(),'fcos-bootstrap-cli-'));t.after(()=>rm(dir,{recursive:true,force:true}));
  const p=inputs().proof,proof=path.join(dir,'proof.json'),extra=path.join(dir,'extra.json');
  await writeFile(proof,JSON.stringify(p));await writeFile(extra,JSON.stringify({actionId:'dispatch_qualification'}));
  const args=['scripts/hosted-cutover-bootstrap.mjs','intent',proof,extra],options={cwd:root,encoding:'utf8',env:{PATH:process.env.PATH}};
