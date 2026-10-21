@@ -1,6 +1,6 @@
+import { originalFinancialBuilderSource } from './helpers/originalFinancialBuilderFixture.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import { financialFixture, ids, hash } from './xeroSupplierFinancialBucketPreservation.fixture.js';
 import { supplierDocumentSourceEvidence, supplierFinancialSourcePayload } from '../api/_xeroFinancialSync.js';
 import { evaluateSettledSupplierPaymentProof } from '../api/_xeroSettledSupplierPaymentProof.js';
@@ -175,7 +175,7 @@ test('public diagnostics omit entire private originals/provider identity and rev
 });
 
 test('new fixed wrapper shares the original builder without changing its complete payload or old nine-field evidence', async () => {
-  const path = new URL('../api/_xeroFinancialSync.js', import.meta.url), original = execFileSync('git', ['show', '2f4bca02e94105681dedf674985e052169602492:api/_xeroFinancialSync.js'], { encoding: 'utf8' });
+  const path = new URL('../api/_xeroFinancialSync.js', import.meta.url), original = originalFinancialBuilderSource();
   const text = original.replace(/from '([^']+)'/g, (all, name) => name.startsWith('.') ? `from '${new URL(name, path).href}'` : all)
     + '\nexport function originalPayload({parent,children,charges,buyers,productMappings,contacts,safetyContext}) { const mappingByKey=new Map(productMappings.map(row=>[`${row.direction}:${row.salesforce_product_id}`,row])); return stripClassification(buildSalesforceDocument(parent,"supplier",[...children,...charges],mappingByKey,buildXeroContactIndex(contacts),{...safetyContext,postingMode:"draft",documentFieldSnapshot:{buyers,lines:children,extras:charges,cutoff:XERO_FINANCIAL_CUTOFF}})); }';
   const old = await import(`data:text/javascript;base64,${Buffer.from(text).toString('base64')}`), f = financialFixture(), args = sourceArgs(f);

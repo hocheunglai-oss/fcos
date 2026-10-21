@@ -53,7 +53,8 @@
     "salesforce:hotfix:deploy": "node scripts/deploy-salesforce-schema-free-hotfix.mjs",
     "salesforce:hotfix:validate": "node scripts/deploy-salesforce-schema-free-hotfix.mjs --check-only",
     "salesforce:hotfix:mirror:verify": "node scripts/sync-salesforce-schema-free-hotfix-repository.mjs --check",
-    "salesforce:hotfix:mirror:publish": "node scripts/sync-salesforce-schema-free-hotfix-repository.mjs --publish"
+    "salesforce:hotfix:mirror:publish": "node scripts/sync-salesforce-schema-free-hotfix-repository.mjs --publish",
+    "test:original54": "node scripts/test-original54-private.mjs"
   },
   "dependencies": {
     "@fontsource-variable/ibm-plex-sans": "5.3.0",

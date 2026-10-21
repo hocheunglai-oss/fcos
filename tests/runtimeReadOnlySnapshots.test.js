@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import ts from 'typescript';
 import { isReadOnlyHedgeDeskAction } from '../api/_hedgeDeskReadOnly.js';
 import { requireDeploymentMutationAllowed } from '../api/_deploymentReadOnly.js';
 import { isReadOnlyMarketAction } from '../api/_readOnlyCiAccess.js';
@@ -154,8 +155,20 @@ test('Preview service rejects mutations and unknown actions before touching stor
 test('actual authenticated dispatcher exempts only classified reads and retains all module checks', async () => {
   const source = readFileSync(new URL('../api/functions/[name].js', import.meta.url), 'utf8');
   const access = source.match(/async function requireHandlerAccess\(name, req\) {[\s\S]*?\n}/)?.[0];
-  const dispatch = source.match(/requireDeploymentMutationAllowed\(handlerPolicy\?\.mutation && \([\s\S]*?\n        \)\);/)?.[0];
-  assert.ok(access && dispatch, 'Read the actual dispatcher and authorization boundary');
+  const parsed = ts.createSourceFile('dispatcher.js', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  const declarations = [], gates = [];
+  function visit(node) {
+    if (ts.isVariableStatement(node) && node.declarationList.declarations.some((item) => ts.isIdentifier(item.name) && item.name.text === 'deploymentMutation')) declarations.push(node.getText(parsed));
+    if (ts.isExpressionStatement(node) && ts.isCallExpression(node.expression)
+      && ts.isIdentifier(node.expression.expression) && node.expression.expression.text === 'requireDeploymentMutationAllowed'
+      && node.expression.arguments.length === 1 && ts.isIdentifier(node.expression.arguments[0]) && node.expression.arguments[0].text === 'deploymentMutation') gates.push(node.getText(parsed));
+    ts.forEachChild(node, visit);
+  }
+  visit(parsed);
+  assert.ok(access, 'Read the actual authorization boundary');
+  assert.equal(declarations.length, 1, 'Read the actual classified mutation declaration');
+  assert.equal(gates.length, 1, 'The actual classified result reaches the deployment gate');
+  const dispatch = `${declarations[0]}\n${gates[0]}`;
   await withDeployment({ VERCEL_ENV: 'preview' }, async () => {
     let allowed = true;
     const context = { profile, client: {} };

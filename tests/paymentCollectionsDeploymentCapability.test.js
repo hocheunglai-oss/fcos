@@ -114,11 +114,12 @@ test('server declares the same deployment restriction it enforces, including the
 
 test('AuthProvider fails closed for missing or malformed declarations and clears capability after auth failure or logout', async () => {
   const harness = reactHarness();
-  let response = { data: { user: { id: 'fixture', user_type: 'administrator' } } };
+  let sessionId = 'fixture';
+  let response = { data: { user: { id: 'fixture', user_type: 'administrator', active: true } } };
   let failure = false;
   let pause = false, finishRequest, authEvent;
   const supabase = { auth: {
-    getSession: async () => ({ data: { session: { user: { id: 'fixture' } } } }),
+    getSession: async () => ({ data: { session: { user: { id: sessionId } } } }),
     signOut: async () => {},
     onAuthStateChange: (callback) => { authEvent = callback; return { data: { subscription: { unsubscribe() {} } } }; },
   } };
@@ -148,12 +149,26 @@ test('AuthProvider fails closed for missing or malformed declarations and clears
     let auth = render();
     assert.equal(auth.deploymentMutationAllowed, false);
     for (const declaration of [undefined, {}, { mutationsAllowed: 'true' }, { mutationsAllowed: 1 }, { mutationsAllowed: false }, { mutationsAllowed: true }]) {
-      response = { data: { user: { id: 'fixture', user_type: 'administrator' }, deploymentCapabilities: declaration } };
+      response = { data: { user: { id: 'fixture', user_type: 'administrator', active: true }, deploymentCapabilities: declaration } };
       await auth.checkUserAuth();
       auth = render();
       assert.equal(auth.deploymentMutationAllowed, declaration?.mutationsAllowed === true);
       assert.equal(auth.hasCapability('financial_report_settings_manage'), true, 'administrator permissions do not override deployment capability');
     }
+    for (const user of [
+      { id: 'fixture', user_type: 'administrator' },
+      { id: 'fixture', user_type: 'administrator', active: false },
+      { id: 'other-session', user_type: 'administrator', active: true },
+    ]) {
+      response = { data: { user, deploymentCapabilities: { mutationsAllowed: true } } };
+      await auth.checkUserAuth();
+      auth = render();
+      assert.equal(auth.user, null, 'inactive or mismatched identities cannot inherit capabilities');
+      assert.equal(auth.deploymentMutationAllowed, false);
+    }
+    response = { data: { user: { id: 'fixture', user_type: 'administrator', active: true }, deploymentCapabilities: { mutationsAllowed: true } } };
+    await auth.checkUserAuth();
+    auth = render();
     pause = true;
     const pendingRefresh = auth.checkUserAuth({ showLoader: false });
     await new Promise((resolve) => setImmediate(resolve));
@@ -166,16 +181,17 @@ test('AuthProvider fails closed for missing or malformed declarations and clears
     assert.equal(auth.deploymentMutationAllowed, true);
     harness.runEffect(1);
     pause = true;
+    sessionId = 'replacement';
     authEvent('SIGNED_IN', { user: { id: 'replacement' } });
     auth = render();
     assert.equal(auth.deploymentMutationAllowed, false, 'session replacement clears the old user declaration immediately');
     await new Promise((resolve) => setTimeout(resolve, 5));
-    finishRequest({ data: { user: { id: 'replacement' }, deploymentCapabilities: { mutationsAllowed: false } } });
+    finishRequest({ data: { user: { id: 'replacement', active: true }, deploymentCapabilities: { mutationsAllowed: false } } });
     await new Promise((resolve) => setImmediate(resolve));
     pause = false;
     auth = render();
     assert.equal(auth.deploymentMutationAllowed, false);
-    response = { data: { user: { id: 'replacement' }, deploymentCapabilities: { mutationsAllowed: true } } };
+    response = { data: { user: { id: 'replacement', active: true }, deploymentCapabilities: { mutationsAllowed: true } } };
     failure = true;
     await auth.checkUserAuth();
     auth = render();

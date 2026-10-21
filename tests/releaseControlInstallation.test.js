@@ -1,3 +1,4 @@
+import { retainedQualitySteps } from './helpers/retainedQualitySteps.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
@@ -16,14 +17,7 @@ test('control installation retains frozen quality history and unchanged legacy c
   const consumer = installed.jobs['authenticated-browser'].steps.find(step => step.name === 'Require trusted authenticated-candidate evidence artifact');
   assert.equal(releaseHash(consumer.with.script), 'cdd837e4341a2b6890e4ed42fd2a883cd06fa849e8a52cc2af8725d4f73d0e92');
   assert.equal(consumer.if, "${{ vars.FCOS_HOSTED_READINESS_ENABLED != 'true' }}");
-  const legacyCode = installed.jobs['code-and-database'].steps.slice(1).map(step => {
-    const value = structuredClone(step);
-    if (value.if === "${{ vars.FCOS_HOSTED_READINESS_ENABLED != 'true' }}") delete value.if;
-    else value.if = value.if.replace("vars.FCOS_HOSTED_READINESS_ENABLED != 'true' && ", '');
-    if (value.run === 'python3 -B -m unittest tests.preview_email_coordination_ledger_test tests.release_coordination_ledger_test')
-      value.run = 'python3 -m unittest tests.preview_email_coordination_ledger_test';
-    return value;
-  });
+  const legacyCode = retainedQualitySteps(installed, { fixture72: true });
   assert.deepEqual(legacyCode, load(source).jobs['code-and-database'].steps);
   assert.match(current, /python3 -B -m unittest tests\.preview_email_coordination_ledger_test tests\.release_coordination_ledger_test/);
   const workflow = load(source), steps = workflow.jobs['code-and-database'].steps;

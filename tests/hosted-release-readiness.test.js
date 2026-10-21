@@ -1,3 +1,4 @@
+import { retainedQualitySteps } from './helpers/retainedQualitySteps.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -226,8 +227,7 @@ test('readiness publication precedes final approval and legacy scripts remain un
  const baseline=load(execFileSync('git',['show','b02a1220b0db06823f03be0f9150871728ec9204:.github/workflows/quality.yml'],{encoding:'utf8'}));
  const legacy=quality.jobs['authenticated-browser'].steps.find(step=>step.name==='Require trusted authenticated-candidate evidence artifact');
  assert.equal(digest(legacy.with.script),'cdd837e4341a2b6890e4ed42fd2a883cd06fa849e8a52cc2af8725d4f73d0e92');
- const code=quality.jobs['code-and-database'].steps.slice(1).map(step=>{const copy=structuredClone(step);if(copy.if=== "${{ vars.FCOS_HOSTED_READINESS_ENABLED != 'true' }}")delete copy.if;
-  else copy.if=copy.if.replace("vars.FCOS_HOSTED_READINESS_ENABLED != 'true' && ",'');return copy;});
+ const code=retainedQualitySteps(quality);
  assert.deepEqual(code,baseline.jobs['code-and-database'].steps);
  assert.ok(hosted.jobs.production.needs.includes('merge_readiness'));assert.match(hosted.jobs.production.if,/needs.merge_readiness.outputs.ready/);
  const job=hosted.jobs.merge_readiness;assert.equal(job.environment,undefined);assert.doesNotMatch(JSON.stringify(job),/secrets\./);

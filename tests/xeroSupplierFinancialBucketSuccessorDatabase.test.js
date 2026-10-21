@@ -44,7 +44,7 @@ async function suite(t,native){
   await transactionSuite(t,harness,native);
 }
 test('PGlite successor-v1 supplier financial bucket boundary',t=>suite(t,false));
-test('PostgreSQL17.11 successor-v1 real-role supplier financial boundary',t=>suite(t,true));
+test('native PostgreSQL successor-v1 real-role supplier financial boundary',t=>suite(t,true));
 
 async function transactionSuite(t,h,native){
  const {db}=h;

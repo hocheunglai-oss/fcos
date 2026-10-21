@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import {readFile,mkdtemp,writeFile,realpath} from 'node:fs/promises';
 import {createHash,randomUUID} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
 import net from 'node:net';
 import pg from 'pg';
 import {PGlite} from '@electric-sql/pglite';
@@ -13,16 +15,19 @@ export const privateTables=['xero_financial_sync_runs','xero_financial_sync_item
 const migrations=['20260827145608_xero_contact_sync.sql','20260829080726_xero_financial_sync.sql','20260923210832_xero_financial_selection_scope.sql','20260923213339_xero_payment_reference_link.sql','20260923222821_xero_grouped_preservation_link.sql','20260927175805_xero_issued_supplier_preservation_link.sql','20260927185526_xero_issued_petroleum_preservation_link.sql','20260927213024_xero_petroleum_inactive_source_ownership.sql','20260928033217_xero_issued_petroleum_attachment_preservation_v2.sql','20260928053229_xero_document_field_correction_journal.sql','20261004105022_xero_aggregate_supplier_preservation_v3.sql','20261004123026_xero_aggregate_supplier_component_literals_v3.sql','20261004135507_xero_settled_supplier_ledger_assert_v1.sql',migrationName];
 
 export async function financialDatabase(t,native){
-  let client,engine,connectOther;
+  let client,engine,connectOther,nativeRuntime=null;
   if(!native){
     engine=new PGlite();client={query:(sql,params)=>engine.query(sql,params),exec:sql=>engine.exec(sql)};
     t.after(()=>engine.close());
   }else{
-    const bin='/opt/homebrew/opt/postgresql@17/bin/',executable=await realpath(bin+'postgres');
-    const directory=await mkdtemp('/private/tmp/fcos-financial-bucket-pg17-');
+    const config=spawnSync('pg_config',['--bindir'],{encoding:'utf8'});
+    assert.equal(config.status,0,'Native PostgreSQL binaries are required; no simulated fallback');
+    assert.ok(path.isAbsolute(config.stdout.trim()),'PostgreSQL binary directory must be absolute');
+    const bin=await realpath(config.stdout.trim()),executable=await realpath(path.join(bin,'postgres'));
+    const directory=await mkdtemp(path.join(process.platform==='darwin'?'/private/tmp':tmpdir(),'fcos-financial-bucket-pg-'));
     const port=await new Promise((resolve,reject)=>{const s=net.createServer();s.on('error',reject);s.listen(0,'127.0.0.1',()=>{const p=s.address().port;s.close(e=>e?reject(e):resolve(p));});});
     const calls=[],clients=[];let started=false;
-    const run=(name,args,expected=0)=>{const at=new Date().toISOString(),result=spawnSync(bin+name,args,{encoding:'utf8'});calls.push({command:[bin+name,...args],at,exitCode:result.status,outputSha256:sha((result.stdout||'')+(result.stderr||''))});assert.equal(result.status,expected,result.stderr||result.stdout);return result.stdout;};
+    const run=(name,args,expected=0)=>{const at=new Date().toISOString(),command=path.join(bin,name),result=spawnSync(command,args,{encoding:'utf8'});calls.push({command:[command,...args],at,exitCode:result.status,outputSha256:sha((result.stdout||'')+(result.stderr||''))});assert.equal(result.status,expected,result.stderr||result.stdout);return result.stdout;};
     t.after(async()=>{
       for(const c of clients){await c.query('rollback').catch(()=>{});await c.end();}
       if(started){
@@ -31,13 +36,20 @@ export async function financialDatabase(t,native){
         assert.equal(ps.status,0);assert.ok(ps.stdout.trim().startsWith(executable+' -D '+directory+' '),'Only exact task-owned server may stop');
         run('pg_ctl',['-D',directory,'stop','-m','fast']);run('pg_ctl',['-D',directory,'status'],3);
       }
-      if(process.env.FCOS_FINANCIAL_BUCKET_OUTPUT_DIR)await writeFile(process.env.FCOS_FINANCIAL_BUCKET_OUTPUT_DIR+'/native-cleanup.json',JSON.stringify({directory,port,taskOwned:true,stopped:started,calls},null,2)+'\n');
+      if(process.env.FCOS_FINANCIAL_BUCKET_OUTPUT_DIR)await writeFile(process.env.FCOS_FINANCIAL_BUCKET_OUTPUT_DIR+'/native-cleanup.json',JSON.stringify({directory,port,taskOwned:true,stopped:started,nativeRuntime,calls},null,2)+'\n');
     });
-    assert.match(run('postgres',['--version']),/PostgreSQL\) 17\.11/);
+    const version=run('postgres',['--version']).trim(),match=/^postgres \(PostgreSQL\) (16|17)\.(\d+)(?:\s|$)/.exec(version);
+    assert.ok(match,'Native fixture supports PostgreSQL 16 and 17; record the actual version instead of claiming historical 17.11 evidence');
+    nativeRuntime={executable,version,major:Number(match[1]),minor:Number(match[2])};
     run('initdb',['-D',directory,'-U','postgres','--auth=trust','--no-instructions']);
     run('pg_ctl',['-D',directory,'-l',directory+'/server.log','-o',`-F -p ${port} -h '' -k ${directory} -c max_connections=10`,'start','-w']);started=true;
     connectOther=async()=>{const c=new pg.Client({host:directory,port,user:'postgres',database:'postgres',application_name:'fcos_financial_bucket_'+randomUUID()});await c.connect();clients.push(c);await c.query("set statement_timeout='30s';set lock_timeout='5s'");return c;};
-    client=await connectOther();assert.match((await client.query('show server_version')).rows[0].server_version,/^17\.11/);
+    client=await connectOther();
+    const serverVersion=(await client.query('show server_version')).rows[0].server_version;
+    const serverVersionNumber=Number((await client.query('show server_version_num')).rows[0].server_version_num);
+    assert.equal(Math.floor(serverVersionNumber/10000),nativeRuntime.major);
+    assert.equal(serverVersionNumber%10000,nativeRuntime.minor);
+    nativeRuntime={...nativeRuntime,serverVersion,serverVersionNumber};
   }
   let transaction=false;
   const exec=sql=>client.exec?client.exec(sql):client.query(sql);
@@ -51,7 +63,7 @@ export async function financialDatabase(t,native){
   const load=async name=>exec((await readFile(new URL('../supabase/migrations/'+name,import.meta.url),'utf8')).replace(/^create extension if not exists pgcrypto;$/m,''));
   await load('20260707163000_dispute_beta_workflow.sql');for(const name of migrations)await load(name);
   await exec("set statement_timeout='30s';set lock_timeout='5s'");
-  return{db:{exec,query},connectOther,setTransaction:value=>{transaction=value;}};
+  return{db:{exec,query},connectOther,nativeRuntime,setTransaction:value=>{transaction=value;}};
 }
 
 // Hash-pinned complete synthetic proofs from the reviewed pure implementation.

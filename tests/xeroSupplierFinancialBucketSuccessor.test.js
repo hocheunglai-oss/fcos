@@ -1,9 +1,10 @@
+import { originalFinancialBuilderSource } from './helpers/originalFinancialBuilderFixture.mjs';
 // Held successor-v1 candidate; original test/loader remain unchanged.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, writeFileSync, copyFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { ids, hash } from './xeroSupplierFinancialBucketPreservation.fixture.js';
 import { successorFinancialFixture as financialFixture, loadSuccessorFixture, successorCaseRecord, successorMetrics, SUCCESSOR_CASES } from './xeroSupplierFinancialBucketSuccessor.fixture.js';
 import { supplierDocumentSourceEvidence, supplierFinancialSourcePayload } from '../api/_xeroFinancialSync.js';
@@ -179,7 +180,7 @@ test('public diagnostics omit entire private originals/provider identity and rev
 });
 
 test('new fixed wrapper shares the original builder without changing its complete payload or old nine-field evidence', async () => {
-  const path = new URL('../api/_xeroFinancialSync.js', import.meta.url), original = execFileSync('git', ['show', '2f4bca02e94105681dedf674985e052169602492:api/_xeroFinancialSync.js'], { encoding: 'utf8' });
+  const path = new URL('../api/_xeroFinancialSync.js', import.meta.url), original = originalFinancialBuilderSource();
   const text = original.replace(/from '([^']+)'/g, (all, name) => name.startsWith('.') ? `from '${new URL(name, path).href}'` : all)
     + '\nexport function originalPayload({parent,children,charges,buyers,productMappings,contacts,safetyContext}) { const mappingByKey=new Map(productMappings.map(row=>[`${row.direction}:${row.salesforce_product_id}`,row])); return stripClassification(buildSalesforceDocument(parent,"supplier",[...children,...charges],mappingByKey,buildXeroContactIndex(contacts),{...safetyContext,postingMode:"draft",documentFieldSnapshot:{buyers,lines:children,extras:charges,cutoff:XERO_FINANCIAL_CUTOFF}})); }';
   const old = await import(`data:text/javascript;base64,${Buffer.from(text).toString('base64')}`), f = financialFixture(), args = sourceArgs(f);
@@ -225,7 +226,7 @@ for(const name of SUCCESSOR_CASES)test('successor-v1 exact synthetic '+name,()=>
 });
 
 test('successor-v1 loader rejects missing or altered bytes without original-loader or generator fallback',t=>{
- const directory=mkdtempSync('/private/tmp/fcos-successor-loader-');t.after(()=>rmSync(directory,{recursive:true,force:true}));
+ const directory=mkdtempSync(join(tmpdir(),'fcos-successor-loader-'));t.after(()=>rmSync(directory,{recursive:true,force:true}));
  const family=new URL('./fixtures/xero-supplier-financial-bucket-successor-v1-20261006/',import.meta.url);
  assert.throws(()=>loadSuccessorFixture('authorised-positive',{directory}));
  copyFileSync(new URL('successor-v1-manifest.json',family),join(directory,'successor-v1-manifest.json'));

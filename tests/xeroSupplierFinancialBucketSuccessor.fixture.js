@@ -16,7 +16,8 @@ export const SUCCESSOR_CASES = Object.freeze(['authorised-positive','paid-positi
 const sourceRoot = resolve(fileURLToPath(new URL('..',import.meta.url)));
 const defaultDirectory = fileURLToPath(new URL('./fixtures/'+SUCCESSOR_FAMILY+'/',import.meta.url));
 const sha = value => createHash('sha256').update(value).digest('hex');
-const SOURCE_COMPOSITION_SHA256 = '8be331ccd6a65e081de327fe41c337872503e9db28811e22a0cce15f07f9c26f';
+const PREVIOUS_SOURCE_COMPOSITION_SHA256 = '8be331ccd6a65e081de327fe41c337872503e9db28811e22a0cce15f07f9c26f';
+const SOURCE_COMPOSITION_SHA256 = 'a0545d4b883712811785a45673359c9cc7db7b7341b6065a4bca68e51ff4ff6c';
 const manifests = new Map();
 function manifest(directory=defaultDirectory) {
   const raw=readFileSync(resolve(directory,'successor-v1-manifest.json'));
@@ -27,12 +28,17 @@ function manifest(directory=defaultDirectory) {
   for(const k of ['synthetic','nonExecutablePreparation'])assert.equal(m[k],true);
   for(const k of ['recoveredOriginal','originalCaseEquivalence','currentBusinessCase','verificationExecuted','liveAcceptance'])assert.equal(m[k],false);
   assert.deepEqual(m.records.map(r=>r.caseName),SUCCESSOR_CASES);
-  const compositionRaw=readFileSync(resolve(sourceRoot,'tests/fixtures/final-application-supplier-source-bindings-v1.json'));
+  const previousCompositionRaw=readFileSync(resolve(sourceRoot,'tests/fixtures/final-application-supplier-source-bindings-v1.json'));
+  assert.equal(sha(previousCompositionRaw),PREVIOUS_SOURCE_COMPOSITION_SHA256,'Historical source composition must remain exact');
+  const compositionRaw=readFileSync(resolve(sourceRoot,'tests/fixtures/final-application-supplier-source-bindings-v2.json'));
   assert.equal(sha(compositionRaw),SOURCE_COMPOSITION_SHA256,'Exact final application source-composition binding required');
   const composition=JSON.parse(compositionRaw);
   assert.equal(composition.kind,'final_application_supplier_source_bindings_v1');
+  assert.equal(composition.schemaVersion,2);
+  assert.equal(composition.previousSourceCompositionSha256,sha(previousCompositionRaw));
+  for(const [file,expected]of Object.entries(JSON.parse(previousCompositionRaw).originalBindings))assert.equal(composition.originalBindings[file],expected,'Historical dependency binding changed');
   assert.equal(composition.historicalManifestSha256,SUCCESSOR_MANIFEST_SHA256);
-  assert.deepEqual(Object.keys(composition.sourceOverrides).sort(),['api/_runtimeCache.js','api/_supabaseConfig.js','config/fcosConnections.js','package-lock.json','package.json']);
+  assert.deepEqual(Object.keys(composition.sourceOverrides).sort(),["api/_runtimeCache.js", "api/_supabaseConfig.js", "config/fcosConnections.js", "package-lock.json", "package.json", "tests/xeroSupplierFinancialBucketDatabase.fixture.js", "tests/xeroSupplierFinancialBucketPreservation.test.js"]);
   assert.equal(composition.sevenRawFixtureRecordsUnchanged,true);assert.equal(composition.algorithmBodiesUnchanged,true);
   for(const key of ['generatorExecuted','privateFixtureRead','currentBusinessCase','financialAuthorityGranted'])assert.equal(composition[key],false);
   for(const [file,expected]of Object.entries(composition.originalBindings))assert.equal(expected,({...m.sourceBindings,...m.publicImportClosure})[file]);
