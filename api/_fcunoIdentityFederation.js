@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
-import { requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
+import { isDeploymentReadOnly, requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
 import { denyCiWithoutFederation, readOnlyCiProfile, validateCiFederation } from './_readOnlyCiAccess.js';
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 
@@ -377,7 +377,7 @@ function validateSessionBinding(binding, session, authUser, link, config) {
   requireUnrevokedSession(link, Date.parse(binding.provider_issued_at), Number(binding.credential_revision));
 }
 
-async function requireFederatedSession({ client, authUser, link, session, providerAccessToken, config, now, jwks, env }) {
+async function requireFederatedSession({ client, authUser, link, session, providerAccessToken, config, now, jwks }) {
   requireUnrevokedSession(link, session.authenticatedAt);
   const stored = await sessionBinding(client, session.sessionId);
   if (stored) {
@@ -412,7 +412,10 @@ async function requireFederatedSession({ client, authUser, link, session, provid
     provider_issued_at: new Date(payload.iat * 1000).toISOString(),
     provider_token_hash: createHash('sha256').update(`${config.issuer}\u0000${payload.jti}`).digest('hex'),
   };
-  requireDeploymentMutationAllowed(true, env);
+  // Recording verified sign-in evidence is authentication, not application write
+  // authority. Read-only deployments require an already-owned link and existing
+  // profile before this path; the signed proof, replay and revocation checks stay
+  // identical to Production. Never store the provider token itself.
   const { error } = await client.from('fcos_external_identity_sessions').insert(binding);
   if (error) {
     if (error.code !== '23505') throw error;
@@ -476,7 +479,12 @@ export async function enforceFcunoFederatedAccess({ client, authUser, profile = 
   if (link.source_active !== true || link.use_fcos !== true) {
     throw fcunoFederationError('FCUNO has not authorized this account for FCOS.', 403, 'FCUNO_IDENTITY_ACCESS_REVOKED');
   }
-  await requireFederatedSession({ client, authUser, link, session, providerAccessToken, config, now, jwks, env });
+  // Preview may authenticate existing accounts but cannot claim identity links
+  // or provision profiles, including indirectly through session-proof bootstrap.
+  if (isDeploymentReadOnly(env) && (!link.auth_user_id || !profile)) {
+    requireDeploymentMutationAllowed(true, env);
+  }
+  await requireFederatedSession({ client, authUser, link, session, providerAccessToken, config, now, jwks });
   if (!link.auth_user_id) {
     requireDeploymentMutationAllowed(true, env);
     const { data: claimed, error } = await client.from('fcos_external_identity_links')

@@ -60,6 +60,40 @@ test('FCUNO session proof is signed, session-bound, refresh-stable and independe
     assert.doesNotMatch(JSON.stringify(stored), new RegExp(initialToken.replaceAll('.', '\\.')));
     await assert.rejects(enforce({ accessToken: jwt(claims({ session_id: '44444444-4444-4444-8444-444444444444' })), providerAccessToken: initialToken }), { status: 401 });
   });
+  await t.test('fresh verified sign-in records only session proof in read-only deployments', async () => {
+    const configurations = [
+      { VERCEL_ENV: 'preview' },
+      { VERCEL_ENV: 'production', FCOS_ENABLE_READ_ONLY_CI: 'true' },
+    ];
+    for (const [index, configuration] of configurations.entries()) {
+      const freshSessionId = `${index + 1}1111111-1111-4111-8111-111111111111`;
+      const readonlyEnv = { ...env, ...configuration };
+      const proof = await provider({ jti: `readonly-existing-${index}` });
+      const freshClaims = claims({ session_id: freshSessionId });
+      await assert.rejects(enforce({ env: readonlyEnv, accessToken: jwt(freshClaims) }),
+        { code: 'FCUNO_IDENTITY_REAUTHENTICATION_REQUIRED' });
+      await assert.rejects(enforce({ env: readonlyEnv, accessToken: jwt(freshClaims),
+        providerAccessToken: await provider({ aud: 'other-app' }) }), { status: 401 });
+      assert.equal((await query('select count(*)::int n from public.fcos_external_identity_sessions')).rows[0].n, 1);
+      const result = await enforce({ env: readonlyEnv, accessToken: jwt(freshClaims), providerAccessToken: proof });
+      assert.equal(result.id, profile.id);
+      assert.equal(result.active, profile.active);
+      assert.equal(result.user_type, profile.user_type);
+      const stored = (await query('select * from public.fcos_external_identity_sessions where session_id=$1', [freshSessionId])).rows[0];
+      assert.equal(stored.auth_user_id, userId);
+      assert.equal(stored.subject, subject);
+      assert.equal(new Date(stored.authenticated_at).getTime(), now);
+      assert.equal(stored.credential_revision, 1);
+      assert.equal(JSON.stringify(stored).includes(proof), false);
+      await assert.rejects(enforce({ env: readonlyEnv,
+        accessToken: jwt(claims({ session_id: '99999999-9999-4999-8999-999999999999' })), providerAccessToken: proof }),
+      { status: 401 });
+      assert.equal((await query('select count(*)::int n from public.fcos_external_identity_sessions')).rows[0].n, 2);
+      assert.deepEqual((await query('select * from public.user_profiles where id=$1', [userId])).rows[0], profile);
+      assert.equal((await query('select auth_user_id from public.fcos_external_identity_links where subject=$1', [subject])).rows[0].auth_user_id, userId);
+      await query('delete from public.fcos_external_identity_sessions where session_id=$1', [freshSessionId]);
+    }
+  });
   await t.test('verified readonly sessions cannot bind an unowned link or provision a profile', async () => {
     const unboundSubject='77777777-7777-4777-8777-777777777777';
     await query(`insert into public.fcos_external_identity_links(provider,issuer,subject,auth_user_id,source_active,use_fcos,revision,credential_revision,revoked_before,email,email_verified,username,full_name,source_updated_at) values('fcuno',$1,$2,null,true,true,1,1,'1970-01-01','user@fcuno.example',true,'user','FCUNO User',now())`,[issuer,unboundSubject]);
