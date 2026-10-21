@@ -164,7 +164,8 @@ export function createXeroRecoveryHost(options = {}) {
         need(req.url === PATH, 'path_mismatch');
         need(['GET', 'POST'].includes(req.method), 'method_refused');
         phase = 'request_headers';
-        need(Array.isArray(req.rawHeaders) && req.rawHeaders.length <= 100, 'header_count_refused');
+        // rawHeaders contains one name and one value per field: allow 100 fields.
+        need(Array.isArray(req.rawHeaders) && req.rawHeaders.length <= 200, 'header_count_refused');
         const headers = new Map(); let headerBytes = 0;
         for (let i = 0; i < req.rawHeaders.length; i += 2) {
           const key = req.rawHeaders[i].toLowerCase(), value = req.rawHeaders[i + 1];

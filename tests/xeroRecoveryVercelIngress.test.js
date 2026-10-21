@@ -96,7 +96,7 @@ test('POST probe rejects real credential strings and forbidden or inexact framin
   }
   for(const [rawHeaders,reason] of [
     [undefined,'raw_headers_shape_refused'],[[...raw(postProbeHeaders),'odd'],'raw_headers_shape_refused'],
-    [[...raw(postProbeHeaders),...Array.from({length:51},(_,i)=>[`x-count-${i}`,marker]).flat()],'raw_header_count_exceeded'],
+    [[...raw(postProbeHeaders),...Array.from({length:101},(_,i)=>[`x-count-${i}`,marker]).flat()],'raw_header_count_exceeded'],
     [[...raw(postProbeHeaders),'Authorization',marker],'raw_header_duplicate_refused'],
     [[null,marker,...raw(postProbeHeaders)],'raw_header_name_refused'],[[...raw(postProbeHeaders),'x-value',{}],'raw_header_value_shape_refused'],
     [[...raw(postProbeHeaders),'x-value',`${marker}\r\n${marker}`],'raw_header_value_refused'],
@@ -111,6 +111,18 @@ test('POST probe rejects real credential strings and forbidden or inexact framin
   try{platform=await synthetic(handler,{method:'POST',path:VERCEL_INGRESS_PROBE_PATH,rawHeaders:raw(postProbeHeaders),body:marker});}finally{process.env.VERCEL=before;}
   assert.deepEqual(platform.body,probeRefusedBody('platform_context_refused'));assert.equal(platform.reads.body,0);
   assert.equal(calls,0);assert.deepEqual(logs,[]);
+});
+test('probe counts bounded header fields as name/value pairs and rejects the 101st field',async t=>{
+  environment(t);const handler=createVercelIngressProbe({target:target()});
+  for(const method of ['GET','POST'])for(const count of [51,100,101]){
+    const base=raw(method==='POST'?postProbeHeaders:ingressHeaders);
+    const rawHeaders=[...base,...Array.from({length:count-base.length/2},(_,i)=>['x-platform-forwarded-'+i,'safe']).flat()];
+    const response=await synthetic(handler,{method,path:VERCEL_INGRESS_PROBE_PATH,rawHeaders,...(method==='POST'?{body:'{}'}:{})});
+    assert.equal(response.status,count<=100?200:403);
+    if(count<=100){assert.equal(response.body.normalHttpsConsistency,true);assert.equal(response.body.executionAuthorityGranted,false);}
+    else assert.deepEqual(response.body,probeRefusedBody('raw_header_count_exceeded'));
+    assert.doesNotMatch(JSON.stringify(response.body),/safe|x-platform-forwarded/);
+  }
 });
 test('POST probe bounds exact body bytes, cancellation and a one-second stalled-body timeout',async t=>{
   environment(t);const handler=createVercelIngressProbe({target:target()}),options={method:'POST',path:VERCEL_INGRESS_PROBE_PATH,rawHeaders:raw(postProbeHeaders)};
@@ -129,15 +141,16 @@ test('valid synthetic GET and POST transport shapes retain count/size boundaries
   const headers={...ingressHeaders,...await credentials(c)},body=prepareXeroRecoveryStepRequest({planJson:c.planJson,step:'preflight',submissionId:randomUUID(),previousResultSha256:null}).requestJson;
   for(const method of ['GET','POST']){
     const base=raw({...headers,...(method==='POST'?{'content-type':'application/json','content-length':String(Buffer.byteLength(body))}:{})});
-    const atCountLimit=[...base,...Array.from({length:(100-base.length)/2},(_,i)=>[`x-extra-${i}`,'safe']).flat()];
+    const aboveOldRawLimit=[...base,...Array.from({length:(102-base.length)/2},(_,i)=>['x-forwarded-extra-'+i,'safe']).flat()];
+    const atCountLimit=[...base,...Array.from({length:(200-base.length)/2},(_,i)=>[`x-extra-${i}`,'safe']).flat()];
     const size=base.reduce((sum,value)=>sum+value.length,0)+'x-padding'.length;
     const atSizeLimit=[...base,'x-padding','p'.repeat(65536-size)];
-    for(const rawHeaders of [base,atCountLimit,atSizeLimit]){
+    for(const rawHeaders of [base,aboveOldRawLimit,atCountLimit,atSizeLimit]){
       const response=await synthetic(handler,{method,rawHeaders,...(method==='POST'?{body}:{})});
       assert.equal(response.status,403);assert.deepEqual(response.body,refusedBody);assert.ok(response.reads.path>0);assert.ok(response.reads.body>0);
     }
   }
-  assert.equal(calls,6);assert.deepEqual(logs.map(({kind,phase,reason})=>[kind,phase,reason]),Array.from({length:6},()=>['fcos_xero_recovery_host_failure_v1','github_jwks','jwks_response_refused']));
+  assert.equal(calls,8);assert.deepEqual(logs.map(({kind,phase,reason})=>[kind,phase,reason]),Array.from({length:8},()=>['fcos_xero_recovery_host_failure_v1','github_jwks','jwks_response_refused']));
 });
 test('each synthetic transport refusal retains its gate and logs only a fixed predicate code before downstream work',async t=>{
   environment(t);const logs=[];t.mock.method(console,'error',value=>logs.push(JSON.parse(value)));const c=compiled();let calls=0,clockReads=0;
@@ -146,7 +159,7 @@ test('each synthetic transport refusal retains its gate and logs only a fixed pr
   const changed=(key,value)=>base.map((entry,i)=>i%2&&base[i-1]===key?value:entry);
   const cases=[
     ['raw_headers_shape_refused',undefined],['raw_headers_shape_refused',{}],['raw_headers_shape_refused',[...base,'odd']],
-    ['raw_header_count_exceeded',[...base,...Array.from({length:51},(_,i)=>[`x-count-${i}`,marker]).flat()]],
+    ['raw_header_count_exceeded',[...base,...Array.from({length:101},(_,i)=>[`x-count-${i}`,marker]).flat()]],
     ['raw_header_name_refused',[null,marker,...base]],
     ['raw_header_name_refused',[{toLowerCase(){throw Object.assign(Error(marker),{code:marker,reason:marker});}},marker,...base]],
     ['raw_header_value_shape_refused',[...base,'x-value',new String(marker)]],

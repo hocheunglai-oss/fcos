@@ -49,7 +49,8 @@ function platform(target) {
 function headers(req) {
   need(Array.isArray(req.rawHeaders),'raw_headers_shape_refused');
   need(req.rawHeaders.length%2===0,'raw_headers_shape_refused');
-  need(req.rawHeaders.length<=100,'raw_header_count_exceeded');
+  // rawHeaders alternates names and values: 200 entries permit 100 fields.
+  need(req.rawHeaders.length<=200,'raw_header_count_exceeded');
   const values=new Map();let length=0;
   for(let i=0;i<req.rawHeaders.length;i+=2){let k;
     try{k=req.rawHeaders[i].toLowerCase();}catch{fail('raw_header_name_refused');}
@@ -93,7 +94,8 @@ function credentialFreeProbe(target) {
       need(actual.VERCEL==='1'&&actual.VERCEL_ENV==='preview'&&actual.VERCEL_TARGET_ENV===target.customEnvironment&&actual.VERCEL_PROJECT_ID===target.projectId
         &&validHost(actual.VERCEL_URL)&&/^dpl_[A-Za-z0-9]{1,100}$/.test(actual.VERCEL_DEPLOYMENT_ID||''),'platform_context_refused');
       const h=new Map();need(Array.isArray(req.rawHeaders),'raw_headers_shape_refused');need(req.rawHeaders.length%2===0,'raw_headers_shape_refused');
-      need(req.rawHeaders.length<=100,'raw_header_count_exceeded');let size=0;
+      // Match the recovery ingress's bounded 100-field budget (name/value pairs).
+      need(req.rawHeaders.length<=200,'raw_header_count_exceeded');let size=0;
       for(let i=0;i<req.rawHeaders.length;i+=2){let k;
         try{k=req.rawHeaders[i].toLowerCase();}catch{need(false,'raw_header_name_refused');}
         const v=req.rawHeaders[i+1];need(typeof v==='string','raw_header_value_shape_refused');need(!h.has(k),'raw_header_duplicate_refused');
