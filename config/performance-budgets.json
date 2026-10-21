@@ -18,7 +18,15 @@
   },
   "onDemandReconciliationCampaign": {
     "totalBytes": 36000,
-    "totalGzipBytes": 11000
+    "totalGzipBytes": 11000,
+    "excludedFromSavedIntegrityPortal": {
+      "portalEntry": "src/pages/XeroPortal.jsx",
+      "sourceBindings": {
+        "src/pages/XeroPortal.jsx": "1d14e8610f7bd3e55a1c91009001e3779729cb143d289636a0f9faa9f7f82249",
+        "src/components/xero/XeroFinancialSync.jsx": "55e8b44bb27ac462110388dd80d62d2d67c65e38d245905ee652a78beb6efd5e",
+        "src/components/xero/XeroReconciliationCampaign.jsx": "71b1439b971f64a97568c3488dbf768bb8d53832fd240bc1c4ec22c1a9ecc205"
+      }
+    }
   },
   "server": {
     "universalDispatcherLines": 19600,

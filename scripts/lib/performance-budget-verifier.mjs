@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
@@ -64,6 +65,34 @@ function isStaticallyReachable(manifest, roots, targets) {
     for (const importedKey of manifest[key]?.imports || []) pending.push(importedKey);
   }
   return false;
+}
+
+// The saved integrity portal intentionally excludes the retired interactive
+// campaign. Absence is valid only for its reviewed source and import census.
+async function campaignExcludedFromPortal(root, manifest, rule) {
+  if (!rule || rule.portalEntry !== 'src/pages/XeroPortal.jsx') return false;
+  const retired = ['src/components/xero/XeroFinancialSync.jsx', 'src/components/xero/XeroReconciliationCampaign.jsx'];
+  const expected = [rule.portalEntry, ...retired];
+  if (JSON.stringify(Object.keys(rule.sourceBindings || {}).sort()) !== JSON.stringify(expected.toSorted())) return false;
+  for (const name of expected) {
+    if (createHash('sha256').update(await readFile(path.join(root, name))).digest('hex') !== rule.sourceBindings[name]) return false;
+  }
+  const portal = manifest[rule.portalEntry];
+  if (!portal?.isDynamicEntry || !await exists(path.join(root, 'dist', portal.file))) return false;
+  if (Object.entries(manifest).some(([key, value]) =>
+    retired.includes(key) || [...(value.imports || []), ...(value.dynamicImports || [])].some(name => retired.includes(name)))) return false;
+  const pending = ['src'];
+  while (pending.length) {
+    const directory = pending.pop();
+    for (const item of await readdir(path.join(root, directory), { withFileTypes: true })) {
+      const name = `${directory}/${item.name}`;
+      if (item.isSymbolicLink()) return false;
+      if (item.isDirectory()) pending.push(name);
+      else if (/\.[cm]?[jt]sx?$/.test(item.name) && !retired.includes(name)
+        && /XeroFinancialSync|XeroReconciliationCampaign/.test(await readFile(path.join(root, name), 'utf8'))) return false;
+    }
+  }
+  return true;
 }
 
 export async function verifyPerformanceBudgets({
@@ -201,7 +230,9 @@ export async function verifyPerformanceBudgets({
         const lazy = entry?.isDynamicEntry === true && !entry.isEntry
           && Object.values(manifest).some(item => item.dynamicImports?.includes(entryKey))
           && !Object.values(manifest).some(item => item.imports?.includes(entryKey));
-        assertBudget(Boolean(asset && lazy), 'Reconciliation campaign must remain a separate dynamic entry without a static importer.');
+        const excluded = !entry && await campaignExcludedFromPortal(root, manifest, budgets.onDemandReconciliationCampaign.excludedFromSavedIntegrityPortal);
+        assertBudget(Boolean((asset && lazy) || excluded), 'Reconciliation campaign must remain a separate dynamic entry without a static importer, or be proven excluded from the saved integrity portal.');
+        if (excluded) clientAssets.reconciliationCampaignExclusion = { verified: true, bytes: 0, reason: 'Reviewed saved integrity portal excludes the retired campaign.' };
         if (asset && lazy) {
           const limit = budgets.onDemandReconciliationCampaign;
           assertBudget(asset.bytes <= limit.totalBytes, `On-demand reconciliation campaign is ${asset.bytes} bytes (budget ${limit.totalBytes}).`);

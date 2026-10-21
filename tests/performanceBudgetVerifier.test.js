@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -296,4 +297,32 @@ test('on-demand XLS writer enforces largest, total, and compressed limits', asyn
   assert.match(report.failures.join('\n'), /Largest on-demand XLS writer asset .* is 400/);
   assert.match(report.failures.join('\n'), /On-demand XLS writer is 600/);
   assert.match(report.failures.join('\n'), /Compressed on-demand XLS writer/);
+});
+
+
+test('saved read-only portal exclusion requires exact source, built portal and no campaign imports', async (t) => {
+  const portal = 'src/pages/XeroPortal.jsx';
+  const retired = ['src/components/xero/XeroFinancialSync.jsx', 'src/components/xero/XeroReconciliationCampaign.jsx'];
+  const sources = { [portal]: 'export default function XeroPortal() { return "Saved read-only integrity"; }',
+    [retired[0]]: 'const XeroReconciliationCampaign = lazy(() => import("./XeroReconciliationCampaign"));',
+    [retired[1]]: 'export default function XeroReconciliationCampaign() {}' };
+  const rule = { portalEntry: portal, sourceBindings: Object.fromEntries(Object.entries(sources).map(([name, source]) => [name, createHash('sha256').update(source).digest('hex')])) };
+  const root = await writeFixture({ ...defaultBudgets, onDemandReconciliationCampaign: { totalBytes: 100, totalGzipBytes: 100, excludedFromSavedIntegrityPortal: rule } });
+  t.after(() => rm(root, { recursive: true, force: true }));
+  for (const [name, source] of Object.entries(sources)) { await mkdir(path.dirname(path.join(root, name)), { recursive: true }); await writeFile(path.join(root, name), source); }
+  await mkdir(path.join(root, 'dist/.vite'));
+  const manifest = { 'index.html': { isEntry: true, file: 'assets/main.js', dynamicImports: [portal] }, [portal]: { isDynamicEntry: true, file: 'assets/main.js' } };
+  const save = () => writeFile(path.join(root, 'dist/.vite/manifest.json'), JSON.stringify(manifest));
+  await save();
+  let report = await verifyPerformanceBudgets({ root }); assert.deepEqual(report.failures, []); assert.equal(report.clientAssets.reconciliationCampaignExclusion.bytes, 0);
+  await writeFile(path.join(root, portal), sources[portal] + '// changed');
+  assert.match((await verifyPerformanceBudgets({ root })).failures.join('\n'), /Reconciliation campaign/);
+  await writeFile(path.join(root, portal), sources[portal]);
+  await writeFile(path.join(root, 'src/Unexpected.jsx'), 'import Sync from "./components/xero/XeroFinancialSync";');
+  assert.match((await verifyPerformanceBudgets({ root })).failures.join('\n'), /Reconciliation campaign/);
+  await rm(path.join(root, 'src/Unexpected.jsx'));
+  manifest['index.html'].imports = [retired[1]]; await save();
+  assert.match((await verifyPerformanceBudgets({ root })).failures.join('\n'), /Reconciliation campaign/);
+  delete manifest['index.html'].imports; delete manifest[portal]; await save();
+  assert.match((await verifyPerformanceBudgets({ root })).failures.join('\n'), /Reconciliation campaign/);
 });
