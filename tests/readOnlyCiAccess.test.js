@@ -72,8 +72,9 @@ test('the CI allowlist admits audited reads and denies financial, admin, email, 
   const profile = ciProfile();
   for (const handler of READ_ONLY_CI_HANDLERS) requireReadOnlyCiOperation(profile, handler);
   for (const handler of ['adminUserSave', 'variableChargesBuyerConfirm', 'hedgePhysicalSalesforceApply',
-    'marketReportAnalysis', 'dashboardAiSearch', 'marketIntradaySnapshotPreview', 'emailRouterBackgroundSync',
-    'collaborationAttachmentPrepare', 'workspacePreferencesSave', 'portalApplicationLaunch', 'futureReadEndpoint']) {
+    'marketBookContext', 'marketTraderWorkspace', 'marketTraderWorkspaceSave', 'marketReportAnalysis', 'dashboardAiSearch', 'marketIntradaySnapshotPreview', 'emailRouterBackgroundSync',
+    'collaborationAttachmentPrepare', 'workspacePreferencesSave', 'portalApplicationLaunch', 'futureReadEndpoint',
+    'dashboardNomBRead', 'dashboardNomBPolicySave', 'dashboardNomBAuditRead']) {
     assertDenied(() => requireReadOnlyCiOperation(profile, handler));
     // An accidental Administrator assignment or copied DB row cannot escape.
     assertDenied(() => requireReadOnlyCiOperation({ ...storedProfile, active: true }, handler));
@@ -130,6 +131,7 @@ test('every authenticated dispatcher enforces the CI guard and Markets skips exp
   assert.match(main, /requireReadOnlyCiOperation\(accessContext\?\.profile, name, body\)/);
   assert.match(wrapper, /requireReadOnlyCiOperation\(context\.profile, resolvedHandlerName, body/);
   assert.match(main, /readOnlyCi \? \[\] : await listPortalApplicationsForUser/);
-  assert.match(main, /if \(!readOnlyCi\) schedulePortalOutboxRetry/);
+  assert.match(main, /deploymentCapabilities\(process\.env, \{ readOnlyProfile: readOnlyCi \}\)/);
+  assert.match(main, /if \(deployment\.mutationsAllowed\) schedulePortalOutboxRetry/);
   assert.match(markets, /isReadOnlyCiProfile\(profile\)\s*\? \{ status: 'not_run', reason: 'read_only_identity' \}\s*: await reconcilePaperHedgeExpiry\(client\)/);
 });

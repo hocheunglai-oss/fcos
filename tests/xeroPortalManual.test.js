@@ -62,12 +62,11 @@ test('Xero Portal manual explains every critical write and review control', () =
   assert.deepEqual(xeroWrites.sort(), ['Apply exact payments', 'Apply selected', 'Create Xero draft bill', 'Run selected', 'Sync'].sort());
 });
 
-test('Xero Portal exposes the bilingual manual from both the header and tabs', async () => {
+test('saved-report view retains the complete bilingual manual component without exposing financial actions', async () => {
   const page = await readFile(new URL('../src/pages/XeroPortal.jsx', import.meta.url), 'utf8');
   const manual = await readFile(new URL('../src/components/xero/XeroPortalManual.jsx', import.meta.url), 'utf8');
-  assert.match(page, /setTab\('manual'\)/);
-  assert.match(page, /TabsTrigger value="manual">\{copy\.tabs\.manual\}<\/TabsTrigger>/);
-  assert.match(page, /<XeroPortalManual language=\{language\} onLanguageChange=\{setLanguage\} \/>/);
+  assert.match(page, /xeroIntegrityReport/);
+  assert.doesNotMatch(page, /xeroFinancialSyncApply|xeroPortalReceiptCreate/);
   assert.match(manual, /XERO_PORTAL_MANUAL_LANGUAGES\.map/);
   assert.match(manual, /Button-by-button reference/);
   assert.match(manual, /按鈕逐項參考/);

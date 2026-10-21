@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
 import { denyCiWithoutFederation, readOnlyCiProfile, validateCiFederation } from './_readOnlyCiAccess.js';
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 
@@ -376,7 +377,7 @@ function validateSessionBinding(binding, session, authUser, link, config) {
   requireUnrevokedSession(link, Date.parse(binding.provider_issued_at), Number(binding.credential_revision));
 }
 
-async function requireFederatedSession({ client, authUser, link, session, providerAccessToken, config, now, jwks }) {
+async function requireFederatedSession({ client, authUser, link, session, providerAccessToken, config, now, jwks, env }) {
   requireUnrevokedSession(link, session.authenticatedAt);
   const stored = await sessionBinding(client, session.sessionId);
   if (stored) {
@@ -411,6 +412,7 @@ async function requireFederatedSession({ client, authUser, link, session, provid
     provider_issued_at: new Date(payload.iat * 1000).toISOString(),
     provider_token_hash: createHash('sha256').update(`${config.issuer}\u0000${payload.jti}`).digest('hex'),
   };
+  requireDeploymentMutationAllowed(true, env);
   const { error } = await client.from('fcos_external_identity_sessions').insert(binding);
   if (error) {
     if (error.code !== '23505') throw error;
@@ -474,8 +476,9 @@ export async function enforceFcunoFederatedAccess({ client, authUser, profile = 
   if (link.source_active !== true || link.use_fcos !== true) {
     throw fcunoFederationError('FCUNO has not authorized this account for FCOS.', 403, 'FCUNO_IDENTITY_ACCESS_REVOKED');
   }
-  await requireFederatedSession({ client, authUser, link, session, providerAccessToken, config, now, jwks });
+  await requireFederatedSession({ client, authUser, link, session, providerAccessToken, config, now, jwks, env });
   if (!link.auth_user_id) {
+    requireDeploymentMutationAllowed(true, env);
     const { data: claimed, error } = await client.from('fcos_external_identity_links')
       .update({ auth_user_id: authUser.id, updated_at: new Date().toISOString() })
       .eq('id', link.id).is('auth_user_id', null).select().maybeSingle();
@@ -483,7 +486,10 @@ export async function enforceFcunoFederatedAccess({ client, authUser, profile = 
     if (!claimed) throw fcunoFederationError('This FCUNO identity was linked concurrently. Sign in again.', 409, 'FCUNO_IDENTITY_LINK_RACE');
     link.auth_user_id = authUser.id;
   }
-  if (!profile) await provisionZeroPermissionProfile(client, authUser, link);
+  if (!profile) {
+    requireDeploymentMutationAllowed(true, env);
+    await provisionZeroPermissionProfile(client, authUser, link);
+  }
   const { data: resolvedProfile, error: profileError } = await client.from('user_profiles')
     .select('id,email,full_name,user_type,active,use_type_defaults').eq('id', authUser.id).maybeSingle();
   if (profileError) throw profileError;

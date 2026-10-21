@@ -1,3 +1,4 @@
+import { operationalHome } from '@/lib/operationalHome';
 import { useEffect, useRef, useState } from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
 import { Boxes, Loader2, LockKeyhole, TriangleAlert } from 'lucide-react';
@@ -93,7 +94,8 @@ export default function Login() {
     const stateReturnTo = from
       ? `${from.pathname || '/'}${from.search || ''}${from.hash || ''}`
       : null;
-    const returnTo = safeLocalReturnTo(stateReturnTo) || federatedReturnTo || '/';
+    const requestedReturnTo = safeLocalReturnTo(stateReturnTo) || federatedReturnTo;
+    const returnTo = requestedReturnTo && requestedReturnTo !== '/' ? requestedReturnTo : operationalHome();
     return <Navigate to={returnTo} replace />;
   }
 

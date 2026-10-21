@@ -1,30 +1,27 @@
-import { execSync } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { APP_VERSION } from '../src/lib/appVersionMeta.js';
+import { APP_VERSION_HISTORY } from '../src/lib/appVersion.js';
+import { assertCurrentReleaseHistory } from './lib/app-version-history-guard.mjs';
+import { collectBuildProvenance, writeBuildReceipts } from './lib/build-provenance.mjs';
 
-const outputUrl = new URL('../public/app-version.json', import.meta.url);
-const outputPath = fileURLToPath(outputUrl);
+const cwd = fileURLToPath(new URL('../', import.meta.url));
 const builtAt = new Date().toISOString();
 
-function readGitCommit() {
-  try {
-    return execSync('git rev-parse HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
-  } catch {
-    return null;
-  }
-}
+assertCurrentReleaseHistory(APP_VERSION, APP_VERSION_HISTORY);
 
-const commit = process.env.VERCEL_GIT_COMMIT_SHA || readGitCommit();
+const provenance = collectBuildProvenance({ cwd });
+const commit = provenance.commit;
 const deploymentId = process.env.VERCEL_DEPLOYMENT_ID || null;
 const buildId = deploymentId || `${commit || APP_VERSION}-${builtAt}`;
 
-mkdirSync(dirname(outputPath), { recursive: true });
-writeFileSync(outputPath, `${JSON.stringify({
+const receipt = {
   version: APP_VERSION,
   buildId,
   commit,
   deploymentId,
   builtAt,
-}, null, 2)}\n`);
+  gitDirty: provenance.gitDirty,
+  provenance,
+};
+// Static JSON imports make the same receipt traceable in Node function packages.
+writeBuildReceipts({ cwd, receipt });

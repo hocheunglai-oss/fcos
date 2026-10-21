@@ -112,6 +112,7 @@ test('release gates scope credentials, enforce strict checks, and always clean p
     for (const key of ['FCOS_E2E_PASSWORD', 'FCOS_E2E_VERCEL_BYPASS', 'GITHUB_TOKEN']) assert.equal(call.env[key], undefined);
   }
   assert.equal(calls.find(call => call.args.includes('verify:migrations')).env.FCOS_REQUIRE_LIVE_MIGRATION_CHECK, '1');
+  assert.equal(calls.find(call => call.args.includes('build')).env.FCOS_REQUIRE_CLEAN_BUILD, '1');
   assert.equal(calls.find(call => call.args.includes('verify:performance')).env.FCOS_REQUIRE_SERVER_BUNDLES, '1');
   assert.ok(calls.some(call => call.args.includes('verify:compatibility')));
 });

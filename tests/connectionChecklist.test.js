@@ -17,6 +17,7 @@ import {
   sanitizeConnectionAttestation,
 } from '../src/lib/connectionChecklist.js';
 import { resolveSalesforceBrowserAuthentication } from '../scripts/fcos-connections.mjs';
+import { parseDeploymentArguments } from '../scripts/deploy-salesforce-schema-free-hotfix.mjs';
 
 const VERIFIED_AT = '2026-08-09T08:00:00.000Z';
 const EXPIRES_AT = '2026-08-10T08:00:00.000Z';
@@ -243,6 +244,39 @@ test('Salesforce promotions fail closed and enforce DEVEE, GitHub, QAT, Producti
   );
   assert.ok(
     source.indexOf("sharedPublication = mirror('--check')") < source.indexOf('const validation = validate(environment)'),
+    'Shared publication must succeed before QAT and Production promotion.',
+  );
+});
+
+test('Schema-free hotfix promotions fail closed and enforce DEVEE, GitHub, QAT, Production order', async () => {
+  const source = await readFile(new URL('../scripts/deploy-salesforce-schema-free-hotfix.mjs', import.meta.url), 'utf8');
+  assert.match(source, /display\?\.username === environment\.username/);
+  assert.match(source, /display\?\.connectedStatus !== 'Connected'/);
+  assert.match(source, /organization\?\.IsSandbox !== environment\.isSandbox/);
+  assert.match(source, /sync-salesforce-schema-free-hotfix-repository\.mjs/);
+  assert.equal(parseDeploymentArguments([], {}).completeOwnedTree, true);
+  assert.throws(() => parseDeploymentArguments(['--manifest', 'manifest/focused.xml'], {}), /validation-only/);
+  assert.throws(() => parseDeploymentArguments(['--schema-cutover'], {}), /schema-free/);
+  assert.match(source, /EXPECTED_ORDER = \['devee', 'qat', 'production'\]/);
+  assert.match(source, /writeDeveeSourceState/);
+  assert.match(source, /FULL_SALESFORCE_TEST_LEVEL/);
+  assert.match(source, /--source-dir', COMPLETE_SALESFORCE_SCOPE/);
+  assert.match(source, /'project', 'deploy', 'validate'/);
+  assert.match(source, /'project', 'deploy', 'quick'/);
+  assert.match(source, /'project', 'deploy', 'report', '--target-org', environment\.alias/);
+  assert.match(source, /--async/);
+  assert.match(source, /validationResumeDisposition/);
+  assert.match(source, /deploymentResumeDisposition/);
+  assert.match(source, /--schema-cutover/);
+  assert.match(source, /--schema-bootstrap/);
+  assert.doesNotMatch(source, /all-or-none-schema-bootstrap|org', 'assign', 'permset|ensureDataPermission/);
+  assert.match(source, /Salesforce source must use LF line endings/);
+  assert.ok(
+    source.indexOf('ensureDeployment(devee)') < source.indexOf('ensurePublication()'),
+    'DEVEE must be deployed successfully before shared publication.',
+  );
+  assert.ok(
+    source.indexOf('ensurePublication()') < source.indexOf('ensureValidation(qat)'),
     'Shared publication must succeed before QAT and Production promotion.',
   );
 });

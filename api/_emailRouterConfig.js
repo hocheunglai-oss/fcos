@@ -1,4 +1,4 @@
-import { DASHBOARD_AI_MODELS, DEFAULT_DASHBOARD_AI_MODEL, isAllowedDashboardAiModel } from './_dashboardAi.js';
+import { AUTO_AI_MODEL, AI_MODEL_SELECTIONS, isAllowedAiSelection, automaticRoutingFor } from './_aiModelRouting.js';
 import { currentEmailRouterMailbox, emailRouterProfilesById, sortEmailRouterPresetDestinations } from './_emailRouterCore.js';
 import { listEmailRouterRoutingFolders, saveEmailRouterRoutingFolders } from './_emailRouterFolders.js';
 import { listEmailRouterLearnedRoutes } from './_emailRouterLearning.js';
@@ -78,7 +78,7 @@ export async function emailRouterConfiguration(client) {
   const actionCounts = {};
   for (const row of actions.data || []) actionCounts[row.state] = (actionCounts[row.state] || 0) + 1;
   const profiles = await emailRouterProfilesById(client, (destinations.data || []).map((destination) => destination.user_profile_id));
-  const advisorSetting = settingValue(settings.data, 'advisor.model', { modelId: DEFAULT_DASHBOARD_AI_MODEL });
+  const advisorSetting = settingValue(settings.data, 'advisor.model', { modelId: AUTO_AI_MODEL });
   const enabledSetting = settingValue(settings.data, 'advisor.enabled', { enabled: true });
   return {
     mailbox,
@@ -177,8 +177,9 @@ export async function emailRouterConfiguration(client) {
     advisor: {
       enabled: enabledSetting.enabled !== false,
       learningEnabled: settingValue(settings.data, 'advisor.learning_enabled', { enabled: true }).enabled !== false,
-      modelId: isAllowedDashboardAiModel(advisorSetting.modelId) ? advisorSetting.modelId : DEFAULT_DASHBOARD_AI_MODEL,
-      models: DASHBOARD_AI_MODELS,
+      modelId: isAllowedAiSelection(advisorSetting.modelId) ? advisorSetting.modelId : AUTO_AI_MODEL,
+      models: AI_MODEL_SELECTIONS,
+      automaticRouting: automaticRoutingFor('email_routing', 'email_classification'),
       usage: usageTotals(usage.data),
       apiConfigured: Boolean(String(process.env.OPENAI_API_KEY || '').trim()),
     },
@@ -300,7 +301,7 @@ export async function saveEmailRouterConfiguration(client, profile, operation = 
   }
   if (operation.type === 'setting_save' && operation.key === 'advisor.model') {
     const modelId = operation.value?.modelId;
-    if (!isAllowedDashboardAiModel(modelId)) throw configError('Select a supported Email Router Advisor model.');
+    if (!isAllowedAiSelection(modelId)) throw configError('Select a supported Email Router Advisor model.');
   }
   if (operation.type === 'setting_save' && operation.key === 'advisor.learning_enabled' && typeof operation.value?.enabled !== 'boolean') {
     throw configError('Choose whether company-wide Email Router learning is enabled.');

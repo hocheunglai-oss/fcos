@@ -5,7 +5,8 @@ import { federationDatabase, userId } from './fcunoDatabaseFixture.js';
 
 const source = await readFile(new URL('../api/functions/[name].js', import.meta.url), 'utf8');
 function implementation(name, next) {
-  const start = source.indexOf(`async function ${name}(`), end = source.indexOf(`async function ${next}(`, start);
+  const start = source.indexOf(`async function ${name}(`); let end = source.indexOf(`async function ${next}(`, start);
+  if (end < 0) end = source.indexOf('\nasync function ', start + 1);
   assert.ok(start >= 0 && end > start);
   return source.slice(start, end);
 }
@@ -55,7 +56,7 @@ function fixture({ profileClient = null, initialProfile = null, generalManager =
     ADMINISTRATIVE_USER_TYPES: ['administrator', 'general_manager'], ADMIN_APP_MODULES: [], ADMIN_CAPABILITIES: [],
     REPORT_ARCHIVE_MODULE_ID: 'report_archive', REPORT_ARCHIVE_MANAGE_MODULE_ID: 'report_archive_manage',
     ensureReportArchiveManageModule: async () => {}, permissionCanView: () => false,
-    reportArchiveAccessLevel: () => 'none',
+    reportArchiveAccessLevel: () => 'none', loadEffectiveGroupAccess: async () => ({permissions:{},capabilities:{},groups:[],access_revision:1,grant_sources:{}}),
   };
   // Execute the production sanitizer, continuity checks, audit and persistence
   // together. Only provider/database dependencies are fixture implementations.
@@ -120,6 +121,34 @@ test('executed activation path preserves a concurrently projected identity in Po
   assert.equal(result.email, stored.email); assert.equal(result.full_name, stored.full_name);
 });
 
+test('activation-only request preserves a role changed before its initial server read', async (t) => {
+  const { query, client } = await federationDatabase(t);
+  await query("update user_profiles set active=false,user_type='viewer',use_type_defaults=false where id=$1", [userId]);
+  const stalePageProfile = (await query('select * from user_profiles where id=$1', [userId])).rows[0];
+  const { save, state } = fixture({ initialProfile: stalePageProfile, profileClient: client });
+  // A separate role edit completes after page load, before this save reads it.
+  await query("update user_profiles set user_type='administrator' where id=$1", [userId]);
+  const result = await save({ activationOnly: true, active: true, user_type: 'viewer' });
+  assert.deepEqual((await query('select active,user_type,use_type_defaults from user_profiles where id=$1', [userId])).rows[0],
+    { active: true, user_type: 'administrator', use_type_defaults: false });
+  assert.deepEqual(state.authWrites, [{ app_metadata: { user_type: 'administrator' } }]);
+  assert.equal(result.user_type, 'administrator');
+  assert.equal(state.audits[0].metadata.user_type, 'administrator');
+  assert.equal(state.permissions.length, 0);
+});
+
+test('activation-only omission cannot fall back to Viewer and malformed activation-only requests stop before writes', async () => {
+  const { save, state } = fixture({ initialProfile: { id: 'local-user', email: 'user@fcuno.example', full_name: 'FCUNO User', active: false, user_type: 'administrator', use_type_defaults: false } });
+  assert.equal((await save({ activationOnly: true, active: true, user_type: undefined })).user_type, 'administrator');
+  assert.equal(state.profile.user_type, 'administrator');
+  assert.deepEqual(state.authWrites[0], { app_metadata: { user_type: 'administrator' } });
+  const before = state.authWrites.length;
+  for (const patch of [{ activationOnly: 'true', active: false }, { activationOnly: true, active: undefined }, { activationOnly: true, id: null, password: 'fixture-password', active: true }]) {
+    await assert.rejects(save(patch), { code: 'FCOS_APPLICATION_ACCESS_INVALID' });
+  }
+  assert.equal(state.authWrites.length, before);
+});
+
 test('permissions-only save conflicts safely when activation changes concurrently', async (t) => {
   const { query, client } = await federationDatabase(t);
   await query("update user_profiles set active=false,user_type='viewer',use_type_defaults=false where id=$1", [userId]);
@@ -161,6 +190,8 @@ test('the administrator entrypoint and desktop form expose local application act
   const admin = await readFile(new URL('../src/pages/AdminControl.jsx', import.meta.url), 'utf8');
   assert.match(implementation('adminUserSave', 'adminUserDelete'), /requireAdministrator\(req\)/);
   assert.match(admin, /FCOS application access/);
+  assert.match(admin, /activationOnly: true, active: currentPerson\.active !== true/);
+  assert.doesNotMatch(admin.slice(admin.indexOf('const toggleFcosAccess'), admin.indexOf('const openIdentity')), /user_type:/);
   assert.doesNotMatch(admin, /Managed in FCUNO/);
   assert.match(admin, /Identity is read-only from FCUNO/);
 });

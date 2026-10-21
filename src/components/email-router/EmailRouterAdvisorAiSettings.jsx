@@ -65,9 +65,9 @@ export default function EmailRouterAdvisorAiSettings() {
   return (
     <AiModelSettingsCard
       title="Email Router Advisor"
-      description="Select the model used to recommend Forward or Redirect, ordered recipients, and post-action filing. Recommendations never send or move email without a user action."
+      description="Choose automatic routing or a manual model. Recommendations require user action to send or move email."
       icon={Sparkles}
-      modelLabel="Routing Advisor model"
+      modelLabel="Routing Advisor AI selection"
       models={models}
       selectedModelId={modelId}
       savedModelId={configuration?.advisor?.modelId || ''}
@@ -83,6 +83,7 @@ export default function EmailRouterAdvisorAiSettings() {
       onSave={save}
       onRefresh={load}
       updatedAt={modelSetting?.updatedAt}
+      automaticRouting={configuration?.advisor?.automaticRouting}
       privacyNote="Only the opened message's minimum live text and opaque routing choices are sent. Confirmed learning stores protected fingerprints and directory references, never message or recipient content."
     />
   );

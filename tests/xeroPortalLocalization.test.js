@@ -40,15 +40,13 @@ test('Traditional Chinese UI uses the same critical labels as the manual', () =>
   assert.equal(copy.receipts.createBill, '建立 Xero 草稿供應商帳單');
 });
 
-test('Xero Portal owns one persisted language and passes it to every lazy workspace', async () => {
+test('saved-report portal removes financial workspaces while retained bilingual components remain available', async () => {
   const page = await readFile(new URL('../src/pages/XeroPortal.jsx', import.meta.url), 'utf8');
   const financial = await readFile(new URL('../src/components/xero/XeroFinancialSync.jsx', import.meta.url), 'utf8');
   const manual = await readFile(new URL('../src/components/xero/XeroPortalManual.jsx', import.meta.url), 'utf8');
 
-  assert.match(page, /localStorage\.getItem\(XERO_PORTAL_LANGUAGE_STORAGE_KEY\)/);
-  assert.match(page, /localStorage\.setItem\(XERO_PORTAL_LANGUAGE_STORAGE_KEY, language\)/);
-  assert.match(page, /<XeroFinancialSync portalStatus=\{status\} language=\{language\} \/>/);
-  assert.match(page, /<XeroPortalManual language=\{language\} onLanguageChange=\{setLanguage\} \/>/);
+  assert.match(page, /xeroIntegrityReport/);
+  assert.doesNotMatch(page, /<XeroFinancialSync|xeroPortalConnectStart|xeroFinancialPaymentApply/);
   assert.match(financial, /xeroPortalUiCopy\(language\)/);
   assert.match(manual, /controlledLanguage/);
 });

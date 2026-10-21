@@ -675,7 +675,9 @@ public class StemLineItemTriggerHandler {
         Set<Id> oldSupplierIds = new Set<Id>();
         Set<Id> stemIds = new Set<Id>();
         for(STEM_Line_Item__c stemLineItem : stemLineItems){
-            if(stemLineItem.Payment_Term__c != oldStemLineItemMap.get(stemLineItem.Id).Payment_Term__c && oldStemLineItemMap.get(stemLineItem.Id).Payment_Term__c == 'Deposit'){
+            if((stemLineItem.Payment_Term__c != oldStemLineItemMap.get(stemLineItem.Id).Payment_Term__c 
+                || stemLineItem.Cancelled__c != oldStemLineItemMap.get(stemLineItem.Id).Cancelled__c)
+                && oldStemLineItemMap.get(stemLineItem.Id).Payment_Term__c == 'Deposit'){
                 supplierIds.add(stemLineItem.Original_Supplier__c);
                 stemIds.add(stemLineItem.STEM__c);
                 oldSupplierIds.add(oldStemLineItemMap.get(stemLineItem.Id).Original_Supplier__c);

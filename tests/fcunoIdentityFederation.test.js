@@ -138,6 +138,39 @@ function federationClient(link, profile) {
   };
 }
 
+function trackedFederationClient(link, profile) {
+  const writes = [];
+  return {
+    writes,
+    from(table) {
+      if (table === 'fcos_external_identity_links') {
+        const query = {
+          select() { return query; },
+          eq() { return query; },
+          is() { return query; },
+          maybeSingle: async () => ({ data: link, error: null }),
+          update() { writes.push('identity_link_claim'); return query; },
+        };
+        return query;
+      }
+      if (table === 'user_profiles') {
+        const query = {
+          select() { return query; },
+          eq() { return query; },
+          maybeSingle: async () => ({ data: profile, error: null }),
+          upsert(row) {
+            writes.push('profile_provision');
+            profile = { ...row };
+            return { error: null };
+          },
+        };
+        return query;
+      }
+      throw new Error(`Unexpected table ${table}`);
+    },
+  };
+}
+
 function syncClient() {
   const state = { transaction: null, link: null, audit: [] };
   return {
@@ -328,6 +361,19 @@ test('FCUNO revocation timestamp rejects an otherwise active session issued befo
     }),
     (error) => error.code === 'FCUNO_IDENTITY_SESSION_REVOKED' && error.status === 401,
   );
+});
+
+test('unproved federated sessions cannot bind or provision in Preview, read-only or Production', async () => {
+  const authUser = { id:'24b02cff-beb0-444c-a80c-d539a70b5840', email:'user@fcuno.example', identities:[{provider:'custom:fcuno',provider_id:'fcuno-user-1'}] };
+  const linked = { id:'a8c3cbfd-5662-40b4-9a51-bbbd5170e357',auth_user_id:authUser.id,source_active:true,use_fcos:true,email:authUser.email,full_name:'FCUNO User' };
+  const profile={id:authUser.id,email:authUser.email,active:true};
+  for(const configuration of [{VERCEL_ENV:'preview'},{FCOS_ENABLE_READ_ONLY_CI:'true'},{VERCEL_ENV:'production'}]){
+    for(const [link,currentProfile] of [[{...linked,auth_user_id:null},profile],[linked,null],[linked,profile]]){
+      const client=trackedFederationClient(link,currentProfile);
+      await assert.rejects(enforceFcunoFederatedAccess({client,authUser,profile:currentProfile,env:{FCOS_ENABLE_FCUNO_FEDERATION:'true',FCUNO_IDENTITY_ISSUER:issuer,...configuration}}),{status:401,code:'FCUNO_IDENTITY_REAUTHENTICATION_REQUIRED'});
+      assert.deepEqual(client.writes,[]);
+    }
+  }
 });
 
 test('FCOS uses the custom FCUNO OIDC provider behind public migration flags and enforces federation at server boundaries', async () => {

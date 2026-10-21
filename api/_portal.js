@@ -1,5 +1,6 @@
 import { importPKCS8, SignJWT } from 'jose';
 import { randomUUID } from 'node:crypto';
+import { isDeploymentReadOnly, requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
 
 const ASSERTION_ALGORITHM = 'ES256';
 const ASSERTION_LIFETIME_SECONDS = 60;
@@ -398,7 +399,10 @@ export async function listPortalApplicationsForUser({
   env = process.env,
 }) {
   const catalog = await loadPortalCatalog(client);
-  const reconciled = await reconcilePortalEntitlementsForProfile(client, profile, null, { catalog });
+  const readOnly = isDeploymentReadOnly(env);
+  const reconciled = readOnly
+    ? await loadUserEntitlements(client, profile.id)
+    : await reconcilePortalEntitlementsForProfile(client, profile, null, { catalog });
   const entitlementMap = new Map(reconciled.map((row) => [row.application_id, row]));
   const hasFcosAccess = ['administrator', 'general_manager'].includes(profile.user_type)
     || Object.values(moduleAccess || {}).some((allowed) => allowed === true || allowed === 'read' || allowed === 'full');
@@ -435,6 +439,7 @@ export async function listPortalApplicationsForUser({
     const statusBlockingReason = application.status === 'active'
       ? null
       : (application.status_message || 'Application unavailable.');
+    const deploymentBlockingReason = readOnly ? 'Application launch is unavailable in this read-only environment.' : null;
     return [{
       id: application.id,
       name: application.name,
@@ -447,8 +452,8 @@ export async function listPortalApplicationsForUser({
       roleLabel: roleLabel(application, entitlement.effective_role_id),
       accessSource: entitlement.effective_source,
       status: application.status,
-      available: !configurationIssue && !syncBlockingReason && !statusBlockingReason,
-      blockingReason: configurationIssue || syncBlockingReason || statusBlockingReason,
+      available: !deploymentBlockingReason && !configurationIssue && !syncBlockingReason && !statusBlockingReason,
+      blockingReason: deploymentBlockingReason || configurationIssue || syncBlockingReason || statusBlockingReason,
       syncStatus: entitlement.sync_status,
       revision: entitlement.revision,
     }];
@@ -1114,6 +1119,7 @@ export async function processPortalOutbox({
   env = process.env,
   fetchImpl = fetch,
 }) {
+  requireDeploymentMutationAllowed(true, env);
   const boundedLimit = Math.max(1, Math.min(Number(limit) || 20, 50));
   const now = new Date().toISOString();
   const staleLockBefore = new Date(Date.now() - OUTBOX_STALE_LOCK_MS).toISOString();

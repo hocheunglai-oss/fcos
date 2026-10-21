@@ -1,50 +1,55 @@
-import { useState } from 'react';
-import { format, isValid, parse } from 'date-fns';
-import { Calendar as CalendarIcon } from 'lucide-react';
+import { X } from 'lucide-react';
 import { Input } from '@/components/ui/input';
-import { Calendar } from '@/components/ui/calendar';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { cn } from '@/lib/utils';
 
-const ISO_FORMAT = 'yyyy-MM-dd';
-const DISPLAY_FORMAT = 'dd/MM/yyyy';
+const ISO_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 
-function toDate(value) {
-  if (!value) return undefined;
-  const parsed = parse(String(value).slice(0, 10), ISO_FORMAT, new Date());
-  return isValid(parsed) ? parsed : undefined;
+function normalizeIsoDate(value) {
+  const candidate = typeof value === 'string' ? value.slice(0, 10) : '';
+  const match = ISO_DATE_PATTERN.exec(candidate);
+  if (!match) return '';
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year
+    && date.getUTCMonth() === month - 1
+    && date.getUTCDate() === day
+    ? candidate
+    : '';
 }
 
-export default function BrokerDatePicker({ value, onChange, placeholder, ...props }) {
-  const [open, setOpen] = useState(false);
-  const selectedDate = toDate(value);
+export default function BrokerDatePicker({
+  value,
+  onChange,
+  placeholder,
+  className,
+  disabled = false,
+  'aria-label': ariaLabel,
+  ...props
+}) {
+  const isoValue = normalizeIsoDate(value);
+  const clearLabel = ariaLabel ? `Clear ${ariaLabel}` : 'Clear date';
 
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <div className="relative">
-          <Input
-            {...props}
-            readOnly
-            value={selectedDate ? format(selectedDate, DISPLAY_FORMAT) : ''}
-            placeholder={placeholder}
-            className="cursor-pointer pr-9"
-          />
-          <CalendarIcon className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        </div>
-      </PopoverTrigger>
-      <PopoverContent align="start" className="w-auto p-0">
-        <Calendar
-          mode="single"
-          selected={selectedDate}
-          defaultMonth={selectedDate}
-          onSelect={date => {
-            if (!date) return;
-            onChange(format(date, ISO_FORMAT));
-            setOpen(false);
-          }}
-          initialFocus
-        />
-      </PopoverContent>
-    </Popover>
-  );
+  return <div className="relative">
+    <Input
+      {...props}
+      type="date"
+      value={isoValue}
+      onChange={(event) => onChange?.(event.target.value)}
+      placeholder={placeholder}
+      disabled={disabled}
+      aria-label={ariaLabel}
+      className={cn('pr-10', className)}
+    />
+    {isoValue && !disabled ? <button
+      type="button"
+      className="absolute right-1 top-1/2 z-10 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+      aria-label={clearLabel}
+      onClick={() => onChange?.('')}
+    >
+      <X className="h-3.5 w-3.5" aria-hidden="true" />
+    </button> : null}
+  </div>;
 }

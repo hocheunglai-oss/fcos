@@ -60,6 +60,19 @@ test('FCUNO session proof is signed, session-bound, refresh-stable and independe
     assert.doesNotMatch(JSON.stringify(stored), new RegExp(initialToken.replaceAll('.', '\\.')));
     await assert.rejects(enforce({ accessToken: jwt(claims({ session_id: '44444444-4444-4444-8444-444444444444' })), providerAccessToken: initialToken }), { status: 401 });
   });
+  await t.test('verified readonly sessions cannot bind an unowned link or provision a profile', async () => {
+    const unboundSubject='77777777-7777-4777-8777-777777777777';
+    await query(`insert into public.fcos_external_identity_links(provider,issuer,subject,auth_user_id,source_active,use_fcos,revision,credential_revision,revoked_before,email,email_verified,username,full_name,source_updated_at) values('fcuno',$1,$2,null,true,true,1,1,'1970-01-01','user@fcuno.example',true,'user','FCUNO User',now())`,[issuer,unboundSubject]);
+    for(const configuration of [{VERCEL_ENV:'preview'},{FCOS_ENABLE_READ_ONLY_CI:'true'}]){
+      const readonlyEnv={...env,...configuration};
+      assert.equal((await enforce({env:readonlyEnv})).id,userId);
+      await assert.rejects(enforce({env:readonlyEnv,authUser:{...authUser,identities:[{provider:'custom:fcuno',provider_id:unboundSubject}]},accessToken:jwt(claims({session_id:'88888888-8888-4888-8888-888888888888'})),providerAccessToken:await provider({sub:unboundSubject,jti:'readonly-unbound'})}),{status:403,code:'FCOS_DEPLOYMENT_READ_ONLY'});
+      assert.equal((await query('select auth_user_id from public.fcos_external_identity_links where subject=$1',[unboundSubject])).rows[0].auth_user_id,null);
+      await assert.rejects(enforce({env:readonlyEnv,profile:null}),{status:403,code:'FCOS_DEPLOYMENT_READ_ONLY'});
+      assert.equal((await query('select count(*)::int n from public.fcos_external_identity_sessions')).rows[0].n,1);
+      assert.equal((await query('select count(*)::int n from public.user_profiles')).rows[0].n,1);
+    }
+  });
   await t.test('normal refresh uses existing proof even after retained provider token expires', async () => {
     assert.equal((await enforce({ accessToken: jwt(claims({ iat: seconds + 3600 })), now: now + 3600_000,
       providerAccessToken: initialToken })).active, true);

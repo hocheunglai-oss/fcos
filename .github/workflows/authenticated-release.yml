@@ -38,8 +38,8 @@ jobs:
   authenticated-candidate:
     needs: require-default-branch-dispatch
     runs-on: ubuntu-latest
-    # This protected environment must require a human reviewer before any
-    # environment secret is exposed. Its name is deliberately fixed here.
+    # The environment permits only main and has no per-run reviewer or wait.
+    # Keep credentials scoped here; protected-branch and candidate checks remain.
     environment: fcos-ci-readonly
     permissions:
       contents: read

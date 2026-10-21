@@ -154,7 +154,8 @@ export default function SupplierCreditStatement({ accountId, entityType = 'accou
     supplierIds: Array.isArray(filters?.supplierIds) ? filters.supplierIds : [],
     portIds: Array.isArray(filters?.portIds) ? filters.portIds : [],
     countryCodes: Array.isArray(filters?.countryCodes) ? filters.countryCodes : [],
-  }), [filters?.accountIds, filters?.countryCodes, filters?.portIds, filters?.supplierIds]);
+    excludedCountryCodes: Array.isArray(filters?.excludedCountryCodes) ? filters.excludedCountryCodes : [],
+  }), [filters?.accountIds, filters?.countryCodes, filters?.excludedCountryCodes, filters?.portIds, filters?.supplierIds]);
 
   const load = useCallback(async ({ cursor = null, history = [], force = false } = {}) => {
     if (!active || !accountId) return;

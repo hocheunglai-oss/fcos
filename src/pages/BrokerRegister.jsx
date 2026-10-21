@@ -1,3 +1,4 @@
+import { usePageState } from '@/hooks/usePageState';
 import { useEffect, useMemo, useState } from 'react';
 import { Download, Loader2, RefreshCw } from 'lucide-react';
 import { endOfQuarter, format, startOfQuarter, subQuarters } from 'date-fns';
@@ -150,17 +151,17 @@ export default function BrokerRegister() {
   const [paymentDataReliability, setPaymentDataReliability] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [search, setSearch] = useState('');
-  const [selectedTypes, setSelectedTypes] = useState([]);
-  const [selectedBrokerNames, setSelectedBrokerNames] = useState([]);
-  const [selectedHiddenBrokerFlags, setSelectedHiddenBrokerFlags] = useState([]);
-  const [fromDate, setFromDate] = useState(() => initialDateRange.from);
-  const [toDate, setToDate] = useState(() => initialDateRange.to);
+  const [search, setSearch] = usePageState('broker-register:search', '');
+  const [selectedTypes, setSelectedTypes] = usePageState('broker-register:selectedTypes', []);
+  const [selectedBrokerNames, setSelectedBrokerNames] = usePageState('broker-register:selectedBrokerNames', []);
+  const [selectedHiddenBrokerFlags, setSelectedHiddenBrokerFlags] = usePageState('broker-register:selectedHiddenBrokerFlags', []);
+  const [fromDate, setFromDate] = usePageState('broker-register:fromDate', () => initialDateRange.from);
+  const [toDate, setToDate] = usePageState('broker-register:toDate', () => initialDateRange.to);
   const [selectedStemId, setSelectedStemId] = useState(null);
   const [exchangeRate, setExchangeRate] = useState(null);
   const [exchangeRateLoading, setExchangeRateLoading] = useState(false);
   const [exchangeRateError, setExchangeRateError] = useState(null);
-  const [showCny, setShowCny] = useState(false);
+  const [showCny, setShowCny] = usePageState('broker-register:showCny', false);
   const [excludedRowIds, setExcludedRowIds] = useState([]);
 
   const loadRows = async (options = {}) => {
@@ -646,6 +647,7 @@ export default function BrokerRegister() {
         actions={(
           <>
           <PaymentDataReliabilityBadge excludedCount={paymentDataReliability?.excludedLegacyRecordCount} />
+          <Button variant="ghost" onClick={() => { setSearch(''); setSelectedTypes([]); setSelectedBrokerNames([]); setSelectedHiddenBrokerFlags([]); setFromDate(initialDateRange.from); setToDate(initialDateRange.to); }}>Reset filters</Button>
           <Button type="button" size="sm" variant={showCny ? 'default' : 'outline'} onClick={() => setShowCny(value => !value)} className="gap-2 w-fit">
             CNY
           </Button>

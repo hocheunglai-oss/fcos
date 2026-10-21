@@ -52,13 +52,16 @@ test('executed AuthProvider rejects late auth after logout and after a newer acc
   sessionUser = 'user-b';
   const newest = auth.checkUserAuth();
   await Promise.resolve();
-  pending[1]({ data: { user: { id: 'user-b', active: true }, moduleAccess: { dashboard: true } } });
+  pending[1]({ data: { user: { id: 'user-b', active: true }, moduleAccess: { dashboard: true }, deploymentCapabilities: { mutationsAllowed: true }, permissionGroups: [{id:'group-b'}], accessRevision:7, grantSources:{dashboard:['group-b']} } });
   await newest;
   pending[0]({ data: { user: { id: 'user-a', active: true }, moduleAccess: { admin: true } } });
   assert.equal((await old).stale, true);
   assert.equal(states[0].id, 'user-b');
+  assert.deepEqual(states[11], { permissionGroups: [{id:'group-b'}], accessRevision:7, grantSources:{dashboard:['group-b']} }, 'only the current verified user supplies effective group provenance');
+  assert.deepEqual(states[12], { mutationsAllowed: true }, 'only verified current-user response supplies deployment capability');
   assert.equal(clientSessionState().ownerId, 'user-b');
   const beforeLogout = auth.checkUserAuth();
+  assert.equal(states[12], null, 'a fresh authorization check immediately invalidates deployment mutation eligibility');
   await Promise.resolve();
   let finishSignOut;
   supabase.auth.signOut = () => new Promise((resolve) => { finishSignOut = resolve; });
@@ -92,6 +95,8 @@ test('executed AuthProvider rejects late auth after logout and after a newer acc
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(states[0], null);
   assert.equal(states[9].type, 'auth_required');
+  assert.equal(states[12], null, 'revoked federation cannot retain deployment capability');
+  assert.deepEqual(states[11], { permissionGroups: [], accessRevision:null, grantSources:{} }, 'revoked federation clears effective group provenance');
   assert.equal(stored.get('fcos:fcuno-force-reauth'), 'true');
   for (const user of [{ id: 'foreign-user', active: true }, { id: sessionUser, active: false }]) {
     const check = auth.checkUserAuth();

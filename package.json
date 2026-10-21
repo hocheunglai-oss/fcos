@@ -17,7 +17,7 @@
     "local:services:stop": "node scripts/local-services.mjs stop",
     "test": "node --test tests/*.test.js",
     "test:e2e": "playwright test",
-    "build": "node scripts/verify-fcuno-build-environment.mjs && node scripts/write-app-version.mjs && vite build",
+    "build": "node scripts/write-methodology-assets.mjs && node scripts/verify-fcuno-build-environment.mjs && node scripts/write-app-version.mjs && vite build",
     "lint": "eslint . --quiet",
     "lint:fix": "eslint . --fix",
     "migrate:hedge-desk": "node scripts/migrate-hedge-desk.mjs",
@@ -48,7 +48,12 @@
     "connections:auth": "node scripts/fcos-connections.mjs auth",
     "connections:keychain": "node scripts/fcos-connections.mjs keychain",
     "connections:cli": "node scripts/fcos-connections.mjs run",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:historical:supplier": "node --test tests/xeroSupplierFinancialBucketDatabase.historical-test.js",
+    "salesforce:hotfix:deploy": "node scripts/deploy-salesforce-schema-free-hotfix.mjs",
+    "salesforce:hotfix:validate": "node scripts/deploy-salesforce-schema-free-hotfix.mjs --check-only",
+    "salesforce:hotfix:mirror:verify": "node scripts/sync-salesforce-schema-free-hotfix-repository.mjs --check",
+    "salesforce:hotfix:mirror:publish": "node scripts/sync-salesforce-schema-free-hotfix-repository.mjs --publish"
   },
   "dependencies": {
     "@fontsource-variable/ibm-plex-sans": "5.3.0",
@@ -112,11 +117,14 @@
     "tailwindcss-animate": "^1.0.7",
     "tesseract.js": "^7.0.0",
     "vaul": "^1.1.2",
-    "zod": "^3.24.2"
+    "zod": "^3.24.2",
+    "pdfjs-dist": "6.3.289",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "overrides": {
     "quill": "2.0.2",
-    "brace-expansion": "1.1.18"
+    "brace-expansion": "1.1.18",
+    "js-yaml": "4.3.2"
   },
   "devDependencies": {
     "@actions/artifact": "6.3.1",
@@ -140,6 +148,7 @@
     "tailwindcss": "^3.4.17",
     "terser": "5.51.2",
     "typescript": "^5.8.2",
-    "vite": "^6.1.0"
+    "vite": "^6.1.0",
+    "ignore": "5.3.2"
   }
 }

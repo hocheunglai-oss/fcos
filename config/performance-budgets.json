@@ -3,7 +3,22 @@
     "largestJavaScriptBytes": 720000,
     "largestJavaScriptGzipBytes": 215000,
     "chartChunkBytes": 405000,
-    "totalJavaScriptBytes": 3850000
+    "totalJavaScriptBytes": 3950000
+  },
+  "onDemandPdfViewer": {
+    "rendererBytes": 475000,
+    "workerBytes": 1350000,
+    "totalBytes": 1825000,
+    "totalGzipBytes": 550000
+  },
+  "onDemandXlsWriter": {
+    "largestAssetBytes": 650000,
+    "totalBytes": 650000,
+    "totalGzipBytes": 220000
+  },
+  "onDemandReconciliationCampaign": {
+    "totalBytes": 36000,
+    "totalGzipBytes": 11000
   },
   "server": {
     "universalDispatcherLines": 19600,
