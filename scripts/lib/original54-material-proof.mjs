@@ -32,6 +32,10 @@ export function assertOriginal54MaterialProof({ proofPath, proofSha256, candidat
   if (p.kind !== 'actual_private_original54_source_material_test_proof_v1' || p.accepted !== true || p.sourceUnchanged !== true
     || p.sourceCommit !== candidateCommit || p.tree !== candidateTree || p.seedSha256 !== seed || p.originalRecords !== 54
     || JSON.stringify(p.command?.slice(1)) !== JSON.stringify(['--test','--test-reporter=tap','tests/xeroExistingDraftAuthorisationDatabase.private54.test.mjs','tests/xeroExistingDraftQuotaDatabase.private54.test.mjs'])
+    || !['tests','pass','fail','skipped','cancelled'].every(key => Number.isSafeInteger(p.counts?.[key]) && p.counts[key] >= 0)
+    || p.runtime !== process.version || p.platform !== process.platform || p.architecture !== process.arch
+    || p.packageLockSha256 !== sourceFiles?.find(row => row.path === 'package-lock.json')?.sha256
+    || !/^[a-f0-9]{64}$/.test(p.packageLockSha256 || '')
     || p.exitCode !== 0 || p.counts?.tests < 50 || p.counts?.tests !== p.counts?.pass || p.counts?.fail !== 0 || p.counts?.skipped !== 0 || p.counts?.cancelled !== 0
     || p.hostedCheck !== false || p.providerCalls !== 0 || p.financialActions !== 0 || p.privateSeedExported !== false
     || !/^postgres \(PostgreSQL\) 17\.11(?:\s|$)/.test(p.postgresVersion || '')

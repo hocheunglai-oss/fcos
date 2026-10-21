@@ -9,8 +9,9 @@ const digest = x => createHash('sha256').update(x).digest('hex');
 test('private54 material requires exact candidate/source/proof and complete local success', t => {
   const dir = mkdtempSync(join(tmpdir(), 'fcos-private54-proof-contract-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const sourceFiles = [{ path: 'test-source', mode: '100644', blob: 'c'.repeat(40), sha256: 'd'.repeat(64) }];
+  const sourceFiles = [{ path: 'package-lock.json', mode: '100644', blob: 'c'.repeat(40), sha256: 'd'.repeat(64) }];
   const proof = { kind: 'actual_private_original54_source_material_test_proof_v1', accepted: true,
+    runtime: process.version, platform: process.platform, architecture: process.arch, packageLockSha256: 'd'.repeat(64),
     sourceUnchanged: true, sourceCommit: 'a'.repeat(40), tree: 'b'.repeat(40), sourceFiles,
     seedSha256: 'bb1347c0917102e5ea1917446d6b5970865403c6f2d63931d7451246e90dfb82', originalRecords: 54,
     command: ['node', '--test', '--test-reporter=tap', 'tests/xeroExistingDraftAuthorisationDatabase.private54.test.mjs', 'tests/xeroExistingDraftQuotaDatabase.private54.test.mjs'],
@@ -25,7 +26,7 @@ test('private54 material requires exact candidate/source/proof and complete loca
   for (const change of [p => p.accepted = false, p => p.sourceUnchanged = false, p => p.sourceCommit = 'e'.repeat(40),
     p => p.tree = 'e'.repeat(40), p => p.sourceFiles = [], p => p.seedSha256 = 'e'.repeat(64),
     p => p.counts.skipped = 1, p => p.counts.fail = 1, p => p.counts.pass--, p => p.exitCode = 1,
-    p => p.command.pop(), p => p.hostedCheck = true, p => p.providerCalls++, p => p.financialActions++, p => p.privateSeedExported = true]) {
+    p => delete p.counts.tests, p => delete p.counts.pass, p => p.counts.tests = '80', p => p.runtime = 'unobserved', p => p.platform = 'unobserved', p => p.architecture = 'unobserved', p => p.packageLockSha256 = 'e'.repeat(64), p => p.command.pop(), p => p.hostedCheck = true, p => p.providerCalls++, p => p.financialActions++, p => p.privateSeedExported = true]) {
     const changed = structuredClone(proof); change(changed); assert.throws(() => verify(changed));
   }
   assert.throws(() => assertOriginal54MaterialProof({}));
