@@ -9,7 +9,7 @@ export const SOURCE_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 export const FIXTURE_ROOT = join(SOURCE_ROOT, 'tests/fixtures/runtime-compatibility-successor-integration');
 export const MANIFEST_HASH = '7dd76f84f6db203a7a3071eb77366277872d3e01efd0f450fad29e6fe98c7e1f';
 export const PACK_HASH = 'edb0c7a0d0ac7f45dba5fcfc8f6d98cbbf9667f01713a5d7f7764dc7e7380628';
-const BINDINGS_HASH = 'c24903fee2de107e3b45c82b604d56acff58987ad343e053a0001a7084bc8c02';
+const BINDINGS_HASH = 'd33f6cd169f058ade2bfb71f67649dc1d467cf902e5cd461f3ea2a00ec2cc32d';
 export const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 
 function regularFile(root, path) {
@@ -238,10 +238,13 @@ assert.equal(JSON.parse(seventyFirstBindingBytes).previousSourceBindingsSha256, 
 const seventySecondBindingBytes = regularFile(FIXTURE_ROOT, 'source-bindings-v72.json');
 assert.equal(hash(seventySecondBindingBytes), 'a800d2f8d166f4621b22ecc706fb65a8b319d78caf77c5e970a8e31fdb9366f3');
 assert.equal(JSON.parse(seventySecondBindingBytes).previousSourceBindingsSha256, hash(seventyFirstBindingBytes));
-const bindingBytes = regularFile(FIXTURE_ROOT, 'source-bindings-v73.json');
+const seventyThirdBindingBytes = regularFile(FIXTURE_ROOT, 'source-bindings-v73.json');
+assert.equal(hash(seventyThirdBindingBytes), 'c24903fee2de107e3b45c82b604d56acff58987ad343e053a0001a7084bc8c02');
+assert.equal(JSON.parse(seventyThirdBindingBytes).previousSourceBindingsSha256, hash(seventySecondBindingBytes));
+const bindingBytes = regularFile(FIXTURE_ROOT, 'source-bindings-v74.json');
 assert.equal(hash(bindingBytes), BINDINGS_HASH, 'Reviewed source bindings differ.');
 export const sourceBindings = JSON.parse(bindingBytes);
-assert.equal(sourceBindings.previousSourceBindingsSha256, hash(seventySecondBindingBytes), 'Previous source binding history differs.');
+assert.equal(sourceBindings.previousSourceBindingsSha256, hash(seventyThirdBindingBytes), 'Previous source binding history differs.');
 const rows = new Map(sourceBindings.sources.map(row => [row.path, row]));
 assert.equal(rows.size, sourceBindings.sources.length, 'Duplicate source binding.');
 export function assertBoundSource(path, bytes) {
