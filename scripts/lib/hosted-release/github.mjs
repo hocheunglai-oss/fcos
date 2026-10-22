@@ -13,7 +13,7 @@ export async function requestGitHubIdentity({ env = process.env, fetchImpl = fet
   try { response = await fetchImpl(url, { headers: { authorization: `Bearer ${env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}` }, redirect: 'error', signal: AbortSignal.timeout(15000) }); }
   catch { fail('HOSTED_IDENTITY_UNAVAILABLE', 'identity', 'Resume when GitHub OIDC is available; do not replace identity with local JSON.'); }
   if (!response.ok || response.redirected) fail('HOSTED_IDENTITY_UNAVAILABLE');
-  const token = (await response.json()).value;
+  let token; try { token = (await response.json()).value; } catch { fail('HOSTED_IDENTITY_INVALID', 'identity'); }
   if (typeof token !== 'string' || token.length > 32768) fail('HOSTED_IDENTITY_INVALID');
   return token;
 }
@@ -58,7 +58,8 @@ export function githubClient({ token, fetchImpl = fetch, repositoryId } = {}) {
       catch { fail('ARTIFACT_DOWNLOAD_UNAVAILABLE'); }
     }
     if (!response.ok || !bytes && response.redirected) fail(`GITHUB_READ_HTTP_${response.status}`, 'github.read');
-    const data = bytes ? Buffer.from(await response.arrayBuffer()) : await response.json();
+    let data; try { data = bytes ? Buffer.from(await response.arrayBuffer()) : await response.json(); }
+    catch { fail('GITHUB_RESPONSE_INVALID', 'github.read'); }
     if (bytes && data.length > 32 * 1024 * 1024) fail('ARTIFACT_TOO_LARGE');
     return data;
   }

@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { fcosConnectionIdentifier } from '../../../config/fcosConnections.js';
+import { ReleaseError } from './json-contract.mjs';
 
 const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const digest = value => createHash('sha256').update(value).digest('hex');
@@ -8,7 +9,7 @@ const exact = (value, keys) => value && Object.getPrototypeOf(value) === Object.
 const fields = ['operationId', 'tokenId', 'name', 'bearerSha256', 'teamId', 'projectId', 'createdAt', 'expiresAt',
   'originalIssuanceResponseSha256', 'exactIdMetadataReadbackSha256'];
 function need(value, code = 'VERCEL_WRITER_CREDENTIAL_BINDING') {
-  if (!value) { const error = new Error(code); error.code = code; error.phase = 'vercel.preview'; throw error; }
+  if (!value) throw new ReleaseError(code, 'vercel.preview', 'Correct the existing Preview credential binding through its original owner; do not retry a provider write.');
 }
 
 // Project writers cannot introspect /user/tokens. This explicit original-issuer
@@ -64,7 +65,7 @@ export function assertVercelPreviewWriterSecret(binding, { targets, env = proces
 // setup evidence, never a claim that the restricted bearer can introspect them.
 const productionFields = [...fields, 'issuerUserId', 'productionRightsReadbackSha256', 'metadataReadbackAt'];
 function productionNeed(value, code = 'VERCEL_PRODUCTION_WRITER_CREDENTIAL_BINDING') {
-  if (!value) { const error = new Error(code); error.code = code; error.phase = 'vercel.production'; throw error; }
+  if (!value) throw new ReleaseError(code, 'vercel.production', 'Correct the existing Production credential binding through its original owner; do not retry a provider write.');
 }
 export function validateVercelProductionWriterBinding(binding, { targets, previewBinding, now = Date.now() } = {}) {
   productionNeed(exact(binding, ['schemaVersion', 'kind', ...productionFields, 'rootAcceptanceSha256'])
