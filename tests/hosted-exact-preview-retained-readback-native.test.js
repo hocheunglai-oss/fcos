@@ -43,7 +43,7 @@ test('native PG17 actual signed retained-owner JWT passes actual handler/auth an
     const principal=await createGithubAuthenticator({policy,jwks})(signed);
     assert.equal(principal.retainedPreviewReadbackOnly,true);assert.equal(principal.runId,principalRun);assert.notEqual(principal.runId,originalJournal.operation.actor.runId);
     const response=await send('snapshot',scope);assert.equal(response.status,200);const snapshot=await response.json();assert.equal(snapshot.operations['preview.create'].state,'uncertain');
-    assert.equal(snapshot.registration.registration_actor.runId,'39811703824');
+    assert.equal(snapshot.registration.registration_actor.runId,'39789525210');
     const verificationToken=await token({environment:'fcos-hosted-verification'});
     const verificationPrincipal=await createGithubAuthenticator({policy,jwks})(verificationToken);
     assert.equal(verificationPrincipal.retainedPreviewReadbackOnly,true);assert.equal(verificationPrincipal.runId,principalRun);

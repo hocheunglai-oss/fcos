@@ -35,7 +35,8 @@ language sql stable set search_path=pg_catalog,fcos_release_coordination as $$
    and r.release_id='fcos-qualification-6a3fbd8f-2ef733d1-source-20261022'
    and r.scope='qualification' and r.owner='{"kind":"release","id":"features"}'::jsonb
    and o.actor=exact_preview_quarantine_original_actor()
-   and (r.registration_actor-'environment'-'subject'-'legacyContainmentBoundary')=(o.actor-'environment'-'subject'-'legacyContainmentBoundary')
+   and r.registration_actor->>'runId'='39789525210' and o.actor->>'runId'='39811703824'
+   and (r.registration_actor-'runId'-'environment'-'subject'-'legacyContainmentBoundary')=(o.actor-'runId'-'environment'-'subject'-'legacyContainmentBoundary')
    and e.state='uncertain' and e.evidence='{"reason":"PROVIDER_RESPONSE_LOST","outcome":"unknown"}'::jsonb
    and e.evidence_hash=auth_maintenance_hash(e.evidence)
    and (e.actor-'legacyContainmentBoundary')=(o.actor-'legacyContainmentBoundary'))

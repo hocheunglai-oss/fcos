@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { digest } from '../scripts/lib/hosted-release/json-contract.mjs';
-import { ID, scope, recoveryPrincipal, originalManifest, originalJournal, reviewed, migrationSource, quarantineDatabase } from './helpers/exact-preview-uncertainty-quarantine.mjs';
+import { ID, scope, recoveryPrincipal, originalManifest, originalJournal, originalRegistration, reviewed, migrationSource, quarantineDatabase } from './helpers/exact-preview-uncertainty-quarantine.mjs';
 
 const native=process.env.FCOS_EXACT_PREVIEW_NATIVE==='docker';
 const admit='select fcos_release_coordination.admit_exact_preview_uncertainty_quarantine($1) result';
@@ -32,6 +32,23 @@ test(`${native?'native PG17 Docker':'PGlite'} exact Preview quarantine preserves
   await d.seed();const original=await d.state(),p=await d.proof();
   assert.equal(digest(originalManifest),scope.manifestHash);
   assert.equal(digest({candidate:originalManifest.candidate,target:'preview'}),originalJournal.operation.request_hash);
+  await t.test('actual distinct registration and operation runs are independently pinned; every third run is refused',()=>d.transaction(async()=>{
+    assert.deepEqual(original.registrations[0],originalRegistration);
+    const oldComparison=(await d.query("select (r.registration_actor-'environment'-'subject'-'legacyContainmentBoundary')=(o.actor-'environment'-'subject'-'legacyContainmentBoundary') v from fcos_release_coordination.registrations r join fcos_release_coordination.operations o using(release_id) where o.operation_id=$1",[ID])).rows[0].v;
+    assert.equal(oldComparison,false,'regression: prior fixture concealed the legitimate distinct original run IDs');
+    assert.equal((await d.query('select fcos_release_coordination.exact_preview_quarantine_original_bound() v')).rows[0].v,true);
+    await d.exec('alter table fcos_release_coordination.registrations disable trigger append_only');
+    for(const run of ['39811703824','49999990001']){
+      await d.query("update fcos_release_coordination.registrations set registration_actor=jsonb_set(registration_actor,'{runId}',to_jsonb($1::text))",[run]);
+      assert.equal((await d.query('select fcos_release_coordination.exact_preview_quarantine_original_bound() v')).rows[0].v,false);
+      await d.fails(admit,[p],/EXACT_PREVIEW_QUARANTINE_INVALID/);
+    }
+    await d.query("update fcos_release_coordination.registrations set registration_actor=jsonb_set(registration_actor,'{runId}','\"39789525210\"')");
+    await d.exec('alter table fcos_release_coordination.operations disable trigger append_only');
+    await d.query("update fcos_release_coordination.operations set actor=jsonb_set(actor,'{runId}','\"49999990001\"') where operation_id=$1",[ID]);
+    assert.equal((await d.query('select fcos_release_coordination.exact_preview_quarantine_original_bound() v')).rows[0].v,false);
+    await d.fails(admit,[p],/EXACT_PREVIEW_QUARANTINE_INVALID/);
+  }));
   await t.test('missing, wrong operation/phase/state/actor/source and authority expansion fail without state changes',()=>d.transaction(async()=>{
     const mutations=[x=>{x.operationId='other';},x=>{x.epoch=2;},x=>{x.originalOutcome='not_applied';},x=>{x.replayAllowed=true;},x=>{x.financialAuthorityGranted=true;},x=>{x.maximumEffect.ordinaryPreviewOnly=false;},x=>{x.maximumEffect.readOnlyCi=false;},x=>{x.maximumEffect.productionAliasesCanChange=true;},x=>{x.maximumEffect.financialActionsPossible=true;},x=>{x.maximumEffect.controllerSha='c'.repeat(40);},x=>{x.maximumEffect.argumentsSha256='d'.repeat(64);},x=>{x.terminalWriter.status='in_progress';},x=>{x.terminalWriter.jobId='99';},x=>{x.terminalWriter.runId='99';},x=>{x.terminalWriter.writerStopped=false;},x=>{x.originalEventSha256='e'.repeat(64);},x=>{x.successor.actorId='99';},x=>{x.successor.controllerSha=originalManifest.controller.sha;}];
     for(const change of mutations){const x=structuredClone(p);change(x);await d.fails(admit,[reviewed(x)],/EXACT_PREVIEW_QUARANTINE_/);}

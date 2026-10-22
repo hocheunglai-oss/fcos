@@ -10,6 +10,7 @@ const migrations = new URL('../../supabase/migrations/', import.meta.url);
 const fixture = name => readFile(new URL(`../fixtures/exact-preview-uncertainty-quarantine/${name}.json`, import.meta.url), 'utf8').then(JSON.parse);
 export const originalManifest = await fixture('original-manifest');
 export const originalJournal = await fixture('original-operation');
+export const originalRegistration = await fixture('original-registration');
 export const ID = originalJournal.operation.operation_id;
 export const scope = { epoch: 1, owner: { kind: 'release', id: 'features' }, releaseId: originalManifest.releaseId, manifestHash: digest(originalManifest) };
 export const recoveryPrincipal = () => {
@@ -71,6 +72,9 @@ export async function quarantineDatabase(t, native = false) {
   const client = db || memory;
   const query = async (sql, parameters = []) => { calls++; return client.query(sql, parameters); };
   const exec = sql => db ? db.query(sql) : memory.exec(sql);
+  // Supabase's actual captured journal is UTC. PGlite otherwise inherits the
+  // host time zone, changing JSON timestamptz bytes despite identical instants.
+  await query("set time zone 'UTC'");
   for (const name of names) await exec(await readFile(new URL(name,migrations),'utf8'));
   if (admin) await admin.query('grant fcos_coordinator_runtime,anon,authenticated,service_role to postgres with inherit false,set true');
   let serial = 0;
@@ -95,9 +99,12 @@ export async function quarantineDatabase(t, native = false) {
     const o=originalJournal.operation;
     await query("insert into fcos_release_coordination.epochs(epoch,activation_evidence) values(1,'{}')");
     await query("update fcos_release_coordination.control set epoch=1,mode='qualification'");
-    const a=structuredClone(o.actor); delete a.legacyContainmentBoundary;
-    a.environment=null;a.subject=`repo:hocheunglai-oss/fcos:ref:${a.ref}`;
-    await query('insert into fcos_release_coordination.registrations(release_id,epoch,owner,manifest,manifest_hash,scope,registration_actor) values($1,1,$2,$3,$4,$5,$6)',[scope.releaseId,scope.owner,originalManifest,scope.manifestHash,'qualification',a]);
+    // Use actual original registration bytes. Its prepare run legitimately
+    // predates the separate Preview operation; never infer this actor from o.
+    const r=originalRegistration;
+    assert.equal(r.registration_actor.runId,'39789525210');assert.equal(o.actor.runId,'39811703824');
+    assert.deepEqual(r.manifest,originalManifest);
+    await query('insert into fcos_release_coordination.registrations(release_id,epoch,owner,manifest,manifest_hash,scope,registration_actor,registered_at) values($1,$2,$3,$4,$5,$6,$7,$8)',[r.release_id,r.epoch,r.owner,r.manifest,r.manifest_hash,r.scope,r.registration_actor,r.registered_at]);
     await query('insert into fcos_release_coordination.operations(operation_id,release_id,epoch,phase,request_hash,manifest_hash,actor,created_at) values($1,$2,1,$3,$4,$5,$6,$7)',[ID,o.release_id,o.phase,o.request_hash,o.manifest_hash,o.actor,o.created_at]);
     for(const e of originalJournal.events) await query('insert into fcos_release_coordination.operation_events(event_id,operation_id,state,evidence,evidence_hash,actor,created_at) overriding system value values($1,$2,$3,$4,$5,$6,$7)',[e.event_id,ID,e.state,e.evidence,e.evidence_hash,e.actor,e.created_at]);
     await query("select setval('fcos_release_coordination.operation_events_event_id_seq',2,true)");
