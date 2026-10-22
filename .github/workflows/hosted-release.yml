@@ -32,7 +32,7 @@ jobs:
     env:
       FCOS_CONTROLLER_DIRECTORY: controller
       FCOS_CANDIDATE_DIRECTORY: candidate
-      FCOS_CONTROLLER_SHA: 05bc88fa54cbab4013f99997f5e1ae7885bbb5b1
+      FCOS_CONTROLLER_SHA: 6a3fbd8fd05a76c052e7e380d618aedf43e5b72e
       FCOS_ADMITTED_RELEASE_SETUP: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP }}
       FCOS_ADMITTED_RELEASE_SETUP_SHA256: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP_SHA256 }}
       FCOS_CANDIDATE_SHA: ${{ fromJSON(inputs.resume_manifest || '{}').candidate.sha || inputs.candidate_sha }}
@@ -43,7 +43,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: hocheunglai-oss/fcos
-          ref: 05bc88fa54cbab4013f99997f5e1ae7885bbb5b1
+          ref: 6a3fbd8fd05a76c052e7e380d618aedf43e5b72e
           path: controller
           fetch-depth: 0
           persist-credentials: false
@@ -100,7 +100,7 @@ jobs:
       actions: read
       packages: read
       id-token: write
-    uses: hocheunglai-oss/fcos/.github/workflows/hosted-release-controller.yml@05bc88fa54cbab4013f99997f5e1ae7885bbb5b1
+    uses: hocheunglai-oss/fcos/.github/workflows/hosted-release-controller.yml@6a3fbd8fd05a76c052e7e380d618aedf43e5b72e
     with:
       manifest: ${{ needs.manifest.outputs.manifest }}
     # Values remain in each called job's protected environment; no secrets: inherit.

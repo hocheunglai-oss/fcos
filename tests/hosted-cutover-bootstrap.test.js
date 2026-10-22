@@ -195,7 +195,7 @@ test('container COPY closure includes every relative server import; normal calle
  await visit('supabase/functions/release-coordinator/server.mjs');assert.ok(seen.has('config/legacyReleaseContainment.js'));
  const caller=await readFile(new URL('.github/workflows/hosted-release.yml',root),'utf8');
  assert.equal(BOOTSTRAP_SOURCE.controllerSha,'64aa338b04cee7e05bde0ca9bfd10b81ac001a65');
- assert.ok(caller.includes('hocheunglai-oss/fcos/.github/workflows/hosted-release-controller.yml@05bc88fa54cbab4013f99997f5e1ae7885bbb5b1'));
+ assert.ok(caller.includes('hocheunglai-oss/fcos/.github/workflows/hosted-release-controller.yml@6a3fbd8fd05a76c052e7e380d618aedf43e5b72e'));
  assert.ok(!caller.includes('hosted-release-controller.yml@4079c569'));
  const session=await readFile(new URL('scripts/lib/hosted-release/session.mjs',root),'utf8');
  assert.ok(session.includes("owner: { kind: 'release', id: 'features' }"));assert.equal(inputs().scope.owner.id,'features');
