@@ -157,7 +157,10 @@ test('actual adapter rechecks owner freshness at the final staging/promotion CLI
   current=f.now;expireDuringAdmission=false;await adapter.admit(manifest,'production.promote');
   // Simulates schema/acceptance/coordinator.begin awaiting after admission.
   current=f.now+1800001;await assert.rejects(adapter.promote({id:'dpl_latefixture'}),{code:'FIRST_RUNTIME_OWNER_REFRESH_REQUIRED'});assert.deepEqual(writes,[]);
-  current=f.now;await adapter.stage(manifest,context);await adapter.promote({id:'dpl_latefixture'});assert.deepEqual(writes,['deploy','promote']);writes.length=0;
+  current=f.now;
+  await assert.rejects(adapter.stage(manifest,context),{code:'VERCEL_CLI_PROJECT_SCOPE_UNSUPPORTED'});
+  await assert.rejects(adapter.promote({id:'dpl_latefixture'}),{code:'VERCEL_CLI_PROJECT_SCOPE_UNSUPPORTED'});
+  assert.deepEqual(writes,[]);
   current=f.now+1800001;const state={consumed:false},journal=[];
   const coordinator={begin:async()=>{if(state.consumed)return {disposition:'readback'};state.consumed=true;journal.push('intent');return {disposition:'execute'};},
     uncertain:async row=>{state.reason=row.reason;journal.push('uncertain');}};

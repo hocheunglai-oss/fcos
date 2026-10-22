@@ -87,7 +87,7 @@ test('generated pre-candidate Node guard pins the reviewed stderr-only successor
  assert.equal(digest(body),'aa4195a744b213701a242f520f23972ce0bc1dfd056f11c6db111ded024df118');
 });
 
-function controllerFixture(t,{lostResponse=false}={}){
+function controllerFixture(t,{lostResponse=false,existingUncertain=false}={}){
  const dir=realpathSync(mkdtempSync(join(tmpdir(),'fcos-selection-adapter-')));t.after(()=>rmSync(dir,{recursive:true,force:true}));
  writeFileSync(join(dir,'package.json'),JSON.stringify({name:'fixture',version:'1.0.0',engines:{node:'24.x'},scripts:{build:'echo fixture'}}));
  writeFileSync(join(dir,'package-lock.json'),'{}\n');writeFileSync(join(dir,'.gitignore'),'.vercel/\n');writeFileSync(join(dir,'vercel.json'),JSON.stringify({installCommand:'npm ci',git:{deploymentEnabled:false}}));
@@ -102,6 +102,11 @@ function controllerFixture(t,{lostResponse=false}={}){
  const deployment={id,url:new URL(url).hostname,projectId:m.targets.vercelProject,teamId:m.targets.vercelTeam,readyState:'BUILDING',source:'cli',projectSettings:m.verification.projectSettings,
  meta:{githubCommitRef:'HEAD',githubCommitSha:source.commit,fcosHostedOperation:`${m.releaseId}-preview-create`,fcosHostedManifest:digest(m),fcosSourceSha256:m.candidate.sourceSha256,fcosVerificationSha256:digest(m.verification),fcosConfigurationSelectionSha256:digest(guard.nodeOptions)}};
  const registration={release_id:m.releaseId,epoch:m.epoch,manifest_hash:digest(m),manifest:m};
+ if(existingUncertain){
+  const operationId=`${m.releaseId}-preview-create`,requestHash=digest(selectionSourceDeployRequest(m,false));
+  // A preserved synthetic old intent, not a new execution of the now-refused CLI.
+  operation={operationId,operation_id:operationId,requestHash,request_hash:requestHash,release_id:m.releaseId,manifest_hash:digest(m),epoch:m.epoch,phase:'preview.create',state:'uncertain'};
+ }
  const coordinator={register:async()=>{},snapshot:async()=>({registration,operations:operation?{'preview.create':operation}:{}}),begin:async p=>{
   if(operation)return{disposition:operation.state==='complete'?'complete':'readback',evidence:operation.evidence};
   operation={...p,operation_id:p.operationId,request_hash:p.requestHash,release_id:m.releaseId,manifest_hash:digest(m),epoch:m.epoch,state:'intent'};return{disposition:'execute'};},
@@ -121,28 +126,28 @@ function controllerFixture(t,{lostResponse=false}={}){
  return {m,coordinator,adapter,deployment,uncertainHistory,get operation(){return operation;},get invoked(){return invoked;},get deployCalls(){return deployCalls;},makeDiscoverable(){discoverable=true;},removeReadbackReceipt(){delete operation.evidence.result.sourceDeployReadback;}};
 }
 
-test('real controller create path journals exact adapter source argv only after native CLI acknowledgement',async t=>{
+test('real controller rejects the incompatible project-scoped CLI before creating a new durable intent',async t=>{
  const f=controllerFixture(t),{m,coordinator}=f,provider=f.adapter();
- assert.equal((await preparePreview({manifest:m,coordinator,provider})).status,'waiting_dependency');
- assert.ok(f.invoked&&!f.invoked.includes('--prebuilt'));assert.deepEqual(f.invoked.slice(0,-5),deploymentArguments(m,`${m.releaseId}-preview-create`,false));
- assert.equal(f.operation.state,'complete');assert.equal(f.operation.evidence.result.id,f.deployment.id);assert.equal(f.operation.evidence.result.sourceDeploy.argumentsSha256,digest(f.invoked.slice(0,-5)));
- assert.equal(f.operation.evidence.result.prebuiltFieldPresent,false);assert.equal(f.operation.evidence.result.prebuiltRaw,null);
+ await assert.rejects(preparePreview({manifest:m,coordinator,provider}),{code:'VERCEL_CLI_PROJECT_SCOPE_UNSUPPORTED'});
+ assert.equal(f.deployCalls,0);assert.equal(f.operation,undefined);assert.deepEqual(f.uncertainHistory,[]);
+ await assert.rejects(provider.createPreview(m,{operationId:`${m.releaseId}-preview-create`,request:selectionSourceDeployRequest(m,false)}),{code:'VERCEL_CLI_PROJECT_SCOPE_UNSUPPORTED'});
+ assert.equal(f.deployCalls,0);
 });
 
 
-test('lost source CLI response remains consumed, then exact owner readback survives controller restart without another deploy',async t=>{
- const f=controllerFixture(t,{lostResponse:true}),{m,coordinator}=f;
+test('a preserved uncertain CLI intent remains recoverable through exact GET-only readback despite the new capability refusal',async t=>{
+ const f=controllerFixture(t,{existingUncertain:true}),{m,coordinator}=f;
  await assert.rejects(preparePreview({manifest:m,coordinator,provider:f.adapter()}),{code:'PROVIDER_OUTCOME_UNKNOWN'});
- assert.equal(f.deployCalls,1);assert.equal(f.operation.state,'uncertain');assert.equal(f.uncertainHistory.length,1);
- assert.equal(f.uncertainHistory[0].reason,'PROVIDER_RESPONSE_LOST');assert.equal(f.operation.evidence,undefined);
+ assert.equal(f.deployCalls,0);assert.equal(f.operation.state,'uncertain');assert.equal(f.uncertainHistory.length,0);
+ assert.equal(f.operation.evidence,undefined);
  f.makeDiscoverable();f.deployment.readyState='READY';
  // Fresh adapter and controller restart use only the original intent plus actual
  // provider GETs. Selection succeeds; unrelated app-version503 stops qualification.
  await assert.rejects(preparePreview({manifest:m,coordinator,provider:f.adapter()}),{code:'ARTIFACT_READ_FAILED'});
- assert.equal(f.deployCalls,1);assert.equal(f.operation.state,'complete');assert.equal(f.uncertainHistory.length,1);
+ assert.equal(f.deployCalls,0);assert.equal(f.operation.state,'complete');assert.equal(f.uncertainHistory.length,0);
  const result=f.operation.evidence.result;assert.equal(Object.hasOwn(result,'sourceDeploy'),false);
  assert.equal(result.sourceDeployReadback.basis,'authenticated_provider_owner_readback');
- assert.equal(result.sourceDeployReadback.argumentsSha256,digest(f.invoked.slice(0,-5)));
+ assert.equal(result.sourceDeployReadback.argumentsSha256,digest(deploymentArguments(m,`${m.releaseId}-preview-create`,false)));
  assert.equal(Object.hasOwn(result.sourceDeployReadback,'exitCode'),false);
  const p={kind:'fcos_hosted_selection_source_build_v1',registration:(await coordinator.snapshot()).registration,operation:f.operation,arguments:deploymentArguments(m,`${m.releaseId}-preview-create`,false)};
  const logs=[{text:'Running "vercel build"'},{text:'Running "install" command: `npm ci`...'},{text:selectionBuildGuard(m).proof}];
@@ -150,7 +155,7 @@ test('lost source CLI response remains consumed, then exact owner readback survi
  const originalProof=structuredClone(p),freshReadback=structuredClone(result.sourceDeployReadback);
  f.removeReadbackReceipt();
  await assert.rejects(preparePreview({manifest:m,coordinator,provider:f.adapter()}),{code:'ARTIFACT_READ_FAILED'});
- assert.equal(f.deployCalls,1);assert.equal(Object.hasOwn(f.operation.evidence.result,'sourceDeployReadback'),false);
+ assert.equal(f.deployCalls,0);assert.equal(Object.hasOwn(f.operation.evidence.result,'sourceDeployReadback'),false);
  assert.equal(assertSelectionBuildEvidence(logs,result,m,{...p,providerReadback:freshReadback}).sourceBuild.basis,'authenticated_provider_owner_readback');
  for(const change of [p=>p.operation.state='uncertain',p=>p.operation.request_hash=H,p=>p.operation.evidence.result.sourceDeployReadback.deploymentId='dpl_foreign',p=>p.operation.evidence.result.sourceDeployReadback.controllerSha='f'.repeat(40),p=>p.operation.evidence.result.sourceDeployReadback.basis='cli_ack',p=>p.operation.evidence.result.sourceDeploy={}]){
   const changed=structuredClone(originalProof);change(changed);assert.throws(()=>assertSelectionBuildEvidence(logs,result,m,changed),/SOURCE_BUILD_UNPROVEN/);

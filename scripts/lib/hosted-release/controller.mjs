@@ -1,5 +1,6 @@
 import { assertBoundEvidence, digest, fail, ReleaseError, validateManifest } from './contract.mjs';
 import { atReleaseBoundary, isReleaseBoundary } from './failure.mjs';
+import { safeVercelCommandFailure } from './vercel-command-failure.mjs';
 
 const bound = manifest => ({ releaseId: manifest.releaseId, manifestHash: digest(manifest) });
 
@@ -16,15 +17,36 @@ export async function consequential({ manifest, phase, request, coordinator, sub
   if (!['execute', 'readback'].includes(claim.disposition)) fail('INVALID_COORDINATOR_RESPONSE', phase);
   if (claim.disposition === 'execute') {
     let value;
-    try { value = await submit({ operationId, request }); }
+    try {
+      value = await submit({ operationId, request });
+      if (value === undefined || value === null) throw new ReleaseError('PROVIDER_RESPONSE_MISSING', phase);
+    }
     catch (error) {
       // Even a local transport exception can occur after submission. Never infer no write.
       const ownerRefreshRequired=error instanceof ReleaseError&&error.code==='FIRST_RUNTIME_OWNER_REFRESH_REQUIRED'
         &&error.detail?.providerSubmissionStarted===false;
-      await coordinator.uncertain({ ...binding, phase, operationId, reason: ownerRefreshRequired?'FIRST_RUNTIME_OWNER_REFRESH_REQUIRED_BEFORE_SUBMISSION':'PROVIDER_RESPONSE_LOST' });
+      const commandFailure = error instanceof ReleaseError ? safeVercelCommandFailure(error.detail?.commandFailure) : undefined;
+      const reason = ownerRefreshRequired ? 'FIRST_RUNTIME_OWNER_REFRESH_REQUIRED_BEFORE_SUBMISSION' : 'PROVIDER_RESPONSE_LOST';
+      try {
+        await coordinator.uncertain({ ...binding, phase, operationId, reason,
+          ...(commandFailure ? { evidence: { outcome: 'unknown', reason, commandFailure } } : {}) });
+      } catch (coordinationError) {
+        // A lost journal response must not erase the only local command report.
+        // Keep the coordination refusal authoritative, without copying a raw cause.
+        const stopped = coordinationError instanceof ReleaseError ? coordinationError
+          : new ReleaseError('COORDINATION_UNCERTAINTY_UNCONFIRMED', 'coordinator.uncertain',
+            'Read the original intent and uncertainty result separately; do not retry the provider operation.');
+        if (commandFailure) stopped.detail = { commandFailure };
+        throw stopped;
+      }
       // Preserve the consumed intent. This precise trusted pre-launch guard can
       // wait for its dependency, but cannot turn a restart into a second submit.
       if(ownerRefreshRequired)throw error;
+      // Stop this enclosing operation. Recovery is a separate admitted readback;
+      // even a GET must not silently follow a refused, thrown or timed-out write.
+      throw new ReleaseError('PROVIDER_OUTCOME_UNKNOWN', phase,
+        'Resume GET-only readback for this exact operation; do not resubmit.',
+        commandFailure ? { commandFailure } : {});
     }
     if (value !== undefined) {
       const evidence = { outcome: 'applied', result: value };
@@ -68,9 +90,11 @@ export function terminalReleaseStatus(snapshot, manifest) {
 export async function preparePreview({ manifest, coordinator, provider, now = Date.now }) {
   validateManifest(manifest);
   await atReleaseBoundary('preview.register', () => coordinator.register({ ...bound(manifest), manifest }));
-  const terminal = terminalReleaseStatus(await atReleaseBoundary('preview.snapshot', () => coordinator.snapshot(bound(manifest))), manifest);
+  const snapshot = await atReleaseBoundary('preview.snapshot', () => coordinator.snapshot(bound(manifest)));
+  const terminal = terminalReleaseStatus(snapshot, manifest);
   if (terminal) return { status: terminal, resumed: true };
   await atReleaseBoundary('preview.admit', () => provider.admit(manifest, 'preview'));
+  if (!snapshot.operations?.['preview.create']) provider.assertWriteCapability?.();
   const preview = await consequential({ manifest, coordinator, phase: 'preview.create', request: { candidate: manifest.candidate, target: 'preview' },
     submit: context => provider.createPreview(manifest, context), readback: context => provider.discover(manifest, 'preview', context) });
   assertDeployment(preview, manifest, 'preview');
@@ -116,6 +140,7 @@ async function rollback({ manifest, coordinator, provider, staged, cause, now })
   const compatible = await provider.rollbackCompatibility(previous, manifest);
   if (compatible?.compatible !== true || compatible.schemaSha256 !== manifest.migration.expectedSchemaSha256
     || compatible.runtimeSha256 !== manifest.runtime.expectedSha256 || compatible.deploymentId !== previous.deploymentId) fail('ROLLBACK_INCOMPATIBLE', 'production.rollback', 'Keep the operation recorded and request intervention; no schema rollback is permitted.');
+  provider.assertWriteCapability?.();
   const restored = await consequential({ manifest, coordinator, phase: 'production.rollback', request: { from: staged.id, to: previous.deploymentId, schemaSha256: compatible.schemaSha256, runtimeSha256: compatible.runtimeSha256 },
     submit: async context => {
       // A second observation closes the local check-to-write gap; shared coordination fences all participating writers.
@@ -179,6 +204,7 @@ export async function executeHostedProduction({ manifest, coordinator, provider,
   if (acceptance.status !== 'ready') return { status: 'waiting_dependency', phase: 'production.acceptance', missing: acceptance.missing };
   const existingStage = snapshot.operations?.['production.stage'];
   if (!existingStage) {
+    provider.assertWriteCapability?.();
     const current = await provider.currentProduction();
     if (current.id !== manifest.previousProduction.deploymentId || current.sha !== manifest.previousProduction.sha) fail('PRODUCTION_CHANGED', 'production.stage', 'Prepare a new manifest with the actual Production and rollback target.');
   }
@@ -199,6 +225,7 @@ export async function executeHostedProduction({ manifest, coordinator, provider,
   }
   const promotionAcceptance = await collectAcceptance({ manifest, coordinator, provider, now, refresh: true });
   if (promotionAcceptance.status !== 'ready') return { status: 'waiting_dependency', phase: 'production.acceptance', missing: promotionAcceptance.missing, deploymentId: ready.id };
+  if (!snapshot.operations?.['production.promote']) provider.assertWriteCapability?.();
   const live = await consequential({ manifest, coordinator, phase: 'production.promote', request: { deploymentId: ready.id, previousDeploymentId: manifest.previousProduction.deploymentId },
     submit: async context => {
       const current = await provider.currentProduction();
@@ -221,9 +248,11 @@ export async function executeHostedProduction({ manifest, coordinator, provider,
 }
 
 export function safeFailure(error) {
+  const commandFailure = error instanceof ReleaseError ? safeVercelCommandFailure(error.detail?.commandFailure) : undefined;
   if(error instanceof ReleaseError&&error.code==='FIRST_RUNTIME_OWNER_REFRESH_REQUIRED')return {
     status:'waiting_dependency',code:error.code,phase:error.phase,recovery:error.recovery};
   return error instanceof ReleaseError ? { status: 'intervention_required', code: error.code, phase: error.phase, recovery: error.recovery,
-    ...(isReleaseBoundary(error.boundary) ? { boundary: error.boundary } : {}) }
+    ...(isReleaseBoundary(error.boundary) ? { boundary: error.boundary } : {}),
+    ...(commandFailure ? { commandFailure } : {}) }
     : { status: 'intervention_required', code: 'UNCLASSIFIED_PROVIDER_FAILURE', phase: 'unknown', recovery: 'Inspect sanitized phase evidence; do not replay a consequential operation.' };
 }

@@ -13,6 +13,7 @@ import { assertHostedSetup, assertHostedSourceContext } from './admission.mjs';
 import { assertVercelPreviewWriterSecret, assertVercelProductionWriterSecret } from './vercel-writer-auth.mjs';
 import { validateFirstRuntimeOwnerRefresh } from './first-runtime.mjs';
 import { atReleaseBoundary } from './failure.mjs';
+import { vercelCommandFailure } from './vercel-command-failure.mjs';
 
 export function assertProjectConfiguration(actual, expected) {
   const keys = ['framework','buildCommand','devCommand','installCommand','outputDirectory','rootDirectory','nodeVersion'];
@@ -66,6 +67,22 @@ function buildVercelAdapter({ manifest, candidateDirectory, env = process.env, f
   if (!readOnly && (!env.FCOS_HOSTED_VERCEL_TOKEN || !env.FCOS_HOSTED_VERCEL_TOKEN_ID)) fail('HOSTED_VERCEL_CREDENTIAL_MISSING');
   const cliEnv = { PATH: env.PATH, HOME: env.HOME, CI: '1', NO_COLOR: '1', VERCEL_TOKEN: env.FCOS_HOSTED_VERCEL_TOKEN,
     VERCEL_ORG_ID: target.vercelTeam, VERCEL_PROJECT_ID: target.vercelProject };
+  let admittedScope;
+  function assertWriteCapability() {
+    if (env.FCOS_HOSTED_CREDENTIAL_CLASS === 'production') {
+      assertCurrentFirstRuntimeOwnerRefresh(manifest);
+      assertProductionWriterContext(manifest);
+    } else if (manifest.verification?.vercelPreviewWriterCredential) {
+      assertVercelPreviewWriterSecret(manifest.verification.vercelPreviewWriterCredential, { targets: target, env, now: now() });
+    }
+    // --scope in the pinned CLI requires /v2/user. A project writer's required
+    // denial is incompatible with that transport, not permission to widen it.
+    if (!admittedScope || [403, 404].includes(admittedScope.userStatus)) {
+      throw new ReleaseError('VERCEL_CLI_PROJECT_SCOPE_UNSUPPORTED', 'vercel.transport',
+        'Keep the existing restricted credential. Prepare and qualify a supported project-only transport; do not create another intent or retry an uncertain deployment.',
+        { providerSubmissionStarted: false });
+    }
+  }
   function assertCurrentFirstRuntimeOwnerRefresh(release) {
     if(!release.previousProduction.firstRuntime)return;
     const setup=assertHostedSetup({manifest:release,env});assertHostedSourceContext({manifest:release,env});
@@ -92,9 +109,14 @@ function buildVercelAdapter({ manifest, candidateDirectory, env = process.env, f
     if(args[0]==='deploy'&&manifest.legacyReleaseContainment)assertSelectionSource(cwd,manifest);
     if(args[0]==='promote'||args[0]==='deploy'&&args.includes('--prod'))assertCurrentFirstRuntimeOwnerRefresh(manifest);
     if (args[0] === 'promote' || args[0] === 'rollback' || args[0] === 'deploy' && args.includes('--prod')) assertProductionWriterContext(manifest);
+    if (args[0] !== '--version') assertWriteCapability();
     try { return execute('vercel', [...args, '--scope', fcosConnectionIdentifier('vercel', 'Team'), '--cwd', cwd, '--no-color'], {
       cwd, env: args[0] === '--version' ? { PATH: cliEnv.PATH, HOME: cliEnv.HOME, CI: '1', NO_COLOR: '1' } : cliEnv, encoding: 'utf8', timeout: 180000, maxBuffer: 2 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'],
-    }).trim(); } catch { fail('VERCEL_COMMAND_UNRESOLVED', 'vercel.write', 'Read back this operation; command errors do not prove that submission did not occur.'); }
+    }).trim(); } catch (error) {
+      throw new ReleaseError('VERCEL_COMMAND_UNRESOLVED', 'vercel.write',
+        'Read back this operation; command errors do not prove that submission did not occur.',
+        { commandFailure: vercelCommandFailure(error, args[0]) });
+    }
   };
   const api = async (path, { permitStatus, scopeTeam = true } = {}) => {
     if(readOnly)return reader.get(path);
@@ -173,6 +195,7 @@ function buildVercelAdapter({ manifest, candidateDirectory, env = process.env, f
     return { deployment: exact, version, runtime, ...(selection?{configurationSelection:selection}:{}) };
   }
   async function admit(release, phase) {
+    admittedScope = undefined;
     step('vercel.manifest', () => {
       validateManifest(release);
       if (digest(release) !== digest(manifest)) fail('MANIFEST_CHANGED');
@@ -239,6 +262,7 @@ function buildVercelAdapter({ manifest, candidateDirectory, env = process.env, f
       if (existsSync(configFile)) { if (canonical(JSON.parse(readFileSync(configFile))) !== canonical(expected)) fail('VERCEL_LINK_MISMATCH', phase); }
       else { mkdirSync(configDirectory, { recursive: true, mode: 0o700 }); writeFileSync(configFile, `${JSON.stringify(expected)}\n`, { mode: 0o600, flag: 'wx' }); }
     });
+    admittedScope = { userStatus, teamStatus };
     return { credentialAuthority: production && productionBinding ? 'root_accepted_original_production_issuance'
       : previewBinding && !production ? 'root_accepted_original_issuance' : 'live_token_metadata',
       effectiveAccess: { userStatus, teamStatus, projectId: p.id, projectCount: list.pagination.count } };
@@ -247,6 +271,7 @@ function buildVercelAdapter({ manifest, candidateDirectory, env = process.env, f
 
   async function create(release, context, production) {
     await admit(release, production ? 'production.stage' : 'preview');
+    assertWriteCapability();
     const args=deploymentArguments(release, context.operationId, production);
     if(release.legacyReleaseContainment&&canonical(context.request)!==canonical(selectionSourceDeployRequest(release,production)))fail('CONFIGURATION_SELECTION_SOURCE_BUILD_UNPROVEN');
     const output = run(args);
@@ -258,7 +283,7 @@ function buildVercelAdapter({ manifest, candidateDirectory, env = process.env, f
       controllerSha:release.controller.sha,candidateSha:release.candidate.sha,argumentsSha256:digest(args),cliVersion:'54.20.1'}};
   }
   const adapter = {
-    admit, verifyArtifact, collectCheck, inspect: deployment,
+    admit, assertWriteCapability, verifyArtifact, collectCheck, inspect: deployment,
     observePreviousProduction: async () => {
       const p = await project();
       if (p.id !== target.vercelProject || p.accountId !== target.vercelTeam) fail('VERCEL_PROJECT_IDENTITY');

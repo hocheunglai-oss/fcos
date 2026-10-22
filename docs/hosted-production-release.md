@@ -64,6 +64,23 @@ The admitted setup includes `dependencyArtifact: {runId, name}` for the one-time
 
 ## Evidence and diagnostics
 
+Metadata admission does not prove that a credential can deploy. The pinned CLI's
+scoped commands require `/v2/user`, while the admitted project writer must be denied
+that endpoint. The controller therefore rejects this combination before creating a
+new deployment intent. The admission-only diagnostic still checks identity, source,
+configuration and effective access; its success does not qualify the write transport.
+Do not widen the credential, remove the scope or substitute a REST request under an
+existing manifest. A replacement transport needs its own reviewed source, exact
+configuration/source receipts and hosted qualification.
+
+After a submission throws or returns no result, the controller records uncertainty
+and stops without an inline provider discovery call. A separate recovery invocation
+can read back the original consumed operation; the new-write capability guard does
+not prevent that recovery. A native CLI failure retains only its bounded exit status,
+fixed signal/error labels, and output byte counts and hashes. Raw stdout, stderr,
+command arguments, paths and credentials are never published. These diagnostics do
+not prove that a write was rejected, and never resolve an older unknown outcome.
+
 `config/release-checks-v2.json` is the shared check definition used by the local runner and hosted publisher. A cached check retains its actual source/dependency/runtime/configuration/controller binding and original capture time. Successful records in a partially failed group are retained; failed or pending records never count as acceptance. Generated server bundles must exist and pass the performance budget. Source/config changes invalidate only affected proofs; an unrelated newer `main` does not invalidate the admitted controller SHA.
 
 `release-report.json` separates observed queue time, summed parallel compute time and wall time, identifies recovery runs, and records only actionable approval/intervention/rollback/completion events. Missing timing observations stay null. GitHub's native review/workflow notifications provide delivery; iPhone receipt is verified during setup. Saved coordinator timestamps remain the authority for approval age. No routine progress messages or new chat readiness loop is required.

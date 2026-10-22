@@ -190,17 +190,16 @@ function productionAdapterFixture(t) {
     } });
   return { manifest, preview, ...f, create, state, reads, writes };
 }
-test('Production adapter refreshes narrow access for stage, same-ID promote and rollback without introspection', async t => {
+test('Production metadata admission cannot falsely qualify scoped CLI stage, promote or rollback', async t => {
   const f = productionAdapterFixture(t), adapter = f.create();
   const admitted = await adapter.admit(f.manifest, 'production.stage');
   assert.equal(admitted.credentialAuthority, 'root_accepted_original_production_issuance');
   assert.equal(admitted.effectiveAccess.userStatus, 404);
   f.reads.length = 0;
-  const staged = await adapter.stage(f.manifest, { operationId: `${f.manifest.releaseId}-production-stage` });
-  await adapter.promote(staged); await adapter.rollback(f.manifest.previousProduction);
-  assert.deepEqual(f.writes.map(args => args[0]), ['deploy', 'promote', 'rollback']);
-  assert.ok(f.writes[0].includes('--prod') && f.writes[0].includes('--skip-domain'));
-  assert.equal(f.writes[1][1], staged.id); assert.equal(f.writes[2][1], f.manifest.previousProduction.deploymentId);
+  await assert.rejects(adapter.stage(f.manifest, { operationId: `${f.manifest.releaseId}-production-stage` }), {code:'VERCEL_CLI_PROJECT_SCOPE_UNSUPPORTED'});
+  await assert.rejects(adapter.promote({id:'dpl_productionfixture'}), {code:'VERCEL_CLI_PROJECT_SCOPE_UNSUPPORTED'});
+  await assert.rejects(adapter.rollback(f.manifest.previousProduction), {code:'VERCEL_CLI_PROJECT_SCOPE_UNSUPPORTED'});
+  assert.deepEqual(f.writes, []);
   assert.equal(f.reads.filter(path => path === '/v9/projects').length, 3);
   assert.equal(f.reads.filter(path => path === '/v2/user').length, 3);
   f.state.change = 'user403'; assert.equal((await adapter.admit(f.manifest, 'production.stage')).effectiveAccess.userStatus, 403);

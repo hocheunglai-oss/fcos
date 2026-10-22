@@ -1,4 +1,5 @@
 import { ReleaseError } from './json-contract.mjs';
+import { safeVercelCommandFailure } from './vercel-command-failure.mjs';
 
 // These are code-owned labels, never provider values, error messages or paths.
 export const RELEASE_BOUNDARIES = Object.freeze([
@@ -72,7 +73,7 @@ const diagnosticCodes = new Set(`
   SALESFORCE_READ_SETUP_PROOF_REQUIRED SALESFORCE_READ_UNAVAILABLE SCOPE_BINDING
   SERVER_BUNDLES_REQUIRED SOURCE_ADMISSION SOURCE_CHANGED
   TARGET_MISMATCH VERCEL_API_PATH VERCEL_BUILD_CONFIGURATION_CHANGED
-  VERCEL_CLI_VERSION VERCEL_COMMAND_UNRESOLVED VERCEL_LINK_MISMATCH
+  VERCEL_CLI_VERSION VERCEL_CLI_PROJECT_SCOPE_UNSUPPORTED VERCEL_COMMAND_UNRESOLVED VERCEL_LINK_MISMATCH
   VERCEL_OIDC_TOKEN VERCEL_PREVIEW_WRITER_FOR_PRODUCTION VERCEL_PREVIEW_WRITER_SETUP_REQUIRED
   VERCEL_PRODUCTION_WRITER_CONTEXT VERCEL_PRODUCTION_WRITER_CREDENTIAL_BINDING VERCEL_PRODUCTION_WRITER_CREDENTIAL_SUBSTITUTED
   VERCEL_PRODUCTION_WRITER_FOR_PREVIEW VERCEL_PRODUCTION_WRITER_ORIGINAL_PROOF_REQUIRED VERCEL_PRODUCTION_WRITER_RIGHTS_PROOF_REQUIRED
@@ -85,13 +86,14 @@ const diagnosticCodes = new Set(`
   VERCEL_WRITER_CREDENTIAL_SUBSTITUTED VERCEL_WRITER_ORIGINAL_PROOF_REQUIRED VERIFICATION_ENVIRONMENT
   VERIFICATION_SETUP_REQUIRED
 `.trim().split(/\s+/));
-const diagnosticPhases = new Set([...RELEASE_BOUNDARIES, 'admission', 'identity', 'github.read', 'vercel.preview', 'vercel.read', 'vercel.write', 'preview', 'first_runtime.owner_refresh']);
+const diagnosticPhases = new Set([...RELEASE_BOUNDARIES, 'admission', 'identity', 'github.read', 'vercel.preview', 'vercel.read', 'vercel.write', 'vercel.transport', 'preview', 'first_runtime.owner_refresh']);
 export function safeDiagnosticFailure(error) {
+  const commandFailure = error instanceof ReleaseError ? safeVercelCommandFailure(error.detail?.commandFailure) : undefined;
   const boundary = isReleaseBoundary(error?.boundary) ? error.boundary : undefined;
   const known = error instanceof ReleaseError && (diagnosticCodes.has(error.code)
     || /^(?:GITHUB|VERCEL)_READ_HTTP_[1-5][0-9]{2}$/.test(error.code));
   return { status: 'intervention_required', code: known ? error.code : 'DIAGNOSTIC_FAILURE_UNCLASSIFIED',
     phase: known && diagnosticPhases.has(error.phase) ? error.phase : boundary || 'diagnostic',
     recovery: 'Inspect this admission diagnostic. It authorizes no deployment or release retry.',
-    ...(boundary ? { boundary } : {}) };
+    ...(boundary ? { boundary } : {}), ...(known && commandFailure ? { commandFailure } : {}) };
 }
