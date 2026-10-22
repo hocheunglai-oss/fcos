@@ -1,6 +1,7 @@
 import { assertBoundEvidence, digest, fail, ReleaseError, validateManifest } from './contract.mjs';
 import { atReleaseBoundary, isReleaseBoundary } from './failure.mjs';
 import { safeVercelCommandFailure } from './vercel-command-failure.mjs';
+import { safeVercelSourceApiFailure } from './vercel-source-api.mjs';
 
 const bound = manifest => ({ releaseId: manifest.releaseId, manifestHash: digest(manifest) });
 
@@ -26,17 +27,19 @@ export async function consequential({ manifest, phase, request, coordinator, sub
       const ownerRefreshRequired=error instanceof ReleaseError&&error.code==='FIRST_RUNTIME_OWNER_REFRESH_REQUIRED'
         &&error.detail?.providerSubmissionStarted===false;
       const commandFailure = error instanceof ReleaseError ? safeVercelCommandFailure(error.detail?.commandFailure) : undefined;
+      const sourceApiFailure = error instanceof ReleaseError ? safeVercelSourceApiFailure(error.detail?.sourceApiFailure) : undefined;
+      const diagnostics = { ...(commandFailure ? { commandFailure } : {}), ...(sourceApiFailure ? { sourceApiFailure } : {}) };
       const reason = ownerRefreshRequired ? 'FIRST_RUNTIME_OWNER_REFRESH_REQUIRED_BEFORE_SUBMISSION' : 'PROVIDER_RESPONSE_LOST';
       try {
         await coordinator.uncertain({ ...binding, phase, operationId, reason,
-          ...(commandFailure ? { evidence: { outcome: 'unknown', reason, commandFailure } } : {}) });
+          ...(Object.keys(diagnostics).length ? { evidence: { outcome: 'unknown', reason, ...diagnostics } } : {}) });
       } catch (coordinationError) {
         // A lost journal response must not erase the only local command report.
         // Keep the coordination refusal authoritative, without copying a raw cause.
         const stopped = coordinationError instanceof ReleaseError ? coordinationError
           : new ReleaseError('COORDINATION_UNCERTAINTY_UNCONFIRMED', 'coordinator.uncertain',
             'Read the original intent and uncertainty result separately; do not retry the provider operation.');
-        if (commandFailure) stopped.detail = { commandFailure };
+        if (Object.keys(diagnostics).length) stopped.detail = diagnostics;
         throw stopped;
       }
       // Preserve the consumed intent. This precise trusted pre-launch guard can
@@ -46,7 +49,7 @@ export async function consequential({ manifest, phase, request, coordinator, sub
       // even a GET must not silently follow a refused, thrown or timed-out write.
       throw new ReleaseError('PROVIDER_OUTCOME_UNKNOWN', phase,
         'Resume GET-only readback for this exact operation; do not resubmit.',
-        commandFailure ? { commandFailure } : {});
+        diagnostics);
     }
     if (value !== undefined) {
       const evidence = { outcome: 'applied', result: value };
@@ -95,7 +98,10 @@ export async function preparePreview({ manifest, coordinator, provider, now = Da
   if (terminal) return { status: terminal, resumed: true };
   await atReleaseBoundary('preview.admit', () => provider.admit(manifest, 'preview'));
   if (!snapshot.operations?.['preview.create']) provider.assertWriteCapability?.();
-  const preview = await consequential({ manifest, coordinator, phase: 'preview.create', request: { candidate: manifest.candidate, target: 'preview' },
+  const request = provider.preparePreviewRequest
+    ? await provider.preparePreviewRequest(manifest, { operationId: `${manifest.releaseId}-preview-create`, existingOperation: snapshot.operations?.['preview.create'] })
+    : { candidate: manifest.candidate, target: 'preview' };
+  const preview = await consequential({ manifest, coordinator, phase: 'preview.create', request,
     submit: context => provider.createPreview(manifest, context), readback: context => provider.discover(manifest, 'preview', context) });
   assertDeployment(preview, manifest, 'preview');
   // Building is a dependency, not a false proof failure; a restart polls the same deployment.
@@ -249,10 +255,11 @@ export async function executeHostedProduction({ manifest, coordinator, provider,
 
 export function safeFailure(error) {
   const commandFailure = error instanceof ReleaseError ? safeVercelCommandFailure(error.detail?.commandFailure) : undefined;
+  const sourceApiFailure = error instanceof ReleaseError ? safeVercelSourceApiFailure(error.detail?.sourceApiFailure) : undefined;
   if(error instanceof ReleaseError&&error.code==='FIRST_RUNTIME_OWNER_REFRESH_REQUIRED')return {
     status:'waiting_dependency',code:error.code,phase:error.phase,recovery:error.recovery};
   return error instanceof ReleaseError ? { status: 'intervention_required', code: error.code, phase: error.phase, recovery: error.recovery,
     ...(isReleaseBoundary(error.boundary) ? { boundary: error.boundary } : {}),
-    ...(commandFailure ? { commandFailure } : {}) }
+    ...(commandFailure ? { commandFailure } : {}), ...(sourceApiFailure ? { sourceApiFailure } : {}) }
     : { status: 'intervention_required', code: 'UNCLASSIFIED_PROVIDER_FAILURE', phase: 'unknown', recovery: 'Inspect sanitized phase evidence; do not replay a consequential operation.' };
 }

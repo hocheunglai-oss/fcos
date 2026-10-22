@@ -82,6 +82,43 @@ export function selectionDeploymentMetadata(value) {
 }
 const same=(a,b)=>a===undefined||b===undefined?a===b:canonical(a)===canonical(b);
 const validHash=v=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v);
+export function sourceApiSelectionIntent(manifest, receipt) {
+  return { kind: 'fcos_source_api_archive_v1', candidate: manifest.candidate, target: 'preview', bodySha256: receipt.bodySha256,
+    inventorySha256: receipt.inventorySha256, configurationSha256: receipt.configurationSha256, archiveSha256: receipt.archive?.sha256 };
+}
+function assertSourceApiBuildEvidence(evidence, deployment, manifest) {
+  const bad=()=>fail('CONFIGURATION_SELECTION_SOURCE_BUILD_UNPROVEN'), kind='fcos_source_api_archive_v1';
+  if(manifest.verification?.vercelSourceTransport!==kind||deployment.target!=='preview'||Object.hasOwn(evidence,'arguments'))bad();
+  const {registration:r,operation:o}=evidence,receipt=o?.evidence?.result?.sourceApi,phase='preview.create',operationId=`${manifest.releaseId}-preview-create`,bound=digest(manifest);
+  const keys=['schemaVersion','kind','phase','operationId','requestHash','manifestHash','controllerSha','candidateSha','sourceSha256','projectId','teamId','target',
+    'providerSourceLabel','transport','sourceBuildReadyProven','bodySha256','inventorySha256','configurationSha256','bodyBytes','sourceBytes','fileCount','archive','deploymentId','acknowledgement'];
+  const archive=receipt?.archive,archiveKeys=['format','compressor','packer','parts','compressedBytes','sha256','entryCount'];
+  if(!receipt||Object.getPrototypeOf(receipt)!==Object.prototype||Object.keys(receipt).length!==keys.length||keys.some(key=>!Object.hasOwn(receipt,key))
+    ||receipt.schemaVersion!==1||receipt.kind!==kind||receipt.phase!==phase||receipt.operationId!==operationId||receipt.manifestHash!==bound
+    ||receipt.controllerSha!==manifest.controller.sha||receipt.candidateSha!==manifest.candidate.sha||receipt.sourceSha256!==manifest.candidate.sourceSha256
+    ||receipt.projectId!==manifest.targets.vercelProject||receipt.teamId!==manifest.targets.vercelTeam||receipt.target!=='preview'
+    ||receipt.providerSourceLabel!=='cli'||receipt.transport!=='rest_api'||receipt.sourceBuildReadyProven!==false||receipt.deploymentId!==deployment.id
+    ||!['provider_create_response','authenticated_provider_owner_readback'].includes(receipt.acknowledgement)
+    ||['requestHash','bodySha256','inventorySha256','configurationSha256'].some(key=>!validHash(receipt[key]))
+    ||!Number.isSafeInteger(receipt.bodyBytes)||receipt.bodyBytes<1||receipt.bodyBytes>16*1024*1024
+    ||!Number.isSafeInteger(receipt.sourceBytes)||receipt.sourceBytes<1||receipt.sourceBytes>100_000_000
+    ||!Number.isSafeInteger(receipt.fileCount)||receipt.fileCount<1||receipt.fileCount>15000
+    ||!archive||Object.keys(archive).length!==archiveKeys.length||archiveKeys.some(key=>!Object.hasOwn(archive,key))
+    ||archive.format!=='vercel_source_tgz_parts_v1'||archive.compressor!=='node_gzip_level6'||archive.packer!=='tar-stream@3.2.2'||archive.parts!==1
+    ||!Number.isSafeInteger(archive.compressedBytes)||archive.compressedBytes<1||archive.compressedBytes>16*1024*1024||!validHash(archive.sha256)
+    ||archive.entryCount!==receipt.fileCount||receipt.bodyBytes<=Math.ceil(archive.compressedBytes/3)*4
+    ||o?.evidence?.result?.sourceDeploy||o?.evidence?.result?.sourceDeployReadback)bad();
+  const configuration=Object.fromEntries(['framework','buildCommand','devCommand','installCommand','outputDirectory','rootDirectory','nodeVersion'].map(key=>[key,manifest.verification.projectSettings[key]]));
+  const requestHash=digest(sourceApiSelectionIntent(manifest,receipt));
+  if(receipt.configurationSha256!==digest(configuration)||receipt.requestHash!==requestHash
+    ||!r||r.release_id!==manifest.releaseId||r.manifest_hash!==bound||r.epoch!==manifest.epoch||!same(r.manifest,manifest)
+    ||!o||o.operationId!==operationId||o.operation_id!==operationId||o.release_id!==manifest.releaseId||o.epoch!==manifest.epoch||o.phase!==phase
+    ||o.manifest_hash!==bound||o.requestHash!==requestHash||o.request_hash!==requestHash||o.state!=='complete'||o.evidence?.outcome!=='applied'
+    ||o.evidence.result.id!==deployment.id||deployment.sourceTransport!==kind||deployment.archiveSha256!==archive.sha256
+    ||deployment.inventorySha256!==receipt.inventorySha256||deployment.configurationSha256!==receipt.configurationSha256)bad();
+  return {kind:evidence.kind,operationId,requestHash,bodySha256:receipt.bodySha256,archiveSha256:archive.sha256,
+    inventorySha256:receipt.inventorySha256,basis:receipt.acknowledgement,transport:'rest_api'};
+}
 // Exact existing controller requests, including the staged Production alias hold.
 export function selectionSourceDeployRequest(manifest,production) {
   return production?{candidate:manifest.candidate,previous:manifest.previousProduction,target:'production',skipDomain:true}
@@ -107,6 +144,7 @@ function sourceArguments(args,manifest,hosted) {
  * coordinator; native operators must authenticate original local journal/ACK
  * provenance. A hash or this function never authenticates those providers. */
 export function assertSelectionSourceBuildEvidence(evidence,deployment,manifest) {
+  if(evidence?.kind==='fcos_hosted_selection_source_api_build_v1')return assertSourceApiBuildEvidence(evidence,deployment,manifest);
   const bad=()=>fail('CONFIGURATION_SELECTION_SOURCE_BUILD_UNPROVEN');
   const hosted=evidence?.kind==='fcos_hosted_selection_source_build_v1';
   if(!hosted&&evidence?.kind!=='fcos_native_selection_source_build_v1')bad();

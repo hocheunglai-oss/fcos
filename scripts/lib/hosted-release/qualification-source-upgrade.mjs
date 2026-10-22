@@ -22,6 +22,22 @@ const need = (v, code = 'SOURCE_UPGRADE_PROOF_INVALID') => { if (!v) fail(code, 
 const repo = () => fcosConnectionIdentifier('github', 'Repository');
 const team = () => fcosConnectionIdentifier('vercel', 'Team ID');
 const qSource = p => p.setup.qualificationSource;
+// Integrity only: the privileged caller must authenticate this admission from
+// the same private coordinator. SQL independently checks its actual stored row.
+function exactPreviewCheckerChange(p, quarantine) {
+  const proof=quarantine?.proof,s=proof?.successor,q=qSource(p);
+  return quarantine?.operationId==='fcos-qualification-6a3fbd8f-2ef733d1-source-20261022-preview-create'
+    && quarantine.originalOutcome==='unknown' && quarantine.replayAllowed===false && quarantine.active===true
+    && quarantine.proofSha256===digest(proof) && proof?.kind==='fcos_exact_preview_uncertainty_quarantine_v1'
+    && s?.sourceUpgradeId===p.operationId && s.releaseId===p.plan?.releaseId
+    && s.controllerSha===q?.controllerSha && s.callerSha===q.bootstrapSha && s.ref===q.ref
+    && s.candidateSha===SOURCE_UPGRADE.candidateSha && s.setupSha256===p.setupSha256
+    && s.checkerManifestSha256===digest(p.checkerManifest)
+    && p.parent?.releaseId==='fcos-qualification-6a3fbd8f-2ef733d1-source-20261022';
+}
+function withoutAddedPreviewTransport(value) {
+  return {...value,verification:without(value.verification,'vercelSourceTransport')};
+}
 export const sourceUpgradeSubject = p => without(p, 'rootReview', 'independentReview');
 export function sourceUpgradeActions(p, ready) {
   const host = p.preservation.project, q = qSource(p), route = name => `/repos/${repo()}/actions/variables/${name}`;
@@ -41,7 +57,7 @@ export function sourceUpgradeActions(p, ready) {
 }
 /** Integrity and scope only. Authenticated postgres must independently verify
  * actual root/peer material, source publication and provider observations. */
-export function validateSourceUpgradeProof(p, { now = Date.now() } = {}) {
+export function validateSourceUpgradeProof(p, { now = Date.now(), previewQuarantine } = {}) {
   need(exact(p, ['schemaVersion', 'kind', 'epoch', 'operationId', 'parent', 'previous', 'previousRegistrationSha256', 'previousConfiguration',
     'previousCheckerManifest', 'previousPolicy', 'setup', 'setupSha256', 'plan', 'planSha256', 'manifest', 'manifestSha256',
     'checkerManifest', 'checkerFiles', 'policyRowId', 'policy', 'preservation', 'sourcePreflight', 'ownerReadbackSha256', 'actions', 'rootReview', 'independentReview']));
@@ -58,6 +74,11 @@ export function validateSourceUpgradeProof(p, { now = Date.now() } = {}) {
     && digest(p.previousCheckerManifest) === SOURCE_UPGRADE.initialCheckerManifestSha256
     && digest(p.previousPolicy) === SOURCE_UPGRADE.initialPolicySha256);
   const q = qSource(p), old = p.previous;
+  const checkerChange=exactPreviewCheckerChange(p,previewQuarantine);
+  const transportChange=checkerChange && p.setup.verification?.vercelSourceTransport==='fcos_source_api_archive_v1'
+    && p.manifest.verification?.vercelSourceTransport==='fcos_source_api_archive_v1'
+    && !Object.hasOwn(old.setup.verification||{},'vercelSourceTransport')
+    && !Object.hasOwn(old.manifest.verification||{},'vercelSourceTransport');
   need(p.parent.releaseId === old.plan.releaseId && p.parent.releaseId === old.manifest.releaseId && p.parent.manifestHash === digest(old.manifest)
     && old.manifest.setupSha256 === digest(old.setup) && equal(old.manifest.qualificationSource, old.setup.qualificationSource)
     && old.manifest.controller.sha === old.setup.controllerSha && old.manifest.candidate.sha === SOURCE_UPGRADE.candidateSha
@@ -69,14 +90,14 @@ export function validateSourceUpgradeProof(p, { now = Date.now() } = {}) {
     && q.controllerSha !== old.setup.controllerSha && q.candidateSha === SOURCE_UPGRADE.candidateSha
     && q.callerWorkflowRef === `${repo()}/.github/workflows/authenticated-release.yml@${q.ref}`
     && p.setup.controllerSha === q.controllerSha && p.setup.epoch === 1 && p.setupSha256 === digest(p.setup)
-    && equal(without(p.setup, 'controllerSha', 'qualificationSource'), without(old.setup, 'controllerSha', 'qualificationSource')));
+    && equal(without(transportChange?withoutAddedPreviewTransport(p.setup):p.setup, 'controllerSha', 'qualificationSource'), without(old.setup, 'controllerSha', 'qualificationSource')));
   need(p.planSha256 === digest(p.plan) && /^[A-Za-z0-9._:-]{1,200}$/.test(p.plan.releaseId) && p.plan.releaseId !== old.plan.releaseId
     && equal(without(p.plan, 'releaseId'), without(old.plan, 'releaseId')) && p.plan.stage === 'qualification' && p.plan.executionMode === 'qualification'
     && p.plan.scope.financialAuthority === false && p.plan.migration.mode === 'none' && p.plan.migration.expectedSchemaSha256 === SOURCE_UPGRADE.catalogSha256);
   need(p.manifestSha256 === digest(p.manifest) && p.manifest.releaseId === p.plan.releaseId && p.manifest.setupSha256 === p.setupSha256
     && equal(p.manifest.qualificationSource, q) && p.manifest.controller.sha === q.controllerSha
     && equal(without(p.manifest.controller, 'sha'), without(old.manifest.controller, 'sha'))
-    && equal(without(p.manifest, 'releaseId', 'setupSha256', 'qualificationSource', 'controller'), without(old.manifest, 'releaseId', 'setupSha256', 'qualificationSource', 'controller'))
+    && equal(without(transportChange?withoutAddedPreviewTransport(p.manifest):p.manifest, 'releaseId', 'setupSha256', 'qualificationSource', 'controller'), without(old.manifest, 'releaseId', 'setupSha256', 'qualificationSource', 'controller'))
     && p.manifest.candidate.sha === SOURCE_UPGRADE.candidateSha);
   const admission = { ...p.previousPolicy.qualificationAdmission, ref: q.ref, bootstrapSha: q.bootstrapSha, callerWorkflowSha: q.bootstrapSha,
     callerWorkflowRef: q.callerWorkflowRef, jobWorkflowSha: q.controllerSha,
@@ -89,7 +110,8 @@ export function validateSourceUpgradeProof(p, { now = Date.now() } = {}) {
     const row = p.checkerManifest[i], prior = p.previousCheckerManifest[i], file = p.checkerFiles[i];
     need(exact(row, ['path', 'sha256', 'byteLength']) && sha(row.sha256) && Number.isSafeInteger(row.byteLength) && row.byteLength > 0
       && row.path === prior.path && (i === 0 || p.checkerManifest[i - 1].path < row.path)
-      && (row.path === 'supabase/functions/release-coordinator/approval.mjs' || equal(row, prior))
+      && (row.path === 'supabase/functions/release-coordinator/approval.mjs' || equal(row, prior)
+        || checkerChange && ['supabase/functions/release-coordinator/auth.mjs','supabase/functions/release-coordinator/core.mjs'].includes(row.path))
       && exact(file, ['file', 'encoding', 'data']) && file.file === row.path && file.encoding === 'base64'
       && typeof file.data === 'string' && /^[A-Za-z0-9+/]*={0,2}$/.test(file.data));
     const bytes = Buffer.from(file.data, 'base64'); need(bytes.toString('base64') === file.data && bytes.length === row.byteLength && digest(bytes) === row.sha256);
@@ -108,8 +130,8 @@ export function validateSourceUpgradeProof(p, { now = Date.now() } = {}) {
   }
   return p;
 }
-export function sourceUpgradeSql(command, p, { actionId, evidence, ready, closure } = {}) {
-  validateSourceUpgradeProof(p);
+export function sourceUpgradeSql(command, p, { actionId, evidence, ready, closure, previewQuarantine } = {}) {
+  validateSourceUpgradeProof(p,{previewQuarantine});
   const names = { admit: ['admit_qualification_source_upgrade', [p]], snapshot: ['qualification_source_upgrade_snapshot', [p.operationId, digest(p)]],
     intent: ['qualification_source_upgrade_intent', [p.operationId, actionId, digest(p), ready ?? null]],
     record: ['record_qualification_source_upgrade', [p.operationId, actionId, digest(p), evidence]],

@@ -78,6 +78,10 @@ export function validateManifest(manifest) {
     validateVercelProductionWriterBinding(manifest.verification.vercelProductionWriterCredential,
       { targets: manifest.targets, previewBinding: manifest.verification.vercelPreviewWriterCredential });
   if (manifest.verification) {
+    if (Object.hasOwn(manifest.verification,'vercelSourceTransport')
+      && (manifest.verification.vercelSourceTransport!=='fcos_source_api_archive_v1'
+        || !manifest.legacyReleaseContainment || manifest.stage!=='qualification'
+        || !manifest.verification.vercelPreviewWriterCredential)) fail('VERCEL_SOURCE_TRANSPORT_SCOPE');
     if (!/^ghcr\.io\/hocheunglai-oss\/fcos-release-checks@sha256:[a-f0-9]{64}$/.test(manifest.verification.runtime?.image || '')
       || manifest.verification.runtime.node !== 'v24.18.0' || manifest.verification.runtime.platform !== 'linux'
       || manifest.verification.runtime.arch !== 'x64' || !/^Python 3\.[0-9]+\.[0-9]+$/.test(manifest.verification.runtime.python || '')

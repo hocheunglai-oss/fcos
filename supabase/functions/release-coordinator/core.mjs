@@ -67,6 +67,10 @@ export async function createNotificationDeliveryProof({receiptJson,challenge,now
 
 export function assertQualificationScope(principal,payload,action) {
   assertAuthMaintenanceScope(principal,payload,action);
+  if(principal.retainedPreviewReadbackOnly===true) {
+    need(retainedPreviewReadbackScopeAllowed(principal,payload,action),'COORDINATION_RETAINED_PREVIEW_READBACK_ONLY',403);
+    return;
+  }
   if(principal.qualificationOnly!==true) return;
   need(principal.kind==='github'&&payload.owner.kind==='release'&&!['approve','admitApproval','resume'].includes(action),
     'COORDINATION_QUALIFICATION_ONLY',403);
@@ -151,4 +155,53 @@ export function assertAuthMaintenanceScope(principal,payload,action) {
   'COORDINATION_MAINTENANCE_PRINCIPAL_REQUIRED',403);
   if (action === 'register') validateAuthMaintenanceManifest(payload.manifest);
   if (payload.phase !== undefined) need(AUTH_MAINTENANCE_PHASES.includes(payload.phase),'COORDINATION_PHASE_FORBIDDEN',403);
+}
+
+
+// Historical identity only. This is not an alternative writer admission. Keep
+// the original run/attempt/source immutable even after its successor is admitted.
+const repository = fcosConnectionIdentifier('github', 'Repository');
+export const RETAINED_PREVIEW = Object.freeze({
+  epoch: 1,
+  releaseId: 'fcos-qualification-6a3fbd8f-2ef733d1-source-20261022',
+  operationId: 'fcos-qualification-6a3fbd8f-2ef733d1-source-20261022-preview-create',
+  manifestHash: '62389788e43dd99e081989f974f7df51e0967120e9aff30b9e72c3ffa1a29583',
+  requestHash: '7be15bf07ccfccbb2532c0e439fe296591a78f1d64ca689ab09a14bbc569d466',
+  runId: '39811703824', actor: 'hocheunglai-oss', actorId: '265701760',
+  environment: 'fcos-hosted-preview',
+  admission: Object.freeze({ repository, repositoryId: '1278654816',
+    ref: 'refs/heads/codex/hosted-qualification-6a3fbd8f-20261022',
+    bootstrapSha: '300a46365fbb8b159100b6bdd66523d757cfa4ec',
+    callerWorkflowRef: `${repository}/.github/workflows/authenticated-release.yml@refs/heads/codex/hosted-qualification-6a3fbd8f-20261022`,
+    callerWorkflowSha: '300a46365fbb8b159100b6bdd66523d757cfa4ec',
+    jobWorkflowRef: `${repository}/.github/workflows/hosted-release-controller.yml@6a3fbd8fd05a76c052e7e380d618aedf43e5b72e`,
+    jobWorkflowSha: '6a3fbd8fd05a76c052e7e380d618aedf43e5b72e',
+    candidateSha: '2ef733d17dd12314c72971c2220b2b09903a6bf0',
+    setupSha256: '98d8a3dc58a0a274b0579128c36a9d224b18b1e93a03e27b61c3b451d73c5782' }),
+});
+
+/** Only call after JWT signature/issuer/audience/time verification. A separately
+ * authenticated attempt-one readback run records its own actual run ID. It does
+ * not adopt or replace the original submitting run. */
+export function matchesRetainedPreviewReadbackClaims(c, policy) {
+  const q = RETAINED_PREVIEW.admission;
+  return policy.repository === q.repository && policy.repositoryId === q.repositoryId
+    && c.repository === q.repository && c.repository_id === q.repositoryId
+    && c.ref === q.ref && c.sha === q.bootstrapSha && c.workflow_sha === q.callerWorkflowSha
+    && c.workflow_ref === q.callerWorkflowRef && c.job_workflow_ref === q.jobWorkflowRef
+    && c.job_workflow_sha === q.jobWorkflowSha && /^[1-9][0-9]*$/.test(c.run_id)
+    && c.run_attempt === '1' && c.actor === RETAINED_PREVIEW.actor && c.actor_id === RETAINED_PREVIEW.actorId
+    && ['fcos-hosted-preview','fcos-hosted-verification'].includes(c.environment) && c.ref_protected === 'true';
+}
+
+/** Snapshot is observational. Readback may append a genuine provider outcome
+ * through the separately checked SQL path; it never submits a provider write. */
+export function retainedPreviewReadbackScopeAllowed(principal, payload, action) {
+  if (principal?.retainedPreviewReadbackOnly !== true || principal.kind !== 'github'
+    || !/^[1-9][0-9]*$/.test(principal.runId) || principal.runAttempt !== '1'
+    || payload?.owner?.kind !== 'release' || payload.owner.id !== 'features' || payload.epoch !== RETAINED_PREVIEW.epoch
+    || payload.releaseId !== RETAINED_PREVIEW.releaseId || payload.manifestHash !== RETAINED_PREVIEW.manifestHash) return false;
+  if (action === 'snapshot') return true;
+  return action === 'readback' && payload.phase === 'preview.create'
+    && payload.operationId === RETAINED_PREVIEW.operationId;
 }

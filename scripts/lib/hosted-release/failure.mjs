@@ -1,5 +1,6 @@
 import { ReleaseError } from './json-contract.mjs';
 import { safeVercelCommandFailure } from './vercel-command-failure.mjs';
+import { safeVercelSourceApiFailure } from './vercel-source-api.mjs';
 
 // These are code-owned labels, never provider values, error messages or paths.
 export const RELEASE_BOUNDARIES = Object.freeze([
@@ -85,15 +86,23 @@ const diagnosticCodes = new Set(`
   VERCEL_WRITER_CONTEXT VERCEL_WRITER_CREDENTIALS_NOT_SEPARATE VERCEL_WRITER_CREDENTIAL_BINDING
   VERCEL_WRITER_CREDENTIAL_SUBSTITUTED VERCEL_WRITER_ORIGINAL_PROOF_REQUIRED VERIFICATION_ENVIRONMENT
   VERIFICATION_SETUP_REQUIRED
+  SOURCE_API_TRANSPORT_NOT_ADMITTED SOURCE_API_PRODUCTION_NOT_IMPLEMENTED SOURCE_API_WRITER_CONTEXT
+  SOURCE_API_SOURCE_CHANGED SOURCE_API_PROJECT_CONFIGURATION SOURCE_API_PROJECT_IDENTITY
+  SOURCE_API_PRIVATE_OR_INVALID_PATH SOURCE_API_REGULAR_FILES_REQUIRED SOURCE_API_SOURCE_TOO_LARGE
+  SOURCE_API_SOURCE_EMPTY SOURCE_API_CONFIGURATION_OVERRIDE SOURCE_API_ARCHIVE_ENTRIES
+  SOURCE_API_ARCHIVE_INVALID SOURCE_API_PAYLOAD_TOO_LARGE SOURCE_API_MANIFEST_CHANGED
+  SOURCE_API_OPERATION_BINDING SOURCE_API_SUBMISSION_CONTEXT SOURCE_API_SYNCHRONOUS_CONTEXT_REQUIRED
+  SOURCE_API_RECOVERY_REQUEST_CHANGED VERCEL_SOURCE_API_OUTCOME_UNKNOWN
 `.trim().split(/\s+/));
-const diagnosticPhases = new Set([...RELEASE_BOUNDARIES, 'admission', 'identity', 'github.read', 'vercel.preview', 'vercel.read', 'vercel.write', 'vercel.transport', 'preview', 'first_runtime.owner_refresh']);
+const diagnosticPhases = new Set([...RELEASE_BOUNDARIES, 'admission', 'identity', 'github.read', 'vercel.preview', 'vercel.read', 'vercel.write', 'vercel.transport', 'vercel.source_api.prepare', 'vercel.source_api.write', 'preview', 'first_runtime.owner_refresh']);
 export function safeDiagnosticFailure(error) {
   const commandFailure = error instanceof ReleaseError ? safeVercelCommandFailure(error.detail?.commandFailure) : undefined;
+  const sourceApiFailure = error instanceof ReleaseError ? safeVercelSourceApiFailure(error.detail?.sourceApiFailure) : undefined;
   const boundary = isReleaseBoundary(error?.boundary) ? error.boundary : undefined;
   const known = error instanceof ReleaseError && (diagnosticCodes.has(error.code)
     || /^(?:GITHUB|VERCEL)_READ_HTTP_[1-5][0-9]{2}$/.test(error.code));
   return { status: 'intervention_required', code: known ? error.code : 'DIAGNOSTIC_FAILURE_UNCLASSIFIED',
     phase: known && diagnosticPhases.has(error.phase) ? error.phase : boundary || 'diagnostic',
     recovery: 'Inspect this admission diagnostic. It authorizes no deployment or release retry.',
-    ...(boundary ? { boundary } : {}), ...(known && commandFailure ? { commandFailure } : {}) };
+    ...(boundary ? { boundary } : {}), ...(known && commandFailure ? { commandFailure } : {}), ...(known && sourceApiFailure ? { sourceApiFailure } : {}) };
 }

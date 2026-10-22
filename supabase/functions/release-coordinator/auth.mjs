@@ -1,6 +1,6 @@
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { fcosConnectionIdentifier } from '../../../config/fcosConnections.js';
-import { need } from './core.mjs';
+import { need, RETAINED_PREVIEW, matchesRetainedPreviewReadbackClaims } from './core.mjs';
 export const GITHUB_ISSUER = 'https://token.actions.githubusercontent.com';
 export const COORDINATOR_AUDIENCE = 'fcos-release-coordinator';
 export function validatePolicy(policy) {
@@ -41,8 +41,10 @@ export function createGithubAuthenticator({policy,jwks,now=()=>Date.now()}) {
         maxTokenAge:'5m',clockTolerance:5,currentDate:new Date(now())}));
     } catch { need(false,'COORDINATION_GITHUB_IDENTITY_INVALID',401); }
     const admitted = policy.workflows.find(p=>p.callerWorkflowRef===claims.workflow_ref && p.jobWorkflowRef===claims.job_workflow_ref && p.jobWorkflowSha===claims.job_workflow_sha);
-    const q=policy.qualificationAdmission;
-    const qualificationOnly=!!q&&claims.ref===q.ref&&claims.sha===q.bootstrapSha&&claims.workflow_sha===q.callerWorkflowSha
+    const retainedPreviewReadbackOnly=matchesRetainedPreviewReadbackClaims(claims,policy);
+    need(claims.ref!==RETAINED_PREVIEW.admission.ref||retainedPreviewReadbackOnly,'COORDINATION_RETIRED_PREVIEW_WRITER',401);
+    const q=retainedPreviewReadbackOnly?RETAINED_PREVIEW.admission:policy.qualificationAdmission;
+    const qualificationOnly=retainedPreviewReadbackOnly||!!q&&claims.ref===q.ref&&claims.sha===q.bootstrapSha&&claims.workflow_sha===q.callerWorkflowSha
       &&claims.workflow_ref===q.callerWorkflowRef&&claims.job_workflow_ref===q.jobWorkflowRef&&claims.job_workflow_sha===q.jobWorkflowSha
       &&claims.ref_protected==='true'&&!['fcos-production-release','fcos-hosted-production-resume'].includes(claims.environment);
     need(claims.aud===COORDINATOR_AUDIENCE && claims.repository===policy.repository && claims.repository_id===policy.repositoryId
@@ -57,7 +59,8 @@ export function createGithubAuthenticator({policy,jwks,now=()=>Date.now()}) {
       ref:claims.ref,sha:claims.sha,workflowSha:claims.workflow_sha,workflowRef:claims.workflow_ref,
       jobWorkflowRef:claims.job_workflow_ref,jobWorkflowSha:claims.job_workflow_sha,
       environment:claims.environment ?? null,actor:claims.actor,actorId:claims.actor_id,subject:claims.sub,
-      ...(qualificationOnly?{qualificationOnly:true,qualificationAdmission:{...q}}:{})};
+      ...(qualificationOnly?{qualificationOnly:true,qualificationAdmission:{...q}}:{}),
+      ...(retainedPreviewReadbackOnly?{retainedPreviewReadbackOnly:true}:{})};
   };
 }
 /** A separate issuer/key/audience is mandatory. This credential grants serialization only.
