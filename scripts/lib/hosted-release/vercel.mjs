@@ -14,7 +14,7 @@ import { assertVercelPreviewWriterSecret, assertVercelProductionWriterSecret } f
 import { validateFirstRuntimeOwnerRefresh } from './first-runtime.mjs';
 import { atReleaseBoundary } from './failure.mjs';
 import { vercelCommandFailure } from './vercel-command-failure.mjs';
-import { SOURCE_API_TRANSPORT, prepareVercelSourceApiRequest, executeVercelSourceApiRequest } from './vercel-source-api.mjs';
+import { SOURCE_API_TRANSPORT, prepareVercelSourceApiRequest, executeVercelSourceApiRequest, prepareVercelProjectActionRequest, executeVercelProjectActionRequest, verifyVercelProjectActionRecoveryRequest } from './vercel-source-api.mjs';
 
 export function assertProjectConfiguration(actual, expected) {
   const keys = ['framework','buildCommand','devCommand','installCommand','outputDirectory','rootDirectory','nodeVersion'];
@@ -64,21 +64,27 @@ function buildVercelAdapter({ manifest, candidateDirectory, env = process.env, f
   const cwd = resolve(candidateDirectory), target = manifest.targets;
   const sourceTransport = manifest.verification?.vercelSourceTransport;
   if (sourceTransport !== undefined && sourceTransport !== SOURCE_API_TRANSPORT) fail('SOURCE_API_TRANSPORT_NOT_ADMITTED');
-  const sourceApi = sourceTransport === SOURCE_API_TRANSPORT, preparedPreviews = new Map();
+  const sourceApi = sourceTransport === SOURCE_API_TRANSPORT, preparedPreviews = new Map(), preparedActions = new Map();
   const step = (boundary, callback) => atReleaseBoundary(boundary, callback, observeBoundary);
   if (diagnosticOnly && !manifest.verification?.vercelPreviewWriterCredential) fail('VERCEL_PREVIEW_WRITER_SETUP_REQUIRED', 'diagnostic');
   const reader=readOnly?createVercelIntegrationReader({manifest,env,fetchImpl,now}):null;
+  const aliasReader=readOnly&&sourceApi?createVercelReadTransport({binding:manifest.verification.vercelReadCredential,targets:target,env,fetchImpl,now}):null;
+  const productionAliasPath=`/v4/aliases/${new URL(target.productionOrigin).hostname}?projectId=${target.vercelProject}`;
   if (!readOnly && (!env.FCOS_HOSTED_VERCEL_TOKEN || !env.FCOS_HOSTED_VERCEL_TOKEN_ID)) fail('HOSTED_VERCEL_CREDENTIAL_MISSING');
   const cliEnv = { PATH: env.PATH, HOME: env.HOME, CI: '1', NO_COLOR: '1', VERCEL_TOKEN: env.FCOS_HOSTED_VERCEL_TOKEN,
     VERCEL_ORG_ID: target.vercelTeam, VERCEL_PROJECT_ID: target.vercelProject };
   let admittedScope, admittedProject;
   function assertWriteCapability() {
     if (sourceApi) {
-      if (env.FCOS_HOSTED_CREDENTIAL_CLASS === 'production') fail('SOURCE_API_PRODUCTION_NOT_IMPLEMENTED', 'vercel.transport');
-      if (!admittedScope || !admittedProject || env.FCOS_HOSTED_CREDENTIAL_CLASS !== 'preview'
-        || !manifest.verification?.vercelPreviewWriterCredential) fail('SOURCE_API_WRITER_CONTEXT', 'vercel.transport');
+      if (!admittedScope || !admittedProject) fail('SOURCE_API_WRITER_CONTEXT', 'vercel.transport');
       assertHostedSetup({ manifest, env }); assertHostedSourceContext({ manifest, env });
-      assertVercelPreviewWriterSecret(manifest.verification.vercelPreviewWriterCredential, { targets: target, env, now: now() });
+      if (env.FCOS_HOSTED_CREDENTIAL_CLASS === 'production') {
+        if (!manifest.verification.vercelProductionWriterCredential) fail('SOURCE_API_WRITER_CONTEXT', 'vercel.transport');
+        assertCurrentFirstRuntimeOwnerRefresh(manifest); assertProductionWriterContext(manifest);
+      } else {
+        if(env.FCOS_HOSTED_CREDENTIAL_CLASS!=='preview'||!manifest.verification.vercelPreviewWriterCredential)fail('SOURCE_API_WRITER_CONTEXT','vercel.transport');
+        assertVercelPreviewWriterSecret(manifest.verification.vercelPreviewWriterCredential, { targets: target, env, now: now() });
+      }
       return;
     }
     if (env.FCOS_HOSTED_CREDENTIAL_CLASS === 'production') {
@@ -132,7 +138,7 @@ function buildVercelAdapter({ manifest, candidateDirectory, env = process.env, f
     }
   };
   const api = async (path, { permitStatus, scopeTeam = true } = {}) => {
-    if(readOnly)return reader.get(path);
+    if(readOnly){if(aliasReader&&path===productionAliasPath){await reader.admit();return aliasReader.getProductionAlias();}return reader.get(path);}
     const url = new URL(`https://api.vercel.com${path}`); if (scopeTeam) url.searchParams.set('teamId', target.vercelTeam);
     if (url.origin !== 'https://api.vercel.com' || !path.startsWith('/v')) fail('VERCEL_API_PATH');
     if (diagnosticOnly && !previewAdmissionReadAllowed(url, target)) fail('DIAGNOSTIC_READ_FORBIDDEN', 'diagnostic');
@@ -174,7 +180,6 @@ function buildVercelAdapter({ manifest, candidateDirectory, env = process.env, f
       const operation=snapshot.operations?.[sourcePhase];
       if(exact.operationId!==operationId||exact.sourceSha256!==release.candidate.sourceSha256)fail('CONFIGURATION_SELECTION_SOURCE_BUILD_UNPROVEN');
       if(sourceApi){
-        if(phase!=='preview')fail('SOURCE_API_PRODUCTION_NOT_IMPLEMENTED');
         selection=assertSelectionBuildEvidence(await api(`/v3/deployments/${exact.id}/events?direction=forward&follow=0&limit=-1&builds=1`),exact,release,
           {kind:'fcos_hosted_selection_source_api_build_v1',registration:snapshot.registration,operation});
       }else{
@@ -226,7 +231,7 @@ function buildVercelAdapter({ manifest, candidateDirectory, env = process.env, f
     });
     if(readOnly)return reader.admit();
     const production = phase.startsWith('production');
-    if (sourceApi && production) fail('SOURCE_API_PRODUCTION_NOT_IMPLEMENTED', 'vercel.transport');
+    if (sourceApi && production && (release.executionMode!=='release'||!release.verification?.vercelProductionWriterCredential)) fail('SOURCE_API_PRODUCTION_CONTEXT','vercel.transport');
     if (diagnosticOnly && phase !== 'preview') fail('DIAGNOSTIC_WRITE_FORBIDDEN', 'diagnostic');
     const previewBinding = release.verification?.vercelPreviewWriterCredential;
     const productionBinding = release.verification?.vercelProductionWriterCredential;
@@ -302,11 +307,11 @@ function buildVercelAdapter({ manifest, candidateDirectory, env = process.env, f
 
   async function create(release, context, production) {
     if (sourceApi) {
-      if (production) fail('SOURCE_API_PRODUCTION_NOT_IMPLEMENTED', 'vercel.transport');
       const prepared = preparedPreviews.get(context?.operationId);
-      if (!prepared || prepared.recoveryOnly || digest(release) !== digest(manifest)) fail('SOURCE_API_SUBMISSION_CONTEXT');
+      if (!prepared || prepared.request.receipt.phase !== (production?'production.stage':'preview.create') || prepared.recoveryOnly || digest(release) !== digest(manifest)) fail('SOURCE_API_SUBMISSION_CONTEXT');
       return executeVercelSourceApiRequest({ prepared: prepared.request, manifest: release, context,
-        token: env.FCOS_HOSTED_VERCEL_TOKEN, fetchImpl, assertWriteContext: () => assertWriteCapability() });
+        token: env.FCOS_HOSTED_VERCEL_TOKEN, fetchImpl, assertWriteContext: () => {
+          if(env.FCOS_HOSTED_CREDENTIAL_CLASS!==(production?'production':'preview'))fail('CREDENTIAL_CLASS_MISMATCH');assertWriteCapability(); } });
     }
     await admit(release, production ? 'production.stage' : 'preview');
     assertWriteCapability();
@@ -320,8 +325,32 @@ function buildVercelAdapter({ manifest, candidateDirectory, env = process.env, f
       phase:production?'production.stage':'preview.create',requestHash:digest(context.request),manifestHash:digest(release),
       controllerSha:release.controller.sha,candidateSha:release.candidate.sha,argumentsSha256:digest(args),cliVersion:'54.20.1'}};
   }
+  function bindExisting(request,existingOperation){
+    if(existingOperation&&(existingOperation.requestHash!==request.receipt.requestHash||existingOperation.request_hash!==request.receipt.requestHash
+      ||existingOperation.operationId!==request.receipt.operationId||existingOperation.operation_id!==request.receipt.operationId
+      ||existingOperation.manifest_hash!==digest(manifest)))fail('SOURCE_API_RECOVERY_REQUEST_CHANGED');
+  }
+  function prepareAction(release,{operationId,existingOperation,staged,compatible,phase}){
+    if(!sourceApi)return phase==='production.promote'?{deploymentId:staged.id,previousDeploymentId:release.previousProduction.deploymentId}
+      :{from:staged.id,to:release.previousProduction.deploymentId,schemaSha256:compatible.schemaSha256,runtimeSha256:compatible.runtimeSha256};
+    if(digest(release)!==digest(manifest)||env.FCOS_HOSTED_CREDENTIAL_CLASS!=='production')fail('SOURCE_API_WRITER_CONTEXT');
+    assertWriteCapability();
+    const request=prepareVercelProjectActionRequest({manifest:release,candidateDirectory:cwd,operationId,staged,compatible,phase});
+    bindExisting(request,existingOperation);preparedActions.set(operationId,{request,recoveryOnly:Boolean(existingOperation)});return request.intent;
+  }
+  function executeAction(phase,context,deploymentId){
+    const prepared=preparedActions.get(context?.operationId);
+    if(!prepared||prepared.recoveryOnly||prepared.request.receipt.phase!==phase||prepared.request.receipt.deploymentId!==deploymentId)fail('SOURCE_API_ACTION_CONTEXT');
+    return executeVercelProjectActionRequest({prepared:prepared.request,manifest,context,token:env.FCOS_HOSTED_VERCEL_TOKEN,fetchImpl,
+      assertWriteContext:()=>{if(env.FCOS_HOSTED_CREDENTIAL_CLASS!=='production')fail('CREDENTIAL_CLASS_MISMATCH');assertWriteCapability();}});
+  }
   const adapter = {
     admit, assertWriteCapability, verifyArtifact, collectCheck, inspect: deployment,
+    verifyProjectActionRecoveryRequest: (release,context) => {
+      if(!sourceApi)return undefined;
+      if(digest(release)!==digest(manifest))fail('MANIFEST_CHANGED');
+      return verifyVercelProjectActionRecoveryRequest({...context,manifest:release});
+    },
     preparePreviewRequest: async (release, { operationId, existingOperation } = {}) => {
       if (!sourceApi) return { candidate: release.candidate, target: 'preview' };
       if (digest(release) !== digest(manifest) || !admittedProject) fail('SOURCE_API_WRITER_CONTEXT');
@@ -332,6 +361,15 @@ function buildVercelAdapter({ manifest, candidateDirectory, env = process.env, f
       preparedPreviews.set(operationId, { request, recoveryOnly: Boolean(existingOperation) });
       return request.intent;
     },
+    prepareStageRequest: async (release, { operationId, existingOperation } = {}) => {
+      if(!sourceApi)return selectionSourceDeployRequest(release,true);
+      if(digest(release)!==digest(manifest)||!admittedProject||env.FCOS_HOSTED_CREDENTIAL_CLASS!=='production')fail('SOURCE_API_WRITER_CONTEXT');
+      assertWriteCapability();
+      const request=await prepareVercelSourceApiRequest({manifest:release,candidateDirectory:cwd,observedProject:admittedProject,operationId,phase:'production.stage'});
+      bindExisting(request,existingOperation);preparedPreviews.set(operationId,{request,recoveryOnly:Boolean(existingOperation)});return request.intent;
+    },
+    preparePromoteRequest: (release, { operationId, existingOperation, staged } = {}) => prepareAction(release,{operationId,existingOperation,staged,phase:'production.promote'}),
+    prepareRollbackRequest: (release, { operationId, existingOperation, staged, compatible } = {}) => prepareAction(release,{operationId,existingOperation,staged,compatible,phase:'production.rollback'}),
     observePreviousProduction: async () => {
       const p = await project();
       if (p.id !== target.vercelProject || p.accountId !== target.vercelTeam) fail('VERCEL_PROJECT_IDENTITY');
@@ -349,7 +387,16 @@ function buildVercelAdapter({ manifest, candidateDirectory, env = process.env, f
         sha: prior.sha, sourceSha256, schemaSha256: schema.sha256, runtimeSha256: digest({ flags: runtime.flags, safety: runtime.safety, auth: runtime.auth }) } };
     },
     createPreview: (release, context) => create(release, context, false), stage: (release, context) => create(release, context, true),
-    currentProduction: async () => { const p = await project(); return deployment(p.targets?.production?.id); },
+    currentProduction: async () => {
+      const p=await project();if(!sourceApi)return deployment(p.targets?.production?.id);
+      if(p.id!==target.vercelProject||p.accountId!==target.vercelTeam)fail('DEPLOYMENT_TARGET');
+      const alias=await api(productionAliasPath);
+      if(alias.alias!==new URL(target.productionOrigin).hostname||alias.projectId!==target.vercelProject||alias.deletedAt!=null||alias.redirect!=null
+        ||!/^dpl_[A-Za-z0-9]+$/.test(alias.deploymentId||'')||alias.deployment?.id!==alias.deploymentId)fail('PRODUCTION_ALIAS_BINDING');
+      const current=await deployment(alias.deploymentId);
+      if(current.target!=='production'||current.state!=='READY'||alias.deployment.url!==new URL(current.url).hostname)fail('PRODUCTION_ALIAS_BINDING');
+      return current;
+    },
     ready: value => deployment(value.id),
     discover: async (release, targetName, { operationId, request }) => {
       let sourceReadback;
@@ -360,11 +407,11 @@ function buildVercelAdapter({ manifest, candidateDirectory, env = process.env, f
         // A separate recovery run can reconstruct the deterministic request from
         // its immutable source and compare the original journal hash. This is
         // local preparation plus target-locked GETs, never a new write capability.
-        if(sourceApi&&!prepared&&targetName==='preview'){
-          prepared=await prepareVercelSourceApiRequest({manifest:release,candidateDirectory:cwd,observedProject:await project(),operationId});
+        if(sourceApi&&!prepared){
+          prepared=await prepareVercelSourceApiRequest({manifest:release,candidateDirectory:cwd,observedProject:await project(),operationId,phase:targetName==='preview'?'preview.create':'production.stage'});
           preparedPreviews.set(operationId,{request:prepared,recoveryOnly:true});
         }
-        if(sourceApi&&(!prepared||targetName!=='preview'))fail('SOURCE_API_RECOVERY_REQUEST_CHANGED');
+        if(sourceApi&&!prepared)fail('SOURCE_API_RECOVERY_REQUEST_CHANGED');
         const phase=targetName==='preview'?'preview.create':'production.stage',expectedRequest=sourceApi?prepared.intent:selectionSourceDeployRequest(release,targetName==='production');
         const requestHash=digest(expectedRequest),manifestHash=digest(release);
         const snapshot=await coordinator.snapshot({releaseId:release.releaseId,manifestHash}),r=snapshot.registration,o=snapshot.operations?.[phase];
@@ -400,11 +447,13 @@ function buildVercelAdapter({ manifest, candidateDirectory, env = process.env, f
       return { outcome: 'applied', result:sourceApiReadback?{...result,sourceApi:{...sourceApiReadback,deploymentId:result.id}}
         :sourceReadback?{...result,sourceDeployReadback:{...sourceReadback,deploymentId:result.id}}:result };
     },
-    promote: async value => {
+    promote: async (value,context) => {
+      if(sourceApi)return executeAction('production.promote',context,value.id);
       if (manifest.verification?.vercelProductionWriterCredential) await admit(manifest, 'production.promote');
       run(['promote', value.id, '--yes']);
     },
-    rollback: async previous => {
+    rollback: async (previous,context) => {
+      if(sourceApi)return executeAction('production.rollback',context,previous.deploymentId);
       if (manifest.verification?.vercelProductionWriterCredential) await admit(manifest, 'production.rollback');
       run(['rollback', previous.deploymentId, '--yes']);
     },
@@ -426,7 +475,7 @@ function buildVercelAdapter({ manifest, candidateDirectory, env = process.env, f
       if (version.deploymentId !== value.id || version.commit !== release.previousProduction.sha || version.provenance?.sourceDigest !== release.previousProduction.sourceSha256) fail('ROLLBACK_PUBLIC_READBACK');
     },
   };
-  if(readOnly)return Object.fromEntries(['admit','verifyArtifact','collectCheck','inspect','observePreviousProduction','currentProduction','ready','discover'].map(key=>[key,adapter[key]]));
+  if(readOnly)return Object.fromEntries(['admit','verifyArtifact','collectCheck','inspect','observePreviousProduction','currentProduction','ready','discover','verifyProjectActionRecoveryRequest'].map(key=>[key,adapter[key]]));
   return adapter;
 }
 

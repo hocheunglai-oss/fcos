@@ -83,20 +83,21 @@ export function selectionDeploymentMetadata(value) {
 const same=(a,b)=>a===undefined||b===undefined?a===b:canonical(a)===canonical(b);
 const validHash=v=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v);
 export function sourceApiSelectionIntent(manifest, receipt) {
-  return { kind: 'fcos_source_api_archive_v1', candidate: manifest.candidate, target: 'preview', bodySha256: receipt.bodySha256,
+  return { kind: 'fcos_source_api_archive_v1', candidate: manifest.candidate, target: receipt.target,
+    ...(receipt.target==='production'?{previous:manifest.previousProduction,skipDomain:true}:{}),bodySha256: receipt.bodySha256,
     inventorySha256: receipt.inventorySha256, configurationSha256: receipt.configurationSha256, archiveSha256: receipt.archive?.sha256 };
 }
 function assertSourceApiBuildEvidence(evidence, deployment, manifest) {
   const bad=()=>fail('CONFIGURATION_SELECTION_SOURCE_BUILD_UNPROVEN'), kind='fcos_source_api_archive_v1';
-  if(manifest.verification?.vercelSourceTransport!==kind||deployment.target!=='preview'||Object.hasOwn(evidence,'arguments'))bad();
-  const {registration:r,operation:o}=evidence,receipt=o?.evidence?.result?.sourceApi,phase='preview.create',operationId=`${manifest.releaseId}-preview-create`,bound=digest(manifest);
+  if(manifest.verification?.vercelSourceTransport!==kind||!['preview','production'].includes(deployment.target)||deployment.target==='production'&&manifest.executionMode!=='release'||Object.hasOwn(evidence,'arguments'))bad();
+  const {registration:r,operation:o}=evidence,receipt=o?.evidence?.result?.sourceApi,phase=deployment.target==='preview'?'preview.create':'production.stage',operationId=`${manifest.releaseId}-${phase.replaceAll('.','-')}`,bound=digest(manifest);
   const keys=['schemaVersion','kind','phase','operationId','requestHash','manifestHash','controllerSha','candidateSha','sourceSha256','projectId','teamId','target',
     'providerSourceLabel','transport','sourceBuildReadyProven','bodySha256','inventorySha256','configurationSha256','bodyBytes','sourceBytes','fileCount','archive','deploymentId','acknowledgement'];
   const archive=receipt?.archive,archiveKeys=['format','compressor','packer','parts','compressedBytes','sha256','entryCount'];
   if(!receipt||Object.getPrototypeOf(receipt)!==Object.prototype||Object.keys(receipt).length!==keys.length||keys.some(key=>!Object.hasOwn(receipt,key))
     ||receipt.schemaVersion!==1||receipt.kind!==kind||receipt.phase!==phase||receipt.operationId!==operationId||receipt.manifestHash!==bound
     ||receipt.controllerSha!==manifest.controller.sha||receipt.candidateSha!==manifest.candidate.sha||receipt.sourceSha256!==manifest.candidate.sourceSha256
-    ||receipt.projectId!==manifest.targets.vercelProject||receipt.teamId!==manifest.targets.vercelTeam||receipt.target!=='preview'
+    ||receipt.projectId!==manifest.targets.vercelProject||receipt.teamId!==manifest.targets.vercelTeam||receipt.target!==deployment.target
     ||receipt.providerSourceLabel!=='cli'||receipt.transport!=='rest_api'||receipt.sourceBuildReadyProven!==false||receipt.deploymentId!==deployment.id
     ||!['provider_create_response','authenticated_provider_owner_readback'].includes(receipt.acknowledgement)
     ||['requestHash','bodySha256','inventorySha256','configurationSha256'].some(key=>!validHash(receipt[key]))

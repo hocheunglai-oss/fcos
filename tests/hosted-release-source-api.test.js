@@ -10,11 +10,11 @@ import tarStream from 'tar-stream';
 import { collectBuildProvenance } from '../scripts/lib/build-provenance.mjs';
 import { fixtureManifest } from './helpers/hosted-release-manifest.mjs';
 import { digest } from '../scripts/lib/hosted-release/contract.mjs';
-import { createVercelSourceArchive, prepareVercelSourceApiRequest, executeVercelSourceApiRequest, safeVercelSourceApiFailure, SOURCE_API_TRANSPORT } from '../scripts/lib/hosted-release/vercel-source-api.mjs';
+import { createVercelSourceArchive, prepareVercelSourceApiRequest, executeVercelSourceApiRequest, safeVercelSourceApiFailure, SOURCE_API_TRANSPORT, prepareVercelProjectActionRequest, executeVercelProjectActionRequest } from '../scripts/lib/hosted-release/vercel-source-api.mjs';
 import { createVercelAdapter } from '../scripts/lib/hosted-release/vercel.mjs';
-import { preparePreview, reconcilePending, safeFailure } from '../scripts/lib/hosted-release/controller.mjs';
+import { preparePreview, reconcilePending, safeFailure, consequential } from '../scripts/lib/hosted-release/controller.mjs';
 import { selectionBuildGuard } from '../scripts/lib/hosted-release/configuration-selection.mjs';
-import { admitPreviewWriterFixture } from './helpers/hosted-vercel-writer.mjs';
+import { admitPreviewWriterFixture, admitProductionWriterFixture } from './helpers/hosted-vercel-writer.mjs';
 import { vercelReadFixture } from './helpers/hosted-vercel-read.mjs';
 import { LEGACY_RELEASE_EFFECTS } from '../config/legacyReleaseContainment.js';
 
@@ -184,9 +184,9 @@ test('all extracted file bytes/modes reproduce the exact source digest and execu
   assert.equal(refused.stderr.toString().includes('CANDIDATE_MARKER\n'), false);
 });
 
-test('Production stage, promote, and arbitrary operation IDs are unavailable', async t => {
+test('qualification cannot prepare Production stage, actions, or arbitrary operation IDs', async t => {
   const f = fixture(t);
-  for (const phase of ['production.stage', 'production.promote', 'production.rollback']) await assert.rejects(() => f.prepare({ phase }), /PRODUCTION_NOT_IMPLEMENTED/);
+  for (const phase of ['production.stage', 'production.promote', 'production.rollback']) await assert.rejects(() => f.prepare({ phase }), /SOURCE_API_PHASE/);
   await assert.rejects(() => f.prepare({ operationId: 'different-operation' }), /OPERATION_BINDING/);
 });
 
@@ -275,20 +275,22 @@ test('timeout is bounded even if the transport ignores abort and never resubmits
   assert.equal(calls, 1); assert.equal(signal.aborted, true);
 });
 
-function integrated(t, { outcome = 'ack', uncertaintyThrows = false, native = false, deploymentProjectSettings } = {}) {
+function integrated(t, { outcome = 'ack', uncertaintyThrows = false, native = false, production = false, deploymentProjectSettings } = {}) {
   const f = fixture(t), events = [], admitted = (() => {
+    if(production)asRelease(f);
     if (native) delete f.manifest.verification.vercelSourceTransport;
-    return f.refreshSetup(admitPreviewWriterFixture(f.manifest));
+    const preview=admitPreviewWriterFixture(f.manifest);return f.refreshSetup(production?admitProductionWriterFixture(f.manifest,{previewFixture:preview}):preview);
   })();
+  const phase=production?'production.stage':'preview.create';
   const env = { ...admitted.env }, id = 'dpl_OFFLINE'; let operation, payload, discoverable = false, state = 'BUILDING', begins = 0, posts = 0, uncertainty, afterBegin;
   const registration = () => ({ release_id: f.manifest.releaseId, epoch: f.manifest.epoch, manifest_hash: digest(f.manifest), manifest: structuredClone(f.manifest) });
   const coordinator = {
     register: async () => { events.push('register'); },
-    snapshot: async () => ({ status: 'active', registration: registration(), operations: operation ? { 'preview.create': operation } : {} }),
+    snapshot: async () => ({ status: 'active', registration: registration(), operations: operation ? { [phase]: operation } : {} }),
     begin: async value => {
       begins++; events.push('begin');
       if (operation) { assert.equal(value.requestHash, operation.request_hash); return operation.state === 'complete' ? { disposition: 'complete', evidence: operation.evidence } : { disposition: 'readback' }; }
-      operation = { release_id: f.manifest.releaseId, epoch: f.manifest.epoch, phase: 'preview.create', manifest_hash: digest(f.manifest),
+      operation = { release_id: f.manifest.releaseId, epoch: f.manifest.epoch, phase, manifest_hash: digest(f.manifest),
         operationId: value.operationId, operation_id: value.operationId, requestHash: value.requestHash, request_hash: value.requestHash, state: 'intent' };
       afterBegin?.(); return { disposition: 'execute' };
     },
@@ -299,10 +301,10 @@ function integrated(t, { outcome = 'ack', uncertaintyThrows = false, native = fa
     appendEvidence: async () => { events.push('append'); }
   };
   const nativeMetadata = () => ({ githubCommitRef: 'HEAD', githubCommitSha: f.manifest.candidate.sha,
-    fcosHostedOperation: `${f.manifest.releaseId}-preview-create`, fcosHostedManifest: digest(f.manifest), fcosSourceSha256: f.manifest.candidate.sourceSha256,
+    fcosHostedOperation: `${f.manifest.releaseId}-${phase.replaceAll('.','-')}`, fcosHostedManifest: digest(f.manifest), fcosSourceSha256: f.manifest.candidate.sourceSha256,
     fcosVerificationSha256: digest(f.manifest.verification), fcosConfigurationSelectionSha256: digest(selectionBuildGuard(f.manifest).nodeOptions) });
   const raw = () => ({ id, url: 'fcos-abcdef123-hocheunglai-6535s-projects.vercel.app', projectId: f.manifest.targets.vercelProject,
-    ownerId: f.manifest.targets.vercelTeam, readyState: state, source: 'cli', projectSettings: deploymentProjectSettings ?? f.manifest.verification.projectSettings,
+    ownerId: f.manifest.targets.vercelTeam, readyState: state, source: 'cli', ...(production?{target:'production'}:{}), projectSettings: deploymentProjectSettings ?? f.manifest.verification.projectSettings,
     meta: payload?.meta || nativeMetadata() });
   const fetchImpl = async (value, request = {}) => {
     const url = new URL(value), route = url.pathname; events.push(`${request.method || 'GET'} ${route}`);
@@ -332,7 +334,7 @@ function integrated(t, { outcome = 'ack', uncertaintyThrows = false, native = fa
     get uncertainty() { return uncertainty; }, set afterBegin(value) { afterBegin = value; },
     discover() { discoverable = true; }, ready() { state = 'READY'; },
     seedOriginalUnknown() { const operationId = `${f.manifest.releaseId}-preview-create`, requestHash = digest({ candidate: f.manifest.candidate, target: 'preview' });
-      operation = { release_id: f.manifest.releaseId, epoch: f.manifest.epoch, phase: 'preview.create', manifest_hash: digest(f.manifest),
+      operation = { release_id: f.manifest.releaseId, epoch: f.manifest.epoch, phase, manifest_hash: digest(f.manifest),
         operationId, operation_id: operationId, requestHash, request_hash: requestHash, state: 'uncertain' }; }
   };
 }
@@ -416,12 +418,186 @@ test('READY keeps project-default snapshot strict while separate native build ev
   assert.equal(changed.events.some(event => event.includes('/events')), false);
 });
 
-test('archive Production admission and fresh write capability fail closed before intent', async t => {
-  const f = integrated(t), provider = f.adapter();
-  await assert.rejects(provider.admit(f.manifest, 'production.stage'), /PRODUCTION_NOT_IMPLEMENTED/);
-  f.env.FCOS_HOSTED_CREDENTIAL_CLASS = 'production'; assert.throws(() => provider.assertWriteCapability(), /PRODUCTION_NOT_IMPLEMENTED/);
-  f.env.FCOS_HOSTED_CREDENTIAL_CLASS = 'preview';
-  await assert.rejects(provider.promote({ id: 'dpl_never' }), /PRODUCTION_NOT_IMPLEMENTED/);
-  await assert.rejects(provider.rollback({ deploymentId: 'dpl_never' }), /PRODUCTION_NOT_IMPLEMENTED/);
-  assert.equal(f.begins, 0); assert.equal(f.posts, 0);
+function asRelease(f) {
+  f.manifest.stage='application';f.manifest.executionMode='release';
+  f.manifest.scope.compatibilityProductionObservationSha256=H;
+  f.manifest.scope.handoffs=[{kind:'status19',sha256:H},{kind:'supplier16',sha256:H}];
+  f.manifest.requiredChecks.push('compatibility_production_observation');
+  return f;
+}
+function staged(f) { return {id:'dpl_OFFLINE',sha:f.manifest.candidate.sha,sourceSha256:f.manifest.candidate.sourceSha256,
+  target:'production',state:'READY',projectId:f.manifest.targets.vercelProject,teamId:f.manifest.targets.vercelTeam,manifestHash:digest(f.manifest)}; }
+function action(f,phase='production.promote',extra={}) { return prepareVercelProjectActionRequest({manifest:f.manifest,candidateDirectory:f.directory,
+  phase,operationId:`${f.manifest.releaseId}-${phase.replaceAll('.','-')}`,staged:staged(f),...extra}); }
+function compatible(f) {return {compatible:true,deploymentId:f.manifest.previousProduction.deploymentId,schemaSha256:f.manifest.migration.expectedSchemaSha256,runtimeSha256:f.manifest.runtime.expectedSha256};}
+
+test('qualification still cannot acquire Production authority or prepare aliases',async t=>{
+  const f=integrated(t),provider=f.adapter();
+  await assert.rejects(provider.admit(f.manifest,'production.stage'),/SOURCE_API_PRODUCTION_CONTEXT/);
+  assert.throws(()=>action(f),/SOURCE_API_ACTION_CONTEXT/);
+  f.env.FCOS_HOSTED_CREDENTIAL_CLASS='production';assert.throws(()=>provider.assertWriteCapability());
+  assert.equal(f.posts,0);assert.equal(f.begins,0);
+});
+
+test('Production stage prepares exact archive and alias hold before intent; cold restricted scope creates once with no follow-on GET',async t=>{
+  const f=integrated(t,{production:true}),provider=f.adapter();
+  await provider.admit(f.manifest,'production');
+  const request=await provider.prepareStageRequest(f.manifest,{operationId:`${f.manifest.releaseId}-production-stage`});
+  assert.equal(f.begins,0);assert.equal(f.posts,0);assert.equal(request.skipDomain,true);assert.equal(request.target,'production');
+  f.events.length=0;
+  const result=await consequential({manifest:f.manifest,coordinator:f.coordinator,phase:'production.stage',request,submit:context=>provider.stage(f.manifest,context)});
+  assert.equal(result.target,'production');assert.equal(result.sourceApi.phase,'production.stage');assert.equal(result.sourceApi.requestHash,digest(request));
+  assert.deepEqual(f.events,['begin','POST /v13/deployments','complete']);
+  const prepared=await f.prepare({phase:'production.stage',operationId:`${f.manifest.releaseId}-production-stage`}),body=JSON.parse(prepared.body);
+  assert.equal(body.target,'production');assert.equal(body.autoAssignCustomDomains,false);assert.equal(Object.hasOwn(body.env,'FCOS_ENABLE_READ_ONLY_CI'),false);
+  assert.equal(body.env.FCOS_BUILD_COMMIT_SHA,f.manifest.candidate.sha);assert.equal(body.build.env.NODE_OPTIONS,selectionBuildGuard(f.manifest).nodeOptions);
+  assert.equal(Object.hasOwn(body,'projectSettings'),false);assert.equal(body.installCommand,'npm ci');assert.equal(f.project.installCommand,'npm install');
+});
+
+test('Production credential/source/context final refusals prevent POST without converting intent into a retry',async t=>{
+  for(const change of [f=>{f.env.FCOS_HOSTED_CREDENTIAL_CLASS='preview';},f=>{f.env.FCOS_HOSTED_VERCEL_TOKEN=dummy;},
+    f=>{f.env.GITHUB_REF='refs/heads/other';},f=>{writeFileSync(join(f.directory,'package.json'),'{}');}]){
+    const f=integrated(t,{production:true}),provider=f.adapter();await provider.admit(f.manifest,'production');
+    const request=await provider.prepareStageRequest(f.manifest,{operationId:`${f.manifest.releaseId}-production-stage`});change(f);
+    await assert.rejects(consequential({manifest:f.manifest,coordinator:f.coordinator,phase:'production.stage',request,submit:context=>provider.stage(f.manifest,context)}),/PROVIDER_OUTCOME_UNKNOWN/);
+    assert.equal(f.posts,0);assert.equal(f.operation.state,'uncertain');
+  }
+});
+
+test('Production archive READY proof binds stage receipt and native build logs with no fabricated CLI argv',async t=>{
+  const f=integrated(t,{production:true}),provider=f.adapter();await provider.admit(f.manifest,'production');
+  const request=await provider.prepareStageRequest(f.manifest,{operationId:`${f.manifest.releaseId}-production-stage`});
+  await consequential({manifest:f.manifest,coordinator:f.coordinator,phase:'production.stage',request,submit:context=>provider.stage(f.manifest,context)});f.ready();
+  await assert.rejects(provider.verifyArtifact({id:'dpl_OFFLINE'},f.manifest,'staged'),{code:'ARTIFACT_READ_FAILED'});
+  assert.equal(f.events.some(e=>e.includes('/events')),true);
+  f.operation=structuredClone(f.operation);f.operation.evidence.result.sourceApi.target='preview';
+  await assert.rejects(provider.verifyArtifact({id:'dpl_OFFLINE'},f.manifest,'staged'),/SOURCE_BUILD_UNPROVEN/);
+});
+
+test('separate Production archive recovery preserves original hash and performs only GETs',async t=>{
+  const f=integrated(t,{production:true,outcome:'lost'}),provider=f.adapter();await provider.admit(f.manifest,'production');
+  const request=await provider.prepareStageRequest(f.manifest,{operationId:`${f.manifest.releaseId}-production-stage`});
+  await assert.rejects(consequential({manifest:f.manifest,coordinator:f.coordinator,phase:'production.stage',request,submit:context=>provider.stage(f.manifest,context)}),/PROVIDER_OUTCOME_UNKNOWN/);
+  const hash=f.operation.request_hash;f.discover();f.events.length=0;
+  await reconcilePending({manifest:f.manifest,coordinator:f.coordinator,provider:f.adapter()});
+  assert.equal(f.posts,1);assert.equal(f.operation.request_hash,hash);assert.equal(f.events.some(e=>e==='begin'||e.startsWith('POST')),false);
+  assert.equal(f.operation.evidence.result.sourceApi.target,'production');
+});
+
+test('exact promote and rollback prepared bodies use only native fixed endpoints and receipts do not claim applied',async t=>{
+  const f=integrated(t,{production:true});
+  for(const phase of ['production.promote','production.rollback']){
+    const p=action(f,phase,{compatible:compatible(f)});let calls=0;
+    const result=await executeVercelProjectActionRequest({...options(f,p),fetchImpl:async(url,request)=>{calls++;assert.equal(new URL(url).origin,'https://api.vercel.com');
+      assert.equal(new URL(url).pathname,phase==='production.promote'?`/v10/projects/${f.project.id}/promote/dpl_OFFLINE`:`/v9/projects/${f.project.id}/rollback/${f.manifest.previousProduction.deploymentId}`);
+      assert.equal(new URL(url).searchParams.get('teamId'),f.manifest.targets.vercelTeam);assert.equal(request.body,'{}');assert.equal(request.redirect,'error');return new Response(null,{status:204});}});
+    assert.equal(calls,1);assert.equal(result.accepted,true);assert.equal(result.sourceAction.appliedProven,false);assert.equal(result.sourceAction.requestHash,digest(p.intent));
+    assert.equal(JSON.stringify(result).includes(dummy),false);
+    await assert.rejects(executeVercelProjectActionRequest(options(f,p)),/SOURCE_API_ACTION_CONTEXT/);
+  }
+});
+
+test('Preview/custom/wrong-project stage and incompatible rollback reject before fetch or any rebuild fallback',async t=>{
+  const f=integrated(t,{production:true});
+  for(const change of [{target:'preview'},{target:'custom'},{state:'ERROR'},{projectId:'other'},{manifestHash:H}])
+    assert.throws(()=>action(f,'production.promote',{staged:{...staged(f),...change}}),/STAGED_IDENTITY/);
+  for(const change of [{compatible:false},{deploymentId:'dpl_other'},{schemaSha256:'b'.repeat(64)}])
+    assert.throws(()=>action(f,'production.rollback',{compatible:{...compatible(f),...change}}),/ROLLBACK_COMPATIBILITY/);
+});
+
+test('each project-action 500/redirect/lost/queued202 result is consumed UNKNOWN with one POST and no following GET',async t=>{
+  const f=integrated(t,{production:true});
+  for(const phase of ['production.promote','production.rollback'])for(const outcome of ['500','redirect','lost','queued']){
+    const p=action(f,phase,{compatible:compatible(f)}),calls=[];let caught;
+    try{await executeVercelProjectActionRequest({...options(f,p),fetchImpl:async(url,request)=>{calls.push(request.method);
+      if(outcome==='lost')throw Error(dummy);return new Response(dummy,{status:outcome==='500'?500:outcome==='redirect'?307:202});}});}catch(e){caught=e;}
+    assert.deepEqual(calls,['POST']);assert.equal(caught.detail.sourceApiFailure.phase,phase);assert.equal(caught.detail.sourceApiFailure.outcome,'unknown');
+    assert.equal(safeFailure(caught).sourceApiFailure.reason,outcome==='queued'?'QUEUED':outcome==='lost'?'TRANSPORT_ERROR':outcome==='redirect'?'REDIRECT':'HTTP_ERROR');
+    assert.equal(JSON.stringify(safeFailure(caught)).includes(dummy),false);
+  }
+});
+
+test('project-action timeout aborts once and context/refusal paths issue zero calls',async t=>{
+  const f=integrated(t,{production:true}),p=action(f);let calls=0,signal;
+  await assert.rejects(executeVercelProjectActionRequest({...options(f,p),timeoutMs:5,fetchImpl:async(_,r)=>{calls++;signal=r.signal;return new Promise(()=>{});}}),/OUTCOME_UNKNOWN/);
+  assert.equal(calls,1);assert.equal(signal.aborted,true);
+  for(const change of [{context:{operationId:p.receipt.operationId,request:{wrong:true}}},{assertWriteContext:()=>{throw Error(dummy);}}]){
+    const fresh=action(f);await assert.rejects(executeVercelProjectActionRequest({...options(f,fresh),...change,fetchImpl:async()=>{calls++;}}));
+  }assert.equal(calls,1);
+});
+
+
+test('Production stage rejects Preview ACK and preserves known ERROR as a created deployment, not READY',async t=>{
+  const f=integrated(t,{production:true});
+  for(const outcome of ['preview','ERROR']){
+    const p=await f.prepare({phase:'production.stage',operationId:`${f.manifest.releaseId}-production-stage`});let calls=0;
+    const run=executeVercelSourceApiRequest({...options(f,p),fetchImpl:async()=>{calls++;return Response.json(ack(p,{target:outcome==='preview'?'preview':'production',readyState:outcome==='ERROR'?'ERROR':'BUILDING'}));}});
+    if(outcome==='preview')await assert.rejects(run,/OUTCOME_UNKNOWN/);else {const result=await run;assert.equal(result.state,'ERROR');assert.equal(result.sourceApi.sourceBuildReadyProven,false);}
+    assert.equal(calls,1);
+  }
+});
+
+test('Production stage HTTP/redirect/lost ACK failures retain phase diagnostics and do not read after submission',async t=>{
+  for(const outcome of ['500','redirect','lost']){
+    const f=integrated(t,{production:true}),p=await f.prepare({phase:'production.stage',operationId:`${f.manifest.releaseId}-production-stage`}),calls=[];let caught;
+    try{await executeVercelSourceApiRequest({...options(f,p),fetchImpl:async(_,r)=>{calls.push(r.method);if(outcome==='lost')throw Error(dummy);return new Response(dummy,{status:outcome==='500'?500:307});}});}catch(e){caught=e;}
+    assert.deepEqual(calls,['POST']);assert.equal(safeFailure(caught).sourceApiFailure.phase,'production.stage');assert.equal(JSON.stringify(safeFailure(caught)).includes(dummy),false);
+  }
+});
+
+test('adapter alias submission requires preparation/exact Production credential and has no implicit reads after its known ACK',async t=>{
+  const f=integrated(t,{production:true}),posts=[];
+  const provider=createVercelAdapter({manifest:f.manifest,candidateDirectory:f.directory,env:f.env,coordinator:f.coordinator,fetchImpl:async(url,r={})=>{
+    if(r.method==='POST'){posts.push(new URL(url).pathname);assert.equal(r.body,'{}');return new Response(null,{status:204});}return f.fetchImpl(url,r);}});
+  await provider.admit(f.manifest,'production.promote');
+  const operationId=`${f.manifest.releaseId}-production-promote`;
+  await assert.rejects(provider.promote(staged(f),{operationId,request:{}}),/ACTION_CONTEXT/);assert.equal(posts.length,0);
+  const request=provider.preparePromoteRequest(f.manifest,{operationId,staged:staged(f)});f.events.length=0;
+  const result=await provider.promote(staged(f),{operationId,request});assert.equal(result.sourceAction.appliedProven,false);assert.equal(posts.length,1);assert.deepEqual(f.events,[]);
+  const operationRollback=`${f.manifest.releaseId}-production-rollback`,rollbackRequest=provider.prepareRollbackRequest(f.manifest,{operationId:operationRollback,staged:staged(f),compatible:compatible(f)});
+  f.env.FCOS_HOSTED_CREDENTIAL_CLASS='preview';await assert.rejects(provider.rollback(f.manifest.previousProduction,{operationId:operationRollback,request:rollbackRequest}),/WRITER_CONTEXT/);assert.equal(posts.length,1);
+});
+
+test('current Production is canonical alias-bound even when project target metadata points at a staged build',async t=>{
+  const f=integrated(t,{production:true});let wrong=false;const reads=[];
+  const provider=createVercelAdapter({manifest:f.manifest,candidateDirectory:f.directory,env:f.env,fetchImpl:async(url,r={})=>{
+    const path=new URL(url).pathname;reads.push(path);
+    if(path.startsWith('/v4/aliases/'))return Response.json({alias:new URL(f.manifest.targets.productionOrigin).hostname,projectId:wrong?'other':f.project.id,
+      deploymentId:'dpl_actual',deployment:{id:'dpl_actual',url:'fcos-actual123-hocheunglai-6535s-projects.vercel.app'}});
+    if(path==='/v13/deployments/dpl_actual')return Response.json({...f.raw(),readyState:'READY',id:'dpl_actual',url:'fcos-actual123-hocheunglai-6535s-projects.vercel.app',meta:{githubCommitSha:f.manifest.previousProduction.sha}});
+    if(path===`/v9/projects/${f.project.id}`)return Response.json({...f.project,targets:{production:{id:'dpl_staged'}}});
+    return f.fetchImpl(url,r);}});
+  const current=await provider.currentProduction();assert.equal(current.id,'dpl_actual');assert.equal(current.sha,f.manifest.previousProduction.sha);
+  wrong=true;reads.length=0;await assert.rejects(provider.currentProduction(),/PRODUCTION_ALIAS_BINDING/);assert.equal(reads.includes('/v13/deployments/dpl_actual'),false);
+});
+
+
+test('alias recovery validates original authenticated journal request before owner GET and never invents a POST ACK',async t=>{
+  const f=integrated(t,{production:true}),provider=f.adapter();
+  const prepared=await f.prepare({phase:'production.stage',operationId:`${f.manifest.releaseId}-production-stage`});
+  const sourceStage=await executeVercelSourceApiRequest({...options(f,prepared),fetchImpl:async()=>Response.json(ack(prepared,{target:'production'}))});
+  const registration={release_id:f.manifest.releaseId,epoch:f.manifest.epoch,manifest_hash:digest(f.manifest),manifest:f.manifest};
+  for(const phase of ['production.promote','production.rollback']){
+    const p=action(f,phase,{compatible:compatible(f)}),operation={operationId:p.receipt.operationId,operation_id:p.receipt.operationId,phase,
+      release_id:f.manifest.releaseId,epoch:f.manifest.epoch,manifest_hash:digest(f.manifest),requestHash:digest(p.intent),request_hash:digest(p.intent),state:'uncertain'};
+    f.events.length=0;
+    const receipt=provider.verifyProjectActionRecoveryRequest(f.manifest,{phase,operation,registration,staged:sourceStage});
+    assert.deepEqual(f.events,[]);assert.equal(receipt.requestHash,digest(p.intent));assert.equal(receipt.acknowledgement,'authenticated_provider_owner_readback');
+    assert.equal(Object.hasOwn(receipt,'status'),false);assert.equal(receipt.appliedProven,false);
+    for(const change of [{request_hash:H},{operation_id:'another'},{state:'complete'}])
+      assert.throws(()=>provider.verifyProjectActionRecoveryRequest(f.manifest,{phase,operation:{...operation,...change},registration,staged:sourceStage}),/ACTION_RECOVERY_REQUEST/);
+    assert.throws(()=>provider.verifyProjectActionRecoveryRequest(f.manifest,{phase,operation,registration,staged:{...sourceStage,sourceApi:undefined}}),/ACTION_RECOVERY_REQUEST/);
+    assert.deepEqual(f.events,[]);
+  }
+});
+
+
+test('project action rechecks operation binding after its synchronous final guard and rejects unbounded/unknown ACKs',async t=>{
+  const f=integrated(t,{production:true});let calls=0;
+  const p=action(f),context={operationId:p.receipt.operationId,request:p.intent};
+  await assert.rejects(executeVercelProjectActionRequest({...options(f,p),context,assertWriteContext:()=>{context.operationId='other';},fetchImpl:async()=>{calls++;}}),/ACTION_CONTEXT/);
+  assert.equal(calls,0);
+  for(const response of [()=>new Response('x'.repeat(128*1024+1),{status:200}),()=>new Response('',{status:206})]){
+    const prepared=action(f);await assert.rejects(executeVercelProjectActionRequest({...options(f,prepared),fetchImpl:async()=>{calls++;return response();}}),e=>e.detail.sourceApiFailure.reason==='ACK_INVALID');
+  }assert.equal(calls,2);
 });

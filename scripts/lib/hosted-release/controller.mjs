@@ -106,8 +106,10 @@ export async function preparePreview({ manifest, coordinator, provider, now = Da
   assertDeployment(preview, manifest, 'preview');
   // Building is a dependency, not a false proof failure; a restart polls the same deployment.
   const ready = await provider.ready(preview);
-  if (ready.state !== 'READY') return { status: 'waiting_dependency', phase: 'preview.ready', deploymentId: preview.id };
   assertDeployment(ready, manifest, 'preview');
+  if (ready.id !== preview.id) fail('DEPLOYMENT_IDENTITY', 'preview.ready');
+  if (['ERROR', 'CANCELED'].includes(ready.state)) return { status: 'failed', phase: 'preview.ready', deploymentId: ready.id, state: ready.state };
+  if (ready.state !== 'READY') return { status: 'waiting_dependency', phase: 'preview.ready', deploymentId: preview.id };
   await provider.verifyArtifact(ready, manifest, 'preview');
   await evidenceWrite(coordinator, manifest, 'preview.ready', ready, now);
   return { status: 'ready', phase: 'preview.ready', deployment: ready };
@@ -147,17 +149,22 @@ async function rollback({ manifest, coordinator, provider, staged, cause, now })
   if (compatible?.compatible !== true || compatible.schemaSha256 !== manifest.migration.expectedSchemaSha256
     || compatible.runtimeSha256 !== manifest.runtime.expectedSha256 || compatible.deploymentId !== previous.deploymentId) fail('ROLLBACK_INCOMPATIBLE', 'production.rollback', 'Keep the operation recorded and request intervention; no schema rollback is permitted.');
   provider.assertWriteCapability?.();
-  const restored = await consequential({ manifest, coordinator, phase: 'production.rollback', request: { from: staged.id, to: previous.deploymentId, schemaSha256: compatible.schemaSha256, runtimeSha256: compatible.runtimeSha256 },
+  const rollbackRequest = provider.prepareRollbackRequest
+    ? await provider.prepareRollbackRequest(manifest, { operationId: `${manifest.releaseId}-production-rollback`,
+      existingOperation: (await coordinator.snapshot(bound(manifest))).operations?.['production.rollback'], staged, compatible })
+    : { from: staged.id, to: previous.deploymentId, schemaSha256: compatible.schemaSha256, runtimeSha256: compatible.runtimeSha256 };
+  const restored = await consequential({ manifest, coordinator, phase: 'production.rollback', request: rollbackRequest,
     submit: async context => {
       // A second observation closes the local check-to-write gap; shared coordination fences all participating writers.
       await provider.admit(manifest, 'production.rollback');
       const before = await provider.currentProduction();
       if (before.id === previous.deploymentId) return before;
       if (before.id !== staged.id) fail('ROLLBACK_PRODUCTION_MOVED', 'production.rollback');
-      await provider.rollback(previous, context);
+      const acknowledgement = await provider.rollback(previous, context);
+      if (acknowledgement?.pending === true || acknowledgement?.accepted === false) fail('ROLLBACK_OWNER_READBACK_REQUIRED', 'production.rollback');
       const restored = await provider.currentProduction();
       if (restored.id !== previous.deploymentId || restored.sha !== previous.sha) fail('ROLLBACK_NOT_OBSERVED', 'production.rollback');
-      return restored;
+      return acknowledgement?.sourceAction ? { ...restored, sourceAction: acknowledgement.sourceAction } : restored;
     },
     readback: async () => {
       const live = await provider.currentProduction();
@@ -178,10 +185,14 @@ export async function reconcilePending({ manifest, coordinator, provider }) {
     let observed;
     if (phase === 'preview.create' || phase === 'production.stage') observed = await provider.discover(manifest, phase === 'preview.create' ? 'preview' : 'production', { operationId });
     else if (phase === 'production.promote' || phase === 'production.rollback') {
+      const recovery = provider.verifyProjectActionRecoveryRequest
+        ? await provider.verifyProjectActionRecoveryRequest(manifest, { phase, operation,
+          staged: snapshot.operations['production.stage']?.evidence?.result, registration: snapshot.registration }) : null;
       const live = await provider.currentProduction(), target = phase === 'production.rollback'
         ? { id: manifest.previousProduction.deploymentId, sha: manifest.previousProduction.sha }
         : snapshot.operations['production.stage']?.evidence?.result;
-      observed = target && live.id === target.id && live.sha === target.sha ? { outcome: 'applied', result: live } : { outcome: 'unknown' };
+      observed = target && live.id === target.id && live.sha === target.sha
+        ? { outcome: 'applied', result: recovery ? { ...live, sourceActionReadback: recovery } : live } : { outcome: 'unknown' };
     } else continue;
     if (observed?.outcome !== 'applied') fail('PROVIDER_OUTCOME_UNKNOWN', phase, 'Continue GET-only discovery of the consumed intent; elapsed authority cannot authorize replay.');
     await coordinator.readback({ ...bound(manifest), phase, operationId, evidence: observed });
@@ -214,13 +225,22 @@ export async function executeHostedProduction({ manifest, coordinator, provider,
     const current = await provider.currentProduction();
     if (current.id !== manifest.previousProduction.deploymentId || current.sha !== manifest.previousProduction.sha) fail('PRODUCTION_CHANGED', 'production.stage', 'Prepare a new manifest with the actual Production and rollback target.');
   }
-  const staged = await consequential({ manifest, coordinator, phase: 'production.stage', request: { candidate: manifest.candidate, previous: manifest.previousProduction, target: 'production', skipDomain: true },
+  const stageRequest = provider.prepareStageRequest
+    ? await provider.prepareStageRequest(manifest, { operationId: `${manifest.releaseId}-production-stage`, existingOperation: existingStage })
+    : { candidate: manifest.candidate, previous: manifest.previousProduction, target: 'production', skipDomain: true };
+  const staged = await consequential({ manifest, coordinator, phase: 'production.stage', request: stageRequest,
     submit: context => provider.stage(manifest, context), readback: context => provider.discover(manifest, 'production', context) });
   assertDeployment(staged, manifest, 'production');
   const ready = await provider.ready(staged);
-  if (ready.state !== 'READY') return { status: 'waiting_dependency', phase: 'production.ready', deploymentId: staged.id };
   assertDeployment(ready, manifest, 'production');
+  if (ready.id !== staged.id) fail('DEPLOYMENT_IDENTITY', 'production.ready');
+  if (['ERROR', 'CANCELED'].includes(ready.state)) return { status: 'failed', phase: 'production.ready', deploymentId: ready.id, state: ready.state };
+  if (ready.state !== 'READY') return { status: 'waiting_dependency', phase: 'production.ready', deploymentId: staged.id };
   await provider.verifyArtifact(ready, manifest, 'staged');
+  if (!snapshot.operations?.['production.promote']) {
+    const held = await provider.currentProduction();
+    if (held.id !== manifest.previousProduction.deploymentId || held.sha !== manifest.previousProduction.sha) fail('STAGED_PRODUCTION_ALIAS_CHANGED', 'production.staged');
+  }
   await evidenceWrite(coordinator, manifest, 'production.staged_verified', ready, now);
   await provider.admit(manifest, 'production.promote');
   // A slow staged build must not consume stale browser/business observations.
@@ -232,15 +252,19 @@ export async function executeHostedProduction({ manifest, coordinator, provider,
   const promotionAcceptance = await collectAcceptance({ manifest, coordinator, provider, now, refresh: true });
   if (promotionAcceptance.status !== 'ready') return { status: 'waiting_dependency', phase: 'production.acceptance', missing: promotionAcceptance.missing, deploymentId: ready.id };
   if (!snapshot.operations?.['production.promote']) provider.assertWriteCapability?.();
-  const live = await consequential({ manifest, coordinator, phase: 'production.promote', request: { deploymentId: ready.id, previousDeploymentId: manifest.previousProduction.deploymentId },
+  const promoteRequest = provider.preparePromoteRequest
+    ? await provider.preparePromoteRequest(manifest, { operationId: `${manifest.releaseId}-production-promote`, existingOperation: snapshot.operations?.['production.promote'], staged: ready })
+    : { deploymentId: ready.id, previousDeploymentId: manifest.previousProduction.deploymentId };
+  const live = await consequential({ manifest, coordinator, phase: 'production.promote', request: promoteRequest,
     submit: async context => {
       const current = await provider.currentProduction();
       if (current.id === ready.id && current.sha === manifest.candidate.sha) return current;
       if (current.id !== manifest.previousProduction.deploymentId || current.sha !== manifest.previousProduction.sha) fail('PRODUCTION_CHANGED', 'production.promote');
-      await provider.promote(ready, context);
+      const acknowledgement = await provider.promote(ready, context);
+      if (acknowledgement?.pending === true || acknowledgement?.accepted === false) fail('PROMOTION_OWNER_READBACK_REQUIRED', 'production.promote');
       const result = await provider.currentProduction();
       if (result.id !== ready.id || result.sha !== manifest.candidate.sha) fail('PROMOTION_NOT_OBSERVED', 'production.promote');
-      return result;
+      return acknowledgement?.sourceAction ? { ...result, sourceAction: acknowledgement.sourceAction } : result;
     },
     readback: async () => {
       const result = await provider.currentProduction();

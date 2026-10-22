@@ -2,7 +2,7 @@ import test from 'node:test';
 import { admitVercelReadFixture } from './helpers/hosted-vercel-read.mjs';
 import assert from 'node:assert/strict';
 import { canonical, digest, NORMAL_MODULES, validateManifest,fail } from '../scripts/lib/hosted-release/contract.mjs';
-import { consequential, executeHostedProduction, preparePreview,safeFailure } from '../scripts/lib/hosted-release/controller.mjs';
+import { consequential, executeHostedProduction, preparePreview,reconcilePending,safeFailure } from '../scripts/lib/hosted-release/controller.mjs';
 import { firstRuntimeFixture,firstRuntimeOwnerRefreshFixture } from './helpers/hosted-first-runtime.mjs';
 import { firstRuntimePrevious,validateFirstRuntimeOwnerRefresh } from '../scripts/lib/hosted-release/first-runtime.mjs';
 
@@ -70,6 +70,117 @@ test('lost submission and runner crash resume only through exact readback, never
   assert.equal(f.state.operations['production.stage'].state, 'uncertain');
   discoverable = true;
   assert.equal((await executeHostedProduction(f)).status, 'complete'); assert.equal(submissions, 1);
+});
+
+test('terminal Preview and staged build failures stop immediately and preserve the acknowledged create on restart', async () => {
+  for (const state of ['ERROR', 'CANCELED']) for (const production of [false, true]) {
+    const f = fixture(), run = production ? executeHostedProduction : preparePreview;
+    const phase = production ? 'production.stage' : 'preview.create';
+    let creates = 0, reads = 0;
+    const create = production ? f.provider.stage : f.provider.createPreview;
+    f.provider[production ? 'stage' : 'createPreview'] = async (...args) => { creates++; return create(...args); };
+    f.provider.ready = async deployment => { reads++; return { ...deployment, state }; };
+    const first = await run(f), saved = structuredClone(f.state.operations[phase]);
+    assert.deepEqual(first, { status: 'failed', phase: production ? 'production.ready' : 'preview.ready', deploymentId: saved.evidence.result.id, state });
+    assert.equal(saved.state, 'complete'); assert.equal(saved.evidence.outcome, 'applied');
+    assert.deepEqual(await run(f), first); assert.equal(creates, 1); assert.equal(reads, 2);
+    assert.deepEqual(f.state.operations[phase], saved);
+    assert.ok(!f.events.some(value => value.startsWith('verify:') || ['promote', 'rollback'].includes(value)));
+    assert.equal(f.state.status, 'active');
+  }
+});
+
+test('building deployments remain pending, but terminal state from a different deployment is rejected', async () => {
+  for (const production of [false, true]) {
+    const f = fixture(), run = production ? executeHostedProduction : preparePreview;
+    f.provider.ready = async deployment => ({ ...deployment, state: 'BUILDING' });
+    assert.equal((await run(f)).status, 'waiting_dependency');
+    f.provider.ready = async deployment => ({ ...deployment, id: 'dpl_other', state: 'ERROR' });
+    await assert.rejects(run(f), { code: 'DEPLOYMENT_IDENTITY' });
+    assert.ok(!f.events.some(value => value.startsWith('verify:') || value === 'promote'));
+  }
+});
+
+test('prepared Production requests bind the journal before submission and preserve acknowledged action receipts', async () => {
+  const f = fixture(), requests = Object.fromEntries(['stage', 'promote', 'rollback'].map(action => [action, Object.freeze({ action, bodySha256: H })]));
+  for (const action of Object.keys(requests)) {
+    const original = f.provider[action];
+    f.provider[`prepare${action[0].toUpperCase()}${action.slice(1)}Request`] = async (manifest, input) => {
+      assert.equal(manifest, f.manifest); assert.equal(input.operationId, `${manifest.releaseId}-production-${action}`);
+      f.events.push(`prepared:${action}`); return requests[action];
+    };
+    f.provider[action] = async (...args) => {
+      assert.equal(args[1].request, requests[action]);
+      assert.equal(f.state.operations[`production.${action}`].requestHash, digest(requests[action]));
+      const value = await original(...args);
+      return action === 'stage' ? value : { accepted: true, pending: false, sourceAction: { action, appliedProven: false } };
+    };
+  }
+  f.provider.verifyArtifact = async (_, __, phase) => { if (phase === 'live') throw Error('fixture health failure'); };
+  assert.equal((await executeHostedProduction(f)).status, 'rolled_back');
+  for (const action of Object.keys(requests)) assert.ok(f.events.indexOf(`prepared:${action}`) < f.events.indexOf(`intent:production.${action}`));
+  for (const action of ['promote', 'rollback']) {
+    const saved = f.state.operations[`production.${action}`];
+    assert.equal(saved.evidence.outcome, 'applied');
+    assert.deepEqual(saved.evidence.result.sourceAction, { action, appliedProven: false });
+  }
+});
+
+test('pending promotion or rollback stops before every follow-on provider read and remains owner-readback only', async () => {
+  for (const action of ['promote', 'rollback']) {
+    const f = fixture(); let reads = 0, atSubmission = null, submissions = 0;
+    const observe = f.provider.currentProduction;
+    f.provider.currentProduction = async () => { reads++; return observe(); };
+    if (action === 'rollback') f.provider.verifyArtifact = async (_, __, phase) => { if (phase === 'live') throw Error('fixture health failure'); };
+    f.provider[action] = async () => { submissions++; atSubmission = reads; return { accepted: true, pending: true }; };
+    await assert.rejects(executeHostedProduction(f), { code: 'PROVIDER_OUTCOME_UNKNOWN' });
+    assert.equal(submissions, 1); assert.equal(reads, atSubmission);
+    assert.equal(f.state.operations[`production.${action}`].state, 'uncertain');
+    assert.equal(f.state.status, 'active');
+  }
+});
+
+test('Production request preparation failure cannot create an intent or submit a deployment', async () => {
+  const f = fixture(); f.provider.prepareStageRequest = async () => { throw Error('source changed before claim'); };
+  await assert.rejects(executeHostedProduction(f));
+  assert.equal(f.state.operations['production.stage'], undefined);
+  assert.ok(!f.events.includes('stage') && !f.events.includes('promote'));
+});
+
+test('a staged build that changes the public Production alias cannot mint a promotion intent or be adopted', async () => {
+  for (const pointsToStage of [false, true]) {
+    const f = fixture();
+    f.provider.verifyArtifact = async (deployment, _, phase) => {
+      if (phase === 'staged') f.setLive(pointsToStage ? deployment : { id: 'dpl_other', sha: S });
+    };
+    await assert.rejects(executeHostedProduction(f), { code: 'STAGED_PRODUCTION_ALIAS_CHANGED' });
+    assert.equal(f.state.operations['production.stage'].evidence.outcome, 'applied');
+    assert.equal(f.state.operations['production.promote'], undefined);
+    assert.equal(f.state.checks['production.staged_verified'], undefined);
+    assert.ok(!f.events.includes('promote') && !f.events.includes('rollback'));
+  }
+});
+
+test('alias recovery validates the consumed request before owner reads and never invents an acknowledgement', async () => {
+  const f = fixture();
+  f.provider.promote = async () => ({ pending: true, accepted: true });
+  await assert.rejects(executeHostedProduction(f), { code: 'PROVIDER_OUTCOME_UNKNOWN' });
+  const operation = structuredClone(f.state.operations['production.promote']);
+  let reads = 0; const observe = f.provider.currentProduction;
+  f.provider.currentProduction = async () => { reads++; return observe(); };
+  f.provider.verifyProjectActionRecoveryRequest = async (_, input) => {
+    assert.deepEqual(input.operation, operation); throw Error('consumed request mismatch');
+  };
+  await assert.rejects(reconcilePending(f)); assert.equal(reads, 0);
+  const receipt = Object.freeze({ basis: 'original_request_and_authenticated_owner_readback', postAcknowledgementProven: false });
+  f.provider.verifyProjectActionRecoveryRequest = async (_, input) => {
+    assert.deepEqual(input.operation, operation); assert.equal(input.phase, 'production.promote'); return receipt;
+  };
+  f.setLive(f.state.operations['production.stage'].evidence.result);
+  const recovered = await reconcilePending(f);
+  assert.equal(reads, 1); assert.equal(recovered.operations['production.promote'].state, 'complete');
+  assert.deepEqual(recovered.operations['production.promote'].evidence.result.sourceActionReadback, receipt);
+  assert.equal(recovered.operations['production.promote'].evidence.result.sourceAction, undefined);
 });
 
 test('losing journal completion response cannot replay a successful provider submission', async () => {

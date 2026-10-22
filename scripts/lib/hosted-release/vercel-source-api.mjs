@@ -20,6 +20,8 @@ const settingsKeys = ['framework', 'buildCommand', 'devCommand', 'installCommand
 const configurationKeys = new Set(['$schema', 'version', 'name', 'installCommand', 'buildCommand', 'devCommand', 'outputDirectory',
   'framework', 'regions', 'crons', 'rewrites', 'redirects', 'headers', 'cleanUrls', 'trailingSlash', 'git', 'functions', 'images']);
 const preparedBindings = new WeakMap();
+const actionBindings = new WeakMap();
+export const PROJECT_ACTION_TRANSPORT = 'fcos_vercel_project_action_v1';
 const submitted = new WeakSet();
 const freeze = value => {
   if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value); }
@@ -157,14 +159,15 @@ function sourceConfiguration(files, manifest) {
 }
 
 /** Read-only preparation, before a durable intent. No uploads, settings changes or authority.
- * Production remains unavailable until its staging/alias-hold behavior is separately qualified. */
+ * The Production branch is the pinned CLI's --prod --skip-domain source body. */
 export async function prepareVercelSourceApiRequest({ manifest, candidateDirectory, observedProject,
   operationId = `${manifest?.releaseId}-preview-create`, phase = 'preview.create' } = {}) {
   validateManifest(manifest);
   if (manifest.verification?.vercelSourceTransport !== SOURCE_API_TRANSPORT) fail('SOURCE_API_TRANSPORT_NOT_ADMITTED');
   const originalManifestHash = digest(manifest);
-  if (phase !== 'preview.create') fail('SOURCE_API_PRODUCTION_NOT_IMPLEMENTED');
-  if (operationId !== `${manifest.releaseId}-preview-create`) fail('SOURCE_API_OPERATION_BINDING');
+  const production = phase === 'production.stage';
+  if (!production && phase !== 'preview.create' || production && manifest.executionMode !== 'release') fail('SOURCE_API_PHASE');
+  if (operationId !== `${manifest.releaseId}-${phase.replaceAll('.', '-')}`) fail('SOURCE_API_OPERATION_BINDING');
   const directory = resolve(candidateDirectory), configuration = assertProject(observedProject, manifest);
   assertSource(manifest, directory);
   const { files, inventory, sourceBytes, sourceDigest } = sourceFiles(directory), guard = selectionBuildGuard(manifest);
@@ -184,19 +187,21 @@ export async function prepareVercelSourceApiRequest({ manifest, candidateDirecto
   const payload = { ...nowConfig, version: 2, name: fcosConnectionIdentifier('vercel', 'Project'), project: manifest.targets.vercelProject,
     source: 'cli', files: [{ file: archive.file, data: archive.bytes.toString('base64'), encoding: 'base64', mode: archive.mode }], meta,
     gitMetadata: { remoteUrl: `https://github.com/${manifest.targets.repository}.git`, commitRef: 'HEAD', commitSha: manifest.candidate.sha, dirty: false },
-    env: { FCOS_BUILD_COMMIT_SHA: manifest.candidate.sha, FCOS_ENABLE_READ_ONLY_CI: 'true' },
+    ...(production ? { target: 'production', autoAssignCustomDomains: false } : {}),
+    env: { FCOS_BUILD_COMMIT_SHA: manifest.candidate.sha, ...(!production ? { FCOS_ENABLE_READ_ONLY_CI: 'true' } : {}) },
     build: { env: { ...manifest.verification.publicBuildEnvironment, FCOS_BUILD_COMMIT_SHA: manifest.candidate.sha,
       FCOS_EXPECTED_SOURCE_SHA256: manifest.candidate.sourceSha256, NODE_OPTIONS: guard.nodeOptions } } };
   const body = canonical(payload), bodyBytes = Buffer.byteLength(body);
   if (bodyBytes > SOURCE_API_MAX_BODY_BYTES) fail('SOURCE_API_PAYLOAD_TOO_LARGE');
   // Catch changes during inventory capture, including assume-unchanged bytes.
   assertSource(manifest, directory);
-  const intent = { kind: SOURCE_API_TRANSPORT, candidate: structuredClone(manifest.candidate), target: 'preview',
+  const intent = { kind: SOURCE_API_TRANSPORT, candidate: structuredClone(manifest.candidate), target: production ? 'production' : 'preview',
+    ...(production ? { previous: structuredClone(manifest.previousProduction), skipDomain: true } : {}),
     bodySha256: digest(body), inventorySha256: digest(inventory), configurationSha256: digest(configuration), archiveSha256: archive.sha256 };
   const receipt = { schemaVersion: 1, kind: SOURCE_API_TRANSPORT, phase, operationId, requestHash: digest(intent),
     manifestHash: digest(manifest), controllerSha: manifest.controller.sha, candidateSha: manifest.candidate.sha,
     sourceSha256: manifest.candidate.sourceSha256, projectId: manifest.targets.vercelProject, teamId: manifest.targets.vercelTeam,
-    target: 'preview', providerSourceLabel: 'cli', transport: 'rest_api', sourceBuildReadyProven: false,
+    target: production ? 'production' : 'preview', providerSourceLabel: 'cli', transport: 'rest_api', sourceBuildReadyProven: false,
     bodySha256: digest(body), inventorySha256: digest(inventory), configurationSha256: digest(configuration),
     bodyBytes, sourceBytes, fileCount: files.length,
     archive: { format: 'vercel_source_tgz_parts_v1', compressor: 'node_gzip_level6', packer: 'tar-stream@3.2.2', parts: 1,
@@ -207,9 +212,9 @@ export async function prepareVercelSourceApiRequest({ manifest, candidateDirecto
   return prepared;
 }
 
-async function boundedJson(response) {
+async function boundedText(response) {
   const reader = response.body?.getReader();
-  if (!reader) throw Error('ACK_INVALID');
+  if (!reader) { if(response.status===204)return ''; throw Error('ACK_INVALID'); }
   const chunks = []; let size = 0;
   try {
     while (true) {
@@ -218,9 +223,11 @@ async function boundedJson(response) {
       if (size > MAX_ACK_BYTES) { await reader.cancel(); throw Error('ACK_INVALID'); }
       chunks.push(Buffer.from(value));
     }
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    return Buffer.concat(chunks).toString('utf8');
   } finally { reader.releaseLock(); }
 }
+
+async function boundedJson(response) { return JSON.parse(await boundedText(response)); }
 
 /** Call only inside the existing controller's freshly claimed submit callback.
  * This wrapper grants no approval/claim. A consumed or uncertain request must use
@@ -258,16 +265,17 @@ export async function executeVercelSourceApiRequest({ prepared, manifest, contex
       let url; try { url = canonicalFcosE2eCandidateUrl(`https://${ack.url}`); } catch { throw Error('ACK_INVALID'); }
       if (!/^dpl_[A-Za-z0-9]+$/.test(ack.id || '') || ack.projectId !== prepared.receipt.projectId
         || ack.ownerId !== prepared.receipt.teamId || ack.teamId !== undefined && ack.teamId !== prepared.receipt.teamId
-        || ![undefined, null, 'preview'].includes(ack.target)
+        || (prepared.receipt.target === 'production' ? ack.target !== 'production' : ![undefined, null, 'preview'].includes(ack.target))
         || ack.customEnvironment != null || ack.source !== 'cli' || ack.prebuilt != null && ack.prebuilt !== false
         || !['QUEUED', 'INITIALIZING', 'BUILDING', 'READY', 'ERROR', 'CANCELED'].includes(ack.readyState)
         || Object.entries(JSON.parse(prepared.body).meta).some(([key, value]) => ack.meta?.[key] !== value)) throw Error('ACK_INVALID');
-      return freeze({ id: ack.id, url, projectId: ack.projectId, teamId: ack.ownerId, target: 'preview', state: ack.readyState,
+      return freeze({ id: ack.id, url, projectId: ack.projectId, teamId: ack.ownerId, target: prepared.receipt.target, state: ack.readyState,
         sha: manifest.candidate.sha, sourceSha256: manifest.candidate.sourceSha256,
         sourceApi: { ...prepared.receipt, deploymentId: ack.id, acknowledgement: 'provider_create_response', sourceBuildReadyProven: false } });
     })();
     return await Promise.race([submit, timeout]);
   } catch {
+    abort.abort();
     const sourceApiFailure = freeze({ schemaVersion: 1, kind: 'fcos_source_api_submission_failure_v1', outcome: 'unknown',
       operationId: prepared.receipt.operationId, phase: prepared.receipt.phase, requestHash: binding.requestHash,
       manifestHash: binding.manifestHash, bodySha256: binding.bodySha256, status, reason });
@@ -283,9 +291,114 @@ export function safeVercelSourceApiFailure(value) {
   const keys = ['schemaVersion', 'kind', 'outcome', 'operationId', 'phase', 'requestHash', 'manifestHash', 'bodySha256', 'status', 'reason'];
   if (!value || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).length !== keys.length
     || keys.some(key => !Object.hasOwn(value, key)) || value.schemaVersion !== 1 || value.kind !== 'fcos_source_api_submission_failure_v1'
-    || value.outcome !== 'unknown' || value.phase !== 'preview.create' || !/^[a-z0-9][a-z0-9-]{7,110}-preview-create$/.test(value.operationId || '')
+    || value.outcome !== 'unknown' || !['preview.create','production.stage','production.promote','production.rollback'].includes(value.phase)
+    || !new RegExp('^[a-z0-9][a-z0-9-]{7,110}-'+value.phase.replaceAll('.', '-')+'$').test(value.operationId || '')
     || ['requestHash', 'manifestHash', 'bodySha256'].some(key => !/^[a-f0-9]{64}$/.test(value[key] || ''))
     || value.status !== null && (!Number.isSafeInteger(value.status) || value.status < 100 || value.status > 599)
-    || !['TRANSPORT_ERROR', 'TIMEOUT', 'REDIRECT', 'HTTP_ERROR', 'ACK_INVALID'].includes(value.reason)) return undefined;
+    || !['TRANSPORT_ERROR', 'TIMEOUT', 'REDIRECT', 'HTTP_ERROR', 'ACK_INVALID', 'QUEUED'].includes(value.reason)) return undefined;
   return freeze(Object.fromEntries(keys.map(key => [key, value[key]])));
+}
+
+/** Pure exact project actions. This never promotes a Preview by creating a new build.
+ * Compatibility, live ownership and protected approval remain controller duties. */
+export function prepareVercelProjectActionRequest({ manifest, candidateDirectory, phase, operationId, staged, compatible } = {}) {
+  validateManifest(manifest);
+  if (manifest.verification?.vercelSourceTransport !== SOURCE_API_TRANSPORT || manifest.executionMode !== 'release'
+    || !manifest.verification.vercelProductionWriterCredential || !['production.promote','production.rollback'].includes(phase)
+    || operationId !== `${manifest.releaseId}-${phase.replaceAll('.', '-')}`) fail('SOURCE_API_ACTION_CONTEXT');
+  const directory = resolve(candidateDirectory); assertSource(manifest, directory);
+  if (!/^dpl_[A-Za-z0-9]+$/.test(staged?.id || '') || staged.sha !== manifest.candidate.sha || staged.target !== 'production'
+    || staged.state !== 'READY' || staged.projectId !== manifest.targets.vercelProject || staged.teamId !== manifest.targets.vercelTeam
+    || staged.manifestHash !== digest(manifest) || staged.sourceSha256 !== manifest.candidate.sourceSha256) fail('SOURCE_API_STAGED_IDENTITY');
+  const rollback = phase === 'production.rollback', previous = manifest.previousProduction;
+  if (rollback && (compatible?.compatible !== true || compatible.deploymentId !== previous.deploymentId
+    || compatible.schemaSha256 !== manifest.migration.expectedSchemaSha256 || compatible.runtimeSha256 !== manifest.runtime.expectedSha256
+    || previous.firstRuntime?.rollbackEligible === false)) fail('SOURCE_API_ROLLBACK_COMPATIBILITY');
+  const body = '{}', intent = projectActionIntent(manifest,phase,staged.id), {deploymentId,path} = intent;
+  const receipt = { schemaVersion: 1, kind: PROJECT_ACTION_TRANSPORT, phase, operationId, requestHash: digest(intent),
+    manifestHash: digest(manifest), controllerSha: manifest.controller.sha, projectId: manifest.targets.vercelProject, teamId: manifest.targets.vercelTeam,
+    deploymentId, method: 'POST', path, bodySha256: digest(body), transport: 'rest_api' };
+  const prepared = freeze({ schemaVersion: 1, kind: PROJECT_ACTION_TRANSPORT, method: 'POST',
+    url: `https://api.vercel.com${path}?teamId=${manifest.targets.vercelTeam}`, body, intent, receipt });
+  actionBindings.set(prepared, { directory, manifestHash: digest(manifest), requestHash: digest(intent), bodySha256: digest(body) });
+  return prepared;
+}
+
+/** One POST and acknowledgement only.202 is pending and stops before any GET. */
+export async function executeVercelProjectActionRequest({ prepared, manifest, context, token, assertWriteContext,
+  fetchImpl = fetch, timeoutMs = 20000 } = {}) {
+  validateManifest(manifest);
+  const binding = actionBindings.get(prepared);
+  if (manifest.verification?.vercelSourceTransport !== SOURCE_API_TRANSPORT || manifest.executionMode !== 'release'
+    || !binding || submitted.has(prepared) || digest(manifest) !== binding.manifestHash || digest(prepared.body) !== binding.bodySha256
+    || digest(prepared.intent) !== binding.requestHash || context?.operationId !== prepared.receipt.operationId
+    || canonical(context?.request) !== canonical(prepared.intent) || typeof assertWriteContext !== 'function' || typeof fetchImpl !== 'function'
+    || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 20000
+    || typeof token !== 'string' || !token.length || token.length > 8192 || /\s|[\x00-\x1f\x7f]/.test(token)) fail('SOURCE_API_ACTION_CONTEXT');
+  assertSource(manifest, binding.directory);
+  let guardResult; try { guardResult = assertWriteContext({ manifest, context, prepared }); } catch { fail('SOURCE_API_WRITER_CONTEXT'); }
+  if (guardResult !== undefined && guardResult !== true) fail('SOURCE_API_SYNCHRONOUS_CONTEXT_REQUIRED');
+  if (digest(manifest) !== binding.manifestHash || context.operationId !== prepared.receipt.operationId
+    || digest(context.request) !== binding.requestHash) fail('SOURCE_API_ACTION_CONTEXT');
+  submitted.add(prepared);
+  const abort = new AbortController(); let timer, status = null, reason = 'TRANSPORT_ERROR';
+  try {
+    const timeout = new Promise((_, reject) => { timer = setTimeout(() => { reason = 'TIMEOUT'; abort.abort(); reject(Error('TIMEOUT')); }, timeoutMs); });
+    const submit = (async () => {
+      const response = await fetchImpl(prepared.url, { method: 'POST', redirect: 'error', signal: abort.signal,
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', accept: 'application/json' }, body: prepared.body });
+      status = Number.isSafeInteger(response?.status) && response.status >= 100 && response.status <= 599 ? response.status : null;
+      if (response?.redirected || response?.url && response.url !== prepared.url || status >= 300 && status < 400) { reason = 'REDIRECT'; throw Error('REDIRECT'); }
+      if (!response?.ok || status === null) { reason = 'HTTP_ERROR'; throw Error('HTTP_ERROR'); }
+      // Native54.20.1 handles202 as queued. It grants no applied/current-domain evidence.
+      if (status === 202) { reason = 'QUEUED'; throw Error('QUEUED'); }
+      reason = 'ACK_INVALID';
+      if (![200,201,204].includes(status) || Number(response.headers?.get('content-length')) > MAX_ACK_BYTES) throw Error('ACK_INVALID');
+      const text = await boundedText(response);
+      if (Buffer.byteLength(text) > MAX_ACK_BYTES) throw Error('ACK_INVALID');
+      // The native command does not bind a deployment identity from its response body.
+      // Preserve only status and a digest; independently observed domains prove application.
+      return freeze({ accepted: true, pending: false, sourceAction: { ...prepared.receipt, status,
+        acknowledgement: 'provider_action_response', responseBytes: Buffer.byteLength(text), responseSha256: digest(text), appliedProven: false } });
+    })();
+    return await Promise.race([submit, timeout]);
+  } catch {
+    abort.abort();
+    const sourceApiFailure = freeze({ schemaVersion: 1, kind: 'fcos_source_api_submission_failure_v1', outcome: 'unknown',
+      operationId: prepared.receipt.operationId, phase: prepared.receipt.phase, requestHash: binding.requestHash,
+      manifestHash: binding.manifestHash, bodySha256: binding.bodySha256, status, reason });
+    throw new ReleaseError(status === 202 ? 'VERCEL_SOURCE_API_ACTION_PENDING' : 'VERCEL_SOURCE_API_OUTCOME_UNKNOWN', 'vercel.source_api.write',
+      'Preserve the consumed intent; use separately admitted exact owner readback and never resubmit.',
+      { providerSubmissionStarted: true, sourceApiFailure });
+  } finally { clearTimeout(timer); }
+}
+
+function projectActionIntent(manifest,phase,stagedId){
+  const rollback=phase==='production.rollback',deploymentId=rollback?manifest.previousProduction.deploymentId:stagedId;
+  const path=`/v${rollback?'9':'10'}/projects/${manifest.targets.vercelProject}/${rollback?'rollback':'promote'}/${deploymentId}`;
+  return {kind:PROJECT_ACTION_TRANSPORT,phase,projectId:manifest.targets.vercelProject,teamId:manifest.targets.vercelTeam,deploymentId,
+    ...(rollback?{from:stagedId,to:deploymentId,schemaSha256:manifest.migration.expectedSchemaSha256,runtimeSha256:manifest.runtime.expectedSha256}
+      :{previousDeploymentId:manifest.previousProduction.deploymentId}),method:'POST',path,bodySha256:digest('{}')};
+}
+
+/** Historical request reconstruction only. The caller supplies authenticated
+ * original journal rows; this never asserts fresh rollback compatibility or an ACK. */
+export function verifyVercelProjectActionRecoveryRequest({manifest,phase,operation:o,registration:r,staged}={}){
+  validateManifest(manifest);
+  if(!['production.promote','production.rollback'].includes(phase))fail('SOURCE_API_ACTION_RECOVERY_REQUEST');
+  const bound=digest(manifest),operationId=`${manifest.releaseId}-${phase.replaceAll('.','-')}`;
+  if(manifest.verification?.vercelSourceTransport!==SOURCE_API_TRANSPORT||manifest.executionMode!=='release'
+    ||!['production.promote','production.rollback'].includes(phase)||!/^dpl_[A-Za-z0-9]+$/.test(staged?.id||'')
+    ||staged.target!=='production'||staged.sha!==manifest.candidate.sha||staged.sourceSha256!==manifest.candidate.sourceSha256
+    ||staged.projectId!==manifest.targets.vercelProject||staged.teamId!==manifest.targets.vercelTeam
+    ||staged.sourceApi?.manifestHash!==bound||staged.sourceApi.phase!=='production.stage'||staged.sourceApi.target!=='production'
+    ||staged.sourceApi.deploymentId!==staged.id||staged.sourceApi.sourceSha256!==manifest.candidate.sourceSha256
+    ||!r||r.release_id!==manifest.releaseId||r.epoch!==manifest.epoch||r.manifest_hash!==bound||canonical(r.manifest)!==canonical(manifest))fail('SOURCE_API_ACTION_RECOVERY_REQUEST');
+  const intent=projectActionIntent(manifest,phase,staged.id),requestHash=digest(intent);
+  if(!o||o.operationId!==operationId||o.operation_id!==operationId||o.phase!==phase||o.release_id!==manifest.releaseId
+    ||o.epoch!==manifest.epoch||o.manifest_hash!==bound||o.requestHash!==requestHash||o.request_hash!==requestHash
+    ||!['intent','uncertain'].includes(o.state))fail('SOURCE_API_ACTION_RECOVERY_REQUEST');
+  return freeze({schemaVersion:1,kind:PROJECT_ACTION_TRANSPORT,phase,operationId,requestHash,manifestHash:bound,controllerSha:manifest.controller.sha,
+    projectId:manifest.targets.vercelProject,teamId:manifest.targets.vercelTeam,deploymentId:intent.deploymentId,method:intent.method,path:intent.path,
+    bodySha256:intent.bodySha256,transport:'rest_api',acknowledgement:'authenticated_provider_owner_readback',appliedProven:false});
 }

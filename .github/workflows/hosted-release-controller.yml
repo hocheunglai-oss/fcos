@@ -268,9 +268,19 @@ jobs:
       - prepare
       - reconcile
     runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/hocheunglai-oss/fcos-release-checks@sha256:1cb176a00c6224f94a668f76de51186e2d0b3cd95d631af4289467451caf40ef
+      credentials:
+        username: hocheunglai-oss
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user 1001:1001
+    defaults:
+      run:
+        shell: bash
     environment: fcos-hosted-preview
     permissions:
       contents: read
+      packages: read
       actions: read
       id-token: write
     timeout-minutes: 30
@@ -292,11 +302,32 @@ jobs:
           path: controller
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: 24.18.0
       - name: Install trusted controller dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Verify admitted trusted runtime
+        timeout-minutes: 1
+        run: |
+          node --input-type=commonjs <<'NODE'
+          const {accessSync,constants,readFileSync,realpathSync}=require('node:fs');
+          const {spawnSync}=require('node:child_process');
+          const playwright=require('playwright');
+          if(process.version!=='v24.18.0'||process.platform!=='linux'||process.arch!=='x64'||process.getuid()!==1001||process.getgid()!==1001
+            ||process.env.PLAYWRIGHT_BROWSERS_PATH!=='/ms-playwright'||require('playwright/package.json').version!=='1.62.1'
+            ||JSON.parse(readFileSync('/usr/local/lib/node_modules/vercel/package.json','utf8')).version!=='54.20.1'
+            ||realpathSync('/usr/local/bin/vercel')!=='/usr/local/lib/node_modules/vercel/dist/vc.js')throw Error('HOSTED_TRUSTED_TOOLCHAIN_MISMATCH');
+          accessSync('/usr/local/bin/vercel',constants.X_OK);
+          const chromium=playwright.chromium.executablePath();
+          if(!chromium.startsWith('/ms-playwright/'))throw Error('HOSTED_TRUSTED_BROWSER_PATH');
+          const python=spawnSync('/usr/bin/python3',['--version'],{encoding:'utf8',timeout:5000,maxBuffer:4096,env:{PATH:'/usr/local/bin:/usr/bin:/bin'}});
+          if(python.status!==0||python.signal||python.error||python.stdout.trim()!=='Python 3.11.2')throw Error('HOSTED_TRUSTED_PYTHON_MISMATCH');
+          for(const binary of [chromium,'/opt/google/chrome/chrome']){
+            accessSync(binary,constants.X_OK);
+            const result=spawnSync(binary,['--version'],{encoding:'utf8',timeout:5000,maxBuffer:4096,env:{PATH:'/usr/local/bin:/usr/bin:/bin'}});
+            if(result.status!==0||result.signal||result.error||!/^(?:Chromium|Google Chrome(?: for Testing)?) [0-9]+\./.test(result.stdout.trim()))throw Error('HOSTED_TRUSTED_BROWSER_UNAVAILABLE');
+          }
+          console.log(JSON.stringify({node:process.version,platform:process.platform,arch:process.arch,python:python.stdout.trim(),playwright:'1.62.1',vercel:'54.20.1',browserAvailabilityVerified:true}));
+          NODE
         working-directory: controller
       - name: Check out exact candidate data
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -306,10 +337,6 @@ jobs:
           path: candidate
           fetch-depth: 0
           persist-credentials: false
-      - name: Install trusted browser runtime
-        run: npx --no-install playwright install --with-deps chromium chrome
-        working-directory: controller
-      - run: npm install --global vercel@54.20.1
       - name: Run admitted checks
         id: run
         run: node controller/scripts/hosted-release.mjs preview
@@ -338,9 +365,19 @@ jobs:
       - prepare
       - preview
     runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/hocheunglai-oss/fcos-release-checks@sha256:1cb176a00c6224f94a668f76de51186e2d0b3cd95d631af4289467451caf40ef
+      credentials:
+        username: hocheunglai-oss
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user 1001:1001
+    defaults:
+      run:
+        shell: bash
     environment: fcos-hosted-verification
     permissions:
       contents: read
+      packages: read
       actions: read
       id-token: write
     timeout-minutes: 20
@@ -367,11 +404,32 @@ jobs:
           path: controller
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: 24.18.0
       - name: Install trusted controller dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Verify admitted trusted runtime
+        timeout-minutes: 1
+        run: |
+          node --input-type=commonjs <<'NODE'
+          const {accessSync,constants,readFileSync,realpathSync}=require('node:fs');
+          const {spawnSync}=require('node:child_process');
+          const playwright=require('playwright');
+          if(process.version!=='v24.18.0'||process.platform!=='linux'||process.arch!=='x64'||process.getuid()!==1001||process.getgid()!==1001
+            ||process.env.PLAYWRIGHT_BROWSERS_PATH!=='/ms-playwright'||require('playwright/package.json').version!=='1.62.1'
+            ||JSON.parse(readFileSync('/usr/local/lib/node_modules/vercel/package.json','utf8')).version!=='54.20.1'
+            ||realpathSync('/usr/local/bin/vercel')!=='/usr/local/lib/node_modules/vercel/dist/vc.js')throw Error('HOSTED_TRUSTED_TOOLCHAIN_MISMATCH');
+          accessSync('/usr/local/bin/vercel',constants.X_OK);
+          const chromium=playwright.chromium.executablePath();
+          if(!chromium.startsWith('/ms-playwright/'))throw Error('HOSTED_TRUSTED_BROWSER_PATH');
+          const python=spawnSync('/usr/bin/python3',['--version'],{encoding:'utf8',timeout:5000,maxBuffer:4096,env:{PATH:'/usr/local/bin:/usr/bin:/bin'}});
+          if(python.status!==0||python.signal||python.error||python.stdout.trim()!=='Python 3.11.2')throw Error('HOSTED_TRUSTED_PYTHON_MISMATCH');
+          for(const binary of [chromium,'/opt/google/chrome/chrome']){
+            accessSync(binary,constants.X_OK);
+            const result=spawnSync(binary,['--version'],{encoding:'utf8',timeout:5000,maxBuffer:4096,env:{PATH:'/usr/local/bin:/usr/bin:/bin'}});
+            if(result.status!==0||result.signal||result.error||!/^(?:Chromium|Google Chrome(?: for Testing)?) [0-9]+\./.test(result.stdout.trim()))throw Error('HOSTED_TRUSTED_BROWSER_UNAVAILABLE');
+          }
+          console.log(JSON.stringify({node:process.version,platform:process.platform,arch:process.arch,python:python.stdout.trim(),playwright:'1.62.1',vercel:'54.20.1',browserAvailabilityVerified:true}));
+          NODE
         working-directory: controller
       - name: Check out exact candidate data
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -381,9 +439,6 @@ jobs:
           path: candidate
           fetch-depth: 0
           persist-credentials: false
-      - name: Install trusted browser runtime
-        run: npx --no-install playwright install --with-deps chromium chrome
-        working-directory: controller
       - name: Run admitted checks
         id: run
         run: node controller/scripts/hosted-release.mjs observe
@@ -489,9 +544,19 @@ jobs:
       ${{ needs.prepare.outputs.terminal != 'true' && always() && needs.prepare.result == 'success' && needs.observe_before.result == 'success' &&
       needs.observe_before.outputs.has_browsers == 'true' }}
     runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/hocheunglai-oss/fcos-release-checks@sha256:1cb176a00c6224f94a668f76de51186e2d0b3cd95d631af4289467451caf40ef
+      credentials:
+        username: hocheunglai-oss
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user 1001:1001
+    defaults:
+      run:
+        shell: bash
     environment: ${{ matrix.mode == 'restricted' && 'fcos-hosted-restricted-verification' || 'fcos-hosted-normal-verification' }}
     permissions:
       contents: read
+      packages: read
       actions: read
     timeout-minutes: 20
     strategy:
@@ -518,11 +583,32 @@ jobs:
           path: controller
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: 24.18.0
       - name: Install trusted controller dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Verify admitted trusted runtime
+        timeout-minutes: 1
+        run: |
+          node --input-type=commonjs <<'NODE'
+          const {accessSync,constants,readFileSync,realpathSync}=require('node:fs');
+          const {spawnSync}=require('node:child_process');
+          const playwright=require('playwright');
+          if(process.version!=='v24.18.0'||process.platform!=='linux'||process.arch!=='x64'||process.getuid()!==1001||process.getgid()!==1001
+            ||process.env.PLAYWRIGHT_BROWSERS_PATH!=='/ms-playwright'||require('playwright/package.json').version!=='1.62.1'
+            ||JSON.parse(readFileSync('/usr/local/lib/node_modules/vercel/package.json','utf8')).version!=='54.20.1'
+            ||realpathSync('/usr/local/bin/vercel')!=='/usr/local/lib/node_modules/vercel/dist/vc.js')throw Error('HOSTED_TRUSTED_TOOLCHAIN_MISMATCH');
+          accessSync('/usr/local/bin/vercel',constants.X_OK);
+          const chromium=playwright.chromium.executablePath();
+          if(!chromium.startsWith('/ms-playwright/'))throw Error('HOSTED_TRUSTED_BROWSER_PATH');
+          const python=spawnSync('/usr/bin/python3',['--version'],{encoding:'utf8',timeout:5000,maxBuffer:4096,env:{PATH:'/usr/local/bin:/usr/bin:/bin'}});
+          if(python.status!==0||python.signal||python.error||python.stdout.trim()!=='Python 3.11.2')throw Error('HOSTED_TRUSTED_PYTHON_MISMATCH');
+          for(const binary of [chromium,'/opt/google/chrome/chrome']){
+            accessSync(binary,constants.X_OK);
+            const result=spawnSync(binary,['--version'],{encoding:'utf8',timeout:5000,maxBuffer:4096,env:{PATH:'/usr/local/bin:/usr/bin:/bin'}});
+            if(result.status!==0||result.signal||result.error||!/^(?:Chromium|Google Chrome(?: for Testing)?) [0-9]+\./.test(result.stdout.trim()))throw Error('HOSTED_TRUSTED_BROWSER_UNAVAILABLE');
+          }
+          console.log(JSON.stringify({node:process.version,platform:process.platform,arch:process.arch,python:python.stdout.trim(),playwright:'1.62.1',vercel:'54.20.1',browserAvailabilityVerified:true}));
+          NODE
         working-directory: controller
       - name: Check out exact candidate data
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -532,9 +618,6 @@ jobs:
           path: candidate
           fetch-depth: 0
           persist-credentials: false
-      - name: Install trusted browser runtime
-        run: npx --no-install playwright install --with-deps chromium chrome
-        working-directory: controller
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: ${{ format('fcos-{0}-observations-before', needs.prepare.outputs.release_id) }}
@@ -697,9 +780,19 @@ jobs:
       ${{ needs.prepare.outputs.terminal != 'true' && always() && needs.prepare.result == 'success' && (needs.production.result == 'success' ||
       needs.prepare.outputs.approved == 'true') }}
     runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/hocheunglai-oss/fcos-release-checks@sha256:1cb176a00c6224f94a668f76de51186e2d0b3cd95d631af4289467451caf40ef
+      credentials:
+        username: hocheunglai-oss
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user 1001:1001
+    defaults:
+      run:
+        shell: bash
     environment: fcos-hosted-verification
     permissions:
       contents: read
+      packages: read
       actions: read
       id-token: write
     timeout-minutes: 20
@@ -726,11 +819,32 @@ jobs:
           path: controller
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: 24.18.0
       - name: Install trusted controller dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Verify admitted trusted runtime
+        timeout-minutes: 1
+        run: |
+          node --input-type=commonjs <<'NODE'
+          const {accessSync,constants,readFileSync,realpathSync}=require('node:fs');
+          const {spawnSync}=require('node:child_process');
+          const playwright=require('playwright');
+          if(process.version!=='v24.18.0'||process.platform!=='linux'||process.arch!=='x64'||process.getuid()!==1001||process.getgid()!==1001
+            ||process.env.PLAYWRIGHT_BROWSERS_PATH!=='/ms-playwright'||require('playwright/package.json').version!=='1.62.1'
+            ||JSON.parse(readFileSync('/usr/local/lib/node_modules/vercel/package.json','utf8')).version!=='54.20.1'
+            ||realpathSync('/usr/local/bin/vercel')!=='/usr/local/lib/node_modules/vercel/dist/vc.js')throw Error('HOSTED_TRUSTED_TOOLCHAIN_MISMATCH');
+          accessSync('/usr/local/bin/vercel',constants.X_OK);
+          const chromium=playwright.chromium.executablePath();
+          if(!chromium.startsWith('/ms-playwright/'))throw Error('HOSTED_TRUSTED_BROWSER_PATH');
+          const python=spawnSync('/usr/bin/python3',['--version'],{encoding:'utf8',timeout:5000,maxBuffer:4096,env:{PATH:'/usr/local/bin:/usr/bin:/bin'}});
+          if(python.status!==0||python.signal||python.error||python.stdout.trim()!=='Python 3.11.2')throw Error('HOSTED_TRUSTED_PYTHON_MISMATCH');
+          for(const binary of [chromium,'/opt/google/chrome/chrome']){
+            accessSync(binary,constants.X_OK);
+            const result=spawnSync(binary,['--version'],{encoding:'utf8',timeout:5000,maxBuffer:4096,env:{PATH:'/usr/local/bin:/usr/bin:/bin'}});
+            if(result.status!==0||result.signal||result.error||!/^(?:Chromium|Google Chrome(?: for Testing)?) [0-9]+\./.test(result.stdout.trim()))throw Error('HOSTED_TRUSTED_BROWSER_UNAVAILABLE');
+          }
+          console.log(JSON.stringify({node:process.version,platform:process.platform,arch:process.arch,python:python.stdout.trim(),playwright:'1.62.1',vercel:'54.20.1',browserAvailabilityVerified:true}));
+          NODE
         working-directory: controller
       - name: Check out exact candidate data
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -740,9 +854,6 @@ jobs:
           path: candidate
           fetch-depth: 0
           persist-credentials: false
-      - name: Install trusted browser runtime
-        run: npx --no-install playwright install --with-deps chromium chrome
-        working-directory: controller
       - name: Run admitted checks
         id: run
         run: node controller/scripts/hosted-release.mjs observe
@@ -851,9 +962,19 @@ jobs:
       ${{ needs.prepare.outputs.terminal != 'true' && always() && needs.prepare.result == 'success' && needs.observe_after.result == 'success' &&
       needs.observe_after.outputs.has_browsers == 'true' }}
     runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/hocheunglai-oss/fcos-release-checks@sha256:1cb176a00c6224f94a668f76de51186e2d0b3cd95d631af4289467451caf40ef
+      credentials:
+        username: hocheunglai-oss
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user 1001:1001
+    defaults:
+      run:
+        shell: bash
     environment: ${{ matrix.mode == 'restricted' && 'fcos-hosted-restricted-verification' || 'fcos-hosted-normal-verification' }}
     permissions:
       contents: read
+      packages: read
       actions: read
     timeout-minutes: 20
     strategy:
@@ -880,11 +1001,32 @@ jobs:
           path: controller
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: 24.18.0
       - name: Install trusted controller dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Verify admitted trusted runtime
+        timeout-minutes: 1
+        run: |
+          node --input-type=commonjs <<'NODE'
+          const {accessSync,constants,readFileSync,realpathSync}=require('node:fs');
+          const {spawnSync}=require('node:child_process');
+          const playwright=require('playwright');
+          if(process.version!=='v24.18.0'||process.platform!=='linux'||process.arch!=='x64'||process.getuid()!==1001||process.getgid()!==1001
+            ||process.env.PLAYWRIGHT_BROWSERS_PATH!=='/ms-playwright'||require('playwright/package.json').version!=='1.62.1'
+            ||JSON.parse(readFileSync('/usr/local/lib/node_modules/vercel/package.json','utf8')).version!=='54.20.1'
+            ||realpathSync('/usr/local/bin/vercel')!=='/usr/local/lib/node_modules/vercel/dist/vc.js')throw Error('HOSTED_TRUSTED_TOOLCHAIN_MISMATCH');
+          accessSync('/usr/local/bin/vercel',constants.X_OK);
+          const chromium=playwright.chromium.executablePath();
+          if(!chromium.startsWith('/ms-playwright/'))throw Error('HOSTED_TRUSTED_BROWSER_PATH');
+          const python=spawnSync('/usr/bin/python3',['--version'],{encoding:'utf8',timeout:5000,maxBuffer:4096,env:{PATH:'/usr/local/bin:/usr/bin:/bin'}});
+          if(python.status!==0||python.signal||python.error||python.stdout.trim()!=='Python 3.11.2')throw Error('HOSTED_TRUSTED_PYTHON_MISMATCH');
+          for(const binary of [chromium,'/opt/google/chrome/chrome']){
+            accessSync(binary,constants.X_OK);
+            const result=spawnSync(binary,['--version'],{encoding:'utf8',timeout:5000,maxBuffer:4096,env:{PATH:'/usr/local/bin:/usr/bin:/bin'}});
+            if(result.status!==0||result.signal||result.error||!/^(?:Chromium|Google Chrome(?: for Testing)?) [0-9]+\./.test(result.stdout.trim()))throw Error('HOSTED_TRUSTED_BROWSER_UNAVAILABLE');
+          }
+          console.log(JSON.stringify({node:process.version,platform:process.platform,arch:process.arch,python:python.stdout.trim(),playwright:'1.62.1',vercel:'54.20.1',browserAvailabilityVerified:true}));
+          NODE
         working-directory: controller
       - name: Check out exact candidate data
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -894,9 +1036,6 @@ jobs:
           path: candidate
           fetch-depth: 0
           persist-credentials: false
-      - name: Install trusted browser runtime
-        run: npx --no-install playwright install --with-deps chromium chrome
-        working-directory: controller
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: ${{ format('fcos-{0}-observations-after', needs.prepare.outputs.release_id) }}
@@ -1174,9 +1313,19 @@ jobs:
       ${{ needs.prepare.outputs.terminal != 'true' && always() && needs.prepare.result == 'success' && needs.ready_after.result == 'success' &&
       needs.prepare.outputs.execution_mode == 'release' && needs.ready_after.outputs.ready == 'true' }}
     runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/hocheunglai-oss/fcos-release-checks@sha256:1cb176a00c6224f94a668f76de51186e2d0b3cd95d631af4289467451caf40ef
+      credentials:
+        username: hocheunglai-oss
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user 1001:1001
+    defaults:
+      run:
+        shell: bash
     environment: fcos-hosted-production-resume
     permissions:
       contents: read
+      packages: read
       actions: read
       id-token: write
     timeout-minutes: 30
@@ -1198,11 +1347,32 @@ jobs:
           path: controller
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: 24.18.0
       - name: Install trusted controller dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Verify admitted trusted runtime
+        timeout-minutes: 1
+        run: |
+          node --input-type=commonjs <<'NODE'
+          const {accessSync,constants,readFileSync,realpathSync}=require('node:fs');
+          const {spawnSync}=require('node:child_process');
+          const playwright=require('playwright');
+          if(process.version!=='v24.18.0'||process.platform!=='linux'||process.arch!=='x64'||process.getuid()!==1001||process.getgid()!==1001
+            ||process.env.PLAYWRIGHT_BROWSERS_PATH!=='/ms-playwright'||require('playwright/package.json').version!=='1.62.1'
+            ||JSON.parse(readFileSync('/usr/local/lib/node_modules/vercel/package.json','utf8')).version!=='54.20.1'
+            ||realpathSync('/usr/local/bin/vercel')!=='/usr/local/lib/node_modules/vercel/dist/vc.js')throw Error('HOSTED_TRUSTED_TOOLCHAIN_MISMATCH');
+          accessSync('/usr/local/bin/vercel',constants.X_OK);
+          const chromium=playwright.chromium.executablePath();
+          if(!chromium.startsWith('/ms-playwright/'))throw Error('HOSTED_TRUSTED_BROWSER_PATH');
+          const python=spawnSync('/usr/bin/python3',['--version'],{encoding:'utf8',timeout:5000,maxBuffer:4096,env:{PATH:'/usr/local/bin:/usr/bin:/bin'}});
+          if(python.status!==0||python.signal||python.error||python.stdout.trim()!=='Python 3.11.2')throw Error('HOSTED_TRUSTED_PYTHON_MISMATCH');
+          for(const binary of [chromium,'/opt/google/chrome/chrome']){
+            accessSync(binary,constants.X_OK);
+            const result=spawnSync(binary,['--version'],{encoding:'utf8',timeout:5000,maxBuffer:4096,env:{PATH:'/usr/local/bin:/usr/bin:/bin'}});
+            if(result.status!==0||result.signal||result.error||!/^(?:Chromium|Google Chrome(?: for Testing)?) [0-9]+\./.test(result.stdout.trim()))throw Error('HOSTED_TRUSTED_BROWSER_UNAVAILABLE');
+          }
+          console.log(JSON.stringify({node:process.version,platform:process.platform,arch:process.arch,python:python.stdout.trim(),playwright:'1.62.1',vercel:'54.20.1',browserAvailabilityVerified:true}));
+          NODE
         working-directory: controller
       - name: Check out exact candidate data
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -1212,10 +1382,6 @@ jobs:
           path: candidate
           fetch-depth: 0
           persist-credentials: false
-      - name: Install trusted browser runtime
-        run: npx --no-install playwright install --with-deps chromium chrome
-        working-directory: controller
-      - run: npm install --global vercel@54.20.1
       - name: Run admitted checks
         id: run
         run: node controller/scripts/hosted-release.mjs execute

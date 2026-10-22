@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {COMPATIBILITY_CORRECTION as C,COMPATIBILITY_CONFIGURATION_CORRECTION as V,isFirstRuntimeCandidateSha,firstRuntimeCandidateProfile} from '../config/hostedCompatibilityCorrection.js';
+import {COMPATIBILITY_CORRECTION as C,COMPATIBILITY_CONFIGURATION_CORRECTION as V,COMPATIBILITY_DIAGNOSTIC_CORRECTION as D,isFirstRuntimeCandidateSha,firstRuntimeCandidateProfile} from '../config/hostedCompatibilityCorrection.js';
 import {loadReleaseCheckManifest,requiredReleaseChecks} from '../scripts/lib/hosted-release/checks.mjs';
 import {validateManifest} from '../scripts/lib/hosted-release/contract.mjs';
 import {fixtureManifest} from './helpers/hosted-release-manifest.mjs';
@@ -65,4 +65,21 @@ test('configuration successor preserves all31 checks, original profiles and mani
   for(const change of [v=>v.candidate.sha=C.candidateSha,v=>v.candidate.sourceProfile=C.sourceProfile,v=>delete v.candidate.sourceProfile,v=>v.scope.existingUi=true,v=>v.scope.handoffs=[{kind:'status19',sha256:'a'.repeat(64)}],v=>v.scope.financialAuthority=true]){
     const changed=structuredClone(m);change(changed);assert.throws(()=>validateManifest(changed));
   }
+});
+
+test('diagnostic successor is the explicit one-file child and leaves business source, configuration and historical pins unchanged',()=>{
+  assert.equal(D.baseSha,V.candidateSha);assert.equal(git('rev-parse',`${D.candidateSha}^`),D.baseSha);
+  assert.deepEqual(git('diff-tree','--no-commit-id','--name-only','-r',D.baseSha,D.candidateSha).split('\n'),D.files.map(f=>f.path));
+  for(const f of D.files){const bytes=execFileSync('git',['show',`${D.candidateSha}:${f.path}`],{cwd:ROOT});assert.equal(createHash('sha256').update(bytes).digest('hex'),f.sha256);assert.equal(git('rev-parse',`${D.candidateSha}:${f.path}`),f.gitBlob);}
+  for(const path of ['force-app/main/default','vercel.json','src','api','supabase','package.json','package-lock.json'])assert.equal(git('diff','--name-only',D.baseSha,D.candidateSha,'--',path),'');
+  for(const key of ['existingUi','salesforceMetadataChanged','cronSchedulesChanged'])assert.equal(D[key],false);assert.deepEqual(D.handoffs,[]);
+});
+test('diagnostic successor inherits all31 frozen checks and exact commands with independent candidate/profile binding',()=>{
+  const {manifest}=loadReleaseCheckManifest(ROOT),old=requiredReleaseChecks(manifest,V.sourceProfile),next=requiredReleaseChecks(manifest,D.sourceProfile);
+  assert.equal(next.length,31);assert.deepEqual(next.map(x=>x.id),old.map(x=>x.id));
+  for(let i=0;i<old.length;i++)assert.deepEqual(next[i].profileCommands?.[D.sourceProfile]||next[i].commands,old[i].profileCommands?.[V.sourceProfile]||old[i].commands);
+  assert.equal(manifest.sourceProfiles[D.sourceProfile].candidateSha,D.candidateSha);assert.equal(manifest.sourceProfiles[V.sourceProfile].candidateSha,V.candidateSha);
+  assert.equal(firstRuntimeCandidateProfile(D.candidateSha),D.sourceProfile);assert.equal(isFirstRuntimeCandidateSha(D.candidateSha),true);
+  const m=fixtureManifest();m.candidate.sha=D.candidateSha;m.candidate.sourceProfile=D.sourceProfile;assert.doesNotThrow(()=>validateManifest(m));
+  for(const change of [v=>v.candidate.sha=V.candidateSha,v=>v.candidate.sourceProfile=V.sourceProfile,v=>delete v.candidate.sourceProfile,v=>v.scope.existingUi=true,v=>v.scope.handoffs=[{kind:'status19',sha256:'a'.repeat(64)}],v=>v.scope.financialAuthority=true]){const changed=structuredClone(m);change(changed);assert.throws(()=>validateManifest(changed));}
 });

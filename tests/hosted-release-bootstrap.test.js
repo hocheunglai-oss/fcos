@@ -28,7 +28,7 @@ test('qualification bootstrap stays inactive and calls the same immutable contro
   assert.deepEqual(Object.keys(definition.jobs), ['toolchain', 'dependency_setup', 'dependency_key', 'setup_discovery', 'preservation_preflight', 'manifest', 'release', 'xero_owner_readback', 'xero_original_warm']);
   assert.equal(definition.jobs.manifest.if, "${{ inputs.xero_recovery_mode == 'disabled' && inputs.bootstrap_phase == 'qualification' && vars.FCOS_HOSTED_QUALIFICATION_ADMITTED == 'true' }}");
   assert.equal(definition.jobs.manifest.environment, 'fcos-hosted-verification');
-  assert.deepEqual(definition.jobs.manifest.permissions, { contents: 'read', actions: 'read' });
+  assert.deepEqual(definition.jobs.manifest.permissions, { contents: 'read', packages: 'read', actions: 'read' });
   assert.equal(template.split('__FCOS_CONTROLLER_SHA__').length - 1, 17);
   const sha = 'a'.repeat(40), rendered = yaml.load(template.replaceAll('__FCOS_CONTROLLER_SHA__', sha));
   assert.equal(rendered.jobs.manifest.env.FCOS_CONTROLLER_SHA, sha);
@@ -62,6 +62,7 @@ test('every reusable environment secret is explicitly admitted without exposing 
   const referenced = new Set();
   for (const [id, job] of Object.entries(controller.jobs)) {
     for (const [, name] of JSON.stringify(job).matchAll(/secrets\.([A-Z0-9_]+)/g)) {
+      if(name==='GITHUB_TOKEN'){assert.equal(job.container?.credentials?.password,'${{ secrets.GITHUB_TOKEN }}');continue;}
       referenced.add(name);
       assert.ok(controller.on.workflow_call.secrets[name], `${id} references an undeclared secret`);
       if (name !== 'FCOS_HOSTED_GITHUB_READ_TOKEN') assert.ok(job.environment, `${id} exposes a provider secret without a protected environment`);
@@ -88,7 +89,7 @@ test('bootstrap checks scope and live read-only admission before candidate check
   assert.deepEqual(Object.keys(steps[admission].env).sort(), ['FCOS_HOSTED_GITHUB_READ_TOKEN', 'GITHUB_TOKEN']);
   assert.ok(steps[admission].run.includes('node controller/scripts/hosted-release-manifest.mjs --validate-dispatch-only'));
   const qualification = {...definition,jobs:Object.fromEntries(Object.entries(definition.jobs).filter(([id])=>!['xero_owner_readback','xero_original_warm'].includes(id)))};
-  const secrets = [...JSON.stringify(qualification).matchAll(/secrets\.([A-Z0-9_]+)/g)].map(match => match[1]);
+  const secrets = [...JSON.stringify(qualification).matchAll(/secrets\.([A-Z0-9_]+)/g)].map(match => match[1]).filter(name=>name!=='GITHUB_TOKEN');
   assert.deepEqual([...new Set(secrets)].sort(), environmentSecrets.map(name=>fallbackSources[name]||name).sort());
   assert.ok(!secrets.includes('FCOS_HOSTED_VERCEL_PRODUCTION_TOKEN'));
 });

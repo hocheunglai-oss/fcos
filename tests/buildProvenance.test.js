@@ -1,7 +1,8 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { accessSync, constants, cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { accessSync, chmodSync, constants, cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { collectBuildProvenance, deploymentSourceFilter, writeBuildReceipts } from '../scripts/lib/build-provenance.mjs';
@@ -240,6 +241,43 @@ test('Vercel archive and clean Git source share a digest after default and custo
   f.git('update-index', '--assume-unchanged', 'tests/fixture.js');
   writeFileSync(join(f.cwd, 'tests/fixture.js'), 'hidden excluded-file change');
   assert.throws(() => f.collect({ requireClean: true }), /source content differs from HEAD/);
+});
+
+test('archive attestation failure reports bounded public hashes and executable counts while still refusing changed source', t => {
+  const f = fixture(t), hash = value => createHash('sha256').update(value).digest('hex');
+  mkdirSync(join(f.cwd, '.githooks'));
+  const hook = join(f.cwd, '.githooks/pre-push');
+  writeFileSync(hook, '#!/bin/sh\nexit 0\n'); chmodSync(hook, 0o755);
+  writeFileSync(join(f.cwd, 'vercel.json'), '{"version":2}\n');
+  writeFileSync(join(f.cwd, 'package.json'), '{"name":"PUBLIC_CONTENT_MUST_BE_HASHED_ONLY"}\n');
+  f.git('add', '.'); f.git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'diagnostic source');
+  const original = f.collect({ requireClean: true });
+  rmSync(join(f.cwd, '.git'), { recursive: true });
+  chmodSync(hook, 0o644);
+  writeFileSync(join(f.cwd, 'vercel.json'), '{"version":2,"name":"changed"}\n');
+  writeFileSync(join(f.cwd, '.env.local'), 'PASSWORD=PRIVATE_MUST_NOT_APPEAR');
+  let failure;
+  try { f.collect({ env: { VERCEL: '1', FCOS_BUILD_COMMIT_SHA: original.commit, FCOS_EXPECTED_SOURCE_SHA256: original.sourceDigest } }); }
+  catch (error) { failure = error; }
+  assert.ok(failure instanceof Error); assert.match(failure.message, /source digest does not match/);
+  const metadata = JSON.parse(failure.message.split(' Source attestation diagnostics: ')[1]);
+  assert.equal(metadata.expectedSha256, original.sourceDigest);
+  assert.equal(metadata.actualSha256, f.collect().sourceDigest);
+  assert.equal(metadata.sourceFileCount, original.sourceFileCount); assert.equal(metadata.executableFileCount, 0);
+  assert.deepEqual(metadata.inputs.find(input => input.path === '.githooks/pre-push'), {
+    path: '.githooks/pre-push', executable: false, bytes: readFileSync(hook).length, sha256: hash(readFileSync(hook)),
+  });
+  assert.equal(metadata.inputs.find(input => input.path === 'vercel.json').sha256, hash(readFileSync(join(f.cwd, 'vercel.json'))));
+  assert.ok(metadata.inputs.length <= 8);
+  assert.doesNotMatch(failure.message, /PRIVATE_MUST_NOT_APPEAR|PUBLIC_CONTENT_MUST_BE_HASHED_ONLY|\.env/);
+});
+
+test('malformed expected attestation values never escape through failure diagnostics', t => {
+  const f = fixture(t); let failure;
+  try { f.collect({ env: { FCOS_EXPECTED_SOURCE_SHA256: 'PRIVATE_EXPECTATION_MUST_NOT_APPEAR' } }); }
+  catch (error) { failure = error; }
+  assert.ok(failure instanceof Error); assert.doesNotMatch(failure.message, /private_expectation_must_not_appear/i);
+  assert.equal(JSON.parse(failure.message.split(' Source attestation diagnostics: ')[1]).expectedSha256, 'invalid');
 });
 
 test('upload negation rules retain included files and Git-ignored deployable input cannot escape provenance', t => {

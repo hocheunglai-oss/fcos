@@ -202,3 +202,37 @@ that exact container. It does not use live credentials or change machine
 settings. The host native initdb attempt failed on exhausted orphan SysV memory
 IDs; no orphan belonging to another task was removed. PGlite is additional
 syntax/behavior evidence and does not replace native or signed HTTP integration.
+
+## Separate known build failure and diagnostic successor
+
+The archive Preview under controller `f0bb486474d3267b324704acbe3fef5576126576`
+received a known create acknowledgement. Its later build stopped at source
+attestation; this is separate from the quarantined original UNKNOWN. Preserve
+both histories. A terminal `ERROR` or `CANCELED` readback now stops the controller
+immediately instead of waiting for the job timeout. It cannot create a replacement
+or advance to Production.
+
+The explicit diagnostic-only compatibility child
+`160edcccc3347596ac18bb5c9dcb34ecc26df02b` has parent
+`2ef733d17dd12314c72971c2220b2b09903a6bf0`. It changes only
+`scripts/lib/build-provenance.mjs`. A mismatch still refuses the build, with the
+same path, content, executable-mode and cleanliness checks. Failure metadata
+adds only source hashes, counts and hashes of eight fixed public input paths.
+The actual remote mismatch cause remains unproven. The new source profile keeps
+all 31 frozen release checks and requires its own exact setup, source admission,
+qualification and final Production decision; it cannot reuse a consumed intent.
+
+The Production archive transport creates a Production-target deployment with
+custom domains held. Promotion uses the project action for that same staged
+identifier. Rollback uses the project's rollback action for the verified
+compatible previous identifier. The durable intent binds the exact prepared
+request before submitting; queued or uncertain responses stop all subsequent
+provider calls. A separate original-owner readback must validate that original
+request binding and observe the canonical Production alias. New promotion
+intent is refused if that alias moved away from the expected previous deployment.
+
+Trusted workflow jobs reuse the existing immutable release-checks image rather
+than downloading browsers repeatedly. Candidate execution remains in its
+separate credential-free sandbox. Local tests establish the new checks and
+refusal behavior; the next admitted hosted run must still prove private image
+pulling, job startup, source attestation, browser checks and qualification.

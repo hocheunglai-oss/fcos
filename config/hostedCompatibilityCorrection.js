@@ -46,12 +46,30 @@ export const COMPATIBILITY_CONFIGURATION_CORRECTION = Object.freeze({
   salesforceMetadataChanged: false,
   cronSchedulesChanged: false,
 });
+// Explicit diagnostic-only child: failure metadata changes, while source hashing,
+// executable-mode attestation and refusal behavior remain mandatory and unchanged.
+export const COMPATIBILITY_DIAGNOSTIC_CORRECTION = Object.freeze({
+  baseSha: '2ef733d17dd12314c72971c2220b2b09903a6bf0',
+  candidateSha: '160edcccc3347596ac18bb5c9dcb34ecc26df02b',
+  sourceProfile: 'compat_source_diagnostics_20261023',
+  kind: 'explicit_bounded_source_attestation_diagnostics',
+  files: [{
+    path: 'scripts/lib/build-provenance.mjs',
+    sha256: '96ec0600534ad64a81a617960cb7a712aea9355c801c12b07232881e184b69b8',
+    gitBlob: '3d2b1e68123b5f57eec35a5bb57c84aca7df3f42',
+  }],
+  existingUi: false,
+  handoffs: [],
+  salesforceMetadataChanged: false,
+  cronSchedulesChanged: false,
+});
 export function isFirstRuntimeCandidateSha(value) {
   return value === COMPATIBILITY_CORRECTION.baseSha || value === COMPATIBILITY_CORRECTION.candidateSha
-    || value === COMPATIBILITY_CONFIGURATION_CORRECTION.candidateSha;
+    || value === COMPATIBILITY_CONFIGURATION_CORRECTION.candidateSha || value === COMPATIBILITY_DIAGNOSTIC_CORRECTION.candidateSha;
 }
 export function firstRuntimeCandidateProfile(value) {
   return value === COMPATIBILITY_CORRECTION.baseSha ? 'frozen_04ee'
     : value === COMPATIBILITY_CORRECTION.candidateSha ? COMPATIBILITY_CORRECTION.sourceProfile
-      : value === COMPATIBILITY_CONFIGURATION_CORRECTION.candidateSha ? COMPATIBILITY_CONFIGURATION_CORRECTION.sourceProfile : null;
+      : value === COMPATIBILITY_CONFIGURATION_CORRECTION.candidateSha ? COMPATIBILITY_CONFIGURATION_CORRECTION.sourceProfile
+        : value === COMPATIBILITY_DIAGNOSTIC_CORRECTION.candidateSha ? COMPATIBILITY_DIAGNOSTIC_CORRECTION.sourceProfile : null;
 }

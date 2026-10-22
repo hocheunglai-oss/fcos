@@ -1,8 +1,8 @@
-import { COMPATIBILITY_CONFIGURATION_CORRECTION } from '../../../config/hostedCompatibilityCorrection.js';
+import { COMPATIBILITY_CONFIGURATION_CORRECTION, COMPATIBILITY_DIAGNOSTIC_CORRECTION } from '../../../config/hostedCompatibilityCorrection.js';
 import { canonical, digest, fail, FROZEN_COMPATIBILITY_SHA, validateManifest } from './contract.mjs';
 import { hostedProof } from './observations.mjs';
 
-// Explicit 2ef source/configuration successor and its reviewed runtime/schema.
+// Explicit source/configuration successor and its reviewed runtime/schema.
 // This tuple does not admit another candidate, refresh evidence or authorize a release.
 export const CONFIGURATION_SUCCESSOR_PRODUCTION = Object.freeze({
   candidateSha: COMPATIBILITY_CONFIGURATION_CORRECTION.candidateSha,
@@ -13,8 +13,16 @@ export const CONFIGURATION_SUCCESSOR_PRODUCTION = Object.freeze({
   previewRuntimeSha256: 'ce69bfac777f6886f13326f8a6972ae73d6121f4aa4dda33c26ee313caa0cc59',
 });
 
-function configurationSuccessorAccepted({ manifest, prior, registered, actual, observation, reference, now }) {
-  const pin = CONFIGURATION_SUCCESSOR_PRODUCTION;
+// The diagnostic-only child keeps the exact reviewed runtime/schema and source
+// algorithm; only its independently measured immutable source digest changes.
+export const DIAGNOSTIC_SUCCESSOR_PRODUCTION = Object.freeze({
+  ...CONFIGURATION_SUCCESSOR_PRODUCTION,
+  candidateSha: COMPATIBILITY_DIAGNOSTIC_CORRECTION.candidateSha,
+  sourceProfile: COMPATIBILITY_DIAGNOSTIC_CORRECTION.sourceProfile,
+  sourceSha256: '9f8b01198784d1e222f96f726207ef9c980f9ab5d2536e7a156ca97b2f307912',
+});
+
+function configurationSuccessorAccepted({ manifest, prior, registered, actual, observation, reference, now, pin }) {
   try { validateManifest(registered); validateManifest(manifest); } catch { return false; }
   // The next manifest's previousProduction comes from its fresh authenticated
   // observation. The stored live result itself contains deployment metadata,
@@ -50,8 +58,10 @@ export async function collectCompatibilitySuccessor({ manifest, coordinator, env
   const actual = observation?.result;
   const original = registered?.candidate?.sha === FROZEN_COMPATIBILITY_SHA
     && actual?.sha === FROZEN_COMPATIBILITY_SHA && manifest.previousProduction.sha === FROZEN_COMPATIBILITY_SHA;
-  const configurationSuccessor = registered?.candidate?.sha === CONFIGURATION_SUCCESSOR_PRODUCTION.candidateSha && actual
-    && configurationSuccessorAccepted({ manifest, prior, registered, actual, observation, reference, now });
+  const pin = [CONFIGURATION_SUCCESSOR_PRODUCTION, DIAGNOSTIC_SUCCESSOR_PRODUCTION]
+    .find(value => registered?.candidate?.sha === value.candidateSha);
+  const configurationSuccessor = pin && actual
+    && configurationSuccessorAccepted({ manifest, prior, registered, actual, observation, reference, now, pin });
   if (prior.status !== 'complete' || prior.finished !== true || registered?.stage !== 'compatibility'
     || registered.executionMode !== 'release' || !(original || configurationSuccessor)
     || digest(registered) !== reference.manifestHash || registered.scope?.existingUi !== false
