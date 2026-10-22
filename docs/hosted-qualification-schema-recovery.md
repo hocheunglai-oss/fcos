@@ -1,6 +1,6 @@
 # One finite qualification schema recovery
 
-`20261022000001_qualification_schema_recovery.sql` adds a separate, private
+`20261021193455_qualification_schema_recovery.sql` adds a separate, private
 administrative journal for the terminal manifest-preparation failure in run
 `39653018028`. It is restricted to epoch 1, recovery
 `qualification-schema-recovery-epoch1-39653018028-v1`, original bootstrap

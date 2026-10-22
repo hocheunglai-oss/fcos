@@ -87,16 +87,41 @@ export async function validateQualificationRun({ github, source, run, env = proc
   validateQualificationSource(source, { repository, controllerSha: env.FCOS_CONTROLLER_SHA, candidateSha: env.FCOS_CANDIDATE_SHA });
   const branchName = source.ref.slice('refs/heads/'.length), branchPath = `/repos/${repository}/branches/${encodeURIComponent(branchName)}`;
   const [branch, protection] = await Promise.all([github.read(branchPath), github.read(`${branchPath}/protection`)]);
-  const references = run?.referenced_workflows?.filter(row => row.path === `${repository}/${CONTROLLER_WORKFLOW}@${source.controllerSha}`);
+  const references = Array.isArray(run?.referenced_workflows)
+    ? run.referenced_workflows.filter(row => row?.path === `${repository}/${CONTROLLER_WORKFLOW}@${source.controllerSha}`) : [];
   const actor = repository.split('/')[0];
-  if (branch?.name !== branchName || branch.protected !== true || branch.commit?.sha !== source.bootstrapSha
-    || protection?.enforce_admins?.enabled !== true || protection.allow_force_pushes?.enabled !== false || protection.allow_deletions?.enabled !== false
-    || run?.repository?.full_name !== repository || String(run.repository.id) !== env.GITHUB_REPOSITORY_ID || run.head_repository?.full_name !== repository
-    || String(run.id) !== env.GITHUB_RUN_ID || run.head_branch !== branchName || run.head_sha !== source.bootstrapSha
-    || !['.github/workflows/authenticated-release.yml', `.github/workflows/authenticated-release.yml@${branchName}`].includes(run.path) || run.event !== 'workflow_dispatch' || run.run_attempt !== 1
-    || run.status !== 'in_progress' || run.conclusion !== null || references?.length !== 1 || references[0].sha !== source.controllerSha
-    || env.GITHUB_ACTOR !== actor || !/^[1-9][0-9]*$/.test(env.GITHUB_ACTOR_ID || '')
-    || run.actor?.login !== actor || String(run.actor.id) !== env.GITHUB_ACTOR_ID
-    || run.triggering_actor?.login !== actor || String(run.triggering_actor.id) !== env.GITHUB_ACTOR_ID) fail('QUALIFICATION_SOURCE_DRIFT');
+  const failedPredicates = Object.entries({
+    BRANCH_NAME: branch?.name !== branchName,
+    BRANCH_PROTECTED: branch?.protected !== true,
+    BRANCH_TIP: branch?.commit?.sha !== source.bootstrapSha,
+    PROTECTION_ENFORCE_ADMINS: protection?.enforce_admins?.enabled !== true,
+    PROTECTION_ALLOW_FORCE_PUSHES: protection?.allow_force_pushes?.enabled !== false,
+    PROTECTION_ALLOW_DELETIONS: protection?.allow_deletions?.enabled !== false,
+    RUN_REPOSITORY: run?.repository?.full_name !== repository,
+    RUN_REPOSITORY_ID: String(run?.repository?.id) !== env.GITHUB_REPOSITORY_ID,
+    RUN_HEAD_REPOSITORY: run?.head_repository?.full_name !== repository,
+    RUN_ID: String(run?.id) !== env.GITHUB_RUN_ID,
+    RUN_BRANCH: run?.head_branch !== branchName,
+    RUN_SHA: run?.head_sha !== source.bootstrapSha,
+    RUN_WORKFLOW_PATH: !['.github/workflows/authenticated-release.yml', `.github/workflows/authenticated-release.yml@${branchName}`].includes(run?.path),
+    RUN_EVENT: run?.event !== 'workflow_dispatch',
+    RUN_ATTEMPT: run?.run_attempt !== 1,
+    RUN_STATUS: run?.status !== 'in_progress',
+    RUN_CONCLUSION: run?.conclusion !== null,
+    CONTROLLER_REFERENCE_COUNT: references.length !== 1,
+    CONTROLLER_REFERENCE_SHA: references[0]?.sha !== source.controllerSha,
+    ENV_ACTOR: env.GITHUB_ACTOR !== actor,
+    ENV_ACTOR_ID: !/^[1-9][0-9]*$/.test(env.GITHUB_ACTOR_ID || ''),
+    RUN_ACTOR: run?.actor?.login !== actor,
+    RUN_ACTOR_ID: String(run?.actor?.id) !== env.GITHUB_ACTOR_ID,
+    RUN_TRIGGERING_ACTOR: run?.triggering_actor?.login !== actor,
+    RUN_TRIGGERING_ACTOR_ID: String(run?.triggering_actor?.id) !== env.GITHUB_ACTOR_ID,
+  }).filter(([, failed]) => failed).map(([name]) => name);
+  if (failedPredicates.length) {
+    // Fixed predicate names only: never serialize provider responses or environment values.
+    try { console.error(JSON.stringify({ kind: 'fcos_qualification_source_drift_diagnostic_v1', failedPredicates })); }
+    catch { /* A diagnostic failure must not replace the admission refusal. */ }
+    fail('QUALIFICATION_SOURCE_DRIFT');
+  }
   return true;
 }

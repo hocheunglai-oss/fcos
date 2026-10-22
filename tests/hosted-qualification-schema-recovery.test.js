@@ -15,7 +15,7 @@ import {typedFirstRuntimeFixture} from './helpers/hosted-first-runtime-v2.mjs';
 import {SCHEMA_QUERY} from '../scripts/lib/hosted-release/observations.mjs';
 const load=n=>readFile(new URL(`../supabase/migrations/${n}`,import.meta.url),'utf8');
 const names=['20261016190509_release_coordination.sql','20261018112914_auth_maintenance_coordination.sql','20261019171349_legacy_release_effect_containment.sql','20261020080001_hosted_cutover_bootstrap.sql','20261021101811_exact_7dc_public_metadata_quarantine.sql'];
-const migrationName='20261022000001_qualification_schema_recovery.sql',migration=await load(migrationName);
+const migrationName='20261021193455_qualification_schema_recovery.sql',migration=await load(migrationName);
 function repin(p){p.setupSha256=digest(p.setup);p.planSha256=digest(p.plan);p.actions=schemaRecoveryActions(p);return reviewRecovery(p);}
 
 test('JS proof/route construction refuses source, setup, plan, review and arbitrary-command drift',()=>{

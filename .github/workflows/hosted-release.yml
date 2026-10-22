@@ -32,7 +32,7 @@ jobs:
     env:
       FCOS_CONTROLLER_DIRECTORY: controller
       FCOS_CANDIDATE_DIRECTORY: candidate
-      FCOS_CONTROLLER_SHA: 4079c569e4576e4432c2877efaabc20180159465
+      FCOS_CONTROLLER_SHA: 64aa338b04cee7e05bde0ca9bfd10b81ac001a65
       FCOS_ADMITTED_RELEASE_SETUP: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP }}
       FCOS_ADMITTED_RELEASE_SETUP_SHA256: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP_SHA256 }}
       FCOS_CANDIDATE_SHA: ${{ fromJSON(inputs.resume_manifest || '{}').candidate.sha || inputs.candidate_sha }}
@@ -43,7 +43,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: hocheunglai-oss/fcos
-          ref: 4079c569e4576e4432c2877efaabc20180159465
+          ref: 64aa338b04cee7e05bde0ca9bfd10b81ac001a65
           path: controller
           fetch-depth: 0
           persist-credentials: false
