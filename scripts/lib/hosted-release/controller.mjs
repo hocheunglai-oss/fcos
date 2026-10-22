@@ -1,4 +1,5 @@
 import { assertBoundEvidence, digest, fail, ReleaseError, validateManifest } from './contract.mjs';
+import { atReleaseBoundary, isReleaseBoundary } from './failure.mjs';
 
 const bound = manifest => ({ releaseId: manifest.releaseId, manifestHash: digest(manifest) });
 
@@ -66,10 +67,10 @@ export function terminalReleaseStatus(snapshot, manifest) {
 
 export async function preparePreview({ manifest, coordinator, provider, now = Date.now }) {
   validateManifest(manifest);
-  await coordinator.register({ ...bound(manifest), manifest });
-  const terminal = terminalReleaseStatus(await coordinator.snapshot(bound(manifest)), manifest);
+  await atReleaseBoundary('preview.register', () => coordinator.register({ ...bound(manifest), manifest }));
+  const terminal = terminalReleaseStatus(await atReleaseBoundary('preview.snapshot', () => coordinator.snapshot(bound(manifest))), manifest);
   if (terminal) return { status: terminal, resumed: true };
-  await provider.admit(manifest, 'preview');
+  await atReleaseBoundary('preview.admit', () => provider.admit(manifest, 'preview'));
   const preview = await consequential({ manifest, coordinator, phase: 'preview.create', request: { candidate: manifest.candidate, target: 'preview' },
     submit: context => provider.createPreview(manifest, context), readback: context => provider.discover(manifest, 'preview', context) });
   assertDeployment(preview, manifest, 'preview');
@@ -222,6 +223,7 @@ export async function executeHostedProduction({ manifest, coordinator, provider,
 export function safeFailure(error) {
   if(error instanceof ReleaseError&&error.code==='FIRST_RUNTIME_OWNER_REFRESH_REQUIRED')return {
     status:'waiting_dependency',code:error.code,phase:error.phase,recovery:error.recovery};
-  return error instanceof ReleaseError ? { status: 'intervention_required', code: error.code, phase: error.phase, recovery: error.recovery }
+  return error instanceof ReleaseError ? { status: 'intervention_required', code: error.code, phase: error.phase, recovery: error.recovery,
+    ...(isReleaseBoundary(error.boundary) ? { boundary: error.boundary } : {}) }
     : { status: 'intervention_required', code: 'UNCLASSIFIED_PROVIDER_FAILURE', phase: 'unknown', recovery: 'Inspect sanitized phase evidence; do not replay a consequential operation.' };
 }
