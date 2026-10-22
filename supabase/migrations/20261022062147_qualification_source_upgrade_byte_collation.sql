@@ -18,7 +18,96 @@ begin
   fcos_release_coordination.qualification_source_upgrade_intents,
   fcos_release_coordination.qualification_source_upgrade_events,
   fcos_release_coordination.qualification_source_upgrade_milestones in share row exclusive mode;
- if c.singleton is distinct from true or c.epoch is distinct from 1 or c.mode is distinct from 'qualification'
+ -- The pristine branch must remain inert while all private histories are checked.
+ if c.epoch is null and c.mode is not distinct from 'frozen' then
+  lock table fcos_release_coordination.activations,
+   fcos_release_coordination.approval_admissions,
+   fcos_release_coordination.auth_maintenance_authorities,
+   fcos_release_coordination.auth_maintenance_fences,
+   fcos_release_coordination.auth_maintenance_occurrences,
+   fcos_release_coordination.auth_maintenance_resolutions,
+   fcos_release_coordination.auth_maintenance_revocations,
+   fcos_release_coordination.auth_maintenance_saved_rotations,
+   fcos_release_coordination.authorizations,
+   fcos_release_coordination.cutover_bootstrap_actions,
+   fcos_release_coordination.cutover_bootstrap_events,
+   fcos_release_coordination.cutover_bootstrap_finishes,
+   fcos_release_coordination.cutover_bootstraps,
+   fcos_release_coordination.epochs,
+   fcos_release_coordination.evidence,
+   fcos_release_coordination.exact_7dc_publication_quarantine_revocations,
+   fcos_release_coordination.exact_7dc_publication_quarantines,
+   fcos_release_coordination.finishes,
+   fcos_release_coordination.import_resolutions,
+   fcos_release_coordination.imported_uncertainty,
+   fcos_release_coordination.legacy_release_containment_revocations,
+   fcos_release_coordination.legacy_release_containments,
+   fcos_release_coordination.operation_events,
+   fcos_release_coordination.operations,
+   fcos_release_coordination.qualification_plan_completion_events,
+   fcos_release_coordination.qualification_plan_completion_finishes,
+   fcos_release_coordination.qualification_plan_completion_intents,
+   fcos_release_coordination.qualification_plan_completions,
+   fcos_release_coordination.qualification_schema_recoveries,
+   fcos_release_coordination.qualification_schema_recovery_actions,
+   fcos_release_coordination.qualification_schema_recovery_events,
+   fcos_release_coordination.qualification_schema_recovery_finishes,
+   fcos_release_coordination.qualification_source_upgrade_events,
+   fcos_release_coordination.qualification_source_upgrade_intents,
+   fcos_release_coordination.qualification_source_upgrade_milestones,
+   fcos_release_coordination.qualification_source_upgrades,
+   fcos_release_coordination.registration_runs,
+   fcos_release_coordination.registrations,
+   fcos_release_coordination.resume_admissions in share row exclusive mode;
+ end if;
+ if c.singleton is distinct from true or not (
+  (c.epoch is not distinct from 1 and c.mode is not distinct from 'qualification')
+  or (c.epoch is null and c.mode is not distinct from 'frozen'
+   and (select array_agg(t.relname::text order by t.relname::text collate "C")
+    from pg_catalog.pg_class t join pg_catalog.pg_namespace n on n.oid=t.relnamespace
+    where n.nspname='fcos_release_coordination' and t.relkind in ('r','p'))
+    is not distinct from array['activations','approval_admissions','auth_maintenance_authorities','auth_maintenance_fences','auth_maintenance_occurrences','auth_maintenance_resolutions','auth_maintenance_revocations','auth_maintenance_saved_rotations','authorizations','control','cutover_bootstrap_actions','cutover_bootstrap_events','cutover_bootstrap_finishes','cutover_bootstraps','epochs','evidence','exact_7dc_publication_quarantine_revocations','exact_7dc_publication_quarantines','finishes','import_resolutions','imported_uncertainty','legacy_release_containment_revocations','legacy_release_containments','operation_events','operations','qualification_plan_completion_events','qualification_plan_completion_finishes','qualification_plan_completion_intents','qualification_plan_completions','qualification_schema_recoveries','qualification_schema_recovery_actions','qualification_schema_recovery_events','qualification_schema_recovery_finishes','qualification_source_upgrade_events','qualification_source_upgrade_intents','qualification_source_upgrade_milestones','qualification_source_upgrades','registration_runs','registrations','resume_admissions']::text[]
+   and not exists(select 1 from fcos_release_coordination.activations)
+   and not exists(select 1 from fcos_release_coordination.approval_admissions)
+   and not exists(select 1 from fcos_release_coordination.auth_maintenance_authorities)
+   and not exists(select 1 from fcos_release_coordination.auth_maintenance_fences)
+   and not exists(select 1 from fcos_release_coordination.auth_maintenance_occurrences)
+   and not exists(select 1 from fcos_release_coordination.auth_maintenance_resolutions)
+   and not exists(select 1 from fcos_release_coordination.auth_maintenance_revocations)
+   and not exists(select 1 from fcos_release_coordination.auth_maintenance_saved_rotations)
+   and not exists(select 1 from fcos_release_coordination.authorizations)
+   and not exists(select 1 from fcos_release_coordination.cutover_bootstrap_actions)
+   and not exists(select 1 from fcos_release_coordination.cutover_bootstrap_events)
+   and not exists(select 1 from fcos_release_coordination.cutover_bootstrap_finishes)
+   and not exists(select 1 from fcos_release_coordination.cutover_bootstraps)
+   and not exists(select 1 from fcos_release_coordination.epochs)
+   and not exists(select 1 from fcos_release_coordination.evidence)
+   and not exists(select 1 from fcos_release_coordination.exact_7dc_publication_quarantine_revocations)
+   and not exists(select 1 from fcos_release_coordination.exact_7dc_publication_quarantines)
+   and not exists(select 1 from fcos_release_coordination.finishes)
+   and not exists(select 1 from fcos_release_coordination.import_resolutions)
+   and not exists(select 1 from fcos_release_coordination.imported_uncertainty)
+   and not exists(select 1 from fcos_release_coordination.legacy_release_containment_revocations)
+   and not exists(select 1 from fcos_release_coordination.legacy_release_containments)
+   and not exists(select 1 from fcos_release_coordination.operation_events)
+   and not exists(select 1 from fcos_release_coordination.operations)
+   and not exists(select 1 from fcos_release_coordination.qualification_plan_completion_events)
+   and not exists(select 1 from fcos_release_coordination.qualification_plan_completion_finishes)
+   and not exists(select 1 from fcos_release_coordination.qualification_plan_completion_intents)
+   and not exists(select 1 from fcos_release_coordination.qualification_plan_completions)
+   and not exists(select 1 from fcos_release_coordination.qualification_schema_recoveries)
+   and not exists(select 1 from fcos_release_coordination.qualification_schema_recovery_actions)
+   and not exists(select 1 from fcos_release_coordination.qualification_schema_recovery_events)
+   and not exists(select 1 from fcos_release_coordination.qualification_schema_recovery_finishes)
+   and not exists(select 1 from fcos_release_coordination.qualification_source_upgrade_events)
+   and not exists(select 1 from fcos_release_coordination.qualification_source_upgrade_intents)
+   and not exists(select 1 from fcos_release_coordination.qualification_source_upgrade_milestones)
+   and not exists(select 1 from fcos_release_coordination.qualification_source_upgrades)
+   and not exists(select 1 from fcos_release_coordination.registration_runs)
+   and not exists(select 1 from fcos_release_coordination.registrations)
+   and not exists(select 1 from fcos_release_coordination.resume_admissions)
+  )
+ )
   or c.operation_id is not null or c.bootstrap_id is not null or c.recovery_id is not null
   or c.plan_completion_id is not null or c.source_upgrade_id is not null
   or exists(select 1 from fcos_release_coordination.qualification_source_upgrades)
