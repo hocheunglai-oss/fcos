@@ -1,9 +1,12 @@
 # Later release continuation source corrections
 
 The ordinary hosted wrapper prepares manifests and invokes the reusable
-controller at the same admitted64aa SHA. Its environment and checkout previously
-selected4079 while its reusable job selected64aa, so setup admission could not
-agree across the two jobs. This correction changes only those two prepare pins.
+controller at the same reviewed immutable05bc SHA. Its environment and checkout
+previously selected4079 while its reusable job selected64aa, so setup admission
+could not agree across the two jobs. All three ordinary pins now select the
+combined controller correction commit05bc. The admitted setup still selects64aa:
+the ordinary wrapper fails closed until a separate exact05bc setup/controller
+admission is complete. Publication does not grant that admission.
 
 The application successor collector retains the original04ee path and adds only
 the explicitly reviewed2ef configuration successor. The new path requires its
