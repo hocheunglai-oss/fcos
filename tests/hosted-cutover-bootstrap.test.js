@@ -187,14 +187,15 @@ test('actual credential-free operator CLI emits the exact parameterized intent a
  assert.throws(()=>execFileSync(process.execPath,[args[0],'arbitrary-write',proof],{...options,stdio:'pipe'}),e=>e.status===1&&e.stderr==='BOOTSTRAP_OPERATOR_INPUT_REFUSED\n');
 });
 
-test('container COPY closure includes every relative server import; normal caller pins the admitted controller',async()=>{
+test('container COPY closure includes every relative server import; normal caller pins the reviewed successor while original bootstrap stays frozen',async()=>{
  const docker=await readFile(new URL('supabase/functions/release-coordinator/Dockerfile',root),'utf8');
  const copies=[...docker.matchAll(/^COPY (\S+) /gm)].map(m=>m[1]);
  const seen=new Set();async function visit(relative){if(seen.has(relative))return;seen.add(relative);assert.ok(copies.some(p=>relative===p||relative.startsWith(`${p}/`)),`missing container COPY: ${relative}`);
   const text=await readFile(new URL(relative,root),'utf8');for(const m of text.matchAll(/(?:from\s*|import\s*)['"]([^'"]+)['"]/g)){if(m[1].startsWith('.'))await visit(path.posix.normalize(path.posix.join(path.posix.dirname(relative),m[1])));}}
  await visit('supabase/functions/release-coordinator/server.mjs');assert.ok(seen.has('config/legacyReleaseContainment.js'));
  const caller=await readFile(new URL('.github/workflows/hosted-release.yml',root),'utf8');
- assert.ok(caller.includes(`hocheunglai-oss/fcos/.github/workflows/hosted-release-controller.yml@${BOOTSTRAP_SOURCE.controllerSha}`));
+ assert.equal(BOOTSTRAP_SOURCE.controllerSha,'64aa338b04cee7e05bde0ca9bfd10b81ac001a65');
+ assert.ok(caller.includes('hocheunglai-oss/fcos/.github/workflows/hosted-release-controller.yml@05bc88fa54cbab4013f99997f5e1ae7885bbb5b1'));
  assert.ok(!caller.includes('hosted-release-controller.yml@4079c569'));
  const session=await readFile(new URL('scripts/lib/hosted-release/session.mjs',root),'utf8');
  assert.ok(session.includes("owner: { kind: 'release', id: 'features' }"));assert.equal(inputs().scope.owner.id,'features');
