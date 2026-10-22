@@ -121,7 +121,7 @@ export function evaluateCheckEvidence({ check, binding, evidence, now = Date.now
   return true;
 }
 
-export function sanitisedCheckEnvironment({ environment = process.env, home, command, candidateDirectory }) {
+export function sanitisedCheckEnvironment({ environment = process.env, home, command, candidateDirectory, checkId }) {
   const env = { PATH: `${join(candidateDirectory, 'node_modules/.bin')}${sep === '/' ? ':' : ';'}${dirname(process.execPath)}:/usr/bin:/bin`,
     HOME: home, TMPDIR: home, LANG: 'C.UTF-8', TZ: 'UTC', CI: 'true', ...command.env };
   // Non-secret local browser cache only; never copy arbitrary FCOS/provider/controller variables.
@@ -130,7 +130,9 @@ export function sanitisedCheckEnvironment({ environment = process.env, home, com
     const values = JSON.parse(environment.FCOS_HOSTED_PUBLIC_BUILD_INPUTS);
     const allowed = ['VITE_FCOS_ENABLE_FCUNO_OIDC','FCOS_ENABLE_FCUNO_FEDERATION','FCUNO_IDENTITY_ISSUER','VITE_SUPABASE_URL','VITE_SUPABASE_ANON_KEY','VITE_SUPABASE_PUBLISHABLE_KEY'];
     if (Object.entries(values).some(([key,value]) => !allowed.includes(key) || typeof value !== 'string' || /[\r\n]/.test(value))) throw new Error('Unadmitted public build inputs.');
-    Object.assign(env, values);
+    // Unit fixtures must own their auth configuration. Deployment settings can
+    // start a persistent browser auth client inside a Node/Vite SSR test.
+    if (checkId !== 'unit') Object.assign(env, values);
   }
   return env;
 }
@@ -194,7 +196,7 @@ export async function runReleaseChecks({ candidateDirectory, controllerDirectory
           for (const command of check.profileCommands?.[sourceProfile] || check.commands) {
             const args = expandArguments(command.args, candidateDirectory, controllerDirectory);
             const result = await run(command.program === 'node' ? process.execPath : '/usr/bin/python3', args, {
-              cwd: candidateDirectory, env: sanitisedCheckEnvironment({ environment, home, command, candidateDirectory }),
+              cwd: candidateDirectory, env: sanitisedCheckEnvironment({ environment, home, command, candidateDirectory, checkId: check.id }),
               shell: false, stdio: 'inherit', timeout: 60 * 60 * 1000,
             });
             commands.push({ program: command.program, args: command.args, exitCode: result?.status ?? 1 });

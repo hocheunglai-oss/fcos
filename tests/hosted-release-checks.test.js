@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadReleaseCheckManifest, runReleaseChecks, evaluateCheckEvidence, requiredReleaseChecks } from '../scripts/lib/hosted-release/checks.mjs';
+import { loadReleaseCheckManifest, runReleaseChecks, evaluateCheckEvidence, requiredReleaseChecks, sanitisedCheckEnvironment } from '../scripts/lib/hosted-release/checks.mjs';
 
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const command = (args, env = {}) => ({ program: 'node', args, env });
@@ -146,4 +146,60 @@ test('dirty immutable controller, repository mismatch and arbitrary executable d
   await assert.rejects(runReleaseChecks({ ...f, run: () => ({ status: 0 }) }), /controller.*dirty/);
   const bad = fixture(t, [check('unit', [{ program: 'sh', args: ['-c', 'exit 0'], env: {} }])]);
   assert.throws(() => loadReleaseCheckManifest(bad.controllerDirectory), /Unadmitted/);
+});
+
+const publicBuildFixture = {
+  VITE_FCOS_ENABLE_FCUNO_OIDC: 'true', FCOS_ENABLE_FCUNO_FEDERATION: 'true',
+  FCUNO_IDENTITY_ISSUER: 'https://issuer.example.invalid',
+  VITE_SUPABASE_URL: 'http://127.0.0.1:9',
+  VITE_SUPABASE_ANON_KEY: 'sb_publishable_FCOS_DIAGNOSTIC_PUBLIC_ONLY',
+  VITE_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_FCOS_DIAGNOSTIC_PUBLIC_ONLY',
+};
+
+test('only unit fixtures omit inherited deployment public inputs; build and other checks retain them', () => {
+  const options = { environment: { FCOS_HOSTED_PUBLIC_BUILD_INPUTS: JSON.stringify(publicBuildFixture), GH_TOKEN: 'not-a-real-secret' },
+    home: '/tmp/fcos-unit-home', candidateDirectory: '/candidate', command: command(['--test', '@deterministic-tests']) };
+  const unit = sanitisedCheckEnvironment({ ...options, checkId: 'unit' });
+  for (const key of Object.keys(publicBuildFixture)) assert.equal(unit[key], undefined);
+  assert.equal(unit.GH_TOKEN, undefined);
+  assert.equal(unit.CI, 'true');
+  for (const checkId of ['build', 'normal_role', 'restricted_browser', 'server_bundles', 'compatibility', undefined]) {
+    const env = sanitisedCheckEnvironment({ ...options, checkId });
+    for (const [key, value] of Object.entries(publicBuildFixture)) assert.equal(env[key], value, `${checkId}: ${key}`);
+  }
+  const ownFixture = { VITE_SUPABASE_URL: 'http://localhost:19', VITE_SUPABASE_ANON_KEY: 'synthetic-fixture-key' };
+  const ownUnit = sanitisedCheckEnvironment({ ...options, checkId: 'unit', command: command(['--test'], ownFixture) });
+  for (const [key, value] of Object.entries(ownFixture)) assert.equal(ownUnit[key], value, 'explicit admitted fixture env remains owned by the fixture');
+});
+
+test('invalid public build JSON still refuses before every unit or build invocation', () => {
+  for (const value of ['{', 'null', '["unexpected"]', JSON.stringify({ SECRET: 'synthetic' }),
+    JSON.stringify({ VITE_SUPABASE_URL: 42 }), JSON.stringify({ VITE_SUPABASE_URL: 'http://localhost/\n' })]) {
+    for (const checkId of ['unit', 'build']) assert.throws(() => sanitisedCheckEnvironment({
+      environment: { FCOS_HOSTED_PUBLIC_BUILD_INPUTS: value }, home: '/tmp/fcos-home',
+      candidateDirectory: '/candidate', command: command(['--test']), checkId,
+    }));
+  }
+});
+
+test('real orchestration sends fixture-owned unit env and unchanged build env to the actual commands', async t => {
+  const f = fixture(t, [check('unit', [command(['--test', 'tests/*.test.js'])]), check('build', [command(['scripts/build.mjs'])], ['unit'])]);
+  const seen = [];
+  const report = await runReleaseChecks({ ...f, environment: { ...f.environment, FCOS_HOSTED_PUBLIC_BUILD_INPUTS: JSON.stringify(publicBuildFixture) },
+    run(program, args, options) { seen.push({ program, args, env: options.env }); return { status: 0 }; } });
+  assert.equal(report.status, 'passed'); assert.equal(seen.length, 2);
+  for (const key of Object.keys(publicBuildFixture)) assert.equal(seen[0].env[key], undefined);
+  for (const [key, value] of Object.entries(publicBuildFixture)) assert.equal(seen[1].env[key], value);
+  assert.deepEqual(seen[0].args, ['--test', 'tests/probe.test.js']);
+  assert.deepEqual(report.checks.map(c => c.binding.controllerSha), [f.controllerSha, f.controllerSha]);
+  assert.deepEqual(report.checks.map(c => c.binding.candidateSha), [f.expectedCandidateSha, f.expectedCandidateSha]);
+});
+
+test('actual child assertion failures remain failed with deployment inputs omitted, never forced to exit successfully', async t => {
+  const f = fixture(t);
+  file(f.candidateDirectory, 'tests/probe.test.js', `import test from 'node:test'; import assert from 'node:assert/strict'; test('intentional assertion failure',()=>{ assert.equal(process.env.VITE_SUPABASE_URL,undefined); assert.equal(process.env.VITE_SUPABASE_ANON_KEY,undefined); assert.equal(1,2); });`);
+  f.expectedCandidateSha = commit(f.candidateDirectory);
+  const report = await runReleaseChecks({ ...f, environment: { ...f.environment, FCOS_HOSTED_PUBLIC_BUILD_INPUTS: JSON.stringify(publicBuildFixture) } });
+  assert.equal(report.status, 'failed'); assert.equal(report.checks[0].status, 'failed');
+  assert.notEqual(report.checks[0].commands[0].exitCode, 0);
 });

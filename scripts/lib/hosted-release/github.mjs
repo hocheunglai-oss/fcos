@@ -106,7 +106,8 @@ export async function validateQualificationRun({ github, source, run, env = proc
     RUN_WORKFLOW_PATH: !['.github/workflows/authenticated-release.yml', `.github/workflows/authenticated-release.yml@${branchName}`].includes(run?.path),
     RUN_EVENT: run?.event !== 'workflow_dispatch',
     RUN_ATTEMPT: run?.run_attempt !== 1,
-    RUN_STATUS: run?.status !== 'in_progress',
+    // A parent run can be queued while its exact hosted job is already in progress.
+    RUN_STATUS: !['queued', 'in_progress'].includes(run?.status),
     RUN_CONCLUSION: run?.conclusion !== null,
     CONTROLLER_REFERENCE_COUNT: references.length !== 1,
     CONTROLLER_REFERENCE_SHA: references[0]?.sha !== source.controllerSha,

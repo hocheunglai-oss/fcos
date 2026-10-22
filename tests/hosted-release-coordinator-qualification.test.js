@@ -8,8 +8,9 @@ import { PGlite } from '@electric-sql/pglite';
 import pg from 'pg';
 import { SignJWT, generateKeyPair, exportJWK, createLocalJWKSet } from 'jose';
 import { createCoordinatorHandler, createSqlStore, createGithubAuthenticator, createGithubQualificationValidator } from '../supabase/functions/release-coordinator/index.ts';
+import { validateGithubQualification } from '../supabase/functions/release-coordinator/approval.mjs';
 import { validatePolicy } from '../supabase/functions/release-coordinator/auth.mjs';
-import { digest, createNotificationChallenge, createNotificationDeliveryProof } from '../supabase/functions/release-coordinator/core.mjs';
+import { digest, createMetadataAdmission, createNotificationChallenge, createNotificationDeliveryProof } from '../supabase/functions/release-coordinator/core.mjs';
 import { createCoordinatorClient } from '../scripts/lib/hosted-release/coordinator-client.mjs';
 
 const H='a'.repeat(64),S='b'.repeat(40),B='c'.repeat(40),C='d'.repeat(40),REPO='hocheunglai-oss/fcos';
@@ -178,3 +179,70 @@ test('native PostgreSQL qualification bootstrap uses the real handler and privat
   {skip:!bindir&&process.env.FCOS_REQUIRE_NATIVE_COORDINATOR_DATABASE!=='1'},async t=>{
     assert.ok(bindir,'Native PostgreSQL is mandatory for the coordinator database gate.');await exerciseQualification(await fixture(t,true));
   });
+
+
+// Pure metadata/JWT coverage only. These tests do not initialize PGlite or native PostgreSQL.
+async function schedulingMetadataFixture(status='queued') {
+  const principal=await createGithubAuthenticator({policy,jwks})(await token());
+  const operator={login:'hocheunglai-oss',id:9},repository={id:77,full_name:REPO,default_branch:'main',archived:false};
+  return {principal,policy,operator,repository,branch:{name:REF.slice(11),protected:true,commit:{sha:B}},
+    protection:{enforce_admins:{enabled:true},allow_force_pushes:{enabled:false},allow_deletions:{enabled:false}},
+    run:{id:101,run_attempt:1,status,conclusion:null,event:'workflow_dispatch',head_branch:REF.slice(11),head_sha:B,
+      path:'.github/workflows/authenticated-release.yml',repository:{...repository},head_repository:{...repository},
+      actor:{...operator},triggering_actor:{...operator},referenced_workflows:[{path:admission.jobWorkflowRef,sha:S}]}};
+}
+
+test('qualification scheduling permits only queued or in_progress with null conclusion and signed exact principal',async()=>{
+  for(const status of ['queued','in_progress']) assert.equal(validateGithubQualification(await schedulingMetadataFixture(status)),true);
+  for(const status of ['completed','requested','waiting','pending','action_required','startup_failure','unknown','',null,undefined,0,false,{},[]]){
+    const context=await schedulingMetadataFixture();context.run.status=status;
+    assert.throws(()=>validateGithubQualification(context),/QUALIFICATION_RUN_INVALID/);
+  }
+  for(const status of ['queued','in_progress'])for(const conclusion of ['action_required','cancelled','failure','neutral','skipped','stale','startup_failure','success','timed_out','',undefined,0,false,{},[]]){
+    const context=await schedulingMetadataFixture(status);context.run.conclusion=conclusion;
+    assert.throws(()=>validateGithubQualification(context),/QUALIFICATION_RUN_INVALID/);
+  }
+});
+
+test('qualification scheduling retains exact principal, protected source, run, controller and actor refusals',async()=>{
+  const cases=[
+    c=>{c.principal.qualificationOnly=false;},c=>{c.principal.qualificationAdmission={...admission,setupSha256:'f'.repeat(64)};},
+    c=>{c.principal.ref='refs/heads/main';},c=>{c.principal.sha=S;},c=>{c.principal.workflowSha=S;},
+    c=>{c.principal.workflowRef='foreign';},c=>{c.principal.jobWorkflowRef='foreign';},c=>{c.principal.jobWorkflowSha=B;},
+    c=>{c.repository.full_name='foreign/fcos';},c=>{c.repository.id=78;},c=>{c.repository.default_branch='foreign';},c=>{c.repository.archived=true;},
+    c=>{c.branch.name='foreign';},c=>{c.branch.protected=false;},c=>{c.branch.commit.sha=S;},
+    c=>{c.protection.enforce_admins.enabled=false;},c=>{c.protection.allow_force_pushes.enabled=true;},c=>{c.protection.allow_deletions.enabled=true;},
+    c=>{c.run.id=102;},c=>{c.run.run_attempt=2;},c=>{c.run.event='push';},c=>{c.run.head_branch='main';},c=>{c.run.head_sha=S;},
+    c=>{c.run.path='.github/workflows/foreign.yml';},c=>{c.run.repository.full_name='foreign/fcos';},c=>{c.run.repository.id=78;},
+    c=>{c.run.head_repository.full_name='foreign/fcos';},c=>{c.run.head_repository.id=78;},
+    c=>{c.run.referenced_workflows[0].path='foreign';},c=>{c.run.referenced_workflows[0].sha=B;},
+    c=>{c.run.referenced_workflows.push({...c.run.referenced_workflows[0]});},
+    c=>{c.operator.login='foreign';},c=>{c.operator.id=0;},c=>{c.run.actor.login='foreign';},c=>{c.run.actor.id=10;},
+    c=>{c.run.triggering_actor.login='foreign';},c=>{c.run.triggering_actor.id=10;},c=>{c.principal.actor='foreign';},c=>{c.principal.actorId='10';},
+  ];
+  for(const mutate of cases){const context=await schedulingMetadataFixture();mutate(context);assert.throws(()=>validateGithubQualification(context),/COORDINATION_QUALIFICATION_/);}
+});
+
+test('qualification metadata collector accepts queued through actual handler with exactly five reserved GETs and no jobs read',async()=>{
+  const context=await schedulingMetadataFixture(),paths=[],gate=createMetadataAdmission();let maximum=0,active=0,weight;
+  const fetchImpl=async(url,options)=>{
+    paths.push(url);active++;maximum=Math.max(maximum,active);
+    assert.equal(options.method,'GET');assert.equal(options.redirect,'error');assert.equal(options.headers.authorization,'Bearer scheduling-fixture');
+    await new Promise(resolve=>setImmediate(resolve));active--;
+    const base=`https://api.github.com/repos/${REPO}`,ref=encodeURIComponent(REF.slice(11));
+    const value=url==='https://api.github.com/user'?context.operator:url===base?context.repository:
+      url===`${base}/branches/${ref}`?context.branch:url===`${base}/branches/${ref}/protection`?context.protection:
+      url===`${base}/actions/runs/101`?context.run:null;
+    assert.ok(value,`Unexpected metadata GET ${url}`);return Response.json(value);
+  };
+  const storeCalls=[],handler=createCoordinatorHandler({authenticateGithub:async()=>context.principal,
+    store:{request:async action=>{storeCalls.push(action);return{registered:true};}},
+    admitMetadata:({weight:value})=>{weight=value;return gate.admit(value);},
+    validateQualification:createGithubQualificationValidator({policy,token:'scheduling-fixture',fetchImpl})});
+  const response=await handler(new Request('http://localhost/coordinate',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer synthetic'},
+    body:JSON.stringify({action:'register',payload:{epoch:1,owner:{kind:'release',id:'features'},releaseId:'scheduling-only',manifestHash:await digest(manifest),manifest}})}));
+  assert.equal(response.status,200);assert.deepEqual(await response.json(),{registered:true});assert.deepEqual(storeCalls,['register']);
+  assert.equal(weight,5);assert.equal(paths.length,5);assert.equal(maximum,2);assert.equal(active,0);
+  const base=`https://api.github.com/repos/${REPO}`,ref=encodeURIComponent(REF.slice(11));
+  assert.deepEqual(paths,['https://api.github.com/user',base,`${base}/branches/${ref}`,`${base}/branches/${ref}/protection`,`${base}/actions/runs/101`]);
+});

@@ -97,7 +97,7 @@ export function validateGithubQualification({principal,policy,repository,branch,
     &&protection.enforce_admins?.enabled===true&&protection.allow_force_pushes?.enabled===false&&protection.allow_deletions?.enabled===false,
     'COORDINATION_QUALIFICATION_PROTECTED_REF_INVALID',403);
   const workflows=run.referenced_workflows?.filter(w=>w.path===q.jobWorkflowRef&&w.sha===q.jobWorkflowSha)??[];
-  need(run.id===Number(principal.runId)&&run.run_attempt===1&&run.status==='in_progress'&&run.conclusion===null
+  need(run.id===Number(principal.runId)&&run.run_attempt===1&&['queued','in_progress'].includes(run.status)&&run.conclusion===null
     &&run.event==='workflow_dispatch'&&run.head_branch===branch.name&&run.head_sha===q.bootstrapSha
     &&['.github/workflows/authenticated-release.yml',`.github/workflows/authenticated-release.yml@${branch.name}`].includes(run.path)
     &&run.repository?.full_name===q.repository&&String(run.repository.id)===q.repositoryId

@@ -65,12 +65,15 @@ test('each existing source gate still refuses and identifies only its fixed publ
     ['RUN_TRIGGERING_ACTOR', f => { f.run.triggering_actor.login = 'foreign'; }],
     ['RUN_TRIGGERING_ACTOR_ID', f => { f.run.triggering_actor.id = 1; }],
   ];
-  for (const [reason, mutate] of cases) await t.test(reason, async () => capture(async output => {
-    const f = fixture(); mutate(f);
+  for (const status of ['in_progress', 'queued']) for (const [reason, mutate] of cases) {
+    if (status === 'queued' && reason === 'RUN_STATUS') continue;
+    await t.test(`${status}:${reason}`, async () => capture(async output => {
+    const f = fixture(); f.run.status = status; mutate(f);
     await assert.rejects(validateQualificationRun(f), drift);
     assert.deepEqual(output, [[JSON.stringify({ kind: 'fcos_qualification_source_drift_diagnostic_v1', failedPredicates: [reason] })]]);
     assert.equal(f.reads.length, 2);
-  }));
+    }));
+  }
 });
 
 test('combined failures emit one bounded names-only record without provider or environment values', async () => {
@@ -124,5 +127,86 @@ test('transport or source validation refusal gains no diagnostic data, additiona
     await assert.rejects(validateQualificationRun(g), e => e === error);
     assert.equal(g.reads.length, 2);
     assert.deepEqual(output, []);
+  });
+});
+
+
+test('only queued or in_progress with an explicit null conclusion can pass scheduling admission', async () => {
+  await capture(async output => {
+    for (const status of ['queued', 'in_progress']) {
+      const f = fixture(); f.run.status = status;
+      assert.equal(await validateQualificationRun(f), true);
+      assert.equal(f.reads.length, 2);
+    }
+    assert.deepEqual(output, []);
+    for (const status of ['completed', 'requested', 'waiting', 'pending', 'action_required', 'startup_failure', 'unknown', '', null, undefined, 0, false, {}, []]) {
+      const f = fixture(); f.run.status = status; output.length = 0;
+      await assert.rejects(validateQualificationRun(f), drift);
+      assert.deepEqual(JSON.parse(output[0][0]).failedPredicates, ['RUN_STATUS']);
+      assert.equal(f.reads.length, 2);
+    }
+    for (const status of ['queued', 'in_progress']) for (const conclusion of ['action_required', 'cancelled', 'failure', 'neutral', 'skipped', 'stale', 'startup_failure', 'success', 'timed_out', '', undefined, 0, false, {}, []]) {
+      const f = fixture(); f.run.status = status; f.run.conclusion = conclusion; output.length = 0;
+      await assert.rejects(validateQualificationRun(f), drift);
+      assert.deepEqual(JSON.parse(output[0][0]).failedPredicates, ['RUN_CONCLUSION']);
+    }
+  });
+});
+
+
+test('actual39715847468 queued/null public run projection passes without replacing identity or controller source', async () => {
+  // Projection of actual root readback SHA256 5600bc4d108dfd5e46e7019ea8e6a90e78abb0699f815bd2c89aecba21705d6f.
+  // That later snapshot had active code/fixtures jobs. It does not recover the earlier failure-time API response.
+  const run = {
+  "id": 39715847468,
+  "head_branch": "codex/hosted-qualification-dependency-setup-20261020",
+  "head_sha": "12bee4edb7fc459162efb6a35571731c8fe5beb5",
+  "path": ".github/workflows/authenticated-release.yml",
+  "event": "workflow_dispatch",
+  "run_attempt": 1,
+  "status": "queued",
+  "conclusion": null,
+  "referenced_workflows": [
+    {
+      "path": "hocheunglai-oss/fcos/.github/workflows/hosted-release-controller.yml@64aa338b04cee7e05bde0ca9bfd10b81ac001a65",
+      "sha": "64aa338b04cee7e05bde0ca9bfd10b81ac001a65"
+    },
+    {
+      "path": "hocheunglai-oss/fcos/.github/workflows/hosted-xero-recovery-carrier.yml@64aa338b04cee7e05bde0ca9bfd10b81ac001a65",
+      "sha": "64aa338b04cee7e05bde0ca9bfd10b81ac001a65"
+    },
+    {
+      "path": "hocheunglai-oss/fcos/.github/workflows/hosted-release-toolchain.yml@64aa338b04cee7e05bde0ca9bfd10b81ac001a65",
+      "sha": "64aa338b04cee7e05bde0ca9bfd10b81ac001a65"
+    }
+  ],
+  "repository": {
+    "full_name": "hocheunglai-oss/fcos",
+    "id": 1278654816
+  },
+  "head_repository": {
+    "full_name": "hocheunglai-oss/fcos"
+  },
+  "actor": {
+    "login": "hocheunglai-oss",
+    "id": 265701760
+  },
+  "triggering_actor": {
+    "login": "hocheunglai-oss",
+    "id": 265701760
+  }
+};
+  const f = fixture(); f.run = run;
+  f.source = { controllerSha: '64aa338b04cee7e05bde0ca9bfd10b81ac001a65', bootstrapSha: run.head_sha,
+    candidateSha: '2ef733d17dd12314c72971c2220b2b09903a6bf0', ref: `refs/heads/${run.head_branch}`,
+    callerWorkflowRef: `${repository}/.github/workflows/authenticated-release.yml@refs/heads/${run.head_branch}` };
+  f.env = { FCOS_CONTROLLER_SHA: f.source.controllerSha, FCOS_CANDIDATE_SHA: f.source.candidateSha,
+    GITHUB_REPOSITORY_ID: String(run.repository.id), GITHUB_RUN_ID: String(run.id),
+    GITHUB_ACTOR: run.actor.login, GITHUB_ACTOR_ID: String(run.actor.id) };
+  f.branch = { name: run.head_branch, protected: true, commit: { sha: run.head_sha } };
+  f.github = { async read(route) { f.reads.push(route); return route.endsWith('/protection') ? f.protection : f.branch; } };
+  await capture(async output => {
+    assert.equal(await validateQualificationRun(f), true);
+    assert.equal(f.reads.length, 2); assert.deepEqual(output, []);
   });
 });

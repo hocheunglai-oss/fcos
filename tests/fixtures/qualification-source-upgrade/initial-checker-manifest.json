@@ -1,0 +1,87 @@
+[
+  {
+    "path": ".dockerignore",
+    "sha256": "bcdf99161727e31d318680f629325c33c3be4e598083bc4dfea707e2a9c7b8b4",
+    "byteLength": 270
+  },
+  {
+    "path": "Dockerfile.vercel",
+    "sha256": "5027ffb793599035358b87f8c9c1489ce53224ab33419cd7d565b648c3cdceac",
+    "byteLength": 589
+  },
+  {
+    "path": "config/fcosConnections.js",
+    "sha256": "36132abd2ae8d82ac19f434b495b39f26e3bab99f0e364b0d4d70eb88b0f923d",
+    "byteLength": 26030
+  },
+  {
+    "path": "config/legacyReleaseContainment.js",
+    "sha256": "b2ab4e9dd277636c801a37d3f846a960480ff0dd847b852292969a3cb385ced0",
+    "byteLength": 1357
+  },
+  {
+    "path": "package-lock.json",
+    "sha256": "13506d3330b7e82f8280fc04438738c5fe6c776d640eb4d381c3d099a266a71d",
+    "byteLength": 433624
+  },
+  {
+    "path": "package.json",
+    "sha256": "bbf43cb997ef6c90b2f8847bb47d997127bf09c376cea0f8257567e75e575fe7",
+    "byteLength": 6226
+  },
+  {
+    "path": "supabase/functions/release-coordinator/Dockerfile",
+    "sha256": "5027ffb793599035358b87f8c9c1489ce53224ab33419cd7d565b648c3cdceac",
+    "byteLength": 589
+  },
+  {
+    "path": "supabase/functions/release-coordinator/approval.mjs",
+    "sha256": "459bb2e3922d98e0ed9a3ab00e8b75ad75acf0c7858efba4549e36956efc6ff9",
+    "byteLength": 11998
+  },
+  {
+    "path": "supabase/functions/release-coordinator/auth.mjs",
+    "sha256": "539013a82e74b4fccfdd3e75952685d101018f22422d727b83421ef8f6e28254",
+    "byteLength": 6730
+  },
+  {
+    "path": "supabase/functions/release-coordinator/core.mjs",
+    "sha256": "f5b7f09ad686215d9bd1ef53d99ac96ea9bb02ebe64f7def97827ed8c78e64da",
+    "byteLength": 11787
+  },
+  {
+    "path": "supabase/functions/release-coordinator/deno.json",
+    "sha256": "29ea751d42a854a1531a2548f9cd091badf5a029731742faf1e214885372ab2e",
+    "byteLength": 79
+  },
+  {
+    "path": "supabase/functions/release-coordinator/index.ts",
+    "sha256": "52803513f43b23513ad4cd5ae574ecc800bb3679c132c72de31377a83dfeaabc",
+    "byteLength": 11121
+  },
+  {
+    "path": "supabase/functions/release-coordinator/legacy-containment.mjs",
+    "sha256": "a5631f06df503d7ff74a1e5fba5d553dcd168e91b915a3cc1585b7504aacb4c3",
+    "byteLength": 3868
+  },
+  {
+    "path": "supabase/functions/release-coordinator/runtime.mjs",
+    "sha256": "0f06529117db654b5f5f9c44465e6596e135702c7b6187721775ad75ee00405e",
+    "byteLength": 3879
+  },
+  {
+    "path": "supabase/functions/release-coordinator/server.mjs",
+    "sha256": "61f679de1aaaf5b38d4de60ecc040705facc7e07fae7d8e821f676f88376c356",
+    "byteLength": 2362
+  },
+  {
+    "path": "supabase/functions/release-coordinator/supabase-root-2021.crt",
+    "sha256": "700723581420dd1ac98fd7e9ac529f0ef210eadcaf87fc868a3ad7d114c2f3b7",
+    "byteLength": 1367
+  },
+  {
+    "path": "vercel.json",
+    "sha256": "5494052d829a3b3611b651ad88c489e4148d479d560c6fd809b733ca13c2c9e6",
+    "byteLength": 169
+  }
+]

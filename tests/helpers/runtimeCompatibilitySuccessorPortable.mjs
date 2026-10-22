@@ -7,9 +7,9 @@ import { fileURLToPath } from 'node:url';
 
 export const SOURCE_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 export const FIXTURE_ROOT = join(SOURCE_ROOT, 'tests/fixtures/runtime-compatibility-successor-integration');
-export const MANIFEST_HASH = 'b97a931f5f5f6e86adabba21ed4562a60d32e122d35a0af9e46908d0b3dc8603';
+export const MANIFEST_HASH = '6b488152f9fa3279bfe5dcc60f02e91e179fff98c915c4c5b6544ec9262a5d0c';
 export const PACK_HASH = 'edb0c7a0d0ac7f45dba5fcfc8f6d98cbbf9667f01713a5d7f7764dc7e7380628';
-const BINDINGS_HASH = '74af2614e761e7a2fd9b1d017284e86366a7ce9b512ba8dabdb0e43bbf620757';
+const BINDINGS_HASH = '8b847cbef9696f4d92d8b52981b219ac17d7cd96219a8121816d150fcc686abe';
 export const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 
 function regularFile(root, path) {
@@ -244,10 +244,13 @@ assert.equal(JSON.parse(seventyThirdBindingBytes).previousSourceBindingsSha256, 
 const seventyFourthBindingBytes = regularFile(FIXTURE_ROOT, 'source-bindings-v74.json');
 assert.equal(hash(seventyFourthBindingBytes), 'd33f6cd169f058ade2bfb71f67649dc1d467cf902e5cd461f3ea2a00ec2cc32d');
 assert.equal(JSON.parse(seventyFourthBindingBytes).previousSourceBindingsSha256, hash(seventyThirdBindingBytes));
-const bindingBytes = regularFile(FIXTURE_ROOT, 'source-bindings-v75.json');
+const previousBinding75Bytes = regularFile(FIXTURE_ROOT, 'source-bindings-v75.json');
+assert.equal(hash(previousBinding75Bytes), '74af2614e761e7a2fd9b1d017284e86366a7ce9b512ba8dabdb0e43bbf620757');
+assert.equal(JSON.parse(previousBinding75Bytes).previousSourceBindingsSha256, hash(seventyFourthBindingBytes));
+const bindingBytes = regularFile(FIXTURE_ROOT, 'source-bindings-v76.json');
 assert.equal(hash(bindingBytes), BINDINGS_HASH, 'Reviewed source bindings differ.');
 export const sourceBindings = JSON.parse(bindingBytes);
-assert.equal(sourceBindings.previousSourceBindingsSha256, hash(seventyFourthBindingBytes), 'Previous source binding history differs.');
+assert.equal(sourceBindings.previousSourceBindingsSha256, hash(previousBinding75Bytes), 'Previous source binding history differs.');
 const rows = new Map(sourceBindings.sources.map(row => [row.path, row]));
 assert.equal(rows.size, sourceBindings.sources.length, 'Duplicate source binding.');
 export function assertBoundSource(path, bytes) {
@@ -262,7 +265,7 @@ export function validateSourceBindings() {
 export function validatePublicManifest(bytes) {
   assert.equal(hash(bytes), MANIFEST_HASH, 'Immutable public manifest differs.');
   const manifest = JSON.parse(bytes);
-  assert.equal(manifest.previousManifestSha256, hash(sixtyFifthManifestBytes), 'Public manifest history differs.');
+  assert.equal(manifest.previousManifestSha256, hash(previousManifest66Bytes), 'Public manifest history differs.');
   assert.deepEqual(manifest.objects, historicalManifest.objects, 'Immutable packed objects differ.');
   assert.deepEqual(manifest.observationBindings, historicalManifest.observationBindings, 'Immutable observation bindings differ.');
   assert.deepEqual(manifest.pack, historicalManifest.pack, 'Immutable public pack differs.');
@@ -465,7 +468,10 @@ assert.equal(JSON.parse(sixtyFourthManifestBytes).previousManifestSha256, hash(s
 const sixtyFifthManifestBytes = regularFile(FIXTURE_ROOT, 'fixture-manifest-v65.json');
 assert.equal(hash(sixtyFifthManifestBytes), '7dd76f84f6db203a7a3071eb77366277872d3e01efd0f450fad29e6fe98c7e1f');
 assert.equal(JSON.parse(sixtyFifthManifestBytes).previousManifestSha256, hash(sixtyFourthManifestBytes));
-export const manifestBytes = regularFile(FIXTURE_ROOT, 'fixture-manifest-v66.json');
+const previousManifest66Bytes = regularFile(FIXTURE_ROOT, 'fixture-manifest-v66.json');
+assert.equal(hash(previousManifest66Bytes), 'b97a931f5f5f6e86adabba21ed4562a60d32e122d35a0af9e46908d0b3dc8603');
+assert.equal(JSON.parse(previousManifest66Bytes).previousManifestSha256, hash(sixtyFifthManifestBytes));
+export const manifestBytes = regularFile(FIXTURE_ROOT, 'fixture-manifest-v67.json');
 export const manifest = validatePublicManifest(manifestBytes);
 export const pack = regularFile(FIXTURE_ROOT, 'objects-v2.pack');
 assert.equal(pack.length, 552150); assert.equal(hash(pack), PACK_HASH);
