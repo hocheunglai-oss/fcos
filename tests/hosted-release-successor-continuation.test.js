@@ -42,11 +42,11 @@ const collect = f => collectCompatibilitySuccessor({ manifest: f.manifest, coord
   assert.deepEqual(reference, f.manifest.scope.compatibilityRelease); return f.snapshot;
 } }, env, now: () => NOW });
 
-test('ordinary wrapper shares the reviewed immutable05bc pin without changing original qualification64aa', () => {
+test('ordinary wrapper shares the reviewed immutable6a3 pin without changing original qualification64aa', () => {
   const workflow = yaml.load(readFileSync(new URL('../.github/workflows/hosted-release.yml', import.meta.url), 'utf8'));
   const manifest = workflow.jobs.manifest, checkout = manifest.steps.find(row => row.name === 'Check out admitted controller');
   const reusableSha = workflow.jobs.release.uses.split('@').at(-1);
-  assert.equal(reusableSha, '05bc88fa54cbab4013f99997f5e1ae7885bbb5b1');
+  assert.equal(reusableSha, '6a3fbd8fd05a76c052e7e380d618aedf43e5b72e');
   assert.equal(BOOTSTRAP_SOURCE.controllerSha, '64aa338b04cee7e05bde0ca9bfd10b81ac001a65');
   assert.equal(manifest.env.FCOS_CONTROLLER_SHA, reusableSha);
   assert.equal(checkout.with.ref, reusableSha);
