@@ -306,6 +306,9 @@ jobs:
           path: candidate
           fetch-depth: 0
           persist-credentials: false
+      - name: Install trusted browser runtime
+        run: npx --no-install playwright install --with-deps chromium chrome
+        working-directory: controller
       - run: npm install --global vercel@54.20.1
       - name: Run admitted checks
         id: run
