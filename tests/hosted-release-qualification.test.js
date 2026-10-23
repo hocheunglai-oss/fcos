@@ -31,10 +31,11 @@ function proof(m,id,{stale=false}={}){return{schemaVersion:2,checkId:id,status:'
 
 // These fixture routes are the only Vercel boundary. No real Vercel credential/URL is used.
 function fakeVercel(m){
- const deployments=new Map(),effects={preview:0,stage:0,promote:0,rollback:0},previous={id:m.previousProduction.deploymentId,sha:m.previousProduction.sha,
+ const deployments=new Map(),effects={preview:0,stage:0,promote:0,rollback:0,reads:0,readsAtLostRollback:null},previous={id:m.previousProduction.deploymentId,sha:m.previousProduction.sha,
  target:'production',projectId:m.targets.vercelProject,teamId:m.targets.vercelTeam,state:'READY',url:'https://previous.vercel.app'};
  deployments.set(previous.id,previous);let current=previous,crashStage=false,readUnavailable=false,failLive=false,rollbackLost=false;
  async function api(method,route,body){
+  if(method==='GET')effects.reads++;
   if(route==='/deployments'&&method==='POST'){
    const key=body.target==='preview'?'preview':'stage';effects[key]++;const id=`dpl_${key}${effects[key]}`;
    const deployment={id,sha:m.candidate.sha,target:body.target,projectId:m.targets.vercelProject,teamId:m.targets.vercelTeam,state:'READY',url:`https://${key}${effects[key]}.vercel.app`,operationId:body.operationId,manifestHash:digest(m)};
@@ -45,7 +46,7 @@ function fakeVercel(m){
   }
   if(route==='/current'&&method==='GET')return current;
   if(route==='/promote'&&method==='POST'){effects.promote++;current=deployments.get(body.id);return current;}
-  if(route==='/rollback'&&method==='POST'){effects.rollback++;current=previous;if(rollbackLost){rollbackLost=false;throw new Error('simulated lost rollback response');}return current;}
+  if(route==='/rollback'&&method==='POST'){effects.rollback++;current=previous;if(rollbackLost){rollbackLost=false;effects.readsAtLostRollback=effects.reads;throw new Error('simulated lost rollback response');}return current;}
   throw new Error('Unexpected fake Vercel route');
  }
  const provider={admit:async()=>{},createPreview:async(_,c)=>api('POST','/deployments',{target:'preview',operationId:c.operationId}),
@@ -136,6 +137,11 @@ test('local rehearsal: native PostgreSQL, signed OIDC, real endpoint/client/cont
  // A new dispatch prepares the same manifest and reconciles the original staged write without another POST or renewed receipt.
  identity={runId:'102',sha:'d'.repeat(40),environment:null};await client.register({...bind(m),manifest:m});
  metadata={...(await client.snapshot(bind(m))).registrationRun,manifestHash:digest(m)};await executor();v.setFaults({readUnavailable:false,failLive:true,rollbackLost:true});
+ await assert.rejects(executeHostedProduction({manifest:m,coordinator:client,provider:v.provider,resumeAuthorization:true}),error=>error.code==='PROVIDER_OUTCOME_UNKNOWN'&&error.phase==='production.rollback');
+ assert.equal(v.effects.reads,v.effects.readsAtLostRollback);
+ assert.equal(v.effects.rollback,1);
+ assert.equal((await client.snapshot(bind(m))).operations['production.rollback'].state,'uncertain');
+ // A separate invocation reads the consumed rollback; it must never post again.
  const terminal=await executeHostedProduction({manifest:m,coordinator:client,provider:v.provider,resumeAuthorization:true});
  assert.equal(terminal.status,'rolled_back');assert.equal(v.effects.stage,1);assert.equal(v.effects.promote,1);assert.equal(v.effects.rollback,1);
  const saved=await client.snapshot(bind(m));assert.equal(saved.status,'rolled_back');assert.equal(saved.approval.expires_at,approved.expiresAt);assert.equal(saved.operations['production.rollback'].state,'complete');

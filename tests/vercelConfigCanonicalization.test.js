@@ -23,5 +23,7 @@ test('FCOS deployment config retains the observed platform canonical form and sc
     { path: '/api/functions/emailRouterMaintenanceCron', schedule: '*/5 * * * *' },
   ]);
   assert.equal(config.git.deploymentEnabled.main, false);
-  assert.notEqual(config.git.deploymentEnabled['codex/hosted-release-consolidation-20261017'], false);
+  // The reviewed qualification path creates Previews explicitly; a source push
+  // must not start an additional deployment while the old attempt is isolated.
+  assert.equal(config.git.deploymentEnabled['codex/hosted-release-consolidation-20261017'], false);
 });
