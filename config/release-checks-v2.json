@@ -39,7 +39,8 @@
         "application_v2",
         "compat_application_auth_20261018",
         "compat_source_config_20261020",
-        "compat_source_diagnostics_20261023"
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024"
       ]
     },
     {
@@ -69,7 +70,8 @@
         "application_v2",
         "compat_application_auth_20261018",
         "compat_source_config_20261020",
-        "compat_source_diagnostics_20261023"
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024"
       ]
     },
     {
@@ -100,7 +102,8 @@
         "application_v2",
         "compat_application_auth_20261018",
         "compat_source_config_20261020",
-        "compat_source_diagnostics_20261023"
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024"
       ],
       "profileCommands": {
         "controller_v2": [
@@ -182,7 +185,8 @@
         "application_v2",
         "compat_application_auth_20261018",
         "compat_source_config_20261020",
-        "compat_source_diagnostics_20261023"
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024"
       ]
     },
     {
@@ -223,7 +227,8 @@
         "application_v2",
         "compat_application_auth_20261018",
         "compat_source_config_20261020",
-        "compat_source_diagnostics_20261023"
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024"
       ]
     },
     {
@@ -253,7 +258,8 @@
         "application_v2",
         "compat_application_auth_20261018",
         "compat_source_config_20261020",
-        "compat_source_diagnostics_20261023"
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024"
       ]
     },
     {
@@ -305,7 +311,8 @@
         "application_v2",
         "compat_application_auth_20261018",
         "compat_source_config_20261020",
-        "compat_source_diagnostics_20261023"
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024"
       ],
       "profileCommands": {
         "controller_v2": [
@@ -357,7 +364,8 @@
         "application_v2",
         "compat_application_auth_20261018",
         "compat_source_config_20261020",
-        "compat_source_diagnostics_20261023"
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024"
       ],
       "artifactInputs": [
         "dist"
@@ -419,7 +427,8 @@
         "application_v2",
         "compat_application_auth_20261018",
         "compat_source_config_20261020",
-        "compat_source_diagnostics_20261023"
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024"
       ]
     },
     {
@@ -451,7 +460,8 @@
         "application_v2",
         "compat_application_auth_20261018",
         "compat_source_config_20261020",
-        "compat_source_diagnostics_20261023"
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024"
       ]
     },
     {
@@ -510,7 +520,8 @@
         "application_v2",
         "compat_application_auth_20261018",
         "compat_source_config_20261020",
-        "compat_source_diagnostics_20261023"
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024"
       ]
     },
     {
@@ -542,7 +553,8 @@
         "application_v2",
         "compat_application_auth_20261018",
         "compat_source_config_20261020",
-        "compat_source_diagnostics_20261023"
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024"
       ]
     },
     {
@@ -576,8 +588,43 @@
         "application_v2",
         "compat_application_auth_20261018",
         "compat_source_config_20261020",
-        "compat_source_diagnostics_20261023"
-      ]
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024"
+      ],
+      "profileCommands": {
+        "compat_verification_harness_20261024": [
+          {
+            "program": "node",
+            "args": [
+              "scripts/verify-migrations.mjs"
+            ],
+            "env": {
+              "FCOS_MIGRATION_DATABASE_URL": "postgresql://postgres:postgres@127.0.0.1:54322/postgres",
+              "FCOS_MIGRATION_DISPOSABLE_CLUSTER": "1",
+              "FCOS_MIGRATION_DOCKER_CONTAINER": "supabase_db_fcos",
+              "FCOS_REQUIRE_LIVE_MIGRATION_CHECK": "1",
+              "FCOS_MIGRATION_PROJECT_ID": "fcos",
+              "FCOS_MIGRATION_PARENT_PROOF_FILE": "/controller/output/disposable-migration-server.json"
+            }
+          }
+        ],
+        "application_v2": [
+          {
+            "program": "node",
+            "args": [
+              "scripts/verify-migrations.mjs"
+            ],
+            "env": {
+              "FCOS_MIGRATION_DATABASE_URL": "postgresql://postgres:postgres@127.0.0.1:54322/postgres",
+              "FCOS_MIGRATION_DISPOSABLE_CLUSTER": "1",
+              "FCOS_MIGRATION_DOCKER_CONTAINER": "supabase_db_fcos",
+              "FCOS_REQUIRE_LIVE_MIGRATION_CHECK": "1",
+              "FCOS_MIGRATION_PROJECT_ID": "fcos",
+              "FCOS_MIGRATION_PARENT_PROOF_FILE": "/controller/output/disposable-migration-server.json"
+            }
+          }
+        ]
+      }
     },
     {
       "id": "missing_nom_b_database",
@@ -619,7 +666,8 @@
         "application_v2",
         "compat_application_auth_20261018",
         "compat_source_config_20261020",
-        "compat_source_diagnostics_20261023"
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024"
       ]
     },
     {
@@ -653,7 +701,8 @@
         "application_v2",
         "compat_application_auth_20261018",
         "compat_source_config_20261020",
-        "compat_source_diagnostics_20261023"
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024"
       ]
     },
     {
@@ -690,7 +739,8 @@
         "application_v2",
         "compat_application_auth_20261018",
         "compat_source_config_20261020",
-        "compat_source_diagnostics_20261023"
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024"
       ]
     },
     {
@@ -725,7 +775,8 @@
         "application_v2",
         "compat_application_auth_20261018",
         "compat_source_config_20261020",
-        "compat_source_diagnostics_20261023"
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024"
       ]
     },
     {
@@ -760,7 +811,8 @@
         "application_v2",
         "compat_application_auth_20261018",
         "compat_source_config_20261020",
-        "compat_source_diagnostics_20261023"
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024"
       ]
     },
     {
@@ -794,7 +846,8 @@
         "application_v2",
         "compat_application_auth_20261018",
         "compat_source_config_20261020",
-        "compat_source_diagnostics_20261023"
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024"
       ]
     },
     {
@@ -828,7 +881,8 @@
         "application_v2",
         "compat_application_auth_20261018",
         "compat_source_config_20261020",
-        "compat_source_diagnostics_20261023"
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024"
       ]
     },
     {
@@ -862,7 +916,8 @@
         "application_v2",
         "compat_application_auth_20261018",
         "compat_source_config_20261020",
-        "compat_source_diagnostics_20261023"
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024"
       ]
     },
     {
@@ -896,7 +951,8 @@
         "application_v2",
         "compat_application_auth_20261018",
         "compat_source_config_20261020",
-        "compat_source_diagnostics_20261023"
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024"
       ]
     },
     {
@@ -930,7 +986,8 @@
         "application_v2",
         "compat_application_auth_20261018",
         "compat_source_config_20261020",
-        "compat_source_diagnostics_20261023"
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024"
       ]
     },
     {
@@ -964,7 +1021,8 @@
         "application_v2",
         "compat_application_auth_20261018",
         "compat_source_config_20261020",
-        "compat_source_diagnostics_20261023"
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024"
       ]
     },
     {
@@ -986,7 +1044,8 @@
         "application_v2",
         "compat_application_auth_20261018",
         "compat_source_config_20261020",
-        "compat_source_diagnostics_20261023"
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024"
       ]
     },
     {
@@ -1008,7 +1067,8 @@
         "application_v2",
         "compat_application_auth_20261018",
         "compat_source_config_20261020",
-        "compat_source_diagnostics_20261023"
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024"
       ]
     },
     {
@@ -1043,7 +1103,8 @@
         "application_v2",
         "compat_application_auth_20261018",
         "compat_source_config_20261020",
-        "compat_source_diagnostics_20261023"
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024"
       ],
       "artifactInputs": [
         "dist",
@@ -1084,7 +1145,8 @@
         "application_v2",
         "compat_application_auth_20261018",
         "compat_source_config_20261020",
-        "compat_source_diagnostics_20261023"
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024"
       ],
       "artifactInputs": [
         "dist",
@@ -1118,7 +1180,8 @@
         "application_v2",
         "compat_application_auth_20261018",
         "compat_source_config_20261020",
-        "compat_source_diagnostics_20261023"
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024"
       ]
     },
     {
@@ -1160,7 +1223,8 @@
         "application_v2",
         "compat_application_auth_20261018",
         "compat_source_config_20261020",
-        "compat_source_diagnostics_20261023"
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024"
       ]
     },
     {
@@ -1247,7 +1311,8 @@
         "application_v2",
         "compat_application_auth_20261018",
         "compat_source_config_20261020",
-        "compat_source_diagnostics_20261023"
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024"
       ]
     }
   ],
@@ -1280,6 +1345,11 @@
       "candidateSha": "160edcccc3347596ac18bb5c9dcb34ecc26df02b",
       "purpose": "Complete original accepted business release scope.",
       "description": "Explicit one-file diagnostic-only child of2ef. Fixed public source hashes/counts on attestation failure; source/mode/cleanliness refusal gates and all31 required checks remain unchanged. No remote mismatch cause or successful deployment is inferred."
+    },
+    "compat_verification_harness_20261024": {
+      "candidateSha": "bf517a8ba86f8c210eacd2b9dd859ca7c4d48e3d",
+      "purpose": "Complete original accepted business release scope.",
+      "description": "Explicit six-file verification-only child of160ed: current auth reset/outbox assertions, unchanged browser XLS encoding path at65537 rows, source-bound read-only parent disposable-database proof. All31 required checks and historical profiles remain unchanged."
     }
   }
 }

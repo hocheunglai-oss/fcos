@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isDeepStrictEqual } from 'node:util';
 import { dirname, join, sep } from 'node:path';
@@ -121,7 +121,8 @@ export function evaluateCheckEvidence({ check, binding, evidence, now = Date.now
   return true;
 }
 
-export function sanitisedCheckEnvironment({ environment = process.env, home, command, candidateDirectory, checkId }) {
+export function sanitisedCheckEnvironment({ environment = process.env, home, command, candidateDirectory, checkId,
+  controllerDirectory, controllerSha, candidateSha }) {
   const env = { PATH: `${join(candidateDirectory, 'node_modules/.bin')}${sep === '/' ? ':' : ';'}${dirname(process.execPath)}:/usr/bin:/bin`,
     HOME: home, TMPDIR: home, LANG: 'C.UTF-8', TZ: 'UTC', CI: 'true', ...command.env };
   // Non-secret local browser cache only; never copy arbitrary FCOS/provider/controller variables.
@@ -133,6 +134,30 @@ export function sanitisedCheckEnvironment({ environment = process.env, home, com
     // Unit fixtures must own their auth configuration. Deployment settings can
     // start a persistent browser auth client inside a Node/Vite SSR test.
     if (checkId !== 'unit') Object.assign(env, values);
+  }
+  if (command.env.FCOS_MIGRATION_PARENT_PROOF_FILE !== undefined) {
+    const proofPath = '/controller/output/disposable-migration-server.json';
+    if (checkId !== 'migrations' || command.env.FCOS_MIGRATION_PARENT_PROOF_FILE !== proofPath
+      || command.env.FCOS_MIGRATION_PROJECT_ID !== 'fcos' || environment.GITHUB_ACTIONS !== 'true'
+      || command.env.FCOS_MIGRATION_DOCKER_CONTAINER !== 'supabase_db_fcos'
+      || command.env.FCOS_MIGRATION_DATABASE_URL !== 'postgresql://postgres:postgres@127.0.0.1:54322/postgres'
+      || command.env.FCOS_MIGRATION_DISPOSABLE_CLUSTER !== '1'
+      || environment.FCOS_HOSTED_CHECK_EXECUTION !== '1' || !sha(controllerSha) || !sha(candidateSha)
+      || !controllerDirectory || !/^[a-f0-9]{64}$/.test(environment.FCOS_HOSTED_MIGRATION_PARENT_PROOF_SHA256 || '')) {
+      throw new Error('Trusted migration fixture context is required.');
+    }
+    const file = join(controllerDirectory, 'output/disposable-migration-server.json');
+    if (realpathSync(file) !== file || !lstatSync(file).isFile() || lstatSync(file).isSymbolicLink()
+      || lstatSync(file).size > 32768 || (lstatSync(file).mode & 0o222) !== 0) {
+      throw new Error('Migration fixture proof must be a physical controller file.');
+    }
+    const bytes = readFileSync(file), proof = JSON.parse(bytes);
+    if (hash(bytes) !== environment.FCOS_HOSTED_MIGRATION_PARENT_PROOF_SHA256
+      || proof.kind !== 'fcos_disposable_migration_parent_proof_v1' || proof.schemaVersion !== 1
+      || proof.projectId !== 'fcos' || proof.source?.controllerSha !== controllerSha
+      || proof.source?.candidateSha !== candidateSha) throw new Error('Migration fixture source binding changed.');
+    Object.assign(env, { FCOS_MIGRATION_PARENT_PROOF_SHA256: hash(bytes),
+      FCOS_CONTROLLER_SHA: controllerSha, FCOS_CANDIDATE_SHA: candidateSha });
   }
   return env;
 }
@@ -196,7 +221,8 @@ export async function runReleaseChecks({ candidateDirectory, controllerDirectory
           for (const command of check.profileCommands?.[sourceProfile] || check.commands) {
             const args = expandArguments(command.args, candidateDirectory, controllerDirectory);
             const result = await run(command.program === 'node' ? process.execPath : '/usr/bin/python3', args, {
-              cwd: candidateDirectory, env: sanitisedCheckEnvironment({ environment, home, command, candidateDirectory, checkId: check.id }),
+              cwd: candidateDirectory, env: sanitisedCheckEnvironment({ environment, home, command, candidateDirectory, checkId: check.id,
+                controllerDirectory, controllerSha, candidateSha: expectedCandidateSha }),
               shell: false, stdio: 'inherit', timeout: 60 * 60 * 1000,
             });
             commands.push({ program: command.program, args: command.args, exitCode: result?.status ?? 1 });

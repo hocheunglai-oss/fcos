@@ -63,13 +63,57 @@ export const COMPATIBILITY_DIAGNOSTIC_CORRECTION = Object.freeze({
   salesforceMetadataChanged: false,
   cronSchedulesChanged: false,
 });
+// Verification-only successor; runtime, XLS format, financial scope and historical pins are unchanged.
+export const COMPATIBILITY_VERIFICATION_CORRECTION = Object.freeze({
+  "baseSha": "160edcccc3347596ac18bb5c9dcb34ecc26df02b",
+  "candidateSha": "bf517a8ba86f8c210eacd2b9dd859ca7c4d48e3d",
+  "sourceProfile": "compat_verification_harness_20261024",
+  "kind": "explicit_isolated_verification_harness_correction",
+  "files": [
+    {
+      "path": "scripts/lib/migration-verification.mjs",
+      "sha256": "6a5bbe04c986ffab9672297f11f9feb2c1cb2afba78b04aedd79bc267b38643e",
+      "gitBlob": "2db452c81d4de8285c06716b3429661908302960"
+    },
+    {
+      "path": "scripts/verify-migrations.mjs",
+      "sha256": "6a99e018d669a446df5143aeabc92dbb5b86783b1207a481b1493c41b2509ea3",
+      "gitBlob": "8f77552aeee560f7565da0fcbe9feaf903fc4927"
+    },
+    {
+      "path": "tests/clientSessionIsolation.test.js",
+      "sha256": "f9da5ac531cd1cc1ecd7ea0636ae79c45fbc3d87c63da2faf0f630ed49c5648a",
+      "gitBlob": "e17ee1d1a96d36eadbe729cbf9b305527a356aa1"
+    },
+    {
+      "path": "tests/dashboardStemExport.test.js",
+      "sha256": "974e1a371a088984a206bc1066730bdefc680150ef17caac49186145d14e9cb8",
+      "gitBlob": "17ff6810b23549e18b04b2570f6597485b5e2abb"
+    },
+    {
+      "path": "tests/migrationVerification.test.js",
+      "sha256": "5a13af05a4fd8761f38d7fd5aa312689673fb49d631744063bb141c06a8f7cb7",
+      "gitBlob": "e4f5471de746150bf21fd72150c488fbfa6792d9"
+    },
+    {
+      "path": "tests/readOnlyCiAccess.test.js",
+      "sha256": "eee8ab2fb11dcdd77f0e15861c977b11641dae0d857df45437a17631a4b94c55",
+      "gitBlob": "bf65f0d549b860ea7118fe711aa60304a3d29947"
+    }
+  ],
+  "existingUi": false,
+  "handoffs": [],
+  "salesforceMetadataChanged": false,
+  "cronSchedulesChanged": false
+});
 export function isFirstRuntimeCandidateSha(value) {
   return value === COMPATIBILITY_CORRECTION.baseSha || value === COMPATIBILITY_CORRECTION.candidateSha
-    || value === COMPATIBILITY_CONFIGURATION_CORRECTION.candidateSha || value === COMPATIBILITY_DIAGNOSTIC_CORRECTION.candidateSha;
+    || value === COMPATIBILITY_CONFIGURATION_CORRECTION.candidateSha || value === COMPATIBILITY_DIAGNOSTIC_CORRECTION.candidateSha || value === COMPATIBILITY_VERIFICATION_CORRECTION.candidateSha;
 }
 export function firstRuntimeCandidateProfile(value) {
   return value === COMPATIBILITY_CORRECTION.baseSha ? 'frozen_04ee'
     : value === COMPATIBILITY_CORRECTION.candidateSha ? COMPATIBILITY_CORRECTION.sourceProfile
       : value === COMPATIBILITY_CONFIGURATION_CORRECTION.candidateSha ? COMPATIBILITY_CONFIGURATION_CORRECTION.sourceProfile
-        : value === COMPATIBILITY_DIAGNOSTIC_CORRECTION.candidateSha ? COMPATIBILITY_DIAGNOSTIC_CORRECTION.sourceProfile : null;
+        : value === COMPATIBILITY_DIAGNOSTIC_CORRECTION.candidateSha ? COMPATIBILITY_DIAGNOSTIC_CORRECTION.sourceProfile
+          : value === COMPATIBILITY_VERIFICATION_CORRECTION.candidateSha ? COMPATIBILITY_VERIFICATION_CORRECTION.sourceProfile : null;
 }

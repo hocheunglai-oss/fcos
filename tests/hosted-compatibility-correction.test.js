@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {COMPATIBILITY_CORRECTION as C,COMPATIBILITY_CONFIGURATION_CORRECTION as V,COMPATIBILITY_DIAGNOSTIC_CORRECTION as D,isFirstRuntimeCandidateSha,firstRuntimeCandidateProfile} from '../config/hostedCompatibilityCorrection.js';
+import {COMPATIBILITY_CORRECTION as C,COMPATIBILITY_CONFIGURATION_CORRECTION as V,COMPATIBILITY_DIAGNOSTIC_CORRECTION as D,COMPATIBILITY_VERIFICATION_CORRECTION as M,isFirstRuntimeCandidateSha,firstRuntimeCandidateProfile} from '../config/hostedCompatibilityCorrection.js';
 import {loadReleaseCheckManifest,requiredReleaseChecks} from '../scripts/lib/hosted-release/checks.mjs';
 import {validateManifest} from '../scripts/lib/hosted-release/contract.mjs';
 import {fixtureManifest} from './helpers/hosted-release-manifest.mjs';
@@ -82,4 +82,32 @@ test('diagnostic successor inherits all31 frozen checks and exact commands with 
   assert.equal(firstRuntimeCandidateProfile(D.candidateSha),D.sourceProfile);assert.equal(isFirstRuntimeCandidateSha(D.candidateSha),true);
   const m=fixtureManifest();m.candidate.sha=D.candidateSha;m.candidate.sourceProfile=D.sourceProfile;assert.doesNotThrow(()=>validateManifest(m));
   for(const change of [v=>v.candidate.sha=V.candidateSha,v=>v.candidate.sourceProfile=V.sourceProfile,v=>delete v.candidate.sourceProfile,v=>v.scope.existingUi=true,v=>v.scope.handoffs=[{kind:'status19',sha256:'a'.repeat(64)}],v=>v.scope.financialAuthority=true]){const changed=structuredClone(m);change(changed);assert.throws(()=>validateManifest(changed));}
+});
+
+test('verification successor changes only the six reviewed verification files and preserves all business source',()=>{
+  assert.equal(M.baseSha,D.candidateSha);assert.equal(git('rev-parse',`${M.candidateSha}^`),M.baseSha);
+  assert.deepEqual(git('diff-tree','--no-commit-id','--name-only','-r',M.baseSha,M.candidateSha).split('\n'),M.files.map(f=>f.path));
+  assert.equal(M.files.length,6);
+  for(const f of M.files){const bytes=execFileSync('git',['show',`${M.candidateSha}:${f.path}`],{cwd:ROOT});assert.equal(createHash('sha256').update(bytes).digest('hex'),f.sha256);assert.equal(git('rev-parse',`${M.candidateSha}:${f.path}`),f.gitBlob);}
+  for(const path of ['src','api','force-app','supabase','vercel.json','config','package.json','package-lock.json'])assert.equal(git('diff','--name-only',M.baseSha,M.candidateSha,'--',path),'');
+  for(const key of ['existingUi','salesforceMetadataChanged','cronSchedulesChanged'])assert.equal(M[key],false);
+  assert.deepEqual(M.handoffs,[]);
+});
+
+test('verification profile preserves all31 checks and changes only the exact disposable migration transport',()=>{
+  const {manifest}=loadReleaseCheckManifest(ROOT),old=requiredReleaseChecks(manifest,D.sourceProfile),next=requiredReleaseChecks(manifest,M.sourceProfile);
+  assert.equal(next.length,31);assert.deepEqual(next.map(x=>x.id),old.map(x=>x.id));
+  for(let i=0;i<old.length;i++){
+    const prior=old[i].profileCommands?.[D.sourceProfile]||old[i].commands,current=next[i].profileCommands?.[M.sourceProfile]||next[i].commands;
+    if(next[i].id!=='migrations'){assert.deepEqual(current,prior);continue;}
+    assert.equal(current.length,1);const env={...current[0].env};
+    assert.equal(env.FCOS_MIGRATION_PARENT_PROOF_FILE,'/controller/output/disposable-migration-server.json');assert.equal(env.FCOS_MIGRATION_PROJECT_ID,'fcos');
+    delete env.FCOS_MIGRATION_PARENT_PROOF_FILE;delete env.FCOS_MIGRATION_PROJECT_ID;
+    assert.deepEqual({...current[0],env},prior[0]);assert.deepEqual(next[i].profileCommands.application_v2,current);
+  }
+  assert.equal(manifest.sourceProfiles[D.sourceProfile].candidateSha,D.candidateSha);
+  assert.equal(manifest.sourceProfiles[M.sourceProfile].candidateSha,M.candidateSha);
+  assert.equal(firstRuntimeCandidateProfile(M.candidateSha),M.sourceProfile);assert.equal(isFirstRuntimeCandidateSha(M.candidateSha),true);
+  const m=fixtureManifest();m.candidate.sha=M.candidateSha;m.candidate.sourceProfile=M.sourceProfile;assert.doesNotThrow(()=>validateManifest(m));
+  for(const mutate of [v=>v.candidate.sha=D.candidateSha,v=>v.candidate.sourceProfile=D.sourceProfile,v=>delete v.candidate.sourceProfile,v=>v.scope.existingUi=true,v=>v.scope.handoffs=[{kind:'status19',sha256:'a'.repeat(64)}],v=>v.scope.financialAuthority=true]){const changed=structuredClone(m);mutate(changed);assert.throws(()=>validateManifest(changed));}
 });

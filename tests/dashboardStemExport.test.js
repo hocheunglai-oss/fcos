@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { Worker } from 'node:worker_threads';
 import {
   createDashboardStemWorkbook,
   dashboardStemExportFileName,
@@ -356,13 +357,46 @@ test('native XLS preserves Unicode and formula-like text without executing or si
 });
 
 test('native XLS exports more than the legacy worksheet row limit without dropping records', async () => {
-  const rows = Array.from({ length: 65_537 }, (_, index) => ({ name: `STEM-${index}`, currency: 'USD', buyer: 1, netPnl: 0 }));
-  const blob = await createDashboardStemWorkbook({ rows });
-  const book = read(await blob.arrayBuffer(), { type: 'array' });
+  // The browser export uses Uint8Array buffers. SheetJS's Node Buffer writer
+  // retains a 16 KiB backing allocation per cell record, so exercise the actual
+  // browser byte-array path in an isolated worker before importing the module.
+  // Other tests above retain the ordinary Node path and its format checks.
+  const { bytes, type, bufferAbsent } = await new Promise((resolve, reject) => {
+    const worker = new Worker(`
+      const { parentPort, workerData } = require('node:worker_threads');
+      globalThis.Buffer = undefined;
+      (async () => {
+        const { createDashboardStemWorkbook } = await import(workerData.moduleUrl);
+        const rows = Array.from({ length: 65_537 }, (_, index) => ({ name: 'STEM-' + index, currency: 'USD', buyer: 1, netPnl: 0 }));
+        const blob = await createDashboardStemWorkbook({ rows });
+        const bytes = await blob.arrayBuffer();
+        parentPort.postMessage({ bytes, type: blob.type, bufferAbsent: typeof Buffer === 'undefined' }, [bytes]);
+      })().catch(error => { throw error; });
+    `, { eval: true, workerData: { moduleUrl: new URL('../src/lib/dashboardStemExport.js', import.meta.url).href } });
+    let result;
+    worker.once('message', message => { result = message; });
+    worker.once('error', reject);
+    worker.once('exit', code => {
+      if (code !== 0 || !result) reject(new Error(`Browser XLS worker exited without a complete workbook (code ${code}).`));
+      else resolve(result);
+    });
+  });
+  assert.equal(bufferAbsent, true);
+  assert.equal(type, 'application/vnd.ms-excel');
+  // Dense readback avoids retaining a sparse-cell map and two extra matrices.
+  const book = read(Buffer.from(bytes), { type: 'buffer', dense: true, cellNF: true });
   assert.deepEqual(book.SheetNames, ['STEMs 1', 'STEMs 2', 'Scope']);
-  const first = utils.sheet_to_json(book.Sheets['STEMs 1'], { header: 1 });
-  const second = utils.sheet_to_json(book.Sheets['STEMs 2'], { header: 1 });
+  const first = book.Sheets['STEMs 1']['!data'];
+  const second = book.Sheets['STEMs 2']['!data'];
   assert.equal(first.length - 1, 60_000); assert.equal(second.length - 1, 5537);
-  assert.equal(first[1][0], 'STEM-0'); assert.equal(second.at(-1)[0], 'STEM-65536');
+  const headers = ['STEM', 'Delivery / Expected Date', 'Date Source', 'Vessel', 'Buyer', 'Suppliers', 'Products / Quantities', 'Port', 'Country', 'Turnover (USD)', 'Gross Profit (USD)', 'Dispute'];
+  for (const sheet of [first, second]) assert.deepEqual(sheet[0].map(cell => cell.v), headers);
+  for (const [sheet, offset] of [[first, 0], [second, 60_000]]) {
+    for (let index = 1; index < sheet.length; index += 1) {
+      assert.equal(sheet[index][0].v, `STEM-${offset + index - 1}`);
+      assert.equal(sheet[index][9].v, 1); assert.equal(sheet[index][9].t, 'n'); assert.equal(sheet[index][9].z, '#,##0.00');
+    }
+  }
+  assert.equal(first[1][0].v, 'STEM-0'); assert.equal(second.at(-1)[0].v, 'STEM-65536');
   assert.equal(Object.fromEntries(utils.sheet_to_json(book.Sheets.Scope, { header: 1 }))['Exported STEM rows'], '65537');
 });

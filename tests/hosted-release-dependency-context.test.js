@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DIAGNOSTIC_DEPENDENCY_CONTEXT as PIN, dependencyContextCandidate } from '../config/hostedDependencyContext.js';
+import { DIAGNOSTIC_DEPENDENCY_CONTEXT as PIN, VERIFICATION_DEPENDENCY_CONTEXT as VERIFICATION, dependencyContextCandidate } from '../config/hostedDependencyContext.js';
 import { DEPENDENCY_SEED_FILES, sealDependencySeed } from '../scripts/hosted-release-dependency-seed.mjs';
 import { digest, releaseTargets } from '../scripts/lib/hosted-release/contract.mjs';
 import { NOM_B_LEGACY_HISTORY } from '../scripts/lib/hosted-release/dependency-publisher.mjs';
@@ -48,6 +48,24 @@ test('only the exact admitted diagnostic candidate and immutable dependency obje
 test('normal candidates retain their own context and unrelated candidates gain no parent mapping', () => {
   for (const sha of [base, '04ee3425aac7a49089eda781eb3c976aea1f6785', 'c'.repeat(40)])
     assert.equal(dependencyContextCandidate({ candidate: { sha } }), sha);
+});
+
+test('verification-only successor requires its complete exact candidate and the original immutable dependency objects', () => {
+  const m = { candidate: structuredClone(VERIFICATION.candidate), dependencies: structuredClone(publicFixture.dependencies) };
+  assert.equal(VERIFICATION.contextCandidateSha, PIN.contextCandidateSha);
+  for (const field of ['dependenciesSha256','seedSha256','handoffSha256']) assert.equal(VERIFICATION[field],PIN[field]);
+  for (const field of ['configurationSha256','lockSha256','salesforceSourceSha256']) assert.equal(VERIFICATION.candidate[field],PIN.candidate[field]);
+  assert.equal(dependencyContextCandidate(m, { seed: publicFixture.seed, handoff: { ...publicFixture.handoff, manifestHash: 'new-manifest' } }), base);
+  for (const field of Object.keys(m.candidate)) {
+    const changed = structuredClone(m); changed.candidate[field] = field === 'sha' ? PIN.candidate.sha : 'changed';
+    assert.throws(() => dependencyContextCandidate(changed), { code: 'DEPENDENCY_CONTEXT_REQUIRED' });
+  }
+  for (const patch of [{ sha: PIN.candidate.sha }, { sourceProfile: PIN.candidate.sourceProfile }])
+    assert.throws(() => dependencyContextCandidate({ ...m, candidate: { ...m.candidate, ...patch } }), { code: 'DEPENDENCY_CONTEXT_REQUIRED' });
+  for (const dependencies of [undefined, null, {}, { ...m.dependencies, extra: true }])
+    assert.throws(() => dependencyContextCandidate({ ...m, dependencies }), { code: 'DEPENDENCY_CONTEXT_REQUIRED' });
+  assert.throws(() => dependencyContextCandidate(m, { seed: { ...publicFixture.seed, extra: true } }), { code: 'DEPENDENCY_CONTEXT_REQUIRED' });
+  assert.throws(() => dependencyContextCandidate(m, { handoff: { ...publicFixture.handoff, candidateSha: m.candidate.sha } }), { code: 'DEPENDENCY_CONTEXT_REQUIRED' });
 });
 
 function temporary(t) {

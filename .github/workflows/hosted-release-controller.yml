@@ -181,8 +181,18 @@ jobs:
           version: 2.113.0
       - name: Start isolated disposable database
         if: ${{ matrix.group == 'database' && fromJSON(inputs.manifest).candidate.sourceProfile != 'controller_v2' }}
-        run: supabase start -x studio,imgproxy,edge-runtime,logflare,vector,supavisor
+        run: |
+          mkdir -p output
+          mkdir output/disposable-migration-project
+          mkdir output/disposable-migration-project/supabase
+          install -m 0444 config/hosted-migration-fixture.toml output/disposable-migration-project/supabase/config.toml
+          supabase start --workdir output/disposable-migration-project -x studio,imgproxy,edge-runtime,logflare,vector,supavisor
         working-directory: controller
+      - name: Bind disposable database for the isolated candidate
+        if: ${{ matrix.group == 'database' && fromJSON(inputs.manifest).candidate.sourceProfile != 'controller_v2' }}
+        run: node controller/scripts/hosted-release-migration-fixture.mjs
+        env:
+          FCOS_CONTROLLER_SHA: ${{ job.workflow_sha }}
       - name: Run admitted checks
         id: run
         run: node controller/scripts/hosted-release.mjs checks
@@ -202,7 +212,7 @@ jobs:
         if: >-
           ${{ always() && matrix.group == 'database' && fromJSON(inputs.manifest).candidate.sourceProfile !=
           'controller_v2' }}
-        run: supabase stop --no-backup
+        run: supabase stop --no-backup --workdir output/disposable-migration-project
         working-directory: controller
   reconcile:
     if: ${{ needs.prepare.outputs.terminal != 'true' }}
