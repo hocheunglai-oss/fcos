@@ -171,7 +171,7 @@ function buildVercelAdapter({ manifest, candidateDirectory, env = process.env, f
     if (exact.state !== 'READY' || exact.sha !== release.candidate.sha || exact.manifestHash !== digest(release)
       || exact.target !== (phase === 'preview' ? 'preview' : 'production')) fail('ARTIFACT_IDENTITY', phase);
     if (exact.verificationSha256 !== digest(release.verification)) fail('ARTIFACT_BUILD_CONFIGURATION_MISMATCH', phase);
-    assertProjectConfiguration(exact.projectSettings, release.verification.projectSettings);
+    if (!sourceApi) assertProjectConfiguration(exact.projectSettings, release.verification.projectSettings);
     let selection;
     if(release.legacyReleaseContainment || sourceApi){
       if(typeof coordinator?.snapshot!=='function')fail('CONFIGURATION_SELECTION_SOURCE_BUILD_UNPROVEN');
@@ -195,6 +195,15 @@ function buildVercelAdapter({ manifest, candidateDirectory, env = process.env, f
       selection=assertSelectionBuildEvidence(await api(`/v3/deployments/${exact.id}/events?direction=forward&follow=0&limit=-1&builds=1`),exact,release,
         {kind:'fcos_hosted_selection_source_build_v1',registration:snapshot.registration,operation,arguments:args,...(providerReadback?{providerReadback}:{})});
       }
+    }
+    if (sourceApi) {
+      // Source-API preparation permits exactly this checked-in deployment
+      // override. Require its authenticated consumed receipt and guarded build
+      // proof above before comparing effective settings; project admission and
+      // its configuration hash continue to use the unchanged project defaults.
+      const settings = release.verification.projectSettings;
+      assertProjectConfiguration(exact.projectSettings, settings.installCommand === 'npm install'
+        ? { ...settings, installCommand: 'npm ci' } : settings);
     }
     const origin = phase === 'live' ? target.productionOrigin : exact.url;
     const bypass = phase === 'preview' ? env.FCOS_E2E_VERCEL_BYPASS : phase === 'staged' ? env.FCOS_PRODUCTION_VERIFICATION_BYPASS : undefined;

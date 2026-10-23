@@ -17,6 +17,7 @@ import { selectionBuildGuard } from '../scripts/lib/hosted-release/configuration
 import { admitPreviewWriterFixture, admitProductionWriterFixture } from './helpers/hosted-vercel-writer.mjs';
 import { vercelReadFixture } from './helpers/hosted-vercel-read.mjs';
 import { LEGACY_RELEASE_EFFECTS } from '../config/legacyReleaseContainment.js';
+import { PREVIEW_PARITY_POLICY } from '../scripts/lib/preview-parity.mjs';
 
 const H = 'a'.repeat(64), dummy = 'OfflineDummyCredentialOnly';
 function fixture(t) {
@@ -315,14 +316,19 @@ test('timeout is bounded even if the transport ignores abort and never resubmits
   assert.equal(calls, 1); assert.equal(signal.aborted, true);
 });
 
-function integrated(t, { outcome = 'ack', uncertaintyThrows = false, native = false, production = false, deploymentProjectSettings } = {}) {
+function integrated(t, { outcome = 'ack', uncertaintyThrows = false, native = false, production = false, deploymentProjectSettings, healthyRuntime = false } = {}) {
   const f = fixture(t), events = [], admitted = (() => {
+    if (healthyRuntime) f.manifest.runtime.expectedPreview = {
+      flags: Object.fromEntries(PREVIEW_PARITY_POLICY.runtimeFlags.map(key => [key, { state: 'known', value: true }])),
+      safety: { readOnly: true, externalActions: Object.fromEntries(PREVIEW_PARITY_POLICY.externalActions.map(key => [key, false])) },
+      auth: Object.fromEntries(PREVIEW_PARITY_POLICY.requiredAuth.map(key => [key, { state: 'authenticated', target: 'synthetic-' + key, mode: 'application' }]))
+    };
     if(production)asRelease(f);
     if (native) delete f.manifest.verification.vercelSourceTransport;
     const preview=admitPreviewWriterFixture(f.manifest);return f.refreshSetup(production?admitProductionWriterFixture(f.manifest,{previewFixture:preview}):preview);
   })();
   const phase=production?'production.stage':'preview.create';
-  const env = { ...admitted.env }, id = 'dpl_OFFLINE'; let operation, payload, discoverable = false, state = 'BUILDING', begins = 0, posts = 0, uncertainty, afterBegin;
+  const env = { ...admitted.env, ...(healthyRuntime ? { FCOS_RELEASE_PREVIEW_RUNTIME_TOKEN: dummy } : {}) }, id = 'dpl_OFFLINE'; let operation, payload, discoverable = false, state = 'BUILDING', begins = 0, posts = 0, uncertainty, afterBegin;
   const registration = () => ({ release_id: f.manifest.releaseId, epoch: f.manifest.epoch, manifest_hash: digest(f.manifest), manifest: structuredClone(f.manifest) });
   const coordinator = {
     register: async () => { events.push('register'); },
@@ -344,10 +350,19 @@ function integrated(t, { outcome = 'ack', uncertaintyThrows = false, native = fa
     fcosHostedOperation: `${f.manifest.releaseId}-${phase.replaceAll('.','-')}`, fcosHostedManifest: digest(f.manifest), fcosSourceSha256: f.manifest.candidate.sourceSha256,
     fcosVerificationSha256: digest(f.manifest.verification), fcosConfigurationSelectionSha256: digest(selectionBuildGuard(f.manifest).nodeOptions) });
   const raw = () => ({ id, url: 'fcos-abcdef123-hocheunglai-6535s-projects.vercel.app', projectId: f.manifest.targets.vercelProject,
-    ownerId: f.manifest.targets.vercelTeam, readyState: state, source: 'cli', ...(production?{target:'production'}:{}), projectSettings: deploymentProjectSettings ?? f.manifest.verification.projectSettings,
+    ownerId: f.manifest.targets.vercelTeam, readyState: state, source: 'cli', ...(production?{target:'production'}:{}),
+    projectSettings: deploymentProjectSettings ?? { ...f.manifest.verification.projectSettings, ...(!native ? { installCommand: 'npm ci' } : {}) },
     meta: payload?.meta || nativeMetadata() });
   const fetchImpl = async (value, request = {}) => {
     const url = new URL(value), route = url.pathname; events.push(`${request.method || 'GET'} ${route}`);
+    if (healthyRuntime && url.host.endsWith('.vercel.app')) {
+      if (route === '/app-version.json') return Response.json({ commit: f.manifest.candidate.sha, deploymentId: id,
+        provenance: { sourceDigest: f.manifest.candidate.sourceSha256, releaseEligible: true } });
+      assert.equal(route, '/api/connection-runtime'); assert.equal(request.method, 'POST');
+      assert.deepEqual(JSON.parse(request.body), { action: 'probe' });
+      return Response.json({ schemaVersion: 1, capturedAt: new Date().toISOString(), deploymentId: id,
+        sha: f.manifest.candidate.sha, sourceDigest: f.manifest.candidate.sourceSha256, ...f.manifest.runtime.expectedPreview });
+    }
     if (request.method === 'POST') {
       posts++; assert.equal(route, '/v13/deployments'); assert.equal(url.searchParams.get('teamId'), f.manifest.targets.vercelTeam);
       assert.equal(request.redirect, 'error'); payload = JSON.parse(request.body); assert.equal(payload.project, f.manifest.targets.vercelProject);
@@ -447,15 +462,59 @@ test('archive READY requires actual metadata, consumed REST receipt and ordered 
   assert.equal(f.posts, 1);
 });
 
-test('READY keeps project-default snapshot strict while separate native build evidence requires the effective npm ci command', async t => {
+// Public seven-field projections captured for actual run39996371592 / Preview
+// dpl_6r4CARbHWpLtgjH2PPi4FKWm3XH3. Other source/journal/runtime data below is synthetic.
+const savedProjectSettings = { framework: 'vite', buildCommand: 'npm run build', devCommand: null,
+  installCommand: 'npm install', outputDirectory: null, rootDirectory: null, nodeVersion: '24.x' };
+const savedDeploymentSettings = { framework: 'vite', buildCommand: 'npm run build', devCommand: null,
+  installCommand: 'npm ci', outputDirectory: null, nodeVersion: '24.x' }; // Provider omitted the nullable rootDirectory.
+test('READY verifies saved effective source-API settings through actual adapter while preserving admitted project defaults', async t => {
+  const f = integrated(t, { deploymentProjectSettings: savedDeploymentSettings, healthyRuntime: true }), provider = f.adapter();
+  assert.deepEqual(f.manifest.verification.projectSettings, savedProjectSettings);
+  await preparePreview({ manifest: f.manifest, coordinator: f.coordinator, provider }); f.ready();
+  const result = await provider.verifyArtifact({ id: 'dpl_OFFLINE' }, f.manifest, 'preview');
+  assert.equal(result.deployment.projectSettings.installCommand, 'npm ci');
+  assert.equal(result.configurationSelection.sourceBuild.transport, 'rest_api');
+  assert.deepEqual(result.runtime.safety, f.manifest.runtime.expectedPreview.safety);
+  assert.equal(f.posts, 1); assert.equal(f.project.installCommand, 'npm install');
+  assert.deepEqual(f.manifest.verification.projectSettings, savedProjectSettings);
+  assert.equal(f.operation.evidence.result.sourceApi.configurationSha256, digest(savedProjectSettings));
+});
+test('source-API READY refuses wrong deployment install/build/Node/root and retains strict project admission', async t => {
+  for (const patch of [{ installCommand: 'npm install' }, { installCommand: 'npm ci --ignore-scripts' },
+    { buildCommand: 'npm run other' }, { nodeVersion: '22.x' }, { rootDirectory: 'other' },
+    { framework: 'nextjs' }, { devCommand: 'npm run dev' }, { outputDirectory: 'other' }]) {
+    const f = integrated(t, { deploymentProjectSettings: { ...savedDeploymentSettings, ...patch } }), provider = f.adapter();
+    await preparePreview({ manifest: f.manifest, coordinator: f.coordinator, provider }); f.ready();
+    await assert.rejects(provider.verifyArtifact({ id: 'dpl_OFFLINE' }, f.manifest, 'preview'), { code: 'VERCEL_BUILD_CONFIGURATION_CHANGED' });
+    assert.equal(f.events.some(event => event.includes('/app-version.json')), false); assert.equal(f.posts, 1);
+  }
+  for (const patch of [{ installCommand: 'npm ci' }, { buildCommand: 'npm run other' }, { nodeVersion: '22.x' }, { rootDirectory: 'other' },
+    { framework: 'nextjs' }, { devCommand: 'npm run dev' }, { outputDirectory: 'other' }]) {
+    const f = integrated(t), provider = f.adapter(); Object.assign(f.project, patch);
+    await assert.rejects(provider.admit(f.manifest, 'preview'), { code: 'VERCEL_BUILD_CONFIGURATION_CHANGED' }); assert.equal(f.posts, 0);
+  }
+});
+test('effective source-API setting exception requires original complete journal and guarded source build', async t => {
   const f = integrated(t), provider = f.adapter(); await preparePreview({ manifest: f.manifest, coordinator: f.coordinator, provider }); f.ready();
-  assert.equal(f.raw().projectSettings.installCommand, 'npm install');
-  await assert.rejects(provider.verifyArtifact({ id: 'dpl_OFFLINE' }, f.manifest, 'preview'), { code: 'ARTIFACT_READ_FAILED' });
-  assert.equal(f.events.some(event => event.includes('/events')), true);
-  const changed = integrated(t, { deploymentProjectSettings: { ...f.manifest.verification.projectSettings, installCommand: 'npm ci' } }), changedProvider = changed.adapter();
-  await preparePreview({ manifest: changed.manifest, coordinator: changed.coordinator, provider: changedProvider }); changed.ready();
-  await assert.rejects(changedProvider.verifyArtifact({ id: 'dpl_OFFLINE' }, changed.manifest, 'preview'), { code: 'VERCEL_BUILD_CONFIGURATION_CHANGED' });
-  assert.equal(changed.events.some(event => event.includes('/events')), false);
+  const saved = structuredClone(f.operation);
+  for (const mutate of [o => { o.state = 'uncertain'; }, o => { o.evidence.outcome = 'unknown'; },
+    o => { delete o.evidence.result.sourceApi; }, o => { o.evidence.result.sourceApi.configurationSha256 = H; }]) {
+    f.operation = structuredClone(saved); mutate(f.operation); f.events.length = 0;
+    await assert.rejects(provider.verifyArtifact({ id: 'dpl_OFFLINE' }, f.manifest, 'preview'), /SOURCE_BUILD_UNPROVEN/);
+    assert.equal(f.events.some(event => event.includes('/app-version.json')), false);
+  }
+  f.operation = saved; f.events.length = 0;
+  const missingBuildGuard = createVercelAdapter({ manifest: f.manifest, candidateDirectory: f.directory, env: f.env, coordinator: f.coordinator,
+    fetchImpl: (url, options) => new URL(url).pathname.endsWith('/events')
+      ? Response.json([{ text: 'Running "vercel build"' }, { text: 'Running "install" command: `npm install`...' }]) : f.fetchImpl(url, options) });
+  await assert.rejects(missingBuildGuard.verifyArtifact({ id: 'dpl_OFFLINE' }, f.manifest, 'preview'), { code: 'CONFIGURATION_SELECTION_BUILD_UNPROVEN' });
+  assert.equal(f.events.some(event => event.includes('/app-version.json')), false);
+});
+test('the source-API effective setting exception never applies to the original CLI transport', async t => {
+  const f = integrated(t, { native: true, deploymentProjectSettings: savedDeploymentSettings }); f.ready();
+  await assert.rejects(f.adapter().verifyArtifact({ id: 'dpl_OFFLINE' }, f.manifest, 'preview'), { code: 'VERCEL_BUILD_CONFIGURATION_CHANGED' });
+  assert.equal(f.events.some(event => event.includes('/events') || event.includes('/app-version.json')), false);
 });
 
 function asRelease(f) {
