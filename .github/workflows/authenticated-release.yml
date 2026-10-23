@@ -66,9 +66,9 @@ jobs:
       contents: read
       actions: read
       packages: write
-    uses: hocheunglai-oss/fcos/.github/workflows/hosted-release-toolchain.yml@798cfb2d3927f6c37a9dae548893e97ebe8931ed
+    uses: hocheunglai-oss/fcos/.github/workflows/hosted-release-toolchain.yml@ae17dad53d3c3ed201e21290ec81b9f7c8b5288f
     with:
-      source_sha: 798cfb2d3927f6c37a9dae548893e97ebe8931ed
+      source_sha: ae17dad53d3c3ed201e21290ec81b9f7c8b5288f
       intent_sha256: ${{ inputs.intent_sha256 }}
   dependency_setup:
     name: Dependency setup archive
@@ -80,7 +80,7 @@ jobs:
       actions: read
     env:
       FCOS_CONTROLLER_DIRECTORY: controller
-      FCOS_CONTROLLER_SHA: 798cfb2d3927f6c37a9dae548893e97ebe8931ed
+      FCOS_CONTROLLER_SHA: ae17dad53d3c3ed201e21290ec81b9f7c8b5288f
       FCOS_ADMITTED_DEPENDENCY_SEED: ${{ vars.FCOS_ADMITTED_DEPENDENCY_SEED }}
       FCOS_ADMITTED_DEPENDENCY_SEED_SHA256: ${{ vars.FCOS_ADMITTED_DEPENDENCY_SEED_SHA256 }}
       FCOS_DEPENDENCY_SEED_SOURCE: bootstrap/.github/qualification/dependency-setup
@@ -93,7 +93,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: hocheunglai-oss/fcos
-          ref: 798cfb2d3927f6c37a9dae548893e97ebe8931ed
+          ref: ae17dad53d3c3ed201e21290ec81b9f7c8b5288f
           path: controller
           fetch-depth: 0
           persist-credentials: false
@@ -136,7 +136,7 @@ jobs:
       actions: read
     env:
       FCOS_CONTROLLER_DIRECTORY: controller
-      FCOS_CONTROLLER_SHA: 798cfb2d3927f6c37a9dae548893e97ebe8931ed
+      FCOS_CONTROLLER_SHA: ae17dad53d3c3ed201e21290ec81b9f7c8b5288f
       FCOS_ADMITTED_DEPENDENCY_SEED: ${{ vars.FCOS_ADMITTED_DEPENDENCY_SEED }}
       FCOS_ADMITTED_DEPENDENCY_SEED_SHA256: ${{ vars.FCOS_ADMITTED_DEPENDENCY_SEED_SHA256 }}
       FCOS_DEPENDENCY_KEY_OUTPUT: dependency-recipient.json
@@ -147,7 +147,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: hocheunglai-oss/fcos
-          ref: 798cfb2d3927f6c37a9dae548893e97ebe8931ed
+          ref: ae17dad53d3c3ed201e21290ec81b9f7c8b5288f
           path: controller
           fetch-depth: 0
           persist-credentials: false
@@ -180,7 +180,7 @@ jobs:
       FCOS_HOSTED_ENVIRONMENT: fcos-hosted-verification
       FCOS_CONTROLLER_DIRECTORY: controller
       FCOS_CANDIDATE_DIRECTORY: candidate
-      FCOS_CONTROLLER_SHA: 798cfb2d3927f6c37a9dae548893e97ebe8931ed
+      FCOS_CONTROLLER_SHA: ae17dad53d3c3ed201e21290ec81b9f7c8b5288f
       FCOS_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
       FCOS_ADMITTED_DISCOVERY_SETUP: ${{ vars.FCOS_ADMITTED_DISCOVERY_SETUP }}
       FCOS_ADMITTED_DISCOVERY_SETUP_SHA256: ${{ vars.FCOS_ADMITTED_DISCOVERY_SETUP_SHA256 }}
@@ -190,7 +190,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: hocheunglai-oss/fcos
-          ref: 798cfb2d3927f6c37a9dae548893e97ebe8931ed
+          ref: ae17dad53d3c3ed201e21290ec81b9f7c8b5288f
           path: controller
           fetch-depth: 0
           persist-credentials: false
@@ -249,7 +249,7 @@ jobs:
       FCOS_HOSTED_ENVIRONMENT: fcos-hosted-dependency-verification
       FCOS_CONTROLLER_DIRECTORY: controller
       FCOS_CANDIDATE_DIRECTORY: candidate
-      FCOS_CONTROLLER_SHA: 798cfb2d3927f6c37a9dae548893e97ebe8931ed
+      FCOS_CONTROLLER_SHA: ae17dad53d3c3ed201e21290ec81b9f7c8b5288f
       FCOS_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
       FCOS_ADMITTED_PRESERVATION_PREFLIGHT: ${{ vars.FCOS_ADMITTED_PRESERVATION_PREFLIGHT }}
       FCOS_ADMITTED_PRESERVATION_PREFLIGHT_SHA256: ${{ vars.FCOS_ADMITTED_PRESERVATION_PREFLIGHT_SHA256 }}
@@ -259,7 +259,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: hocheunglai-oss/fcos
-          ref: 798cfb2d3927f6c37a9dae548893e97ebe8931ed
+          ref: ae17dad53d3c3ed201e21290ec81b9f7c8b5288f
           path: controller
           fetch-depth: 0
           persist-credentials: false
@@ -321,7 +321,7 @@ jobs:
       FCOS_HOSTED_QUALIFICATION_ADMITTED: ${{ vars.FCOS_HOSTED_QUALIFICATION_ADMITTED }}
       FCOS_CONTROLLER_DIRECTORY: controller
       FCOS_CANDIDATE_DIRECTORY: candidate
-      FCOS_CONTROLLER_SHA: 798cfb2d3927f6c37a9dae548893e97ebe8931ed
+      FCOS_CONTROLLER_SHA: ae17dad53d3c3ed201e21290ec81b9f7c8b5288f
       FCOS_ADMITTED_RELEASE_SETUP: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP }}
       FCOS_ADMITTED_RELEASE_SETUP_SHA256: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP_SHA256 }}
       FCOS_CANDIDATE_SHA: ${{ fromJSON(inputs.resume_manifest || '{}').candidate.sha || inputs.candidate_sha }}
@@ -332,7 +332,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: hocheunglai-oss/fcos
-          ref: 798cfb2d3927f6c37a9dae548893e97ebe8931ed
+          ref: ae17dad53d3c3ed201e21290ec81b9f7c8b5288f
           path: controller
           fetch-depth: 0
           persist-credentials: false
@@ -416,7 +416,7 @@ jobs:
       actions: read
       packages: read
       id-token: write
-    uses: hocheunglai-oss/fcos/.github/workflows/hosted-release-controller.yml@798cfb2d3927f6c37a9dae548893e97ebe8931ed
+    uses: hocheunglai-oss/fcos/.github/workflows/hosted-release-controller.yml@ae17dad53d3c3ed201e21290ec81b9f7c8b5288f
     with:
       manifest: ${{ needs.manifest.outputs.manifest }}
     # Values remain in each called job's protected environment; no secrets: inherit.
@@ -446,9 +446,9 @@ jobs:
       actions: read
       statuses: read
       id-token: write
-    uses: hocheunglai-oss/fcos/.github/workflows/hosted-xero-recovery-carrier.yml@798cfb2d3927f6c37a9dae548893e97ebe8931ed
+    uses: hocheunglai-oss/fcos/.github/workflows/hosted-xero-recovery-carrier.yml@ae17dad53d3c3ed201e21290ec81b9f7c8b5288f
     with:
-      controller_sha: 798cfb2d3927f6c37a9dae548893e97ebe8931ed
+      controller_sha: ae17dad53d3c3ed201e21290ec81b9f7c8b5288f
       template_base64: ${{ inputs.xero_recovery_template_base64 }}
       # Hardcoded purpose: no dispatch input can select the POST entrypoint.
       mode: owner-readback
@@ -468,9 +468,9 @@ jobs:
       actions: read
       statuses: read
       id-token: write
-    uses: hocheunglai-oss/fcos/.github/workflows/hosted-xero-recovery-carrier.yml@798cfb2d3927f6c37a9dae548893e97ebe8931ed
+    uses: hocheunglai-oss/fcos/.github/workflows/hosted-xero-recovery-carrier.yml@ae17dad53d3c3ed201e21290ec81b9f7c8b5288f
     with:
-      controller_sha: 798cfb2d3927f6c37a9dae548893e97ebe8931ed
+      controller_sha: ae17dad53d3c3ed201e21290ec81b9f7c8b5288f
       # Repository public setup, never a dispatch-selected submit template.
       # A paired v3 descriptor uses the reusable same-run public preparation job;
       # only the later real execution job may consume admitted requests.
