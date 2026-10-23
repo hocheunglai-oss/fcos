@@ -184,7 +184,8 @@ export async function runReleaseChecks({ candidateDirectory, controllerDirectory
   if (environment.FCOS_HOSTED_CHECK_EXECUTION === '1') {
     const { inspectCandidateRuntime, isolatedCandidateRunner } = await import('./isolation.mjs');
     runtime = inspectCandidateRuntime({ image: environment.FCOS_HOSTED_CHECK_IMAGE });
-    run = isolatedCandidateRunner({ image: environment.FCOS_HOSTED_CHECK_IMAGE, candidateDirectory, controllerDirectory });
+    run = isolatedCandidateRunner({ image: environment.FCOS_HOSTED_CHECK_IMAGE, candidateDirectory, controllerDirectory,
+      proofSha256: environment.FCOS_HOSTED_MIGRATION_PARENT_PROOF_SHA256 });
   }
   const common = collectCheckBinding({ candidateDirectory, controllerDirectory, controllerSha, expectedCandidateSha, sourceProfile, manifest, manifestSha256, source, ...(runtime ? { runtime } : {}) });
   if (environment.FCOS_HOSTED_CHECK_EXECUTION === '1') {
@@ -224,6 +225,7 @@ export async function runReleaseChecks({ candidateDirectory, controllerDirectory
               cwd: candidateDirectory, env: sanitisedCheckEnvironment({ environment, home, command, candidateDirectory, checkId: check.id,
                 controllerDirectory, controllerSha, candidateSha: expectedCandidateSha }),
               shell: false, stdio: 'inherit', timeout: 60 * 60 * 1000,
+              checkId: check.id, controllerSha, candidateSha: expectedCandidateSha,
             });
             commands.push({ program: command.program, args: command.args, exitCode: result?.status ?? 1 });
             if (collectReleaseCheckSource(candidateDirectory).sourceInputsSha256 !== source.sourceInputsSha256) throw new Error('Candidate execution modified admitted tracked inputs.');

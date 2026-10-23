@@ -131,13 +131,13 @@ test('readonly Vercel adapter uses only pinned GET endpoints and rejects a misma
   assert.equal(deniedCalls, 2);
 });
 
-function fakeLoginBrowser(auth, state, { foreign = false, cleanupFail = false } = {}) {
+function fakeLoginBrowser(auth, state, { foreign = false, cleanupFail = false, failAt = null } = {}) {
   let location = origin, fills = 0, closed = 0;
   const issuer = new URL(FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation.issuer).origin;
-  const response = { status: () => 200, json: async () => auth };
-  const page = { goto: async () => { location = foreign ? 'https://foreign.invalid/admin' : `${origin}/login`; }, url: () => location,
-    getByRole: (_, { name }) => ({ click: async () => { location = name === 'Continue with FCUNO' ? (foreign ? location : `${issuer}/admin`) : origin; } }),
-    getByLabel: () => ({ fill: async () => { fills++; assert.equal(new URL(location).origin, issuer); } }),
+  const response = { status: () => 200, json: async () => { if (failAt === 'identity') throw new SyntaxError('PRIVATE_RESPONSE_BODY'); return auth; } };
+  const page = { goto: async () => { if (failAt === 'navigation') throw Error('PRIVATE_NAVIGATION_TOKEN'); location = foreign ? 'https://foreign.invalid/admin' : `${origin}/login`; }, url: () => location,
+    getByRole: (_, { name }) => ({ click: async () => { if (failAt === 'submit' && name === 'Login') throw Error('PRIVATE_SUBMIT_PASSWORD'); location = name === 'Continue with FCUNO' ? (foreign ? location : `${issuer}/admin`) : origin; } }),
+    getByLabel: () => ({ fill: async () => { if (failAt === 'form') throw Error('PRIVATE_FORM_EMAIL'); fills++; assert.equal(new URL(location).origin, issuer); } }),
     waitForURL: async predicate => { if (!predicate(new URL(location))) throw Error('PRIVATE_WRONG_LOCATION'); }, waitForResponse: async () => response };
   const context = { newPage: async () => page, storageState: async () => state, close: async () => { closed++; if (cleanupFail) throw Error('PRIVATE_CLEANUP_ERROR'); } };
   return { browserType: { launch: async () => ({ newContext: async () => context, close: async () => { closed++; } }) }, counts: () => ({ fills, closed }) };
@@ -148,10 +148,10 @@ test('fresh FCUNO login only fills pinned issuer and yields candidate-only new s
   const login = await loginHostedFcuno({ origin, mode: 'normal_role', credentials: { email: 'normal@example.invalid', password: 'PRIVATE_TEST', expectedRole: 'finance' }, protectionState: {}, browserType: browser.browserType });
   assert.equal(login.token, 'PRIVATE_NEW_TEST_TOKEN'); assert.equal(login.state.cookies.length, 1); assert.deepEqual(browser.counts(), { fills: 2, closed: 2 });
   const foreign = fakeLoginBrowser(identity(), f.state, { foreign: true });
-  await assert.rejects(loginHostedFcuno({ origin, mode: 'normal_role', credentials: { email: 'normal@example.invalid', password: 'PRIVATE_TEST', expectedRole: 'finance' }, protectionState: {}, browserType: foreign.browserType }), /Dedicated hosted FCUNO login failed/);
+  await assert.rejects(loginHostedFcuno({ origin, mode: 'normal_role', credentials: { email: 'normal@example.invalid', password: 'PRIVATE_TEST', expectedRole: 'finance' }, protectionState: {}, browserType: foreign.browserType }), error => error.code === 'RELEASE_BOUNDARY_FAILED' && error.boundary === 'runtime.login.issuer');
   assert.deepEqual(foreign.counts(), { fills: 0, closed: 2 });
   const cleanup = fakeLoginBrowser(identity(), f.state, { cleanupFail: true });
-  await assert.rejects(loginHostedFcuno({ origin, mode: 'normal_role', credentials: { email: 'normal@example.invalid', password: 'PRIVATE_TEST', expectedRole: 'finance' }, protectionState: {}, browserType: cleanup.browserType }), /browser cleanup failed/);
+  await assert.rejects(loginHostedFcuno({ origin, mode: 'normal_role', credentials: { email: 'normal@example.invalid', password: 'PRIVATE_TEST', expectedRole: 'finance' }, protectionState: {}, browserType: cleanup.browserType }), error => error.code === 'RELEASE_BOUNDARY_FAILED' && error.boundary === 'runtime.login.cleanup');
   assert.deepEqual(cleanup.counts(), { fills: 2, closed: 2 });
 });
 
@@ -189,4 +189,25 @@ test('runtime token provider preserves only fixed login phases, never raw privat
     const provider = createHostedRuntimeTokenProvider({ env, verifyTarget, login: async () => { throw Object.assign(Error('PRIVATE_PASSWORD_AND_URL'), { code }); } });
     await assert.rejects(provider({ origin, deployment: f.preview }), error => error.message === expected && !String(error.stack).includes('PRIVATE_PASSWORD_AND_URL'));
   }
+});
+
+
+test('actual login boundaries retain only fixed stages and close both resources after private failures', async t => {
+  const f = fixture(t, 'normal_role');
+  for (const [failAt, boundary] of [['navigation','runtime.login.navigation'],['form','runtime.login.form'],['submit','runtime.login.submit'],['identity','runtime.login.identity']]) {
+    const browser = fakeLoginBrowser(identity(), f.state, { failAt });
+    await assert.rejects(loginHostedFcuno({ origin, mode:'normal_role', credentials:{ email:'normal@example.invalid',password:'PRIVATE_TEST',expectedRole:'finance' }, protectionState:{},browserType:browser.browserType }), error => {
+      assert.equal(error.code,'RELEASE_BOUNDARY_FAILED'); assert.equal(error.boundary,boundary);
+      assert.equal(JSON.stringify(error).includes('PRIVATE'),false); assert.equal(String(error.stack).includes('PRIVATE'),false); return true;
+    });
+    assert.equal(browser.counts().closed,2);
+  }
+});
+
+test('runtime target recheck preserves its closed boundary and cannot reach login on failure', async t => {
+  const f=fixture(t);let logins=0;
+  const provider=createHostedRuntimeTokenProvider({env:{FCOS_HOSTED_RUNTIME_EMAIL:'runtime@example.invalid',FCOS_HOSTED_RUNTIME_PASSWORD:'PRIVATE_RUNTIME',FCOS_HOSTED_RUNTIME_EXPECTED_ROLE:'administrator'},
+    verifyTarget:async()=>{throw Error('PRIVATE_PROVIDER_RESPONSE');},login:async()=>{logins++;}});
+  await assert.rejects(provider({origin,deployment:f.preview}),error=>error.code==='RELEASE_BOUNDARY_FAILED'&&error.boundary==='runtime.identity.target'&&!JSON.stringify(error).includes('PRIVATE'));
+  assert.equal(logins,0);
 });

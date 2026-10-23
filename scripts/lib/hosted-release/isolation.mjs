@@ -1,7 +1,8 @@
-import { spawnSync, execFileSync } from 'node:child_process';
+import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { resolve, sep } from 'node:path';
 import { fail } from './contract.mjs';
+import { BACKEND_RSS_PREFIXES, startBackendRssTransport } from './backend-rss.mjs';
 
 const imagePattern = /^ghcr\.io\/hocheunglai-oss\/fcos-release-checks@sha256:[a-f0-9]{64}$/;
 export function candidateContainerArguments({ image, candidateDirectory, controllerDirectory, program, args, env = {} }) {
@@ -19,11 +20,25 @@ export function candidateContainerArguments({ image, candidateDirectory, control
     '--env', 'HOME=/tmp', '--env', 'TMPDIR=/tmp', '--env', 'PLAYWRIGHT_BROWSERS_PATH=/ms-playwright',
     ...permitted.flatMap(([key, value]) => ['--env', `${key}=${rewrite(value)}`]), image, program, ...args.map(rewrite)];
 }
-export function isolatedCandidateRunner({ image, candidateDirectory, controllerDirectory, spawn = spawnSync }) {
-  return (program, args, options) => spawn('docker', candidateContainerArguments({ image, candidateDirectory, controllerDirectory,
-    program: program.endsWith('python3') ? 'python3' : 'node', args, env: options.env }), {
-    env: { PATH: process.env.PATH, HOME: process.env.HOME }, shell: false, stdio: options.stdio, timeout: options.timeout,
-  });
+export function isolatedCandidateRunner({ image, candidateDirectory, controllerDirectory, spawn: synchronousSpawn = spawnSync,
+  proofSha256, startRss = startBackendRssTransport, asynchronousSpawn = spawn }) {
+  return (program, args, options) => {
+    const dockerArgs = env => candidateContainerArguments({ image, candidateDirectory, controllerDirectory,
+      program: program.endsWith('python3') ? 'python3' : 'node', args, env });
+    const childOptions = { env: { PATH: process.env.PATH, HOME: process.env.HOME }, shell: false, stdio: options.stdio, timeout: options.timeout };
+    if (!BACKEND_RSS_PREFIXES[options.checkId]) return synchronousSpawn('docker', dockerArgs(options.env), childOptions);
+    return (async () => {
+      const transport = await startRss({ controllerDirectory, controllerSha: options.controllerSha,
+        candidateSha: options.candidateSha, checkId: options.checkId, proofSha256 });
+      try {
+        return await new Promise(resolve => {
+          const child = asynchronousSpawn('docker', ['--host', transport.dockerEndpoint, ...dockerArgs({ ...options.env, ...transport.env })], childOptions);
+          child.once('error', error => resolve({ status: null, error }));
+          child.once('close', (status, signal) => resolve({ status, signal }));
+        });
+      } finally { await transport.close(); }
+    })();
+  };
 }
 export function inspectCandidateRuntime({ image, execute = execFileSync }) {
   if (!imagePattern.test(image || '')) fail('CANDIDATE_IMAGE_NOT_ADMITTED');

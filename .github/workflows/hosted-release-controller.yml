@@ -199,6 +199,7 @@ jobs:
         env:
           FCOS_CONTROLLER_SHA: ${{ job.workflow_sha }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ always() && steps.run.outcome != 'skipped' && steps.run.outcome != '' }}
         with:
           name: ${{ format('fcos-{0}-{1}', needs.prepare.outputs.release_id, matrix.group) }}
           path: ${{ format('{0}.json', matrix.group) }}

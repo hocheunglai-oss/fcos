@@ -174,9 +174,9 @@ export async function hostedRelease(command, { env = process.env, wait = sleep, 
 if (process.argv[1] && realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url))) {
   hostedRelease(process.argv[2]).then(result => {
     console.log(JSON.stringify(releaseResultSummary(result)));
-    // The isolated observer can complete successfully with failed candidate checks.
-    // Publish preserves successful records; final readiness still fails closed.
-    if (process.argv[2] !== 'checks' && ['failed','intervention_required'].includes(result.status)) process.exitCode = 1;
+    // Persisted raw reports retain successful records; a failed check must also
+    // fail its job so the workflow UI cannot imply that all checks passed.
+    if (['failed','intervention_required'].includes(result.status)) process.exitCode = 1;
   }).catch(error => {
     const failure = safeFailure(error); console.error(JSON.stringify(failure));
     if (process.env.FCOS_RELEASE_OUTPUT) writeJson(process.env.FCOS_RELEASE_OUTPUT, failure);

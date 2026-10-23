@@ -102,16 +102,16 @@ export async function preparePreview({ manifest, coordinator, provider, now = Da
   const request = provider.preparePreviewRequest
     ? await provider.preparePreviewRequest(manifest, { operationId: `${manifest.releaseId}-preview-create`, existingOperation: snapshot.operations?.['preview.create'] })
     : { candidate: manifest.candidate, target: 'preview' };
-  const preview = await consequential({ manifest, coordinator, phase: 'preview.create', request,
-    submit: context => provider.createPreview(manifest, context), readback: context => provider.discover(manifest, 'preview', context) });
+  const preview = await atReleaseBoundary('preview.operation', () => consequential({ manifest, coordinator, phase: 'preview.create', request,
+    submit: context => provider.createPreview(manifest, context), readback: context => provider.discover(manifest, 'preview', context) }));
   assertDeployment(preview, manifest, 'preview');
   // Building is a dependency, not a false proof failure; a restart polls the same deployment.
-  const ready = await provider.ready(preview);
+  const ready = await atReleaseBoundary('preview.ready', () => provider.ready(preview));
   assertDeployment(ready, manifest, 'preview');
   if (ready.id !== preview.id) fail('DEPLOYMENT_IDENTITY', 'preview.ready');
   if (['ERROR', 'CANCELED'].includes(ready.state)) return { status: 'failed', phase: 'preview.ready', deploymentId: ready.id, state: ready.state };
   if (ready.state !== 'READY') return { status: 'waiting_dependency', phase: 'preview.ready', deploymentId: preview.id };
-  await provider.verifyArtifact(ready, manifest, 'preview');
+  await atReleaseBoundary('preview.artifact', () => provider.verifyArtifact(ready, manifest, 'preview'));
   await evidenceWrite(coordinator, manifest, 'preview.ready', ready, now);
   return { status: 'ready', phase: 'preview.ready', deployment: ready };
 }

@@ -1,8 +1,7 @@
+import { backendRssSampler } from './helpers/backendRss.mjs';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { performance } from 'node:perf_hooks';
 import test from 'node:test';
 import pg from 'pg';
@@ -22,40 +21,7 @@ const partLimit = 256 * 1024;
 const denied = ['accesstoken','refreshtoken','idtoken','authorization','password','clientsecret','apikey','secretkey',
   'servicerolekey','sessiontoken','cookie','setcookie','bearertoken','privatekey','connection','env','client','actorauth'];
 
-async function backendRssSampler(pid, connectionUrl) {
-  const run = promisify(execFile);
-  const port = new URL(connectionUrl).port || '5432';
-  // Supabase CI runs PostgreSQL in a PID namespace. Match the exact published
-  // loopback database port before reading that backend inside its container.
-  const candidates = await run('docker', ['ps', '--filter', `publish=${port}`, '--format', '{{.ID}}'])
-    .then(result => result.stdout.trim().split(/\s+/).filter(Boolean), () => []);
-  const matches = [];
-  for (const id of candidates) {
-    const inspected = JSON.parse((await run('docker', ['inspect', id])).stdout)[0];
-    if ((inspected.NetworkSettings?.Ports?.['5432/tcp'] || []).some(binding => binding.HostPort === port)) matches.push(id);
-  }
-  assert.ok(matches.length <= 1, 'The disposable database port must identify one container');
-  if (matches.length) {
-    const id = matches[0];
-    const command = (await run('docker', ['exec', id, 'cat', `/proc/${pid}/comm`])).stdout.trim();
-    // Linux truncates comm to 15 bytes; the pinned Supabase image runs
-    // .postgres-wrapped. Its readable status does not require ptrace access.
-    assert.ok(['postgres', '.postgres-wrapp'].includes(command), 'The measured container process must be PostgreSQL');
-    return async () => {
-      const status = (await run('docker', ['exec', id, 'cat', `/proc/${pid}/status`])).stdout;
-      const value = Number(status.match(/^VmRSS:\s+(\d+)\s+kB$/m)?.[1]);
-      assert.ok(value > 0, 'The PostgreSQL backend RSS must be measurable');
-      return value;
-    };
-  }
-  const command = (await run('/bin/ps', ['-o', 'comm=', '-p', String(pid)])).stdout.trim();
-  assert.match(command, /(^|\/)postgres(?:$|\s|:)/, 'The measured host process must be PostgreSQL');
-  return async () => {
-    const value = Number((await run('/bin/ps', ['-o', 'rss=', '-p', String(pid)])).stdout.trim());
-    assert.ok(value > 0, 'The PostgreSQL backend RSS must be measurable');
-    return value;
-  };
-}
+
 
 // An independent native-test fixture writer for the public manifest contract.
 function encode(payload) {
@@ -285,16 +251,17 @@ test('native representative 25 MB checkpoint save/load stays bounded and reconst
     ...Array.from({length:24},(_,k)=>[`field${k}`,hash(`${i}:${k}`).repeat(1)])]));}
   const encoded=encode(value),bytes=Buffer.byteLength(text(value));assert.ok(bytes>=20*1024*1024 && bytes<=35*1024*1024);
   const created=await f.create(3600),pid=(await f.client.query('select pg_backend_pid() pid')).rows[0].pid;
-  let peak=0,sampling=false,samples=0;
+  let peak=0,sampling=false,samples=0,sampleError; const pendingSamples=new Set();
   const canMeasure=process.platform==='darwin'||process.platform==='linux';
-  const rss=canMeasure?await backendRssSampler(pid,nativeUrl):null;
+  let rss=null;
+  if(canMeasure){await f.client.query('reset role');try{rss=await backendRssSampler(pid,nativeUrl,f.client);}finally{await f.client.query('set role service_role');}}
   const before=canMeasure?await rss():null;
-  const timer=canMeasure?setInterval(async()=>{if(sampling)return;sampling=true;try{peak=Math.max(peak,await rss());samples++;}catch{}finally{sampling=false;}},25):null;
-  t.after(()=>{if(timer)clearInterval(timer);});
+  const timer=canMeasure?setInterval(()=>{if(sampling)return;sampling=true;const task=rss().then(value=>{peak=Math.max(peak,value);samples++;});pendingSamples.add(task);void task.catch(error=>{sampleError=error;}).finally(()=>{sampling=false;pendingSamples.delete(task);});},25):null;
+  t.after(async()=>{if(timer)clearInterval(timer);await Promise.allSettled(pendingSamples);});
   const start=performance.now();const saved=await f.saveAll(created,encoded);const saveMs=Math.round(performance.now()-start);
   const readStart=performance.now(),read=[];let after=-1,page;
   do{page=await f.rpc('read_chunks_v2',[saved.id,f.scope,after,null]);assert.ok(page.chunks.length<=2);assert.ok(page.chunks.reduce((n,c)=>n+Buffer.byteLength(c.payloadText),0)<=512*1024);read.push(...page.chunks);if(page.chunks.length)after=page.chunks.at(-1).ordinal;}while(page.hasMore);
-  const readMs=Math.round(performance.now()-readStart);if(timer)clearInterval(timer);if(canMeasure)peak=Math.max(peak,await rss());
+  const readMs=Math.round(performance.now()-readStart);if(timer)clearInterval(timer);await Promise.allSettled(pendingSamples);assert.ifError(sampleError);if(canMeasure)peak=Math.max(peak,await rss());
   const loaded=await f.rpc('load_v2',[f.scope,saved.id,null]);const recovered=reconstruct(loaded.payload.manifest,read);
   assert.deepEqual(recovered,value);assert.equal(hash(text(recovered)),encoded.payloadHash);assert.equal(saved.payload_hash,encoded.payloadHash);
   assert.ok(Buffer.byteLength(JSON.stringify(saved))<512*1024);assert.ok(encoded.chunks.every(c=>Buffer.byteLength(c.payloadText)<=partLimit));

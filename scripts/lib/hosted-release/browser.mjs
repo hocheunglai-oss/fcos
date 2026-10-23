@@ -17,6 +17,8 @@ import { PREVIEW_EMAIL_SIGNER_MAILBOX_REGISTRY_ID } from '../preview-email-signe
 import { compatibilityBrowserIsolationVerified } from '../compatibility-browser-isolation.mjs';
 import { createVercelIntegrationReader } from './vercel-read-auth.mjs';
 import { legacyRuntimeLoginFailureCode } from './legacy-hosted-runtime-login.mjs';
+import { ReleaseError } from './json-contract.mjs';
+import { atReleaseBoundary, boundaryFailure } from './failure.mjs';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const FROZEN = '04ee3425aac7a49089eda781eb3c976aea1f6785';
@@ -114,25 +116,30 @@ export async function loginHostedFcuno({ origin, credentials, mode, protectionSt
   const issuer = new URL(FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation.issuer).origin;
   let browser, context;
   try {
-    browser = await browserType.launch({ headless: true, env: launchEnvironment });
-    context = await browser.newContext({ storageState: protectionState, viewport: { width: 1440, height: 1000 }, serviceWorkers: 'block' });
+    browser = await atReleaseBoundary('runtime.login.browser', () => browserType.launch({ headless: true, env: launchEnvironment }));
+    context = await atReleaseBoundary('runtime.login.context', () => browser.newContext({ storageState: protectionState, viewport: { width: 1440, height: 1000 }, serviceWorkers: 'block' }));
     const page = await context.newPage();
-    await page.goto(`${origin}/login`, { waitUntil: 'domcontentloaded', timeout: 45000 });
+    await atReleaseBoundary('runtime.login.navigation', () => page.goto(`${origin}/login`, { waitUntil: 'domcontentloaded', timeout: 45000 }));
     if (new URL(page.url()).origin !== issuer) {
-      await page.getByRole('button', { name: 'Continue with FCUNO', exact: true }).click();
-      await page.waitForURL(url => url.origin === issuer, { timeout: 30000 });
+      await atReleaseBoundary('runtime.login.issuer', async () => {
+        await page.getByRole('button', { name: 'Continue with FCUNO', exact: true }).click();
+        await page.waitForURL(url => url.origin === issuer, { timeout: 30000 });
+      });
     }
     const issuerLocation = () => { const url = new URL(page.url()); requireFact(url.origin === issuer && url.pathname === '/admin'); };
-    issuerLocation(); await page.getByLabel('Username', { exact: true }).fill(credentials.email);
-    issuerLocation(); await page.getByLabel('Password', { exact: true }).fill(credentials.password);
-    issuerLocation();
-    const [response] = await Promise.all([
+    await atReleaseBoundary('runtime.login.form', async () => {
+      issuerLocation(); await page.getByLabel('Username', { exact: true }).fill(credentials.email);
+      issuerLocation(); await page.getByLabel('Password', { exact: true }).fill(credentials.password);
+      issuerLocation();
+    });
+    const [response] = await atReleaseBoundary('runtime.login.submit', () => Promise.all([
       page.waitForResponse(res => res.url() === `${origin}/api/functions/authContext` && res.request().method() === 'POST', { timeout: 60000 }),
       page.getByRole('button', { name: 'Login', exact: true }).click(),
-    ]);
-    await page.waitForURL(url => url.origin === origin && !/\/login(?:\?|$)/.test(url.pathname), { timeout: 30000 });
+    ]));
+    await atReleaseBoundary('runtime.login.callback', () => page.waitForURL(url => url.origin === origin && !/\/login(?:\?|$)/.test(url.pathname), { timeout: 30000 }));
     requireFact(response.status() === 200 && new URL(page.url()).origin === origin);
-    const auth = await response.json(); assertHostedBrowserIdentity(auth, { mode, credentials });
+    const auth = await atReleaseBoundary('runtime.login.identity', () => response.json());
+    atReleaseBoundary('runtime.login.identity', () => assertHostedBrowserIdentity(auth, { mode, credentials }));
     const state = candidateAuthenticationState(await context.storageState(), origin);
     let token;
     if (mode !== 'restricted') {
@@ -142,12 +149,15 @@ export async function loginHostedFcuno({ origin, credentials, mode, protectionSt
       requireFact(typeof token === 'string' && token.length > 0);
     }
     return { state, token, auth };
-  } catch { throw new Error('Dedicated hosted FCUNO login failed.'); }
+  } catch (error) {
+    if (error instanceof ReleaseError) throw error;
+    throw new Error('Dedicated hosted FCUNO login failed.');
+  }
   finally {
     let cleanupFailed = false;
     try { await context?.close(); } catch { cleanupFailed = true; }
     try { await browser?.close(); } catch { cleanupFailed = true; }
-    if (cleanupFailed) throw new Error('Hosted FCUNO browser cleanup failed.');
+    if (cleanupFailed) throw boundaryFailure(null, 'runtime.login.cleanup');
   }
 }
 
@@ -195,7 +205,7 @@ export function createHostedRuntimeTokenProvider({ env = process.env, verifyTarg
       if (typeof verifyTarget !== 'function') setup('runtime_identity_verified_target');
       requireFact(!env.FCOS_HOSTED_NORMAL_EMAIL && !env.FCOS_HOSTED_NORMAL_PASSWORD
         && !env.FCOS_HOSTED_RESTRICTED_EMAIL && !env.FCOS_HOSTED_RESTRICTED_PASSWORD);
-      const proof = await verifyTarget({ origin, deployment });
+      const proof = await atReleaseBoundary('runtime.identity.target', () => verifyTarget({ origin, deployment }));
       requireFact(proof?.verified === true && proof.origin === origin && proof.deploymentId === deployment?.id
         && proof.sha === deployment.sha && SHA.test(proof.sha || '') && HASH.test(proof.sourceSha256 || ''));
       requireFact(origin === new URL(FCOS_CONNECTION_POLICY.attestation.endpoint).origin || canonicalFcosE2eCandidateUrl(origin) === origin);
@@ -211,7 +221,7 @@ export function createHostedRuntimeTokenProvider({ env = process.env, verifyTarg
       requireFact(typeof authenticated.token === 'string' && authenticated.token.length > 0);
       return authenticated.token;
     } catch (error) {
-      if (error instanceof HostedBrowserSetupError) throw error;
+      if (error instanceof HostedBrowserSetupError || error instanceof ReleaseError) throw error;
       const code = legacyRuntimeLoginFailureCode(error);
       if (code) throw Object.assign(new Error(code), { code });
       throw new Error('Hosted runtime identity verification failed.');

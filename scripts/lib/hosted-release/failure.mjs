@@ -6,7 +6,10 @@ import { safeVercelSourceApiFailure } from './vercel-source-api.mjs';
 export const RELEASE_BOUNDARIES = Object.freeze([
   'diagnostic.identity', 'diagnostic.source', 'diagnostic.setup',
   'session.controller', 'session.setup', 'session.source', 'session.github', 'session.identity',
-  'preview.register', 'preview.snapshot', 'preview.admit',
+  'preview.register', 'preview.snapshot', 'preview.admit', 'preview.operation', 'preview.ready', 'preview.artifact',
+  'vercel.artifact.version', 'runtime.protection', 'runtime.identity', 'runtime.identity.target',
+  'runtime.login.browser', 'runtime.login.context', 'runtime.login.navigation', 'runtime.login.issuer',
+  'runtime.login.form', 'runtime.login.submit', 'runtime.login.callback', 'runtime.login.identity', 'runtime.login.cleanup',
   'vercel.manifest', 'vercel.context', 'vercel.credential', 'vercel.source',
   'vercel.version', 'vercel.project', 'vercel.selection_source', 'vercel.selection_environment',
   'vercel.token', 'vercel.project_identity', 'vercel.project_list', 'vercel.user_scope',

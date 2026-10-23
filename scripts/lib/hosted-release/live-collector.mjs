@@ -9,6 +9,7 @@ import { collectRuntimeObservation } from '../../collect-preview-parity.mjs';
 import { createVercelAdapter, createVercelReadAdapter, createVercelProductionObserver } from './vercel.mjs';
 import { collectSchemaSnapshot, collectSchemaObservation, hostedProof } from './observations.mjs';
 import { digest, fail } from './contract.mjs';
+import { atReleaseBoundary } from './failure.mjs';
 import { admittedFirstRuntimeBaseline, assertFirstRuntimeSetup, FIRST_RUNTIME, firstRuntimePrevious, firstRuntimeLegacyBinding, firstRuntimeSourceAbsence, isFirstRuntimePair, firstRuntimeVersionEvidence } from './first-runtime.mjs';
 import { PREVIEW_PARITY_POLICY } from '../preview-parity.mjs';
 import { observeLegacySalesforceApp } from './legacy-salesforce-app-observation.mjs';
@@ -82,8 +83,8 @@ export function createLiveCollector({ session, candidateDirectory, production = 
   const runtimeTokenProvider = async ({ origin, deployment }) => {
     const bypass = deployment.target === 'preview' ? env.FCOS_E2E_VERCEL_BYPASS : env.FCOS_PRODUCTION_VERIFICATION_BYPASS;
     if (!bypass) fail('RUNTIME_PROTECTION_SETUP_REQUIRED');
-    const state = await collectRuntimeProtectionState({ origin, sha: deployment.sha, bypass });
-    return tokenProvider({ origin, deployment, protectionState: state });
+    const state = await atReleaseBoundary('runtime.protection', () => collectRuntimeProtectionState({ origin, sha: deployment.sha, bypass }));
+    return atReleaseBoundary('runtime.identity', () => tokenProvider({ origin, deployment, protectionState: state }));
   };
   const adapter=production || env.FCOS_HOSTED_CREDENTIAL_CLASS==='preview'?createVercelAdapter:createVercelReadAdapter;
   provider = adapter({ manifest, candidateDirectory, env, fetchImpl, now, runtimeTokenProvider, coordinator: session.coordinator,

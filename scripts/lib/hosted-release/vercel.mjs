@@ -212,7 +212,7 @@ function buildVercelAdapter({ manifest, candidateDirectory, env = process.env, f
     try { response = await fetchImpl(`${origin}/app-version.json`, { headers, redirect: 'error', signal: AbortSignal.timeout(20000) }); }
     catch { fail('ARTIFACT_READ_UNAVAILABLE', phase); }
     if (!response.ok || response.redirected) fail('ARTIFACT_READ_FAILED', phase);
-    const version = await response.json();
+    const version = await atReleaseBoundary('vercel.artifact.version', () => response.json());
     if (version.commit !== release.candidate.sha || version.deploymentId !== exact.id
       || version.provenance?.sourceDigest !== release.candidate.sourceSha256 || version.provenance.releaseEligible !== true) fail('ARTIFACT_SOURCE_MISMATCH', phase);
     const runtimeToken = runtimeTokenProvider ? await runtimeTokenProvider({ origin: exact.url, deployment: exact })

@@ -253,3 +253,16 @@ test('first cutover preserves its manifest and completed stage while awaiting on
   assert.equal((await executeHostedProduction(f)).status,'complete');assert.equal(f.events.filter(e=>e==='stage').length,1);assert.equal(f.events.filter(e=>e==='promote').length,1);
   assert.equal(digest(f.manifest),manifestHash);assert.equal(first.reference.json,originalBaseline);
 });
+
+
+test('post-ACK verification failure keeps the original deployment and resumes only its consumer', async () => {
+  const f=fixture();let creates=0;
+  const create=f.provider.createPreview;f.provider.createPreview=async(...args)=>{creates++;return create(...args);};
+  f.provider.ready=async()=>{throw Error('PRIVATE_PROVIDER_RESPONSE');};
+  await assert.rejects(preparePreview(f),error=>{const safe=safeFailure(error);assert.equal(safe.code,'RELEASE_BOUNDARY_FAILED');assert.equal(safe.boundary,'preview.ready');assert.equal(JSON.stringify(safe).includes('PRIVATE'),false);return true;});
+  assert.equal(f.state.operations['preview.create'].state,'complete');assert.equal(creates,1);
+  f.provider.ready=async value=>value;f.provider.verifyArtifact=async()=>{throw new SyntaxError('PRIVATE_BODY');};
+  await assert.rejects(preparePreview(f),error=>safeFailure(error).boundary==='preview.artifact');
+  assert.equal(creates,1);assert.equal(f.events.filter(x=>x==='intent:preview.create').length,1);
+  f.provider.verifyArtifact=async()=>{};assert.equal((await preparePreview(f)).status,'ready');assert.equal(creates,1);
+});
