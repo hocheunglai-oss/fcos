@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { digest } from '../scripts/lib/hosted-release/json-contract.mjs';
 import { SOURCE_UPGRADE_CONTROLLER_REPAIR as S, SOURCE_UPGRADE_DIAGNOSTIC as D,
-  controllerRepairSourceUpgradeTransition, sourceUpgradeActions, validateSourceUpgradeProof } from '../scripts/lib/hosted-release/qualification-source-upgrade.mjs';
+  controllerRepairSourceUpgradeTransition, SOURCE_UPGRADE_SOURCE_ORDER_REPAIR as O, sourceOrderSourceUpgradeTransition, sourceUpgradeActions, validateSourceUpgradeProof } from '../scripts/lib/hosted-release/qualification-source-upgrade.mjs';
 import { sourceUpgradeFixture, repinSourceUpgrade } from './helpers/hosted-qualification-source-upgrade.mjs';
 
 const projection = JSON.parse(readFileSync(new URL('./fixtures/qualification-source-upgrade-controller-repair/parent-projection.json', import.meta.url)));
@@ -97,4 +97,64 @@ test('historical2ef proof and requests remain accepted without mutation', () => 
   assert.doesNotThrow(() => validateSourceUpgradeProof(p));
   assert.equal(JSON.stringify(p), before);
   assert.equal(p.actions[5].request.body.inputs.candidate_sha, '2ef733d17dd12314c72971c2220b2b09903a6bf0');
+});
+
+
+const sourceOrderProjection = JSON.parse(readFileSync(new URL('./fixtures/qualification-source-upgrade-controller-repair/source-order-parent-projection.json', import.meta.url)));
+// Public actual5f source projection only. Every prospective child source,
+// registration, configuration and review below is SYNTHETIC; no provider ERROR,
+// SQL completion or future immutable source publication is manufactured here.
+function sourceOrderFixture() {
+  const p = sourceUpgradeFixture().upgrade, old = structuredClone(sourceOrderProjection);
+  p.parent = { kind: 'source_upgrade', operationId: O.parentOperationId, proofSha256: O.parentProofSha256,
+    releaseId: O.parentReleaseId, manifestHash: O.parentManifestSha256 };
+  p.previous = { setup: old.setup, plan: old.plan, manifest: old.manifest };
+  p.previousPolicy = old.policy; p.previousCheckerManifest = old.checkerManifest;
+  p.setup = structuredClone(old.setup); p.plan = structuredClone(old.plan); p.manifest = structuredClone(old.manifest);
+  p.policy = structuredClone(old.policy); p.checkerManifest = structuredClone(old.checkerManifest);
+  p.checkerFiles = p.checkerFiles.map(f => old.checkerFileOverrides.find(x => x.file === f.file) || f);
+  p.operationId = 'SYNTHETIC-source-order-source-upgrade'; p.plan.releaseId = 'SYNTHETIC-source-order-release';
+  const ref = 'refs/heads/codex/SYNTHETIC-source-order';
+  const q = { ref, bootstrapSha: 'a'.repeat(40), controllerSha: 'b'.repeat(40), candidateSha: D.candidateSha,
+    callerWorkflowRef: 'hocheunglai-oss/fcos/.github/workflows/authenticated-release.yml@' + ref };
+  p.setup.controllerSha = q.controllerSha; p.setup.qualificationSource = q;
+  p.manifest.releaseId = p.plan.releaseId; p.manifest.qualificationSource = q; p.manifest.controller.sha = q.controllerSha;
+  Object.assign(p.policy.qualificationAdmission, { ref, bootstrapSha: q.bootstrapSha, callerWorkflowSha: q.bootstrapSha,
+    callerWorkflowRef: q.callerWorkflowRef, jobWorkflowSha: q.controllerSha,
+    jobWorkflowRef: 'hocheunglai-oss/fcos/.github/workflows/hosted-release-controller.yml@' + q.controllerSha });
+  p.previousConfiguration = { ...p.previousConfiguration, setupSha256: O.parentSetupSha256, policySha256: O.parentPolicySha256 };
+  p.previousRegistrationSha256 = digest('SYNTHETIC current5f registration, not live admission');
+  return repinSourceUpgrade(p);
+}
+
+test('source-order parent is exact5f and known Preview identity is not an UNKNOWN resolution', () => {
+  assert.equal(sourceOrderProjection.proofSha256, O.parentProofSha256);
+  for (const [key, expected] of [['setup', O.parentSetupSha256], ['plan', O.parentPlanSha256],
+    ['manifest', O.parentManifestSha256], ['policy', O.parentPolicySha256]]) assert.equal(digest(sourceOrderProjection[key]), expected);
+  assert.equal(digest(sourceOrderProjection.checkerManifest), D.checkerManifestSha256);
+  assert.equal(O.failedPreviewOperationId, O.parentReleaseId + '-preview-create');
+  assert.equal(O.failedPreviewDeploymentId, 'dpl_D83KCC6C5jUkfTusiNeUJg8ZnSz7');
+  assert.notEqual(O.failedPreviewOperationId, 'fcos-qualification-6a3fbd8f-2ef733d1-source-20261022-preview-create');
+});
+
+test('one5f child preserves exact160/9f8 source and all non-controller contracts', () => {
+  const p = sourceOrderFixture(); assert.equal(sourceOrderSourceUpgradeTransition(p), true);
+  assert.equal(controllerRepairSourceUpgradeTransition(p), false);
+  assert.doesNotThrow(() => validateSourceUpgradeProof(p));
+  assert.deepEqual(p.manifest.candidate, sourceOrderProjection.manifest.candidate);
+  assert.equal(p.manifest.candidate.sourceSha256, D.sourceSha256);
+  assert.deepEqual(p.setup.dependencies, sourceOrderProjection.setup.dependencies);
+  assert.deepEqual(p.manifest.previousProduction, sourceOrderProjection.manifest.previousProduction);
+  assert.deepEqual(p.checkerManifest, sourceOrderProjection.checkerManifest);
+  assert.equal(sourceUpgradeActions(p)[5].request.body.inputs.candidate_sha, D.candidateSha);
+});
+for (const [name, mutate] of mutations) test('source-order-only transition refuses ' + name, () => {
+  const p = sourceOrderFixture(); mutate(p); assert.equal(sourceOrderSourceUpgradeTransition(p), false);
+  assert.throws(() => validateSourceUpgradeProof(repinSourceUpgrade(p)));
+});
+test('5f child cannot rewrite checker bytes, policy rules or final reviews by repinning', () => {
+  for (const mutate of [p => { p.checkerFiles[0].data = 'YWJj'; }, p => { p.policy.workflows = []; },
+    p => { p.rootReview.accepted = false; }, p => { p.rootReview.subjectSha256 = 'c'.repeat(64); }]) {
+    const p = sourceOrderFixture(); mutate(p); assert.throws(() => validateSourceUpgradeProof(p));
+  }
 });

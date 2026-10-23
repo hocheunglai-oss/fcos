@@ -44,6 +44,24 @@ export const SOURCE_UPGRADE_CONTROLLER_REPAIR = Object.freeze({
   parentPlanSha256: '2f545c333bcf837169ce74f66df236d8e4ee51b220e5bbfe177ea650544f12b7',
   parentPolicySha256: 'a6ae94e61696be2715c233e7ac7fd57a26a067b089525f6b6492070d7e098ccb',
 });
+// One source-order repair of the completed5f cycle. These are historical
+// integrity pins, not proof of live completion, provider ERROR or authority.
+// Final SQL must authenticate the exact current parent/known Preview rows and
+// the final reviewed child; no arbitrary descendant is admitted by this helper.
+export const SOURCE_UPGRADE_SOURCE_ORDER_REPAIR = Object.freeze({
+  parentOperationId: 'qualification-source-upgrade-epoch1-controller-context-6edee96c284d-168647669d31-v1',
+  parentProofSha256: '5f4100674f66c1658d59125874348f23a80b5f7f13d23b77112e0fff6ed10757',
+  parentReleaseId: 'fcos-qualification-6edee96c284d-160edccc-context',
+  parentManifestSha256: '57a21f9ccb88ed40cf1cc5e3610da3c66ec6ff139e30d1b0eaa0706ec7951b5d',
+  parentSetupSha256: 'df436795cdc6519b86140074f51c84f5eaf35febb34b107e53f2c1fff3ec99e5',
+  parentPlanSha256: 'ea66d553297f6206c18e0b9f6c8ef729f798f29a7d10e8c23b3873a666af4fbc',
+  parentPolicySha256: 'e4728aa86103de81d67c361b5b4fe31fbfdeb83ec82bddd089668314e6cfce84',
+  failedPreviewOperationId: 'fcos-qualification-6edee96c284d-160edccc-context-preview-create',
+  failedPreviewRequestSha256: '87a4c85c30d2daedaf72c6877ab0dcdddeee48d1b6d6fd9880f6164d3dd78a33',
+  failedPreviewCompleteEvidenceSha256: '314a78405c1129fba89ef05e0582cefdcd14ab0db20d70d66562e599f86e22f2',
+  failedPreviewDeploymentId: 'dpl_D83KCC6C5jUkfTusiNeUJg8ZnSz7',
+  failedPreviewRunId: '39903100527',
+});
 const sha = v => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v);
 const commit = v => typeof v === 'string' && /^[a-f0-9]{40}$/.test(v);
 const exact = (v, keys) => v && Object.getPrototypeOf(v) === Object.prototype && Object.keys(v).length === keys.length && keys.every(k => Object.hasOwn(v, k));
@@ -96,6 +114,31 @@ export function diagnosticSourceUpgradeTransition(p, { now = Date.now() } = {}) 
 export function controllerRepairSourceUpgradeTransition(p) {
   try {
     const s = SOURCE_UPGRADE_CONTROLLER_REPAIR, candidate = SOURCE_UPGRADE_DIAGNOSTIC, old = p.previous, q = qSource(p);
+    return equal(p.parent, { kind: 'source_upgrade', operationId: s.parentOperationId, proofSha256: s.parentProofSha256,
+      releaseId: s.parentReleaseId, manifestHash: s.parentManifestSha256 })
+      && digest(old.setup) === s.parentSetupSha256 && digest(old.plan) === s.parentPlanSha256
+      && digest(old.manifest) === s.parentManifestSha256 && digest(p.previousPolicy) === s.parentPolicySha256
+      && digest(p.previousCheckerManifest) === candidate.checkerManifestSha256
+      && equal(p.checkerManifest, p.previousCheckerManifest)
+      && equal(old.manifest.candidate, { sha: candidate.candidateSha, sourceProfile: candidate.sourceProfile,
+        sourceSha256: candidate.sourceSha256, sourceInputsSha256: candidate.sourceInputsSha256,
+        lockSha256: candidate.lockSha256, configurationSha256: candidate.configurationSha256,
+        salesforceSourceSha256: candidate.salesforceSourceSha256, branch: candidate.branch })
+      && q.candidateSha === candidate.candidateSha && commit(q.controllerSha) && commit(q.bootstrapSha)
+      && q.controllerSha !== old.setup.controllerSha && q.bootstrapSha !== old.setup.qualificationSource.bootstrapSha
+      && q.ref !== old.setup.qualificationSource.ref
+      && equal(without(p.setup, 'controllerSha', 'qualificationSource'), without(old.setup, 'controllerSha', 'qualificationSource'))
+      && equal(without(p.plan, 'releaseId'), without(old.plan, 'releaseId'))
+      && equal(without(p.manifest.controller, 'sha'), without(old.manifest.controller, 'sha'))
+      && equal(without(p.manifest, 'releaseId', 'setupSha256', 'qualificationSource', 'controller'),
+        without(old.manifest, 'releaseId', 'setupSha256', 'qualificationSource', 'controller'));
+  } catch { return false; }
+}
+// Structural integrity only; actual parent6/6/2, terminal owned run and
+// known-applied ERROR Preview are separately authenticated admission duties.
+export function sourceOrderSourceUpgradeTransition(p) {
+  try {
+    const s = SOURCE_UPGRADE_SOURCE_ORDER_REPAIR, candidate = SOURCE_UPGRADE_DIAGNOSTIC, old = p.previous, q = qSource(p);
     return equal(p.parent, { kind: 'source_upgrade', operationId: s.parentOperationId, proofSha256: s.parentProofSha256,
       releaseId: s.parentReleaseId, manifestHash: s.parentManifestSha256 })
       && digest(old.setup) === s.parentSetupSha256 && digest(old.plan) === s.parentPlanSha256
@@ -169,7 +212,7 @@ export function validateSourceUpgradeProof(p, { now = Date.now(), previewQuarant
     && digest(p.previousPolicy) === SOURCE_UPGRADE.initialPolicySha256);
   const q = qSource(p), old = p.previous;
   const diagnosticChange = diagnosticSourceUpgradeTransition(p, { now });
-  const controllerRepair = controllerRepairSourceUpgradeTransition(p);
+  const controllerRepair = controllerRepairSourceUpgradeTransition(p) || sourceOrderSourceUpgradeTransition(p);
   const selectedCandidate = diagnosticChange || controllerRepair ? SOURCE_UPGRADE_DIAGNOSTIC.candidateSha : SOURCE_UPGRADE.candidateSha;
   const checkerChange=exactPreviewCheckerChange(p,previewQuarantine);
   const transportChange=checkerChange && p.setup.verification?.vercelSourceTransport==='fcos_source_api_archive_v1'

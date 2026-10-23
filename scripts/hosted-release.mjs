@@ -16,6 +16,16 @@ import { collectCompatibilitySuccessor } from './lib/hosted-release/successor.mj
 
 const commands = new Set(['prepare','checks','reconcile','preview','observe','browser','publish','ready','approve','execute','qualify','qualify-publish']);
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+export function releaseResultSummary(result) {
+  const summary = { status: result.status, phase: result.phase, missing: result.missing };
+  if (result.status === 'failed' && result.phase === 'preview.ready'
+    && typeof result.deploymentId === 'string' && /^dpl_[A-Za-z0-9]{1,128}$/.test(result.deploymentId)
+    && ['ERROR', 'CANCELED'].includes(result.state)) {
+    summary.deploymentId = result.deploymentId;
+    summary.state = result.state;
+  }
+  return summary;
+}
 function previewFrom(snapshot) {
   const item = snapshot.checks?.['preview.ready']; const value = item?.evidence?.result || item?.result;
   if (!value) fail('PREVIEW_EVIDENCE_PENDING', 'preview.ready', 'Resume the original Preview operation.'); return value;
@@ -163,7 +173,7 @@ export async function hostedRelease(command, { env = process.env, wait = sleep, 
 
 if (process.argv[1] && realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url))) {
   hostedRelease(process.argv[2]).then(result => {
-    console.log(JSON.stringify({ status: result.status, phase: result.phase, missing: result.missing }));
+    console.log(JSON.stringify(releaseResultSummary(result)));
     // The isolated observer can complete successfully with failed candidate checks.
     // Publish preserves successful records; final readiness still fails closed.
     if (process.argv[2] !== 'checks' && ['failed','intervention_required'].includes(result.status)) process.exitCode = 1;

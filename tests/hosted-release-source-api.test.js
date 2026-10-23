@@ -9,7 +9,7 @@ import { randomBytes } from 'node:crypto';
 import tarStream from 'tar-stream';
 import { collectBuildProvenance } from '../scripts/lib/build-provenance.mjs';
 import { fixtureManifest } from './helpers/hosted-release-manifest.mjs';
-import { digest } from '../scripts/lib/hosted-release/contract.mjs';
+import { canonical, digest } from '../scripts/lib/hosted-release/contract.mjs';
 import { createVercelSourceArchive, prepareVercelSourceApiRequest, executeVercelSourceApiRequest, safeVercelSourceApiFailure, SOURCE_API_TRANSPORT, prepareVercelProjectActionRequest, executeVercelProjectActionRequest } from '../scripts/lib/hosted-release/vercel-source-api.mjs';
 import { createVercelAdapter } from '../scripts/lib/hosted-release/vercel.mjs';
 import { preparePreview, reconcilePending, safeFailure, consequential } from '../scripts/lib/hosted-release/controller.mjs';
@@ -182,6 +182,46 @@ test('all extracted file bytes/modes reproduce the exact source digest and execu
   try { execFileSync(process.execPath, ['-e', "process.stderr.write('CANDIDATE_MARKER\\n')"], { cwd: extracted, env: { ...env, VERCEL_GIT_COMMIT_REF: 'foreign' }, stdio: ['ignore', 'pipe', 'pipe'] }); } catch (error) { refused = error; }
   assert.equal(refused.status, 1); assert.equal(refused.stderr.toString().includes('FCOS_CONFIGURATION_SELECTION_REFUSED'), true);
   assert.equal(refused.stderr.toString().includes('CANDIDATE_MARKER\n'), false);
+});
+
+test('Preview and Production config overlays retain nested key order and the exact archived source fingerprint', async t => {
+  for (const production of [false, true]) await t.test(production ? 'Production' : 'Preview', async t => {
+    const f = production ? integrated(t, { production: true }) : fixture(t);
+    const configPath = join(f.directory, 'vercel.json');
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    // Match the formatted source configuration used by the observed build.
+    const original = JSON.stringify(config, null, 2) + '\n';
+    writeFileSync(configPath, original); f.commit(); f.refresh();
+    const phase = production ? 'production.stage' : 'preview.create';
+    const prepared = await f.prepare({ phase, operationId: `${f.manifest.releaseId}-${phase.replaceAll('.', '-')}` });
+    const payload = JSON.parse(prepared.body), entries = await archiveEntries(payload);
+    const extracted = realpathSync(mkdtempSync(join(tmpdir(), 'fcos-source-config-overlay-')));
+    t.after(() => rmSync(extracted, { recursive: true, force: true }));
+    for (const entry of entries) {
+      const file = join(extracted, entry.header.name); mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, entry.bytes); chmodSync(file, entry.header.mode);
+    }
+    const archived = JSON.parse(readFileSync(join(extracted, 'vercel.json'), 'utf8'));
+    const overlay = body => JSON.stringify({ ...archived,
+      ...Object.fromEntries(Object.keys(archived).map(key => [key, body[key]])) }, null, 2) + '\n';
+    assert.deepEqual(Object.keys(payload.rewrites[0]), ['source', 'destination']);
+    assert.equal(overlay(payload), original);
+    writeFileSync(join(extracted, 'vercel.json'), overlay(payload));
+    const env = { FCOS_BUILD_COMMIT_SHA: f.manifest.candidate.sha,
+      FCOS_EXPECTED_SOURCE_SHA256: f.manifest.candidate.sourceSha256 };
+    assert.equal(collectBuildProvenance({ cwd: extracted, requireClean: true, env }).sourceDigest,
+      f.manifest.candidate.sourceSha256);
+    // The old transport is semantically equivalent JSON but changes the file
+    // bytes after the same overlay, reproducing the hosted attestation refusal.
+    const sorted = JSON.parse(canonical(payload));
+    assert.notEqual(overlay(sorted), original);
+    writeFileSync(join(extracted, 'vercel.json'), overlay(sorted));
+    assert.throws(() => collectBuildProvenance({ cwd: extracted, requireClean: true, env }),
+      /source digest does not match/);
+    assert.equal(prepared.receipt.bodySha256, digest(prepared.body));
+    assert.equal(prepared.receipt.requestHash, digest(prepared.intent));
+    assert.equal((await f.prepare({ phase, operationId: prepared.receipt.operationId })).body, prepared.body);
+  });
 });
 
 test('qualification cannot prepare Production stage, actions, or arbitrary operation IDs', async t => {

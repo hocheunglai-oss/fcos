@@ -352,6 +352,7 @@ jobs:
           FCOS_HOSTED_VERCEL_TOKEN_ID: ${{ vars.FCOS_HOSTED_VERCEL_TOKEN_ID }}
           FCOS_E2E_VERCEL_BYPASS: ${{ secrets.FCOS_E2E_VERCEL_BYPASS }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ always() && steps.run.outcome != 'skipped' && steps.run.outcome != '' }}
         with:
           name: ${{ format('fcos-{0}-preview', needs.prepare.outputs.release_id) }}
           path: preview.json

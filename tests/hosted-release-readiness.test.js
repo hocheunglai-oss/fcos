@@ -15,6 +15,19 @@ import { admittedReadiness, consumeHostedReadiness, createReadinessReader, READI
 import { hostedReadinessEntrypoint, produceHostedReadiness } from '../scripts/hosted-release-readiness.mjs';
 
 const require = createRequire(import.meta.url), H = 'a'.repeat(64);
+test('failed Preview keeps its exact result artifact without changing the failed run outcome', () => {
+  const workflow = load(readFileSync(new URL('../.github/workflows/hosted-release-controller.yml', import.meta.url), 'utf8'));
+  const preview = workflow.jobs.preview, run = preview.steps.find(step => step.id === 'run');
+  const upload = preview.steps.find(step => step.uses?.startsWith('actions/upload-artifact@'));
+  assert.equal(run.run, 'node controller/scripts/hosted-release.mjs preview');
+  assert.notEqual(run['continue-on-error'], true);
+  assert.equal(preview.env.FCOS_RELEASE_OUTPUT, 'preview.json');
+  assert.equal(upload.if, "${{ always() && steps.run.outcome != 'skipped' && steps.run.outcome != '' }}");
+  assert.equal(upload.with.path, 'preview.json');
+  assert.equal(upload.with['if-no-files-found'], 'error');
+  assert.equal(upload.with['retention-days'], 30);
+  assert.equal(upload.with.overwrite, false);
+});
 function zip(filename, payload) {
   const directory = mkdtempSync(join(tmpdir(), 'fcos-readiness-zip-'));
   try { writeFileSync(join(directory, filename), JSON.stringify(payload)); execFileSync('zip', ['-q','proof.zip',filename], { cwd: directory }); return readFileSync(join(directory, 'proof.zip')); }

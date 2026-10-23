@@ -15,10 +15,24 @@ import { releaseTiming, releaseNotification, assertNotificationDeliveryReceipt }
 import { assertProjectConfiguration, deploymentArguments } from '../scripts/lib/hosted-release/vercel.mjs';
 import { collectRuntimeProtectionState } from '../scripts/lib/hosted-release/live-collector.mjs';
 import { collectCompatibilitySuccessor } from '../scripts/lib/hosted-release/successor.mjs';
-import { verificationPlan } from '../scripts/hosted-release.mjs';
+import { verificationPlan, releaseResultSummary } from '../scripts/hosted-release.mjs';
 import { hostedProof } from '../scripts/lib/hosted-release/observations.mjs';
 
 const H='a'.repeat(64), image=`ghcr.io/hocheunglai-oss/fcos-release-checks@sha256:${H}`;
+test('known failed Preview summary retains only its public deployment identity and terminal state', () => {
+  const known = { status: 'failed', phase: 'preview.ready', deploymentId: 'dpl_Fixture123', state: 'ERROR' };
+  const publicSummary = value => JSON.parse(JSON.stringify(releaseResultSummary(value)));
+  assert.deepEqual(publicSummary({ ...known, token: 'PRIVATE_SENTINEL', rawProviderError: 'PRIVATE_SENTINEL' }), known);
+  assert.deepEqual(publicSummary({ ...known, state: 'CANCELED' }), { ...known, state: 'CANCELED' });
+  for (const patch of [{ deploymentId: 'dpl_bad\nPRIVATE_SENTINEL' }, { state: 'PRIVATE_SENTINEL' },
+    { deploymentId: { toString: () => 'dpl_Fixture123', privateField: 'PRIVATE_SENTINEL' } },
+    { phase: 'preview.create' }, { status: 'waiting_dependency' }]) {
+    const result = publicSummary({ ...known, ...patch, token: 'PRIVATE_SENTINEL' });
+    assert.equal(Object.hasOwn(result, 'deploymentId'), false);
+    assert.equal(Object.hasOwn(result, 'state'), false);
+    assert.equal(JSON.stringify(result).includes('PRIVATE_SENTINEL'), false);
+  }
+});
 test('hosted public publishable-key alias preserves controller credential isolation', () => {
   const values = { VITE_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_public_fixture' };
   const f = setupFixture();

@@ -191,7 +191,11 @@ export async function prepareVercelSourceApiRequest({ manifest, candidateDirecto
     env: { FCOS_BUILD_COMMIT_SHA: manifest.candidate.sha, ...(!production ? { FCOS_ENABLE_READ_ONLY_CI: 'true' } : {}) },
     build: { env: { ...manifest.verification.publicBuildEnvironment, FCOS_BUILD_COMMIT_SHA: manifest.candidate.sha,
       FCOS_EXPECTED_SOURCE_SHA256: manifest.candidate.sourceSha256, NODE_OPTIONS: guard.nodeOptions } } };
-  const body = canonical(payload), bodyBytes = Buffer.byteLength(body);
+  // Validate strict JSON without sorting the HTTP payload: Vercel merges these
+  // configuration overrides into vercel.json, including nested property order.
+  // Sorting a rewrite's keys changes the source bytes covered by provenance.
+  canonical(payload);
+  const body = JSON.stringify(payload), bodyBytes = Buffer.byteLength(body);
   if (bodyBytes > SOURCE_API_MAX_BODY_BYTES) fail('SOURCE_API_PAYLOAD_TOO_LARGE');
   // Catch changes during inventory capture, including assume-unchanged bytes.
   assertSource(manifest, directory);
