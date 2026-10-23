@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DIAGNOSTIC_DEPENDENCY_CONTEXT as PIN, VERIFICATION_DEPENDENCY_CONTEXT as VERIFICATION, dependencyContextCandidate } from '../config/hostedDependencyContext.js';
+import { DIAGNOSTIC_DEPENDENCY_CONTEXT as PIN, VERIFICATION_DEPENDENCY_CONTEXT as VERIFICATION, MEASUREMENT_DEPENDENCY_CONTEXT as MEASUREMENT, dependencyContextCandidate } from '../config/hostedDependencyContext.js';
 import { DEPENDENCY_SEED_FILES, sealDependencySeed } from '../scripts/hosted-release-dependency-seed.mjs';
 import { digest, releaseTargets } from '../scripts/lib/hosted-release/contract.mjs';
 import { NOM_B_LEGACY_HISTORY } from '../scripts/lib/hosted-release/dependency-publisher.mjs';
@@ -244,4 +244,20 @@ test('NomB historical handoff is validated unchanged while new evidence retains 
   const result = JSON.parse(child.stdout); assert.equal(result.candidateSha, PIN.candidate.sha); assert.equal(result.capturedAt, f.live.completedAt); assert.equal(result.result.financialAuthority, false);
   payload.handoff.artifacts.cleanup = 'f'.repeat(64); writeFileSync(input, JSON.stringify(payload));
   const bad = run(); assert.equal(bad.status, 1); assert.ok(bad.stderr.includes('NOM_B_DEPENDENCY_REVALIDATION_REQUIRED'));
+});
+
+
+test('measurement-only successor retains original AAD only for its complete exact candidate and immutable dependency objects',()=>{
+  const m={candidate:structuredClone(MEASUREMENT.candidate),dependencies:structuredClone(publicFixture.dependencies)};
+  assert.equal(m.candidate.sha,'8d4cb87391c55de6debab92b9ab34827af17bea3');assert.equal(m.candidate.sourceProfile,'compat_database_measurement_20261024');
+  assert.equal(MEASUREMENT.contextCandidateSha,VERIFICATION.contextCandidateSha);
+  for(const field of ['dependenciesSha256','seedSha256','handoffSha256'])assert.equal(MEASUREMENT[field],VERIFICATION[field]);
+  for(const field of ['configurationSha256','lockSha256','salesforceSourceSha256','branch'])assert.equal(m.candidate[field],VERIFICATION.candidate[field]);
+  for(const field of ['sourceSha256','sourceInputsSha256'])assert.notEqual(m.candidate[field],VERIFICATION.candidate[field]);
+  assert.equal(dependencyContextCandidate(m,{seed:publicFixture.seed,handoff:{...publicFixture.handoff,manifestHash:'measurement-manifest'}}),base);
+  for(const field of Object.keys(m.candidate)){const changed=structuredClone(m);changed.candidate[field]=field==='sha'?VERIFICATION.candidate.sha:'changed';assert.throws(()=>dependencyContextCandidate(changed),{code:'DEPENDENCY_CONTEXT_REQUIRED'});}
+  for(const patch of [{sha:VERIFICATION.candidate.sha},{sourceProfile:VERIFICATION.candidate.sourceProfile}])assert.throws(()=>dependencyContextCandidate({...m,candidate:{...m.candidate,...patch}}),{code:'DEPENDENCY_CONTEXT_REQUIRED'});
+  for(const dependencies of [undefined,null,{}, {...m.dependencies,extra:true}])assert.throws(()=>dependencyContextCandidate({...m,dependencies}),{code:'DEPENDENCY_CONTEXT_REQUIRED'});
+  assert.throws(()=>dependencyContextCandidate(m,{seed:{...publicFixture.seed,extra:true}}),{code:'DEPENDENCY_CONTEXT_REQUIRED'});
+  assert.throws(()=>dependencyContextCandidate(m,{handoff:{...publicFixture.handoff,candidateSha:m.candidate.sha}}),{code:'DEPENDENCY_CONTEXT_REQUIRED'});
 });

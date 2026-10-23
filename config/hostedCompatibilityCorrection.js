@@ -106,14 +106,48 @@ export const COMPATIBILITY_VERIFICATION_CORRECTION = Object.freeze({
   "salesforceMetadataChanged": false,
   "cronSchedulesChanged": false
 });
+// Measurement-only child: backend RSS crosses the verified parent boundary; business/runtime source and historical pins stay unchanged.
+export const COMPATIBILITY_MEASUREMENT_CORRECTION = Object.freeze({
+  "baseSha": "bf517a8ba86f8c210eacd2b9dd859ca7c4d48e3d",
+  "candidateSha": "8d4cb87391c55de6debab92b9ab34827af17bea3",
+  "sourceProfile": "compat_database_measurement_20261024",
+  "kind": "explicit_native_database_measurement_harness_correction",
+  "files": [
+    {
+      "path": "scripts/lib/hosted-release/backend-rss.mjs",
+      "sha256": "e0393d24af2ddd88f7525d122b498c17ab7bfb9f0c5f7de4d85d6c5638bffcd2",
+      "gitBlob": "724178822ef017aba994f2677778bb0582dcab44"
+    },
+    {
+      "path": "tests/helpers/backendRss.mjs",
+      "sha256": "1a6ca017469978a7be8090e1b0efd2933cf00c3b9a555f119e1ffc65456f949c",
+      "gitBlob": "2fff36aa6b4c5c66a66b6cc064ccb49b82c8f8f2"
+    },
+    {
+      "path": "tests/xeroPreviewCheckpointChunksDatabase.test.js",
+      "sha256": "15eb234c8d2d5b5b3b9b5e0d5b7fa5c538ac0125608cb1f9ddaea6343bc70880",
+      "gitBlob": "8c3866c508e893525ab884bddab7ca7b067a7562"
+    },
+    {
+      "path": "tests/xeroPreviewPaymentsReferenceDatabase.test.js",
+      "sha256": "d87fb429750125741760749453b13206cf3f84c217ec30cc0481e3cf2dcf8078",
+      "gitBlob": "064403100ab0a8d320ce6ebe074cf26320a4aa10"
+    }
+  ],
+  "existingUi": false,
+  "handoffs": [],
+  "salesforceMetadataChanged": false,
+  "cronSchedulesChanged": false
+});
 export function isFirstRuntimeCandidateSha(value) {
   return value === COMPATIBILITY_CORRECTION.baseSha || value === COMPATIBILITY_CORRECTION.candidateSha
-    || value === COMPATIBILITY_CONFIGURATION_CORRECTION.candidateSha || value === COMPATIBILITY_DIAGNOSTIC_CORRECTION.candidateSha || value === COMPATIBILITY_VERIFICATION_CORRECTION.candidateSha;
+    || value === COMPATIBILITY_CONFIGURATION_CORRECTION.candidateSha || value === COMPATIBILITY_DIAGNOSTIC_CORRECTION.candidateSha || value === COMPATIBILITY_VERIFICATION_CORRECTION.candidateSha || value === COMPATIBILITY_MEASUREMENT_CORRECTION.candidateSha;
 }
 export function firstRuntimeCandidateProfile(value) {
   return value === COMPATIBILITY_CORRECTION.baseSha ? 'frozen_04ee'
     : value === COMPATIBILITY_CORRECTION.candidateSha ? COMPATIBILITY_CORRECTION.sourceProfile
       : value === COMPATIBILITY_CONFIGURATION_CORRECTION.candidateSha ? COMPATIBILITY_CONFIGURATION_CORRECTION.sourceProfile
         : value === COMPATIBILITY_DIAGNOSTIC_CORRECTION.candidateSha ? COMPATIBILITY_DIAGNOSTIC_CORRECTION.sourceProfile
-          : value === COMPATIBILITY_VERIFICATION_CORRECTION.candidateSha ? COMPATIBILITY_VERIFICATION_CORRECTION.sourceProfile : null;
+          : value === COMPATIBILITY_VERIFICATION_CORRECTION.candidateSha ? COMPATIBILITY_VERIFICATION_CORRECTION.sourceProfile
+            : value === COMPATIBILITY_MEASUREMENT_CORRECTION.candidateSha ? COMPATIBILITY_MEASUREMENT_CORRECTION.sourceProfile : null;
 }

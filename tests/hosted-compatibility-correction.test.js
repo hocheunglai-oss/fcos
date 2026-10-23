@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {COMPATIBILITY_CORRECTION as C,COMPATIBILITY_CONFIGURATION_CORRECTION as V,COMPATIBILITY_DIAGNOSTIC_CORRECTION as D,COMPATIBILITY_VERIFICATION_CORRECTION as M,isFirstRuntimeCandidateSha,firstRuntimeCandidateProfile} from '../config/hostedCompatibilityCorrection.js';
+import {COMPATIBILITY_CORRECTION as C,COMPATIBILITY_CONFIGURATION_CORRECTION as V,COMPATIBILITY_DIAGNOSTIC_CORRECTION as D,COMPATIBILITY_VERIFICATION_CORRECTION as M,COMPATIBILITY_MEASUREMENT_CORRECTION as N,isFirstRuntimeCandidateSha,firstRuntimeCandidateProfile} from '../config/hostedCompatibilityCorrection.js';
 import {loadReleaseCheckManifest,requiredReleaseChecks} from '../scripts/lib/hosted-release/checks.mjs';
 import {validateManifest} from '../scripts/lib/hosted-release/contract.mjs';
 import {fixtureManifest} from './helpers/hosted-release-manifest.mjs';
@@ -110,4 +110,25 @@ test('verification profile preserves all31 checks and changes only the exact dis
   assert.equal(firstRuntimeCandidateProfile(M.candidateSha),M.sourceProfile);assert.equal(isFirstRuntimeCandidateSha(M.candidateSha),true);
   const m=fixtureManifest();m.candidate.sha=M.candidateSha;m.candidate.sourceProfile=M.sourceProfile;assert.doesNotThrow(()=>validateManifest(m));
   for(const mutate of [v=>v.candidate.sha=D.candidateSha,v=>v.candidate.sourceProfile=D.sourceProfile,v=>delete v.candidate.sourceProfile,v=>v.scope.existingUi=true,v=>v.scope.handoffs=[{kind:'status19',sha256:'a'.repeat(64)}],v=>v.scope.financialAuthority=true]){const changed=structuredClone(m);mutate(changed);assert.throws(()=>validateManifest(changed));}
+});
+
+
+test('measurement successor is exactly four reviewed verification paths above the immutable six-file predecessor',()=>{
+  assert.equal(N.baseSha,M.candidateSha);assert.equal(git('rev-parse',`${N.candidateSha}^`),N.baseSha);
+  assert.deepEqual(git('diff-tree','--no-commit-id','--name-only','-r',N.baseSha,N.candidateSha).split('\n'),N.files.map(f=>f.path));
+  assert.equal(N.files.length,4);
+  for(const f of N.files){const bytes=execFileSync('git',['show',`${N.candidateSha}:${f.path}`],{cwd:ROOT});assert.equal(createHash('sha256').update(bytes).digest('hex'),f.sha256);assert.equal(git('rev-parse',`${N.candidateSha}:${f.path}`),f.gitBlob);}
+  for(const path of ['src','api','force-app','supabase','vercel.json','config','.github/workflows','package.json','package-lock.json'])assert.equal(git('diff','--name-only',N.baseSha,N.candidateSha,'--',path),'');
+  for(const key of ['existingUi','salesforceMetadataChanged','cronSchedulesChanged'])assert.equal(N[key],false);assert.deepEqual(N.handoffs,[]);
+  assert.equal(M.candidateSha,'bf517a8ba86f8c210eacd2b9dd859ca7c4d48e3d');assert.equal(firstRuntimeCandidateProfile(M.candidateSha),M.sourceProfile);
+});
+
+test('measurement profile retains all31 exact verification commands and rejects candidate/profile/scope substitutions',()=>{
+  const {manifest}=loadReleaseCheckManifest(ROOT),prior=requiredReleaseChecks(manifest,M.sourceProfile),next=requiredReleaseChecks(manifest,N.sourceProfile);
+  assert.equal(next.length,31);assert.deepEqual(next.map(c=>c.id),prior.map(c=>c.id));
+  for(let i=0;i<prior.length;i++)assert.deepEqual(next[i].profileCommands?.[N.sourceProfile]||next[i].commands,prior[i].profileCommands?.[M.sourceProfile]||prior[i].commands);
+  assert.equal(manifest.sourceProfiles[N.sourceProfile].candidateSha,N.candidateSha);assert.equal(manifest.sourceProfiles[M.sourceProfile].candidateSha,M.candidateSha);
+  assert.equal(firstRuntimeCandidateProfile(N.candidateSha),N.sourceProfile);assert.equal(isFirstRuntimeCandidateSha(N.candidateSha),true);
+  const m=fixtureManifest();m.candidate.sha=N.candidateSha;m.candidate.sourceProfile=N.sourceProfile;assert.doesNotThrow(()=>validateManifest(m));
+  for(const mutate of [v=>v.candidate.sha=M.candidateSha,v=>v.candidate.sourceProfile=M.sourceProfile,v=>delete v.candidate.sourceProfile,v=>v.scope.existingUi=true,v=>v.scope.handoffs=[{kind:'status19',sha256:'a'.repeat(64)}],v=>v.scope.financialAuthority=true]){const changed=structuredClone(m);mutate(changed);assert.throws(()=>validateManifest(changed));}
 });
