@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import pg from 'pg';
-import { disposableDatabaseUrl, LOCAL_PLATFORM_FIXTURE_SQL, migrationSha256, planMigrationVerification, verifyLocalMigrationServer } from './lib/migration-verification.mjs';
+import { disposableDatabaseUrl, LOCAL_PLATFORM_FIXTURE_SQL, migrationSha256, planMigrationVerification, verifyLocalMigrationServer, MIGRATION_SERVER_IDENTITY_SQL } from './lib/migration-verification.mjs';
 import { seedUpgradeFixture, verifyUpgradeFixture } from './fixtures/migration-upgrade.mjs';
 
 const migrationDirectory = new URL('../supabase/migrations/', import.meta.url);
@@ -403,12 +403,11 @@ let originalSchemaSetting;
 let settingsCaptured = false;
 let localServerProof;
 try {
-  const identity = (await owner.query(`select host(inet_server_addr()) as address, current_database() as database,
-    current_setting('data_directory') as data_directory`)).rows[0];
-  localServerProof = verifyLocalMigrationServer({ address: identity.address, databaseUrl, cwd: fileURLToPath(new URL('../', import.meta.url)) });
-  assert.equal(identity.database, decodeURIComponent(parsedUrl.pathname.slice(1)), 'Database target did not match the requested local database.');
-  if (process.env.FCOS_MIGRATION_EXPECTED_DATA_DIRECTORY) assert.equal(identity.data_directory, process.env.FCOS_MIGRATION_EXPECTED_DATA_DIRECTORY);
+  const identity = (await owner.query(MIGRATION_SERVER_IDENTITY_SQL)).rows[0];
   const roles = (await owner.query("select rolname,rolconfig from pg_roles where rolname=any($1::text[])", [['postgres', 'anon', 'authenticated', 'service_role', 'authenticator']])).rows;
+  localServerProof = verifyLocalMigrationServer({ address: identity.address, identity, roles: roles.map(role => role.rolname), databaseUrl, cwd: fileURLToPath(new URL('../', import.meta.url)) });
+  assert.equal(identity.database, decodeURIComponent(parsedUrl.pathname.slice(1)), 'Database target did not match the requested local database.');
+  if (process.env.FCOS_MIGRATION_EXPECTED_DATA_DIRECTORY) assert.equal(identity.dataDirectory, process.env.FCOS_MIGRATION_EXPECTED_DATA_DIRECTORY);
   assert.equal(roles.length, 5, 'Disposable cluster must have the standard Supabase roles.');
   originalSchemaSetting = roles.find(role => role.rolname === 'authenticator').rolconfig?.find(value => value.startsWith('pgrst.db_schemas='))?.slice('pgrst.db_schemas='.length);
   settingsCaptured = true;

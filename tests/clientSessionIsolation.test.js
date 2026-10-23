@@ -94,7 +94,7 @@ test('auth lifecycle remounts users, rejects stale auth and captures page/autosa
   ].map((path) => readFile(new URL(`../${path}`, import.meta.url), 'utf8')));
   assert.match(auth, /request !== authRequest.current \|\| !isCurrentClientSession\(session\)/);
   assert.match(auth, /React.Fragment key=\{user\?\.id \|\| 'signed-out'\}/);
-  assert.match(auth, /setClientSessionOwner\(null\);\s*setUser\(null\);\s*setIsAuthenticated\(false\)/);
+  assert.match(auth, /setClientSessionOwner\(null\);\s*setUser\(null\);\s*setDeploymentCapabilities\(null\);\s*setIsAuthenticated\(false\)/);
   assert.match(draft, /writeDraft\(key, valueRef.current, sessionRef.current\)/);
   assert.match(incoming, /writePageState\(PAGE_STATE_KEY, pageState, pageSession.current\)/);
   assert.match(cashflow, /view: activeView \}, pageSession\)/);

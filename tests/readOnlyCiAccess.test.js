@@ -10,6 +10,7 @@ import { enforceFcunoFederatedAccess } from '../api/_fcunoIdentityFederation.js'
 import { handleHedgeMarkets } from '../api/_hedgeDeskService.js';
 import { workNotificationsList } from '../api/_workNotifications.js';
 import { requireEmailRouterUser } from '../api/_emailRouterCore.js';
+import { deploymentCapabilities } from '../api/_deploymentReadOnly.js';
 
 const authUser = { id: '11111111-1111-4111-8111-111111111111', email: pin.email,
   identities: [{ provider: pin.provider, identity_data: { sub: pin.subject } }] };
@@ -120,6 +121,12 @@ test('every authenticated dispatcher enforces the CI guard and Markets skips exp
   assert.match(main, /requireReadOnlyCiOperation\(accessContext\?\.profile, name, body\)/);
   assert.match(wrapper, /requireReadOnlyCiOperation\(context\.profile, resolvedHandlerName, body/);
   assert.match(main, /readOnlyCi \? \[\] : await listPortalApplicationsForUser/);
-  assert.match(main, /if \(!readOnlyCi\) schedulePortalOutboxRetry/);
+  assert.match(main, /deploymentCapabilities\(process\.env, \{ readOnlyProfile: readOnlyCi \}\)/);
+  assert.match(main, /if \(deployment\.mutationsAllowed\) schedulePortalOutboxRetry/);
+  for (const deploymentEnv of [{}, { VERCEL_ENV: 'production' }, { VERCEL_ENV: 'preview' }]) {
+    assert.equal(deploymentCapabilities(deploymentEnv, { readOnlyProfile: isReadOnlyCiProfile(ciProfile()) }).mutationsAllowed, false);
+  }
+  assert.equal(deploymentCapabilities({ VERCEL_ENV: 'preview' }).mutationsAllowed, false);
+  assert.equal(deploymentCapabilities({ VERCEL_ENV: 'production' }).mutationsAllowed, true);
   assert.match(markets, /isReadOnlyCiProfile\(profile\)\s*\? \{ status: 'not_run', reason: 'read_only_identity' \}\s*: await reconcilePaperHedgeExpiry\(client\)/);
 });

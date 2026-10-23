@@ -1,7 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
-import { disposableDatabaseUrl, migrationSha256, planMigrationVerification, verifyLocalMigrationServer } from '../scripts/lib/migration-verification.mjs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { disposableDatabaseUrl, migrationSha256, planMigrationVerification, verifyLocalMigrationServer,
+  MIGRATION_PARENT_PROOF_PATH, MIGRATION_STANDARD_ROLES, MIGRATION_SERVER_IDENTITY_SQL,
+  isReadOnlyMigrationProofMount, loadMigrationParentProof, validateMigrationParentProof } from '../scripts/lib/migration-verification.mjs';
 
 const first = { name: '20260930000000_baseline.sql', sql: 'select 1;' };
 const second = { name: '20260930100000_pending.sql', sql: 'select 2;' };
@@ -45,19 +50,19 @@ test('database gate accepts explicit loopback targets and rejects connection-str
 });
 
 function dockerFixture(overrides = {}) {
-  const container = { name: '/supabase_db_fcos', running: true, project: 'fcos',
+  const container = { id: '1'.repeat(64), name: '/supabase_db_fcos', running: true, project: 'fcos',
     ports: { '5432/tcp': [{ HostIp: '0.0.0.0', HostPort: '54322' }] },
     networks: { supabase_network_fcos: { IPAddress: '172.18.0.2', GlobalIPv6Address: '' } }, ...overrides };
   const calls = [];
   const args = { address: '172.18.0.2', databaseUrl: 'postgresql://postgres@127.0.0.1:54322/postgres', cwd: '/fixture/fcos',
-    env: { FCOS_MIGRATION_DISPOSABLE_CLUSTER: '1', FCOS_MIGRATION_DOCKER_CONTAINER: 'supabase_db_fcos' },
+    env: { FCOS_MIGRATION_DISPOSABLE_CLUSTER: '1', FCOS_MIGRATION_PROJECT_ID: 'fcos', FCOS_MIGRATION_DOCKER_CONTAINER: 'supabase_db_fcos' },
     runDocker(command, env) { calls.push({ command, env }); return command[0] === 'context' ? '"unix:///var/run/docker.sock"' : JSON.stringify(container); } };
   return { args, calls };
 }
 
 test('local Docker bridge address requires exact project, published port, address and a forced local socket', () => {
   const { args, calls } = dockerFixture();
-  assert.deepEqual(verifyLocalMigrationServer(args), { transport: 'local-docker', container: 'supabase_db_fcos', project: 'fcos' });
+  assert.deepEqual(verifyLocalMigrationServer(args), { transport: 'local-docker', container: 'supabase_db_fcos', containerId: '1'.repeat(64), project: 'fcos', endpoint: 'unix:///var/run/docker.sock' });
   assert.deepEqual(calls[1].command.slice(0, 5), ['--host', 'unix:///var/run/docker.sock', 'inspect', '--type', 'container']);
   assert.doesNotMatch(calls[1].command.join(' '), /\.Config\.Env/);
   assert.equal(calls[1].env.DOCKER_HOST, undefined); assert.equal(calls[1].env.DOCKER_CONTEXT, undefined);
@@ -75,8 +80,76 @@ test('remote, unrelated or ambiguous Docker targets fail closed before any migra
   assert.throws(() => verifyLocalMigrationServer({ ...args, env: { FCOS_MIGRATION_DISPOSABLE_CLUSTER: '1' } }), /explicitly verified/);
   assert.throws(() => verifyLocalMigrationServer({ ...args, env: { ...args.env, FCOS_MIGRATION_DISPOSABLE_CLUSTER: '0' } }), /explicitly disposable/);
   assert.throws(() => verifyLocalMigrationServer({ ...args, env: { ...args.env, FCOS_MIGRATION_DOCKER_CONTAINER: 'supabase_db_other' } }), /does not match/);
-  assert.throws(() => verifyLocalMigrationServer({ ...args, cwd: '/fixture/FCOS' }), /does not match/);
+  assert.throws(() => verifyLocalMigrationServer({ ...args, env: { ...args.env, FCOS_MIGRATION_PROJECT_ID: 'other' } }), /does not match/);
   assert.throws(() => verifyLocalMigrationServer({ ...args, address: null }), /address could not be verified/);
   assert.throws(() => verifyLocalMigrationServer({ ...args, env: { ...args.env, DOCKER_HOST: 'tcp://remote.invalid:2375' } }), /remote Docker host/);
   assert.throws(() => verifyLocalMigrationServer({ ...args, runDocker: () => '"ssh://remote.invalid"' }), /could not be verified/);
+});
+
+test('archive checkout names do not replace the explicit disposable project identity', () => {
+  const { args } = dockerFixture();
+  for (const cwd of ['/candidate', '/fixture/FCOS']) {
+    assert.deepEqual(verifyLocalMigrationServer({ ...args, cwd }), { transport: 'local-docker', container: 'supabase_db_fcos', containerId: '1'.repeat(64), project: 'fcos', endpoint: 'unix:///var/run/docker.sock' });
+  }
+  const missingPin = { ...args.env }; delete missingPin.FCOS_MIGRATION_PROJECT_ID;
+  assert.throws(() => verifyLocalMigrationServer({ ...args, env: missingPin }), /FCOS_MIGRATION_PROJECT_ID is required/);
+  for (const project of ['', '../fcos', 'fcos.example', 123]) {
+    assert.throws(() => verifyLocalMigrationServer({ ...args, env: { ...args.env, FCOS_MIGRATION_PROJECT_ID: project } }), /project ID is invalid/);
+  }
+});
+
+function parentFixture() {
+  const identity = { address: '172.18.0.2', database: 'postgres', dataDirectory: '/var/lib/postgresql/data',
+    serverStartedAt: '2026-10-24T01:02:03.123456Z', systemIdentifier: '1234567890123456789', currentUser: 'postgres', sessionUser: 'postgres', roleSetting: 'none' };
+  const args = { identity, databaseUrl: 'postgresql://postgres:postgres@127.0.0.1:54322/postgres', projectId: 'fcos',
+    controllerSha: 'a'.repeat(40), candidateSha: 'b'.repeat(40), roles: [...MIGRATION_STANDARD_ROLES] };
+  const proof = { kind: 'fcos_disposable_migration_parent_proof_v1', schemaVersion: 1, projectId: 'fcos',
+    container: { name: 'supabase_db_fcos', id: '1'.repeat(64) }, url: { hostname: '127.0.0.1', port: 54322, username: 'postgres', database: 'postgres' },
+    identity: { ...identity }, roles: [...MIGRATION_STANDARD_ROLES], source: { controllerSha: args.controllerSha, candidateSha: args.candidateSha } };
+  return { proof, args };
+}
+
+test('trusted parent proof binds the exact current SQL server, fixed URL, roles and immutable sources', () => {
+  const { proof, args } = parentFixture();
+  assert.deepEqual(validateMigrationParentProof(proof, args), { transport: 'trusted-parent-docker', container: 'supabase_db_fcos', containerId: '1'.repeat(64), project: 'fcos' });
+  for (const key of Object.keys(args.identity)) {
+    assert.throws(() => validateMigrationParentProof(proof, { ...args, identity: { ...args.identity, [key]: 'changed' } }), /does not match/);
+  }
+  for (const patch of [{ projectId: 'other' }, { controllerSha: 'c'.repeat(40) }, { candidateSha: 'c'.repeat(40) },
+    { roles: ['postgres'] }, { roles: [...MIGRATION_STANDARD_ROLES, 'service_role'] }, { databaseUrl: 'postgresql://postgres@127.0.0.1:6543/postgres' }]) {
+    assert.throws(() => validateMigrationParentProof(proof, { ...args, ...patch }), /does not match/);
+  }
+  for (const mutate of [p => delete p.source, p => p.extra = true, p => p.container.id = 'invalid', p => p.roles.reverse(),
+    p => p.identity.systemIdentifier = '0', p => p.url.hostname = 'localhost', p => p.source.candidateSha = '0'.repeat(40)]) {
+    const changed = structuredClone(proof); mutate(changed);
+    assert.throws(() => validateMigrationParentProof(changed, args), /does not match/);
+  }
+  assert.match(MIGRATION_SERVER_IDENTITY_SQL, /pg_control_system\(\)/);
+  assert.match(MIGRATION_SERVER_IDENTITY_SQL, /pg_postmaster_start_time\(\)/);
+});
+
+test('fixed parent proof loader refuses arbitrary paths and writable or obscured controller mounts', () => {
+  for (const path of ['/tmp/proof.json', `${MIGRATION_PARENT_PROOF_PATH}/../proof.json`, undefined]) {
+    assert.throws(() => loadMigrationParentProof({ env: { FCOS_MIGRATION_PARENT_PROOF_FILE: path, FCOS_MIGRATION_PARENT_PROOF_SHA256: 'a'.repeat(64) } }), /fixed hash-bound/);
+  }
+  assert.throws(() => loadMigrationParentProof({ env: { FCOS_MIGRATION_PARENT_PROOF_FILE: MIGRATION_PARENT_PROOF_PATH } }), /fixed hash-bound/);
+  const ro = '10 1 0:1 / /controller ro,relatime - ext4 /dev/fixture rw\n';
+  assert.equal(isReadOnlyMigrationProofMount(ro), true);
+  assert.equal(isReadOnlyMigrationProofMount(ro.replace(' ro,', ' rw,')), false);
+  assert.equal(isReadOnlyMigrationProofMount(ro + '11 10 0:2 / /controller/output rw,relatime - ext4 /dev/fixture rw\n'), false);
+  assert.equal(isReadOnlyMigrationProofMount('1 0 0:1 / / ro - ext4 /dev/fixture ro\n'), false);
+  assert.equal(isReadOnlyMigrationProofMount(ro + `11 10 0:2 / ${MIGRATION_PARENT_PROOF_PATH} ro,relatime - ext4 /dev/fixture rw\n`), true);
+});
+
+test('an explicit project pin must agree with an existing local Supabase configuration', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'fcos-migration-project-'));
+  try {
+    mkdirSync(join(cwd, 'supabase'));
+    writeFileSync(join(cwd, 'supabase/config.toml'), 'project_id = "fcos"\n');
+    const { args } = dockerFixture();
+    assert.equal(verifyLocalMigrationServer({ ...args, cwd }).project, 'fcos');
+    assert.throws(() => verifyLocalMigrationServer({ ...args, cwd, env: { ...args.env, FCOS_MIGRATION_PROJECT_ID: 'other' } }), /does not match/);
+    writeFileSync(join(cwd, 'supabase/config.toml'), 'project_id = "../fcos"\n');
+    assert.throws(() => verifyLocalMigrationServer({ ...args, cwd }), /project_id is missing or invalid/);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
