@@ -33,6 +33,17 @@ export const SOURCE_UPGRADE_DIAGNOSTIC = Object.freeze({
   parentPolicySha256: 'acaebd6b75b28103a09ed8b52b95445801b5ee578664f7148e9710b92c17e2f1',
   checkerManifestSha256: '12a0e17a8f1b36616f2b16668f42d70bda5741655fe163b2a17d0fd8bec40172',
 });
+// One controller-only successor of the completed diagnostic admission. The
+// privileged SQL admission additionally pins the final reviewed child proof.
+export const SOURCE_UPGRADE_CONTROLLER_REPAIR = Object.freeze({
+  parentOperationId: 'qualification-source-upgrade-epoch1-diagnostic-b4397085ada3-02da6a03353e-v1',
+  parentProofSha256: '5c0890619b5b7c9402c9cf86aca73f9a8c3f4d6d68498318f89af7052112a749',
+  parentReleaseId: 'fcos-qualification-b4397085ada3-160edccc-diagnostic',
+  parentManifestSha256: 'df46219012b5520f1ffd0fae05a14cc2402a2659b021a60f5546c5587a48a397',
+  parentSetupSha256: 'b7fe941c3c63a1d7d7082aaffc1a66b11234ec60a5385476985ef9f07d955ae5',
+  parentPlanSha256: '2f545c333bcf837169ce74f66df236d8e4ee51b220e5bbfe177ea650544f12b7',
+  parentPolicySha256: 'a6ae94e61696be2715c233e7ac7fd57a26a067b089525f6b6492070d7e098ccb',
+});
 const sha = v => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v);
 const commit = v => typeof v === 'string' && /^[a-f0-9]{40}$/.test(v);
 const exact = (v, keys) => v && Object.getPrototypeOf(v) === Object.prototype && Object.keys(v).length === keys.length && keys.every(k => Object.hasOwn(v, k));
@@ -78,6 +89,31 @@ export function diagnosticSourceUpgradeTransition(p, { now = Date.now() } = {}) 
     return old.manifest.candidate.sha === SOURCE_UPGRADE.candidateSha && expectedCandidate.lockSha256 === s.lockSha256
       && expectedCandidate.configurationSha256 === s.configurationSha256 && expectedCandidate.salesforceSourceSha256 === s.salesforceSourceSha256
       && equal(p.manifest.candidate, expectedCandidate) && equal(p.manifest.previousProduction, expectedPrevious);
+  } catch { return false; }
+}
+/** Integrity only. Publication, genuine reviews, completed parent history and
+ * the exact final child proof remain independently authenticated SQL duties. */
+export function controllerRepairSourceUpgradeTransition(p) {
+  try {
+    const s = SOURCE_UPGRADE_CONTROLLER_REPAIR, candidate = SOURCE_UPGRADE_DIAGNOSTIC, old = p.previous, q = qSource(p);
+    return equal(p.parent, { kind: 'source_upgrade', operationId: s.parentOperationId, proofSha256: s.parentProofSha256,
+      releaseId: s.parentReleaseId, manifestHash: s.parentManifestSha256 })
+      && digest(old.setup) === s.parentSetupSha256 && digest(old.plan) === s.parentPlanSha256
+      && digest(old.manifest) === s.parentManifestSha256 && digest(p.previousPolicy) === s.parentPolicySha256
+      && digest(p.previousCheckerManifest) === candidate.checkerManifestSha256
+      && equal(p.checkerManifest, p.previousCheckerManifest)
+      && equal(old.manifest.candidate, { sha: candidate.candidateSha, sourceProfile: candidate.sourceProfile,
+        sourceSha256: candidate.sourceSha256, sourceInputsSha256: candidate.sourceInputsSha256,
+        lockSha256: candidate.lockSha256, configurationSha256: candidate.configurationSha256,
+        salesforceSourceSha256: candidate.salesforceSourceSha256, branch: candidate.branch })
+      && q.candidateSha === candidate.candidateSha && commit(q.controllerSha) && commit(q.bootstrapSha)
+      && q.controllerSha !== old.setup.controllerSha && q.bootstrapSha !== old.setup.qualificationSource.bootstrapSha
+      && q.ref !== old.setup.qualificationSource.ref
+      && equal(without(p.setup, 'controllerSha', 'qualificationSource'), without(old.setup, 'controllerSha', 'qualificationSource'))
+      && equal(without(p.plan, 'releaseId'), without(old.plan, 'releaseId'))
+      && equal(without(p.manifest.controller, 'sha'), without(old.manifest.controller, 'sha'))
+      && equal(without(p.manifest, 'releaseId', 'setupSha256', 'qualificationSource', 'controller'),
+        without(old.manifest, 'releaseId', 'setupSha256', 'qualificationSource', 'controller'));
   } catch { return false; }
 }
 // Integrity only: the privileged caller must authenticate this admission from
@@ -133,7 +169,8 @@ export function validateSourceUpgradeProof(p, { now = Date.now(), previewQuarant
     && digest(p.previousPolicy) === SOURCE_UPGRADE.initialPolicySha256);
   const q = qSource(p), old = p.previous;
   const diagnosticChange = diagnosticSourceUpgradeTransition(p, { now });
-  const selectedCandidate = diagnosticChange ? SOURCE_UPGRADE_DIAGNOSTIC.candidateSha : SOURCE_UPGRADE.candidateSha;
+  const controllerRepair = controllerRepairSourceUpgradeTransition(p);
+  const selectedCandidate = diagnosticChange || controllerRepair ? SOURCE_UPGRADE_DIAGNOSTIC.candidateSha : SOURCE_UPGRADE.candidateSha;
   const checkerChange=exactPreviewCheckerChange(p,previewQuarantine);
   const transportChange=checkerChange && p.setup.verification?.vercelSourceTransport==='fcos_source_api_archive_v1'
     && p.manifest.verification?.vercelSourceTransport==='fcos_source_api_archive_v1'
@@ -141,7 +178,8 @@ export function validateSourceUpgradeProof(p, { now = Date.now(), previewQuarant
     && !Object.hasOwn(old.manifest.verification||{},'vercelSourceTransport');
   need(p.parent.releaseId === old.plan.releaseId && p.parent.releaseId === old.manifest.releaseId && p.parent.manifestHash === digest(old.manifest)
     && old.manifest.setupSha256 === digest(old.setup) && equal(old.manifest.qualificationSource, old.setup.qualificationSource)
-    && old.manifest.controller.sha === old.setup.controllerSha && old.manifest.candidate.sha === SOURCE_UPGRADE.candidateSha
+    && old.manifest.controller.sha === old.setup.controllerSha
+    && old.manifest.candidate.sha === (controllerRepair ? SOURCE_UPGRADE_DIAGNOSTIC.candidateSha : SOURCE_UPGRADE.candidateSha)
     && equal(old.manifest.runtime, old.plan.runtime) && equal(old.manifest.scope, old.plan.scope)
     && p.previousConfiguration.setupSha256 === digest(old.setup) && p.previousConfiguration.policySha256 === digest(p.previousPolicy));
   need(exact(q, ['ref', 'bootstrapSha', 'callerWorkflowRef', 'controllerSha', 'candidateSha'])

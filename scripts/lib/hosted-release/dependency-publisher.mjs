@@ -1,3 +1,4 @@
+import { dependencyContextCandidate } from '../../../config/hostedDependencyContext.js';
 import { createSalesforceRecipeReader, salesforceRecipePath, validateSalesforceReadBinding } from './salesforce-read-auth.mjs';
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -74,7 +75,7 @@ export function loadDependencySetup({ manifest, env = process.env, readFile = re
     const publicBinding=dependencyHash({kind:'fcos_preservation_membership_file_binding_v1',manifestHash,membershipFileSha256:preservation.membershipSha256});
     if(!privateMembership){setup.preservation={publicBinding,setupPins:{...preservation}};return setup;}
     let sealed;try{sealed=readFile(env.FCOS_HOSTED_PRESERVATION_MEMBERSHIP_FILE);}catch(error){need(error.code!=='ENOENT','DEPENDENCY_SETUP_PENDING');throw error;}
-    const plain=openPreservationMembership(sealed,{candidateSha:manifest.candidate.sha,project:manifest.targets.supabaseProject,membershipSha256:preservation.membershipSha256,
+    const plain=openPreservationMembership(sealed,{candidateSha:dependencyContextCandidate(manifest),project:manifest.targets.supabaseProject,membershipSha256:preservation.membershipSha256,
       envelopeSha256:preservation.envelopeSha256,connection:env.FCOS_HOSTED_PRESERVATION_DATABASE_URL});
     let original;try{original=JSON.parse(plain.toString('utf8'));}finally{plain.fill(0);}
     need(!Object.hasOwn(original, 'manifestHash'));

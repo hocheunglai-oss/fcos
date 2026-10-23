@@ -214,7 +214,7 @@ test('historical timestamp permission is exact NomB deterministic and cannot wai
 
 test('actual CLI process writes waiting report and calls no-OIDC hosted entrypoint without executing candidate code', t => {
   const directory = temporary(t), sourceRoot = fileURLToPath(new URL('../', import.meta.url));
-  for (const relative of ['scripts/hosted-release-dependencies.mjs','scripts/lib/hosted-release/dependencies.mjs','scripts/lib/hosted-release/observer-target.mjs','scripts/lib/hosted-release/preservation-preflight.mjs','scripts/lib/hosted-release/dependency-publisher.mjs','scripts/lib/hosted-release/salesforce-read-auth.mjs','config/fcosConnections.js','config/hostedReleaseQualification.js','config/runtime-compatibility-successor-live.json']) {
+  for (const relative of ['scripts/hosted-release-dependencies.mjs','scripts/lib/hosted-release/dependencies.mjs','scripts/lib/hosted-release/observer-target.mjs','scripts/lib/hosted-release/preservation-preflight.mjs','scripts/lib/hosted-release/dependency-publisher.mjs','scripts/lib/hosted-release/salesforce-read-auth.mjs','config/fcosConnections.js','config/hostedDependencyContext.js','config/hostedReleaseQualification.js','config/runtime-compatibility-successor-live.json']) {
     const destination = join(directory, relative); mkdirSync(dirname(destination), { recursive: true }); copyFileSync(join(sourceRoot, relative), destination);
   }
   symlinkSync(join(sourceRoot,'scripts/lib/hosted-release/contract.mjs'),join(directory,'scripts/lib/hosted-release/contract.mjs'));

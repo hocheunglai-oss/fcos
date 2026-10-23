@@ -24,7 +24,7 @@ function fixture(t) {
   const directory = mkdtempSync(join(realpathSync(tmpdir()), 'fcos-dependency-integration-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const controller = join(directory, 'controller'); mkdirSync(controller);
-  const sourceFiles = [script, 'scripts/lib/hosted-release/json-contract.mjs', 'config/fcosConnections.js', 'config/hostedReleaseQualification.js'];
+  const sourceFiles = [script, 'scripts/lib/hosted-release/json-contract.mjs', 'config/fcosConnections.js', 'config/hostedReleaseQualification.js', 'config/hostedDependencyContext.js'];
   for (const file of sourceFiles) { mkdirSync(dirname(join(controller, file)), { recursive: true }); copyFileSync(join(root, file), join(controller, file)); }
   writeFileSync(join(controller, 'package.json'), '{"type":"module"}\n');
   const gitEnv = { PATH: process.env.PATH, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };

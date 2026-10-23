@@ -1,3 +1,4 @@
+import { dependencyContextCandidate } from '../../../config/hostedDependencyContext.js';
 import { createHash } from 'node:crypto';
 import { lstatSync, readFileSync } from 'node:fs';
 import { resolve, sep } from 'node:path';
@@ -165,7 +166,7 @@ export async function importAcceptedNomB({ manifest, handoff, verifyHandoff, rea
     required(admitted?.verified === true && admitted.manifestHash === dependencyHash(manifest)
       && admitted.handoffSha256 === dependencyHash(handoff) && admitted.financialAuthority === false);
     required(handoff.kind === 'fcos_reviewed_nom_b_legacy_import' && handoff.manifestHash === dependencyHash(manifest)
-      && handoff.candidateSha === manifest.candidate.sha && handoff.originalCandidateSha === legacyCandidateSha && fingerprintKeys.every(k => hash(handoff.relevantInputs?.[k]))
+      && handoff.candidateSha === dependencyContextCandidate(manifest, { handoff }) && handoff.originalCandidateSha === legacyCandidateSha && fingerprintKeys.every(k => hash(handoff.relevantInputs?.[k]))
       && Object.keys(handoff.relevantInputs).length === fingerprintKeys.length
       && salesforceDependencySourceVerified(manifest, handoff));
     const cache = new Map(); let total = 0;

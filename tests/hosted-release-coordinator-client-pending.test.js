@@ -110,3 +110,19 @@ test('actual consequential controller never submits a provider operation while d
     submit: async () => { providerCalls++; }, readback: async () => { providerCalls++; } }), { code: 'COORDINATION_METADATA_PENDING' });
   assert.equal(providerCalls, 0); assert.equal(new Set(f.requests.map(row => row.body)).size, 1);
 });
+
+test('quarantine successor refusal reports the public code and never submits or retries', async () => {
+  const f = clientFixture(() => Response.json({ error: 'COORDINATION_EXACT_PREVIEW_QUARANTINE_SUCCESSOR_REQUIRED',
+    detail: 'synthetic-private-provider-detail' }, { status: 403 }));
+  let providerCalls = 0, caught;
+  try {
+    await consequential({ manifest: fixtureManifest(), phase: 'preview.create', request: { exact: true }, coordinator: f.client,
+      submit: async () => { providerCalls++; }, readback: async () => { providerCalls++; } });
+  } catch (error) { caught = error; }
+  assert.equal(caught?.code, 'COORDINATION_EXACT_PREVIEW_QUARANTINE_SUCCESSOR_REQUIRED');
+  assert.equal(caught.phase, 'coordinator.begin');
+  assert.equal(providerCalls, 0); assert.equal(f.requests.length, 1); assert.deepEqual(f.waits, []);
+  assert.equal(JSON.stringify(safeFailure(caught)).includes('synthetic-private-provider-detail'), false);
+  const unknown = clientFixture(() => Response.json({ error: 'synthetic-private-provider-detail' }, { status: 403 }));
+  await assert.rejects(unknown.client.begin(scope()), { code: 'COORDINATION_REQUEST_REJECTED' });
+});
