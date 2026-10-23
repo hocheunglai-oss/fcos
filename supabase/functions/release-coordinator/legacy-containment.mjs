@@ -1,6 +1,6 @@
 import { FCOS_RELEASE_APPROVAL_POLICY, fcosConnectionIdentifier } from '../../../config/fcosConnections.js';
 import { validateLegacyReleaseContainment } from '../../../config/legacyReleaseContainment.js';
-import { need, digest } from './core.mjs';
+import { need, digest, readCoordinatorMetadata } from './core.mjs';
 
 export function assertLegacyContainmentEnvironments(resume, final) {
   const operator=fcosConnectionIdentifier(FCOS_RELEASE_APPROVAL_POLICY.operatorProvider,FCOS_RELEASE_APPROVAL_POLICY.operatorIdentifier);
@@ -20,18 +20,16 @@ export function assertLegacyContainmentEnvironments(resume, final) {
 /** The endpoint has only GitHub metadata credentials. No Vercel/Xero secret or
  * new permission enters the coordinator, and callers cannot supply this proof. */
 export function createLegacyContainmentValidator({policy,token,fetchImpl=fetch}={}) {
-  return async ({principal,registration,manifestHash,metadataReservation})=>{
+  return async ({principal,registration,manifestHash,metadataReservation,requestContext})=>{
     const manifest=registration?.manifest;
     need(principal.kind==='github'&&registration?.owner?.kind==='release'&&['qualification','release'].includes(registration.scope)
       &&registration.manifest_hash===manifestHash&&manifest.controller?.sha===principal.jobWorkflowSha
       &&/^[a-f0-9]{64}$/.test(manifest.setupSha256||''),'COORDINATION_CONTAINMENT_BINDING_CHANGED');
     try{validateLegacyReleaseContainment(manifest.legacyReleaseContainment);}catch{need(false,'COORDINATION_CONTAINMENT_BINDING_CHANGED');}
     need(metadataReservation&&typeof metadataReservation.runRead==='function','COORDINATION_CONTAINMENT_METADATA_REQUIRED',503);
-    const read=path=>metadataReservation.runRead(async()=>{
-      const url=`https://api.github.com${path}`;let response;
-      try{response=await fetchImpl(url,{method:'GET',headers:{authorization:`Bearer ${token}`,accept:'application/vnd.github+json','x-github-api-version':'2022-11-28'},redirect:'error',signal:AbortSignal.timeout(10000)});}catch{need(false,'COORDINATION_GITHUB_METADATA_UNAVAILABLE',503);}
-      need(response.ok&&!response.redirected&&(!response.url||response.url===url),'COORDINATION_GITHUB_METADATA_UNAVAILABLE',503);return response.json();
-    });
+    const read=path=>metadataReservation.runRead(()=>readCoordinatorMetadata({
+      url:`https://api.github.com${path}`,token,fetchImpl,requestContext,exactUrl:true,
+    }),{signal:requestContext?.metadataSignal});
     const user=await read('/user');
     need(user.login===fcosConnectionIdentifier('github','Required account')&&Number.isSafeInteger(user.id)&&user.id>0,'COORDINATION_METADATA_ACCOUNT_MISMATCH',403);
     const base=`/repos/${policy.repository}/environments/`;

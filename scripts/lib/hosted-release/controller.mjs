@@ -1,3 +1,4 @@
+import { safeCoordinatorTransport } from '../../../supabase/functions/release-coordinator/core.mjs';
 import { assertBoundEvidence, digest, fail, ReleaseError, validateManifest } from './contract.mjs';
 import { atReleaseBoundary, isReleaseBoundary } from './failure.mjs';
 import { safeVercelCommandFailure } from './vercel-command-failure.mjs';
@@ -278,12 +279,14 @@ export async function executeHostedProduction({ manifest, coordinator, provider,
 }
 
 export function safeFailure(error) {
+  const coordinatorTransport = error instanceof ReleaseError&&error.code==='COORDINATION_RESPONSE_UNKNOWN' ? safeCoordinatorTransport(error.detail?.coordinatorTransport) : undefined;
   const commandFailure = error instanceof ReleaseError ? safeVercelCommandFailure(error.detail?.commandFailure) : undefined;
   const sourceApiFailure = error instanceof ReleaseError ? safeVercelSourceApiFailure(error.detail?.sourceApiFailure) : undefined;
   if(error instanceof ReleaseError&&error.code==='FIRST_RUNTIME_OWNER_REFRESH_REQUIRED')return {
     status:'waiting_dependency',code:error.code,phase:error.phase,recovery:error.recovery};
   return error instanceof ReleaseError ? { status: 'intervention_required', code: error.code, phase: error.phase, recovery: error.recovery,
     ...(isReleaseBoundary(error.boundary) ? { boundary: error.boundary } : {}),
-    ...(commandFailure ? { commandFailure } : {}), ...(sourceApiFailure ? { sourceApiFailure } : {}) }
+    ...(commandFailure ? { commandFailure } : {}), ...(sourceApiFailure ? { sourceApiFailure } : {}),
+    ...(coordinatorTransport ? { coordinatorTransport } : {}) }
     : { status: 'intervention_required', code: 'UNCLASSIFIED_PROVIDER_FAILURE', phase: 'unknown', recovery: 'Inspect sanitized phase evidence; do not replay a consequential operation.' };
 }

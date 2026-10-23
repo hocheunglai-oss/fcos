@@ -87,9 +87,16 @@ export function assertQualificationScope(principal,payload,action) {
  * Full bundles remain charged until all queued reads settle, then for one minute. */
 export function createMetadataAdmission({now=Date.now}={}) {
   let reservations=[],active=0;const pending=[];
-  const runRead=async read=>{
-    await new Promise(resolve=>{const start=()=>{active++;resolve();};if(active<2) start();else pending.push(start);});
-    try{return await read();}finally{active--;pending.shift()?.();}
+  const runRead=async(read,{signal}={})=>{
+    await new Promise((resolve,reject)=>{
+      const cleanup=()=>signal?.removeEventListener('abort',cancel);
+      const entry={start(){cleanup();if(signal?.aborted){reject(signal.reason);return;}active++;resolve();}};
+      const cancel=()=>{const index=pending.indexOf(entry);if(index!==-1)pending.splice(index,1);cleanup();reject(signal.reason);};
+      if(signal?.aborted){reject(signal.reason);return;}
+      if(active<2)entry.start();else{pending.push(entry);signal?.addEventListener('abort',cancel,{once:true});}
+    });
+    try{if(signal?.aborted)throw signal.reason;return await read();}
+    finally{active--;while(active<2&&pending.length)pending.shift().start();}
   };
   return {
     admit(weight) {
@@ -108,10 +115,10 @@ export function createMetadataAdmission({now=Date.now}={}) {
       let outstanding=0,dispatched=0,finished=false;
       const settle=()=>{if(finished&&outstanding===0){reservation.pending=false;reservation.at=now();}};
       return {
-        async runRead(read) {
+        async runRead(read,options) {
           need(!finished,'COORDINATION_METADATA_RESERVATION_FINISHED',500);
           need(dispatched<weight,'COORDINATION_METADATA_RESERVATION_EXHAUSTED',500);dispatched++;outstanding++;
-          try{return await runRead(read);}finally{outstanding--;settle();}
+          try{return await runRead(read,options);}finally{outstanding--;settle();}
         },
         finish(){finished=true;settle();},
       };
@@ -204,4 +211,97 @@ export function retainedPreviewReadbackScopeAllowed(principal, payload, action) 
   if (action === 'snapshot') return true;
   return action === 'readback' && payload.phase === 'preview.create'
     && payload.operationId === RETAINED_PREVIEW.operationId;
+}
+
+/** One attempt budget, including body consumption. The SQL reserve derives from
+ * the existing 10s connection + 10s statement limits plus 1s margin. These are
+ * admission bounds, not a measured live latency guarantee. */
+export const COORDINATOR_REQUEST_BUDGET = Object.freeze({clientMs:45000,handlerMs:42000,responseMarginMs:3000,storageReserveMs:21000,metadataReadMs:10000});
+export const COORDINATOR_DEADLINE_HEADER = 'x-fcos-coordinator-deadline-ms';
+export class CoordinatorRequestError extends Error {
+  constructor(code,status=408) {super(code);this.code=code;this.status=status;}
+}
+const stages=new Set(['request','request_body','request_digest','authenticate','manifest_digest','sql_snapshot','sql_pending','metadata_admission','qualification','containment','sql_approval_admission','approval','resume','evidence_digest','sql_dispatch']);
+
+/** An untrusted deadline may only shorten our local cap. Reject malformed or
+ * already-expired values before authentication or storage; never trust clock
+ * skew to extend the server budget. Await work already dispatched to storage. */
+export function createRequestContext(request,{now=Date.now,monotonicNow=()=>performance.now(),observe=()=>{},budget=COORDINATOR_REQUEST_BUDGET}={}) {
+  const startedAt=now(),startedMono=monotonicNow(),raw=request.headers.get(COORDINATOR_DEADLINE_HEADER);
+  if(!Number.isSafeInteger(startedAt)||!Number.isFinite(startedMono)||raw!==null&&(!/^[1-9][0-9]{0,15}$/.test(raw)||!Number.isSafeInteger(Number(raw))))
+    throw new CoordinatorRequestError('COORDINATION_DEADLINE_INVALID',400);
+  const duration=Math.min(budget.handlerMs,raw===null?budget.handlerMs:Number(raw)-startedAt-budget.responseMarginMs);
+  if(!Number.isFinite(duration)||duration<=0)throw new CoordinatorRequestError('COORDINATION_DEADLINE_EXCEEDED');
+  // Real monotonic elapsed time preserves the storage reserve through wall-clock
+  // rollback. A wall-clock jump forward may shorten, but never extend, admission.
+  let elapsed=0;const elapsedMs=()=>{
+    const wallElapsed=now()-startedAt,monoElapsed=monotonicNow()-startedMono;
+    if(!Number.isFinite(wallElapsed)||!Number.isFinite(monoElapsed))throw new CoordinatorRequestError('COORDINATION_DEADLINE_INVALID',400);
+    elapsed=Math.max(elapsed,wallElapsed,monoElapsed);return elapsed;
+  };
+  const deadline=new AbortController(),metadataDeadline=new AbortController();
+  const expired=()=>new CoordinatorRequestError('COORDINATION_DEADLINE_EXCEEDED');
+  const deadlineTimer=setTimeout(()=>deadline.abort(expired()),duration);
+  const metadataTimer=setTimeout(()=>metadataDeadline.abort(expired()),Math.max(0,duration-budget.storageReserveMs));
+  deadlineTimer.unref?.();metadataTimer.unref?.();
+  const signal=AbortSignal.any([request.signal,deadline.signal]);
+  const metadataSignal=AbortSignal.any([signal,metadataDeadline.signal]);
+  const assertActive=(reserveMs=0)=>{
+    if(request.signal.aborted)throw new CoordinatorRequestError('COORDINATION_REQUEST_CANCELLED');
+    if(deadline.signal.aborted||elapsedMs()+reserveMs>=duration)throw expired();
+  };
+  let identity;const pendingEvents=[];
+  const deliver=event=>{try{observe({...event,action:identity?.action??'unknown',...(identity?{requestSha256:identity.requestSha256}:{})});}catch{}};
+  const emit=(stage,outcome,at)=>{
+    if(!stages.has(stage))return;
+    // Caller/observer exceptions never change the authoritative request outcome.
+    const event={event:'coordinator_stage',stage,outcome,durationMs:Math.max(0,Math.min(2147483647,Math.round(elapsedMs()-at)))};
+    if(identity)deliver(event);else pendingEvents.push(event);
+  };
+  return {
+    signal,metadataSignal,
+    setIdentity(action,requestSha256){
+      if(!ACTIONS.includes(action)||!/^[a-f0-9]{64}$/.test(requestSha256))throw new CoordinatorRequestError('COORDINATION_SCOPE_INVALID',400);
+      identity={action,requestSha256};for(const event of pendingEvents.splice(0))deliver(event);
+    },
+    cancelMetadata:reason=>metadataDeadline.abort(reason),
+    assertActive,
+    assertStorage:()=>assertActive(budget.storageReserveMs),
+    assertMetadata:()=>{assertActive(budget.storageReserveMs);if(metadataDeadline.signal.aborted)throw metadataDeadline.signal.reason;},
+    async run(stage,work,{storage=false}={}) {
+      assertActive(storage?budget.storageReserveMs:0);const at=elapsedMs();
+      try {
+        const result=await work();
+        emit(stage,signal.aborted||elapsedMs()>=duration?'settled_after_cancellation':'ok',at);
+        return result;
+      }catch(error){emit(stage,signal.aborted?'cancelled':'error',at);throw error;}
+    },
+    finish(){metadataDeadline.abort(new CoordinatorRequestError('COORDINATION_REQUEST_CANCELLED'));emit('request',signal.aborted||elapsedMs()>=duration?'cancelled':'settled',0);for(const event of pendingEvents.splice(0))deliver(event);clearTimeout(deadlineTimer);clearTimeout(metadataTimer);},
+  };
+}
+
+/** Consume the body inside the scheduler slot and the same cancellation budget.
+ * Never retain provider URLs, exception messages, body text or credentials. */
+export async function readCoordinatorMetadata({url,token,fetchImpl,requestContext,exactUrl=false}) {
+  requestContext?.assertMetadata();
+  const signal=AbortSignal.any([...(requestContext?[requestContext.metadataSignal]:[]),AbortSignal.timeout(COORDINATOR_REQUEST_BUDGET.metadataReadMs)]);
+  try {
+    const response=await fetchImpl(url,{method:'GET',headers:{authorization:`Bearer ${token}`,accept:'application/vnd.github+json','x-github-api-version':'2022-11-28'},redirect:'error',signal});
+    if(!response.ok||response.redirected||exactUrl&&response.url&&response.url!==url)throw new Error();
+    const result=await response.json();requestContext?.assertMetadata();return result;
+  }catch {
+    let failure=new CoordinatorRequestError('COORDINATION_GITHUB_METADATA_UNAVAILABLE',503);
+    try{requestContext?.assertMetadata();}catch(error){failure=error;}
+    // Cancel queued reads before the scheduler releases this failed slot. A
+    // refusal must never admit a follow-on GET; started database work is separate.
+    requestContext?.cancelMetadata(failure);throw failure;
+  }
+}
+
+/** Reconstruct only fixed public transport diagnostics for workflow evidence. */
+export function safeCoordinatorTransport(value) {
+  if(!value||Object.getPrototypeOf(value)!==Object.prototype||Object.keys(value).length!==4||!['stage','elapsedMs','timeout','requestSha256'].every(key=>Object.hasOwn(value,key))
+    ||!['fetch','response_body'].includes(value.stage)||!Number.isSafeInteger(value.elapsedMs)
+    ||value.elapsedMs<0||value.elapsedMs>2147483647||typeof value.timeout!=='boolean'||!/^[a-f0-9]{64}$/.test(value.requestSha256))return undefined;
+  return {stage:value.stage,elapsedMs:value.elapsedMs,timeout:value.timeout,requestSha256:value.requestSha256};
 }

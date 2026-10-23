@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { ReleaseError } from './json-contract.mjs';
+import { COORDINATOR_REQUEST_BUDGET, COORDINATOR_DEADLINE_HEADER } from '../../../supabase/functions/release-coordinator/core.mjs';
 // Literal public protocol codes from the checked-in coordinator and migrations.
 // Unknown response text is never copied into a diagnostic.
 const safeServerCodes = new Set([
@@ -49,10 +50,11 @@ const safeServerCodes = new Set([
   'COORDINATION_SOURCE_UPGRADE_REGISTRATION_INVALID', 'COORDINATION_SOURCE_UPGRADE_SOURCE_DRIFT', 'COORDINATION_SOURCE_UPGRADE_TERMINAL',
   'COORDINATION_STALE_EPOCH', 'COORDINATION_TERMINAL_CONFLICT', 'COORDINATION_UNAVAILABLE',
   'COORDINATION_UNRESOLVED_OPERATION', 'COORDINATION_WRITER_NOT_ADMITTED',
+  'COORDINATION_DEADLINE_INVALID', 'COORDINATION_DEADLINE_EXCEEDED', 'COORDINATION_REQUEST_CANCELLED',
 ]);
 const actions = ['snapshot','register','claim','begin','approve','resume','complete','uncertain','readback','appendEvidence','finish'];
-const refusal = (code, action = 'configuration') => new ReleaseError(code, `coordinator.${action}`,
-  'Read the existing coordinator journal before any consequential operation. Do not retry an uncertain submission.');
+const refusal = (code, action = 'configuration', detail = {}) => new ReleaseError(code, `coordinator.${action}`,
+  'Read the existing coordinator journal before any consequential operation. Do not retry an uncertain submission.', detail);
 
 
 const metadataWaitLimitMs = 180000;
@@ -62,10 +64,10 @@ const metadataPending = () => new ReleaseError('COORDINATION_METADATA_PENDING', 
 
 /** Retry only the definitive pre-storage metadata-budget response. Lost responses
  * still require readback, never another provider submission. */
-export function createCoordinatorClient({url,tokenProvider,fetch:fetchImpl=globalThis.fetch,epoch,owner,adapter='release',now=Date.now,wait=sleep}) {
+export function createCoordinatorClient({url,tokenProvider,fetch:fetchImpl=globalThis.fetch,epoch,owner,adapter='release',now=Date.now,wait=sleep,requestBudgetMs=COORDINATOR_REQUEST_BUDGET.clientMs}) {
   let parsed;try{parsed=new URL(url);}catch{throw refusal('COORDINATION_CONFIGURATION_INVALID');}
   if(!(parsed.protocol==='https:'||parsed.protocol==='http:'&&['localhost','127.0.0.1','[::1]'].includes(parsed.hostname))
-    ||parsed.username||parsed.password||!Number.isSafeInteger(epoch)||epoch<1||!owner||typeof tokenProvider!=='function'||typeof now!=='function'||typeof wait!=='function') throw refusal('COORDINATION_CONFIGURATION_INVALID');
+    ||parsed.username||parsed.password||!Number.isSafeInteger(epoch)||epoch<1||!owner||typeof tokenProvider!=='function'||typeof now!=='function'||typeof wait!=='function'||!Number.isSafeInteger(requestBudgetMs)||requestBudgetMs<1||requestBudgetMs>COORDINATOR_REQUEST_BUDGET.clientMs) throw refusal('COORDINATION_CONFIGURATION_INVALID');
   const manifests=new Map();
   const canonical=value=>value===null||typeof value!=='object'?JSON.stringify(value):Array.isArray(value)?`[${value.map(canonical).join(',')}]`:`{${Object.keys(value).sort().map(key=>`${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}`;
   const request=async(action,payload={})=>{
@@ -81,17 +83,21 @@ export function createCoordinatorClient({url,tokenProvider,fetch:fetchImpl=globa
     // Capture the operation before the first asynchronous call. A caller mutation
     // during a budget wait must never change the admitted request or evidence ID.
     const body=JSON.stringify({action,payload:{...payload,epoch,owner,manifestHash}}),releaseId=payload.releaseId;
+    const requestSha256=createHash('sha256').update(canonical(JSON.parse(body))).digest('hex');
     const startedAt=now();let waitedMs=0;
     for(;;) {
       let token;try{token=await tokenProvider({audience:adapter==='financial'?'fcos-financial-coordination':'fcos-release-coordinator'});}
       catch(error){if(error instanceof ReleaseError)throw error;throw refusal('COORDINATION_IDENTITY_UNAVAILABLE',action);}
       if(typeof token!=='string'||!token||/\s/.test(token)) throw refusal('COORDINATION_IDENTITY_UNAVAILABLE',action);
+      const attemptStartedAt=now(),signal=AbortSignal.timeout(requestBudgetMs);
+      const unknown=stage=>refusal('COORDINATION_RESPONSE_UNKNOWN',action,{coordinatorTransport:{stage,
+        elapsedMs:Math.max(0,Math.min(2147483647,Math.round(now()-attemptStartedAt)||0)),timeout:signal.aborted,requestSha256}});
       let response;
-      try { response=await fetchImpl(parsed.href,{method:'POST',headers:{authorization:`Bearer ${token}`,'content-type':'application/json',
+      try { response=await fetchImpl(parsed.href,{method:'POST',headers:{authorization:`Bearer ${token}`,'content-type':'application/json',[COORDINATOR_DEADLINE_HEADER]:String(attemptStartedAt+requestBudgetMs),
         ...(adapter==='financial'?{'x-fcos-coordination-adapter':'financial'}:{})},body,
-        redirect:'error',signal:AbortSignal.timeout(20000)}); }
-      catch { throw refusal('COORDINATION_RESPONSE_UNKNOWN',action); }
-      let result; try { result=await response.json(); } catch {throw refusal('COORDINATION_RESPONSE_UNKNOWN',action);}
+        redirect:'error',signal}); }
+      catch { throw unknown('fetch'); }
+      let result; try { result=await response.json(); } catch {throw unknown('response_body');}
       const retryAfter=response.headers?.get('retry-after');
       if(adapter==='release'&&response.status===429&&!response.redirected&&result&&Object.getPrototypeOf(result)===Object.prototype
         &&Object.keys(result).length===1&&result.error==='COORDINATION_METADATA_PENDING'

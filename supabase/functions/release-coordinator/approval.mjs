@@ -1,5 +1,5 @@
 import { FCOS_RELEASE_APPROVAL_POLICY, fcosConnectionIdentifier } from '../../../config/fcosConnections.js';
-import { digest, need, canonicalJson, createMetadataAdmission } from './core.mjs';
+import { digest, need, canonicalJson, createMetadataAdmission, readCoordinatorMetadata } from './core.mjs';
 const initialEnvironment='fcos-production-release', resumeEnvironment='fcos-hosted-production-resume';
 const positive=v=>Number.isSafeInteger(v)&&v>0;
 /** Current protection must remain intact; unrelated main commits do not replace the admitted reusable controller. */
@@ -68,12 +68,9 @@ function githubMetadataCollector({policy,token,fetchImpl=globalThis.fetch,metada
   const base=`https://api.github.com/repos/${policy.repository}`;
   return async context=>{
     const scheduler=context.metadataReservation??metadataAdmission;
-    const read=(path,user=false)=>scheduler.runRead(async()=>{
-      let response;
-      try {response=await fetchImpl(user?'https://api.github.com/user':`${base}${path}`,{method:'GET',headers:{authorization:`Bearer ${token}`,accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'},redirect:'error',signal:AbortSignal.timeout(10000)});}
-      catch {need(false,'COORDINATION_GITHUB_METADATA_UNAVAILABLE',503);}
-      need(response.ok&&!response.redirected,'COORDINATION_GITHUB_METADATA_UNAVAILABLE',503);return response.json();
-    });
+    const read=(path,user=false)=>scheduler.runRead(()=>readCoordinatorMetadata({
+      url:user?'https://api.github.com/user':`${base}${path}`,token,fetchImpl,requestContext:context.requestContext,
+    }),{signal:context.requestContext?.metadataSignal});
     const user=await read('',true);need(user.login===fcosConnectionIdentifier('github','Required account')&&positive(user.id),'COORDINATION_METADATA_ACCOUNT_MISMATCH',403);
     const runId=context.principal.runId,environmentName=resuming?resumeEnvironment:initialEnvironment;
     const [repository,branch,protection,environment,run,jobs,approvals]=await Promise.all([read(''),read('/branches/main'),read('/branches/main/protection'),
@@ -112,12 +109,9 @@ export function createGithubQualificationValidator({policy,token,fetchImpl=globa
   const base=`https://api.github.com/repos/${policy.repository}`,ref=encodeURIComponent(policy.qualificationAdmission.ref.slice('refs/heads/'.length));
   return async context=>{
     const scheduler=context.metadataReservation??metadataAdmission;
-    const read=path=>scheduler.runRead(async()=>{
-      try{const response=await fetchImpl(path==='user'?'https://api.github.com/user':`${base}${path}`,{method:'GET',
-        headers:{authorization:`Bearer ${token}`,accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'},redirect:'error',signal:AbortSignal.timeout(10000)});
-        need(response.ok&&!response.redirected,'COORDINATION_GITHUB_METADATA_UNAVAILABLE',503);return await response.json();}
-      catch{need(false,'COORDINATION_GITHUB_METADATA_UNAVAILABLE',503);}
-    });
+    const read=path=>scheduler.runRead(()=>readCoordinatorMetadata({
+      url:path==='user'?'https://api.github.com/user':`${base}${path}`,token,fetchImpl,requestContext:context.requestContext,
+    }),{signal:context.requestContext?.metadataSignal});
     const operator=await read('user');
     need(operator.login===fcosConnectionIdentifier('github','Required account')&&positive(operator.id),'COORDINATION_METADATA_ACCOUNT_MISMATCH',403);
     const [repository,branch]=await Promise.all([read(''),read(`/branches/${ref}`)]);
