@@ -4,6 +4,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { load as loadYaml } from 'js-yaml';
 import { disposableDatabaseUrl, migrationSha256, planMigrationVerification, verifyLocalMigrationServer,
   MIGRATION_PARENT_PROOF_PATH, MIGRATION_STANDARD_ROLES, MIGRATION_SERVER_IDENTITY_SQL,
   isReadOnlyMigrationProofMount, loadMigrationParentProof, validateMigrationParentProof } from '../scripts/lib/migration-verification.mjs';
@@ -95,6 +96,20 @@ test('archive checkout names do not replace the explicit disposable project iden
   assert.throws(() => verifyLocalMigrationServer({ ...args, env: missingPin }), /FCOS_MIGRATION_PROJECT_ID is required/);
   for (const project of ['', '../fcos', 'fcos.example', 123]) {
     assert.throws(() => verifyLocalMigrationServer({ ...args, env: { ...args.env, FCOS_MIGRATION_PROJECT_ID: project } }), /project ID is invalid/);
+  }
+});
+
+test('both direct quality entrypoints bind their disposable project without checkout-name inference', async () => {
+  for (const [file, jobId] of [['quality.yml', 'code-and-database'], ['candidate-quality.yml', 'candidate-tests']]) {
+    const workflow = loadYaml(await readFile(new URL(`../.github/workflows/${file}`, import.meta.url), 'utf8'));
+    const job = workflow.jobs[jobId], migration = job.steps.find(step => step.run?.includes('npm run verify:migrations'));
+    assert.equal(job.env.FCOS_MIGRATION_PROJECT_ID, 'fcos');
+    assert.match(migration.run, /FCOS_MIGRATION_DOCKER_CONTAINER=supabase_db_fcos/);
+    const { args } = dockerFixture();
+    assert.equal(verifyLocalMigrationServer({ ...args, cwd: '/SYNTHETIC/renamed-checkout',
+      env: { ...args.env, FCOS_MIGRATION_PROJECT_ID: job.env.FCOS_MIGRATION_PROJECT_ID } }).project, 'fcos');
+    assert.throws(() => verifyLocalMigrationServer({ ...args,
+      env: { ...args.env, FCOS_MIGRATION_PROJECT_ID: 'another-project' } }), /does not match/);
   }
 });
 

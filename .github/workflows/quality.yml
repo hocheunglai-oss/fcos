@@ -111,6 +111,8 @@ jobs:
     needs: hosted-readiness
     if: ${{ always() }}
     runs-on: ubuntu-latest
+    env:
+      FCOS_MIGRATION_PROJECT_ID: fcos
     permissions:
       contents: read
     steps:
