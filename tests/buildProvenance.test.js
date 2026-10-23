@@ -89,21 +89,16 @@ test('deleted, staged, renamed files and executable mode affect provenance', t =
 
 test('source archives report unknown Git state and cannot produce release receipts', t => {
   const f = fixture(t); rmSync(join(f.cwd, '.git'), { recursive: true });
-  // Bound discovery at the archive root instead of relying on the suite-wide
-  // parent ceiling, whose Git discovery behavior differs between runners.
-  const inheritedCeiling = process.env.GIT_CEILING_DIRECTORIES;
-  process.env.GIT_CEILING_DIRECTORIES = f.cwd;
-  try {
-    assert.throws(() => f.git('rev-parse', 'HEAD'));
-    const receipt = f.collect({ env: { VERCEL_GIT_COMMIT_SHA: 'a'.repeat(40) } });
-    assert.equal(receipt.commitVerified, false); assert.equal(receipt.gitDirty, null);
-    assert.equal(receipt.releaseEligible, false);
-    assert.throws(() => f.collect({ requireClean: true }), /clean Git checkout/);
-    assert.throws(() => f.collect({ env: { VERCEL_GIT_COMMIT_SHA: 'a'.repeat(40), FCOS_BUILD_COMMIT_SHA: 'b'.repeat(40) } }), /disagree/);
-  } finally {
-    if (inheritedCeiling === undefined) delete process.env.GIT_CEILING_DIRECTORIES;
-    else process.env.GIT_CEILING_DIRECTORIES = inheritedCeiling;
-  }
+  // Git ignores a ceiling equal to its starting directory. Keep the physical
+  // parent ceiling so an unrelated repository above the fixture cannot leak in.
+  assert.equal(process.env.GIT_CEILING_DIRECTORIES, fixtureRoot);
+  assert.equal(existsSync(join(f.cwd, '.git')), false);
+  assert.throws(() => f.git('rev-parse', 'HEAD'));
+  const receipt = f.collect({ env: { VERCEL_GIT_COMMIT_SHA: 'a'.repeat(40) } });
+  assert.equal(receipt.commitVerified, false); assert.equal(receipt.gitDirty, null);
+  assert.equal(receipt.releaseEligible, false);
+  assert.throws(() => f.collect({ requireClean: true }), /clean Git checkout/);
+  assert.throws(() => f.collect({ env: { VERCEL_GIT_COMMIT_SHA: 'a'.repeat(40), FCOS_BUILD_COMMIT_SHA: 'b'.repeat(40) } }), /disagree/);
 });
 
 test('archive fixtures cannot discover an ancestor checkout', t => {
