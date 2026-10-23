@@ -1,9 +1,8 @@
+import { backendRssSampler } from './helpers/backendRss.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import pg from 'pg';
 import { createPreviewCheckpoint, savePreviewCheckpoint, previewCheckpointReference, markPreviewCheckpointPublished } from '../api/_xeroPreviewCheckpoint.js';
 import { performance } from 'node:perf_hooks';
@@ -27,40 +26,7 @@ const migrations = ['20260827145608_xero_contact_sync.sql', '20260829080726_xero
   '20260929192752_xero_preview_checkpoint.sql', '20260930004000_xero_preview_checkpoint_chunks.sql',
   '20260930004100_xero_financial_preview_staged.sql', '20260930004200_xero_preview_payments_reference.sql'];
 
-async function backendRssSampler(pid, connectionUrl) {
-  const run = promisify(execFile);
-  const port = new URL(connectionUrl).port || '5432';
-  // Supabase CI runs PostgreSQL in a PID namespace. Match the exact published
-  // loopback database port before reading that backend inside its container.
-  const candidates = await run('docker', ['ps', '--filter', `publish=${port}`, '--format', '{{.ID}}'])
-    .then(result => result.stdout.trim().split(/\s+/).filter(Boolean), () => []);
-  const matches = [];
-  for (const id of candidates) {
-    const inspected = JSON.parse((await run('docker', ['inspect', id])).stdout)[0];
-    if ((inspected.NetworkSettings?.Ports?.['5432/tcp'] || []).some(binding => binding.HostPort === port)) matches.push(id);
-  }
-  assert.ok(matches.length <= 1, 'The disposable database port must identify one container');
-  if (matches.length) {
-    const id = matches[0];
-    const command = (await run('docker', ['exec', id, 'cat', `/proc/${pid}/comm`])).stdout.trim();
-    // Linux truncates comm to 15 bytes; the pinned Supabase image runs
-    // .postgres-wrapped. Its readable status does not require ptrace access.
-    assert.ok(['postgres', '.postgres-wrapp'].includes(command), 'The measured container process must be PostgreSQL');
-    return async () => {
-      const status = (await run('docker', ['exec', id, 'cat', `/proc/${pid}/status`])).stdout;
-      const value = Number(status.match(/^VmRSS:\s+(\d+)\s+kB$/m)?.[1]);
-      assert.ok(value > 0, 'The PostgreSQL backend RSS must be measurable');
-      return value;
-    };
-  }
-  const command = (await run('/bin/ps', ['-o', 'comm=', '-p', String(pid)])).stdout.trim();
-  assert.match(command, /(^|\/)postgres(?:$|\s|:)/, 'The measured host process must be PostgreSQL');
-  return async () => {
-    const value = Number((await run('/bin/ps', ['-o', 'rss=', '-p', String(pid)])).stdout.trim());
-    assert.ok(value > 0, 'The PostgreSQL backend RSS must be measurable');
-    return value;
-  };
-}
+
 
 async function fixture(t, count = 3, { paymentRows = [{ salesforcePaymentId: 'payment-1', amount: 10 }], capture = null, compact = true, ttlSeconds = 900 } = {}) {
   const includePayments = capture !== null || paymentRows !== null;
@@ -414,9 +380,9 @@ test('native payment reference preserves every value of a complete 4408-row capt
     const rejected = await f.connect(); await rejected.query('set role service_role');
     await assert.rejects(f.begin(f.inlineRun, 3, f.identity, rejected), /STAGED_INVALID/);
     const { rows: [{ pid }] } = await f.db.query('select pg_backend_pid() pid');
-    const readRss = await backendRssSampler(pid, nativeUrl);
-    let peakRss = 0; const rss = async () => {
-      const value = await readRss(); peakRss = Math.max(peakRss, value); return value;
+    const readRss = await f.asOwner(() => backendRssSampler(pid, nativeUrl, f.db));
+    let peakRss = 0, rssSamples = 0; const rss = async () => {
+      const value = await readRss(); rssSamples++; peakRss = Math.max(peakRss, value); return value;
     };
     const pendingSamples = new Set(); let sampleError;
     const baselineRss = await rss();
@@ -426,7 +392,8 @@ test('native payment reference preserves every value of a complete 4408-row capt
     }, 100);
     const started = performance.now();
     try {
-      await f.begin(); await f.append(); await f.finalize(); await rss();
+      await f.begin(); await f.append(); await f.finalize();
+      clearInterval(sample); await Promise.allSettled(pendingSamples); assert.ifError(sampleError); await rss();
       assert.ok(peakRss - baselineRss < 64 * 1024, 'Begin/finalize must not reconstruct the 8+ MiB payment snapshot');
       const staged = (await f.db.query('select octet_length(run_payload::text) bytes from xero_financial_preview_builds where request_id=$1', [f.id])).rows[0].bytes;
       assert.ok(staged < 64 * 1024, 'The staged run must contain the exact compact reference');
@@ -455,6 +422,6 @@ test('native payment reference preserves every value of a complete 4408-row capt
         paymentRows: 4408, paymentUtf8Bytes: Buffer.byteLength(JSON.stringify(capture.provider.payments)),
         stagedRunBytes: staged, elapsedMilliseconds: Math.round(performance.now() - started),
         campaignCaseCount: cases.length, campaignCreateMilliseconds: Math.round(createMilliseconds), campaignRefreshMilliseconds: Math.round(refreshMilliseconds),
-        backendBaselineRssKiB: baselineRss, backendPeakRssKiB: peakRss, backendRssGrowthKiB: peakRss - baselineRss }));
+        backendBaselineRssKiB: baselineRss, backendPeakRssKiB: peakRss, backendRssGrowthKiB: peakRss - baselineRss, backendRssSamples: rssSamples }));
     } finally { clearInterval(sample); await Promise.allSettled(pendingSamples); }
   });
