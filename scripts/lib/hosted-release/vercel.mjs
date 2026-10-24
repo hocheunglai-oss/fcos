@@ -29,7 +29,7 @@ function runtimeProbeIntent(release, deploymentId, phase) {
 function sanitizedRuntimeShape(runtime) {
   const providers = new Set([...PREVIEW_PARITY_POLICY.requiredAuth, ...Object.values(PREVIEW_PARITY_POLICY.applicationKeys.credentials)]);
   return exactKeys(runtime, ['capturedAt','runtimeValidUntil','deploymentId','sha','flags','safety','auth'])
-    && typeof runtime.runtimeValidUntil === 'string'
+    && typeof runtime.capturedAt === 'string' && typeof runtime.runtimeValidUntil === 'string'
     && exactKeys(runtime.flags, PREVIEW_PARITY_POLICY.runtimeFlags)
     && Object.values(runtime.flags).every(value => exactKeys(value, ['state','value']) && value.state === 'known' && typeof value.value === 'boolean')
     && exactKeys(runtime.safety, ['readOnly','externalActions']) && typeof runtime.safety.readOnly === 'boolean'
@@ -197,16 +197,65 @@ function buildVercelAdapter({ manifest, candidateDirectory, env = process.env, f
     if (protocol !== undefined && !metered) fail('RUNTIME_PROBE_PROTOCOL', phase);
     if (metered && (!['preview','staged','live'].includes(phase) || typeof coordinator?.snapshot !== 'function'
       || typeof coordinator?.appendEvidence !== 'function')) fail('RUNTIME_PROBE_COORDINATOR_REQUIRED', phase);
-    if (metered && startedRuntimeProbes.has(digest(runtimeProbeIntent(release, value.id, phase)))) fail('RUNTIME_PROBE_READBACK_REQUIRED', phase);
+    const validateRuntime = runtime => {
+      if (!runtime) fail('RUNTIME_OBSERVATION_MISSING', phase);
+      if (metered) {
+        const captured = Date.parse(runtime.capturedAt), validUntil = Date.parse(runtime.runtimeValidUntil);
+        if (typeof runtime.runtimeValidUntil !== 'string' || !Number.isFinite(captured) || !Number.isFinite(validUntil)
+          || validUntil <= captured || now() >= validUntil || validUntil > captured + PREVIEW_PARITY_POLICY.maxAgeSeconds * 1000)
+          fail('RUNTIME_PROBE_RESULT_STALE', phase);
+      }
+      if (phase === 'preview') {
+        if (runtime.safety.readOnly !== true || Object.values(runtime.safety.externalActions).some(value => value !== false)
+          || canonical({ flags: runtime.flags, safety: runtime.safety, auth: runtime.auth }) !== canonical(release.runtime.expectedPreview)) throw new ReleaseError('PREVIEW_RUNTIME_MISMATCH', phase,
+            'Correct the bound inputs before starting a new operation.', {runtimeMismatch:runtimeMismatchDetail(release.runtime.expectedPreview,runtime,
+              {manifestHash:digest(release),candidateSha:release.candidate.sha,deploymentId:value.id})});
+      } else {
+        const expected = release.runtime.expectedProduction;
+        try { assertProductionRuntimeReadback(runtime, { expectedRuntimeFlags: expected.flags, expectedRuntimeSafety: expected.safety, expectedRuntimeAuth: expected.auth }); }
+        catch { fail('PRODUCTION_RUNTIME_MISMATCH', phase); }
+      }
+    };
+    const validateSavedRuntime = (savedIntent, savedResult, intent, resultKey) => {
+      if (!savedIntent || !exactKeys(savedResult, ['key','result','capturedAt']) || savedResult.key !== resultKey
+        || !exactKeys(savedResult.result, [...Object.keys(intent), 'runtime'])
+        || canonical({ ...savedResult.result, kind: intent.kind, runtime: null }) !== canonical({ ...intent, runtime: null })) fail('RUNTIME_PROBE_RESULT_CHANGED', phase);
+      const runtime = savedResult.result.runtime, captured = Date.parse(runtime?.capturedAt), current = now();
+      if (!sanitizedRuntimeShape(runtime)
+        || savedResult.result.kind !== 'fcos_hosted_runtime_probe_result_v1' || savedResult.capturedAt !== runtime.capturedAt
+        || runtime.deploymentId !== intent.deploymentId || runtime.sha !== release.candidate.sha || !Number.isFinite(captured)
+        || captured > current + 300000 || current - captured > PREVIEW_PARITY_POLICY.maxAgeSeconds * 1000) fail('RUNTIME_PROBE_RESULT_STALE', phase);
+      validateRuntime(runtime);
+      return runtime;
+    };
+    let runtimeProbe;
+    if (metered) {
+      const intent = runtimeProbeIntent(release, value.id, phase), intentKey = `runtime.probe.${phase}.intent`, resultKey = `runtime.probe.${phase}.result`;
+      const binding = { releaseId: release.releaseId, manifestHash: digest(release) }, attempt = digest(intent);
+      if (startedRuntimeProbes.has(attempt)) fail('RUNTIME_PROBE_READBACK_REQUIRED', phase);
+      startedRuntimeProbes.add(attempt);
+      // Resolve durable runtime state before any deployment, build-event,
+      // app-version or login read. An unresolved request permits owner readback
+      // only; a fresh adapter must not restart this provider read chain.
+      const snapshot = await coordinator.snapshot(binding), registration = snapshot?.registration;
+      if (snapshot?.epoch !== release.epoch || registration?.release_id !== release.releaseId || registration.epoch !== release.epoch
+        || registration.manifest_hash !== binding.manifestHash || !registration.manifest || digest(registration.manifest) !== binding.manifestHash
+        || !snapshot.checks || Object.getPrototypeOf(snapshot.checks) !== Object.prototype) fail('RUNTIME_PROBE_SNAPSHOT_INVALID', phase);
+      const savedIntent = snapshot.checks[intentKey], savedResult = snapshot.checks[resultKey];
+      if (savedIntent !== undefined && canonical(savedIntent) !== canonical({ key: intentKey, result: intent })) fail('RUNTIME_PROBE_INTENT_CHANGED', phase);
+      if (savedResult !== undefined) validateSavedRuntime(savedIntent, savedResult, intent, resultKey);
+      else if (savedIntent !== undefined) fail('RUNTIME_PROBE_READBACK_REQUIRED', phase);
+      runtimeProbe = { intent, intentKey, resultKey, binding, attempt, snapshot, savedIntent, savedResult };
+    }
     const exact = await deployment(value.id);
-    if (exact.state !== 'READY' || exact.sha !== release.candidate.sha || exact.manifestHash !== digest(release)
+    if ((metered && exact.id !== value.id) || exact.state !== 'READY' || exact.sha !== release.candidate.sha || exact.manifestHash !== digest(release)
       || exact.target !== (phase === 'preview' ? 'preview' : 'production')) fail('ARTIFACT_IDENTITY', phase);
     if (exact.verificationSha256 !== digest(release.verification)) fail('ARTIFACT_BUILD_CONFIGURATION_MISMATCH', phase);
     if (!sourceApi) assertProjectConfiguration(exact.projectSettings, release.verification.projectSettings);
     let selection;
     if(release.legacyReleaseContainment || sourceApi){
       if(typeof coordinator?.snapshot!=='function')fail('CONFIGURATION_SELECTION_SOURCE_BUILD_UNPROVEN');
-      const snapshot=await coordinator.snapshot({releaseId:release.releaseId,manifestHash:digest(release)});
+      const snapshot=runtimeProbe?.snapshot ?? await coordinator.snapshot({releaseId:release.releaseId,manifestHash:digest(release)});
       const sourcePhase=phase==='preview'?'preview.create':'production.stage',operationId=`${release.releaseId}-${sourcePhase.replaceAll('.','-')}`;
       const operation=snapshot.operations?.[sourcePhase];
       if(exact.operationId!==operationId||exact.sourceSha256!==release.candidate.sourceSha256)fail('CONFIGURATION_SELECTION_SOURCE_BUILD_UNPROVEN');
@@ -246,25 +295,6 @@ function buildVercelAdapter({ manifest, candidateDirectory, env = process.env, f
     const version = await atReleaseBoundary('vercel.artifact.version', () => response.json());
     if (version.commit !== release.candidate.sha || version.deploymentId !== exact.id
       || version.provenance?.sourceDigest !== release.candidate.sourceSha256 || version.provenance.releaseEligible !== true) fail('ARTIFACT_SOURCE_MISMATCH', phase);
-    const validateRuntime = runtime => {
-      if (!runtime) fail('RUNTIME_OBSERVATION_MISSING', phase);
-      if (metered) {
-        const captured = Date.parse(runtime.capturedAt), validUntil = Date.parse(runtime.runtimeValidUntil);
-        if (typeof runtime.runtimeValidUntil !== 'string' || !Number.isFinite(captured) || !Number.isFinite(validUntil)
-          || validUntil <= captured || now() >= validUntil || validUntil > captured + PREVIEW_PARITY_POLICY.maxAgeSeconds * 1000)
-          fail('RUNTIME_PROBE_RESULT_STALE', phase);
-      }
-      if (phase === 'preview') {
-        if (runtime.safety.readOnly !== true || Object.values(runtime.safety.externalActions).some(value => value !== false)
-          || canonical({ flags: runtime.flags, safety: runtime.safety, auth: runtime.auth }) !== canonical(release.runtime.expectedPreview)) throw new ReleaseError('PREVIEW_RUNTIME_MISMATCH', phase,
-            'Correct the bound inputs before starting a new operation.', {runtimeMismatch:runtimeMismatchDetail(release.runtime.expectedPreview,runtime,
-              {manifestHash:digest(release),candidateSha:release.candidate.sha,deploymentId:exact.id})});
-      } else {
-        const expected = release.runtime.expectedProduction;
-        try { assertProductionRuntimeReadback(runtime, { expectedRuntimeFlags: expected.flags, expectedRuntimeSafety: expected.safety, expectedRuntimeAuth: expected.auth }); }
-        catch { fail('PRODUCTION_RUNTIME_MISMATCH', phase); }
-      }
-    };
     const observeRuntime = async requestId => {
       const runtimeToken = runtimeTokenProvider ? await runtimeTokenProvider({ origin: exact.url, deployment: exact })
         : phase === 'preview' ? env.FCOS_RELEASE_PREVIEW_RUNTIME_TOKEN : env.FCOS_RELEASE_RUNTIME_TOKEN;
@@ -274,29 +304,14 @@ function buildVercelAdapter({ manifest, candidateDirectory, env = process.env, f
     };
     let runtime;
     if (metered) {
-      const intent = runtimeProbeIntent(release, exact.id, phase), intentKey = `runtime.probe.${phase}.intent`, resultKey = `runtime.probe.${phase}.result`;
-      const binding = { releaseId: release.releaseId, manifestHash: digest(release) }, attempt = digest(intent);
-      if (startedRuntimeProbes.has(attempt)) fail('RUNTIME_PROBE_READBACK_REQUIRED', phase);
-      startedRuntimeProbes.add(attempt);
-      const snapshot = await coordinator.snapshot(binding), registration = snapshot?.registration;
-      if (snapshot?.epoch !== release.epoch || registration?.release_id !== release.releaseId || registration.epoch !== release.epoch
-        || registration.manifest_hash !== binding.manifestHash || !registration.manifest || digest(registration.manifest) !== binding.manifestHash
-        || !snapshot.checks || Object.getPrototypeOf(snapshot.checks) !== Object.prototype) fail('RUNTIME_PROBE_SNAPSHOT_INVALID', phase);
-      const savedIntent = snapshot.checks[intentKey], savedResult = snapshot.checks[resultKey];
-      if (savedIntent !== undefined && canonical(savedIntent) !== canonical({ key: intentKey, result: intent })) fail('RUNTIME_PROBE_INTENT_CHANGED', phase);
+      const { intent, intentKey, resultKey, binding, attempt, savedIntent, savedResult } = runtimeProbe;
       if (savedResult !== undefined) {
-        if (!savedIntent || !exactKeys(savedResult, ['key','result','capturedAt']) || savedResult.key !== resultKey
-          || !exactKeys(savedResult.result, [...Object.keys(intent), 'runtime'])
-          || canonical({ ...savedResult.result, kind: intent.kind, runtime: null }) !== canonical({ ...intent, runtime: null })) fail('RUNTIME_PROBE_RESULT_CHANGED', phase);
-        runtime = savedResult.result.runtime;
-        const captured = Date.parse(runtime?.capturedAt), created = typeof exact.createdAt === 'number' ? exact.createdAt : Date.parse(exact.createdAt), current = now();
-        if (!sanitizedRuntimeShape(runtime)
-          || savedResult.result.kind !== 'fcos_hosted_runtime_probe_result_v1' || savedResult.capturedAt !== runtime.capturedAt
-          || runtime.deploymentId !== exact.id || runtime.sha !== release.candidate.sha || !Number.isFinite(captured) || !Number.isFinite(created)
-          || captured < created || captured > current + 300000 || current - captured > PREVIEW_PARITY_POLICY.maxAgeSeconds * 1000) fail('RUNTIME_PROBE_RESULT_STALE', phase);
-        validateRuntime(runtime);
+        // A valid cache still needs current deployment/source/version reads.
+        // Recheck its shape, parity and expiry after those reads complete.
+        runtime = validateSavedRuntime(savedIntent, savedResult, intent, resultKey);
+        const created = typeof exact.createdAt === 'number' ? exact.createdAt : Date.parse(exact.createdAt);
+        if (!Number.isFinite(created) || Date.parse(runtime.capturedAt) < created) fail('RUNTIME_PROBE_RESULT_STALE', phase);
       } else {
-        if (savedIntent !== undefined) fail('RUNTIME_PROBE_READBACK_REQUIRED', phase);
         // This journal persists identity, not a lease CAS. The server's shared
         // request-UUID admission enforces the single Xero GET across callers.
         const ack = await coordinator.appendEvidence({ ...binding, key: intentKey, evidence: { result: intent } });

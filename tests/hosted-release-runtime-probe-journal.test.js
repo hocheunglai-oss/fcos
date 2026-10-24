@@ -17,6 +17,10 @@ const expected = readOnly => ({
 });
 function fixture({ phase = 'preview', legacy = false } = {}) {
   const manifest = fixtureManifest(), checks = {}, events = [], requests = [];
+  if (!legacy) {
+    manifest.candidate.sha = '1e25147dc9fc9ba008096f1200b681993d49d428';
+    manifest.candidate.sourceProfile = 'compat_runtime_metering_20261024';
+  }
   manifest.runtime = { expectedPreview: expected(true), expectedProduction: expected(false), expectedSha256: digest(expected(false)),
     ...(!legacy ? { probeProtocol: 'xero_metered_v1' } : {}) };
   manifest.verification = { runtime: { image: `ghcr.io/hocheunglai-oss/fcos-release-checks@sha256:${H}`, node: 'v24.18.0', python: 'Python 3.11.2', platform: 'linux', arch: 'x64' },
@@ -45,11 +49,11 @@ function fixture({ phase = 'preview', legacy = false } = {}) {
       events.push('deployment');
       return Response.json({ id, url: url.slice(8), projectId: manifest.targets.vercelProject, teamId: manifest.targets.vercelTeam,
         readyState: 'READY', target: phase === 'preview' ? null : 'production', createdAt: now - 1000, projectSettings: manifest.verification.projectSettings,
-        meta: { githubCommitSha: manifest.candidate.sha, fcosSourceSha256: manifest.candidate.sourceSha256,
+        meta: { githubCommitSha: state.deploymentSha ?? manifest.candidate.sha, fcosSourceSha256: manifest.candidate.sourceSha256,
           fcosHostedManifest: digest(manifest), fcosVerificationSha256: digest(manifest.verification) } });
     }
     if (target.endsWith('/app-version.json')) {
-      events.push('version'); return Response.json({ commit: manifest.candidate.sha, deploymentId: id,
+      events.push('version'); state.now += state.versionAdvance || 0; return Response.json({ commit: manifest.candidate.sha, deploymentId: id,
         provenance: { sourceDigest: manifest.candidate.sourceSha256, releaseEligible: true } });
     }
     assert.equal(target, `${url}/api/connection-runtime`); assert.equal(request.method, 'POST'); events.push('POST');
@@ -84,7 +88,7 @@ test('collector keeps legacy body and sends only a supplied canonical public req
 test('actual opt-in entrypoint persists exact intent before HTTP and successful sanitized result after parity', async () => {
   const f = fixture(); validateManifest(f.manifest);
   const result = await f.verify(f.adapter());
-  assert.deepEqual(f.events, ['deployment', 'version', 'snapshot', 'intent', 'token', 'POST', 'result']);
+  assert.deepEqual(f.events, ['snapshot', 'deployment', 'version', 'intent', 'token', 'POST', 'result']);
   const intent = f.checks['runtime.probe.preview.intent'].result;
   assert.match(intent.requestId, /^[a-f0-9]{8}-[a-f0-9]{4}-5[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
   assert.deepEqual(f.requests, [{ action: 'probe', requestId: intent.requestId }]);
@@ -100,7 +104,21 @@ test('fresh persisted success is reused across adapters with no second HTTP or l
   f.events.length = 0; f.state.now += 1000;
   const second = await f.verify(f.adapter());
   assert.deepEqual(second.runtime, first.runtime); assert.deepEqual(f.checks, original);
-  assert.deepEqual(f.events, ['deployment', 'version', 'snapshot']); assert.equal(f.requests.length, 1);
+  assert.deepEqual(f.events, ['snapshot', 'deployment', 'version']); assert.equal(f.requests.length, 1);
+});
+
+test('valid cached success still requires current target and source identity', async () => {
+  const f = fixture(); await f.verify(f.adapter());
+  f.state.deploymentSha = 'f'.repeat(40); f.events.length = 0;
+  await assert.rejects(f.verify(f.adapter()), { code: 'ARTIFACT_IDENTITY' });
+  assert.deepEqual(f.events, ['snapshot', 'deployment']); assert.equal(f.requests.length, 1);
+});
+
+test('cached validity is checked again after current provider reads', async () => {
+  const f = fixture(); await f.verify(f.adapter());
+  f.state.versionAdvance = 120000; f.events.length = 0;
+  await assert.rejects(f.verify(f.adapter()), { code: 'RUNTIME_PROBE_RESULT_STALE' });
+  assert.deepEqual(f.events, ['snapshot', 'deployment', 'version']); assert.equal(f.requests.length, 1);
 });
 
 test('fresh capture cannot extend a cached Xero session beyond its exact validity deadline', async () => {
@@ -108,7 +126,7 @@ test('fresh capture cannot extend a cached Xero session beyond its exact validit
   f.state.now = Date.parse(result.runtime.runtimeValidUntil); f.events.length = 0;
   assert(f.state.now - Date.parse(result.runtime.capturedAt) < PREVIEW_PARITY_POLICY.maxAgeSeconds * 1000);
   await assert.rejects(f.verify(f.adapter()), { code: 'RUNTIME_PROBE_RESULT_STALE' });
-  assert.deepEqual(f.events, ['deployment','version','snapshot']); assert.equal(f.requests.length, 1);
+  assert.deepEqual(f.events, ['snapshot']); assert.equal(f.requests.length, 1);
 });
 
 test('absent, malformed or out-of-bounds validity never produces success evidence or a retry', async () => {
@@ -144,6 +162,15 @@ test('unknown transport and runtime mismatch leave intent consumed, no result RP
   }
 });
 
+test('unresolved persisted intent on a fresh adapter blocks before any provider read', async () => {
+  const f = fixture(); f.state.outcome = 'throw';
+  await assert.rejects(f.verify(f.adapter()), { code: 'RUNTIME_OBSERVATION_MISSING' });
+  f.events.length = 0;
+  await assert.rejects(f.verify(f.adapter()), { code: 'RUNTIME_PROBE_READBACK_REQUIRED' });
+  assert.deepEqual(f.events, ['snapshot']);
+  assert.equal(f.requests.length, 1);
+});
+
 test('stale, changed or orphaned persisted evidence refuses without HTTP or a result append', async () => {
   for (const change of [
     f => { f.state.now += (PREVIEW_PARITY_POLICY.maxAgeSeconds + 1) * 1000; },
@@ -155,7 +182,7 @@ test('stale, changed or orphaned persisted evidence refuses without HTTP or a re
   ]) {
     const f = fixture(); await f.verify(f.adapter()); change(f); f.events.length = 0;
     await assert.rejects(f.verify(f.adapter()), error => /^RUNTIME_PROBE_(?:RESULT_STALE|RESULT_CHANGED|INTENT_CHANGED)$/.test(error.code));
-    assert.deepEqual(f.events, ['deployment', 'version', 'snapshot']); assert.equal(f.requests.length, 1);
+    assert.deepEqual(f.events, ['snapshot']); assert.equal(f.requests.length, 1);
   }
 });
 
@@ -187,7 +214,7 @@ test('persisted Production results cannot add raw private fields hidden from the
     r => { r.flags.FCOS_ENABLE_FCUNO_FEDERATION.raw = SECRET; }, r => { r.safety.raw = SECRET; }]) {
     const f = fixture({ phase: 'staged' }); await f.verify(f.adapter()); change(f.checks['runtime.probe.staged.result'].result.runtime);
     f.events.length = 0; await assert.rejects(f.verify(f.adapter()), { code: 'RUNTIME_PROBE_RESULT_STALE' });
-    assert.deepEqual(f.events, ['deployment','version','snapshot']); assert.equal(f.requests.length, 1);
+    assert.deepEqual(f.events, ['snapshot']); assert.equal(f.requests.length, 1);
   }
 });
 
@@ -212,8 +239,8 @@ test('opt-in requires coordinator capability and rejects unknown protocol before
   for (const coordinator of [undefined, { snapshot: async () => ({}) }, { appendEvidence: async () => ({ appended: true }) }]) {
     const f = fixture(); await assert.rejects(f.verify(f.adapter({ coordinator })), { code: 'RUNTIME_PROBE_COORDINATOR_REQUIRED' }); assert.deepEqual(f.events, []);
   }
-  const f = fixture(); f.manifest.runtime.probeProtocol = 'unknown';
-  await assert.rejects(f.verify(f.adapter()), { code: 'RUNTIME_PROBE_PROTOCOL' }); assert.deepEqual(f.events, []);
+  const f = fixture(), adapter = f.adapter(); f.manifest.runtime.probeProtocol = 'unknown';
+  await assert.rejects(f.verify(adapter), { code: 'RUNTIME_PROBE_PROTOCOL' }); assert.deepEqual(f.events, []);
 });
 
 test('legacy adapter retains action-only request and never invokes a journal', async () => {
