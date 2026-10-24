@@ -15,7 +15,7 @@ import StateBlock from '@/components/common/StateBlock';
 import DataStatus from '@/components/common/DataStatus';
 import { buildDashboardDateWindows } from '@/lib/dashboardFilters';
 import { numericValue, textValue } from '@/lib/displayValue';
-import { QLIK_VALIDATOR_METHODOLOGY } from '@/lib/pageMethodologies';
+import { QLIK_VALIDATOR_METHODOLOGY } from '@/lib/pageMethodologyIndex';
 
 const fmt = (v, isPercent = false) => {
   const number = numericValue(v);

@@ -288,7 +288,7 @@ test('Variable Charges presents native-HKD selected totals and removes duplicate
   assert.match(component, />Remove Extra Cost<\/AlertDialogAction>/);
   assert.match(component, /Agent Agreed Currency/);
   assert.match(service, /Agency_Fee_Currency__c/);
-  assert.match(service, /requiredInputCurrency: agentCurrency/);
+  assert.match(service, /requiredInputCurrency: hongKongDelivery \? agentCurrency : 'USD'/);
   assert.match(service, /AGENT_COST_CURRENCY_MISMATCH/);
   assert.match(service, /inputCurrency === 'HKD'[\s\S]*nativeTotal \/ rate/);
 });
@@ -336,7 +336,7 @@ test('manual Hong Kong support rows inherit the exact supplier Basic Calling Cos
   };
   const settings = { usdHkdRate: 7.84, revision: 4 };
   const supplierIds = variableChargeInternals.basicCallingSupplierIds(live);
-  const options = { basicCallingSupplierIds: supplierIds, accountsById: new Map(live.accounts.map((row) => [row.Id, row])) };
+  const options = { hongKongDelivery: true, basicCallingSupplierIds: supplierIds, accountsById: new Map(live.accounts.map((row) => [row.Id, row])) };
 
   const serializedBasic = variableChargeInternals.serializeLiveRow(basic, 'extra_cost', settings, options);
   const serializedAgency = variableChargeInternals.serializeLiveRow(agency, 'extra_cost', settings, options);

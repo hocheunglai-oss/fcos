@@ -3,6 +3,8 @@ import { FULL_ACCESS, FULL_CAPABILITIES, isAdministratorUserType } from '@/lib/a
 import { authConfigurationError, isLocalAdminAllowed, isSupabaseConfigured, supabase } from '@/lib/supabaseClient';
 import { appClient } from '@/api/appClient';
 import { clientSessionState, isCurrentClientSession, setClientSessionOwner } from './clientSessionState.js';
+import { subscribeAccessRefresh } from './accessRefresh.js';
+
 
 const AuthContext = createContext();
 
@@ -63,6 +65,10 @@ async function loadSupabaseUser() {
 
   const { data } = await appClient.functions.invoke('authContext', {}, { force: true });
   if (data?.error) {
+    if (['FCUNO_IDENTITY_REAUTHENTICATION_REQUIRED', 'FCUNO_IDENTITY_SESSION_REVOKED'].includes(data.code)) {
+      window.sessionStorage.setItem(FCUNO_FORCE_REAUTH_KEY, 'true');
+      return { user: null, access: {}, accessLevels: {}, error: { type: 'auth_required', message: String(data.error) } };
+    }
     const message = String(data.error || 'Unable to verify your account.');
     const normalizedMessage = message.toLowerCase();
     if (normalizedMessage.includes('inactive')) {
@@ -77,12 +83,20 @@ async function loadSupabaseUser() {
     throw new Error(message);
   }
   if (!data?.user) throw new Error('Unable to verify your account.');
+  if (data.user.id !== sessionData.session.user?.id || data.user.active !== true) {
+    throw new Error('Your FCOS session could not be verified. Please sign in again.');
+  }
   return {
     user: data.user,
     access: data.moduleAccess || {},
+    permissionGroups: data.permissionGroups || [],
+    accessRevision: data.accessRevision ?? null,
+    grantSources: data.grantSources || {},
     accessLevels: data.moduleAccessLevels || {},
     applications: data.applications || [],
     capabilities: data.capabilities || {},
+    deploymentCapabilities: typeof data.deploymentCapabilities?.mutationsAllowed === 'boolean'
+      ? { mutationsAllowed: data.deploymentCapabilities.mutationsAllowed } : null,
     navigationPreferences: data.navigationPreferences || null,
     workspacePreferences: data.workspacePreferences || null,
     error: null,
@@ -91,6 +105,7 @@ async function loadSupabaseUser() {
 
 export const AuthProvider = ({ children }) => {
   const authRequest = useRef(0);
+  const accessSnapshot = useRef(null);
   const loggingOut = useRef(false);
   const [user, setUser] = useState(null);
   const [moduleAccess, setModuleAccess] = useState({});
@@ -103,6 +118,8 @@ export const AuthProvider = ({ children }) => {
   const [isLoadingPublicSettings] = useState(false);
   const [authError, setAuthError] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
+  const [groupAccess, setGroupAccess] = useState({ permissionGroups: [], accessRevision: null, grantSources: {} });
+  const [deploymentCapabilities, setDeploymentCapabilities] = useState(null);
   const authMode = isSupabaseConfigured ? 'supabase' : isLocalAdminAllowed ? 'local' : 'unavailable';
 
   const applyLocalAdmin = useCallback(() => {
@@ -113,6 +130,8 @@ export const AuthProvider = ({ children }) => {
     setModuleAccessLevels(fullAccessLevels());
     setApplications(LOCAL_APPLICATIONS);
     setCapabilities(FULL_CAPABILITIES);
+    setDeploymentCapabilities(null);
+    setGroupAccess({ permissionGroups: [], accessRevision: null, grantSources: {} });
     setBootstrapPreferences(null);
     setIsAuthenticated(true);
     setAuthError(null);
@@ -124,6 +143,8 @@ export const AuthProvider = ({ children }) => {
     if (loggingOut.current) return { user: null, stale: true };
     const request = ++authRequest.current;
     const session = clientSessionState();
+    setDeploymentCapabilities(null);
+    setGroupAccess({ permissionGroups: [], accessRevision: null, grantSources: {} });
     if (showLoader) setIsLoadingAuth(true);
     setAuthError(null);
     try {
@@ -135,6 +156,11 @@ export const AuthProvider = ({ children }) => {
       if (request !== authRequest.current || !isCurrentClientSession(session)) return { user: null, stale: true };
       setClientSessionOwner(result.user?.id);
       if (result.user) window.sessionStorage.removeItem(FCUNO_FORCE_REAUTH_KEY);
+      const snapshot = JSON.stringify([result.user?.id, result.user?.user_type, result.access, result.accessLevels, result.capabilities, result.deploymentCapabilities, result.permissionGroups, result.accessRevision, result.grantSources]);
+      if (accessSnapshot.current !== snapshot) appClient.functions.clearCache();
+      accessSnapshot.current = snapshot;
+      setDeploymentCapabilities(result.deploymentCapabilities || null);
+      setGroupAccess({ permissionGroups: result.permissionGroups || [], accessRevision: result.accessRevision ?? null, grantSources: result.grantSources || {} });
       setUser(result.user);
       setModuleAccess(result.access || {});
       setModuleAccessLevels(result.accessLevels || {});
@@ -153,6 +179,8 @@ export const AuthProvider = ({ children }) => {
       setClientSessionOwner(null);
       const nextError = { type: 'local_auth_error', message: error.message };
       setUser(null);
+      setDeploymentCapabilities(null);
+      setGroupAccess({ permissionGroups: [], accessRevision: null, grantSources: {} });
       setModuleAccess({});
       setModuleAccessLevels({});
       setApplications([]);
@@ -169,23 +197,27 @@ export const AuthProvider = ({ children }) => {
 
   useEffect(() => {
     checkUserAuth();
+    return () => { authRequest.current += 1; };
   }, [checkUserAuth]);
 
   useEffect(() => {
     if (!isSupabaseConfigured) return undefined;
+    let active = true;
+    const timers = new Set();
     const { data } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED') return;
+      if (event === 'INITIAL_SESSION') return;
       if (loggingOut.current) return;
       appClient.functions.clearCache();
       authRequest.current += 1;
       if (event === 'SIGNED_OUT' || clientSessionState().ownerId !== session?.user?.id) {
         setClientSessionOwner(null);
         setUser(null);
+        setDeploymentCapabilities(null);
+        setGroupAccess({ permissionGroups: [], accessRevision: null, grantSources: {} });
         setIsAuthenticated(false);
         setIsLoadingAuth(event !== 'SIGNED_OUT');
       }
       if (event === 'SIGNED_OUT') {
-        setUser(null);
         setModuleAccess({});
         setModuleAccessLevels({});
         setApplications([]);
@@ -197,18 +229,39 @@ export const AuthProvider = ({ children }) => {
         setIsLoadingAuth(false);
         return;
       }
-      window.setTimeout(() => checkUserAuth({ showLoader: false }), 0);
+      const generation = authRequest.current;
+      const timer = window.setTimeout(() => {
+        timers.delete(timer);
+        if (active && generation === authRequest.current && !loggingOut.current) checkUserAuth({ showLoader: false });
+      }, 0);
+      timers.add(timer);
     });
-    return () => data?.subscription?.unsubscribe();
+    return () => {
+      active = false;
+      for (const timer of timers) window.clearTimeout(timer);
+      data?.subscription?.unsubscribe();
+    };
   }, [checkUserAuth]);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured || !user?.id) return undefined;
+    let pending = false;
+    return subscribeAccessRefresh(async () => {
+      if (pending || loggingOut.current) return;
+      pending = true;
+      try { await checkUserAuth({ showLoader: false }); } finally { pending = false; }
+    });
+  }, [user?.id, checkUserAuth]);
 
   const login = async (email, password) => {
     if (!isSupabaseConfigured) {
       applyLocalAdmin();
       return;
     }
+    if (fcunoOidcEnabled && !legacyPasswordLoginEnabled) throw new Error('Use FCUNO to sign in to this FCOS environment.');
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) throw error;
+    loggingOut.current = false;
     const result = await checkUserAuth({ showLoader: true });
     if (!result?.user) throw new Error(loginFailureMessage(result?.error));
   };
@@ -219,9 +272,13 @@ export const AuthProvider = ({ children }) => {
       return;
     }
     if (!fcunoOidcEnabled) throw new Error('FCUNO sign-in is not enabled for this FCOS environment.');
-    const candidate = typeof returnTo === 'string' && returnTo.startsWith('/') && !returnTo.startsWith('//')
-      ? returnTo
-      : '/';
+    let candidate = '/';
+    try {
+      const target = new URL(returnTo, window.location.origin);
+      if (typeof returnTo === 'string' && returnTo.startsWith('/') && target.origin === window.location.origin) {
+        candidate = `${target.pathname}${target.search}${target.hash}`;
+      }
+    } catch { /* Keep the default local route. */ }
     const forceReauthentication = window.sessionStorage.getItem(FCUNO_FORCE_REAUTH_KEY) === 'true';
     window.sessionStorage.setItem('fcos:fcuno-return-to', candidate);
     const { error } = await supabase.auth.signInWithOAuth({
@@ -235,6 +292,7 @@ export const AuthProvider = ({ children }) => {
       window.sessionStorage.removeItem('fcos:fcuno-return-to');
       throw error;
     }
+    loggingOut.current = false;
   };
 
   const refreshApplications = async () => {
@@ -286,6 +344,8 @@ export const AuthProvider = ({ children }) => {
     setAuthChecked(false);
     setClientSessionOwner(null);
     setUser(null);
+    setDeploymentCapabilities(null);
+    setGroupAccess({ permissionGroups: [], accessRevision: null, grantSources: {} });
     setIsAuthenticated(false);
     setAuthError({ type: 'auth_required' });
     appClient.functions.clearCache();
@@ -308,14 +368,19 @@ export const AuthProvider = ({ children }) => {
       }
     }
     if (isSupabaseConfigured) {
-      await supabase.auth.signOut({ scope: 'local' }).catch(() => {
+      try {
+        const { error } = await supabase.auth.signOut({ scope: 'local' });
+        if (error) throw error;
+      } catch {
+        portalFailures.push({ applicationId: 'fcos', message: 'The server-side FCOS session could not be revoked.' });
         window.sessionStorage.setItem('fcos:portal-logout-warning', JSON.stringify([
           ...portalFailures,
-          { applicationId: 'fcos', message: 'The server-side FCOS session could not be revoked.' },
         ]));
-      });
+      }
     }
     setUser(null);
+    setDeploymentCapabilities(null);
+    setGroupAccess({ permissionGroups: [], accessRevision: null, grantSources: {} });
     setModuleAccess({});
     setModuleAccessLevels({});
     setApplications([]);
@@ -323,7 +388,7 @@ export const AuthProvider = ({ children }) => {
     setBootstrapPreferences(null);
     setIsAuthenticated(false);
     setAuthChecked(true);
-    loggingOut.current = false;
+    loggingOut.current = portalFailures.some((failure) => failure.applicationId === 'fcos');
     setIsLoadingAuth(false);
     if (isLocalAdminAllowed) applyLocalAdmin();
     return { failures: portalFailures };
@@ -349,7 +414,12 @@ export const AuthProvider = ({ children }) => {
     moduleAccessLevels,
     applications,
     capabilities,
+    deploymentCapabilities,
+    deploymentMutationAllowed: Boolean(user) && deploymentCapabilities?.mutationsAllowed === true,
     bootstrapPreferences,
+    permissionGroups: user ? groupAccess.permissionGroups : [],
+    accessRevision: user ? groupAccess.accessRevision : null,
+    grantSources: user ? groupAccess.grantSources : {},
     isAuthenticated,
     isLoadingAuth,
     isLoadingPublicSettings,

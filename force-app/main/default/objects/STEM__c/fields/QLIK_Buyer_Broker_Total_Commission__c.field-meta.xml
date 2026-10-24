@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>QLIK_Buyer_Broker_Total_Commission__c</fullName>
+    <label>QLIK Buyer Broker Total Commission</label>
+    <summarizedField>STEM_Line_Item__c.QLIK_Buyer_Broker_Commission_Lumpsum__c</summarizedField>
+    <summaryFilterItems>
+        <field>STEM_Line_Item__c.Cancelled__c</field>
+        <operation>equals</operation>
+        <value>False</value>
+    </summaryFilterItems>
+    <summaryForeignKey>STEM_Line_Item__c.STEM__c</summaryForeignKey>
+    <summaryOperation>sum</summaryOperation>
+    <trackTrending>false</trackTrending>
+    <type>Summary</type>
+</CustomField>

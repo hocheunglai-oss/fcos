@@ -43,6 +43,39 @@ private class VariableChargeReadinessTest {
         update stage;
     }
 
+    @IsTest
+    static void nonHongKongAgentDoesNotRequireHongKongCurrencyConfiguration() {
+        Map<String, Id> ids = prepareRequiredSupplier(false);
+        Port__c nonHongKong = TestDataFactory.createTestPort('GIBRALTAR', 'GIBRALTAR', true);
+        Port__c hongKong = TestDataFactory.createTestPort('HONG KONG', 'HONG KONG', true);
+        ContextManager.skipTriggers = true;
+        try {
+            update new STEM__c(Id = ids.get('stem'), Port__c = nonHongKong.Id);
+            update new Account(Id = ids.get('supplier'), Agency_Fee_Currency__c = null);
+        } finally {
+            ContextManager.skipTriggers = false;
+        }
+        Test.startTest();
+        System.assertEquals(null, VariableChargeInvoiceReadinessService.agentCurrencyProblem(ids.get('stem'), ids.get('supplier')));
+        ContextManager.skipTriggers = true;
+        try {
+            update new Account(Id = ids.get('supplier'), Agency_Fee_Currency__c = 'HKD');
+        } finally {
+            ContextManager.skipTriggers = false;
+        }
+        System.assertEquals(null, VariableChargeInvoiceReadinessService.agentCurrencyProblem(ids.get('stem'), ids.get('supplier')),
+            'A shared agent Account must not impose its Hong Kong currency on another port.');
+        ContextManager.skipTriggers = true;
+        try {
+            update new STEM__c(Id = ids.get('stem'), Port__c = hongKong.Id);
+            update new Account(Id = ids.get('supplier'), Agency_Fee_Currency__c = null);
+        } finally {
+            ContextManager.skipTriggers = false;
+        }
+        System.assert(VariableChargeInvoiceReadinessService.agentCurrencyProblem(ids.get('stem'), ids.get('supplier')).contains('Agreed Agency Fee Currency'));
+        Test.stopTest();
+    }
+
     private static void verifyBuyerSide(Map<String, Id> ids) {
         STEM_Variable_Charge_Supplier__c stage = [
             SELECT Id, Buyer_Charge_Status__c, Buyer_Charge_Confirmed_At__c,

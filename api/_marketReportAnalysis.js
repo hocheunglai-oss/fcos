@@ -1,9 +1,8 @@
+import { AUTO_AI_MODEL, AI_MODEL_SELECTIONS, isAllowedAiSelection, resolveAiModel, aiRequestOptions } from './_aiModelRouting.js';
 import { createHash } from 'node:crypto';
 import {
   DASHBOARD_AI_MODELS,
-  DEFAULT_DASHBOARD_AI_MODEL,
   dashboardAiUsageFromResponse,
-  isAllowedDashboardAiModel,
 } from './_dashboardAi.js';
 
 const EARLIEST_LIBRARY_DATE = '2025-01-01';
@@ -105,9 +104,9 @@ export async function loadMarketReportCatalogue(client, body = {}) {
   return {
     available: catalogueRows.length > 0,
     catalogue,
-    models: DASHBOARD_AI_MODELS,
+    models: AI_MODEL_SELECTIONS,
     defaults: {
-      modelId: DEFAULT_DASHBOARD_AI_MODEL,
+      modelId: AUTO_AI_MODEL,
       startDate: EARLIEST_LIBRARY_DATE,
       endDate: todayHongKong(),
       maxSelectedSeries: MAX_SELECTED_SERIES,
@@ -285,13 +284,15 @@ function modelInstructions() {
 export async function analyzeMarketReportLibrary(client, profile, body = {}, { apiKey = process.env.OPENAI_API_KEY, fetchImpl = fetch, onUsage } = {}) {
   const prompt = String(body.prompt || '').trim().slice(0, 1_200);
   if (prompt.length < 3) throw analysisError('Enter a market-analysis question.');
-  const modelId = String(body.modelId || DEFAULT_DASHBOARD_AI_MODEL).trim();
-  if (!isAllowedDashboardAiModel(modelId)) throw analysisError('Select an allowed AI model.', 400, 'MARKET_REPORT_MODEL_INVALID');
+  const selection = String(body.modelId || AUTO_AI_MODEL).trim();
+  if (!isAllowedAiSelection(selection)) throw analysisError('Select an allowed AI model.', 400, 'MARKET_REPORT_MODEL_INVALID');
   if (!String(apiKey || '').trim()) throw analysisError('Market report AI analysis is not configured.', 503, 'OPENAI_NOT_CONFIGURED');
 
   const catalogueRows = await allCatalogueRows(client);
   const request = normalizeRequest(body, catalogueRows);
   const rows = await observationRows(client, request.selected, request.startDate, request.endDate);
+  const routing = resolveAiModel({ task: 'market_report', selection, prompt, contextCount: request.selected.length });
+  const modelId = routing.modelId;
   const completeSeries = seriesFacts(request.selected, rows);
   const sampled = sampledFacts(completeSeries);
   const evidence = [];
@@ -309,13 +310,13 @@ export async function analyzeMarketReportLibrary(client, profile, body = {}, { a
   try {
     response = await fetchImpl('https://api.openai.com/v1/responses', {
       method: 'POST',
+      signal: AbortSignal.timeout(90_000),
       headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
       body: JSON.stringify({
         model: modelId,
         store: false,
         service_tier: 'default',
-        max_output_tokens: 2_000,
-        ...(modelId === DEFAULT_DASHBOARD_AI_MODEL ? { reasoning: { effort: 'minimal' } } : modelId.startsWith('gpt-5.6-') ? { reasoning: { effort: 'none' } } : {}),
+        ...aiRequestOptions(routing, 2000),
         safety_identifier: createHash('sha256').update(String(profile?.id || 'fcos-market-user')).digest('hex').slice(0, 32),
         input: [
           { role: 'system', content: [{ type: 'input_text', text: modelInstructions() }] },
@@ -342,6 +343,7 @@ export async function analyzeMarketReportLibrary(client, profile, body = {}, { a
   if (onUsage) await onUsage(dashboardAiUsageFromResponse(payload, modelId));
   return {
     modelId,
+    routing,
     model: DASHBOARD_AI_MODELS.find((model) => model.id === modelId) || null,
     range: { startDate: request.startDate, endDate: request.endDate },
     analysis: {

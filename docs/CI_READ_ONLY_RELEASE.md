@@ -7,7 +7,7 @@ persisted GitHub checkout credential. It cannot log into FCUNO or run the
 authenticated browser suite.
 
 The `authenticated-browser` check is therefore expected to fail
-until an authorized reviewer creates evidence for the exact PR SHA. A skipped
+until the trusted release workflow creates evidence for the exact PR SHA. A skipped
 or green check is not evidence. It reads successful `workflow_dispatch` runs
 for `authenticated-release.yml`, requires their workflow path and head branch
 to be the protected default branch, then looks for a non-expired
@@ -18,20 +18,20 @@ name as proof. The required branch-protection policy must protect
 
 ## Creating evidence
 
-An approved reviewer starts **FCOS authenticated release evidence** using
-`workflow_dispatch` from the protected default branch. The reviewer supplies:
+Release automation starts **FCOS authenticated release evidence** using
+`workflow_dispatch` from the protected default branch after reviewing the patch. It supplies:
 
 - the exact full lowercase PR head SHA;
 - the exact immutable FCOS Vercel deployment origin for that SHA.
 
 The workflow rejects a non-default-branch or unprotected-ref dispatch, checks out the immutable
 default-branch dispatch commit (`github.sha`) with checkout credentials disabled,
-and only then pauses at
-the protected `fcos-ci-readonly` environment. That environment must require
-human approval and contain `FCOS_E2E_EMAIL`, `FCOS_E2E_PASSWORD`, and
+and uses the branch-restricted `fcos-ci-readonly` environment without a per-run
+human approval or wait timer. Its deployment branch policy must allow only the
+`main` branch (not tags or all protected branches). It must contain `FCOS_E2E_EMAIL`, `FCOS_E2E_PASSWORD`, and
 `FCOS_E2E_VERCEL_BYPASS`; `FCOS_AUTH_E2E_ENABLED=true` is also required.
 
-After approval, the trusted harness verifies the candidate URL is canonical,
+The trusted harness verifies the candidate URL is canonical,
 immutable and HTTPS. The pinned GitHub repository's newest exact-SHA Preview
 deployment and its latest status must both be created by `vercel[bot]`, and that
 status must be successful and identify the exact supplied URL. Only then is
@@ -63,14 +63,42 @@ dependency. Payment-reminder and Special Terms functional suites remain in
 ordinary test runs; this restricted identity tests denial of those pages instead
 of being granted extra permissions to open them.
 
-## Human-review boundary
+## Routine release authorization
 
-Checking independently reported SHA and Vercel URL proves candidate identity; it does not
-make candidate JavaScript trusted. The candidate runs in a browser after an
-FCUNO login and can observe data available to the governed read-only account.
-Approve `fcos-ci-readonly` only after reviewing that candidate's code and its
-external requests. Never use this workflow to approve an unreviewed PR, a
-production alias, a branch alias, or a candidate whose SHA was not reviewed.
+On 16 September 2026 the repository owner authorized removing the recurring
+`fcos-ci-readonly` reviewer requirement. The live setting was changed without
+changing the environment secrets, its main-only branch rule, or any required
+branch check. Routine verification, retries, and an already-authorized release
+must proceed without asking the user to review deployments again.
+
+Checking the independently reported SHA and Vercel URL proves candidate
+identity; it does not establish that candidate JavaScript is safe. Review the
+patch and its external requests before dispatch. The browser receives only the
+governed read-only identity. Never use an unreviewed external candidate,
+production alias, branch alias, or a candidate whose SHA differs from the patch.
+All automated checks and immutable artifact evidence remain mandatory.
+
+## Reusable Preview login callback
+
+The one-time standing callback configuration is:
+
+```text
+https://fcos-?????????-hocheunglai-6535s-projects.vercel.app/login?federated=1
+```
+
+Supabase supports `?` as one non-separator character. Nine positions limit the
+rule to the immutable deployment hostname shape used by the candidate resolver;
+the FCOS prefix, pinned Vercel team, HTTPS, and login suffix remain fixed. The
+resolver independently verifies the exact repository, deployment, SHA and URL
+before any CI authentication. Keep the production Site URL unchanged.
+
+The setting requires one owner confirmation when configured through the browser.
+Verify it is installed before use; this document alone does not prove installation.
+After installation, keep this scoped standing rule and stop adding/removing
+matching per-build entries. Do not substitute a team-wide or all-Vercel wildcard.
+
+References: [Supabase redirect patterns](https://supabase.com/docs/guides/auth/redirect-urls),
+[GitHub environment controls](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments).
 
 ## Dedicated identity activation
 

@@ -18,6 +18,7 @@ import getVariableChargeInvoiceReadiness from "@salesforce/apex/InvoiceControlle
 import pdfLib from '@salesforce/resourceUrl/pdfLib';
 import { fireEvent } from 'c/pubsub';
 import { buildInvoiceVesselText, normalizeInvoiceVesselText } from './invoiceVesselText';
+import { buildInvoicePaymentTerm, PARTIAL_CIA_BALANCE_TERM_ERROR, PARTIAL_CIA_FORM_TERM_ERROR } from './invoicePaymentTerms';
 
 export default class FcbInvoiceForm extends LightningElement {
     stemId
@@ -54,22 +55,31 @@ export default class FcbInvoiceForm extends LightningElement {
     @track showBalanceRows = false;
     @track variableChargeReadiness;
     invoiceNumber;
+    paymentTerm;
+    partialCiaPaymentTermInputId;
+    formLoadError;
+    pdfLibraryError;
+    pdfLibraryLoadPromise;
+    invoiceFormLoadSequence = 0;
 
     @wire(CurrentPageReference) pageRef;
 
     renderedCallback(){
-        Promise.all([
-            loadScript(this, jsPDF)
+        if (this.pdfLibraryLoadPromise) return;
+        this.pdfLibraryLoadPromise = Promise.all([
+            loadScript(this, jsPDF).then(() => loadScript(this, jspdfAutotable)),
+            loadScript(this, pdfLib)
         ]).then(() => {
-            loadScript(this, jspdfAutotable);
-        })
-        loadScript(this, pdfLib).then(() => {
             this.isPDFLibLoaded = true;
-        })
+        }).catch(() => {
+            this.pdfLibraryError = 'Invoice PDF tools could not be loaded. Refresh the page before generating an invoice.';
+        });
     }
 
     @api
-    openModal(stemId, products, proforma, isProductLineItemExisting, lastInvoiceForm) {
+    async openModal(stemId, products, proforma, isProductLineItemExisting, lastInvoiceForm) {
+        const loadSequence = ++this.invoiceFormLoadSequence;
+        let loadingPaymentTerm = false;
         try {
             this.stemId = stemId;
             this.products = products;
@@ -77,48 +87,70 @@ export default class FcbInvoiceForm extends LightningElement {
             this.actionExecuted = false;
             this.proforma = proforma;
             this.isCreditNote = false;
+            this.formLoadError = null;
+            this.stem = null;
+            this.paymentTerm = null;
+            this.partialCiaPaymentTermInputId = null;
+            this.inputs = [];
+            this.productInputs = [];
+            this.balance = null;
+            this.showBalanceRows = false;
+            this.lastInvoiceForm = lastInvoiceForm || null;
             this.variableChargeReadiness = null;
             this.isProductLineItemExisting = isProductLineItemExisting;
             this.serviceDeliveryDateValue = null;
-            this.loadVariableChargeReadiness();
-            if(lastInvoiceForm){
-                getStemInfo({stemId: this.stemId}).then((stem) => {
-                    this.stem = stem;
-                    this.invoiceNumber = this.stem.KeyStem__c;
-                    this.lastInvoiceForm = lastInvoiceForm;
-                    this.fillLastForm(products);
-                })
-            }else{
-                getStemInfo({stemId: this.stemId}).then((stem) => {
-                    this.stem = stem;
-                    this.invoiceNumber = this.stem.KeyStem__c;
-                    getPaymentTerm({paymentTerm: stem.Payment_Term__c}).then(paymentTerm => {
-                        getDBSInfo().then((dbs) => {
-                            this.dbs = dbs
-                            getUBSInfo().then((ubs) => {
-                                this.ubs = ubs;
-                                this.prefillInputs(paymentTerm, products);
-                            })
-                        })
-                    })
-                })
+            this.loadVariableChargeReadiness(loadSequence, stemId);
+            const loadedStem = await getStemInfo({stemId});
+            if (loadSequence !== this.invoiceFormLoadSequence) return;
+            this.stem = loadedStem;
+            this.invoiceNumber = this.stem.KeyStem__c;
+            this.isCreditNote = products.every(product => product.total < 0);
+            if (!lastInvoiceForm || this.hasPartialCiaPaymentTerm) {
+                if (this.hasPartialCiaPaymentTerm && !this.stem.Payment_Term__c) {
+                    buildInvoicePaymentTerm(this.stem, null);
+                }
+                loadingPaymentTerm = true;
+                const loadedPaymentTerm = await getPaymentTerm({paymentTerm: this.stem.Payment_Term__c});
+                if (loadSequence !== this.invoiceFormLoadSequence) return;
+                this.paymentTerm = loadedPaymentTerm;
+                loadingPaymentTerm = false;
+                if (this.hasPartialCiaPaymentTerm) buildInvoicePaymentTerm(this.stem, this.paymentTerm);
+            }
+            if (lastInvoiceForm) {
+                this.fillLastForm(products);
+                this.applyPartialCiaPaymentTerm();
+            } else {
+                const [dbs, ubs] = await Promise.all([getDBSInfo(), getUBSInfo()]);
+                if (loadSequence !== this.invoiceFormLoadSequence) return;
+                this.dbs = dbs;
+                this.ubs = ubs;
+                this.prefillInputs(this.paymentTerm, products);
             }
         } catch (error) {
-            console.error(error);
+            if (loadSequence !== this.invoiceFormLoadSequence) return;
+            this.formLoadError = loadingPaymentTerm && this.hasPartialCiaPaymentTerm
+                ? PARTIAL_CIA_BALANCE_TERM_ERROR
+                : error?.message?.startsWith('Partial CIA requires')
+                ? error.message
+                : 'Invoice form could not be loaded. Close and reopen the invoice; refresh the page if the problem continues.';
+        } finally {
+            if (loadSequence === this.invoiceFormLoadSequence) this.actionExecuted = true;
         }
     }
 
-    loadVariableChargeReadiness() {
-        getVariableChargeInvoiceReadiness({ stemId: this.stemId })
+    loadVariableChargeReadiness(loadSequence, stemId) {
+        getVariableChargeInvoiceReadiness({ stemId })
             .then((readiness) => {
+                if (loadSequence !== this.invoiceFormLoadSequence) return;
                 this.variableChargeReadiness = readiness;
             })
             .catch(() => {
+                if (loadSequence !== this.invoiceFormLoadSequence) return;
                 this.variableChargeReadiness = {
                     ready: false,
                     requiresVariableChargeReview: true,
                     reason: 'Final Buyer Invoice readiness could not be checked. Refresh, then open the FCOS task if the problem continues.',
-                    fcosUrl: `https://fcos.fcuno.com/payment-collections?tab=variable-charges&stemId=${this.stemId}`
+                    fcosUrl: `https://fcos.fcuno.com/payment-collections?tab=variable-charges&stemId=${stemId}`
                 };
             });
     }
@@ -141,7 +173,40 @@ export default class FcbInvoiceForm extends LightningElement {
     }
 
     get isGenerateDisabled() {
-        return !this.actionExecuted || this.isFinalInvoiceBlocked;
+        return !this.actionExecuted || this.isFinalInvoiceBlocked || Boolean(this.invoiceFormError) || Boolean(this.pdfLibraryLoadPromise && !this.isPDFLibLoaded);
+    }
+
+    get hasPartialCiaPaymentTerm() {
+        return Boolean(this.stem?.Partial_CIA__c && !this.isCreditNote);
+    }
+
+    get invoiceFormError() {
+        return this.formLoadError || this.pdfLibraryError || this.partialCiaPaymentTermValidationError;
+    }
+
+    get partialCiaPaymentTermValidationError() {
+        if (!this.hasPartialCiaPaymentTerm || !this.actionExecuted || this.formLoadError) return null;
+        try {
+            const expected = buildInvoicePaymentTerm(this.stem, this.paymentTerm);
+            const paymentInputs = this.inputs.filter(input => String(input.label || '').trim().toUpperCase() === 'PAYMENT TERM');
+            if (paymentInputs.length !== 1 || paymentInputs[0].id !== this.partialCiaPaymentTermInputId || paymentInputs[0].value !== expected || paymentInputs[0].isHidden || paymentInputs[0].isDisabled) {
+                return PARTIAL_CIA_FORM_TERM_ERROR;
+            }
+        } catch (error) {
+            return error.message;
+        }
+        return null;
+    }
+
+    applyPartialCiaPaymentTerm() {
+        if (!this.hasPartialCiaPaymentTerm) return;
+        const value = buildInvoicePaymentTerm(this.stem, this.paymentTerm);
+        const previousInput = this.inputs.find(input => String(input.label || '').trim().toUpperCase() === 'PAYMENT TERM');
+        const paymentInput = { ...previousInput, id: previousInput?.id || this.makeId(7), label: 'PAYMENT TERM', value, isHidden: false, isDisabled: false, isPaymentTermLocked: true };
+        this.partialCiaPaymentTermInputId = paymentInput.id;
+        this.inputs = previousInput
+            ? this.inputs.filter(input => input === previousInput || String(input.label || '').trim().toUpperCase() !== 'PAYMENT TERM').map(input => input === previousInput ? paymentInput : input)
+            : [paymentInput, ...this.inputs];
     }
 
     get isExtraCostOnly() {
@@ -154,7 +219,7 @@ export default class FcbInvoiceForm extends LightningElement {
         this.total = JSON.parse(this.lastInvoiceForm.Total__c);
         this.productInputs = JSON.parse(this.lastInvoiceForm.Products__c);
         this.selectedProductInputs = JSON.parse(JSON.stringify(this.productInputs))
-        this.inputs = JSON.parse(this.lastInvoiceForm.Inputs__c);
+        this.inputs = JSON.parse(this.lastInvoiceForm.Inputs__c).map(input => ({ ...input, isPaymentTermLocked: false }));
         this.vesselText = normalizeInvoiceVesselText(this.lastInvoiceForm.Vessel_Text__c?.toUpperCase());
         this.todayDate = this.lastInvoiceForm.Today_Date__c?.toUpperCase();
         this.buyerName = this.lastInvoiceForm.Buyer_Name__c?.toUpperCase();
@@ -240,9 +305,8 @@ export default class FcbInvoiceForm extends LightningElement {
             console.log(this.balance);
 
         }
-        this.inputs.push({id: this.makeId(7), label: "PAYMENT TERM", value: paymentTerm.Name !== 'CIA'
-            ? paymentTerm.Name?.toUpperCase() + ' ' + paymentTerm.Description__c?.toUpperCase()
-            : paymentTerm.Description__c?.toUpperCase() });
+        this.inputs.push({id: this.makeId(7), label: "PAYMENT TERM", value: buildInvoicePaymentTerm(this.isCreditNote ? { Partial_CIA__c: false } : this.stem, paymentTerm) });
+        this.applyPartialCiaPaymentTerm();
         this.inputs.push({id: this.makeId(7), label: "DUE DATE", value: this.stem.Invoice_Due_Date__c ? new Date(`${this.stem.Invoice_Due_Date__c}T00:00:00`).toLocaleDateString('en-GB') : ''});
         this.inputs.push({id: this.makeId(7), label: "BENEFICIARY BANK", value: this.stem.Account__r.Banking_Preference__c == 'DBS' ? this.dbs.Beneficiary_Bank__c?.toUpperCase() : this.ubs.Beneficiary_Bank__c?.toUpperCase()});
         if(this.stem.Account__r.Banking_Preference__c !== 'DBS'){
@@ -310,10 +374,12 @@ export default class FcbInvoiceForm extends LightningElement {
     }
 
     handleChangeInputLabel(event){
+        if (this.hasPartialCiaPaymentTerm && event.target.dataset.id === this.partialCiaPaymentTermInputId) return;
         this.inputs.find(input => input.id === event.target.dataset.id).label = event.detail.value.toUpperCase();
     }
 
     handleChangeInputValue(event){
+        if (this.hasPartialCiaPaymentTerm && event.target.dataset.id === this.partialCiaPaymentTermInputId) return;
         this.inputs.find(input => input.id === event.target.dataset.id).value = event.detail.value.toUpperCase();
     }
 
@@ -412,6 +478,7 @@ export default class FcbInvoiceForm extends LightningElement {
     }
 
     removeInput(event){
+        if (this.hasPartialCiaPaymentTerm && event.target.dataset.id === this.partialCiaPaymentTermInputId) return;
         this.inputs = this.inputs.filter(input => {
             return input.id !== event.target.dataset.id;
         })
@@ -773,6 +840,7 @@ export default class FcbInvoiceForm extends LightningElement {
     }
 
     closeModal() {
+        this.invoiceFormLoadSequence++;
         this.inputs = [];
         this.productInputs = [];
         this.isModalOpen = false;

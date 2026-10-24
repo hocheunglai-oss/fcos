@@ -96,10 +96,23 @@ public without sharing class HongKongBasicCallingBundleService {
                     Port_Clearance_Rate_HKD__c, Port_Clearance_Calculation_Version__c
                 FROM STEM_Extra_Cost__c WHERE STEM__c IN :stemIds
             ];
-            Map<String, Product2> products = exactActiveProducts();
-            Map<Id, Account> suppliers = loadSuppliers(rows);
-            Id stemChargeRecordTypeId = Schema.SObjectType.STEM_Extra_Cost__c
-                .getRecordTypeInfosByName().get('STEM Charge').getRecordTypeId();
+            Map<Id, STEM_Extra_Cost__c> originalRows = new Map<Id, STEM_Extra_Cost__c>();
+            for (STEM_Extra_Cost__c row : rows) {
+                originalRows.put(row.Id, row.clone(true, false, false, false));
+            }
+            Boolean includesHongKongStem = false;
+            for (STEM__c stem : stems.values()) {
+                if (isHongKong(stem)) includesHongKongStem = true;
+            }
+            Map<String, Product2> products = includesHongKongStem
+                ? exactActiveProducts()
+                : new Map<String, Product2>();
+            Map<Id, Account> suppliers = includesHongKongStem
+                ? loadSuppliers(rows)
+                : new Map<Id, Account>();
+            Id stemChargeRecordTypeId = includesHongKongStem
+                ? Schema.SObjectType.STEM_Extra_Cost__c.getRecordTypeInfosByName().get('STEM Charge').getRecordTypeId()
+                : null;
 
             Map<Id, List<STEM_Extra_Cost__c>> rowsByStem = new Map<Id, List<STEM_Extra_Cost__c>>();
             for (STEM_Extra_Cost__c row : rows) {
@@ -126,16 +139,31 @@ public without sharing class HongKongBasicCallingBundleService {
             // times cannot exhaust the transaction query limit or create duplicate
             // nominations and cashflows.
             Boolean previousSkip = ContextManager.skipTriggers;
+            Set<String> changedReviewPairs = new Set<String>();
             ContextManager.skipTriggers = true;
             try {
                 if (!updates.isEmpty()) {
                     List<STEM_Extra_Cost__c> safeUpdates = new List<STEM_Extra_Cost__c>();
-                    for (STEM_Extra_Cost__c row : updates.values()) safeUpdates.add(sparseUpdate(row));
-                    update safeUpdates;
+                    for (STEM_Extra_Cost__c row : updates.values()) {
+                        if (!managedFieldsChanged(row, originalRows.get(row.Id))) continue;
+                        safeUpdates.add(sparseUpdate(row));
+                        addReviewPair(changedReviewPairs, row.STEM__c, row.Supplier__c);
+                    }
+                    if (!safeUpdates.isEmpty()) update safeUpdates;
                 }
-                if (!inserts.isEmpty()) insert inserts;
+                if (!inserts.isEmpty()) {
+                    insert inserts;
+                    for (STEM_Extra_Cost__c row : inserts) {
+                        addReviewPair(changedReviewPairs, row.STEM__c, row.Supplier__c);
+                    }
+                }
             } finally {
                 ContextManager.skipTriggers = previousSkip;
+            }
+            // Generated rows bypass the legacy STEM Charge handler chain above,
+            // but their financial changes must still revoke any stale review.
+            if (previousSkip != true && !changedReviewPairs.isEmpty()) {
+                VariableChargeInvoiceReadinessService.invalidateManagedBundlePairs(changedReviewPairs);
             }
         } finally {
             synchronizing = false;
@@ -151,6 +179,18 @@ public without sharing class HongKongBasicCallingBundleService {
         List<STEM_Extra_Cost__c> inserts,
         Map<Id, STEM_Extra_Cost__c> updates
     ) {
+        Boolean qualifyingPort = isHongKong(stem);
+        if (!qualifyingPort) {
+            for (STEM_Extra_Cost__c row : rows) {
+                if (row.Hong_Kong_Bundle_Managed__c == true && row.Id != null
+                    && isUnissued(row) && row.Cancelled__c != true) {
+                    row.Cancelled__c = true;
+                    updates.put(row.Id, row);
+                }
+            }
+            return;
+        }
+
         Map<Id, List<STEM_Extra_Cost__c>> basicsBySupplier = new Map<Id, List<STEM_Extra_Cost__c>>();
         for (STEM_Extra_Cost__c row : rows) {
             if (row.Cancelled__c == true || row.Supplier__c == null || row.Product2Id__r == null
@@ -158,9 +198,8 @@ public without sharing class HongKongBasicCallingBundleService {
             if (!basicsBySupplier.containsKey(row.Supplier__c)) basicsBySupplier.put(row.Supplier__c, new List<STEM_Extra_Cost__c>());
             basicsBySupplier.get(row.Supplier__c).add(row);
         }
-        Boolean qualifyingPort = isHongKong(stem);
         Set<String> requiredKeys = new Set<String>();
-        if (qualifyingPort && !basicsBySupplier.isEmpty()) requireCompleteProducts(products);
+        if (!basicsBySupplier.isEmpty()) requireCompleteProducts(products);
 
         for (Id supplierId : basicsBySupplier.keySet()) {
             List<STEM_Extra_Cost__c> basics = basicsBySupplier.get(supplierId);
@@ -196,7 +235,7 @@ public without sharing class HongKongBasicCallingBundleService {
 
         for (STEM_Extra_Cost__c row : rows) {
             if (row.Hong_Kong_Bundle_Managed__c != true || row.Id == null) continue;
-            if (!qualifyingPort || !requiredKeys.contains(row.Hong_Kong_Bundle_Key__c)) {
+            if (!requiredKeys.contains(row.Hong_Kong_Bundle_Key__c)) {
                 if (isUnissued(row) && row.Cancelled__c != true) {
                     row.Cancelled__c = true;
                     updates.put(row.Id, row);
@@ -318,7 +357,8 @@ public without sharing class HongKongBasicCallingBundleService {
         try {
             List<STEM_Extra_Cost__c> updates = new List<STEM_Extra_Cost__c>();
             for (STEM_Extra_Cost__c row : [
-                SELECT Id, Supplier__c, Lumpsum_Cost__c, Lumpsum_Price__c,
+                SELECT Id, STEM__c, STEM__r.Port__r.Name, STEM__r.Port__r.Country__c,
+                    Supplier__c, Lumpsum_Cost__c, Lumpsum_Price__c,
                     Buyer_Invoice__c, Supplier_Invoice__c, Cancelled__c,
                     Supplier_Cost_Input_Currency__c, Supplier_Cost_Input_Value__c
                 FROM STEM_Extra_Cost__c
@@ -327,25 +367,30 @@ public without sharing class HongKongBasicCallingBundleService {
             ]) {
                 Account supplier = accounts.get(row.Supplier__c);
                 Decimal fee = supplier?.Agency_Fee_USD__c;
-                if (fee == null || !isUnissued(row) || row.Cancelled__c == true) continue;
+                if (!isHongKong(row.STEM__r) || fee == null || !isUnissued(row) || row.Cancelled__c == true) continue;
                 String feeCurrency = agencyFeeCurrency(supplier);
                 Boolean evidenceChanged = row.Supplier_Cost_Input_Currency__c != feeCurrency
                     || row.Supplier_Cost_Input_Value__c != fee;
                 if (!evidenceChanged && (feeCurrency == 'HKD' || row.Lumpsum_Cost__c != null)) continue;
-                if (row.Lumpsum_Price__c == null) row.Lumpsum_Price__c = 0;
-                row.Supplier_Cost_Input_Currency__c = feeCurrency;
-                row.Supplier_Cost_Input_Value__c = fee;
+                // Keep queried port relationships out of DML; write only the
+                // agency amounts and evidence that this operation changes.
+                STEM_Extra_Cost__c change = new STEM_Extra_Cost__c(
+                    Id = row.Id,
+                    Lumpsum_Price__c = row.Lumpsum_Price__c == null ? 0 : row.Lumpsum_Price__c,
+                    Supplier_Cost_Input_Currency__c = feeCurrency,
+                    Supplier_Cost_Input_Value__c = fee
+                );
                 if (feeCurrency == 'USD') {
-                    row.Lumpsum_Cost__c = fee;
-                    row.Line_Total_Buy__c = fee;
+                    change.Lumpsum_Cost__c = fee;
+                    change.Line_Total_Buy__c = fee;
                 } else if (evidenceChanged) {
-                    row.Lumpsum_Cost__c = null;
-                    row.Line_Total_Buy__c = 0;
-                    row.Supplier_Cost_USD_HKD_Rate__c = null;
-                    row.Supplier_Cost_FX_Settings_Revision__c = null;
+                    change.Lumpsum_Cost__c = null;
+                    change.Line_Total_Buy__c = 0;
+                    change.Supplier_Cost_USD_HKD_Rate__c = null;
+                    change.Supplier_Cost_FX_Settings_Revision__c = null;
                 }
-                row.Line_Total__c = row.Lumpsum_Price__c;
-                updates.add(row);
+                change.Line_Total__c = change.Lumpsum_Price__c;
+                updates.add(change);
             }
             if (!updates.isEmpty()) {
                 Boolean previousSkip = ContextManager.skipTriggers;
@@ -383,6 +428,36 @@ public without sharing class HongKongBasicCallingBundleService {
             Port_Clearance_Rate_HKD__c = row.Port_Clearance_Rate_HKD__c,
             Port_Clearance_Calculation_Version__c = row.Port_Clearance_Calculation_Version__c
         );
+    }
+
+    private static Boolean managedFieldsChanged(
+        STEM_Extra_Cost__c row,
+        STEM_Extra_Cost__c before
+    ) {
+        return before == null
+            || row.Payment_Term__c != before.Payment_Term__c
+            || row.Cancelled__c != before.Cancelled__c
+            || row.Fixed__c != before.Fixed__c
+            || row.Quantity__c != before.Quantity__c
+            || row.Quantity_Delivered_Per_BDN__c != before.Quantity_Delivered_Per_BDN__c
+            || row.Unit_of_Measure__c != before.Unit_of_Measure__c
+            || row.Unit_Cost__c != before.Unit_Cost__c
+            || row.Unit_Price__c != before.Unit_Price__c
+            || row.Lumpsum_Cost__c != before.Lumpsum_Cost__c
+            || row.Lumpsum_Price__c != before.Lumpsum_Price__c
+            || row.Line_Total_Buy__c != before.Line_Total_Buy__c
+            || row.Line_Total__c != before.Line_Total__c
+            || row.Supplier_Cost_Input_Currency__c != before.Supplier_Cost_Input_Currency__c
+            || row.Supplier_Cost_Input_Value__c != before.Supplier_Cost_Input_Value__c
+            || row.Hong_Kong_Bundle_Sequence__c != before.Hong_Kong_Bundle_Sequence__c
+            || row.Hong_Kong_Bundle_Source__c != before.Hong_Kong_Bundle_Source__c
+            || row.Port_Clearance_Rate_HKD__c != before.Port_Clearance_Rate_HKD__c
+            || row.Port_Clearance_Calculation_Version__c != before.Port_Clearance_Calculation_Version__c;
+    }
+
+    private static void addReviewPair(Set<String> pairs, Id stemId, Id supplierId) {
+        if (stemId == null || supplierId == null) return;
+        pairs.add(String.valueOf(stemId) + ':' + String.valueOf(supplierId));
     }
 
     private static Map<String, Product2> exactActiveProducts() {

@@ -3,8 +3,8 @@ import test from 'node:test';
 import { documentPreviewKey, normalizeDocumentPreviewText, paginateDocumentText, specialTermDocumentModel } from '../src/lib/specialTermDocumentPreview.js';
 import { SPECIAL_TERMS_DOCUMENT_TOKENS } from '../src/lib/specialTermsDocumentTokens.js';
 
-test('document preview shares justified body and left final-line alignment tokens', () => {
-  assert.equal(SPECIAL_TERMS_DOCUMENT_TOKENS.typography.bodyAlignment, 'justify');
+test('document preview shares the chosen left-aligned IBM Plex typography', () => {
+  assert.equal(SPECIAL_TERMS_DOCUMENT_TOKENS.typography.bodyAlignment, 'left');
   assert.equal(SPECIAL_TERMS_DOCUMENT_TOKENS.typography.lastLineAlignment, 'left');
 });
 

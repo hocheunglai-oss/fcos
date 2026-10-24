@@ -183,14 +183,15 @@ export function evaluatePreviewParity(observations, { expectedCommit, sourceHash
     const auth = observations[name]?.runtime?.auth?.[provider];
     const expectedTarget = provider === 'salesforce' ? fcosSalesforceEnvironment('production').orgId
       : provider === 'supabase' ? fcosConnectionIdentifier('supabase', 'Project ref') : literal(record(name, 'XERO_TENANT_ID'));
-    const modes = { salesforce: ['jwt', 'oauth'], supabase: ['service_role', 'secret_key'], xero: ['oauth'] };
+    const modes = { salesforce: ['jwt', 'oauth', 'application'], supabase: ['service_role', 'secret_key'], xero: ['oauth'] };
     if (!expectedTarget || auth?.state !== 'authenticated' || auth.target !== expectedTarget || !modes[provider]?.includes(auth.mode)) fail('PROVIDER_AUTH_UNKNOWN', `${name}.runtime.auth.${provider}`);
     const present = key => known(record(name, key)) || record(name, key)?.state === 'unknown' && record(name, key)?.present === true;
     const complete = provider === 'supabase' ? present(auth?.mode === 'secret_key' ? 'SUPABASE_SECRET_KEY' : 'SUPABASE_SERVICE_ROLE_KEY')
       : provider === 'xero' ? present('XERO_CLIENT_SECRET') && present('XERO_REFRESH_TOKEN') && present('XERO_CLIENT_ID')
-        : provider === 'salesforce' && (auth?.mode === 'jwt'
-          ? present('SALESFORCE_JWT_PRIVATE_KEY') && present('SALESFORCE_JWT_USERNAME') && (present('SALESFORCE_JWT_CLIENT_ID') || present('SALESFORCE_CLIENT_ID'))
-          : present('SALESFORCE_ACCESS_TOKEN') || present('SALESFORCE_CLIENT_SECRET') && present('SALESFORCE_REFRESH_TOKEN') && present('SALESFORCE_CLIENT_ID'));
+        : provider === 'salesforce' && ((auth?.mode === 'jwt' || auth?.mode === 'application')
+          && present('SALESFORCE_JWT_PRIVATE_KEY') && present('SALESFORCE_JWT_USERNAME') && (present('SALESFORCE_JWT_CLIENT_ID') || present('SALESFORCE_CLIENT_ID'))
+          || (auth?.mode === 'oauth' || auth?.mode === 'application') && (present('SALESFORCE_ACCESS_TOKEN')
+            || present('SALESFORCE_CLIENT_SECRET') && present('SALESFORCE_REFRESH_TOKEN') && present('SALESFORCE_CLIENT_ID')));
     if (!complete) fail('PROVIDER_CREDENTIALS_MISSING', `${name}.runtime.auth.${provider}`);
   }
   bound(observations.coverage, candidate?.deployment, 'coverage');

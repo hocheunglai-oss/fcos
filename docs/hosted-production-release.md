@@ -1,0 +1,88 @@
+# Hosted Production release
+
+This is the consolidated replacement for the local signing/short-lived chat handoff. It remains **inactive until hosted qualification and cutover are accepted**. Installing these files does not deploy Production, remove a GitHub reviewer, import financial authority, or resolve an old uncertain write.
+
+## FCOS–FCUNO correction rollout
+
+The consolidated PR also contains the explicitly reviewed FCOS authentication corrections. They are new application scope: do not relabel the frozen compatibility candidate or reuse its authentication proof for these changes. Keep the compatibility successor and later application release distinct, with the required observed Production successor between them.
+
+Before serving the corrected application, apply and verify `supabase/migrations/20261016230316_fcuno_session_proof_and_atomic_projection.sql` followed by `20261016231319_fcuno_monotonic_revocation_floor.sql` through the admitted migration path. These add service-only immutable session proofs, atomic identity projection/audit finalization and a database-enforced revocation floor. They do not store provider tokens or export the Mac signing key. A database migration passing locally is not live migration acceptance.
+
+Existing FCUNO sessions without a derived proof must sign in to FCUNO again once. Qualify the actual OAuth callback handoff, signed provider proof, token refresh, revocation, local administrator activation and restricted CI account against the deployed target. FCUNO continues to own identity and sign-in eligibility; FCOS administrators own local application activation and permissions. New users remain inactive Viewers without default permissions until explicitly enabled.
+
+The three operational skills are maintained in `skills/`. The canonical checkout's `.fcos-cli/release-state.json` is a navigation pointer to existing checkpoints, not a release authorization. `npm run verify:controls` and `npm run release:readiness` are read-only local diagnostics; required live evidence remains separate.
+
+## Routine execution
+
+The immutable caller invokes `.github/workflows/hosted-release-controller.yml` by commit SHA. The admitted setup and a business release plan generate the manifest through `scripts/hosted-release-manifest.mjs`; source, lock, configuration, check set and controller hashes are calculated, and current Production/schema/runtime are observed. Recovery supplies the saved identical manifest, rather than generating a new release ID.
+
+The controller prepares the release, reconciles old uncertain outcomes using reads, runs code/database/fixture checks alongside Preview creation, and publishes actual immutable GitHub artifacts. Restricted browser and the separate 15-module normal-role browser run only after their prerequisites exist. The final summary identifies the exact candidate, included scope, current Production, migration requirements and compatible rollback target.
+
+Only `fcos-production-release` requests a reviewer. Waiting consumes no deployment execution window. The protected job records a 24-hour authorization for the immutable manifest. Separate automatic jobs refresh live observations, stage with `--prod --skip-domain`, verify that exact deployment, promote the same deployment ID, then verify the public domain and authenticated runtime. A long staged build must pass fresh acceptance again before promotion. The existing application build necessarily occurs in Vercel's build environment; controller credentials are never passed to candidate code.
+
+On runner interruption, dispatch the **same manifest** in a fresh workflow run, attempt 1. Completed journaled operations are reused. An uncertain write only permits readback; an empty provider listing is not evidence that it failed. There is no lease timeout, takeover or automatic resubmission. Readback runs before approval, so an expired authorization cannot strand a consumed write. The final authorization can be renewed only by a genuine new protected review, with the original receipt and deadlines retained.
+
+Automatic rollback is a separate journaled operation. It requires that Production still serves this release and that the recorded previous build matches the current schema and runtime. Otherwise the controller stops with a sanitized phase/recovery code. Application rollback never rolls back the coordination journal or database schema.
+
+## One-time setup and qualification
+
+Keep the old coordination owner active until the reviewed permanent fencing/import procedure is ready. Never activate a second independent coordinator.
+
+Complete qualification **before merging the consolidation PR**, using the narrowly admitted [pre-merge bootstrap](hosted-release-bootstrap.md). GitHub requires a dispatchable workflow path to exist on the default branch; the existing `authenticated-release.yml` path supplies that entrypoint on a separately protected qualification branch. Its immutable caller invokes the same admitted controller. This temporary path cannot request Production approval, use Production execution, or claim financial authority. Keep all qualification repairs on the same PR.
+
+1. Use the reviewed one-time [hosted toolchain publication](hosted-release-toolchain.md) to build `deploy/hosted-checks.Dockerfile`, publish the credential-free image to `ghcr.io/hocheunglai-oss/fcos-release-checks`, and record its immutable digest plus actual Node/Python/platform versions. The image contains browser/PostgreSQL/Vercel build tools; it contains no provider secrets. The candidate job has no protected environment, OIDC permission, GitHub token environment or Docker socket. Candidate commands run as a non-root user with a read-only controller mount and only disposable database/public build inputs.
+2. Deploy the isolated [coordination service](hosted-release-coordinator.md) with its dedicated coordination-only database role and read-only GitHub metadata credential. The ordinary FCOS app and ordinary Supabase Edge Functions expose broader secrets and cannot host this service under this contract. Choose and approve an isolated service host before deployment. Apply the pinned Supabase migration through the existing reviewed migration process. The endpoint must have no Vercel, Salesforce or Xero credential.
+3. Provision the environments below once. Verify exact account, target, permissions, branch rules and credential expiry. Do not rotate a valid credential or recreate valid Preview settings on another run. Never export the Mac signing key. Keep old environment gates in place until the replacement is qualified. The reusable workflow declares and callers explicitly forward the exact secret names required by each environment; GitHub requires this even when the values exist only in that environment. Verify during setup that provider credentials have no repository/organization copies. Only the GitHub read-only metadata token is repository-scoped. Never use blanket secret inheritance, and never expose credential expressions or a protected environment to candidate checks. See [GitHub environment-secret forwarding](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows#using-inputs-and-secrets-in-a-reusable-workflow).
+
+| Environment | Access | Routine reviewer |
+| --- | --- | --- |
+| `fcos-hosted-preview` | FCOS Preview deployment credential and dedicated runtime diagnostic identity | None after qualification |
+| `fcos-hosted-verification` | Read-only Vercel metadata, schema observer, FCUNO contract read and runtime diagnostic identity | None after qualification |
+| `fcos-hosted-dependency-verification` | Dedicated renewable DEVEE fixed Run As client-credentials recipe reader and preservation-only database role; no coordinator or Vercel write access | None after qualification |
+| `fcos-hosted-restricted-verification` | Restricted CI identity and read-only Preview metadata/protection | None after qualification |
+| `fcos-hosted-normal-verification` | Separate normal business role, read-only Preview metadata/protection | None after qualification |
+| `fcos-production-release` | Approval metadata only; no Vercel deployment credential | One required operator |
+| `fcos-hosted-production-resume` | Separate Production deployment credential and runtime/schema observations; cannot mint approval | None; original valid receipt required |
+
+4. Admit the controller SHA, caller/reusable workflow identities, numeric repository ID, final reviewer and protected main restrictions in the coordinator policy. Publish the non-secret setup JSON and its canonical SHA-256 as `FCOS_ADMITTED_RELEASE_SETUP` and `FCOS_ADMITTED_RELEASE_SETUP_SHA256`. Bind the immutable image, public build settings, epoch and reviewed dependency handoff files. The setup's previous-Production baseline is used only to construct the read-only observation request; the generated manifest stores the actual fresh observation. A plan supplies release ID, branch, stage, changes, exact scope, migration proof and runtime expectations. It cannot override required checks.
+5. Import the accepted NomB originals with their original timestamps and independently reviewed relevant-input mapping; measure current Salesforce/source/fixture/environment assumptions through read-only adapters. Provision the exact financial preservation membership/full-row baseline and narrow `fcos_release_observer` role. Missing or changed evidence blocks release. A 15-module browser result is not NomB, and local financial evidence is not live preservation.
+6. Follow [permanent fencing and import](hosted-release-cutover.md), including every actual writer and unresolved operation. Run the **actual hosted** Preview qualification through the same controller, artifact publisher, validator and coordinator, with simulated Production stage/promotion/rollback and crash/lost-response recovery. Local tests explicitly cannot activate the epoch. Verify candidate credential isolation in this hosted run.
+7. Configure GitHub Mobile notifications for the operator's iPhone and test an actionable protected-review alert plus a completed/failed workflow alert. Record the actual human receipt, challenge and timestamp; a runner success or generated notification record does not prove phone delivery. Do not claim the notification setup is complete without this receipt.
+8. Only after accepted qualification, notification delivery and full writer fencing, activate the same epoch and remove the obsolete intermediate reviewer gates. Keep the final Production reviewer and protected-source restrictions.
+
+The existing `code-and-database`, `dependency-review` and `authenticated-browser` branch checks remain required with their pinned GitHub Actions app. Do not delete or rename these checks: coordinator approval verifies their protection policy. Before activation, both legacy browser evidence routes and the complete legacy code/database job retain their existing behavior and reviewers.
+
+After actual epoch activation has been reviewed, the cutover administrator records the original activation RPC/readback artifact digest and installs `FCOS_HOSTED_READINESS_ACTIVATION` as `{schemaVersion:1,mode:"active",epoch,controllerSha,setupSha256,activationReceiptSha256}`. Every value must match the admitted immutable controller/setup and active epoch; the digest records integrity of the administrator-reviewed activation evidence. Only then set `FCOS_HOSTED_READINESS_ENABLED=true` and remove obsolete intermediate environment reviewers. `FCOS_HOSTED_CONTROLLER_ADMITTED` alone never enables this route. Keep these new variables unset/false before cutover; installing source or producing qualification evidence cannot enable them.
+
+The controller's `release / merge-readiness` job runs before the final Production review, reads the active coordinator and actual original browser/deterministic producer jobs and archives, and uploads `fcos-hosted-readiness-<candidateSha>/hosted-readiness.json`. The single read-only quality validator loads only the admitted controller's immutable validator, verifies that archive plus the original restricted/15-module normal and deterministic proofs, and feeds the same accepted artifact ID/digest to both required status jobs. Once enabled, the complete deterministic suites execute only through the shared v2 check manifest. `dependency-review` remains independently required. Neither proof publication nor consumption requests a reviewer or waits for whole-workflow terminal success. A later unrelated `main` commit does not replace the admitted controller or invalidate source-bound proof.
+
+The validator lists the exact candidate artifact name, waits up to 60 minutes with 30-second list polls, caches immutable run identity/archives, and caps its GETs at two in flight and 40 per minute, leaving bootstrap headroom under the shared 45-call budget. Missing evidence stays `waiting_dependency` during this bounded wait; exhaustion produces a sanitized intervention and keeps both required checks blocked. Resume the hosted run and rerun quality once readiness exists, within the original volatile deadlines. A newly merged SHA requires its own exact-source evidence; source-tree similarity does not substitute a different SHA. Readiness publication never resets browser clocks, and final Production execution still refreshes expired observations independently after human approval.
+
+The two outstanding releases remain separate: frozen compatibility `04ee3425…` with `existingUi:false` and no added handoffs; then the final application release after the required Production observation, including the separately admitted 19-status and 16-supplier scopes. The application scope references the completed compatibility release's ID, manifest hash and original live-observation hash; the controller reads that immutable journal record and rejects qualification, rollback, incomplete or different-deployment evidence. Each needs one final approval. Financial approvals and the existing financial owner are unchanged.
+
+The admitted setup includes `dependencyArtifact: {runId, name}` for the one-time immutable handoff archive. Both the read-only dependency producer and independent publisher download it, then verify all four file hashes from `setup.dependencies`. No artifact name or release-plan field can substitute different historical NomB or financial membership evidence. All seven effective Vercel build settings must be explicitly present in `verification.projectSettings`; admission and the actual deployment readback compare them, and public build values are passed explicitly to the remote build.
+
+## Evidence and diagnostics
+
+Metadata admission does not prove that a credential can deploy. The pinned CLI's
+scoped commands require `/v2/user`, while the admitted project writer must be denied
+that endpoint. The controller therefore rejects this combination before creating a
+new deployment intent. The admission-only diagnostic still checks identity, source,
+configuration and effective access; its success does not qualify the write transport.
+Do not widen the credential, remove the scope or substitute a REST request under an
+existing manifest. A replacement transport needs its own reviewed source, exact
+configuration/source receipts and hosted qualification.
+
+After a submission throws or returns no result, the controller records uncertainty
+and stops without an inline provider discovery call. A separate recovery invocation
+can read back the original consumed operation; the new-write capability guard does
+not prevent that recovery. A native CLI failure retains only its bounded exit status,
+fixed signal/error labels, and output byte counts and hashes. Raw stdout, stderr,
+command arguments, paths and credentials are never published. These diagnostics do
+not prove that a write was rejected, and never resolve an older unknown outcome.
+
+`config/release-checks-v2.json` is the shared check definition used by the local runner and hosted publisher. A cached check retains its actual source/dependency/runtime/configuration/controller binding and original capture time. Successful records in a partially failed group are retained; failed or pending records never count as acceptance. Generated server bundles must exist and pass the performance budget. Source/config changes invalidate only affected proofs; an unrelated newer `main` does not invalidate the admitted controller SHA.
+
+`release-report.json` separates observed queue time, summed parallel compute time and wall time, identifies recovery runs, and records only actionable approval/intervention/rollback/completion events. Missing timing observations stay null. GitHub's native review/workflow notifications provide delivery; iPhone receipt is verified during setup. Saved coordinator timestamps remain the authority for approval age. No routine progress messages or new chat readiness loop is required.
+
+The 15–30 minute routine machine-time target is a qualification target, not a promised first deployment time. Set the first complete Production ETA only after the hosted qualification passes. Keep related integration repairs on the same consolidation PR.

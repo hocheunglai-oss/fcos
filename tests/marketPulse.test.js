@@ -134,7 +134,7 @@ test('Market Pulse handler, permissions and caching are wired without a Brent pr
   assert.match(handler, /async function marketPulseSnapshot/);
   assert.match(policy, /marketPulseSnapshot: readPolicy\(\{"cache":"server"/);
   assert.match(api, /ttlSeconds: 60/);
-  assert.match(api, /version: '5'/);
+  assert.match(api, /version: '6'/);
   assert.match(api, /payload: \{ month: asOfDate\?\.slice\(0, 7\) \|\| hktThisMonth\(\), asOfDate, mode: asOfDate \? 'historical' : 'latest' \}/);
   assert.match(api, /previousMopsRow/);
   assert.match(api, /previousBrief/);

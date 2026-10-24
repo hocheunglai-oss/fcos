@@ -166,16 +166,24 @@ function activeDispute(stem = {}) {
 
 function normalizedDashboardScope(scope = {}) {
   const filters = scope?.filters || {};
+  const countryCodes = unique(Array.isArray(filters.countryCodes) ? filters.countryCodes : []).map((value) => value.toUpperCase());
+  const excludedCountryCodes = unique(Array.isArray(filters.excludedCountryCodes) ? filters.excludedCountryCodes : []).map((value) => value.toUpperCase());
+  const invalidCountry = [...countryCodes, ...excludedCountryCodes].some((country) => country.length > 100 || /[\u0000-\u001f\u007f]/.test(country));
+  if (invalidCountry || countryCodes.length > 200 || excludedCountryCodes.length > 200 || countryCodes.some((country) => excludedCountryCodes.includes(country))) {
+    throw serviceError('Dashboard country filters and exclusions are invalid.', 400, 'ACCOUNT_INSIGHT_COUNTRY_FILTER_INVALID');
+  }
   return {
     mode: scope?.mode === 'account_wide' ? 'account_wide' : 'dashboard',
     portIds: unique(Array.isArray(filters.portIds) ? filters.portIds : []).filter((id) => SALESFORCE_ID.test(id)),
-    countryCodes: unique(Array.isArray(filters.countryCodes) ? filters.countryCodes : []).map((value) => value.toUpperCase()),
+    countryCodes,
+    excludedCountryCodes,
     disputeOnly: scope?.disputeOnly === true,
     labels: {
       company: text(scope?.labels?.company),
       group: text(scope?.labels?.group),
       port: text(scope?.labels?.port),
       country: text(scope?.labels?.country),
+      desk: text(scope?.labels?.desk),
     },
   };
 }
@@ -185,9 +193,11 @@ function applyDashboardScope(dataset, requestedScope) {
   if (scope.mode === 'account_wide') return { dataset, scope };
   const portKeys = new Set(scope.portIds.map(idKey));
   const countries = new Set(scope.countryCodes.map((value) => value.toUpperCase()));
+  const excludedCountries = new Set(scope.excludedCountryCodes.map((value) => value.toUpperCase()));
   const matches = (stem) => {
     if (portKeys.size && !portKeys.has(idKey(stem.Port__c))) return false;
     if (countries.size && !countries.has(text(stem.Port__r?.Country__c).toUpperCase())) return false;
+    if (excludedCountries.has(text(stem.Port__r?.Country__c).toUpperCase())) return false;
     if (scope.disputeOnly && !activeDispute(stem)) return false;
     return true;
   };

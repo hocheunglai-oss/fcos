@@ -4,6 +4,7 @@ import { isExternalActionEnabled } from './_externalActionGates.js';
 const PURPOSE_KEYS = new Set([
   'payment_reminders',
   'outstanding_invoice_reports',
+  'missing_nom_b_reminders',
   'incoming_payment_reports',
   'growth_coaching',
   'fcos_updates',

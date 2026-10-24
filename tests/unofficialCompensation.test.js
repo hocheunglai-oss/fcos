@@ -102,9 +102,9 @@ test('Unofficial Compensation is service-only, permissioned, navigable and dispu
   assert.match(server, /requireOpen: false/);
   assert.match(service, /\['Buyers_Broker__c', 'Buyer_Broker__c'\]/);
   assert.match(service, /schema\.lineBuyerBrokerFields\.map/);
-  assert.match(page, /Outstanding Accounts/);
-  assert.match(page, /Closed \/ Settled/);
-  assert.match(page, /Data Issues/);
+  assert.match(page, /Needs action · outstanding/);
+  assert.match(page, /Completed · settled/);
+  assert.match(page, /Data issues/);
   assert.match(page, /accountClKeyLabel/);
   assert.match(page, /Record UOC Recovery/);
   assert.match(page, /Manage Agreed Compensation/);

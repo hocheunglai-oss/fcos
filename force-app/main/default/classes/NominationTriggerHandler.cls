@@ -103,18 +103,37 @@ public class NominationTriggerHandler {
 */
 
     public static void createStemStatuses(List<Nomination__c> nominations){
+        if (nominations.isEmpty()) return;
+
+        Set<Id> stemIds = new Set<Id>();
+        for (Nomination__c nomination : nominations) {
+            if (nomination.STEM__c == null) {
+                throw new MissingStemException('Cannot create a STEM status: the nomination must reference an existing STEM.');
+            }
+            stemIds.add(nomination.STEM__c);
+        }
+        Map<Id, STEM__c> stemsById = new Map<Id, STEM__c>([
+            SELECT Id, Name FROM STEM__c WHERE Id IN :stemIds
+        ]);
+
         List<STEM_Status__c> stemStatuses = new List<STEM_Status__c>();
-        for(Nomination__c nomination : nominations){
+        for (Nomination__c nomination : nominations) {
+            STEM__c stem = stemsById.get(nomination.STEM__c);
+            if (stem == null) {
+                throw new MissingStemException('Cannot create a STEM status: the nomination must reference an existing STEM.');
+            }
             stemStatuses.add(new STEM_Status__c(
                 Nomination__c = nomination.Id,
                 STEM__c = nomination.STEM__c,
                 Enquiry__c = nomination.Enquiry__c,
-                Name = nomination.STEM__r.Name,
+                Name = stem.Name,
                 Account__c = nomination.Account__c
             ));
         }
         insert stemStatuses;
     }
+
+    private class MissingStemException extends Exception {}
 
     public static void deleteContentDocuments(Map<Id, Nomination__c> nominationMap) {
         List<ContentDocumentLink> contentDocumentLinkList =[SELECT Id, ContentDocumentId FROM ContentDocumentLink WHERE LinkedEntityId In: nominationMap.keySet()];

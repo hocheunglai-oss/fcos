@@ -1,0 +1,83 @@
+{
+  "actor": {
+    "id": "JqCD8K7SRcyoGf6ieD1I1FW7",
+    "username": "hocheunglai-6535"
+  },
+  "team": {
+    "id": "team_MbKDazzCrou3eKTuausPv4X2",
+    "slug": "hocheunglai-6535s-projects"
+  },
+  "project": {
+    "id": "prj_RSs4qXdrK6MQVOqB0N1FRVMVxDwi",
+    "name": "vercel-local-file-path-probe",
+    "nodeVersion": "24.x",
+    "productionDeployment": "dpl_FsQBGdS3AmvEZr81NHa2Q9ViAY3W",
+    "ssoProtection": null
+  },
+  "applicationProductionId": "dpl_KmyVbNkg7okjW4PPjR8ZJXRz19AL",
+  "environment": [
+    {
+      "id": "5Rl6tmYklkODNosl",
+      "key": "FCOS_COORDINATOR_POLICY",
+      "type": "plain",
+      "target": [
+        "preview"
+      ],
+      "gitBranch": null,
+      "customEnvironmentIds": null,
+      "comment": "frozen-install-2e5cffcf-b5d1-4d7a-a839-4073df3f328a"
+    },
+    {
+      "id": "z5w1CdN0T4cjCXtV",
+      "key": "PORT",
+      "type": "plain",
+      "target": [
+        "preview"
+      ],
+      "gitBranch": null,
+      "customEnvironmentIds": null,
+      "comment": "frozen-install-2e5cffcf-b5d1-4d7a-a839-4073df3f328a"
+    },
+    {
+      "id": "1jfua8fNOnCmpTV6",
+      "key": "FCOS_COORDINATOR_DATABASE_URL",
+      "type": "sensitive",
+      "target": [
+        "preview"
+      ],
+      "gitBranch": null,
+      "customEnvironmentIds": null,
+      "comment": "FCOS coordinator runtime-e54b9786-76d2-4ae3-af3f-ebf1e08801fc; sha256=b25494f5523be3b8de8d6d2a4ac941c489f992b1ea139f4fca34ec7c2d19fac2"
+    },
+    {
+      "id": "yzB80J2FpDlQ0wRP",
+      "key": "FCOS_COORDINATOR_GITHUB_METADATA_TOKEN",
+      "type": "sensitive",
+      "target": [
+        "preview"
+      ],
+      "gitBranch": null,
+      "customEnvironmentIds": null,
+      "comment": "Dedicated FCOS-only read-only coordinator token; expires 2026-11-16. No provider write permissions."
+    }
+  ],
+  "credentialVersions": [
+    {
+      "id": "1jfua8fNOnCmpTV6",
+      "createdAt": 1792220495823,
+      "updatedAt": 1792220495823
+    },
+    {
+      "id": "yzB80J2FpDlQ0wRP",
+      "createdAt": 1792204742090,
+      "updatedAt": 1792204742090
+    },
+    {
+      "id": "z5w1CdN0T4cjCXtV",
+      "createdAt": 1792221354096,
+      "updatedAt": 1792221354096
+    }
+  ],
+  "runtime": "nodejs24.x",
+  "environmentMetadataSha256": "e3d602ed8d9424035341b283d1a790b37ebd0445b28b53bfa6c29699ba2fe2e6"
+}

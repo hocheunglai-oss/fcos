@@ -291,11 +291,25 @@ function compatibilityNormalStorage(source, origin) {
   return { state, token };
 }
 
-export async function verifyRuntimeCompatibilityNormalRole({ env = process.env, fetchImpl = globalThis.fetch } = {}) {
+export async function verifyRuntimeCompatibilityNormalRole({ env = process.env, fetchImpl = globalThis.fetch,
+  resolveCandidate = resolveFcosE2eCandidate, observeRuntime = collectRuntimeObservation,
+  authenticate = ({ env, url }) => compatibilityNormalStorage(env.FCOS_NORMAL_ROLE_STORAGE_STATE_BASE64, url),
+  browserType = chromium, admitHostedSource, signerEnabled, collectSigner = collectPreviewEmailSignerEvidence,
+  writeEvidence = evidence => writeFileSync(join(env.RUNNER_TEMP, 'fcos-normal-role-evidence.json'), `${JSON.stringify(evidence)}\n`, { mode: 0o600, flag: 'wx' }),
+} = {}) {
   const root = fileURLToPath(new URL('..', import.meta.url)), successor = env.FCOS_E2E_EXPECTED_COMMIT === SUCCESSOR_LIVE_CONTRACT.candidateSha;
   if (env.FCOS_COMPATIBILITY_NORMAL_ROLE_ENABLED !== 'true' || env.GITHUB_ACTIONS !== 'true' || env.GITHUB_REF_PROTECTED !== 'true' || env.GITHUB_REPOSITORY !== fcosConnectionIdentifier('github', 'Repository') || ![FIRST_RUNTIME_ROLLOUT.candidateSha, SUCCESSOR_LIVE_CONTRACT.candidateSha].includes(env.FCOS_E2E_EXPECTED_COMMIT) || !/^[0-9a-f]{40}$/.test(env.GITHUB_SHA || '')) throw compatibilityNormalDiagnosticError('CONFIGURATION', 'CONFIGURATION_INVALID');
   let admission, operationBinding;
-  if (successor) {
+  let hostedSource;
+  if (admitHostedSource) {
+    hostedSource = await normalRoleDiagnosticStage('SOURCE_SCOPE', () => admitHostedSource({ env, root, successor }));
+    if (hostedSource?.sourceVerified !== true || hostedSource.observationSourcesVerified !== true
+      || hostedSource.candidateSha !== env.FCOS_E2E_EXPECTED_COMMIT || hostedSource.controllerSha !== env.GITHUB_SHA
+      || !['sourceDigest', 'lockSha256', 'configurationSha256', 'manifestHash'].every(key => /^[a-f0-9]{64}$/.test(hostedSource[key] || ''))) {
+      throw compatibilityNormalDiagnosticError('SOURCE_SCOPE', 'READ_ONLY_GUARD_MISSING');
+    }
+    admission = hostedSource.signerAdmission;
+  } else if (successor) {
     admission = await normalRoleDiagnosticStage('SOURCE_SCOPE', () => {
       if (!env.GH_TOKEN) throw compatibilityNormalDiagnosticError('SOURCE_SCOPE', 'READ_ONLY_GUARD_MISSING');
       return collectSuccessorLiveOperationAdmission({ sourceCwd: root, trustedCwd: root,
@@ -306,13 +320,13 @@ export async function verifyRuntimeCompatibilityNormalRole({ env = process.env, 
     operationBinding = { sha: admission.candidate.sha, harnessSha: admission.harnessSha, sourceDigest: admission.candidate.sourceDigest,
       lockHash: admission.candidate.lockHash, configurationRevision: admission.context.configurationRevision, candidateTreeHash: SUCCESSOR_LIVE_CONTRACT.candidateTreeHash };
   }
-  const scope = await normalRoleDiagnosticStage('SOURCE_SCOPE', () => successor ? successorLiveSourceReceipt(admission) : verifyRuntimeCompatibility({ cwd: root,
+  const scope = hostedSource ? null : await normalRoleDiagnosticStage('SOURCE_SCOPE', () => successor ? successorLiveSourceReceipt(admission) : verifyRuntimeCompatibility({ cwd: root,
     baseCommit: FIRST_RUNTIME_ROLLOUT.previousSha, candidateCommit: FIRST_RUNTIME_ROLLOUT.candidateSha }));
-  if (!compatibilityOperationScopeVerified(scope, { binding: operationBinding, admission })) throw compatibilityNormalDiagnosticError('SOURCE_SCOPE', 'READ_ONLY_GUARD_MISSING');
-  await normalRoleDiagnosticStage('OBSERVATION_SOURCES', () => successor ? successorLiveSourceReceipt(admission).observationSources : verifyCompatibilityObservationSources({ cwd: root,
+  if (!hostedSource && !compatibilityOperationScopeVerified(scope, { binding: operationBinding, admission })) throw compatibilityNormalDiagnosticError('SOURCE_SCOPE', 'READ_ONLY_GUARD_MISSING');
+  if (!hostedSource) await normalRoleDiagnosticStage('OBSERVATION_SOURCES', () => successor ? successorLiveSourceReceipt(admission).observationSources : verifyCompatibilityObservationSources({ cwd: root,
     baseSha: FIRST_RUNTIME_ROLLOUT.previousSha, candidateSha: FIRST_RUNTIME_ROLLOUT.candidateSha }));
   const url = await normalRoleDiagnosticStage('CANDIDATE_URL', () => canonicalFcosE2eCandidateUrl(env.FCOS_E2E_CANDIDATE_URL));
-  const verified = await normalRoleDiagnosticStage('CANDIDATE_RESOLUTION', () => resolveFcosE2eCandidate({ candidateUrl: url, expectedCommit: env.FCOS_E2E_EXPECTED_COMMIT,
+  const verified = await normalRoleDiagnosticStage('CANDIDATE_RESOLUTION', () => resolveCandidate({ candidateUrl: url, expectedCommit: env.FCOS_E2E_EXPECTED_COMMIT,
     githubToken: env.GITHUB_TOKEN, protectionBypass: env.FCOS_E2E_VERCEL_BYPASS, fetchImpl, maxWaitMs: 0 }));
   const versionResponse = await normalRoleDiagnosticStage('VERSION_FETCH', () => fetchImpl(`${url}/app-version.json`, { redirect: 'error',
     headers: env.FCOS_E2E_VERCEL_BYPASS ? { 'x-vercel-protection-bypass': env.FCOS_E2E_VERCEL_BYPASS } : {}, signal: AbortSignal.timeout(20000) }));
@@ -320,11 +334,11 @@ export async function verifyRuntimeCompatibilityNormalRole({ env = process.env, 
   const versionStatus = Number.isInteger(versionResponse.status) ? versionResponse.status : undefined;
   if (!versionResponse.ok || versionResponse.redirected || version.commit !== verified.commit || !version.deploymentId
     || !/^[0-9a-f]{64}$/.test(version.provenance?.sourceDigest || '') || version.provenance.releaseEligible !== true
-    || successor && version.provenance.sourceDigest !== admission.candidate.sourceDigest) throw compatibilityNormalDiagnosticError('VERSION_PROVENANCE', 'VERSION_INVALID', { status: versionStatus });
-  const runtime = await normalRoleDiagnosticStage('RUNTIME_OBSERVATION', () => collectRuntimeObservation({ url, deployment: { id: version.deploymentId, url, sha: verified.commit, createdAt: version.builtAt },
+    || successor && version.provenance.sourceDigest !== (hostedSource?.sourceDigest || admission.candidate.sourceDigest)) throw compatibilityNormalDiagnosticError('VERSION_PROVENANCE', 'VERSION_INVALID', { status: versionStatus });
+  const runtime = await normalRoleDiagnosticStage('RUNTIME_OBSERVATION', () => observeRuntime({ url, deployment: { id: version.deploymentId, url, sha: verified.commit, createdAt: version.builtAt },
     sourceDigest: version.provenance.sourceDigest, token: env.FCOS_RELEASE_PREVIEW_RUNTIME_TOKEN, protectionBypass: env.FCOS_E2E_VERCEL_BYPASS, fetchImpl }));
   if (!compatibilityRuntimePreviewVerified(runtime, { id: version.deploymentId, sha: verified.commit })) throw compatibilityNormalDiagnosticError('RUNTIME_SAFETY', 'RUNTIME_SAFETY_FAILED');
-  const { state, token } = await normalRoleDiagnosticStage('STORAGE_STATE', () => compatibilityNormalStorage(env.FCOS_NORMAL_ROLE_STORAGE_STATE_BASE64, url), 'STORAGE_INVALID');
+  const { state, token } = await normalRoleDiagnosticStage('STORAGE_STATE', () => authenticate({ env, url }), 'STORAGE_INVALID');
   const response = await normalRoleDiagnosticStage('AUTH_FETCH', () => fetchImpl(`${url}/api/functions/authContext`, { method: 'POST', body: '{}', redirect: 'error', signal: AbortSignal.timeout(20000),
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json',
       ...(env.FCOS_E2E_VERCEL_BYPASS ? { 'x-vercel-protection-bypass': env.FCOS_E2E_VERCEL_BYPASS } : {}) } }));
@@ -332,8 +346,8 @@ export async function verifyRuntimeCompatibilityNormalRole({ env = process.env, 
   if (!response.ok || response.redirected) throw compatibilityNormalDiagnosticError('AUTH_RESPONSE', 'AUTH_RESPONSE_INVALID', { status: authStatus });
   const auth = await normalRoleDiagnosticStage('IDENTITY', () => response.json(), 'IDENTITY_INVALID');
   const identity = await normalRoleDiagnosticStage('IDENTITY', () => assertCompatibilityNormalIdentity(auth, { approvedEmail: env.FCOS_NORMAL_ROLE_APPROVED_EMAIL }), 'IDENTITY_INVALID');
-  const emailSigner = previewEmailSignerEnabled(verified.commit, { admission })
-    ? await normalRoleDiagnosticStage('RUNTIME_OBSERVATION', () => collectPreviewEmailSignerEvidence({ origin: url, deploymentId: version.deploymentId,
+  const emailSigner = (signerEnabled ? signerEnabled(verified.commit, { admission }) : previewEmailSignerEnabled(verified.commit, { admission }))
+    ? await normalRoleDiagnosticStage('RUNTIME_OBSERVATION', () => collectSigner({ origin: url, deploymentId: version.deploymentId,
       sha: verified.commit, sourceDigest: version.provenance.sourceDigest, bearerToken: token, protectionBypass: env.FCOS_E2E_VERCEL_BYPASS, fetchImpl, admission }))
     : undefined;
   const workspacePreferences = await normalRoleDiagnosticStage('WORKSPACE_PREFERENCES', async () => {
@@ -350,7 +364,7 @@ export async function verifyRuntimeCompatibilityNormalRole({ env = process.env, 
   const checks = [];
   const moduleReasons = new Map();
   try {
-    browser = await chromium.launch({ headless: true });
+    browser = await browserType.launch({ headless: true });
     context = await browser.newContext({ storageState: state, viewport: { width: 1440, height: 1000 }, serviceWorkers: 'block' });
     await context.route('**/*', createNormalRoleVerificationRoute({ origin: url, protectionBypass: env.FCOS_E2E_VERCEL_BYPASS,
       requestAllowed: compatibilityNormalRequestAllowed, deniedReadsFatal: true,
@@ -446,16 +460,16 @@ export async function verifyRuntimeCompatibilityNormalRole({ env = process.env, 
   }
   const evidence = { schemaVersion: 1, baseSha: FIRST_RUNTIME_ROLLOUT.previousSha, candidateSha: verified.commit, candidateUrl: url, deploymentId: version.deploymentId,
     sourceDigest: version.provenance.sourceDigest, harnessSha: env.GITHUB_SHA, capturedAt: new Date().toISOString(), checks, browserIsolation,
-    ...(successor ? { lockHash: admission.candidate.lockHash, configurationRevision: admission.context.configurationRevision } : {}),
+    ...(successor ? { lockHash: hostedSource?.lockSha256 || admission.candidate.lockHash, configurationRevision: hostedSource?.configurationSha256 || admission.context.configurationRevision } : {}),
     ...(emailSigner ? { emailSigner } : {}) };
   if (!compatibilityNormalCoverageVerified({ checks }) || checks.length !== COMPATIBILITY_NORMAL_MODULES.length) throw compatibilityNormalDiagnosticError('COVERAGE', 'COVERAGE_INCOMPLETE', { moduleReasons });
-  if (successor) {
+  if (successor && !hostedSource) {
     successorLiveSelection(admission);
     if (!successorLiveNormalCoverageVerified({ admission, normal: { ...evidence, kind: 'normal_role', sha: verified.commit },
       candidate: { id: version.deploymentId, url, createdAt: version.builtAt } })) throw compatibilityNormalDiagnosticError('COVERAGE', 'COVERAGE_INCOMPLETE', { moduleReasons });
   }
   if (!env.RUNNER_TEMP) throw compatibilityNormalDiagnosticError('EVIDENCE', 'EVIDENCE_WRITE_FAILED', { moduleReasons });
-  await normalRoleDiagnosticStage('EVIDENCE', () => writeFileSync(join(env.RUNNER_TEMP, 'fcos-normal-role-evidence.json'), `${JSON.stringify(evidence)}\n`, { mode: 0o600, flag: 'wx' }), 'EVIDENCE_WRITE_FAILED');
+  await normalRoleDiagnosticStage('EVIDENCE', () => writeEvidence(evidence), 'EVIDENCE_WRITE_FAILED');
   return evidence;
 }
 

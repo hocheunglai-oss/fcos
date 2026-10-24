@@ -230,7 +230,7 @@ function rpcError(error) {
   const message = String(
     error?.message || "Collaboration storage request failed.",
   );
-  if (/changed after it was opened/i.test(message))
+  if (/changed after it was opened|already saved different values/i.test(message))
     return appError(message, 409);
   if (/not found|unavailable/i.test(message)) return appError(message, 404);
   if (
@@ -1055,7 +1055,8 @@ function createValues(body, profile) {
 export async function collaborationCreate(body = {}, accessContext) {
   const { client, profile } = accessContext;
   const workflowValues = normalizeWorkflowValues(body, { partial: false });
-  const { data, error } = await client.rpc("create_collaboration_item", {
+  const { data, error } = await client.rpc("create_collaboration_item_once", {
+    p_request_id: requiredUuid(body.requestId, "Create request; refresh this form"),
     p_values: { ...createValues(body, profile), ...workflowValues },
     p_actor_user_id: profile.id,
     p_actor_email: profile.email,
@@ -1362,9 +1363,10 @@ export async function collaborationTemplateSave(body = {}, accessContext) {
       ...createValues(projectBody, profile),
       ...normalizeWorkflowValues(projectBody, { partial: false }),
     };
-    const rpc = await tryOptionalRpc(client, "save_collaboration_template", {
-      p_values: { mode: "use", id: templateId, project },
-      p_actor_id: profile.id,
+    const rpc = await tryOptionalRpc(client, "create_collaboration_item_once", {
+      p_request_id: requiredUuid(body.requestId, "Create request; refresh this form"),
+      p_values: { ...project, _templateId: templateId },
+      p_actor_user_id: profile.id,
       p_actor_email: profile.email,
     });
     if (!rpc.available) {
@@ -1373,7 +1375,7 @@ export async function collaborationTemplateSave(body = {}, accessContext) {
         503,
       );
     }
-    return collaborationDetail({ itemId: rpc.data.project.id }, accessContext);
+    return collaborationDetail({ itemId: rpc.data.item.id }, accessContext);
   }
   const expectedRevision = templateId ? Number(body.expectedRevision) : null;
   if (

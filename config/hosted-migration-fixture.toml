@@ -1,0 +1,20 @@
+# Public, disposable CI fixture only. Never link this directory to a hosted project.
+project_id = "fcos"
+
+[api]
+port = 54321
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 17
+
+# The isolated candidate owns baseline/upgrade verification in temporary databases.
+# Starting the fixture must not apply controller or candidate application SQL.
+[db.migrations]
+enabled = false
+schema_paths = []
+
+[db.seed]
+enabled = false
+sql_paths = []

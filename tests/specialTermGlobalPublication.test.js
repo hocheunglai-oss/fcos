@@ -55,7 +55,7 @@ test('inline editing is role-aware across all clause projections, local, and no-
   assert.match(dialog, /specialTermClauseGlobalPublish/);
   assert.match(dialog, /Type \{review\.confirmationLabel\} exactly to publish/);
   assert.match(dialog, /No live terms change/);
-  assert.match(revision, /localPublicationBlocked=\{unsaved \|\| hasUnsavedParentChanges\}/);
+  assert.match(revision, /localPublicationBlocked=\{dirty \|\| unsaved \|\| hasUnsavedParentChanges\}/);
   assert.match(revision, /'Unavailable account'/);
   assert.match(revision, /'Unavailable port'/);
   assert.doesNotMatch(revision, /label \|\| id/);

@@ -1,0 +1,680 @@
+{
+  "kind": "supplier_financial_bucket_successor_manifest_v1",
+  "family": "xero-supplier-financial-bucket-successor-v1-20261006",
+  "version": 1,
+  "synthetic": true,
+  "nonExecutablePreparation": true,
+  "recoveredOriginal": false,
+  "originalCaseEquivalence": false,
+  "currentBusinessCase": false,
+  "proposalSha256": "b6f151ba89afccfeab04e036de26811b10ca2fa630913aae95fd2c9205d3a900",
+  "humanDecisionSha256": "3035f973767af9f1019b8ddc4e7e799c799419c38bfafc9c9ea4090fdcfa7868",
+  "serialization": "UTF-8 JSON.stringify(value,null,2) plus LF",
+  "generatorSourceSha256": "40045d4217f30a60f27e61c9fe56022a5391fb1ec3840754c3d0d8a462ec6390",
+  "fixtureGenerationProvenance": {
+    "actualFixtureProducerGeneratorSourceSha256": "1cf0489cd686430b934172952a8f2472a8f5db5738c4c75f91994fadaad9c33e",
+    "currentSourceBindingRevisionGeneratorSha256": "40045d4217f30a60f27e61c9fe56022a5391fb1ec3840754c3d0d8a462ec6390",
+    "originalHeldManifestSha256": "e54355063efd9d9c96e9cd047503462d2de188dcd8dd96b8947424e9f88d934e",
+    "previousAcceptedManifestSha256": "c366c4fea16fd18f5f7a9839f7739712653c12356ccd79946c2bfd6baddde42f",
+    "generatorExecutedForThisRevision": false,
+    "sevenRawFixtureRecordsUnchanged": true,
+    "algorithmBodiesUnchanged": true,
+    "reason": "Only current package and byte-preserved historical test path bindings revised; current generator pin is a source consistency guard, not evidence of regeneration."
+  },
+  "sourceBindings": {
+    "api/_xeroAccountingLineCents.js": "b4bf24acaf852b0780b6d84e872ac6e744719e8ea81b687ed2cf18a3d564d68a",
+    "api/_xeroAggregateSupplierDates.js": "76679c4f37d91c87381d2a28d49ef7d30353531cc744906f5d1c9a4abb5d1c0d",
+    "api/_xeroDocumentSafety.js": "4e89ad62c785a986d4771ee8becf4975c48caedea6685c6ee25283e2e9bde7ca",
+    "api/_xeroFinancialSync.js": "41b88b649de755c9514022a3d1d4cb7a47e11030f8a43e88e1618934439b9d14",
+    "api/_xeroIssuedPetroleumOwnership.js": "95bfbdac32be05b249e0df5e922c855193d901fc9ad77e000222241bedd1fc9e",
+    "api/_xeroIssuedSupplierPreservation.js": "6445d50194b3ce9c26b5c11f435ea30309aa00f13242e2f1ddca515b81ee8499",
+    "api/_xeroPaidSupplierProofJson.js": "f88a6991f1eed8ba785d83af74106fa0c5e449e971e73bfaaf15c558099d040f",
+    "api/_xeroPreviewPersistence.js": "952150e08fb933f300ce26330db00631ee57be73c39b167a481f72b3b6ede68e",
+    "api/_xeroSettledSupplierPaymentProof.js": "3f97941cb47c64ffe679664908fee11ea898f4e78494bd4965cf387b232a41de",
+    "api/_xeroSupplierFinancialBucketPreservation.js": "846dff0df27eee2772b7c2b57cf98e6fd2de8c1387feccc97649664c88750487",
+    "config/fcosConnections.js": "e826d82510a8aeabfa285a66e8d1c546265347536c6f17a7b861cff8c5da0c15",
+    "package-lock.json": "0f35c1e123ab566f5d065d187bc0b8a7d1e05f7968ec31a03cd67ac0070aa0ef",
+    "package.json": "ec6f54ad36bdfdbf4e895d6572782d87fcd21fb7325f36b82b673789d401f17f",
+    "supabase/migrations/20260707163000_dispute_beta_workflow.sql": "c249086db161bbed9ebc5a5078edb3c655f26051885865bf8547007a7057f53b",
+    "supabase/migrations/20260827145608_xero_contact_sync.sql": "e80224fcf23902cf49fc691fd9509c6b7eedba911c34170012557caa18bdccfc",
+    "supabase/migrations/20260829080726_xero_financial_sync.sql": "a87bdf6fdc4b23a3d612d37d26580414f4bfcf97412413f1500791a92bfabe30",
+    "supabase/migrations/20260923210832_xero_financial_selection_scope.sql": "7073ac71a9b83d3acc583c57d14618a13e7c13266d8184608ef8fb4528d33aeb",
+    "supabase/migrations/20260923213339_xero_payment_reference_link.sql": "b8272d733760e146e9321e4f7766a631c98359124a861cedd2765bdf5adcb6fd",
+    "supabase/migrations/20260923222821_xero_grouped_preservation_link.sql": "f2affe8e8a300fb8eaa98f32d4361315e2266fcae031c3a1441e8ed33e248d33",
+    "supabase/migrations/20260927175805_xero_issued_supplier_preservation_link.sql": "c0389fd7f8dbccb29ddd5803633e447b7249998f1e0ad319b4d11c9f3b26c99b",
+    "supabase/migrations/20260927185526_xero_issued_petroleum_preservation_link.sql": "fea7e1413af870e1201cd3f874ffd82521c418c8d83ec7743af4458b91d27461",
+    "supabase/migrations/20260927213024_xero_petroleum_inactive_source_ownership.sql": "0ce7ad19cd82c030033104ce5972348d3a60aca26c4271607d4c82b8beb64537",
+    "supabase/migrations/20260928033217_xero_issued_petroleum_attachment_preservation_v2.sql": "9de9e3efcce40172b9745c4c56b4fa51884eddecf4b7fb278993868a0f1aa206",
+    "supabase/migrations/20260928053229_xero_document_field_correction_journal.sql": "b70a67341dc60c4fba8b74db61dd6dc1dd2321cd5b161774ce6f47cb19a19385",
+    "supabase/migrations/20261004105022_xero_aggregate_supplier_preservation_v3.sql": "f0c212ca317c78016495b359e4438d157221f402ca4cc2b28e22459cdea51859",
+    "supabase/migrations/20261004123026_xero_aggregate_supplier_component_literals_v3.sql": "bd445e3e72afa72586c7be0cf3412b08b0b8235d04d0586371105b0111ebd9a9",
+    "supabase/migrations/20261004135507_xero_settled_supplier_ledger_assert_v1.sql": "c8e8ca9140cc063df176ae25fc12b923bf4907814208fb5f3b9334e2ff7779d4",
+    "supabase/migrations/20261004162251_xero_supplier_financial_bucket_link_v1.sql": "520eea32ed0da3577f57af2f2fb98557eb7547457fcc69931ee4e5801672d4eb",
+    "tests/xeroSupplierFinancialBucketDatabase.fixture.js": "4660dea5d9656779c674f4c4983a17131b9745729e9d3424377bd89ae4ad16d9",
+    "tests/xeroSupplierFinancialBucketDatabase.historical-test.js": "84076347dbe37981561c55c9015bf5e9f74f57b8d562d42f4e42b4119f9da49e",
+    "tests/xeroSupplierFinancialBucketPreservation.fixture.js": "edb272bc9f8dd4e997976f12bf1b2ebe6dfd25a91bda9ba7818257c6ac102252",
+    "tests/xeroSupplierFinancialBucketPreservation.test.js": "048a8ea327b74d34e9721f8367e02f54d21eb87a861eed818a8f333edf27c6cb",
+    "tests/xeroSupplierFinancialSource.fixture.js": "90d4171563b85952f3147f17148d4e3ba8ff9adada4820546e46e1b55538e4e5"
+  },
+  "publicImportClosure": {
+    "tests/xeroSupplierFinancialBucketPreservation.fixture.js": "edb272bc9f8dd4e997976f12bf1b2ebe6dfd25a91bda9ba7818257c6ac102252",
+    "tests/xeroSupplierFinancialSource.fixture.js": "90d4171563b85952f3147f17148d4e3ba8ff9adada4820546e46e1b55538e4e5",
+    "config/fcosConnections.js": "e826d82510a8aeabfa285a66e8d1c546265347536c6f17a7b861cff8c5da0c15",
+    "api/_xeroIssuedSupplierPreservation.js": "6445d50194b3ce9c26b5c11f435ea30309aa00f13242e2f1ddca515b81ee8499",
+    "api/_xeroAccountingLineCents.js": "b4bf24acaf852b0780b6d84e872ac6e744719e8ea81b687ed2cf18a3d564d68a",
+    "api/_xeroFinancialSync.js": "41b88b649de755c9514022a3d1d4cb7a47e11030f8a43e88e1618934439b9d14",
+    "api/_xeroDocumentCorrectionOverlay.js": "c3a5cd3f1ebe4b8f03a3e79d2b6101e8eb02766b5e1f73ef29439f1ed23fc665",
+    "api/_xeroDocumentCorrectionPersistence.js": "13f8810f01d66bccd4a04bab51e6d83c38274188f48209ab99779bd75858a521",
+    "api/_xeroSavedAllowance.js": "bbca4e23bf46b63fcf2b2d1e6a6568f25998c7b1530472b2bd007155e41ba096",
+    "api/_xeroReconciliationContacts.js": "a0677171cc337a1f075b949cc27da3985be5a3fcf10c874f7c374c59f11f0bee",
+    "api/_externalActionGates.js": "bebc1da74985b790929ff6171012942416bf6c45099a439eef1c897fb6787677",
+    "api/_deploymentReadOnly.js": "7e3064a4fec4a19c5d2ed365e6d07069e9391e61acaa43ac7df6e9273673cd3d",
+    "api/_xeroPortal.js": "68ad860b25ef43a1564e58a16fab801d430d4f24bfcd05350ffca31152597369",
+    "api/_xeroContactSync.js": "eec06be257f3fc43f5e7973c17629041a5c0673bfed2597e4e9b18a16ca45a2f",
+    "api/_supabaseConfig.js": "4313704adf8c6a6c891c7226775fbfdbe439de8a615d490b900da379b562187f",
+    "api/_salesforce.js": "711bb688435c63ec727ab2c96e3af906fac0a51bd43c04b823fd5c78332ea107",
+    "api/_salesforceCurrency.js": "9dad36f25d1fdac09e54a77abe515317413144d20e1991c59f09da5db49e9297",
+    "api/_salesforceReadRetry.js": "bba74e16c1f703c5ca549f22a7880465f8430ea223edb0d2f94e7d222a4efba2",
+    "api/_requestTelemetry.js": "c75b5d926932f09564e4d9ffd0ba1eae853027efb84a1e9f6583ddd3d7995733",
+    "api/_runtimeCache.js": "4acde7e0513f87e81523a52650ff06fc3b7895153b6001532b7b0a67ed3fd4b0",
+    "api/_xeroRateLimit.js": "7620261346f77bf32eb0b611bd7d62521832480b4ad9bfb9d8488fdfc419017e",
+    "api/_xeroSharedControl.js": "0b2cd20fc0d3f48f2f5e1c7754aa57d18c102f676bbd11c81a6385ce67cf0631",
+    "api/_xeroUsageYears.js": "b297a6d3c56dfa119b3e28b8b00cd5f0214012a7aa240cc5aa710d92f2ad655a",
+    "api/_xeroContactIdentity.js": "b59d3a6eb9b3d0af8505fa3d3d667cced29dd7796b1a9c5709bf03b238d701cb",
+    "api/_xeroContactRestorePolicy.js": "b9fb398d0978b9361417b0e95ce6d6f85147949e0f36c5130e52fb58394f505f",
+    "api/_xeroContactRestore.js": "827a3fc418413fbcc77dfd8b02d31d0d344933098a52c0ac7ab54bc67098e050",
+    "api/_xeroReconciliationInventory.js": "215016a13a438e24dbea55fc00ca391121947d4c1d6d5206ab4b44a074ba8a00",
+    "api/_xeroDocumentFieldPolicy.js": "41db1a2b195cf63c7ac370a0452c382159b230a732cccb66cfae51b798fb3d04",
+    "api/_xeroSalesInvoiceSummary.js": "d5e121b15d87e9b887549237a69e1b08c5d3c46e2e1d71cfd42a0083bfb25b0f",
+    "config/xeroIssuedPreservationPolicies.js": "45c582081f742221d6abd9ceea886c796a826e0ccbd8207353b0c41d83281601",
+    "api/_xeroIssuedPetroleumSticky.js": "74c489f42e838d240de291815e335c6d9ca7eaeb1904b17f516788933e205392",
+    "api/_xeroIssuedPetroleumPreservation.js": "fd722caf30d36444fd8104f20a5d3ff3e563ab2e22d586708b6b04c7ef5e38ce",
+    "api/_xeroIssuedPetroleumOwnership.js": "95bfbdac32be05b249e0df5e922c855193d901fc9ad77e000222241bedd1fc9e",
+    "api/_xeroIssuedPetroleumPaper.js": "ee4b5895c265f8276cea3d053ff2f4d4a6036bfca74258e2696529cd877e4079",
+    "api/_xeroPreviewPersistence.js": "952150e08fb933f300ce26330db00631ee57be73c39b167a481f72b3b6ede68e",
+    "api/_xeroPreviewPayments.js": "eafef85eb9f6a2ab729b21cd75dce0d05e30eaed4ecb9d78519ce88e6f2e3658",
+    "api/_xeroPreviewCheckpoint.js": "e1903f9d39adbf0260462b00fcbbc3288c907747a11313c4b6a0a7b21ee4f536",
+    "api/_xeroDocumentSafety.js": "4e89ad62c785a986d4771ee8becf4975c48caedea6685c6ee25283e2e9bde7ca",
+    "api/_buyerInvoiceApproval.js": "634d7880565fe963df880a424e090fa66fd83484f8b66caf6fe8ed995b322a79",
+    "api/_xeroPetroleumMappings.js": "df0470a23c8f17dbf9e11662fe3c11ffda5a94404a98076082ac084be82cc17c",
+    "api/_xeroGroupedPreservationAdapter.js": "46f2eb208cb964985d5d05c12aa61250c6b591df792909ab506e4c38636474f5",
+    "api/_xeroGroupedPreservation.js": "807700666030c6e563861b8d1ce8dc8b091a68e1f8f60cb6465bef10e62b8435",
+    "api/_xeroPaymentIdentity.js": "240fc410d9fae33a71923d3a9f34deed6a3fc121036d8b1a0155c59814b19292",
+    "api/_xeroPaymentAssociation.js": "042a04d9a0a2477108741800435bcd4d2715da81dfe0aae758f4d46bc1ad57f9",
+    "api/_xeroRemittanceInventory.js": "1925ae31d262fefed7a0bcfcabae20ae58d5c7716762e9c9e91af437936ce815",
+    "api/_xeroGroupRemittanceBankEvidence.js": "1457ec2ac67b19834cbb4a5b427c18c2ce28079b1ba07a81cb5ae2dc32bf8f1a",
+    "api/_buyerFinancialAmount.js": "9e6fc0a88ac066be3cedce931f6e574aa74c754870368af0ce04d94b04addd8f",
+    "api/_xeroOrdinaryRemittanceCash.js": "ee871c5711a3b368af24e3d2de72619e2953f27e10e6964fe8fa8fe1c2291b71",
+    "api/_xeroGroupPaymentPersistence.js": "9f7255184b4d70436d7e7029ec8ed57c5f079511d5cc9c7c127937347bc9172b",
+    "api/_xeroRemittanceSummary.js": "93d87720ecd2147317789d00f5bcbe6c47ce70f28e38c34b43fe77117f64c9c2",
+    "api/_xeroPaymentBankEvidence.js": "98a53e785b85abe3f087bfe37eecf472e3c76c6b9d75f3f77e1801e5063ec027",
+    "api/_xeroPaymentKind.js": "41737a29b3fab55c7367442818c042f8acde9530d081c1c96cf0126a5ec822d0",
+    "api/_xeroBuyerPaymentEvidence.js": "33172a62c389ef1a35209803dd73f50b190554730d44dd457fa4e3849de1ddc3",
+    "api/_xeroFinancialPublicEvidence.js": "b7d7f27a5be3c07ce6e6173efab5b736901492460bcf2961e8cdc06fd2d31f0a",
+    "api/_xeroGroupRemittanceControls.js": "31370bbc865af5bbcc22786827cdf49a5fe8740b47ec4473f3a93e9eb7910a17",
+    "api/_xeroPaymentPosting.js": "33d98ee4ad4c1ac1268a3ac15d30948da4c9f7efc750426fbe42c281bf6c9d2f",
+    "api/_xeroPaymentReferenceLink.js": "029db73237c5492db6e2eb1a79635c1028591a0a2dba01ca43980e43cf10f921",
+    "api/_xeroSupplierFileDiscovery.js": "1610f4f82bea9de72c6840a30debf6e758cccb8ed6c0993b96d8bc5a8015a0c8",
+    "api/_xeroSupplierFinancialBucketPreservation.js": "846dff0df27eee2772b7c2b57cf98e6fd2de8c1387feccc97649664c88750487",
+    "api/_xeroPaidSupplierProofJson.js": "f88a6991f1eed8ba785d83af74106fa0c5e449e971e73bfaaf15c558099d040f",
+    "api/_xeroAggregateSupplierDates.js": "76679c4f37d91c87381d2a28d49ef7d30353531cc744906f5d1c9a4abb5d1c0d",
+    "api/_xeroSettledSupplierPaymentProof.js": "3f97941cb47c64ffe679664908fee11ea898f4e78494bd4965cf387b232a41de"
+  },
+  "records": [
+    {
+      "caseName": "authorised-positive",
+      "file": "successor-v1-authorised-positive.json",
+      "logicalRole": "AUTHORISED synthetic local preservation",
+      "labels": {
+        "reviewFingerprintLabel": "xero-supplier-financial-bucket-successor-v1-20261006:authorised-positive:review",
+        "legacyReviewFingerprintLabel": "xero-supplier-financial-bucket-successor-v1-20261006:authorised-positive:synthetic-legacy-review"
+      },
+      "inputHash": "4eb746c6692b0e03f87e9f06033ecdec75a875c07db0d85d8899d64bc3f22374",
+      "proofHash": "062f834ebc613b97aea0bb9141ca4790ce9982e6f6b54f39f6a4cf43ec97cfcb",
+      "evidenceFingerprint": "eca85a0b1c04c56a05120dd2c130f1ea1502d837e2e5de9ea6cedbad0a572d11",
+      "accountingFingerprint": "eca85a0b1c04c56a05120dd2c130f1ea1502d837e2e5de9ea6cedbad0a572d11",
+      "localClaimScopeHash": "faf5fd9b4bac4ec150712d8edb94a55cbb980424583768d15457bf9f4c009533",
+      "reviewHash": "3f721f57eb4f6ee9b4b31dbae04b9024f8814bb9a486e1efab95ad80194ca382",
+      "approvalMaterialHash": "bc7252bbfcde95aa670292ac3ed9d5ca8790c0721eca8cba703661bb4dbbd622",
+      "metrics": {
+        "input": {
+          "ordinaryBytes": 13525,
+          "canonicalBytes": 13525,
+          "nodes": 498,
+          "depth": 7
+        },
+        "proof": {
+          "ordinaryBytes": 17342,
+          "canonicalBytes": 17342,
+          "nodes": 633,
+          "depth": 9
+        },
+        "evidence": {
+          "ordinaryBytes": 16156,
+          "canonicalBytes": 16156,
+          "nodes": 600,
+          "depth": 8
+        },
+        "localClaimScope": {
+          "ordinaryBytes": 502,
+          "canonicalBytes": 502,
+          "nodes": 13,
+          "depth": 2
+        },
+        "review": {
+          "ordinaryBytes": 53822,
+          "canonicalBytes": 53822,
+          "nodes": 623,
+          "depth": 9
+        },
+        "compactReceiptProjection": {
+          "ordinaryBytes": 17473,
+          "canonicalBytes": 17473,
+          "nodes": 625,
+          "depth": 10
+        },
+        "targetOriginal": {
+          "ordinaryBytes": 1031,
+          "canonicalBytes": 1031,
+          "nodes": 43,
+          "depth": 3
+        },
+        "sourceOriginal": {
+          "ordinaryBytes": 6270,
+          "canonicalBytes": 6270,
+          "nodes": 240,
+          "depth": 6
+        },
+        "ledgerOriginal": null
+      },
+      "sourceLineCount": 3,
+      "targetLineCount": 1,
+      "documentVerification": "UNVERIFIED",
+      "financialWrites": 0,
+      "workflowEligible": false,
+      "approvalGranted": false,
+      "accepted": false,
+      "sha256": "e06be4237f59015611a5e02c84c9703a60115d24affb401a606edeb23ad37182",
+      "bytes": 112953
+    },
+    {
+      "caseName": "paid-positive",
+      "file": "successor-v1-paid-positive.json",
+      "logicalRole": "PAID synthetic local preservation",
+      "labels": {
+        "reviewFingerprintLabel": "xero-supplier-financial-bucket-successor-v1-20261006:paid-positive:review",
+        "legacyReviewFingerprintLabel": "xero-supplier-financial-bucket-successor-v1-20261006:paid-positive:synthetic-legacy-review"
+      },
+      "inputHash": "47828263dc79fb9e3d72aa70f68b2fd5e0dafca2ab3cd157c595c6b8458fd9c2",
+      "proofHash": "1228f80df9810752b38007f2ad437c14231ff83df2fe7f706e213873b7f5e19c",
+      "evidenceFingerprint": "ba217d25c242fccb0cde940c5bd48d7be68a45db6a4a24ac239752118ad7bbea",
+      "accountingFingerprint": "ba217d25c242fccb0cde940c5bd48d7be68a45db6a4a24ac239752118ad7bbea",
+      "localClaimScopeHash": "60cc1a718078281421afc09db7800a6b9de89bba8099a160c71e0cc82dbff431",
+      "reviewHash": "1bc20b65f2556bc0b963b28b7d741b13e93ee0a29f98d76d19e95954d5c0082c",
+      "approvalMaterialHash": "3ded19a13679dad65876d5ec520ee5855a572f3733467d20d6f4bcd973f100df",
+      "metrics": {
+        "input": {
+          "ordinaryBytes": 14624,
+          "canonicalBytes": 14624,
+          "nodes": 548,
+          "depth": 7
+        },
+        "proof": {
+          "ordinaryBytes": 20839,
+          "canonicalBytes": 20839,
+          "nodes": 770,
+          "depth": 11
+        },
+        "evidence": {
+          "ordinaryBytes": 19615,
+          "canonicalBytes": 19615,
+          "nodes": 736,
+          "depth": 10
+        },
+        "localClaimScope": {
+          "ordinaryBytes": 540,
+          "canonicalBytes": 540,
+          "nodes": 14,
+          "depth": 2
+        },
+        "review": {
+          "ordinaryBytes": 65097,
+          "canonicalBytes": 65097,
+          "nodes": 760,
+          "depth": 11
+        },
+        "compactReceiptProjection": {
+          "ordinaryBytes": 21032,
+          "canonicalBytes": 21032,
+          "nodes": 762,
+          "depth": 12
+        },
+        "targetOriginal": {
+          "ordinaryBytes": 1210,
+          "canonicalBytes": 1210,
+          "nodes": 51,
+          "depth": 3
+        },
+        "sourceOriginal": {
+          "ordinaryBytes": 6252,
+          "canonicalBytes": 6252,
+          "nodes": 240,
+          "depth": 6
+        },
+        "ledgerOriginal": {
+          "ordinaryBytes": 2184,
+          "canonicalBytes": 2184,
+          "nodes": 91,
+          "depth": 5
+        }
+      },
+      "sourceLineCount": 3,
+      "targetLineCount": 1,
+      "documentVerification": "UNVERIFIED",
+      "financialWrites": 0,
+      "workflowEligible": false,
+      "approvalGranted": false,
+      "accepted": false,
+      "sha256": "08b45e3c02ab14345879d461e449c20d14a2ae1395eb33785908db347c312a4a",
+      "bytes": 135838
+    },
+    {
+      "caseName": "source-half-up",
+      "file": "successor-v1-source-half-up.json",
+      "logicalRole": "AUTHORISED synthetic local preservation",
+      "labels": {
+        "reviewFingerprintLabel": "xero-supplier-financial-bucket-successor-v1-20261006:source-half-up:review",
+        "legacyReviewFingerprintLabel": "xero-supplier-financial-bucket-successor-v1-20261006:source-half-up:synthetic-legacy-review"
+      },
+      "inputHash": "156ace5e72d5fdd953c6b4b5decea11a45d74e540e1b749fea44570bbdfbeaf0",
+      "proofHash": "1b7ab221a38b394f5ef52e5e23723e4a6100a8a98d387419cb9497b54b6eb249",
+      "evidenceFingerprint": "deed508493a01a6d83f88414ce679d27852f6c20aa0ce8613bb656bafee27382",
+      "accountingFingerprint": "deed508493a01a6d83f88414ce679d27852f6c20aa0ce8613bb656bafee27382",
+      "localClaimScopeHash": "29444310c52b858b6f4d7603ae04d2782ff7e1686dacdf9f45917801ad172155",
+      "reviewHash": "25439e11d0dcaa822fd272307bf62f5d58344c2132753b863465aff4c0204b4b",
+      "approvalMaterialHash": "fb1de2b6a1ff135c5f7de3d9158c5d179b9e395dafe0694cee77b2197cdc6fd2",
+      "metrics": {
+        "input": {
+          "ordinaryBytes": 13525,
+          "canonicalBytes": 13525,
+          "nodes": 498,
+          "depth": 7
+        },
+        "proof": {
+          "ordinaryBytes": 17401,
+          "canonicalBytes": 17401,
+          "nodes": 637,
+          "depth": 9
+        },
+        "evidence": {
+          "ordinaryBytes": 16215,
+          "canonicalBytes": 16215,
+          "nodes": 604,
+          "depth": 8
+        },
+        "localClaimScope": {
+          "ordinaryBytes": 502,
+          "canonicalBytes": 502,
+          "nodes": 13,
+          "depth": 2
+        },
+        "review": {
+          "ordinaryBytes": 54015,
+          "canonicalBytes": 54015,
+          "nodes": 627,
+          "depth": 9
+        },
+        "compactReceiptProjection": {
+          "ordinaryBytes": 17532,
+          "canonicalBytes": 17532,
+          "nodes": 629,
+          "depth": 10
+        },
+        "targetOriginal": {
+          "ordinaryBytes": 1041,
+          "canonicalBytes": 1041,
+          "nodes": 43,
+          "depth": 3
+        },
+        "sourceOriginal": {
+          "ordinaryBytes": 6255,
+          "canonicalBytes": 6255,
+          "nodes": 240,
+          "depth": 6
+        },
+        "ledgerOriginal": null
+      },
+      "sourceLineCount": 3,
+      "targetLineCount": 1,
+      "documentVerification": "UNVERIFIED",
+      "financialWrites": 0,
+      "workflowEligible": false,
+      "approvalGranted": false,
+      "accepted": false,
+      "sha256": "6379afeb91d26c5e264ec1602b4da737d28bd9907dfa78e17f49e0fe1fc47b4b",
+      "bytes": 113356
+    },
+    {
+      "caseName": "explicit-null-lump",
+      "file": "successor-v1-explicit-null-lump.json",
+      "logicalRole": "AUTHORISED synthetic local preservation",
+      "labels": {
+        "reviewFingerprintLabel": "xero-supplier-financial-bucket-successor-v1-20261006:explicit-null-lump:review",
+        "legacyReviewFingerprintLabel": "xero-supplier-financial-bucket-successor-v1-20261006:explicit-null-lump:synthetic-legacy-review"
+      },
+      "inputHash": "2bec7e31d8a798706806c8ce82988ea6782953ab714ea1a158e21e87f91879f4",
+      "proofHash": "64b1307cef63c5d7bee002364e20bf7c8774a8d71508294f7c10983ca6cabe38",
+      "evidenceFingerprint": "a26901e46b64a8c57dc14324eca61f580fc0c1d708170f0d69610a204881c6d6",
+      "accountingFingerprint": "a26901e46b64a8c57dc14324eca61f580fc0c1d708170f0d69610a204881c6d6",
+      "localClaimScopeHash": "a1f4a32e6cef0ac44606210529715984494696f27dd91c809e137ba992e7427b",
+      "reviewHash": "a2b571fddcf656372c890378a82ef784a420c0015c1a6f9500ade5bbcc64da24",
+      "approvalMaterialHash": "c764fbdec397bee80c5bc406fbd88d8e15caab859b83b47cca61f231e85c3008",
+      "metrics": {
+        "input": {
+          "ordinaryBytes": 13522,
+          "canonicalBytes": 13522,
+          "nodes": 498,
+          "depth": 7
+        },
+        "proof": {
+          "ordinaryBytes": 17342,
+          "canonicalBytes": 17342,
+          "nodes": 633,
+          "depth": 9
+        },
+        "evidence": {
+          "ordinaryBytes": 16156,
+          "canonicalBytes": 16156,
+          "nodes": 600,
+          "depth": 8
+        },
+        "localClaimScope": {
+          "ordinaryBytes": 502,
+          "canonicalBytes": 502,
+          "nodes": 13,
+          "depth": 2
+        },
+        "review": {
+          "ordinaryBytes": 53822,
+          "canonicalBytes": 53822,
+          "nodes": 623,
+          "depth": 9
+        },
+        "compactReceiptProjection": {
+          "ordinaryBytes": 17473,
+          "canonicalBytes": 17473,
+          "nodes": 625,
+          "depth": 10
+        },
+        "targetOriginal": {
+          "ordinaryBytes": 1030,
+          "canonicalBytes": 1030,
+          "nodes": 43,
+          "depth": 3
+        },
+        "sourceOriginal": {
+          "ordinaryBytes": 6270,
+          "canonicalBytes": 6270,
+          "nodes": 240,
+          "depth": 6
+        },
+        "ledgerOriginal": null
+      },
+      "sourceLineCount": 3,
+      "targetLineCount": 1,
+      "documentVerification": "UNVERIFIED",
+      "financialWrites": 0,
+      "workflowEligible": false,
+      "approvalGranted": false,
+      "accepted": false,
+      "sha256": "1153359543446d9514ed64985ea2cbc4bf031f0e2cabd9e85bb9ed2186229dde",
+      "bytes": 112947
+    },
+    {
+      "caseName": "signed-discount",
+      "file": "successor-v1-signed-discount.json",
+      "logicalRole": "AUTHORISED synthetic local preservation",
+      "labels": {
+        "reviewFingerprintLabel": "xero-supplier-financial-bucket-successor-v1-20261006:signed-discount:review",
+        "legacyReviewFingerprintLabel": "xero-supplier-financial-bucket-successor-v1-20261006:signed-discount:synthetic-legacy-review"
+      },
+      "inputHash": "57464c23b6903ec8417e69d0f07b82d606a1c3204f97e51f47758ab0a4d43e64",
+      "proofHash": "21696d7c491e113013ffbb70b9d26f5816f08034d37f0148a96b5875f3d6aaa6",
+      "evidenceFingerprint": "8ee7e1b2d0707d321864c2a726b0e9ea96c789de39b0603e738a95f9cdfcd4ec",
+      "accountingFingerprint": "8ee7e1b2d0707d321864c2a726b0e9ea96c789de39b0603e738a95f9cdfcd4ec",
+      "localClaimScopeHash": "0de3570b271bed2cd14606950f6671636f1358a8fb3db2722a2bd78da6bf2839",
+      "reviewHash": "ba31c6c771b5e5619b7510409656fb41e050563effb20e9ce605fbe238b67f6d",
+      "approvalMaterialHash": "19f6c04c476f19b8fa6a1bac72a21c6c12a2883060b5de610f0123264400827a",
+      "metrics": {
+        "input": {
+          "ordinaryBytes": 13498,
+          "canonicalBytes": 13498,
+          "nodes": 498,
+          "depth": 7
+        },
+        "proof": {
+          "ordinaryBytes": 17319,
+          "canonicalBytes": 17319,
+          "nodes": 633,
+          "depth": 9
+        },
+        "evidence": {
+          "ordinaryBytes": 16133,
+          "canonicalBytes": 16133,
+          "nodes": 600,
+          "depth": 8
+        },
+        "localClaimScope": {
+          "ordinaryBytes": 502,
+          "canonicalBytes": 502,
+          "nodes": 13,
+          "depth": 2
+        },
+        "review": {
+          "ordinaryBytes": 53753,
+          "canonicalBytes": 53753,
+          "nodes": 623,
+          "depth": 9
+        },
+        "compactReceiptProjection": {
+          "ordinaryBytes": 17450,
+          "canonicalBytes": 17450,
+          "nodes": 625,
+          "depth": 10
+        },
+        "targetOriginal": {
+          "ordinaryBytes": 1027,
+          "canonicalBytes": 1027,
+          "nodes": 43,
+          "depth": 3
+        },
+        "sourceOriginal": {
+          "ordinaryBytes": 6258,
+          "canonicalBytes": 6258,
+          "nodes": 240,
+          "depth": 6
+        },
+        "ledgerOriginal": null
+      },
+      "sourceLineCount": 3,
+      "targetLineCount": 1,
+      "documentVerification": "UNVERIFIED",
+      "financialWrites": 0,
+      "workflowEligible": false,
+      "approvalGranted": false,
+      "accepted": false,
+      "sha256": "3f54a32595a1b8be9fadffd6ded81ef67801462a70ebbc935d26a5f9c082dcdc",
+      "bytes": 112822
+    },
+    {
+      "caseName": "retained-tracking",
+      "file": "successor-v1-retained-tracking.json",
+      "logicalRole": "AUTHORISED synthetic local preservation",
+      "labels": {
+        "reviewFingerprintLabel": "xero-supplier-financial-bucket-successor-v1-20261006:retained-tracking:review",
+        "legacyReviewFingerprintLabel": "xero-supplier-financial-bucket-successor-v1-20261006:retained-tracking:synthetic-legacy-review"
+      },
+      "inputHash": "0ba7f011bdd5fc95135d0b2ad0c1e2b2d7ac973b5dab62abe00c661267c952f7",
+      "proofHash": "43434d169dee0076093051955b019788d60ff3b2644db70effef9541004be8db",
+      "evidenceFingerprint": "9ff013db5715d67677ccf2b4b83db0d7dc795e5f3896ae5247398f43aad889a1",
+      "accountingFingerprint": "9ff013db5715d67677ccf2b4b83db0d7dc795e5f3896ae5247398f43aad889a1",
+      "localClaimScopeHash": "b3ba79637584518b13677355fe29d46d3f24fec29bbd04b15b96e87de166e4ad",
+      "reviewHash": "cfe8b0dd7708b8a639fc3fa813d5a3232595dc4224f44a3d84386ff3067e7d85",
+      "approvalMaterialHash": "7acf834ce26fdf3476af35fc57a613f4097ac97b90a39484530e7b0f7e018cfc",
+      "metrics": {
+        "input": {
+          "ordinaryBytes": 13759,
+          "canonicalBytes": 13759,
+          "nodes": 508,
+          "depth": 8
+        },
+        "proof": {
+          "ordinaryBytes": 17811,
+          "canonicalBytes": 17811,
+          "nodes": 652,
+          "depth": 10
+        },
+        "evidence": {
+          "ordinaryBytes": 16625,
+          "canonicalBytes": 16625,
+          "nodes": 619,
+          "depth": 9
+        },
+        "localClaimScope": {
+          "ordinaryBytes": 502,
+          "canonicalBytes": 502,
+          "nodes": 13,
+          "depth": 2
+        },
+        "review": {
+          "ordinaryBytes": 55329,
+          "canonicalBytes": 55329,
+          "nodes": 642,
+          "depth": 10
+        },
+        "compactReceiptProjection": {
+          "ordinaryBytes": 17942,
+          "canonicalBytes": 17942,
+          "nodes": 644,
+          "depth": 11
+        },
+        "targetOriginal": {
+          "ordinaryBytes": 1152,
+          "canonicalBytes": 1152,
+          "nodes": 48,
+          "depth": 5
+        },
+        "sourceOriginal": {
+          "ordinaryBytes": 6264,
+          "canonicalBytes": 6264,
+          "nodes": 240,
+          "depth": 6
+        },
+        "ledgerOriginal": null
+      },
+      "sourceLineCount": 3,
+      "targetLineCount": 1,
+      "documentVerification": "UNVERIFIED",
+      "financialWrites": 0,
+      "workflowEligible": false,
+      "approvalGranted": false,
+      "accepted": false,
+      "sha256": "57497989d752b23a39e29ec70823320f8ce884b2e8e6cc1e984b52be430dbeb2",
+      "bytes": 116387
+    },
+    {
+      "caseName": "largest-current-guang-hua6-positive",
+      "file": "successor-v1-largest-current-guang-hua6-positive.json",
+      "logicalRole": "PAID synthetic local preservation",
+      "labels": {
+        "reviewFingerprintLabel": "xero-supplier-financial-bucket-successor-v1-20261006:largest-current-guang-hua6-positive:review",
+        "legacyReviewFingerprintLabel": "xero-supplier-financial-bucket-successor-v1-20261006:largest-current-guang-hua6-positive:synthetic-legacy-review"
+      },
+      "inputHash": "54a06a3f30bf5cc5828289028bd7450bed12459d2a0661418f5dcef3b2b1d4b8",
+      "proofHash": "c23f24c62cc4190b65e091e0b98606050aa8a9a3cc35b0398d289f894270b962",
+      "evidenceFingerprint": "0b6459609b182d97b8e2a0c5496d03017f290ee1d2f3ac6c71a56e9a26b1d928",
+      "accountingFingerprint": "0b6459609b182d97b8e2a0c5496d03017f290ee1d2f3ac6c71a56e9a26b1d928",
+      "localClaimScopeHash": "245c4adf42ca8a1e64f16d505df42aab9a9054fca1aa2b1ff4043ad44c6fc06f",
+      "reviewHash": "0936ac27229f03dd00f1cf7f11780e0c685f970c149829f3b4019f250c244591",
+      "approvalMaterialHash": "7b6a57c706ce4a04a07f3fc2d74ac946f52de3b3972131915a135a916a191225",
+      "metrics": {
+        "input": {
+          "ordinaryBytes": 555120,
+          "canonicalBytes": 555120,
+          "nodes": 552,
+          "depth": 7
+        },
+        "proof": {
+          "ordinaryBytes": 831527,
+          "canonicalBytes": 831527,
+          "nodes": 776,
+          "depth": 11
+        },
+        "evidence": {
+          "ordinaryBytes": 830303,
+          "canonicalBytes": 830303,
+          "nodes": 742,
+          "depth": 10
+        },
+        "localClaimScope": {
+          "ordinaryBytes": 540,
+          "canonicalBytes": 540,
+          "nodes": 14,
+          "depth": 2
+        },
+        "review": {
+          "ordinaryBytes": 2929209,
+          "canonicalBytes": 2929209,
+          "nodes": 766,
+          "depth": 11
+        },
+        "compactReceiptProjection": {
+          "ordinaryBytes": 831720,
+          "canonicalBytes": 831720,
+          "nodes": 768,
+          "depth": 12
+        },
+        "targetOriginal": {
+          "ordinaryBytes": 271402,
+          "canonicalBytes": 271402,
+          "nodes": 53,
+          "depth": 3
+        },
+        "sourceOriginal": {
+          "ordinaryBytes": 6336,
+          "canonicalBytes": 6336,
+          "nodes": 240,
+          "depth": 6
+        },
+        "ledgerOriginal": {
+          "ordinaryBytes": 272376,
+          "canonicalBytes": 272376,
+          "nodes": 93,
+          "depth": 5
+        }
+      },
+      "sourceLineCount": 3,
+      "targetLineCount": 1,
+      "documentVerification": "UNVERIFIED",
+      "financialWrites": 0,
+      "workflowEligible": false,
+      "approvalGranted": false,
+      "accepted": false,
+      "sha256": "b0daffac48487e214645c18441a6c018440c8e0d8c23756dcba6ecb8a6dc75f6",
+      "bytes": 4351464
+    }
+  ],
+  "coverage": [
+    "authorised-positive",
+    "paid-positive",
+    "source-half-up",
+    "explicit-null-lump",
+    "signed-discount",
+    "retained-tracking",
+    "large synthetic transport envelope"
+  ],
+  "historicalGap": "Missing original PURE2/EXTRA bytes and historical test closure remain unresolved. New synthetic successor only.",
+  "largeShape": "PAID public financialFixture with three source lines, one target line and one ledger payment; deterministic inert extension padding. Size stress only; no current Guang Hua6 identity/data or original-case equivalence.",
+  "verificationExecuted": false,
+  "liveAcceptance": false
+}
