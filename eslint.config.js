@@ -98,5 +98,5 @@ export default [
     files: ["tests/xeroSupplierFinancialBucketDatabase.historical-test.js"],
     rules: { "unused-imports/no-unused-imports": "off" },
   },
-  { files: ["api/connection-runtime.js"], languageOptions: { parserOptions: { ecmaVersion: 2025 } } },
+  { files: ["api/connection-runtime.js", "api/_connectionRuntime.js"], languageOptions: { parserOptions: { ecmaVersion: 2025 } } },
 ];

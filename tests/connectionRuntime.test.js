@@ -3,9 +3,10 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { fcosConnectionIdentifier, fcosSalesforceEnvironment } from '../config/fcosConnections.js';
-import { probeRuntimeConnections, runtimeDeploymentBinding, supabaseDiagnosticCredentialMode } from '../api/_connectionRuntime.js';
+import { probeRuntimeConnections as actualProbeRuntimeConnections, runtimeDeploymentBinding, supabaseDiagnosticCredentialMode } from '../api/_connectionRuntime.js';
 import { authorizeRuntimeProbe, createRuntimeProbeHandler } from '../api/connection-runtime.js';
 import { FCOS_READ_ONLY_CI } from '../config/fcosCiIdentity.js';
+import { createRuntimeProbeDeadline } from '../api/_xeroRuntimeObservation.js';
 
 // The real application auth helper reads process.env. Run all regressions in
 // a child with only synthetic Salesforce configuration, never inherited secrets.
@@ -23,21 +24,31 @@ if (!process.argv.includes('--synthetic-runtime-child')) {
 } else {
   globalThis.fetch = async () => { throw new Error('Unexpected unmocked network request'); };
 
-const sha = 'a'.repeat(40), digest = 'b'.repeat(64), tenant = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+const sha = 'a'.repeat(40), digest = 'b'.repeat(64), tenant = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
 const env = { VERCEL_ENV:'preview', VERCEL_DEPLOYMENT_ID:'dpl_fixture', VERCEL_GIT_COMMIT_SHA:sha,
   SUPABASE_URL:`https://${fcosConnectionIdentifier('supabase','Project ref')}.supabase.co`, SUPABASE_SECRET_KEY:'sb_secret_private-service-key',
   SALESFORCE_INSTANCE_URL:fcosSalesforceEnvironment('production').instanceUrl, SALESFORCE_ACCESS_TOKEN:'private-sf-token',
   XERO_TENANT_ID:tenant, VARIABLE_CHARGE_PAIRED_WORKFLOW_ENABLED:'true' };
 const receipt = { deploymentId:env.VERCEL_DEPLOYMENT_ID, commit:sha, gitDirty:false, provenance:{ schemaVersion:1, sourceDigestAlgorithm:'sha256:fcos-vercel-source-v1', releaseEligible:true, commit:sha, sourceDigest:digest, gitDirty:false } };
 const time = Date.parse('2026-10-01T00:00:00.000Z');
+const actorId = '11111111-1111-4111-8111-111111111111', requestId = '22222222-2222-4222-8222-222222222222';
+const probeRuntimeConnections = args => actualProbeRuntimeConnections({actorId, requestId, clock:()=>time, ...args});
+const quota = {tenantId:tenant, allowanceKnown:true, dailyHold:false, reserve:200, minuteLimit:45, inFlightLimit:2, reservedCalls:0, inFlight:0, minuteCalls:0, revision:1, unresolvedWrites:0, availableCalls:500, spendableCalls:300, retryAt:null};
 function clientFixture(profile = { id:'admin', email:'admin@example.test', active:true, user_type:'administrator' }, connection = {}) {
   const calls = [];
   return { calls, client: {
+    rpc:async (name,p) => {
+      if(name==='xero_shared_status'||name==='xero_shared_release')return {data:quota};
+      if(name==='xero_shared_reserve')return {data:{id:p.p_id,tenant_id:p.p_tenant_id,owner_key:p.p_owner_key,state:'active',operation_remaining:1,verification_remaining:0,verification_reserved:0,expires_at:new Date(time+60000).toISOString()}};
+      if(name==='xero_shared_admit_scoped_v1')return {data:{requestId:p.p_id,tenantId:p.p_tenant_id,deadlineAt:new Date(time+120000).toISOString()}};
+      if(name==='xero_shared_observe')return {data:{recorded:true}};
+      throw Error('unexpected RPC');
+    },
     auth:{ getUser:async () => ({ data:{ user:{ id:profile.id } } }) },
     from: (table) => {
       calls.push(table);
       const q = { select:() => q, eq:() => q, maybeSingle:async () => ({ data:table === 'user_profiles' ? profile : {
-        tenant_id:tenant, access_token:'private-xero-token', expires_at:new Date(time+3600000).toISOString(), ...connection,
+        id:'primary', token_version:1, tenant_id:tenant, access_token:'private-xero-token', expires_at:new Date(time+3600000).toISOString(), ...connection,
       } }) };
       return q;
     },
@@ -59,11 +70,12 @@ test('runtime provider data probes issue only bounded GETs; outputs contain no t
     const data=url.includes('/rest/') ? [{id:'private-user'}] : url.includes('salesforce.com')
       ? {records:[{Id:fcosSalesforceEnvironment('production').orgId,IsSandbox:false}]}
       : [{tenantId:tenant,tenantType:'ORGANISATION'}];
-    return {ok:true,json:async () => data};
+    return Response.json(data);
   } });
   assert.equal(calls.length,3);
   assert.equal(result.auth.supabase.state,'authenticated'); assert.equal(result.auth.salesforce.state,'authenticated');
   assert.equal(result.auth.xero.state,'authenticated');
+  assert.equal(result.runtimeValidUntil,new Date(time+1800000).toISOString());
   assert.equal(result.safety.readOnly,true); assert.ok(Object.values(result.safety.externalActions).every(v=>v===false));
   assert.equal(result.flags.VARIABLE_CHARGE_PAIRED_WORKFLOW_ENABLED.value,true);
   assert.doesNotMatch(JSON.stringify(result),/private-|"access_token"\s*:|"refresh_token"\s*:/);
@@ -72,8 +84,8 @@ test('runtime provider data probes issue only bounded GETs; outputs contain no t
 test('expired Xero token and missing tenant never refresh or query Xero', async () => {
   for (const connection of [{expires_at:new Date(time-1000).toISOString()},{tenant_id:'wrong'},{expires_at:'invalid'}]) {
     const f=clientFixture(undefined,connection), calls=[];
-    const result=await probeRuntimeConnections({ env,receipt,client:f.client,now:time, fetchImpl:async (url) => { calls.push(url); return {ok:false}; } });
-    assert.equal(result.auth.xero.state,'unknown'); assert.ok(calls.every(url=>!url.includes('xero')));
+    await assert.rejects(probeRuntimeConnections({ env,receipt,client:f.client,now:time, fetchImpl:async (url) => { calls.push(url); return Response.json(url.includes('/rest/')?[]:{records:[{Id:fcosSalesforceEnvironment('production').orgId,IsSandbox:false}]}); } }), {code:'RUNTIME_XERO_SESSION_UNAVAILABLE'});
+    assert.ok(calls.every(url=>!url.includes('xero')));
   }
 });
 test('wrong provider endpoints fail before credential-bearing reads', async () => {
@@ -84,7 +96,7 @@ test('wrong provider endpoints fail before credential-bearing reads', async () =
 });
 test('provider error bodies and redirect failures are sanitized', async () => {
   const result=await probeRuntimeConnections({env,receipt,client:clientFixture().client,now:time,fetchImpl:async () => {throw new Error('private-token-provider-body');}});
-  assert.equal(result.auth.xero.code,'READ_PROBE_FAILED'); assert.doesNotMatch(JSON.stringify(result),/private-token/);
+  assert.equal(result.auth.xero.code,'TENANT_OR_PRIOR_PROVIDER_UNVERIFIED'); assert.doesNotMatch(JSON.stringify(result),/private-token/);
 });
 test('Supabase server env labels cannot promote anon or publishable keys to service authority', async () => {
   const token=(role,ref=fcosConnectionIdentifier('supabase','Project ref'))=>'e30.'+Buffer.from(JSON.stringify({role,ref,exp:time/1000+3600})).toString('base64url')+'.signature';
@@ -121,9 +133,19 @@ test('invalid methods and payloads never authorize or touch provider', async () 
 test('probe throttles repeated requests without persistence or logging', async () => {
   let probes=0;
   const handler=createRuntimeProbeHandler({env,now:()=>time,authorize:async ()=>({client:{},userId:'admin'}),readReceipt:()=>receipt,probe:async ()=>{probes++;return {schemaVersion:1};}});
-  const req={method:'POST',headers:{},body:{action:'probe'}}, first=response(), next=response();
+  const req={method:'POST',headers:{},body:{action:'probe',requestId}}, first=response(), next=response();
   await handler(req,first); await handler(req,next);
   assert.equal(first.statusCode,200); assert.equal(next.statusCode,429); assert.equal(probes,1);
+});
+test('slow authorization cannot start a late probe after the server-wide deadline', async () => {
+  let probes=0;
+  const handler=createRuntimeProbeHandler({env,readReceipt:()=>receipt,
+    deadlineFactory:()=>createRuntimeProbeDeadline({durationMs:10}),
+    authorize:async()=>{await new Promise(resolve=>setTimeout(resolve,30));return {client:{},userId:actorId};},
+    probe:async()=>{probes++;return {};}});
+  const res=response();await handler({method:'POST',headers:{},body:{action:'probe',requestId}},res);
+  assert.equal(res.statusCode,503);assert.equal(res.body.code,'RUNTIME_PROBE_DEADLINE');
+  await new Promise(resolve=>setTimeout(resolve,40));assert.equal(probes,0);
 });
 
 test('runtime accepts only explicitly attested source archives and rejects malformed provenance', () => {

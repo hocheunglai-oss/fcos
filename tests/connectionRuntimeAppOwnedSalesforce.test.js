@@ -13,7 +13,7 @@ const configUrl = new URL('../config/fcosConnections.js', import.meta.url).href;
 async function childScenario(options) {
   const { default: assert } = await import('node:assert/strict');
   const { generateKeyPairSync, verify } = await import('node:crypto');
-  const { fcosSalesforceEnvironment } = await import(options.configUrl);
+  const { fcosSalesforceEnvironment, fcosConnectionIdentifier } = await import(options.configUrl);
   const sf = fcosSalesforceEnvironment('production');
   const appEnv = { SALESFORCE_API_VERSION: options.version || 'v68.0' };
   if (!options.omitAppInstance) appEnv.SALESFORCE_INSTANCE_URL = options.appInstance || sf.instanceUrl;
@@ -40,6 +40,7 @@ async function childScenario(options) {
   const calls = [];
   globalThis.fetch = async (url, init = {}) => {
     const target = new URL(url);
+    if(target.origin===`https://${fcosConnectionIdentifier('supabase','Project ref')}.supabase.co`)return {ok:true,json:async()=>[]};
     if (target.href === 'https://login.salesforce.com/services/oauth2/token') {
       assert.equal(init.method, 'POST');
       const body = new URLSearchParams(init.body);
@@ -85,7 +86,9 @@ async function childScenario(options) {
   };
   const sha = 'a'.repeat(40), sourceDigest = 'b'.repeat(64);
   const env = { VERCEL_ENV: 'preview', VERCEL_DEPLOYMENT_ID: 'dpl_fixture', VERCEL_GIT_COMMIT_SHA: sha,
-    SALESFORCE_INSTANCE_URL: options.diagnosticInstance || sf.instanceUrl };
+    SALESFORCE_INSTANCE_URL: options.diagnosticInstance || sf.instanceUrl,
+    SUPABASE_URL:`https://${fcosConnectionIdentifier('supabase','Project ref')}.supabase.co`, SUPABASE_SECRET_KEY:'sb_secret_synthetic', };
+  const identity={actorId:'11111111-1111-4111-8111-111111111111',requestId:'22222222-2222-4222-8222-222222222222'};
   const receipt = { deploymentId: env.VERCEL_DEPLOYMENT_ID, commit: sha, gitDirty: false,
     provenance: { schemaVersion: 1, sourceDigestAlgorithm: 'sha256:fcos-vercel-source-v1',
       releaseEligible: true, commit: sha, sourceDigest, gitDirty: false } };
@@ -97,7 +100,7 @@ async function childScenario(options) {
     return process.stdout.write(JSON.stringify({ bindingRejected: true }));
   }
   const results = [];
-  for (let i = 0; i < (options.repeat || 1); i += 1) results.push(await probeRuntimeConnections({ env, receipt }));
+  for (let i = 0; i < (options.repeat || 1); i += 1) results.push(await probeRuntimeConnections({ env, receipt, ...identity }));
   const elapsedMs = performance.now() - started;
   // Let a timed-out OAuth request finish or reject. It must not trigger a query,
   // retry or unhandled rejection; the application helper itself was not cancelled.
