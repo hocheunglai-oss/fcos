@@ -7,6 +7,25 @@ const json = (data,status=200,headers={}) => Response.json(data,{status,headers}
 const connection = { tenantId:'00000000-0000-4000-8000-000000000001', accessToken:'fixture',tokenVersion:1 };
 const immediate = async (_tenant,fn) => fn();
 
+test('runtime connection admission is scoped to one metadata GET and preserves existing accounting admission', async () => {
+  const calls = [];
+  const control = createXeroSharedControl({ rpc: async (name, payload) => {
+    calls.push({ name, payload }); return { data: {}, error: null };
+  } });
+  const scope = { tenantId: connection.tenantId, tokenVersion: 1, requestId: 'owned-request', budgetId: 'owned-budget' };
+  await control.admitRuntimeConnections({ ...scope, method: 'POST', resourcePath: '/Invoices', payloadJson: { ignored: true } });
+  assert.deepEqual(calls[0], { name: 'xero_shared_admit_scoped_v1', payload: {
+    p_tenant_id: scope.tenantId, p_id: scope.requestId, p_token_version: 1,
+    p_method: 'GET', p_resource_key: 'Connections', p_resource_path: '/connections', p_payload_json: null,
+    p_budget_id: scope.budgetId, p_phase: 'operation', p_probe_id: null,
+  } });
+  await control.admit({ ...scope, method: 'POST', resourceKey: 'Invoices', budgetPhase: 'verification' });
+  assert.deepEqual(calls[1], { name: 'xero_shared_admit', payload: {
+    p_tenant_id: scope.tenantId, p_id: scope.requestId, p_token_version: 1,
+    p_method: 'POST', p_resource_key: 'Invoices', p_budget_id: scope.budgetId, p_phase: 'verification', p_probe_id: null,
+  } });
+});
+
 test('unbound callers fail closed even with a mocked fetch; injected controller sees every retry', async () => {
   let calls=0;const receipts=[];const observations=[];
   const fetchImpl=async()=>{calls++;return json({},calls===1?503:200,{'x-daylimit-remaining':String(1000-calls)});};

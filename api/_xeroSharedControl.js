@@ -68,6 +68,13 @@ export function createXeroSharedControl(client) {
     admit: ({ tenantId, tokenVersion, requestId = randomUUID(), method, resourceKey, budgetId = null, budgetPhase = 'operation', probeId = null }) => rpc('xero_shared_admit', {
       p_tenant_id: tenantId, p_id: requestId, p_token_version: tokenVersion, p_method: method, p_resource_key: resourceKey, p_budget_id: budgetId, p_phase: budgetPhase, p_probe_id: probeId,
     }),
+    // The compatibility observer uses the current scoped RPC without changing
+    // admission for any existing accounting caller in this frozen application.
+    admitRuntimeConnections: ({ tenantId, tokenVersion, requestId, budgetId }) => rpc('xero_shared_admit_scoped_v1', {
+      p_tenant_id: tenantId, p_id: requestId, p_token_version: tokenVersion,
+      p_method: 'GET', p_resource_key: 'Connections', p_resource_path: '/connections', p_payload_json: null,
+      p_budget_id: budgetId, p_phase: 'operation', p_probe_id: null,
+    }),
     observe: ({ tenantId, requestId, status = null, headers = null, outcomeUnknown = false }) => rpc('xero_shared_observe', {
       p_tenant_id: tenantId, p_request_id: requestId, p_status: status, p_snapshot: headers ? xeroRateLimitSnapshot(headers) : {}, p_outcome_unknown: outcomeUnknown,
     }),
