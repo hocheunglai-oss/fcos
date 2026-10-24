@@ -5,14 +5,18 @@ import { serverSupabaseConfig } from './_supabaseConfig.js';
 import { enforceFcunoFederatedAccess } from './_fcunoIdentityFederation.js';
 import { isReadOnlyCiProfile } from './_readOnlyCiAccess.js';
 import { probeRuntimeConnections } from './_connectionRuntime.js';
+import { runtimeProbeRequestId, createRuntimeProbeDeadline } from './_xeroRuntimeObservation.js';
 
 const reject = (status, code) => { throw Object.assign(new Error(code), { status, code }); };
-export async function authorizeRuntimeProbe(req, { env = process.env, createClientImpl = createClient } = {}) {
+export async function authorizeRuntimeProbe(req, { env = process.env, createClientImpl = createClient, deadline = createRuntimeProbeDeadline() } = {}) {
   const token = String(req.headers?.authorization || '').match(/^Bearer\s+([^\s]+)$/i)?.[1];
   if (!token) reject(401, 'RUNTIME_SIGN_IN_REQUIRED');
   const config = serverSupabaseConfig(env);
   if (!config.configured || config.url !== `https://${fcosConnectionIdentifier('supabase', 'Project ref')}.supabase.co`) reject(503, 'RUNTIME_STORAGE_TARGET_UNVERIFIED');
-  const client = createClientImpl(config.url, config.key, { auth: { persistSession: false, autoRefreshToken: false } });
+  const client = createClientImpl(config.url, config.key, { auth: { persistSession: false, autoRefreshToken: false }, global: {
+    fetch: (url, init = {}) => deadline.run(() => fetch(url, { ...init,
+      signal: AbortSignal.any([...(init.signal ? [init.signal] : []), AbortSignal.timeout(deadline.remaining())]) })),
+  } });
   const { data: auth, error: authError } = await client.auth.getUser(token);
   if (authError || !auth?.user) reject(401, 'RUNTIME_SESSION_INVALID');
   const { data: profile, error } = await client.from('user_profiles').select('id,email,full_name,user_type,active,use_type_defaults').eq('id', auth.user.id).maybeSingle();
@@ -25,7 +29,7 @@ export async function authorizeRuntimeProbe(req, { env = process.env, createClie
 }
 
 export function createRuntimeProbeHandler({ env = process.env, authorize = authorizeRuntimeProbe, probe = probeRuntimeConnections,
-  readReceipt = () => runtimeReceipt, now = Date.now } = {}) {
+  readReceipt = () => runtimeReceipt, now = Date.now, deadlineFactory = createRuntimeProbeDeadline } = {}) {
   const lastProbe = new Map();
   return async (req, res) => {
     res.setHeader('content-type', 'application/json'); res.setHeader('cache-control', 'no-store');
@@ -35,13 +39,18 @@ export function createRuntimeProbeHandler({ env = process.env, authorize = autho
       // No streaming or oversized arbitrary body is accepted by this probe.
       if (Number(req.headers?.['content-length'] || 0) > 128 || (typeof req.body === 'string' && Buffer.byteLength(req.body, 'utf8') > 128)) reject(413, 'RUNTIME_REQUEST_TOO_LARGE');
       const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-      if (!body || typeof body !== 'object' || Array.isArray(body) || body.action !== 'probe' || Object.keys(body).length !== 1) reject(400, 'RUNTIME_REQUEST_INVALID');
-      const context = await authorize(req, { env });
+      if (!body || typeof body !== 'object' || Array.isArray(body) || body.action !== 'probe'
+        || Object.keys(body).length !== 2 || !runtimeProbeRequestId(body.requestId)) reject(400, 'RUNTIME_REQUEST_INVALID');
+      // One server-wide monotonic budget includes authorization. A slow auth
+      // response cannot launch provider work after the collector's30s timeout.
+      const deadline = deadlineFactory();
+      const context = await deadline.run(() => authorize(req, { env, deadline }), 25000);
       const time = now();
       if (lastProbe.has(context.userId) && time - lastProbe.get(context.userId) < 5000) reject(429, 'RUNTIME_PROBE_RATE_LIMIT');
       if (lastProbe.size >= 128) lastProbe.delete(lastProbe.keys().next().value);
       lastProbe.set(context.userId, time);
-      const result = await probe({ env, client: context.client, receipt: readReceipt(), now: time });
+      const result = await deadline.run(() => probe({ env, client: context.client, actorId: context.userId, requestId: body.requestId,
+        receipt: readReceipt(), now: time, clock: now, deadline }), 25000);
       res.statusCode = 200; res.end(JSON.stringify(result));
     } catch (error) {
       const status = Number(error?.status || 503);

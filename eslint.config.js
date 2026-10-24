@@ -93,5 +93,10 @@ export default [
       }],
     },
   },
-  { files: ["api/connection-runtime.js"], languageOptions: { parserOptions: { ecmaVersion: 2025 } } },
+  {
+    // Preserve the exact historical suite bytes; the current successor remains linted.
+    files: ["tests/xeroSupplierFinancialBucketDatabase.historical-test.js"],
+    rules: { "unused-imports/no-unused-imports": "off" },
+  },
+  { files: ["api/connection-runtime.js", "api/_connectionRuntime.js"], languageOptions: { parserOptions: { ecmaVersion: 2025 } } },
 ];

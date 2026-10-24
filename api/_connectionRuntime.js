@@ -4,6 +4,8 @@ import { externalActionGates } from './_externalActionGates.js';
 import { fcunoFederationConfig } from './_fcunoIdentityFederation.js';
 import { serverSupabaseConfig } from './_supabaseConfig.js';
 import { getAccessToken, getApiVersion, getInstanceUrl } from './_salesforce.js';
+import { observeRuntimeXero, runtimeProbeRequestId, createRuntimeProbeDeadline } from './_xeroRuntimeObservation.js';
+import runtimePolicy from '../config/preview-parity-policy.json' with { type: 'json' };
 
 const unknown = (target = '', mode = '', code = 'AUTHENTICATION_UNOBSERVED') => ({ state: 'unknown', target, mode, code });
 const authenticated = (target, mode) => ({ state: 'authenticated', target, mode });
@@ -46,13 +48,18 @@ export function runtimeDeploymentBinding(env, receipt) {
 
 /** Provider data reads are GET/SELECT only. Salesforce uses application auth,
  * which may acquire/renew a session through the existing OAuth grant helper.
- * No business mutations, RPC, reconciliation, publication or persisted evidence. */
-export async function probeRuntimeConnections({ env = process.env, client, receipt, fetchImpl = fetch, now = Date.now() }) {
+ * Xero uses its own normal durable quota budget/request; no financial mutation,
+ * Xero renewal, reconciliation, publication or allowance exception is available. */
+export async function probeRuntimeConnections({ env = process.env, client, actorId, requestId, receipt, fetchImpl = fetch, now = Date.now(),
+  observeXero = observeRuntimeXero, clock = Date.now, deadline = createRuntimeProbeDeadline() } = {}) {
   const binding = runtimeDeploymentBinding(env, receipt);
+  if (!runtimeProbeRequestId(actorId) || !runtimeProbeRequestId(requestId)) {
+    throw Object.assign(new Error('Runtime probe identity is unavailable.'), { code: 'RUNTIME_XERO_SCOPE_INVALID' });
+  }
   const fetchJson = async (url, headers) => {
-    const response = await fetchImpl(url, { method: 'GET', headers, redirect: 'error', signal: AbortSignal.timeout(5000) });
+    const response = await deadline.run(() => fetchImpl(url, { method: 'GET', headers, redirect: 'error', signal: AbortSignal.timeout(deadline.remaining()) }));
     if (!response.ok) return null;
-    return response.json().catch(() => null);
+    return deadline.run(() => response.json()).catch(() => null);
   };
   const attempt = async (target, mode, probe) => {
     try { return await probe() ? authenticated(target, mode) : unknown(target, mode); }
@@ -63,26 +70,28 @@ export async function probeRuntimeConnections({ env = process.env, client, recei
   const supabaseUrl = `https://${supabaseRef}.supabase.co`;
   const supabaseMode = supabaseDiagnosticCredentialMode(config.key, now);
   const sf = fcosSalesforceEnvironment('production');
-  const [supabase, salesforce, xero] = await Promise.all([
-    config.url === supabaseUrl && supabaseMode
-      ? attempt(supabaseRef, supabaseMode, async () => {
+  // Probe sequentially. An unknown/refused provider never launches another
+  // provider read; already successful reads are not used to bypass a refusal.
+  const supabase = config.url === supabaseUrl && supabaseMode
+      ? await attempt(supabaseRef, supabaseMode, async () => {
         const headers = { apikey: config.key, ...(supabaseMode === 'service_role' ? { authorization: `Bearer ${config.key}` } : {}) };
         const rows = await fetchJson(`${supabaseUrl}/rest/v1/user_profiles?select=id&limit=1`, headers);
         return Array.isArray(rows);
-      }) : unknown(supabaseRef, '', 'TARGET_OR_CREDENTIAL_UNVERIFIED'),
-    (!clean(env.SALESFORCE_INSTANCE_URL) || clean(env.SALESFORCE_INSTANCE_URL) === sf.instanceUrl)
+      }) : unknown(supabaseRef, '', 'TARGET_OR_CREDENTIAL_UNVERIFIED');
+  const salesforce = supabase.state === 'authenticated'
+    && (!clean(env.SALESFORCE_INSTANCE_URL) || clean(env.SALESFORCE_INSTANCE_URL) === sf.instanceUrl)
       && clean(getInstanceUrl()) === sf.instanceUrl
-      ? attempt(sf.orgId, 'application', async () => {
+      ? await attempt(sf.orgId, 'application', async () => {
         // Application provenance is observed; the helper does not expose the
         // selected grant type or whether it reused an existing session.
         // Bound our wait, not the shared helper: its OAuth call has no abort
         // API and may finish/cache a session later. A timeout never resumes this
         // probe, retries authentication or issues a later Organization query.
-        const authDeadline = performance.now() + 5000;
+        const authTimeout = deadline.remaining(), authDeadline = performance.now() + authTimeout;
         let authTimer, accessToken;
         try {
           const deadline = new Promise((_, reject) => {
-            authTimer = setTimeout(() => reject(new Error('Salesforce authentication deadline exceeded.')), 5000);
+            authTimer = setTimeout(() => reject(new Error('Salesforce authentication deadline exceeded.')), authTimeout);
           });
           accessToken = await Promise.race([Promise.resolve().then(() => getAccessToken()), deadline]);
         } finally {
@@ -94,20 +103,14 @@ export async function probeRuntimeConnections({ env = process.env, client, recei
         const data = await fetchJson(`${sf.instanceUrl}/services/data/${version}/query?q=${encodeURIComponent('SELECT Id, IsSandbox FROM Organization LIMIT 1')}`,
           { authorization: `Bearer ${accessToken}` });
         return data?.records?.length === 1 && data.records[0].Id === sf.orgId && data.records[0].IsSandbox === false;
-      }) : unknown(sf.orgId, 'application', 'TARGET_OR_CREDENTIAL_UNVERIFIED'),
-    (async () => {
-      const expectedTenant = clean(env.XERO_TENANT_ID);
-      if (!uuid(expectedTenant) || !client) return unknown('', '', 'TENANT_UNVERIFIED');
-      return attempt(expectedTenant, 'oauth', async () => {
-        const { data, error } = await client.from('xero_contact_sync_connections')
-          .select('tenant_id,access_token,expires_at').eq('id', 'primary').maybeSingle();
-        if (error || data?.tenant_id !== expectedTenant || !data?.access_token || Date.parse(data.expires_at || '') <= now + 90000
-          || !Number.isFinite(Date.parse(data.expires_at || ''))) return false;
-        const connections = await fetchJson('https://api.xero.com/connections', { authorization: `Bearer ${data.access_token}` });
-        return Array.isArray(connections) && connections.some((entry) => entry?.tenantId === expectedTenant && entry?.tenantType === 'ORGANISATION');
-      });
-    })(),
-  ]);
+      }) : unknown(sf.orgId, 'application', 'TARGET_OR_CREDENTIAL_UNVERIFIED');
+  const expectedTenant = clean(env.XERO_TENANT_ID);
+  const xeroObservation = supabase.state === 'authenticated' && salesforce.state === 'authenticated' && uuid(expectedTenant) && client
+    ? await observeXero({ client, actorId, requestId, binding, tenantId: expectedTenant, fetchImpl, now: clock, deadline })
+    : null;
+  const xero = xeroObservation?.auth || unknown('', '', 'TENANT_OR_PRIOR_PROVIDER_UNVERIFIED');
+  const runtimeValidUntil = new Date(Math.min(now + runtimePolicy.maxAgeSeconds * 1000,
+    xeroObservation ? Date.parse(xeroObservation.runtimeValidUntil) : Infinity)).toISOString();
   const federation = fcunoFederationConfig(env);
   const flags = {
     VARIABLE_CHARGE_PAIRED_WORKFLOW_ENABLED: clean(env.VARIABLE_CHARGE_PAIRED_WORKFLOW_ENABLED).toLowerCase() === 'true',
@@ -116,7 +119,7 @@ export async function probeRuntimeConnections({ env = process.env, client, recei
     FCOS_ENABLE_FCUNO_LEGACY_PASSWORD_LOGIN: federation.legacyPasswordEnabled,
   };
   return {
-    schemaVersion: 1, ...binding, configuration: fcosRuntimeConnectionCatalogue(env), capturedAt: new Date(now).toISOString(),
+    schemaVersion: 1, ...binding, configuration: fcosRuntimeConnectionCatalogue(env), capturedAt: new Date(now).toISOString(), runtimeValidUntil,
     flags: Object.fromEntries(Object.entries(flags).map(([key, value]) => [key, { state: 'known', value }])),
     safety: { readOnly: isDeploymentReadOnly(env), externalActions: Object.fromEntries(Object.entries(externalActionGates(env)).map(([key, gate]) => [key, gate.enabled])) },
     auth: {
