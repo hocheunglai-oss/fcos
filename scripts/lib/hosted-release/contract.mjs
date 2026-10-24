@@ -1,7 +1,7 @@
 import { validateLegacyReleaseContainment } from '../../../config/legacyReleaseContainment.js';
 import { canonical, digest, fail } from './json-contract.mjs';
 export { canonical, digest, fail, ReleaseError } from './json-contract.mjs';
-import { isFirstRuntimeCandidateSha, firstRuntimeCandidateProfile } from '../../../config/hostedCompatibilityCorrection.js';
+import { isFirstRuntimeCandidateSha, firstRuntimeCandidateProfile, runtimeProbeProtocolMatches } from '../../../config/hostedCompatibilityCorrection.js';
 import { qualificationSourceBinding } from '../../../config/hostedReleaseQualification.js';
 import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier } from '../../../config/fcosConnections.js';
 import { validateSalesforceReadBinding } from './salesforce-read-auth.mjs';
@@ -68,6 +68,7 @@ export function validateManifest(manifest) {
     || manifest.migration.mode !== 'none' && !hash(manifest.migration.acceptedMigrationProofSha256)) fail('MIGRATION_SCOPE');
   if (!hash(manifest.runtime?.expectedSha256) || !manifest.runtime.expectedProduction || !manifest.runtime.expectedPreview
     || digest(manifest.runtime.expectedProduction) !== manifest.runtime.expectedSha256) fail('RUNTIME_EXPECTATIONS');
+  if (!runtimeProbeProtocolMatches(candidate, manifest.runtime.probeProtocol)) fail('RUNTIME_PROBE_PROTOCOL_BINDING');
   if (!Array.isArray(manifest.changes) || manifest.changes.length > 200 || manifest.changes.some(text => typeof text !== 'string' || text.length > 500)) fail('RELEASE_SUMMARY');
   if (manifest.stage==='qualification' || manifest.verification?.vercelReadCredential)
     validateVercelReadBinding(manifest.verification?.vercelReadCredential,{targets:manifest.targets});

@@ -139,9 +139,58 @@ export const COMPATIBILITY_MEASUREMENT_CORRECTION = Object.freeze({
   "salesforceMetadataChanged": false,
   "cronSchedulesChanged": false
 });
+// Explicit seven-file runtime observer child; no refresh, business mutation or historical pin substitution.
+export const COMPATIBILITY_RUNTIME_METERING_CORRECTION = Object.freeze({
+  "baseSha": "8d4cb87391c55de6debab92b9ab34827af17bea3",
+  "candidateSha": "1e25147dc9fc9ba008096f1200b681993d49d428",
+  "sourceProfile": "compat_runtime_metering_20261024",
+  "kind": "explicit_metered_runtime_observation_correction",
+  "probeProtocol": "xero_metered_v1",
+  "files": [
+    {
+      "path": "api/_connectionRuntime.js",
+      "sha256": "7f70b93d8d827ef996e52572258c201a948fc555613b9b760864321be37c9eb0",
+      "gitBlob": "3b5e6d4173f9cf206b5755d323f30cf68d2ec557"
+    },
+    {
+      "path": "api/_xeroRuntimeObservation.js",
+      "sha256": "ec86f8f8d7cd5d8d7568889841182e8727e7d47503ca72bb6a94efb0d57c2a51",
+      "gitBlob": "8085627320dc80bdb9dfa56506fa5892525e2931"
+    },
+    {
+      "path": "api/connection-runtime.js",
+      "sha256": "26d151c0db6c24e9fd36e0860915a52c4f450317dfd8065a6e55ab78d4eb4e7e",
+      "gitBlob": "fa5f214be2db2d8529dbec70f6ff1e1bec3dc1b3"
+    },
+    {
+      "path": "eslint.config.js",
+      "sha256": "2da40095a69a1059013a93893201f23a0c69ef93eed8bd9e23bef27f3d6f639d",
+      "gitBlob": "22e17e5c74eebc2508a4d1b454812c70c3249736"
+    },
+    {
+      "path": "tests/connectionRuntime.test.js",
+      "sha256": "312ea3112c8f5a28e49ade91acf924aadbd860b90480c77ff246fd33c5d65be0",
+      "gitBlob": "9c341f813ef272b51d551cf0334290bebcb85ca9"
+    },
+    {
+      "path": "tests/connectionRuntimeAppOwnedSalesforce.test.js",
+      "sha256": "dc58bd698fd4a2c2c5bdc5751eb88cc4519ff7b6a94320957538b8ce71109072",
+      "gitBlob": "82f8cb96691bc15028b9c10b6c9971f7b7af95a5"
+    },
+    {
+      "path": "tests/xeroRuntimeObservation.test.js",
+      "sha256": "efbca13682fb36dc19a9adce8b86c99376fd9c07c86ee4478624f2b9fb3c30df",
+      "gitBlob": "66668f66f09bb9ac580f03f3702c43c365d5a351"
+    }
+  ],
+  "existingUi": false,
+  "handoffs": [],
+  "salesforceMetadataChanged": false,
+  "cronSchedulesChanged": false
+});
 export function isFirstRuntimeCandidateSha(value) {
   return value === COMPATIBILITY_CORRECTION.baseSha || value === COMPATIBILITY_CORRECTION.candidateSha
-    || value === COMPATIBILITY_CONFIGURATION_CORRECTION.candidateSha || value === COMPATIBILITY_DIAGNOSTIC_CORRECTION.candidateSha || value === COMPATIBILITY_VERIFICATION_CORRECTION.candidateSha || value === COMPATIBILITY_MEASUREMENT_CORRECTION.candidateSha;
+    || value === COMPATIBILITY_CONFIGURATION_CORRECTION.candidateSha || value === COMPATIBILITY_DIAGNOSTIC_CORRECTION.candidateSha || value === COMPATIBILITY_VERIFICATION_CORRECTION.candidateSha || value === COMPATIBILITY_MEASUREMENT_CORRECTION.candidateSha || value === COMPATIBILITY_RUNTIME_METERING_CORRECTION.candidateSha;
 }
 export function firstRuntimeCandidateProfile(value) {
   return value === COMPATIBILITY_CORRECTION.baseSha ? 'frozen_04ee'
@@ -149,5 +198,15 @@ export function firstRuntimeCandidateProfile(value) {
       : value === COMPATIBILITY_CONFIGURATION_CORRECTION.candidateSha ? COMPATIBILITY_CONFIGURATION_CORRECTION.sourceProfile
         : value === COMPATIBILITY_DIAGNOSTIC_CORRECTION.candidateSha ? COMPATIBILITY_DIAGNOSTIC_CORRECTION.sourceProfile
           : value === COMPATIBILITY_VERIFICATION_CORRECTION.candidateSha ? COMPATIBILITY_VERIFICATION_CORRECTION.sourceProfile
-            : value === COMPATIBILITY_MEASUREMENT_CORRECTION.candidateSha ? COMPATIBILITY_MEASUREMENT_CORRECTION.sourceProfile : null;
+            : value === COMPATIBILITY_MEASUREMENT_CORRECTION.candidateSha ? COMPATIBILITY_MEASUREMENT_CORRECTION.sourceProfile
+              : value === COMPATIBILITY_RUNTIME_METERING_CORRECTION.candidateSha ? COMPATIBILITY_RUNTIME_METERING_CORRECTION.sourceProfile : null;
+}
+// Old immutable compatibility source cannot acquire a new endpoint protocol by
+// adding a manifest marker. Other application source may explicitly opt in.
+export function runtimeProbeProtocolMatches(candidate, protocol) {
+  const pin = COMPATIBILITY_RUNTIME_METERING_CORRECTION;
+  if (candidate?.sha === pin.candidateSha || candidate?.sourceProfile === pin.sourceProfile)
+    return candidate.sha === pin.candidateSha && candidate.sourceProfile === pin.sourceProfile && protocol === pin.probeProtocol;
+  if (isFirstRuntimeCandidateSha(candidate?.sha)) return protocol === undefined;
+  return protocol === undefined || protocol === pin.probeProtocol;
 }

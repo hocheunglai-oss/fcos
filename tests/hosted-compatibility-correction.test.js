@@ -3,9 +3,11 @@ import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {COMPATIBILITY_CORRECTION as C,COMPATIBILITY_CONFIGURATION_CORRECTION as V,COMPATIBILITY_DIAGNOSTIC_CORRECTION as D,COMPATIBILITY_VERIFICATION_CORRECTION as M,COMPATIBILITY_MEASUREMENT_CORRECTION as N,isFirstRuntimeCandidateSha,firstRuntimeCandidateProfile} from '../config/hostedCompatibilityCorrection.js';
+import {COMPATIBILITY_CORRECTION as C,COMPATIBILITY_CONFIGURATION_CORRECTION as V,COMPATIBILITY_DIAGNOSTIC_CORRECTION as D,COMPATIBILITY_VERIFICATION_CORRECTION as M,COMPATIBILITY_MEASUREMENT_CORRECTION as N,COMPATIBILITY_RUNTIME_METERING_CORRECTION as R,isFirstRuntimeCandidateSha,firstRuntimeCandidateProfile} from '../config/hostedCompatibilityCorrection.js';
 import {loadReleaseCheckManifest,requiredReleaseChecks} from '../scripts/lib/hosted-release/checks.mjs';
-import {validateManifest} from '../scripts/lib/hosted-release/contract.mjs';
+import {validateManifest,digest} from '../scripts/lib/hosted-release/contract.mjs';
+import {assertHostedSetup} from '../scripts/lib/hosted-release/admission.mjs';
+import {buildReleaseManifest} from '../scripts/lib/hosted-release/manifest.mjs';
 import {fixtureManifest} from './helpers/hosted-release-manifest.mjs';
 const ROOT=fileURLToPath(new URL('..',import.meta.url));
 const git=(...args)=>execFileSync('git',args,{cwd:ROOT,encoding:'utf8'}).trim();
@@ -131,4 +133,50 @@ test('measurement profile retains all31 exact verification commands and rejects 
   assert.equal(firstRuntimeCandidateProfile(N.candidateSha),N.sourceProfile);assert.equal(isFirstRuntimeCandidateSha(N.candidateSha),true);
   const m=fixtureManifest();m.candidate.sha=N.candidateSha;m.candidate.sourceProfile=N.sourceProfile;assert.doesNotThrow(()=>validateManifest(m));
   for(const mutate of [v=>v.candidate.sha=M.candidateSha,v=>v.candidate.sourceProfile=M.sourceProfile,v=>delete v.candidate.sourceProfile,v=>v.scope.existingUi=true,v=>v.scope.handoffs=[{kind:'status19',sha256:'a'.repeat(64)}],v=>v.scope.financialAuthority=true]){const changed=structuredClone(m);mutate(changed);assert.throws(()=>validateManifest(changed));}
+});
+
+test('metered runtime child is the exact seven-file direct descendant and preserves all unrelated source',()=>{
+  assert.equal(R.baseSha,N.candidateSha);assert.equal(git('rev-parse',`${R.candidateSha}^`),R.baseSha);
+  assert.equal(R.files.length,7);assert.equal(R.probeProtocol,'xero_metered_v1');
+  assert.deepEqual(git('diff-tree','--no-commit-id','--name-only','-r',R.baseSha,R.candidateSha).split('\n'),R.files.map(f=>f.path));
+  for(const f of R.files){const bytes=execFileSync('git',['show',`${R.candidateSha}:${f.path}`],{cwd:ROOT});assert.equal(createHash('sha256').update(bytes).digest('hex'),f.sha256);assert.equal(git('rev-parse',`${R.candidateSha}:${f.path}`),f.gitBlob);}
+  for(const path of ['src','force-app','supabase','vercel.json','config','.github/workflows','package.json','package-lock.json','.codex','AGENTS.md'])assert.equal(git('diff','--name-only',R.baseSha,R.candidateSha,'--',path),'');
+  for(const key of ['existingUi','salesforceMetadataChanged','cronSchedulesChanged'])assert.equal(R[key],false);assert.deepEqual(R.handoffs,[]);
+});
+
+test('metered runtime profile preserves all31 exact commands and requires its own candidate and protocol',()=>{
+  const {manifest}=loadReleaseCheckManifest(ROOT),prior=requiredReleaseChecks(manifest,N.sourceProfile),next=requiredReleaseChecks(manifest,R.sourceProfile);
+  assert.equal(next.length,31);assert.deepEqual(next.map(c=>c.id),prior.map(c=>c.id));
+  for(let i=0;i<prior.length;i++)assert.deepEqual(next[i].profileCommands?.[R.sourceProfile]||next[i].commands,prior[i].profileCommands?.[N.sourceProfile]||prior[i].commands);
+  assert.equal(manifest.sourceProfiles[R.sourceProfile].candidateSha,R.candidateSha);
+  const m=fixtureManifest();m.candidate.sha=R.candidateSha;m.candidate.sourceProfile=R.sourceProfile;m.runtime.probeProtocol=R.probeProtocol;
+  assert.doesNotThrow(()=>validateManifest(m));assert.equal(firstRuntimeCandidateProfile(R.candidateSha),R.sourceProfile);assert.equal(isFirstRuntimeCandidateSha(R.candidateSha),true);
+  for(const mutate of [v=>delete v.runtime.probeProtocol,v=>v.runtime.probeProtocol='unknown',v=>v.candidate.sha=N.candidateSha,v=>v.candidate.sourceProfile=N.sourceProfile,v=>v.scope.existingUi=true,v=>v.scope.handoffs=[{kind:'status19',sha256:'a'.repeat(64)}],v=>v.scope.financialAuthority=true]){const changed=structuredClone(m);mutate(changed);assert.throws(()=>validateManifest(changed));}
+  for(const pin of [C,V,D,M,N]){const old=fixtureManifest();old.candidate.sha=pin.candidateSha;old.candidate.sourceProfile=pin.sourceProfile;assert.doesNotThrow(()=>validateManifest(old));old.runtime.probeProtocol=R.probeProtocol;assert.throws(()=>validateManifest(old),{code:'RUNTIME_PROBE_PROTOCOL_BINDING'});}
+});
+
+function runtimeSetupFixture() {
+  const m=fixtureManifest();m.candidate.sha=R.candidateSha;m.candidate.sourceProfile=R.sourceProfile;m.runtime.probeProtocol=R.probeProtocol;
+  m.verification={runtime:{image:`ghcr.io/hocheunglai-oss/fcos-release-checks@sha256:${'a'.repeat(64)}`,node:'v24.18.0',python:'Python 3.11.2',platform:'linux',arch:'x64'},publicBuildEnvironment:{},projectSettings:{nodeVersion:'24.x'}};
+  const setup={schemaVersion:2,controllerSha:m.controller.sha,epoch:m.epoch,targetsSha256:digest(m.targets),verification:m.verification,probeProtocol:R.probeProtocol};
+  const env=()=>{m.setupSha256=digest(setup);return {FCOS_ADMITTED_RELEASE_SETUP:JSON.stringify(setup),FCOS_ADMITTED_RELEASE_SETUP_SHA256:digest(setup)};};
+  return {m,setup,env};
+}
+test('new setup marker is independently required even after coherent setup hash rebinding',()=>{
+  const {m,setup,env}=runtimeSetupFixture();assert.doesNotThrow(()=>assertHostedSetup({manifest:m,env:env()}));
+  for(const marker of [undefined,'unknown']){setup.probeProtocol=marker;if(marker===undefined)delete setup.probeProtocol;assert.throws(()=>assertHostedSetup({manifest:m,env:env()}),{code:'RUNTIME_PROBE_SETUP_PROTOCOL'});}
+  setup.probeProtocol=R.probeProtocol;delete m.runtime.probeProtocol;
+  assert.throws(()=>assertHostedSetup({manifest:m,env:env()}),{code:'RUNTIME_PROBE_SETUP_PROTOCOL'});
+});
+
+test('manifest builder refuses protocol mismatch before collecting source, while new application opt-in stays supported',()=>{
+  const {m,setup}=runtimeSetupFixture();let reads=0;
+  const options={plan:{schemaVersion:2,stage:'compatibility',runtime:m.runtime},setup,candidateSha:R.candidateSha,controllerSha:m.controller.sha,collectSource:()=>{reads++;throw Error('source marker');}};
+  delete setup.probeProtocol;
+  assert.throws(()=>buildReleaseManifest(options),{code:'RUNTIME_PROBE_SETUP_PROTOCOL'});assert.equal(reads,0);
+  setup.probeProtocol=R.probeProtocol;assert.throws(()=>buildReleaseManifest(options),/source marker/);assert.equal(reads,1);
+  m.stage='application';m.candidate.sha='e'.repeat(40);m.candidate.sourceProfile='application_v2';
+  m.scope.compatibilityProductionObservationSha256='a'.repeat(64);m.scope.handoffs=[{kind:'status19',sha256:'a'.repeat(64)},{kind:'supplier16',sha256:'a'.repeat(64)}];m.requiredChecks.push('compatibility_production_observation');
+  assert.doesNotThrow(()=>validateManifest(m));
+  m.runtime.probeProtocol='unknown';assert.throws(()=>validateManifest(m),{code:'RUNTIME_PROBE_PROTOCOL_BINDING'});
 });

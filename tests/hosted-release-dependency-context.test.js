@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DIAGNOSTIC_DEPENDENCY_CONTEXT as PIN, VERIFICATION_DEPENDENCY_CONTEXT as VERIFICATION, MEASUREMENT_DEPENDENCY_CONTEXT as MEASUREMENT, dependencyContextCandidate } from '../config/hostedDependencyContext.js';
+import { DIAGNOSTIC_DEPENDENCY_CONTEXT as PIN, VERIFICATION_DEPENDENCY_CONTEXT as VERIFICATION, MEASUREMENT_DEPENDENCY_CONTEXT as MEASUREMENT, RUNTIME_METERING_DEPENDENCY_CONTEXT as METERED, dependencyContextCandidate } from '../config/hostedDependencyContext.js';
 import { DEPENDENCY_SEED_FILES, sealDependencySeed } from '../scripts/hosted-release-dependency-seed.mjs';
 import { digest, releaseTargets } from '../scripts/lib/hosted-release/contract.mjs';
 import { NOM_B_LEGACY_HISTORY } from '../scripts/lib/hosted-release/dependency-publisher.mjs';
@@ -257,6 +257,20 @@ test('measurement-only successor retains original AAD only for its complete exac
   assert.equal(dependencyContextCandidate(m,{seed:publicFixture.seed,handoff:{...publicFixture.handoff,manifestHash:'measurement-manifest'}}),base);
   for(const field of Object.keys(m.candidate)){const changed=structuredClone(m);changed.candidate[field]=field==='sha'?VERIFICATION.candidate.sha:'changed';assert.throws(()=>dependencyContextCandidate(changed),{code:'DEPENDENCY_CONTEXT_REQUIRED'});}
   for(const patch of [{sha:VERIFICATION.candidate.sha},{sourceProfile:VERIFICATION.candidate.sourceProfile}])assert.throws(()=>dependencyContextCandidate({...m,candidate:{...m.candidate,...patch}}),{code:'DEPENDENCY_CONTEXT_REQUIRED'});
+  for(const dependencies of [undefined,null,{}, {...m.dependencies,extra:true}])assert.throws(()=>dependencyContextCandidate({...m,dependencies}),{code:'DEPENDENCY_CONTEXT_REQUIRED'});
+  assert.throws(()=>dependencyContextCandidate(m,{seed:{...publicFixture.seed,extra:true}}),{code:'DEPENDENCY_CONTEXT_REQUIRED'});
+  assert.throws(()=>dependencyContextCandidate(m,{handoff:{...publicFixture.handoff,candidateSha:m.candidate.sha}}),{code:'DEPENDENCY_CONTEXT_REQUIRED'});
+});
+
+test('metered-runtime child retains original dependency AAD only with all exact new source fingerprints',()=>{
+  const m={candidate:structuredClone(METERED.candidate),dependencies:structuredClone(publicFixture.dependencies)};
+  assert.equal(m.candidate.sha,'1e25147dc9fc9ba008096f1200b681993d49d428');assert.equal(m.candidate.sourceProfile,'compat_runtime_metering_20261024');
+  assert.equal(METERED.contextCandidateSha,MEASUREMENT.contextCandidateSha);
+  for(const field of ['dependenciesSha256','seedSha256','handoffSha256'])assert.equal(METERED[field],MEASUREMENT[field]);
+  for(const field of ['lockSha256','salesforceSourceSha256','branch'])assert.equal(m.candidate[field],MEASUREMENT.candidate[field]);
+  for(const field of ['sourceSha256','sourceInputsSha256','configurationSha256'])assert.notEqual(m.candidate[field],MEASUREMENT.candidate[field]);
+  assert.equal(dependencyContextCandidate(m,{seed:publicFixture.seed,handoff:{...publicFixture.handoff,manifestHash:'metered-manifest'}}),base);
+  for(const field of Object.keys(m.candidate)){const changed=structuredClone(m);changed.candidate[field]=field==='sha'?MEASUREMENT.candidate.sha:'changed';assert.throws(()=>dependencyContextCandidate(changed),{code:'DEPENDENCY_CONTEXT_REQUIRED'});}
   for(const dependencies of [undefined,null,{}, {...m.dependencies,extra:true}])assert.throws(()=>dependencyContextCandidate({...m,dependencies}),{code:'DEPENDENCY_CONTEXT_REQUIRED'});
   assert.throws(()=>dependencyContextCandidate(m,{seed:{...publicFixture.seed,extra:true}}),{code:'DEPENDENCY_CONTEXT_REQUIRED'});
   assert.throws(()=>dependencyContextCandidate(m,{handoff:{...publicFixture.handoff,candidateSha:m.candidate.sha}}),{code:'DEPENDENCY_CONTEXT_REQUIRED'});

@@ -1,4 +1,4 @@
-import { firstRuntimeCandidateProfile } from '../../../config/hostedCompatibilityCorrection.js';
+import { firstRuntimeCandidateProfile, runtimeProbeProtocolMatches } from '../../../config/hostedCompatibilityCorrection.js';
 import { qualificationSourceBinding } from '../../../config/hostedReleaseQualification.js';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -71,6 +71,8 @@ export function assertHostedSetup({ manifest, env = process.env }) {
     || canonical(setup.legacyReleaseContainment || null) !== canonical(manifest.legacyReleaseContainment || null)
     || canonical(setup.dependencies || null) !== canonical(manifest.dependencies || null)
     || manifest.qualificationSource !== undefined && canonical(setup.qualificationSource || null) !== canonical(manifest.qualificationSource)) fail('ADMITTED_SETUP_CHANGED');
+  if (!runtimeProbeProtocolMatches(manifest.candidate, setup.probeProtocol)
+    || setup.probeProtocol !== manifest.runtime?.probeProtocol) fail('RUNTIME_PROBE_SETUP_PROTOCOL');
   if(manifest.stage==='qualification' || manifest.verification?.vercelReadCredential)
     validateVercelReadAcceptance(manifest.verification?.vercelReadCredential,setup,{targets:manifest.targets});
   if (manifest.verification?.vercelPreviewWriterCredential)

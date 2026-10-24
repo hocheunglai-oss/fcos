@@ -1,4 +1,4 @@
-import { firstRuntimeCandidateProfile, isFirstRuntimeCandidateSha } from '../../../config/hostedCompatibilityCorrection.js';
+import { firstRuntimeCandidateProfile, isFirstRuntimeCandidateSha, runtimeProbeProtocolMatches } from '../../../config/hostedCompatibilityCorrection.js';
 import { validateQualificationSource } from '../../../config/hostedReleaseQualification.js';
 import { execFileSync } from 'node:child_process';
 import { collectSourceAdmission } from './admission.mjs';
@@ -17,6 +17,9 @@ function releaseManifestDraft({ plan, setup, previousProduction, candidateDirect
   const qualificationSource = plan.stage === 'qualification' && setup.qualificationSource
     ? validateQualificationSource(setup.qualificationSource, { controllerSha, candidateSha }) : null;
   const sourceProfile = plan.stage === 'compatibility' ? firstRuntimeCandidateProfile(candidateSha) : plan.stage === 'application' ? 'application_v2' : plan.sourceProfile;
+  if (!runtimeProbeProtocolMatches({ sha: candidateSha, sourceProfile }, plan.runtime?.probeProtocol)
+    || !runtimeProbeProtocolMatches({ sha: candidateSha, sourceProfile }, setup.probeProtocol)
+    || setup.probeProtocol !== plan.runtime?.probeProtocol) fail('RUNTIME_PROBE_SETUP_PROTOCOL');
   const source = collectSource({ candidateDirectory, controllerDirectory, controllerSha, candidateSha, sourceProfile });
   const manifest = { schemaVersion: 2, contract: CONTRACT_VERSION, releaseId: plan.releaseId, stage: plan.stage,
     executionMode: plan.stage === 'qualification' ? 'qualification' : 'release', epoch: setup.epoch, setupSha256: digest(setup),
@@ -63,10 +66,11 @@ export function validateDiscoverySetup(setup, { controllerSha, candidateSha, now
   const isHash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
   const keys=['schemaVersion','kind','controllerSha','candidateSha','sourceProfile','targets','qualificationSource',
     'environment','issuedAt','notAfter','runtimeIdentity','vercelReadCredential','vercelReadCredentialAcceptance','legacyProductionBinding'];
-  if (!exact(setup, [...keys,...['firstRuntimeBaseline','legacySalesforceAppObservation','legacySalesforceIdentityObservation','legacyRuntimeAuth'].filter(k=>Object.hasOwn(setup||{},k))])
+  if (!exact(setup, [...keys,...['firstRuntimeBaseline','legacySalesforceAppObservation','legacySalesforceIdentityObservation','legacyRuntimeAuth','probeProtocol'].filter(k=>Object.hasOwn(setup||{},k))])
     || setup.schemaVersion !== 1 || setup.kind !== 'fcos_hosted_setup_discovery'
     || setup.controllerSha !== controllerSha || setup.candidateSha !== candidateSha
     || !isFirstRuntimeCandidateSha(setup.candidateSha) || setup.sourceProfile !== firstRuntimeCandidateProfile(setup.candidateSha)
+    || !runtimeProbeProtocolMatches({ sha: setup.candidateSha, sourceProfile: setup.sourceProfile }, setup.probeProtocol)
     || digest(setup.targets) !== digest(releaseTargets()) || setup.environment !== 'fcos-hosted-verification'
     || !Number.isSafeInteger(setup.issuedAt) || setup.issuedAt <= 0 || setup.issuedAt > now + 30000
     || !Number.isSafeInteger(setup.notAfter) || setup.notAfter <= now || setup.notAfter <= setup.issuedAt

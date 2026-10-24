@@ -59,9 +59,27 @@ export const MEASUREMENT_DEPENDENCY_CONTEXT = freeze({
   "handoffSha256": "0e5c9447a34c13f2c5d746f36ce2077f8eefa7778e0601095ff4bd9dc3885e3d"
 });
 
+// Exact metered-runtime child retains only the original immutable dependency AAD and objects.
+export const RUNTIME_METERING_DEPENDENCY_CONTEXT = freeze({
+  "candidate": {
+    "sha": "1e25147dc9fc9ba008096f1200b681993d49d428",
+    "sourceProfile": "compat_runtime_metering_20261024",
+    "sourceSha256": "5317444c5e3c732aa19642f9602db5301c1312fcc34cc7144811a42e7e31fb90",
+    "lockSha256": "9b3d6eb4824ea8688022b9ba249041e25c44b8cebc5443d59c55d8a2da5da378",
+    "configurationSha256": "1f65465122dc42cbf259c6dfb719591c8835357f0d8271b845c08323d632878c",
+    "salesforceSourceSha256": "4c2594c9986269e492487448d402334f43db35b06cb9c409377e728482739c64",
+    "sourceInputsSha256": "3c261f5040a2f97964fb6a0a02c48423f1b9f27bb5d7669cd0e6c494462f5def",
+    "branch": "codex/hosted-release-consolidation-20261017"
+  },
+  "contextCandidateSha": "2ef733d17dd12314c72971c2220b2b09903a6bf0",
+  "dependenciesSha256": "e0e2debcd48c8575a63ecd316a5853f9815625ce7224c2f31ef808ee57fe3067",
+  "seedSha256": "39dd8056e12b276ce31f08e0f9534fc7083b4cb0020ad4805c229d40e49297bf",
+  "handoffSha256": "0e5c9447a34c13f2c5d746f36ce2077f8eefa7778e0601095ff4bd9dc3885e3d"
+});
+
 export function dependencyContextCandidate(manifest, { seed, handoff } = {}) {
   const candidate = manifest?.candidate;
-  const pin = [DIAGNOSTIC_DEPENDENCY_CONTEXT, VERIFICATION_DEPENDENCY_CONTEXT, MEASUREMENT_DEPENDENCY_CONTEXT].find(value =>
+  const pin = [DIAGNOSTIC_DEPENDENCY_CONTEXT, VERIFICATION_DEPENDENCY_CONTEXT, MEASUREMENT_DEPENDENCY_CONTEXT, RUNTIME_METERING_DEPENDENCY_CONTEXT].find(value =>
     candidate?.sha === value.candidate.sha || candidate?.sourceProfile === value.candidate.sourceProfile);
   if (!pin) return candidate?.sha;
   const need = value => { if (!value) throw Object.assign(new Error('DEPENDENCY_CONTEXT_REQUIRED'), { code: 'DEPENDENCY_CONTEXT_REQUIRED' }); };
