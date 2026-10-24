@@ -133,13 +133,22 @@ test('readonly Vercel adapter uses only pinned GET endpoints and rejects a misma
 
 function fakeLoginBrowser(auth, state, { foreign = false, cleanupFail = false, failAt = null } = {}) {
   let location = origin, fills = 0, closed = 0;
+  const waiting = new Set();
+  const move = url => { location = url; for (const wait of waiting) if (wait.predicate(new URL(url))) { waiting.delete(wait); wait.resolve(); } };
   const issuer = new URL(FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation.issuer).origin;
   const response = { status: () => 200, json: async () => { if (failAt === 'identity') throw new SyntaxError('PRIVATE_RESPONSE_BODY'); return auth; } };
-  const page = { goto: async () => { if (failAt === 'navigation') throw Error('PRIVATE_NAVIGATION_TOKEN'); location = foreign ? 'https://foreign.invalid/admin' : `${origin}/login`; }, url: () => location,
-    getByRole: (_, { name }) => ({ click: async () => { if (failAt === 'submit' && name === 'Login') throw Error('PRIVATE_SUBMIT_PASSWORD'); location = name === 'Continue with FCUNO' ? (foreign ? location : `${issuer}/admin`) : origin; } }),
+  const page = { goto: async () => { if (failAt === 'navigation') throw Error('PRIVATE_NAVIGATION_TOKEN'); move(foreign ? 'https://foreign.invalid/admin' : `${origin}/login`); }, url: () => location,
+    getByRole: (_, { name }) => {
+      const click = async () => { if (failAt === 'submit' && name === 'Login') throw Error('PRIVATE_SUBMIT_PASSWORD'); move(name === 'Continue with FCUNO' ? (foreign ? location : `${issuer}/admin`) : origin); };
+      return { click, waitFor: async () => {}, elementHandle: async () => ({ click, dispose: async () => {} }) };
+    },
     getByLabel: () => ({ fill: async () => { if (failAt === 'form') throw Error('PRIVATE_FORM_EMAIL'); fills++; assert.equal(new URL(location).origin, issuer); } }),
-    waitForURL: async predicate => { if (!predicate(new URL(location))) throw Error('PRIVATE_WRONG_LOCATION'); }, waitForResponse: async () => response };
-  const context = { newPage: async () => page, storageState: async () => state, close: async () => { closed++; if (cleanupFail) throw Error('PRIVATE_CLEANUP_ERROR'); } };
+    waitForURL: predicate => {
+      if (predicate(new URL(location))) return Promise.resolve();
+      if (foreign) return Promise.reject(Error('PRIVATE_WRONG_LOCATION'));
+      return new Promise((resolve, reject) => waiting.add({ predicate, resolve, reject }));
+    }, waitForResponse: async () => response };
+  const context = { newPage: async () => page, storageState: async () => state, close: async () => { closed++; for (const wait of waiting) wait.reject(Error('PRIVATE_PAGE_CLOSED')); waiting.clear(); if (cleanupFail) throw Error('PRIVATE_CLEANUP_ERROR'); } };
   return { browserType: { launch: async () => ({ newContext: async () => context, close: async () => { closed++; } }) }, counts: () => ({ fills, closed }) };
 }
 
@@ -210,4 +219,65 @@ test('runtime target recheck preserves its closed boundary and cannot reach logi
     verifyTarget:async()=>{throw Error('PRIVATE_PROVIDER_RESPONSE');},login:async()=>{logins++;}});
   await assert.rejects(provider({origin,deployment:f.preview}),error=>error.code==='RELEASE_BOUNDARY_FAILED'&&error.boundary==='runtime.identity.target'&&!JSON.stringify(error).includes('PRIVATE'));
   assert.equal(logins,0);
+});
+
+
+// Login.jsx may replace the manual button with its automatic FCUNO redirect.
+// This browser double models navigation separately from a document-bound click.
+function issuerArrivalBrowser(auth, state, scenario) {
+  const issuer = new URL(FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation.issuer).origin;
+  let location = origin, fills = 0, closed = 0, manualClicks = 0, disposed = 0;
+  const pending = new Set();
+  const move = url => { location = url; for (const wait of pending) if (wait.predicate(new URL(url))) { pending.delete(wait); wait.resolve(); } };
+  const detached = () => Object.assign(new Error('SYNTHETIC_DOCUMENT_DETACHED'), { name: 'TimeoutError' });
+  const manual = async () => {
+    manualClicks++;
+    if (scenario === 'automatic-before-button' || scenario === 'automatic-during-click') { move(`${issuer}/admin`); throw detached(); }
+    move(`${issuer}/admin`);
+  };
+  const page = {
+    goto: async () => move(scenario === 'already-arrived' ? `${issuer}/admin` : scenario === 'wrong-issuer' ? 'https://foreign.invalid/admin' : `${origin}/login`),
+    url: () => location,
+    getByRole: (_, { name }) => name === 'Continue with FCUNO' ? {
+      click: manual,
+      waitFor: async () => {
+        if (scenario === 'automatic-before-button') { move(`${issuer}/admin`); throw detached(); }
+        if (scenario === 'timeout') throw detached();
+      },
+      elementHandle: async () => ({ click: manual, dispose: async () => { disposed++; } }),
+    } : { click: async () => move(origin) },
+    getByLabel: () => ({ fill: async () => { assert.equal(location, `${issuer}/admin`); fills++; } }),
+    waitForURL: predicate => {
+      if (predicate(new URL(location))) return Promise.resolve();
+      return new Promise((resolve, reject) => {
+        const wait = { predicate, resolve, reject }; pending.add(wait);
+        if (scenario === 'timeout' || scenario === 'wrong-issuer') queueMicrotask(() => { pending.delete(wait); reject(detached()); });
+      });
+    },
+    waitForResponse: async () => ({ status: () => 200, json: async () => auth }),
+  };
+  const context = { newPage: async () => page, storageState: async () => state, close: async () => { closed++; for (const wait of pending) wait.reject(detached()); pending.clear(); } };
+  return { browserType: { launch: async () => ({ newContext: async () => context, close: async () => { closed++; } }) }, counts: () => ({ fills, closed, manualClicks, disposed }) };
+}
+
+for (const [scenario, title] of [
+  ['automatic-before-button', 'automatic navigation before the button appears'],
+  ['automatic-during-click', 'automatic navigation while the old document click detaches'],
+  ['already-arrived', 'already arrived issuer without another click'],
+  ['manual', 'manual document-bound click'],
+]) test(`issuer arrival accepts ${title}`, async t => {
+  const f = fixture(t, 'normal_role'), browser = issuerArrivalBrowser(identity(), f.state, scenario);
+  const result = await loginHostedFcuno({ origin, mode: 'normal_role', credentials: { email: 'normal@example.invalid', password: 'PRIVATE_TEST', expectedRole: 'finance' }, protectionState: {}, browserType: browser.browserType });
+  assert.equal(result.token, 'PRIVATE_NEW_TEST_TOKEN');
+  assert.equal(browser.counts().fills, 2); assert.equal(browser.counts().closed, 2);
+  assert.equal(browser.counts().manualClicks, ['manual', 'automatic-during-click'].includes(scenario) ? 1 : 0);
+  assert.equal(browser.counts().disposed, ['manual', 'automatic-during-click'].includes(scenario) ? 1 : 0);
+});
+for (const scenario of ['wrong-issuer', 'timeout']) test(`issuer arrival refuses ${scenario} before credentials and closes both resources`, async t => {
+  const f = fixture(t, 'normal_role'), browser = issuerArrivalBrowser(identity(), f.state, scenario);
+  await assert.rejects(loginHostedFcuno({ origin, mode: 'normal_role', credentials: { email: 'normal@example.invalid', password: 'PRIVATE_TEST', expectedRole: 'finance' }, protectionState: {}, browserType: browser.browserType }), error => {
+    assert.equal(error.code, 'RELEASE_BOUNDARY_FAILED'); assert.equal(error.boundary, 'runtime.login.issuer');
+    assert.equal(JSON.stringify(error).includes('PRIVATE'), false); assert.equal(String(error.stack).includes('PRIVATE'), false); return true;
+  });
+  assert.equal(browser.counts().fills, 0); assert.equal(browser.counts().closed, 2); assert.equal(browser.counts().manualClicks, 0);
 });

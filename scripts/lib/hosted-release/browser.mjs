@@ -110,6 +110,37 @@ export function assertHostedBrowserIdentity(auth, { mode, credentials }) {
   return { role: 'viewer', moduleAccess: auth.moduleAccess };
 }
 
+async function arriveAtHostedIssuer(page, origin, issuer) {
+  const atIssuer = () => {
+    try { const url = new URL(page.url()); return url.origin === issuer && url.pathname === '/admin'; }
+    catch { return false; }
+  };
+  if (atIssuer()) return;
+  // Login.jsx can automatically redirect while its manual button disappears.
+  // Observe arrival first; an optional click stays bound to the old document.
+  let arrived = false;
+  const arrival = page.waitForURL(url => url.origin === issuer && url.pathname === '/admin', { timeout: 30000 })
+    .then(() => { arrived = true; });
+  const manual = (async () => {
+    const button = page.getByRole('button', { name: 'Continue with FCUNO', exact: true });
+    await button.waitFor({ state: 'visible', timeout: 30000 });
+    if (arrived || atIssuer()) return;
+    const originalLogin = () => {
+      const url = new URL(page.url());
+      requireFact(url.origin === origin && url.pathname === '/login' && !url.searchParams.has('federated'));
+    };
+    originalLogin();
+    const element = await button.elementHandle({ timeout: 1000 });
+    requireFact(element);
+    try {
+      if (!arrived && !atIssuer()) { originalLogin(); await element.click({ timeout: 5000 }); }
+    } finally { await element.dispose().catch(() => {}); }
+    await arrival;
+  })().catch(() => arrival);
+  await Promise.race([arrival, manual]);
+  requireFact(atIssuer());
+}
+
 // Fresh dedicated test login only. Browser state remains opaque and candidate-scoped;
 // the existing normal-role harness consumes its newly issued bearer only in memory.
 export async function loginHostedFcuno({ origin, credentials, mode, protectionState, browserType = chromium, launchEnvironment = hostedBrowserLaunchEnvironment() }) {
@@ -120,12 +151,7 @@ export async function loginHostedFcuno({ origin, credentials, mode, protectionSt
     context = await atReleaseBoundary('runtime.login.context', () => browser.newContext({ storageState: protectionState, viewport: { width: 1440, height: 1000 }, serviceWorkers: 'block' }));
     const page = await context.newPage();
     await atReleaseBoundary('runtime.login.navigation', () => page.goto(`${origin}/login`, { waitUntil: 'domcontentloaded', timeout: 45000 }));
-    if (new URL(page.url()).origin !== issuer) {
-      await atReleaseBoundary('runtime.login.issuer', async () => {
-        await page.getByRole('button', { name: 'Continue with FCUNO', exact: true }).click();
-        await page.waitForURL(url => url.origin === issuer, { timeout: 30000 });
-      });
-    }
+    await atReleaseBoundary('runtime.login.issuer', () => arriveAtHostedIssuer(page, origin, issuer));
     const issuerLocation = () => { const url = new URL(page.url()); requireFact(url.origin === issuer && url.pathname === '/admin'); };
     await atReleaseBoundary('runtime.login.form', async () => {
       issuerLocation(); await page.getByLabel('Username', { exact: true }).fill(credentials.email);
