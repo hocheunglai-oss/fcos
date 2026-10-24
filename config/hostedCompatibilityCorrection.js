@@ -188,9 +188,43 @@ export const COMPATIBILITY_RUNTIME_METERING_CORRECTION = Object.freeze({
   "salesforceMetadataChanged": false,
   "cronSchedulesChanged": false
 });
+// Real child ships the public runtime dependency and narrows only the metadata probe RPC.
+export const COMPATIBILITY_RUNTIME_DEPENDENCY_CORRECTION = Object.freeze({
+  "baseSha": "1e25147dc9fc9ba008096f1200b681993d49d428",
+  "candidateSha": "9152fa655b6e507a568d773534404843595fe323",
+  "sourceProfile": "compat_runtime_dependency_20261024",
+  "kind": "explicit_runtime_public_dependency_and_scoped_connections_admission",
+  "probeProtocol": "xero_metered_v1",
+  "files": [
+    {
+      "path": "api/_xeroRuntimeObservation.js",
+      "sha256": "f22edd5349f39a37b37b1cfd128da55ecf1d6ea5b726f323461cf50752fccf95",
+      "gitBlob": "a7008050bbf03e9e7507ba42594a9c897c864d94"
+    },
+    {
+      "path": "api/_xeroSharedControl.js",
+      "sha256": "eaad8c82ccf91b367551bcb930339c5dff1cdfbd456279c66e5973889474d289",
+      "gitBlob": "a415626003c100c422a1eaee9ca8e4dc38e47a81"
+    },
+    {
+      "path": "config/preview-parity-policy.json",
+      "sha256": "fe95da075bca9aa9ae0757a838cbd79752f6db95892c9544dfde1fe6f911c586",
+      "gitBlob": "e94ec56ed11798cbe01d771bac9ba9862b749258"
+    },
+    {
+      "path": "tests/xeroSharedControl.test.js",
+      "sha256": "d21a6672d250161800e5686ed17c3d36f7d35b3f3b269b41e69540873bae3f60",
+      "gitBlob": "27b85300172cff52e244f7e387afc4ea5bbe4b9b"
+    }
+  ],
+  "existingUi": false,
+  "handoffs": [],
+  "salesforceMetadataChanged": false,
+  "cronSchedulesChanged": false
+});
 export function isFirstRuntimeCandidateSha(value) {
   return value === COMPATIBILITY_CORRECTION.baseSha || value === COMPATIBILITY_CORRECTION.candidateSha
-    || value === COMPATIBILITY_CONFIGURATION_CORRECTION.candidateSha || value === COMPATIBILITY_DIAGNOSTIC_CORRECTION.candidateSha || value === COMPATIBILITY_VERIFICATION_CORRECTION.candidateSha || value === COMPATIBILITY_MEASUREMENT_CORRECTION.candidateSha || value === COMPATIBILITY_RUNTIME_METERING_CORRECTION.candidateSha;
+    || value === COMPATIBILITY_CONFIGURATION_CORRECTION.candidateSha || value === COMPATIBILITY_DIAGNOSTIC_CORRECTION.candidateSha || value === COMPATIBILITY_VERIFICATION_CORRECTION.candidateSha || value === COMPATIBILITY_MEASUREMENT_CORRECTION.candidateSha || value === COMPATIBILITY_RUNTIME_METERING_CORRECTION.candidateSha || value === COMPATIBILITY_RUNTIME_DEPENDENCY_CORRECTION.candidateSha;
 }
 export function firstRuntimeCandidateProfile(value) {
   return value === COMPATIBILITY_CORRECTION.baseSha ? 'frozen_04ee'
@@ -199,14 +233,16 @@ export function firstRuntimeCandidateProfile(value) {
         : value === COMPATIBILITY_DIAGNOSTIC_CORRECTION.candidateSha ? COMPATIBILITY_DIAGNOSTIC_CORRECTION.sourceProfile
           : value === COMPATIBILITY_VERIFICATION_CORRECTION.candidateSha ? COMPATIBILITY_VERIFICATION_CORRECTION.sourceProfile
             : value === COMPATIBILITY_MEASUREMENT_CORRECTION.candidateSha ? COMPATIBILITY_MEASUREMENT_CORRECTION.sourceProfile
-              : value === COMPATIBILITY_RUNTIME_METERING_CORRECTION.candidateSha ? COMPATIBILITY_RUNTIME_METERING_CORRECTION.sourceProfile : null;
+              : value === COMPATIBILITY_RUNTIME_METERING_CORRECTION.candidateSha ? COMPATIBILITY_RUNTIME_METERING_CORRECTION.sourceProfile
+                : value === COMPATIBILITY_RUNTIME_DEPENDENCY_CORRECTION.candidateSha ? COMPATIBILITY_RUNTIME_DEPENDENCY_CORRECTION.sourceProfile : null;
 }
 // Old immutable compatibility source cannot acquire a new endpoint protocol by
 // adding a manifest marker. Other application source may explicitly opt in.
 export function runtimeProbeProtocolMatches(candidate, protocol) {
-  const pin = COMPATIBILITY_RUNTIME_METERING_CORRECTION;
-  if (candidate?.sha === pin.candidateSha || candidate?.sourceProfile === pin.sourceProfile)
+  const pin = [COMPATIBILITY_RUNTIME_METERING_CORRECTION, COMPATIBILITY_RUNTIME_DEPENDENCY_CORRECTION]
+    .find(value => candidate?.sha === value.candidateSha || candidate?.sourceProfile === value.sourceProfile);
+  if (pin)
     return candidate.sha === pin.candidateSha && candidate.sourceProfile === pin.sourceProfile && protocol === pin.probeProtocol;
   if (isFirstRuntimeCandidateSha(candidate?.sha)) return protocol === undefined;
-  return protocol === undefined || protocol === pin.probeProtocol;
+  return protocol === undefined || protocol === COMPATIBILITY_RUNTIME_METERING_CORRECTION.probeProtocol;
 }

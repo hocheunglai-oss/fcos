@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { createGzip } from 'node:zlib';
 import tarStream from 'tar-stream';
-import { fcosConnectionIdentifier } from '../../../config/fcosConnections.js';
+import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier } from '../../../config/fcosConnections.js';
 import { collectBuildProvenance, deploymentSourceFilter, isCredentialPath } from '../build-provenance.mjs';
 import { canonicalFcosE2eCandidateUrl } from '../../verify-e2e-candidate.mjs';
 import { assertSelectionSource, selectionBuildGuard } from './configuration-selection.mjs';
@@ -186,6 +186,14 @@ function publicRuntimeEnvironment(manifest, production) {
     }
     if (phases[0].auth.xero.target !== phases[1].auth.xero.target) fail('SOURCE_API_PUBLIC_RUNTIME_TENANT');
     result.XERO_TENANT_ID = phases[production ? 1 : 0].auth.xero.target;
+  }
+  // Build inputs do not establish the server runtime's public federation issuer.
+  // Bind the runtime override to both admitted input and the canonical provider.
+  const issuer = manifest.verification.publicBuildEnvironment.FCUNO_IDENTITY_ISSUER;
+  if (phases.some(value => value.flags?.FCOS_ENABLE_FCUNO_FEDERATION?.value === true) || issuer !== undefined) {
+    if (issuer !== FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation.issuer)
+      fail('SOURCE_API_PUBLIC_RUNTIME_ISSUER');
+    result.FCUNO_IDENTITY_ISSUER = issuer;
   }
   return result;
 }

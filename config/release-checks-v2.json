@@ -42,7 +42,8 @@
         "compat_source_diagnostics_20261023",
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
-        "compat_runtime_metering_20261024"
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024"
       ]
     },
     {
@@ -75,7 +76,8 @@
         "compat_source_diagnostics_20261023",
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
-        "compat_runtime_metering_20261024"
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024"
       ]
     },
     {
@@ -109,7 +111,8 @@
         "compat_source_diagnostics_20261023",
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
-        "compat_runtime_metering_20261024"
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024"
       ],
       "profileCommands": {
         "controller_v2": [
@@ -194,7 +197,8 @@
         "compat_source_diagnostics_20261023",
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
-        "compat_runtime_metering_20261024"
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024"
       ]
     },
     {
@@ -238,7 +242,8 @@
         "compat_source_diagnostics_20261023",
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
-        "compat_runtime_metering_20261024"
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024"
       ]
     },
     {
@@ -271,7 +276,8 @@
         "compat_source_diagnostics_20261023",
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
-        "compat_runtime_metering_20261024"
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024"
       ]
     },
     {
@@ -326,7 +332,8 @@
         "compat_source_diagnostics_20261023",
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
-        "compat_runtime_metering_20261024"
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024"
       ],
       "profileCommands": {
         "controller_v2": [
@@ -381,7 +388,8 @@
         "compat_source_diagnostics_20261023",
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
-        "compat_runtime_metering_20261024"
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024"
       ],
       "artifactInputs": [
         "dist"
@@ -446,7 +454,8 @@
         "compat_source_diagnostics_20261023",
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
-        "compat_runtime_metering_20261024"
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024"
       ]
     },
     {
@@ -481,7 +490,8 @@
         "compat_source_diagnostics_20261023",
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
-        "compat_runtime_metering_20261024"
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024"
       ]
     },
     {
@@ -543,7 +553,8 @@
         "compat_source_diagnostics_20261023",
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
-        "compat_runtime_metering_20261024"
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024"
       ]
     },
     {
@@ -578,7 +589,8 @@
         "compat_source_diagnostics_20261023",
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
-        "compat_runtime_metering_20261024"
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024"
       ]
     },
     {
@@ -615,7 +627,8 @@
         "compat_source_diagnostics_20261023",
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
-        "compat_runtime_metering_20261024"
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024"
       ],
       "profileCommands": {
         "compat_verification_harness_20261024": [
@@ -681,6 +694,22 @@
               "FCOS_MIGRATION_PARENT_PROOF_FILE": "/controller/output/disposable-migration-server.json"
             }
           }
+        ],
+        "compat_runtime_dependency_20261024": [
+          {
+            "program": "node",
+            "args": [
+              "scripts/verify-migrations.mjs"
+            ],
+            "env": {
+              "FCOS_MIGRATION_DATABASE_URL": "postgresql://postgres:postgres@127.0.0.1:54322/postgres",
+              "FCOS_MIGRATION_DISPOSABLE_CLUSTER": "1",
+              "FCOS_MIGRATION_DOCKER_CONTAINER": "supabase_db_fcos",
+              "FCOS_REQUIRE_LIVE_MIGRATION_CHECK": "1",
+              "FCOS_MIGRATION_PROJECT_ID": "fcos",
+              "FCOS_MIGRATION_PARENT_PROOF_FILE": "/controller/output/disposable-migration-server.json"
+            }
+          }
         ]
       }
     },
@@ -727,7 +756,8 @@
         "compat_source_diagnostics_20261023",
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
-        "compat_runtime_metering_20261024"
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024"
       ]
     },
     {
@@ -764,7 +794,8 @@
         "compat_source_diagnostics_20261023",
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
-        "compat_runtime_metering_20261024"
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024"
       ]
     },
     {
@@ -804,7 +835,8 @@
         "compat_source_diagnostics_20261023",
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
-        "compat_runtime_metering_20261024"
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024"
       ]
     },
     {
@@ -842,7 +874,8 @@
         "compat_source_diagnostics_20261023",
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
-        "compat_runtime_metering_20261024"
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024"
       ]
     },
     {
@@ -880,7 +913,8 @@
         "compat_source_diagnostics_20261023",
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
-        "compat_runtime_metering_20261024"
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024"
       ]
     },
     {
@@ -917,7 +951,8 @@
         "compat_source_diagnostics_20261023",
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
-        "compat_runtime_metering_20261024"
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024"
       ]
     },
     {
@@ -954,7 +989,8 @@
         "compat_source_diagnostics_20261023",
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
-        "compat_runtime_metering_20261024"
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024"
       ]
     },
     {
@@ -991,7 +1027,8 @@
         "compat_source_diagnostics_20261023",
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
-        "compat_runtime_metering_20261024"
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024"
       ]
     },
     {
@@ -1028,7 +1065,8 @@
         "compat_source_diagnostics_20261023",
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
-        "compat_runtime_metering_20261024"
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024"
       ]
     },
     {
@@ -1065,7 +1103,8 @@
         "compat_source_diagnostics_20261023",
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
-        "compat_runtime_metering_20261024"
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024"
       ]
     },
     {
@@ -1102,7 +1141,8 @@
         "compat_source_diagnostics_20261023",
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
-        "compat_runtime_metering_20261024"
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024"
       ]
     },
     {
@@ -1127,7 +1167,8 @@
         "compat_source_diagnostics_20261023",
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
-        "compat_runtime_metering_20261024"
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024"
       ]
     },
     {
@@ -1152,7 +1193,8 @@
         "compat_source_diagnostics_20261023",
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
-        "compat_runtime_metering_20261024"
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024"
       ]
     },
     {
@@ -1190,7 +1232,8 @@
         "compat_source_diagnostics_20261023",
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
-        "compat_runtime_metering_20261024"
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024"
       ],
       "artifactInputs": [
         "dist",
@@ -1234,7 +1277,8 @@
         "compat_source_diagnostics_20261023",
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
-        "compat_runtime_metering_20261024"
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024"
       ],
       "artifactInputs": [
         "dist",
@@ -1271,7 +1315,8 @@
         "compat_source_diagnostics_20261023",
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
-        "compat_runtime_metering_20261024"
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024"
       ]
     },
     {
@@ -1316,7 +1361,8 @@
         "compat_source_diagnostics_20261023",
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
-        "compat_runtime_metering_20261024"
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024"
       ]
     },
     {
@@ -1406,7 +1452,8 @@
         "compat_source_diagnostics_20261023",
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
-        "compat_runtime_metering_20261024"
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024"
       ]
     }
   ],
@@ -1454,6 +1501,12 @@
       "candidateSha": "1e25147dc9fc9ba008096f1200b681993d49d428",
       "purpose": "Complete original accepted business release scope.",
       "description": "Explicit seven-file read-only runtime observer child of8d4: shared quota admission for one source-bound Connections request, finite token validity and no refresh. All31 checks and historical profiles remain unchanged.",
+      "probeProtocol": "xero_metered_v1"
+    },
+    "compat_runtime_dependency_20261024": {
+      "candidateSha": "9152fa655b6e507a568d773534404843595fe323",
+      "purpose": "Complete original accepted business release scope.",
+      "description": "Real child of1e ships the missing public runtime policy and scoped Connections RPC wiring only; original financial admission and all historical profiles remain unchanged.",
       "probeProtocol": "xero_metered_v1"
     }
   }

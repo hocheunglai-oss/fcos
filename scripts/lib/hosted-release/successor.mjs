@@ -1,4 +1,4 @@
-import { COMPATIBILITY_CONFIGURATION_CORRECTION, COMPATIBILITY_DIAGNOSTIC_CORRECTION } from '../../../config/hostedCompatibilityCorrection.js';
+import { COMPATIBILITY_CONFIGURATION_CORRECTION, COMPATIBILITY_DIAGNOSTIC_CORRECTION, COMPATIBILITY_RUNTIME_DEPENDENCY_CORRECTION } from '../../../config/hostedCompatibilityCorrection.js';
 import { canonical, digest, fail, FROZEN_COMPATIBILITY_SHA, validateManifest } from './contract.mjs';
 import { hostedProof } from './observations.mjs';
 
@@ -20,6 +20,14 @@ export const DIAGNOSTIC_SUCCESSOR_PRODUCTION = Object.freeze({
   candidateSha: COMPATIBILITY_DIAGNOSTIC_CORRECTION.candidateSha,
   sourceProfile: COMPATIBILITY_DIAGNOSTIC_CORRECTION.sourceProfile,
   sourceSha256: '9f8b01198784d1e222f96f726207ef9c980f9ab5d2536e7a156ca97b2f307912',
+});
+
+// Exact real runtime-dependency child. This source pin is not Production proof.
+export const RUNTIME_DEPENDENCY_SUCCESSOR_PRODUCTION = Object.freeze({
+  ...CONFIGURATION_SUCCESSOR_PRODUCTION,
+  candidateSha: COMPATIBILITY_RUNTIME_DEPENDENCY_CORRECTION.candidateSha,
+  sourceProfile: COMPATIBILITY_RUNTIME_DEPENDENCY_CORRECTION.sourceProfile,
+  sourceSha256: 'd460d7c3a665799f229bec782322e7a97a52122e4c4ec75bad51551be82ec840',
 });
 
 function configurationSuccessorAccepted({ manifest, prior, registered, actual, observation, reference, now, pin }) {
@@ -58,7 +66,7 @@ export async function collectCompatibilitySuccessor({ manifest, coordinator, env
   const actual = observation?.result;
   const original = registered?.candidate?.sha === FROZEN_COMPATIBILITY_SHA
     && actual?.sha === FROZEN_COMPATIBILITY_SHA && manifest.previousProduction.sha === FROZEN_COMPATIBILITY_SHA;
-  const pin = [CONFIGURATION_SUCCESSOR_PRODUCTION, DIAGNOSTIC_SUCCESSOR_PRODUCTION]
+  const pin = [CONFIGURATION_SUCCESSOR_PRODUCTION, DIAGNOSTIC_SUCCESSOR_PRODUCTION, RUNTIME_DEPENDENCY_SUCCESSOR_PRODUCTION]
     .find(value => registered?.candidate?.sha === value.candidateSha);
   const configurationSuccessor = pin && actual
     && configurationSuccessorAccepted({ manifest, prior, registered, actual, observation, reference, now, pin });

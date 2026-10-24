@@ -1,10 +1,11 @@
+import { firstRuntimeCandidateProfile, runtimeProbeProtocolMatches } from '../config/hostedCompatibilityCorrection.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import yaml from 'js-yaml';
 import { BOOTSTRAP_SOURCE } from '../scripts/lib/hosted-release/cutover-bootstrap.mjs';
 import { digest } from '../scripts/lib/hosted-release/contract.mjs';
-import { CONFIGURATION_SUCCESSOR_PRODUCTION as PIN, DIAGNOSTIC_SUCCESSOR_PRODUCTION as DIAGNOSTIC, collectCompatibilitySuccessor } from '../scripts/lib/hosted-release/successor.mjs';
+import { CONFIGURATION_SUCCESSOR_PRODUCTION as PIN, DIAGNOSTIC_SUCCESSOR_PRODUCTION as DIAGNOSTIC, RUNTIME_DEPENDENCY_SUCCESSOR_PRODUCTION as DEPENDENCY, collectCompatibilitySuccessor } from '../scripts/lib/hosted-release/successor.mjs';
 import { fixtureManifest } from './helpers/hosted-release-manifest.mjs';
 
 const NOW = Date.parse('2026-10-22T00:00:00Z');
@@ -27,6 +28,7 @@ function configuredFixture(pin = PIN) {
   delete registered.qualificationSource;
   registered.candidate.sha=pin.candidateSha;registered.candidate.sourceProfile=pin.sourceProfile;registered.candidate.sourceSha256=pin.sourceSha256;
   registered.previousProduction.firstRuntime.candidateSha=pin.candidateSha;
+  if (pin === DEPENDENCY) registered.runtime.probeProtocol = 'xero_metered_v1';
   const actual = { id: 'dpl_SyntheticCompletedProduction', sha: pin.candidateSha, sourceSha256: pin.sourceSha256,
     projectId: registered.targets.vercelProject, teamId: registered.targets.vercelTeam, target: 'production', state: 'READY' };
   const observation = { capturedAt: '2026-10-21T12:00:00Z', result: actual };
@@ -77,7 +79,7 @@ test('original04ee observation remains supported under its unchanged contract', 
   assert.equal(proof.result.originalCapturedAt, observation.capturedAt);
 });
 
-test('only the two explicit source/profile/schema/runtime tuples are added, even with self-consistent new hashes', async () => {
+test('only explicit source/profile/schema/runtime tuples are added, even with self-consistent new hashes', async () => {
   const mutations = [
     f => { f.registered.candidate.sha = f.actual.sha = f.manifest.previousProduction.sha = '8f39dde6a6885292ce3b70cb61a78f8b86b947c3'; },
     f => { f.registered.candidate.sha = f.actual.sha = f.manifest.previousProduction.sha = 'd'.repeat(40); },
@@ -88,7 +90,7 @@ test('only the two explicit source/profile/schema/runtime tuples are added, even
     f => { f.registered.runtime.expectedPreview.safety.externalActions.salesforce_write = true; },
     f => { f.registered.migration.mode = 'separately_authorized'; f.registered.migration.acceptedMigrationProofSha256 = 'b'.repeat(64); },
   ];
-  for (const pin of [PIN,DIAGNOSTIC])for (const mutate of mutations) { const f = configuredFixture(pin); mutate(f); bind(f); await assert.rejects(collect(f), refused); }
+  for (const pin of [PIN,DIAGNOSTIC,DEPENDENCY])for (const mutate of mutations) { const f = configuredFixture(pin); mutate(f); bind(f); await assert.rejects(collect(f), refused); }
 });
 
 test('qualification, rollback, incomplete, foreign target and changed live/source tuples never count as Production', async () => {
@@ -107,10 +109,10 @@ test('qualification, rollback, incomplete, foreign target and changed live/sourc
     f => { f.manifest.scope.handoffs = []; }, f => { f.manifest.scope.financialAuthority = true; },
     f => { f.observation.capturedAt = 'invalid'; }, f => { f.observation.capturedAt = new Date(NOW + 30001).toISOString(); },
   ];
-  for (const pin of [PIN,DIAGNOSTIC])for (const mutate of mutations) { const f = configuredFixture(pin); mutate(f); bind(f); await assert.rejects(collect(f), refused); }
+  for (const pin of [PIN,DIAGNOSTIC,DEPENDENCY])for (const mutate of mutations) { const f = configuredFixture(pin); mutate(f); bind(f); await assert.rejects(collect(f), refused); }
   for (const mutate of [f => { f.manifest.scope.compatibilityProductionObservationSha256 = 'b'.repeat(64); },
     f => { f.manifest.scope.compatibilityRelease.manifestHash = 'b'.repeat(64); }, f => { f.actual.manifestHash = 'b'.repeat(64); }]) {
-    for(const pin of [PIN,DIAGNOSTIC]){const f = configuredFixture(pin); mutate(f); await assert.rejects(collect(f), refused);}
+    for(const pin of [PIN,DIAGNOSTIC,DEPENDENCY]){const f = configuredFixture(pin); mutate(f); await assert.rejects(collect(f), refused);}
   }
 });
 
@@ -133,4 +135,38 @@ test('diagnostic candidate cannot borrow parent source/profile, another commit, 
     f=>{f.observation.capturedAt=new Date(NOW+30001).toISOString();}]){
     const f=configuredFixture(DIAGNOSTIC);mutate(f);bind(f);await assert.rejects(collect(f),refused);
   }
+});
+
+
+test('real runtime dependency child is exact-source admitted and cannot borrow consumed1e proof', async () => {
+  assert.equal(DEPENDENCY.candidateSha, '9152fa655b6e507a568d773534404843595fe323');
+  assert.equal(DEPENDENCY.sourceProfile, 'compat_runtime_dependency_20261024');
+  assert.equal(firstRuntimeCandidateProfile(DEPENDENCY.candidateSha), DEPENDENCY.sourceProfile);
+  assert.equal(DEPENDENCY.sourceSha256, 'd460d7c3a665799f229bec782322e7a97a52122e4c4ec75bad51551be82ec840');
+  const f = configuredFixture(DEPENDENCY), original = structuredClone(f), proof = await collect(f);
+  assert.deepEqual(f, original); assert.equal(proof.result.originalCapturedAt, f.observation.capturedAt);
+  assert.equal(proof.result.candidateSha, DEPENDENCY.candidateSha);
+  for (const mutate of [x => { x.registered.candidate.sha=x.actual.sha=x.manifest.previousProduction.sha='1e25147dc9fc9ba008096f1200b681993d49d428'; },
+    x => { x.registered.candidate.sourceProfile='compat_runtime_metering_20261024'; },
+    x => { x.registered.candidate.sourceSha256=x.actual.sourceSha256=x.manifest.previousProduction.sourceSha256='5317444c5e3c732aa19642f9602db5301c1312fcc34cc7144811a42e7e31fb90'; },
+    x => { delete x.registered.runtime.probeProtocol; }]) {
+    const changed = configuredFixture(DEPENDENCY); mutate(changed); bind(changed); await assert.rejects(collect(changed), refused);
+  }
+  assert.equal(runtimeProbeProtocolMatches({ sha:DEPENDENCY.candidateSha, sourceProfile:DEPENDENCY.sourceProfile },'xero_metered_v1'),true);
+  assert.equal(runtimeProbeProtocolMatches({ sha:DEPENDENCY.candidateSha, sourceProfile:'compat_runtime_metering_20261024' },'xero_metered_v1'),false);
+  assert.equal(runtimeProbeProtocolMatches({ sha:'1e25147dc9fc9ba008096f1200b681993d49d428', sourceProfile:'compat_runtime_metering_20261024' },'xero_metered_v1'),true);
+  const checks=JSON.parse(readFileSync(new URL('../config/release-checks-v2.json',import.meta.url)));
+  assert.deepEqual(checks.checks.filter(x=>x.profiles.includes(DEPENDENCY.sourceProfile)).map(x=>x.id),checks.checks.filter(x=>x.profiles.includes('compat_runtime_metering_20261024')).map(x=>x.id));
+});
+
+
+test('ordinary app protocol and complete inherited K commands retain exact maintained semantics', () => {
+  for (const [protocol,accepted] of [[undefined,true],['xero_metered_v1',true],['unknown',false]])
+    assert.equal(runtimeProbeProtocolMatches({sha:'f'.repeat(40),sourceProfile:'application_v2'},protocol),accepted);
+  for (const [candidate,protocol] of [[{sha:DEPENDENCY.candidateSha,sourceProfile:'application_v2'},'xero_metered_v1'],
+    [{sha:'f'.repeat(40),sourceProfile:DEPENDENCY.sourceProfile},'xero_metered_v1'],
+    [{sha:DEPENDENCY.candidateSha,sourceProfile:DEPENDENCY.sourceProfile},undefined]])
+    assert.equal(runtimeProbeProtocolMatches(candidate,protocol),false);
+  const checks=JSON.parse(readFileSync(new URL('../config/release-checks-v2.json',import.meta.url)));
+  for (const check of checks.checks) assert.deepEqual(check.profileCommands?.[DEPENDENCY.sourceProfile],check.profileCommands?.compat_runtime_metering_20261024);
 });

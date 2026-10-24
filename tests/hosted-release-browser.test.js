@@ -1,3 +1,5 @@
+import { safeFailure } from '../scripts/lib/hosted-release/controller.mjs';
+import { safeDiagnosticFailure, safeRuntimeLoginFailure } from '../scripts/lib/hosted-release/failure.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -131,12 +133,12 @@ test('readonly Vercel adapter uses only pinned GET endpoints and rejects a misma
   assert.equal(deniedCalls, 2);
 });
 
-function fakeLoginBrowser(auth, state, { foreign = false, cleanupFail = false, failAt = null } = {}) {
-  let location = origin, fills = 0, closed = 0;
+function fakeLoginBrowser(auth, state, { foreign = false, cleanupFail = false, failAt = null, httpStatus = 200, responseBody = null, bodyPending = false } = {}) {
+  let location = origin, fills = 0, closed = 0, waits = 0;
   const waiting = new Set();
   const move = url => { location = url; for (const wait of waiting) if (wait.predicate(new URL(url))) { waiting.delete(wait); wait.resolve(); } };
   const issuer = new URL(FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation.issuer).origin;
-  const response = { status: () => 200, json: async () => { if (failAt === 'identity') throw new SyntaxError('PRIVATE_RESPONSE_BODY'); return auth; } };
+  const response = { status: () => httpStatus, body: async () => bodyPending ? new Promise(() => {}) : Buffer.from(responseBody ?? JSON.stringify(auth)), json: async () => { if (failAt === 'identity') throw new SyntaxError('PRIVATE_RESPONSE_BODY'); return auth; } };
   const page = { goto: async () => { if (failAt === 'navigation') throw Error('PRIVATE_NAVIGATION_TOKEN'); move(foreign ? 'https://foreign.invalid/admin' : `${origin}/login`); }, url: () => location,
     getByRole: (_, { name }) => {
       const click = async () => { if (failAt === 'submit' && name === 'Login') throw Error('PRIVATE_SUBMIT_PASSWORD'); move(name === 'Continue with FCUNO' ? (foreign ? location : `${issuer}/admin`) : origin); };
@@ -144,12 +146,13 @@ function fakeLoginBrowser(auth, state, { foreign = false, cleanupFail = false, f
     },
     getByLabel: () => ({ fill: async () => { if (failAt === 'form') throw Error('PRIVATE_FORM_EMAIL'); fills++; assert.equal(new URL(location).origin, issuer); } }),
     waitForURL: predicate => {
+      waits++; if (failAt === 'callback' && waits === 2) return Promise.reject(Error('PRIVATE_CALLBACK_TICKET'));
       if (predicate(new URL(location))) return Promise.resolve();
       if (foreign) return Promise.reject(Error('PRIVATE_WRONG_LOCATION'));
       return new Promise((resolve, reject) => waiting.add({ predicate, resolve, reject }));
     }, waitForResponse: async () => response };
   const context = { newPage: async () => page, storageState: async () => state, close: async () => { closed++; for (const wait of waiting) wait.reject(Error('PRIVATE_PAGE_CLOSED')); waiting.clear(); if (cleanupFail) throw Error('PRIVATE_CLEANUP_ERROR'); } };
-  return { browserType: { launch: async () => ({ newContext: async () => context, close: async () => { closed++; } }) }, counts: () => ({ fills, closed }) };
+  return { browserType: { launch: async () => ({ newContext: async () => context, close: async () => { closed++; } }) }, counts: () => ({ fills, closed }), waits: () => waits };
 }
 
 test('fresh FCUNO login only fills pinned issuer and yields candidate-only new state; foreign issuer fails before password entry', async t => {
@@ -280,4 +283,43 @@ for (const scenario of ['wrong-issuer', 'timeout']) test(`issuer arrival refuses
     assert.equal(JSON.stringify(error).includes('PRIVATE'), false); assert.equal(String(error.stack).includes('PRIVATE'), false); return true;
   });
   assert.equal(browser.counts().fills, 0); assert.equal(browser.counts().closed, 2); assert.equal(browser.counts().manualClicks, 0);
+});
+
+
+test('actual FCUNO non200 response stops before callback wait and emits only closed diagnostics', async t => {
+  const f = fixture(t, 'normal_role');
+  for (const [responseBody, errorCode] of [[JSON.stringify({ code: 'FCUNO_IDENTITY_CONFIG_MISSING', error: 'PRIVATE_RESPONSE', user: 'PRIVATE_USER' }), 'FCUNO_IDENTITY_CONFIG_MISSING'],
+    [JSON.stringify({ code: 'PRIVATE_CODE', ticket: 'PRIVATE_TICKET' }), 'UNCLASSIFIED'],
+    ['PRIVATE_MALFORMED', 'UNCLASSIFIED'], ['P'.repeat(8193), 'UNCLASSIFIED']]) {
+    const browser = fakeLoginBrowser(identity(), f.state, { httpStatus: 503, responseBody });
+    await assert.rejects(loginHostedFcuno({ origin, mode: 'normal_role', credentials: { email: 'normal@example.invalid', password: 'PRIVATE', expectedRole: 'finance' }, protectionState: {}, browserType: browser.browserType }), error => {
+      assert.equal(error.code, 'RUNTIME_LOGIN_AUTH_CONTEXT_HTTP'); assert.equal(error.boundary, 'runtime.login.identity');
+      for (const report of [safeFailure(error), safeDiagnosticFailure(error)]) {
+        assert.deepEqual(report.runtimeLogin, { httpStatus: 503, errorCode, origin, pathname: '/' });
+        assert.doesNotMatch(JSON.stringify(report), /PRIVATE|ticket|password|user:/);
+      }
+      return true;
+    });
+    assert.equal(browser.waits(), 1); assert.equal(browser.counts().closed, 2);
+  }
+});
+
+test('200 callback failure keeps callback boundary and rejects unsafe diagnostic shapes', async t => {
+  const f = fixture(t, 'normal_role'), browser = fakeLoginBrowser(identity(), f.state, { failAt: 'callback' });
+  await assert.rejects(loginHostedFcuno({ origin, mode: 'normal_role', credentials: { email: 'normal@example.invalid', password: 'PRIVATE', expectedRole: 'finance' }, protectionState: {}, browserType: browser.browserType }), error => {
+    assert.equal(error.boundary, 'runtime.login.callback'); assert.equal(safeFailure(error).runtimeLogin, undefined); return true;
+  });
+  const good = { httpStatus: 503, errorCode: 'UNCLASSIFIED', origin, pathname: '/login' };
+  for (const patch of [{ httpStatus: 200 }, { errorCode: 'PRIVATE' }, { origin: origin + '?ticket=PRIVATE' }, { origin: 'https://foreign.invalid' }, { pathname: '/private/USER' }, { ticket: 'PRIVATE' }])
+    assert.equal(safeRuntimeLoginFailure({ ...good, ...patch }), undefined);
+  assert.equal(browser.counts().closed, 2);
+});
+
+
+test('non200 diagnostic body cannot strand login cleanup beyond its bounded read', async t => {
+  const f = fixture(t, 'normal_role'), browser = fakeLoginBrowser(identity(), f.state, { httpStatus: 503, bodyPending: true });
+  await assert.rejects(loginHostedFcuno({ origin, mode: 'normal_role', credentials: { email: 'normal@example.invalid', password: 'PRIVATE', expectedRole: 'finance' }, protectionState: {}, browserType: browser.browserType }), error => {
+    assert.equal(safeFailure(error).runtimeLogin.errorCode, 'UNCLASSIFIED'); return true;
+  });
+  assert.equal(browser.waits(), 1); assert.equal(browser.counts().closed, 2);
 });

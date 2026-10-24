@@ -18,7 +18,7 @@ import { compatibilityBrowserIsolationVerified } from '../compatibility-browser-
 import { createVercelIntegrationReader } from './vercel-read-auth.mjs';
 import { legacyRuntimeLoginFailureCode } from './legacy-hosted-runtime-login.mjs';
 import { ReleaseError } from './json-contract.mjs';
-import { atReleaseBoundary, boundaryFailure } from './failure.mjs';
+import { atReleaseBoundary, boundaryFailure, RUNTIME_LOGIN_ERROR_CODES } from './failure.mjs';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const FROZEN = '04ee3425aac7a49089eda781eb3c976aea1f6785';
@@ -162,6 +162,33 @@ export async function loginHostedFcuno({ origin, credentials, mode, protectionSt
       page.waitForResponse(res => res.url() === `${origin}/api/functions/authContext` && res.request().method() === 'POST', { timeout: 60000 }),
       page.getByRole('button', { name: 'Login', exact: true }).click(),
     ]));
+    await atReleaseBoundary('runtime.login.identity', async () => {
+      const httpStatus = response.status();
+      if (httpStatus === 200) return;
+      requireFact(Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599);
+      let errorCode = 'UNCLASSIFIED', diagnosticTimer;
+      try {
+        const bytes = await Promise.race([response.body(), new Promise((_, reject) => {
+          diagnosticTimer = setTimeout(() => reject(new Error('RUNTIME_LOGIN_DIAGNOSTIC_TIMEOUT')), 1000);
+        })]);
+        if (bytes.length <= 8192) {
+          const code = JSON.parse(bytes.toString('utf8'))?.code;
+          if (RUNTIME_LOGIN_ERROR_CODES.includes(code)) errorCode = code;
+        }
+      } catch { /* Unknown/private response content stays redacted. */ }
+      finally { clearTimeout(diagnosticTimer); }
+      let observedOrigin = null, pathname = null;
+      try {
+        const location = new URL(page.url());
+        if ([origin, issuer].includes(location.origin)) {
+          observedOrigin = location.origin;
+          if (['/', '/login', '/admin'].includes(location.pathname)) pathname = location.pathname;
+        }
+      } catch { /* No raw navigation value leaves this process. */ }
+      throw new ReleaseError('RUNTIME_LOGIN_AUTH_CONTEXT_HTTP', 'runtime.login.identity',
+        'Inspect the bound authentication response and configuration; do not replay the consumed runtime request.',
+        { runtimeLogin: { httpStatus, errorCode, origin: observedOrigin, pathname } });
+    });
     await atReleaseBoundary('runtime.login.callback', () => page.waitForURL(url => url.origin === origin && !/\/login(?:\?|$)/.test(url.pathname), { timeout: 30000 }));
     requireFact(response.status() === 200 && new URL(page.url()).origin === origin);
     const auth = await atReleaseBoundary('runtime.login.identity', () => response.json());

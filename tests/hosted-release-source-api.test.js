@@ -1,3 +1,4 @@
+import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -22,6 +23,7 @@ import { PREVIEW_PARITY_POLICY } from '../scripts/lib/preview-parity.mjs';
 const H = 'a'.repeat(64), dummy = 'OfflineDummyCredentialOnly';
 const publicTenant = '11111111-1111-4111-8111-111111111111';
 function runtimeExpectations(f) {
+  f.manifest.verification.publicBuildEnvironment.FCUNO_IDENTITY_ISSUER = FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation.issuer;
   const expected = production => ({
     flags: Object.fromEntries(PREVIEW_PARITY_POLICY.runtimeFlags.map((key, index) => [key, { state: 'known', value: production === (index % 2 === 0) }])),
     safety: { readOnly: !production }, auth: { xero: { state: 'authenticated', target: publicTenant, mode: 'oauth' } },
@@ -139,7 +141,7 @@ test('actual deployment payload carries only four phase-specific public flags an
     const prepared = await f.prepare({ phase, operationId: `${f.manifest.releaseId}-${phase.replaceAll('.', '-')}` });
     const payload = JSON.parse(prepared.body);
     assert.deepEqual(payload.env, { ...Object.fromEntries(PREVIEW_PARITY_POLICY.runtimeFlags.map(key => [key, String(expected.flags[key].value)])),
-      XERO_TENANT_ID: publicTenant, FCOS_BUILD_COMMIT_SHA: f.manifest.candidate.sha,
+      XERO_TENANT_ID: publicTenant, FCUNO_IDENTITY_ISSUER: FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation.issuer, FCOS_BUILD_COMMIT_SHA: f.manifest.candidate.sha,
       ...(!production ? { FCOS_ENABLE_READ_ONLY_CI: 'true' } : {}) });
     assert.equal(payload.build.env.FCOS_EXPECTED_SOURCE_SHA256, f.manifest.candidate.sourceSha256);
     assert.equal(payload.build.env.VITE_FCOS_ENABLE_FCUNO_OIDC, 'true');
@@ -396,6 +398,7 @@ test('timeout is bounded even if the transport ignores abort and never resubmits
 function integrated(t, { outcome = 'ack', uncertaintyThrows = false, native = false, production = false, deploymentProjectSettings, healthyRuntime = false } = {}) {
   const f = fixture(t), events = [], admitted = (() => {
     if (healthyRuntime) {
+      f.manifest.verification.publicBuildEnvironment.FCUNO_IDENTITY_ISSUER = FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation.issuer;
       f.manifest.runtime.expectedPreview = {
         flags: Object.fromEntries(PREVIEW_PARITY_POLICY.runtimeFlags.map(key => [key, { state: 'known', value: true }])),
         safety: { readOnly: true, externalActions: Object.fromEntries(PREVIEW_PARITY_POLICY.externalActions.map(key => [key, false])) },
@@ -781,4 +784,17 @@ test('project action rechecks operation binding after its synchronous final guar
   for(const response of [()=>new Response('x'.repeat(128*1024+1),{status:200}),()=>new Response('',{status:206})]){
     const prepared=action(f);await assert.rejects(executeVercelProjectActionRequest({...options(f,prepared),fetchImpl:async()=>{calls++;return response();}}),e=>e.detail.sourceApiFailure.reason==='ACK_INVALID');
   }assert.equal(calls,2);
+});
+
+
+test('canonical public federation issuer is required before an actual controller intent or provider request', async t => {
+  for (const issuer of [undefined, '', 'https://foreign.invalid', 'https://fcuno.com?ticket=PRIVATE', 'PRIVATE_SECRET']) {
+    const f = integrated(t); runtimeExpectations(f);
+    if (issuer === undefined) delete f.manifest.verification.publicBuildEnvironment.FCUNO_IDENTITY_ISSUER;
+    else f.manifest.verification.publicBuildEnvironment.FCUNO_IDENTITY_ISSUER = issuer;
+    Object.assign(f.env, f.refreshSetup(admitPreviewWriterFixture(f.manifest)).env);
+    await assert.rejects(preparePreview({ manifest: f.manifest, coordinator: f.coordinator, provider: f.adapter() }),
+      { code: 'SOURCE_API_PUBLIC_RUNTIME_ISSUER' });
+    assert.equal(f.begins, 0); assert.equal(f.posts, 0); assert.equal(f.operation, undefined);
+  }
 });

@@ -1,3 +1,5 @@
+import { FCOS_CONNECTION_POLICY } from '../../../config/fcosConnections.js';
+import { canonicalFcosE2eCandidateUrl } from '../../verify-e2e-candidate.mjs';
 import { safeRuntimeMismatch } from './runtime-mismatch.mjs';
 import { ReleaseError } from './json-contract.mjs';
 import { safeVercelCommandFailure } from './vercel-command-failure.mjs';
@@ -35,6 +37,28 @@ export function atReleaseBoundary(boundary, callback, observe) {
     return result && typeof result.then === 'function'
       ? result.catch(error => { throw boundaryFailure(error, boundary); }) : result;
   } catch (error) { throw boundaryFailure(error, boundary); }
+}
+
+// Closed response diagnostics: never publish provider text, query, fragments,
+// session data or arbitrary navigation paths from an authentication failure.
+export const RUNTIME_LOGIN_ERROR_CODES = Object.freeze(['UNCLASSIFIED',
+  'FCUNO_IDENTITY_CONFIG_MISSING', 'FCUNO_IDENTITY_CONFIG_INVALID',
+  'FCUNO_IDENTITY_REAUTHENTICATION_REQUIRED', 'FCUNO_IDENTITY_SESSION_REVOKED',
+  'FCUNO_IDENTITY_LINK_REQUIRED', 'FCUNO_IDENTITY_ACCESS_REVOKED']);
+export function safeRuntimeLoginFailure(value) {
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype
+    || Object.keys(value).sort().join(',') !== 'errorCode,httpStatus,origin,pathname'
+    || !Number.isInteger(value.httpStatus) || value.httpStatus < 100 || value.httpStatus > 599 || value.httpStatus === 200
+    || !RUNTIME_LOGIN_ERROR_CODES.includes(value.errorCode)
+    || ![null, '/', '/login', '/admin'].includes(value.pathname)) return undefined;
+  if (value.origin !== null) {
+    try {
+      const issuer = new URL(FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation.issuer).origin;
+      const production = new URL(FCOS_CONNECTION_POLICY.attestation.endpoint).origin;
+      if (value.origin !== issuer && value.origin !== production && canonicalFcosE2eCandidateUrl(value.origin) !== value.origin) return undefined;
+    } catch { return undefined; }
+  }
+  return { httpStatus: value.httpStatus, errorCode: value.errorCode, origin: value.origin, pathname: value.pathname };
 }
 
 // Closed public diagnostic vocabulary. Unknown typed errors are redacted too.
@@ -89,7 +113,7 @@ const diagnosticCodes = new Set(`
   VERCEL_READ_WRITE_FORBIDDEN VERCEL_TOKEN VERCEL_TOKEN_AUTHORITY
   VERCEL_WRITER_CONTEXT VERCEL_WRITER_CREDENTIALS_NOT_SEPARATE VERCEL_WRITER_CREDENTIAL_BINDING
   VERCEL_WRITER_CREDENTIAL_SUBSTITUTED VERCEL_WRITER_ORIGINAL_PROOF_REQUIRED VERIFICATION_ENVIRONMENT
-  VERIFICATION_SETUP_REQUIRED
+  VERIFICATION_SETUP_REQUIRED RUNTIME_LOGIN_AUTH_CONTEXT_HTTP SOURCE_API_PUBLIC_RUNTIME_ISSUER
   SOURCE_API_TRANSPORT_NOT_ADMITTED SOURCE_API_PRODUCTION_NOT_IMPLEMENTED SOURCE_API_WRITER_CONTEXT
   SOURCE_API_SOURCE_CHANGED SOURCE_API_PROJECT_CONFIGURATION SOURCE_API_PROJECT_IDENTITY
   SOURCE_API_PRIVATE_OR_INVALID_PATH SOURCE_API_REGULAR_FILES_REQUIRED SOURCE_API_SOURCE_TOO_LARGE
@@ -103,11 +127,12 @@ export function safeDiagnosticFailure(error) {
   const runtimeMismatch = error instanceof ReleaseError && error.code==='PREVIEW_RUNTIME_MISMATCH' && error.phase==='preview' ? safeRuntimeMismatch(error.detail?.runtimeMismatch) : undefined;
   const commandFailure = error instanceof ReleaseError ? safeVercelCommandFailure(error.detail?.commandFailure) : undefined;
   const sourceApiFailure = error instanceof ReleaseError ? safeVercelSourceApiFailure(error.detail?.sourceApiFailure) : undefined;
+  const runtimeLogin = error instanceof ReleaseError && error.code === 'RUNTIME_LOGIN_AUTH_CONTEXT_HTTP' ? safeRuntimeLoginFailure(error.detail?.runtimeLogin) : undefined;
   const boundary = isReleaseBoundary(error?.boundary) ? error.boundary : undefined;
   const known = error instanceof ReleaseError && (diagnosticCodes.has(error.code)
     || /^(?:GITHUB|VERCEL)_READ_HTTP_[1-5][0-9]{2}$/.test(error.code));
   return { status: 'intervention_required', code: known ? error.code : 'DIAGNOSTIC_FAILURE_UNCLASSIFIED',
     phase: known && diagnosticPhases.has(error.phase) ? error.phase : boundary || 'diagnostic',
     recovery: 'Inspect this admission diagnostic. It authorizes no deployment or release retry.',
-    ...(boundary ? { boundary } : {}), ...(known && commandFailure ? { commandFailure } : {}), ...(known && sourceApiFailure ? { sourceApiFailure } : {}), ...(known && runtimeMismatch ? {runtimeMismatch} : {}) };
+    ...(boundary ? { boundary } : {}), ...(known && commandFailure ? { commandFailure } : {}), ...(known && sourceApiFailure ? { sourceApiFailure } : {}), ...(known && runtimeMismatch ? {runtimeMismatch} : {}), ...(known && runtimeLogin ? { runtimeLogin } : {}) };
 }

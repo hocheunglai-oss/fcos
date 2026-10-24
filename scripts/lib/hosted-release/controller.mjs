@@ -1,7 +1,7 @@
 import { safeRuntimeMismatch } from './runtime-mismatch.mjs';
 import { safeCoordinatorTransport } from '../../../supabase/functions/release-coordinator/core.mjs';
 import { assertBoundEvidence, digest, fail, ReleaseError, validateManifest } from './contract.mjs';
-import { atReleaseBoundary, isReleaseBoundary } from './failure.mjs';
+import { atReleaseBoundary, isReleaseBoundary, safeRuntimeLoginFailure } from './failure.mjs';
 import { safeVercelCommandFailure } from './vercel-command-failure.mjs';
 import { safeVercelSourceApiFailure } from './vercel-source-api.mjs';
 
@@ -280,6 +280,7 @@ export async function executeHostedProduction({ manifest, coordinator, provider,
 }
 
 export function safeFailure(error) {
+  const runtimeLogin = error instanceof ReleaseError && error.code === 'RUNTIME_LOGIN_AUTH_CONTEXT_HTTP' ? safeRuntimeLoginFailure(error.detail?.runtimeLogin) : undefined;
   const runtimeMismatch = error instanceof ReleaseError && error.code==='PREVIEW_RUNTIME_MISMATCH' && error.phase==='preview' ? safeRuntimeMismatch(error.detail?.runtimeMismatch) : undefined;
   const coordinatorTransport = error instanceof ReleaseError&&error.code==='COORDINATION_RESPONSE_UNKNOWN' ? safeCoordinatorTransport(error.detail?.coordinatorTransport) : undefined;
   const commandFailure = error instanceof ReleaseError ? safeVercelCommandFailure(error.detail?.commandFailure) : undefined;
@@ -289,6 +290,6 @@ export function safeFailure(error) {
   return error instanceof ReleaseError ? { status: 'intervention_required', code: error.code, phase: error.phase, recovery: error.recovery,
     ...(isReleaseBoundary(error.boundary) ? { boundary: error.boundary } : {}),
     ...(commandFailure ? { commandFailure } : {}), ...(sourceApiFailure ? { sourceApiFailure } : {}),
-    ...(coordinatorTransport ? { coordinatorTransport } : {}), ...(runtimeMismatch ? {runtimeMismatch} : {}) }
+    ...(coordinatorTransport ? { coordinatorTransport } : {}), ...(runtimeMismatch ? {runtimeMismatch} : {}), ...(runtimeLogin ? { runtimeLogin } : {}) }
     : { status: 'intervention_required', code: 'UNCLASSIFIED_PROVIDER_FAILURE', phase: 'unknown', recovery: 'Inspect sanitized phase evidence; do not replay a consequential operation.' };
 }
