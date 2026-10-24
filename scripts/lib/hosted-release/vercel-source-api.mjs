@@ -19,6 +19,10 @@ const MAX_ACK_BYTES = 128 * 1024;
 const settingsKeys = ['framework', 'buildCommand', 'devCommand', 'installCommand', 'outputDirectory', 'rootDirectory', 'nodeVersion'];
 const configurationKeys = new Set(['$schema', 'version', 'name', 'installCommand', 'buildCommand', 'devCommand', 'outputDirectory',
   'framework', 'regions', 'crons', 'rewrites', 'redirects', 'headers', 'cleanUrls', 'trailingSlash', 'git', 'functions', 'images']);
+const runtimeFlagKeys = ['VARIABLE_CHARGE_PAIRED_WORKFLOW_ENABLED', 'FCOS_ENABLE_FCUNO_FEDERATION',
+  'FCOS_ENABLE_FCUNO_IDENTITY_SYNC', 'FCOS_ENABLE_FCUNO_LEGACY_PASSWORD_LOGIN'];
+const exactKeys = (value, keys) => value && Object.getPrototypeOf(value) === Object.prototype
+  && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
 const preparedBindings = new WeakMap();
 const actionBindings = new WeakMap();
 export const PROJECT_ACTION_TRANSPORT = 'fcos_vercel_project_action_v1';
@@ -158,6 +162,34 @@ function sourceConfiguration(files, manifest) {
   return config;
 }
 
+// Copy only admitted public values. Generic manifests may omit a whole runtime
+// expectation family; a supplied family must be complete in both phases.
+function publicRuntimeEnvironment(manifest, production) {
+  const phases = [manifest.runtime.expectedPreview, manifest.runtime.expectedProduction], result = {};
+  if (phases.some(value => !value || Object.getPrototypeOf(value) !== Object.prototype)) fail('SOURCE_API_PUBLIC_RUNTIME_EXPECTATIONS');
+  if (phases.some(value => Object.hasOwn(value, 'flags'))) {
+    for (const value of phases) {
+      if (!exactKeys(value.flags, runtimeFlagKeys) || runtimeFlagKeys.some(key =>
+        !exactKeys(value.flags[key], ['state', 'value']) || value.flags[key].state !== 'known'
+        || typeof value.flags[key].value !== 'boolean')) fail('SOURCE_API_PUBLIC_RUNTIME_FLAGS');
+    }
+    const flags = phases[production ? 1 : 0].flags;
+    for (const key of runtimeFlagKeys) result[key] = String(flags[key].value);
+  }
+  if (phases.some(value => Object.hasOwn(value, 'auth'))) {
+    for (const value of phases) {
+      const auth = value.auth, xero = auth?.xero;
+      if (!auth || Object.getPrototypeOf(auth) !== Object.prototype
+        || !exactKeys(xero, ['state', 'target', 'mode']) || xero.state !== 'authenticated' || xero.mode !== 'oauth' || typeof xero.target !== 'string'
+        || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(xero.target || ''))
+        fail('SOURCE_API_PUBLIC_RUNTIME_TENANT');
+    }
+    if (phases[0].auth.xero.target !== phases[1].auth.xero.target) fail('SOURCE_API_PUBLIC_RUNTIME_TENANT');
+    result.XERO_TENANT_ID = phases[production ? 1 : 0].auth.xero.target;
+  }
+  return result;
+}
+
 /** Read-only preparation, before a durable intent. No uploads, settings changes or authority.
  * The Production branch is the pinned CLI's --prod --skip-domain source body. */
 export async function prepareVercelSourceApiRequest({ manifest, candidateDirectory, observedProject,
@@ -168,6 +200,7 @@ export async function prepareVercelSourceApiRequest({ manifest, candidateDirecto
   const production = phase === 'production.stage';
   if (!production && phase !== 'preview.create' || production && manifest.executionMode !== 'release') fail('SOURCE_API_PHASE');
   if (operationId !== `${manifest.releaseId}-${phase.replaceAll('.', '-')}`) fail('SOURCE_API_OPERATION_BINDING');
+  const runtimeEnvironment = publicRuntimeEnvironment(manifest, production);
   const directory = resolve(candidateDirectory), configuration = assertProject(observedProject, manifest);
   assertSource(manifest, directory);
   const { files, inventory, sourceBytes, sourceDigest } = sourceFiles(directory), guard = selectionBuildGuard(manifest);
@@ -188,7 +221,7 @@ export async function prepareVercelSourceApiRequest({ manifest, candidateDirecto
     source: 'cli', files: [{ file: archive.file, data: archive.bytes.toString('base64'), encoding: 'base64', mode: archive.mode }], meta,
     gitMetadata: { remoteUrl: `https://github.com/${manifest.targets.repository}.git`, commitRef: 'HEAD', commitSha: manifest.candidate.sha, dirty: false },
     ...(production ? { target: 'production', autoAssignCustomDomains: false } : {}),
-    env: { FCOS_BUILD_COMMIT_SHA: manifest.candidate.sha, ...(!production ? { FCOS_ENABLE_READ_ONLY_CI: 'true' } : {}) },
+    env: { ...runtimeEnvironment, FCOS_BUILD_COMMIT_SHA: manifest.candidate.sha, ...(!production ? { FCOS_ENABLE_READ_ONLY_CI: 'true' } : {}) },
     build: { env: { ...manifest.verification.publicBuildEnvironment, FCOS_BUILD_COMMIT_SHA: manifest.candidate.sha,
       FCOS_EXPECTED_SOURCE_SHA256: manifest.candidate.sourceSha256, NODE_OPTIONS: guard.nodeOptions } } };
   // Validate strict JSON without sorting the HTTP payload: Vercel merges these

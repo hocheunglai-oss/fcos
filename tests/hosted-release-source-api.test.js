@@ -20,6 +20,15 @@ import { LEGACY_RELEASE_EFFECTS } from '../config/legacyReleaseContainment.js';
 import { PREVIEW_PARITY_POLICY } from '../scripts/lib/preview-parity.mjs';
 
 const H = 'a'.repeat(64), dummy = 'OfflineDummyCredentialOnly';
+const publicTenant = '11111111-1111-4111-8111-111111111111';
+function runtimeExpectations(f) {
+  const expected = production => ({
+    flags: Object.fromEntries(PREVIEW_PARITY_POLICY.runtimeFlags.map((key, index) => [key, { state: 'known', value: production === (index % 2 === 0) }])),
+    safety: { readOnly: !production }, auth: { xero: { state: 'authenticated', target: publicTenant, mode: 'oauth' } },
+  });
+  f.manifest.runtime.expectedPreview = expected(false); f.manifest.runtime.expectedProduction = expected(true);
+  f.manifest.runtime.expectedSha256 = digest(f.manifest.runtime.expectedProduction);
+}
 function fixture(t) {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'fcos-source-api-')));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
@@ -120,6 +129,74 @@ test('wrong project, settings, source and non-public environment reject before t
   f.manifest.verification.publicBuildEnvironment.SECRET_VALUE = dummy;
   await assert.rejects(() => f.prepare(), /PUBLIC_BUILD_INPUT/); delete f.manifest.verification.publicBuildEnvironment.SECRET_VALUE;
   f.manifest.candidate.sourceSha256 = H; await assert.rejects(() => f.prepare(), /SOURCE_CHANGED/);
+});
+
+test('actual deployment payload carries only four phase-specific public flags and the admitted common tenant', async t => {
+  for (const production of [false, true]) await t.test(production ? 'Production' : 'Preview', async t => {
+    const f = production ? integrated(t, { production: true }) : fixture(t); runtimeExpectations(f);
+    const expected = f.manifest.runtime[production ? 'expectedProduction' : 'expectedPreview'];
+    const phase = production ? 'production.stage' : 'preview.create';
+    const prepared = await f.prepare({ phase, operationId: `${f.manifest.releaseId}-${phase.replaceAll('.', '-')}` });
+    const payload = JSON.parse(prepared.body);
+    assert.deepEqual(payload.env, { ...Object.fromEntries(PREVIEW_PARITY_POLICY.runtimeFlags.map(key => [key, String(expected.flags[key].value)])),
+      XERO_TENANT_ID: publicTenant, FCOS_BUILD_COMMIT_SHA: f.manifest.candidate.sha,
+      ...(!production ? { FCOS_ENABLE_READ_ONLY_CI: 'true' } : {}) });
+    assert.equal(payload.build.env.FCOS_EXPECTED_SOURCE_SHA256, f.manifest.candidate.sourceSha256);
+    assert.equal(payload.build.env.VITE_FCOS_ENABLE_FCUNO_OIDC, 'true');
+    assert.equal(Object.hasOwn(payload.build.env, 'XERO_TENANT_ID'), false);
+    assert.equal(Object.hasOwn(payload, 'projectSettings'), false);
+    assert.equal(prepared.receipt.bodySha256, digest(prepared.body));
+    assert.equal(prepared.intent.bodySha256, prepared.receipt.bodySha256);
+  });
+});
+
+test('generic fixtures omit whole runtime families without inserting assumed flags or tenant', async t => {
+  const f = fixture(t), payload = JSON.parse((await f.prepare()).body);
+  assert.deepEqual(payload.env, { FCOS_BUILD_COMMIT_SHA: f.manifest.candidate.sha, FCOS_ENABLE_READ_ONLY_CI: 'true' });
+});
+
+test('provided runtime flags refuse unknown, partial, non-boolean and private-key expectations before an intent', async t => {
+  const f = fixture(t); runtimeExpectations(f); const original = structuredClone(f.manifest.runtime), key = PREVIEW_PARITY_POLICY.runtimeFlags[0];
+  for (const mutate of [
+    r => { r.expectedPreview.flags[key].state = 'unknown'; },
+    r => { r.expectedPreview.flags[key].value = 'true'; },
+    r => { delete r.expectedPreview.flags[key]; },
+    r => { delete r.expectedProduction.flags; },
+    r => { r.expectedPreview.flags = null; },
+    r => { r.expectedPreview.flags[key].secret = dummy; },
+    r => { r.expectedPreview.flags.XERO_CLIENT_SECRET = { state: 'known', value: true }; },
+    r => { r.expectedPreview.flags.FCOS_ENABLE_READ_ONLY_CI = { state: 'known', value: false }; },
+  ]) {
+    f.manifest.runtime = structuredClone(original); mutate(f.manifest.runtime);
+    f.manifest.runtime.expectedSha256 = digest(f.manifest.runtime.expectedProduction);
+    await assert.rejects(f.prepare(), /SOURCE_API_PUBLIC_RUNTIME_FLAGS/);
+  }
+});
+
+test('provided runtime Xero auth refuses unverified, noncanonical, cross-phase and secret-bearing targets before an intent', async t => {
+  const f = fixture(t); runtimeExpectations(f); const original = structuredClone(f.manifest.runtime);
+  for (const mutate of [
+    r => { r.expectedPreview.auth.xero.state = 'unknown'; },
+    r => { r.expectedPreview.auth.xero.mode = 'application'; },
+    r => { r.expectedPreview.auth.xero.target = publicTenant.toUpperCase().replace('11111111', 'AAAAAAAA'); },
+    r => { r.expectedPreview.auth.xero.target = 'not-a-tenant'; },
+    r => { r.expectedPreview.auth.xero.target = '00000000-0000-0000-0000-000000000000'; },
+    r => { r.expectedProduction.auth.xero.target = '22222222-2222-4222-8222-222222222222'; },
+    r => { delete r.expectedProduction.auth; },
+    r => { r.expectedPreview.auth.xero.access_token = dummy; },
+    r => { delete r.expectedPreview.auth.xero; },
+  ]) {
+    f.manifest.runtime = structuredClone(original); mutate(f.manifest.runtime);
+    f.manifest.runtime.expectedSha256 = digest(f.manifest.runtime.expectedProduction);
+    await assert.rejects(f.prepare(), /SOURCE_API_PUBLIC_RUNTIME_TENANT/);
+  }
+});
+
+test('invalid public runtime inputs stop the actual controller before begin or provider POST', async t => {
+  const f = integrated(t, { healthyRuntime: true });
+  f.manifest.runtime.expectedPreview.flags.XERO_CLIENT_SECRET = { state: 'known', value: true };
+  await assert.rejects(preparePreview({ manifest: f.manifest, coordinator: f.coordinator, provider: f.adapter() }), /SOURCE_API_PUBLIC_RUNTIME_FLAGS/);
+  assert.equal(f.begins, 0); assert.equal(f.posts, 0); assert.equal(f.operation, undefined);
 });
 
 test('reviewed npm ci source override preserves the actual-manifest npm install default snapshot and refuses other overrides', async t => {
@@ -318,11 +395,16 @@ test('timeout is bounded even if the transport ignores abort and never resubmits
 
 function integrated(t, { outcome = 'ack', uncertaintyThrows = false, native = false, production = false, deploymentProjectSettings, healthyRuntime = false } = {}) {
   const f = fixture(t), events = [], admitted = (() => {
-    if (healthyRuntime) f.manifest.runtime.expectedPreview = {
-      flags: Object.fromEntries(PREVIEW_PARITY_POLICY.runtimeFlags.map(key => [key, { state: 'known', value: true }])),
-      safety: { readOnly: true, externalActions: Object.fromEntries(PREVIEW_PARITY_POLICY.externalActions.map(key => [key, false])) },
-      auth: Object.fromEntries(PREVIEW_PARITY_POLICY.requiredAuth.map(key => [key, { state: 'authenticated', target: 'synthetic-' + key, mode: 'application' }]))
-    };
+    if (healthyRuntime) {
+      f.manifest.runtime.expectedPreview = {
+        flags: Object.fromEntries(PREVIEW_PARITY_POLICY.runtimeFlags.map(key => [key, { state: 'known', value: true }])),
+        safety: { readOnly: true, externalActions: Object.fromEntries(PREVIEW_PARITY_POLICY.externalActions.map(key => [key, false])) },
+        auth: Object.fromEntries(PREVIEW_PARITY_POLICY.requiredAuth.map(key => [key, { state: 'authenticated',
+          target: key === 'xero' ? publicTenant : 'synthetic-' + key, mode: key === 'xero' ? 'oauth' : 'application' }]))
+      };
+      f.manifest.runtime.expectedProduction = { ...structuredClone(f.manifest.runtime.expectedPreview), safety: { readOnly: false } };
+      f.manifest.runtime.expectedSha256 = digest(f.manifest.runtime.expectedProduction);
+    }
     if(production)asRelease(f);
     if (native) delete f.manifest.verification.vercelSourceTransport;
     const preview=admitPreviewWriterFixture(f.manifest);return f.refreshSetup(production?admitProductionWriterFixture(f.manifest,{previewFixture:preview}):preview);
