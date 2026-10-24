@@ -21,7 +21,8 @@
       "codex/hosted-qualification-measurement-ae17dad5-20261024": false,
       "codex/hosted-qualification-issuer-d45bb120-20261024": false,
       "codex/hosted-qualification-runtime-04fe55b7-20261024": false,
-      "codex/hosted-qualification-metered-f9f8fb0c-20261024": false
+      "codex/hosted-qualification-metered-f9f8fb0c-20261024": false,
+      "codex/hosted-qualification-gce436-k9152-20261024": false
     }
   },
   "regions": [
