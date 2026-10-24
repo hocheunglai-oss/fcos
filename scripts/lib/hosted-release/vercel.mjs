@@ -28,7 +28,8 @@ function runtimeProbeIntent(release, deploymentId, phase) {
 }
 function sanitizedRuntimeShape(runtime) {
   const providers = new Set([...PREVIEW_PARITY_POLICY.requiredAuth, ...Object.values(PREVIEW_PARITY_POLICY.applicationKeys.credentials)]);
-  return exactKeys(runtime, ['capturedAt','deploymentId','sha','flags','safety','auth'])
+  return exactKeys(runtime, ['capturedAt','runtimeValidUntil','deploymentId','sha','flags','safety','auth'])
+    && typeof runtime.runtimeValidUntil === 'string'
     && exactKeys(runtime.flags, PREVIEW_PARITY_POLICY.runtimeFlags)
     && Object.values(runtime.flags).every(value => exactKeys(value, ['state','value']) && value.state === 'known' && typeof value.value === 'boolean')
     && exactKeys(runtime.safety, ['readOnly','externalActions']) && typeof runtime.safety.readOnly === 'boolean'
@@ -247,6 +248,12 @@ function buildVercelAdapter({ manifest, candidateDirectory, env = process.env, f
       || version.provenance?.sourceDigest !== release.candidate.sourceSha256 || version.provenance.releaseEligible !== true) fail('ARTIFACT_SOURCE_MISMATCH', phase);
     const validateRuntime = runtime => {
       if (!runtime) fail('RUNTIME_OBSERVATION_MISSING', phase);
+      if (metered) {
+        const captured = Date.parse(runtime.capturedAt), validUntil = Date.parse(runtime.runtimeValidUntil);
+        if (typeof runtime.runtimeValidUntil !== 'string' || !Number.isFinite(captured) || !Number.isFinite(validUntil)
+          || validUntil <= captured || now() >= validUntil || validUntil > captured + PREVIEW_PARITY_POLICY.maxAgeSeconds * 1000)
+          fail('RUNTIME_PROBE_RESULT_STALE', phase);
+      }
       if (phase === 'preview') {
         if (runtime.safety.readOnly !== true || Object.values(runtime.safety.externalActions).some(value => value !== false)
           || canonical({ flags: runtime.flags, safety: runtime.safety, auth: runtime.auth }) !== canonical(release.runtime.expectedPreview)) throw new ReleaseError('PREVIEW_RUNTIME_MISMATCH', phase,

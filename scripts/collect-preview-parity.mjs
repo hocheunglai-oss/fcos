@@ -98,6 +98,9 @@ export async function collectRuntimeObservation({ url, deployment, sourceDigest,
     if (body.schemaVersion !== 1 || body.deploymentId !== deployment.id || body.sha !== deployment.sha || body.sourceDigest !== sourceDigest
       || !Number.isFinite(time) || time > now + 300000 || now - time > PREVIEW_PARITY_POLICY.maxAgeSeconds * 1000
       || time < (typeof deployment.createdAt === 'number' ? deployment.createdAt : Date.parse(deployment.createdAt))) return null;
+    const validUntil = requestId === undefined ? null : Date.parse(body.runtimeValidUntil);
+    if (requestId !== undefined && (typeof body.runtimeValidUntil !== 'string' || !Number.isFinite(validUntil)
+      || validUntil <= now || validUntil <= time || validUntil > time + PREVIEW_PARITY_POLICY.maxAgeSeconds * 1000)) return null;
     const flags = Object.fromEntries(PREVIEW_PARITY_POLICY.runtimeFlags.map(key => [key,
       body.flags?.[key]?.state === 'known' && typeof body.flags[key].value === 'boolean'
         ? { state: 'known', value: body.flags[key].value } : unknown()]));
@@ -107,7 +110,8 @@ export async function collectRuntimeObservation({ url, deployment, sourceDigest,
       if (entry?.state === 'authenticated' && typeof entry.target === 'string' && /^[A-Za-z0-9_@./:-]{1,200}$/.test(entry.target)
         && ['jwt', 'oauth', 'service_role', 'secret_key', 'api_key', 'oidc', 'application'].includes(entry.mode)) auth[provider] = { state: 'authenticated', target: entry.target, mode: entry.mode };
     }
-    return { capturedAt: body.capturedAt, deploymentId: deployment.id, sha: deployment.sha, flags,
+    return { capturedAt: body.capturedAt, ...(requestId !== undefined ? { runtimeValidUntil: new Date(validUntil).toISOString() } : {}),
+      deploymentId: deployment.id, sha: deployment.sha, flags,
       safety: { readOnly: typeof body.safety?.readOnly === 'boolean' ? body.safety.readOnly : null,
         externalActions: Object.fromEntries(PREVIEW_PARITY_POLICY.externalActions.map(key => [key,
           typeof body.safety?.externalActions?.[key] === 'boolean' ? body.safety.externalActions[key] : null])) }, auth };

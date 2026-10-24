@@ -57,7 +57,8 @@ function fixture({ phase = 'preview', legacy = false } = {}) {
     if (state.outcome === 'throw') throw Error(SECRET);
     if (state.outcome === 'http') return new Response('', { status: 503 });
     const runtime = { schemaVersion: 1, deploymentId: id, sha: manifest.candidate.sha, sourceDigest: manifest.candidate.sourceSha256,
-      capturedAt: new Date(state.now).toISOString(), ...expected(phase === 'preview'), secret: SECRET };
+      capturedAt: new Date(state.now).toISOString(), runtimeValidUntil: new Date(state.now + 120000).toISOString(),
+      ...expected(phase === 'preview'), secret: SECRET };
     state.changeRuntime(runtime); return Response.json(runtime);
   };
   const adapter = (override = {}) => createVercelAdapter({ manifest, candidateDirectory: '.', coordinator, fetchImpl,
@@ -70,8 +71,9 @@ test('collector keeps legacy body and sends only a supplied canonical public req
   const requestId = '11111111-1111-5111-8111-111111111111', requests = [];
   const options = { url, deployment: { id, url, sha: 'b'.repeat(40), createdAt: now - 1000 }, sourceDigest: H, token: SECRET, now,
     fetchImpl: async (_url, request) => { requests.push(JSON.parse(request.body)); return Response.json({ schemaVersion: 1, deploymentId: id,
-      sha: 'b'.repeat(40), sourceDigest: H, capturedAt: new Date(now).toISOString(), flags: {}, safety: {}, auth: {} }); } };
-  assert(await collectRuntimeObservation(options)); assert(await collectRuntimeObservation({ ...options, requestId }));
+      sha: 'b'.repeat(40), sourceDigest: H, capturedAt: new Date(now).toISOString(), runtimeValidUntil: new Date(now + 120000).toISOString(), flags: {}, safety: {}, auth: {} }); } };
+  assert.equal(Object.hasOwn(await collectRuntimeObservation(options), 'runtimeValidUntil'), false);
+  assert.equal((await collectRuntimeObservation({ ...options, requestId })).runtimeValidUntil, new Date(now + 120000).toISOString());
   assert.deepEqual(requests, [{ action: 'probe' }, { action: 'probe', requestId }]);
   for (const invalid of [null, '', 'private-secret', requestId.replace('11111111', 'AAAAAAAA'), '00000000-0000-0000-0000-000000000000']) {
     assert.equal(await collectRuntimeObservation({ ...options, requestId: invalid }), null);
@@ -99,6 +101,33 @@ test('fresh persisted success is reused across adapters with no second HTTP or l
   const second = await f.verify(f.adapter());
   assert.deepEqual(second.runtime, first.runtime); assert.deepEqual(f.checks, original);
   assert.deepEqual(f.events, ['deployment', 'version', 'snapshot']); assert.equal(f.requests.length, 1);
+});
+
+test('fresh capture cannot extend a cached Xero session beyond its exact validity deadline', async () => {
+  const f = fixture(); const result = await f.verify(f.adapter());
+  f.state.now = Date.parse(result.runtime.runtimeValidUntil); f.events.length = 0;
+  assert(f.state.now - Date.parse(result.runtime.capturedAt) < PREVIEW_PARITY_POLICY.maxAgeSeconds * 1000);
+  await assert.rejects(f.verify(f.adapter()), { code: 'RUNTIME_PROBE_RESULT_STALE' });
+  assert.deepEqual(f.events, ['deployment','version','snapshot']); assert.equal(f.requests.length, 1);
+});
+
+test('absent, malformed or out-of-bounds validity never produces success evidence or a retry', async () => {
+  for (const change of [r => { delete r.runtimeValidUntil; }, r => { r.runtimeValidUntil = SECRET; },
+    r => { r.runtimeValidUntil = now + 120000; }, r => { r.runtimeValidUntil = r.capturedAt; },
+    r => { r.runtimeValidUntil = new Date(now + PREVIEW_PARITY_POLICY.maxAgeSeconds * 1000 + 1).toISOString(); },
+    r => { r.capturedAt = new Date(now - 1000).toISOString(); r.runtimeValidUntil = new Date(now - 1).toISOString(); }]) {
+    const f = fixture(), adapter = f.adapter(); f.state.changeRuntime = change;
+    await assert.rejects(f.verify(adapter), { code: 'RUNTIME_OBSERVATION_MISSING' });
+    assert.equal(f.checks['runtime.probe.preview.result'], undefined); assert.equal(f.events.at(-1), 'POST');
+    const before = f.events.length; await assert.rejects(f.verify(adapter), { code: 'RUNTIME_PROBE_READBACK_REQUIRED' });
+    assert.equal(f.events.length, before); assert.equal(f.requests.length, 1);
+  }
+});
+
+test('validity expiring during the HTTP round trip stops before result append', async () => {
+  const f = fixture(); f.state.changeRuntime = () => { f.state.now += 120000; };
+  await assert.rejects(f.verify(f.adapter()), { code: 'RUNTIME_PROBE_RESULT_STALE' });
+  assert.equal(f.checks['runtime.probe.preview.result'], undefined); assert.equal(f.events.at(-1), 'POST'); assert.equal(f.requests.length, 1);
 });
 
 test('unknown transport and runtime mismatch leave intent consumed, no result RPC or automatic retry', async () => {
