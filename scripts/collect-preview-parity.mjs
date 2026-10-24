@@ -83,11 +83,13 @@ export function parseParityEnvironment(source, deployedKeys, { hashOpaqueValues 
 
 // Only use this after the transport has independently established the exact
 // deployment origin. Unknown/expired tokens never trigger login or refresh.
-export async function collectRuntimeObservation({ url, deployment, sourceDigest, token, protectionBypass, fetchImpl = globalThis.fetch, now = Date.now() } = {}) {
+export async function collectRuntimeObservation({ url, deployment, sourceDigest, token, protectionBypass, requestId, fetchImpl = globalThis.fetch, now = Date.now() } = {}) {
   if (!immutable(url) || url !== deployment?.url || !/^[0-9a-f]{64}$/.test(sourceDigest || '') || !token) return null;
+  if (requestId !== undefined && (typeof requestId !== 'string'
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(requestId))) return null;
   try {
     const endpoint = `${url}/api/connection-runtime`;
-    const response = await fetchImpl(endpoint, { method: 'POST', body: JSON.stringify({ action: 'probe' }),
+    const response = await fetchImpl(endpoint, { method: 'POST', body: JSON.stringify({ action: 'probe', ...(requestId !== undefined ? { requestId } : {}) }),
       headers: { 'content-type': 'application/json', authorization: `Bearer ${token}`,
         ...(protectionBypass ? { 'x-vercel-protection-bypass': protectionBypass } : {}) },
       redirect: 'error', signal: AbortSignal.timeout(30000) });
