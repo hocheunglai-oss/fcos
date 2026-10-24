@@ -36,8 +36,58 @@ function bootstrapContext() {
     GITHUB_SHA: binding.bootstrapSha, GITHUB_WORKFLOW_REF: binding.callerWorkflowRef,
     SOURCE_SHA: binding.controllerSha, ADMITTED_SOURCE_SHA: binding.controllerSha,
     FCOS_HOSTED_TOOLCHAIN_BOOTSTRAP: raw, FCOS_HOSTED_TOOLCHAIN_BOOTSTRAP_SHA256: createHash('sha256').update(raw).digest('hex'),
-    GITHUB_TOKEN: 'private-canary', INTENT_SHA256: 'b'.repeat(64) } };
+    GITHUB_TOKEN: 'private-canary', INTENT_SHA256: 'b'.repeat(64),
+    FCOS_HOSTED_TOOLCHAIN_SETUP_ENABLED: 'true', FCOS_HOSTED_TOOLCHAIN_EPOCH_PUBLICATION_ENABLED: 'false' } };
 }
+
+function epochPublicationContext() {
+  const { env, binding } = bootstrapContext();
+  const publication = { kind: 'fcos_hosted_toolchain_epoch_publication_v1', schemaVersion: 1, epoch: 1, mode: 'qualification',
+    activated: false, qualificationAdmitted: false, sourceSha: binding.controllerSha, intentSha256: env.INTENT_SHA256,
+    bootstrapSha: binding.bootstrapSha, callerWorkflowRef: binding.callerWorkflowRef, rootReviewSha256: 'e'.repeat(64), scopeSha256: 'f'.repeat(64),
+    lease: { epoch: 'fcos-hosted-admin-epoch1', objective: 'production', ownerThreadId: '01a0f08b-7fcb-7870-9edc-343e16052b62', operationId: 'toolchain-exact-once',
+      bindingSha256: 'c'.repeat(64), leaseId: '00000000-0000-4000-8000-000000000001', coordinationOnly: true,
+      providerAuthorityGranted: false, uncertainOutcomeRequiresReadback: true } };
+  const encoded = value => ({ FCOS_HOSTED_TOOLCHAIN_EPOCH_PUBLICATION: JSON.stringify(value),
+    FCOS_HOSTED_TOOLCHAIN_EPOCH_PUBLICATION_SHA256: createHash('sha256').update(JSON.stringify(value)).digest('hex') });
+  return { binding, publication, encoded, env: { ...env, FCOS_HOSTED_TOOLCHAIN_SETUP_ENABLED: 'false',
+    FCOS_HOSTED_TOOLCHAIN_EPOCH_PUBLICATION_ENABLED: 'true', ...encoded(publication) } };
+}
+
+test('inactive epoch publication requires its exact finite lease context while the legacy publisher stays fenced', () => {
+  const f = epochPublicationContext();
+  assert.deepEqual(toolchainSourceContext(f.env).publication, f.publication);
+  for (const mutate of [p => p.epoch = 2, p => p.mode = 'active', p => p.activated = true,
+    p => p.qualificationAdmitted = true, p => p.sourceSha = 'f'.repeat(40), p => p.intentSha256 = 'f'.repeat(64),
+    p => p.bootstrapSha = 'f'.repeat(40), p => p.callerWorkflowRef += '-foreign', p => delete p.rootReviewSha256,
+    p => p.scopeSha256 = 'bad', p => p.extra = true, p => p.lease.epoch = '2', p => p.lease.objective = 'financial',
+    p => p.lease.providerAuthorityGranted = true, p => p.lease.coordinationOnly = false,
+    p => p.lease.uncertainOutcomeRequiresReadback = false, p => p.lease.leaseId = 'unknown',
+    p => p.lease.bindingSha256 = 'bad', p => p.lease.ownerThreadId = '', p => p.lease.operationId = 'two operations',
+    p => p.lease.extra = true]) {
+    const changed = structuredClone(f.publication); mutate(changed);
+    assert.throws(() => toolchainSourceContext({ ...f.env, ...f.encoded(changed) }), /TOOLCHAIN_PUBLICATION_NOT_ADMITTED/);
+  }
+  for (const patch of [{ FCOS_HOSTED_TOOLCHAIN_SETUP_ENABLED: 'true' }, { FCOS_HOSTED_TOOLCHAIN_SETUP_ENABLED: '' },
+    { FCOS_HOSTED_TOOLCHAIN_EPOCH_PUBLICATION_ENABLED: 'unknown' }, { FCOS_HOSTED_TOOLCHAIN_EPOCH_PUBLICATION_ENABLED: 'false' },
+    { FCOS_HOSTED_TOOLCHAIN_EPOCH_PUBLICATION_SHA256: 'f'.repeat(64) },
+    { GITHUB_RUN_ATTEMPT: '2' }, { GITHUB_REF_PROTECTED: 'false' }, { GITHUB_SHA: 'f'.repeat(40) }]) {
+    assert.throws(() => toolchainSourceContext({ ...f.env, ...patch }), /TOOLCHAIN_PUBLICATION_NOT_ADMITTED/);
+  }
+});
+
+test('epoch path keeps caller-history consumption and cannot use a second intent namespace', () => {
+  const f = epochPublicationContext(), sourceContext = toolchainSourceContext(f.env);
+  assert.equal(admitToolchainRun({ runs: publicationRuns(), runId: 4, intentSha256: f.publication.intentSha256, sourceContext }).admitted, true);
+  const consumed = publicationRuns(); consumed[0].display_title = consumed[1].display_title;
+  assert.throws(() => admitToolchainRun({ runs: consumed, runId: 4, intentSha256: f.publication.intentSha256, sourceContext }), /TOOLCHAIN_PUBLICATION_NOT_ADMITTED/);
+  for (const job of Object.values(workflow.jobs)) {
+    assert.equal(job.env.FCOS_HOSTED_TOOLCHAIN_EPOCH_PUBLICATION, '${{ vars.FCOS_HOSTED_TOOLCHAIN_EPOCH_PUBLICATION }}');
+    assert.equal(job.env.FCOS_HOSTED_TOOLCHAIN_EPOCH_PUBLICATION_SHA256, '${{ vars.FCOS_HOSTED_TOOLCHAIN_EPOCH_PUBLICATION_SHA256 }}');
+    assert.equal(job.env.FCOS_HOSTED_TOOLCHAIN_SETUP_ENABLED, '${{ vars.FCOS_HOSTED_TOOLCHAIN_SETUP_ENABLED }}');
+    assert.equal(job.environment, undefined);
+  }
+});
 
 test('toolchain bootstrap requires the separately admitted immutable caller and controller tuple', () => {
   const { binding, env } = bootstrapContext();

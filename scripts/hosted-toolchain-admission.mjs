@@ -7,6 +7,37 @@ const workflow = '.github/workflows/hosted-release-toolchain.yml';
 const positive = value => Number.isSafeInteger(value) && value > 0;
 const reject = () => { throw new Error('TOOLCHAIN_PUBLICATION_NOT_ADMITTED'); };
 const bootstrapWorkflow = '.github/workflows/authenticated-release.yml';
+const sha256 = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+const exactKeys = (value, keys) => value !== null && typeof value === 'object' && !Array.isArray(value)
+  && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
+
+// This public binding authenticates the reviewed dispatch context, not a live
+// database lease. The original operator must retain and assert that actual lease
+// until definitive registry readback; no hosted database credential is accepted.
+export function toolchainEpochPublication(env, binding) {
+  if (env.FCOS_HOSTED_TOOLCHAIN_EPOCH_PUBLICATION_ENABLED !== 'true') {
+    if (!['false', undefined, ''].includes(env.FCOS_HOSTED_TOOLCHAIN_EPOCH_PUBLICATION_ENABLED)) reject();
+    return null;
+  }
+  if (env.FCOS_HOSTED_TOOLCHAIN_SETUP_ENABLED !== 'false') reject();
+  let publication;
+  try { publication = JSON.parse(env.FCOS_HOSTED_TOOLCHAIN_EPOCH_PUBLICATION); } catch { reject(); }
+  if (createHash('sha256').update(env.FCOS_HOSTED_TOOLCHAIN_EPOCH_PUBLICATION).digest('hex') !== env.FCOS_HOSTED_TOOLCHAIN_EPOCH_PUBLICATION_SHA256
+    || !exactKeys(publication, ['kind', 'schemaVersion', 'epoch', 'mode', 'activated', 'qualificationAdmitted', 'sourceSha', 'intentSha256', 'bootstrapSha', 'callerWorkflowRef', 'rootReviewSha256', 'scopeSha256', 'lease'])
+    || publication.kind !== 'fcos_hosted_toolchain_epoch_publication_v1' || publication.schemaVersion !== 1
+    || publication.epoch !== 1 || publication.mode !== 'qualification' || publication.activated !== false || publication.qualificationAdmitted !== false
+    || publication.sourceSha !== binding.controllerSha || publication.bootstrapSha !== binding.bootstrapSha
+    || publication.callerWorkflowRef !== binding.callerWorkflowRef || publication.intentSha256 !== env.INTENT_SHA256
+    || !sha256(publication.intentSha256) || !sha256(publication.rootReviewSha256) || !sha256(publication.scopeSha256)) reject();
+  const lease = publication.lease;
+  if (!exactKeys(lease, ['epoch', 'objective', 'ownerThreadId', 'operationId', 'bindingSha256', 'leaseId', 'coordinationOnly', 'providerAuthorityGranted', 'uncertainOutcomeRequiresReadback'])
+    || lease.epoch !== 'fcos-hosted-admin-epoch1' || lease.objective !== 'production'
+    || lease.ownerThreadId !== '01a0f08b-7fcb-7870-9edc-343e16052b62'
+    || ![lease.ownerThreadId, lease.operationId].every(value => typeof value === 'string' && value.length > 0 && value.length <= 256 && value.trim() === value && !/\s/.test(value))
+    || !sha256(lease.bindingSha256) || !/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(lease.leaseId || '')
+    || lease.coordinationOnly !== true || lease.providerAuthorityGranted !== false || lease.uncertainOutcomeRequiresReadback !== true) reject();
+  return publication;
+}
 
 export function toolchainSourceContext(env) {
   if (env.GITHUB_REPOSITORY !== repository || env.GITHUB_REPOSITORY_ID !== '1278654816'
@@ -21,7 +52,9 @@ export function toolchainSourceContext(env) {
     || env.GITHUB_REF !== binding.ref || env.GITHUB_SHA !== binding.bootstrapSha
     || env.GITHUB_WORKFLOW_REF !== binding.callerWorkflowRef || env.SOURCE_SHA !== binding.controllerSha
     || env.ADMITTED_SOURCE_SHA !== binding.controllerSha) reject();
-  return { branch: binding.ref.slice('refs/heads/'.length), workflow: bootstrapWorkflow, binding };
+  const publication = toolchainEpochPublication(env, binding);
+  if (!publication && env.FCOS_HOSTED_TOOLCHAIN_SETUP_ENABLED !== 'true') reject();
+  return { branch: binding.ref.slice('refs/heads/'.length), workflow: bootstrapWorkflow, binding, ...(publication ? { publication } : {}) };
 }
 
 export function admitToolchainRun({ runs, runId, intentSha256, sourceContext }) {

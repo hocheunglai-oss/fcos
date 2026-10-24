@@ -1,5 +1,5 @@
-# One-time setup only. The dispatcher retains the canonical provider-write lease
-# through registry readback. Disable and inventory this writer before cutover.
+# One-time setup or exact inactive-epoch repair only. The dispatcher retains the
+# canonical provider-write lease through registry readback. No independent writer.
 name: FCOS hosted verification toolchain setup
 run-name: FCOS toolchain ${{ inputs.intent_sha256 }}
 'on':
@@ -17,7 +17,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   build:
-    if: ${{ vars.FCOS_HOSTED_TOOLCHAIN_SETUP_ENABLED == 'true' && github.repository == 'hocheunglai-oss/fcos' && github.repository_id == '1278654816' && github.actor == 'hocheunglai-oss' && github.actor_id == '265701760' && github.triggering_actor == 'hocheunglai-oss' && github.ref_protected && github.run_attempt == 1 }}
+    if: ${{ ((vars.FCOS_HOSTED_TOOLCHAIN_SETUP_ENABLED == 'true' && vars.FCOS_HOSTED_TOOLCHAIN_EPOCH_PUBLICATION_ENABLED != 'true') || (vars.FCOS_HOSTED_TOOLCHAIN_EPOCH_PUBLICATION_ENABLED == 'true' && vars.FCOS_HOSTED_TOOLCHAIN_SETUP_ENABLED == 'false')) && github.repository == 'hocheunglai-oss/fcos' && github.repository_id == '1278654816' && github.actor == 'hocheunglai-oss' && github.actor_id == '265701760' && github.triggering_actor == 'hocheunglai-oss' && github.ref_protected && github.run_attempt == 1 }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -33,6 +33,10 @@ jobs:
       ADMITTED_INTENT_SHA256: ${{ vars.FCOS_HOSTED_TOOLCHAIN_INTENT_SHA256 }}
       FCOS_HOSTED_TOOLCHAIN_BOOTSTRAP: ${{ vars.FCOS_HOSTED_TOOLCHAIN_BOOTSTRAP }}
       FCOS_HOSTED_TOOLCHAIN_BOOTSTRAP_SHA256: ${{ vars.FCOS_HOSTED_TOOLCHAIN_BOOTSTRAP_SHA256 }}
+      FCOS_HOSTED_TOOLCHAIN_SETUP_ENABLED: ${{ vars.FCOS_HOSTED_TOOLCHAIN_SETUP_ENABLED }}
+      FCOS_HOSTED_TOOLCHAIN_EPOCH_PUBLICATION_ENABLED: ${{ vars.FCOS_HOSTED_TOOLCHAIN_EPOCH_PUBLICATION_ENABLED }}
+      FCOS_HOSTED_TOOLCHAIN_EPOCH_PUBLICATION: ${{ vars.FCOS_HOSTED_TOOLCHAIN_EPOCH_PUBLICATION }}
+      FCOS_HOSTED_TOOLCHAIN_EPOCH_PUBLICATION_SHA256: ${{ vars.FCOS_HOSTED_TOOLCHAIN_EPOCH_PUBLICATION_SHA256 }}
     steps:
       - name: Admit immutable setup source and existing write intent
         shell: bash
@@ -59,9 +63,29 @@ jobs:
           image_id=$(docker image inspect fcos-release-checks:setup --format '{{.Id}}')
           test "$(docker image inspect "$image_id" --format '{{.Config.User}}')" = '1001:1001'
           docker run --rm --network none "$image_id" node --version | tee toolchain-output/node-version.txt
+          docker run --rm --network none "$image_id" npm --version | tee toolchain-output/npm-version.txt
           docker run --rm --network none "$image_id" python3 --version | tee toolchain-output/python-version.txt
+          docker run --rm --network none "$image_id" pg_config --version | tee toolchain-output/postgres-version.txt
+          docker run --rm --network none "$image_id" pg_config --bindir | tee toolchain-output/postgres-bindir.txt
+          docker run --rm --network none "$image_id" postgres --version | tee toolchain-output/postgres-server-version.txt
+          docker run --rm --network none "$image_id" psql --version | tee toolchain-output/postgres-client-version.txt
           docker run --rm --network none "$image_id" vercel --version > toolchain-output/vercel-version.txt 2>&1
           test "$(cat toolchain-output/node-version.txt)" = 'v24.18.0'
+          grep -Eq '^11\.[0-9]+\.[0-9]+$' toolchain-output/npm-version.txt
+          grep -Eq '^PostgreSQL 17\.[0-9]+( |$)' toolchain-output/postgres-version.txt
+          test "$(cat toolchain-output/postgres-bindir.txt)" = '/usr/lib/postgresql/17/bin'
+          postgres_version=$(cat toolchain-output/postgres-version.txt)
+          test "$(cat toolchain-output/postgres-server-version.txt)" = "postgres (PostgreSQL) ${postgres_version#PostgreSQL }"
+          test "$(cat toolchain-output/postgres-client-version.txt)" = "psql (PostgreSQL) ${postgres_version#PostgreSQL }"
+          docker run --rm --network none --read-only --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /tmp:rw,nosuid,nodev,exec,size=128m "$image_id" sh -ec '
+            work=$(mktemp -d /tmp/fcos-toolchain.XXXXXX)
+            trap '\''pg_ctl -D "$work/data" -m immediate -w stop >/dev/null 2>&1 || true; rm -rf "$work"'\'' EXIT
+            initdb -D "$work/data" --username=fcos_checks --auth=trust --no-locale --encoding=UTF8 >/dev/null
+            pg_ctl -D "$work/data" -l "$work/server.log" -o "-k $work -h '\'''\'' -c shared_buffers=8MB -c max_connections=8" -w start >/dev/null
+            test "$(psql -X -h "$work" -U fcos_checks -d postgres -Atc "select current_setting('\''server_version_num'\'')::int / 10000")" = 17
+            psql -X -v ON_ERROR_STOP=1 -h "$work" -U fcos_checks -d postgres -c "create extension pgcrypto" >/dev/null
+            printf "%s\n" native_postgres17_pgcrypto_passed
+          ' | tee toolchain-output/postgres-smoke.txt
           docker save "$image_id" | gzip -1 > toolchain-output/image.tar.gz
           archive_sha256=$(sha256sum toolchain-output/image.tar.gz | cut -d' ' -f1)
           cp scripts/hosted-toolchain-admission.mjs toolchain-output/admission.mjs
@@ -87,6 +111,10 @@ jobs:
       ADMITTED_SOURCE_SHA: ${{ vars.FCOS_HOSTED_TOOLCHAIN_SOURCE_SHA }}
       FCOS_HOSTED_TOOLCHAIN_BOOTSTRAP: ${{ vars.FCOS_HOSTED_TOOLCHAIN_BOOTSTRAP }}
       FCOS_HOSTED_TOOLCHAIN_BOOTSTRAP_SHA256: ${{ vars.FCOS_HOSTED_TOOLCHAIN_BOOTSTRAP_SHA256 }}
+      FCOS_HOSTED_TOOLCHAIN_SETUP_ENABLED: ${{ vars.FCOS_HOSTED_TOOLCHAIN_SETUP_ENABLED }}
+      FCOS_HOSTED_TOOLCHAIN_EPOCH_PUBLICATION_ENABLED: ${{ vars.FCOS_HOSTED_TOOLCHAIN_EPOCH_PUBLICATION_ENABLED }}
+      FCOS_HOSTED_TOOLCHAIN_EPOCH_PUBLICATION: ${{ vars.FCOS_HOSTED_TOOLCHAIN_EPOCH_PUBLICATION }}
+      FCOS_HOSTED_TOOLCHAIN_EPOCH_PUBLICATION_SHA256: ${{ vars.FCOS_HOSTED_TOOLCHAIN_EPOCH_PUBLICATION_SHA256 }}
       IMAGE_ID: ${{ needs.build.outputs.image_id }}
       ARCHIVE_SHA256: ${{ needs.build.outputs.archive_sha256 }}
       GUARD_SHA256: ${{ needs.build.outputs.guard_sha256 }}
@@ -126,7 +154,9 @@ jobs:
           unset REGISTRY_TOKEN
           image="ghcr.io/hocheunglai-oss/fcos-release-checks:setup-${SOURCE_SHA}-${GITHUB_RUN_ID}"
           docker tag "$IMAGE_ID" "$image"
-          printf '{"sourceSha":"%s","intentSha256":"%s","imageId":"%s","archiveSha256":"%s","tag":"%s","runId":"%s","status":"submitting"}\n' "$SOURCE_SHA" "$INTENT_SHA256" "$IMAGE_ID" "$ARCHIVE_SHA256" "$image" "$GITHUB_RUN_ID" > toolchain-output/publication.json
+          epoch_binding_sha256=''
+          if test "${FCOS_HOSTED_TOOLCHAIN_EPOCH_PUBLICATION_ENABLED:-false}" = true; then epoch_binding_sha256="$FCOS_HOSTED_TOOLCHAIN_EPOCH_PUBLICATION_SHA256"; fi
+          printf '{"sourceSha":"%s","intentSha256":"%s","imageId":"%s","archiveSha256":"%s","tag":"%s","runId":"%s","epochPublicationSha256":"%s","status":"submitting"}\n' "$SOURCE_SHA" "$INTENT_SHA256" "$IMAGE_ID" "$ARCHIVE_SHA256" "$image" "$GITHUB_RUN_ID" "$epoch_binding_sha256" > toolchain-output/publication.json
           # No retry. An uncertain push stays under the original operator intent.
           docker push "$image"
           digest=$(docker buildx imagetools inspect "$image" --format '{{json .Manifest}}' | node --input-type=module -e 'import{readFileSync}from"node:fs";const d=JSON.parse(readFileSync(0,"utf8")).digest;if(!/^sha256:[a-f0-9]{64}$/.test(d||""))process.exit(1);console.log(d)')
@@ -139,5 +169,7 @@ jobs:
           path: |
             toolchain-output/publication*.json
             toolchain-output/*-version.txt
+            toolchain-output/postgres-bindir.txt
+            toolchain-output/postgres-smoke.txt
           if-no-files-found: error
           retention-days: 90

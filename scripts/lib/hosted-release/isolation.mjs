@@ -45,5 +45,16 @@ export function inspectCandidateRuntime({ image, execute = execFileSync }) {
   const inspect = JSON.parse(execute('docker', ['image', 'inspect', image], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }));
   if (inspect.length !== 1 || !inspect[0].RepoDigests?.includes(image)) fail('CANDIDATE_IMAGE_DIGEST_MISMATCH');
   const run = args => execute('docker', ['run', '--rm', '--network=none', '--read-only', '--cap-drop=ALL', '--security-opt=no-new-privileges', image, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  // Keep the admitted runtime tuple stable; the image digest binds these tools.
+  // Reject the old Bookworm PG15 image before any candidate npm/install work.
+  try {
+    const version = /^PostgreSQL ((?:16|17)\.\d+)(?:\s|$)/.exec(run(['pg_config', '--version']));
+    const bindir = run(['pg_config', '--bindir']);
+    if (!version || bindir !== `/usr/lib/postgresql/${version[1].split('.')[0]}/bin`) fail('CANDIDATE_POSTGRES_NOT_SUPPORTED');
+    for (const program of ['postgres', 'initdb', 'pg_ctl', 'psql']) {
+      const actual = new RegExp(`^${program} \\(PostgreSQL\\) (${version[1].replace('.', '\\.')})(?:\\s|$)`);
+      if (!actual.test(run([`${bindir}/${program}`, '--version']))) fail('CANDIDATE_POSTGRES_NOT_SUPPORTED');
+    }
+  } catch { fail('CANDIDATE_POSTGRES_NOT_SUPPORTED'); }
   return { ...JSON.parse(run(['node', '-e', 'console.log(JSON.stringify({node:process.version,platform:process.platform,arch:process.arch}))'])), python: run(['python3', '--version']), image };
 }
