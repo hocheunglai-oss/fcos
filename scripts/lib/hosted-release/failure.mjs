@@ -1,3 +1,4 @@
+import { safeRuntimeMismatch } from './runtime-mismatch.mjs';
 import { ReleaseError } from './json-contract.mjs';
 import { safeVercelCommandFailure } from './vercel-command-failure.mjs';
 import { safeVercelSourceApiFailure } from './vercel-source-api.mjs';
@@ -99,6 +100,7 @@ const diagnosticCodes = new Set(`
 `.trim().split(/\s+/));
 const diagnosticPhases = new Set([...RELEASE_BOUNDARIES, 'admission', 'identity', 'github.read', 'vercel.preview', 'vercel.read', 'vercel.write', 'vercel.transport', 'vercel.source_api.prepare', 'vercel.source_api.write', 'preview', 'first_runtime.owner_refresh']);
 export function safeDiagnosticFailure(error) {
+  const runtimeMismatch = error instanceof ReleaseError && error.code==='PREVIEW_RUNTIME_MISMATCH' && error.phase==='preview' ? safeRuntimeMismatch(error.detail?.runtimeMismatch) : undefined;
   const commandFailure = error instanceof ReleaseError ? safeVercelCommandFailure(error.detail?.commandFailure) : undefined;
   const sourceApiFailure = error instanceof ReleaseError ? safeVercelSourceApiFailure(error.detail?.sourceApiFailure) : undefined;
   const boundary = isReleaseBoundary(error?.boundary) ? error.boundary : undefined;
@@ -107,5 +109,5 @@ export function safeDiagnosticFailure(error) {
   return { status: 'intervention_required', code: known ? error.code : 'DIAGNOSTIC_FAILURE_UNCLASSIFIED',
     phase: known && diagnosticPhases.has(error.phase) ? error.phase : boundary || 'diagnostic',
     recovery: 'Inspect this admission diagnostic. It authorizes no deployment or release retry.',
-    ...(boundary ? { boundary } : {}), ...(known && commandFailure ? { commandFailure } : {}), ...(known && sourceApiFailure ? { sourceApiFailure } : {}) };
+    ...(boundary ? { boundary } : {}), ...(known && commandFailure ? { commandFailure } : {}), ...(known && sourceApiFailure ? { sourceApiFailure } : {}), ...(known && runtimeMismatch ? {runtimeMismatch} : {}) };
 }

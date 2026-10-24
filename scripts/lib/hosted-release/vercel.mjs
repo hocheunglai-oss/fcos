@@ -13,6 +13,7 @@ import { assertHostedSetup, assertHostedSourceContext } from './admission.mjs';
 import { assertVercelPreviewWriterSecret, assertVercelProductionWriterSecret } from './vercel-writer-auth.mjs';
 import { validateFirstRuntimeOwnerRefresh } from './first-runtime.mjs';
 import { atReleaseBoundary } from './failure.mjs';
+import { runtimeMismatchDetail } from './runtime-mismatch.mjs';
 import { vercelCommandFailure } from './vercel-command-failure.mjs';
 import { SOURCE_API_TRANSPORT, prepareVercelSourceApiRequest, executeVercelSourceApiRequest, prepareVercelProjectActionRequest, executeVercelProjectActionRequest, verifyVercelProjectActionRecoveryRequest } from './vercel-source-api.mjs';
 
@@ -223,7 +224,9 @@ function buildVercelAdapter({ manifest, candidateDirectory, env = process.env, f
     if (!runtime) fail('RUNTIME_OBSERVATION_MISSING', phase);
     if (phase === 'preview') {
       if (runtime.safety.readOnly !== true || Object.values(runtime.safety.externalActions).some(value => value !== false)
-        || canonical({ flags: runtime.flags, safety: runtime.safety, auth: runtime.auth }) !== canonical(release.runtime.expectedPreview)) fail('PREVIEW_RUNTIME_MISMATCH', phase);
+        || canonical({ flags: runtime.flags, safety: runtime.safety, auth: runtime.auth }) !== canonical(release.runtime.expectedPreview)) throw new ReleaseError('PREVIEW_RUNTIME_MISMATCH', phase,
+          'Correct the bound inputs before starting a new operation.', {runtimeMismatch:runtimeMismatchDetail(release.runtime.expectedPreview,runtime,
+            {manifestHash:digest(release),candidateSha:release.candidate.sha,deploymentId:exact.id})});
     } else {
       const expected = release.runtime.expectedProduction;
       try { assertProductionRuntimeReadback(runtime, { expectedRuntimeFlags: expected.flags, expectedRuntimeSafety: expected.safety, expectedRuntimeAuth: expected.auth }); }
