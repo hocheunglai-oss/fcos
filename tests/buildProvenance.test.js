@@ -42,6 +42,14 @@ function fixture(t) {
   return { cwd, git, collect: options => collectBuildProvenance({ cwd, env: {}, ...options }) };
 }
 
+function detachFixtureGit(cwd) {
+  // Remove the discoverable directory entry atomically. Keep the metadata in an
+  // owned sibling until suite cleanup, outside the archive's discovery ancestry.
+  const removedMetadata = mkdtempSync(join(fixtureRoot, 'removed-child-git-'));
+  renameSync(join(cwd, '.git'), join(removedMetadata, '.git'));
+  assert.equal(existsSync(join(cwd, '.git')), false);
+}
+
 test('clean release receipt binds source content and validates supplied commit identity', t => {
   const f = fixture(t); const head = f.git('rev-parse', 'HEAD');
   const receipt = f.collect({ requireClean: true, env: { VERCEL_GIT_COMMIT_SHA: head } });
@@ -88,7 +96,7 @@ test('deleted, staged, renamed files and executable mode affect provenance', t =
 });
 
 test('source archives report unknown Git state and cannot produce release receipts', t => {
-  const f = fixture(t); rmSync(join(f.cwd, '.git'), { recursive: true });
+  const f = fixture(t); detachFixtureGit(f.cwd);
   // Git ignores a ceiling equal to its starting directory. Keep the physical
   // parent ceiling so an unrelated repository above the fixture cannot leak in.
   assert.equal(process.env.GIT_CEILING_DIRECTORIES, fixtureRoot);
@@ -116,11 +124,7 @@ test('archive fixtures cannot discover an ancestor checkout', t => {
     rmSync(join(fixtureRoot, 'ancestor.txt'), { force: true });
   });
   const f = fixture(t);
-  // Move generated metadata outside the archive's discovery ancestry atomically.
-  // Recursive deletion must not leave a discoverable child repository behind.
-  const removedMetadata = mkdtempSync(join(fixtureRoot, 'removed-child-git-'));
-  renameSync(join(f.cwd, '.git'), join(removedMetadata, '.git'));
-  assert.equal(existsSync(join(f.cwd, '.git')), false);
+  detachFixtureGit(f.cwd);
   const metadataPresence = () => ({
     ancestorGit: existsSync(join(fixtureRoot, '.git')), ancestorConfig: existsSync(join(fixtureRoot, '.git', 'config')),
     childGit: existsSync(join(f.cwd, '.git')), childConfig: existsSync(join(f.cwd, '.git', 'config')),
@@ -188,7 +192,7 @@ test('archive fixtures cannot discover an ancestor checkout', t => {
 });
 
 test('trusted archive attestation requires exact digest and full supplied SHA', t => {
-  const f = fixture(t); const clean = f.collect(); rmSync(join(f.cwd, '.git'), { recursive: true });
+  const f = fixture(t); const clean = f.collect(); detachFixtureGit(f.cwd);
   const env = { VERCEL: '1', VERCEL_GIT_COMMIT_SHA: clean.commit, FCOS_EXPECTED_SOURCE_SHA256: clean.sourceDigest };
   const receipt = f.collect({ env });
   assert.equal(receipt.sourceAttested, true); assert.equal(receipt.releaseEligible, true);
@@ -247,7 +251,7 @@ test('archive attestation failure reports bounded public hashes and executable c
   writeFileSync(join(f.cwd, 'package.json'), '{"name":"PUBLIC_CONTENT_MUST_BE_HASHED_ONLY"}\n');
   f.git('add', '.'); f.git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'diagnostic source');
   const original = f.collect({ requireClean: true });
-  rmSync(join(f.cwd, '.git'), { recursive: true });
+  detachFixtureGit(f.cwd);
   chmodSync(hook, 0o644);
   writeFileSync(join(f.cwd, 'vercel.json'), '{"version":2,"name":"changed"}\n');
   writeFileSync(join(f.cwd, '.env.local'), 'PASSWORD=PRIVATE_MUST_NOT_APPEAR');
