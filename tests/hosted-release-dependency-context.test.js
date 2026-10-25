@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DIAGNOSTIC_DEPENDENCY_CONTEXT as PIN, VERIFICATION_DEPENDENCY_CONTEXT as VERIFICATION, MEASUREMENT_DEPENDENCY_CONTEXT as MEASUREMENT, RUNTIME_METERING_DEPENDENCY_CONTEXT as METERED, dependencyContextCandidate } from '../config/hostedDependencyContext.js';
+import { DIAGNOSTIC_DEPENDENCY_CONTEXT as PIN, VERIFICATION_DEPENDENCY_CONTEXT as VERIFICATION, MEASUREMENT_DEPENDENCY_CONTEXT as MEASUREMENT, RUNTIME_METERING_DEPENDENCY_CONTEXT as METERED, RUNTIME_DEPENDENCY_CONTEXT as DEPENDENCY, ORDINARY_ADMISSION_DEPENDENCY_CONTEXT as ORDINARY, dependencyContextCandidate } from '../config/hostedDependencyContext.js';
 import { DEPENDENCY_SEED_FILES, sealDependencySeed } from '../scripts/hosted-release-dependency-seed.mjs';
 import { digest, releaseTargets } from '../scripts/lib/hosted-release/contract.mjs';
 import { NOM_B_LEGACY_HISTORY } from '../scripts/lib/hosted-release/dependency-publisher.mjs';
@@ -81,10 +81,13 @@ function receiver() {
 // Synthetic crypto cannot match the immutable real ciphertext digest. This
 // isolated Node loader substitutes only the three public data fingerprints;
 // the production selector, opener, crypto and hosted admission code are used.
-function syntheticPins(directory, { dependencies, seed, handoff }) {
-  const pins = { ...PIN, dependenciesSha256: digest(dependencies), seedSha256: digest(seed), handoffSha256: digest(handoff) };
+function syntheticPins(directory, { dependencies, seed, handoff }, pin = PIN) {
+  const pins = { ...pin, dependenciesSha256: digest(dependencies), seedSha256: digest(seed), handoffSha256: digest(handoff) };
   const source = readFileSync(join(root, 'config/hostedDependencyContext.js'), 'utf8');
-  const start = source.indexOf('freeze({'), end = source.indexOf('\n});', start);
+  const declaration = pin === PIN ? 'export const DIAGNOSTIC_DEPENDENCY_CONTEXT' : pin === DEPENDENCY
+    ? 'export const RUNTIME_DEPENDENCY_CONTEXT' : 'export const ORDINARY_ADMISSION_DEPENDENCY_CONTEXT';
+  assert.ok(source.includes(declaration));
+  const start = source.indexOf('freeze({', source.indexOf(declaration)), end = source.indexOf('\n});', start);
   assert.ok(start > 0 && end > start);
   const module = join(directory, 'synthetic-context.mjs');
   writeFileSync(module, source.slice(0, start) + 'freeze(' + JSON.stringify(pins) + source.slice(end + 2));
@@ -92,7 +95,7 @@ function syntheticPins(directory, { dependencies, seed, handoff }) {
   writeFileSync(hook, `import {registerHooks} from 'node:module';\nregisterHooks({resolve(s,c,next){if(s.endsWith('/config/hostedDependencyContext.js'))return {url:${JSON.stringify(new URL('file://' + module).href)},shortCircuit:true};return next(s,c);}});\n`);
   return hook;
 }
-function archive(t, diagnostic = true) {
+function archive(t, diagnostic = true, pin = PIN) {
   const directory = temporary(t), controller = join(directory, 'controller'); mkdirSync(controller);
   execFileSync('git', ['init', '-q'], { cwd: controller });
   execFileSync('git', ['-c', 'user.name=Synthetic', '-c', 'user.email=fixture@example.invalid', 'commit', '--allow-empty', '-qm', 'SYNTHETIC admission fixture'], { cwd: controller });
@@ -118,9 +121,12 @@ function archive(t, diagnostic = true) {
     recipientPublicKeySha256: digest(e.getPublicKey()), credentialSha256: digest(token) };
   const setup = { controllerSha, epoch: 1, targetsSha256: digest(releaseTargets()), verification: {}, dependencies, dependencyArtifact: { seed } };
   const manifest = { stage: 'compatibility', executionMode: 'release', epoch: 1, controller: { sha: controllerSha }, targets: releaseTargets(),
-    candidate: diagnostic ? candidate() : { sha: base }, verification: {}, dependencies, setupSha256: digest(setup) };
+    candidate: diagnostic ? structuredClone(pin.candidate) : { sha: base }, verification: {}, dependencies, setupSha256: digest(setup) };
+  if (pin === DEPENDENCY || pin === ORDINARY) {
+    setup.probeProtocol = 'xero_metered_v1'; manifest.runtime = { probeProtocol: setup.probeProtocol }; manifest.setupSha256 = digest(setup);
+  }
   const encrypted = join(directory, 'dependency-setup'); mkdirSync(encrypted); writeFileSync(join(encrypted, 'seed.encrypted.json'), ciphertext);
-  const hook = diagnostic ? syntheticPins(directory, { dependencies, seed, handoff }) : null;
+  const hook = diagnostic ? syntheticPins(directory, { dependencies, seed, handoff }, pin) : null;
   const env = { PATH: process.env.PATH, HOME: directory, GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'hocheunglai-oss/fcos', GITHUB_REPOSITORY_ID: '1278654816',
     GITHUB_RUN_ATTEMPT: '1', GITHUB_RUN_ID: '12345', GITHUB_REF: 'refs/heads/main', GITHUB_REF_PROTECTED: 'true', GITHUB_EVENT_NAME: 'workflow_dispatch',
     FCOS_CONTROLLER_SHA: controllerSha, FCOS_CONTROLLER_DIRECTORY: controller, FCOS_ADMITTED_RELEASE_SETUP: JSON.stringify(setup), FCOS_ADMITTED_RELEASE_SETUP_SHA256: digest(setup),
@@ -142,9 +148,9 @@ for (const diagnostic of [false, true]) test(`real CLI opens all four trusted jo
   }
 });
 
-function qualificationArchive(t) {
-  const f = archive(t), now = Date.now(), first = typedFirstRuntimeFixture({ now });
-  first.value.candidateSha = PIN.candidate.sha; first.value.candidateSourceProfile = PIN.candidate.sourceProfile;
+function qualificationArchive(t, pin = PIN) {
+  const f = archive(t, true, pin), now = Date.now(), first = typedFirstRuntimeFixture({ now });
+  first.value.candidateSha = pin.candidate.sha; first.value.candidateSourceProfile = pin.candidate.sourceProfile;
   const baseline = first.referenceFor(first.value), m = f.manifest;
   m.stage = 'qualification'; m.executionMode = 'qualification';
   const ref = 'refs/heads/codex/SYNTHETIC-diagnostic-dependency-context';
@@ -154,6 +160,7 @@ function qualificationArchive(t) {
   m.scope = { sha256: 'a'.repeat(64), existingUi: false, handoffs: [], financialAuthority: false };
   m.migration = { mode: 'none', expectedSchemaSha256: first.value.schema.sha256 };
   m.runtime = { expectedSha256: digest(first.desiredRuntime), expectedProduction: first.desiredRuntime, expectedPreview: first.desiredRuntime };
+  if (pin === DEPENDENCY || pin === ORDINARY) m.runtime.probeProtocol = f.setup.probeProtocol;
   const read = admitVercelReadFixture(m, { now });
   f.setup = { ...f.setup, ...read.setup, firstRuntimeBaseline: baseline };
   m.setupSha256 = digest(f.setup);
@@ -216,35 +223,37 @@ test('authenticated decryption failure leaves no partially opened archive even w
   assert.equal(existsSync(f.env.FCOS_HOSTED_DEPENDENCY_SETUP_OPENED_DIRECTORY), false);
 });
 
-test('opened synthetic archive feeds actual inner preservation loader using original AAD and current manifest binding', t => {
-  const f = archive(t), r = cli(f, 'dependencies_before'); assert.equal(r.status, 0, r.stderr);
+function assertInnerPreservation(t, pin = PIN) {
+  const f = archive(t, true, pin), r = cli(f, 'dependencies_before'); assert.equal(r.status, 0, r.stderr);
   const script = join(f.directory, 'inner.mjs');
   writeFileSync(script, `import {loadDependencySetup} from ${JSON.stringify(new URL('file://' + join(root, 'scripts/lib/hosted-release/dependency-publisher.mjs')).href)};\nconst m=JSON.parse(process.env.FCOS_RELEASE_MANIFEST);const s=loadDependencySetup({manifest:m});console.log(JSON.stringify({manifestHash:s.preservation.membership.manifestHash,candidateSha:m.candidate.sha,project:s.preservation.membership.project}));\n`);
   const env = { ...f.env, FCOS_HOSTED_DEPENDENCY_SETUP_DIRECTORY: f.env.FCOS_HOSTED_DEPENDENCY_SETUP_OPENED_DIRECTORY, FCOS_HOSTED_PRESERVATION_DATABASE_URL: f.connection };
   const child = spawnSync(process.execPath, ['--import', f.hook, script], { env, encoding: 'utf8', timeout: 10000 });
   assert.equal(child.status, 0, child.stderr);
-  assert.deepEqual(JSON.parse(child.stdout), { manifestHash: digest(f.manifest), candidateSha: PIN.candidate.sha, project: f.membership.project });
+  assert.deepEqual(JSON.parse(child.stdout), { manifestHash: digest(f.manifest), candidateSha: pin.candidate.sha, project: f.membership.project });
   const wrong = spawnSync(process.execPath, ['--import', f.hook, script], { env: { ...env, FCOS_HOSTED_PRESERVATION_DATABASE_URL: f.connection.replace('SYNTHETIC', 'WRONG') }, encoding: 'utf8', timeout: 10000 });
   assert.equal(wrong.status, 1); assert.ok(wrong.stderr.includes('PRESERVATION_PRIVATE_HANDOFF_INVALID'));
-});
+}
+test('opened synthetic archive feeds actual inner preservation loader using original AAD and current manifest binding', t => assertInnerPreservation(t));
 
-test('NomB historical handoff is validated unchanged while new evidence retains diagnostic candidate and original time', async t => {
+async function assertNomBContext(t, pin = PIN) {
   const directory = temporary(t), now = Date.parse('2026-10-17T01:00:00Z');
   const original = '04ee3425aac7a49089eda781eb3c976aea1f6785';
   const f = await nomBFixture({ manifest: { candidate: { sha: original, salesforceSourceSha256: PIN.candidate.salesforceSourceSha256 }, controller: { sha: 'b'.repeat(40) }, targets: releaseTargets() }, now });
-  const m = { ...f.manifest, candidate: candidate(), dependencies: { schemaVersion: 1, syntheticFixture: true } };
+  const m = { ...f.manifest, candidate: structuredClone(pin.candidate), dependencies: { schemaVersion: 1, syntheticFixture: true } };
   f.handoff.candidateSha = base; delete f.handoff.manifestHash;
-  const hook = syntheticPins(directory, { dependencies: m.dependencies, seed: {}, handoff: f.handoff });
+  const hook = syntheticPins(directory, { dependencies: m.dependencies, seed: {}, handoff: f.handoff }, pin);
   const payload = { manifest: m, handoff: { ...f.handoff, manifestHash: digest(m) }, artifacts: [...f.artifacts].map(([k, v]) => [k, v.toString('base64')]), now };
   const input = join(directory, 'input.json'); writeFileSync(input, JSON.stringify(payload));
   const script = join(directory, 'nom.mjs');
   writeFileSync(script, `import {readFileSync} from 'node:fs';import {importAcceptedNomB,dependencyHash} from ${JSON.stringify(new URL('file://' + join(root, 'scripts/lib/hosted-release/dependencies.mjs')).href)};const p=JSON.parse(readFileSync(process.argv[2]));const a=new Map(p.artifacts.map(([k,v])=>[k,Buffer.from(v,'base64')]));const r=await importAcceptedNomB({manifest:p.manifest,handoff:p.handoff,verifyHandoff:async({handoffSha256})=>({verified:true,handoffSha256,manifestHash:dependencyHash(p.manifest),financialAuthority:false}),readArtifact:async({sha256})=>a.get(sha256),measureInputs:async()=>({readOnly:true,capturedAt:new Date(p.now).toISOString(),inputs:p.handoff.relevantInputs}),now:()=>p.now});console.log(JSON.stringify(r));\n`);
   const run = () => spawnSync(process.execPath, ['--import', hook, script, input], { encoding: 'utf8', timeout: 10000 });
   const child = run(); assert.equal(child.status, 0, child.stderr);
-  const result = JSON.parse(child.stdout); assert.equal(result.candidateSha, PIN.candidate.sha); assert.equal(result.capturedAt, f.live.completedAt); assert.equal(result.result.financialAuthority, false);
+  const result = JSON.parse(child.stdout); assert.equal(result.candidateSha, pin.candidate.sha); assert.equal(result.capturedAt, f.live.completedAt); assert.equal(result.result.financialAuthority, false);
   payload.handoff.artifacts.cleanup = 'f'.repeat(64); writeFileSync(input, JSON.stringify(payload));
   const bad = run(); assert.equal(bad.status, 1); assert.ok(bad.stderr.includes('NOM_B_DEPENDENCY_REVALIDATION_REQUIRED'));
-});
+}
+test('NomB historical handoff is validated unchanged while new evidence retains diagnostic candidate and original time', t => assertNomBContext(t));
 
 
 test('measurement-only successor retains original AAD only for its complete exact candidate and immutable dependency objects',()=>{
@@ -275,3 +284,79 @@ test('metered-runtime child retains original dependency AAD only with all exact 
   assert.throws(()=>dependencyContextCandidate(m,{seed:{...publicFixture.seed,extra:true}}),{code:'DEPENDENCY_CONTEXT_REQUIRED'});
   assert.throws(()=>dependencyContextCandidate(m,{handoff:{...publicFixture.handoff,candidateSha:m.candidate.sha}}),{code:'DEPENDENCY_CONTEXT_REQUIRED'});
 });
+
+test('runtime dependency child maps only its complete K9152 tuple and original immutable public objects', () => {
+  const m = { candidate: structuredClone(DEPENDENCY.candidate), dependencies: structuredClone(publicFixture.dependencies) };
+  assert.equal(m.candidate.sha, '9152fa655b6e507a568d773534404843595fe323');
+  assert.equal(m.candidate.sourceProfile, 'compat_runtime_dependency_20261024');
+  assert.equal(DEPENDENCY.contextCandidateSha, METERED.contextCandidateSha);
+  for (const field of ['dependenciesSha256', 'seedSha256', 'handoffSha256']) assert.equal(DEPENDENCY[field], METERED[field]);
+  for (const field of ['lockSha256', 'salesforceSourceSha256', 'branch']) assert.equal(m.candidate[field], METERED.candidate[field]);
+  for (const field of ['sourceSha256', 'sourceInputsSha256', 'configurationSha256']) assert.notEqual(m.candidate[field], METERED.candidate[field]);
+  assert.equal(dependencyContextCandidate(m, { seed: publicFixture.seed, handoff: { ...publicFixture.handoff, manifestHash: 'current-K-manifest' } }), base);
+  for (const field of Object.keys(m.candidate)) {
+    const changed = structuredClone(m); changed.candidate[field] = field === 'sha' ? METERED.candidate.sha : 'changed';
+    assert.throws(() => dependencyContextCandidate(changed), { code: 'DEPENDENCY_CONTEXT_REQUIRED' });
+  }
+  for (const patch of [{ sha: METERED.candidate.sha }, { sourceProfile: METERED.candidate.sourceProfile }, { extra: true }])
+    assert.throws(() => dependencyContextCandidate({ ...m, candidate: { ...m.candidate, ...patch } }), { code: 'DEPENDENCY_CONTEXT_REQUIRED' });
+  for (const dependencies of [undefined, null, {}, { ...m.dependencies, extra: true }])
+    assert.throws(() => dependencyContextCandidate({ ...m, dependencies }), { code: 'DEPENDENCY_CONTEXT_REQUIRED' });
+  for (const mutate of [s => { s.files[0].sha256 = 'f'.repeat(64); }, s => { s.files[0].bytes++; }, s => { s.files.pop(); },
+    s => { s.credentialSha256 = 'f'.repeat(64); }, s => { s.recipientPublicKeySha256 = 'f'.repeat(64); },
+    s => { s.envelopeSha256 = 'f'.repeat(64); }, s => { s.extra = true; }]) {
+    const seed = structuredClone(publicFixture.seed); mutate(seed);
+    assert.throws(() => dependencyContextCandidate(m, { seed }), { code: 'DEPENDENCY_CONTEXT_REQUIRED' });
+  }
+  for (const field of ['candidateSha', 'originalCandidateSha', 'candidateSalesforceSourceSha256', 'relevantInputs', 'artifacts']) {
+    const handoff = structuredClone(publicFixture.handoff); handoff[field] = 'changed';
+    assert.throws(() => dependencyContextCandidate(m, { handoff }), { code: 'DEPENDENCY_CONTEXT_REQUIRED' });
+  }
+});
+
+test('actual K9152 CLI opens retained-AAD seed in all four jobs and preserves wrong-key refusal', t => {
+  for (const job of ['dependencies_before', 'publish_before', 'dependencies_after', 'publish_after']) {
+    const f = archive(t, true, DEPENDENCY), r = cli(f, job);
+    assert.equal(r.status, 0, r.stderr);
+    for (const file of f.files) assert.deepEqual(readFileSync(join(f.env.FCOS_HOSTED_DEPENDENCY_SETUP_OPENED_DIRECTORY, file.path)), file.bytes);
+    assert.equal(f.manifest.candidate.sha, DEPENDENCY.candidate.sha);
+  }
+  const f = archive(t, true, DEPENDENCY), wrong = cli(f, 'dependencies_before', { FCOS_HOSTED_GITHUB_READ_TOKEN: 'SYNTHETIC-wrong-token-12345' });
+  assert.equal(wrong.status, 1); assert.equal(wrong.stderr.trim(), 'KEY_BINDING_REQUIRED');
+  assert.equal(existsSync(f.env.FCOS_HOSTED_DEPENDENCY_SETUP_OPENED_DIRECTORY), false);
+  assert.equal(wrong.stdout, ''); assert.equal(wrong.stderr.includes(token), false);
+});
+
+test('actual K9152 qualification opener composes source and typed baseline admission before decrypting', t => {
+  const f = qualificationArchive(t, DEPENDENCY), r = cli(f, 'dependencies_before');
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(f.manifest.candidate.sha, DEPENDENCY.candidate.sha);
+  assert.equal(f.setup.qualificationSource.candidateSha, DEPENDENCY.candidate.sha);
+  for (const file of f.files) assert.deepEqual(readFileSync(join(f.env.FCOS_HOSTED_DEPENDENCY_SETUP_OPENED_DIRECTORY, file.path)), file.bytes);
+});
+
+test('actual K9152 inner preservation consumer retains parent AAD and rejects a wrong database key', t => assertInnerPreservation(t, DEPENDENCY));
+test('actual K9152 NomB consumer retains original handoff and time while binding new candidate evidence', t => assertNomBContext(t, DEPENDENCY));
+
+test('ordinary admission child retains parent AAD only for exact be6 source and immutable dependencies', () => {
+  const m={candidate:structuredClone(ORDINARY.candidate),dependencies:structuredClone(publicFixture.dependencies)};
+  assert.equal(m.candidate.sha,'be6daf6162480ca77ec8d4f04fe5aaa5b228a22c');
+  assert.equal(m.candidate.sourceProfile,'compat_runtime_ordinary_admission_20261025');
+  for(const field of ['contextCandidateSha','dependenciesSha256','seedSha256','handoffSha256'])assert.equal(ORDINARY[field],DEPENDENCY[field]);
+  for(const field of ['configurationSha256','lockSha256','salesforceSourceSha256','branch'])assert.equal(m.candidate[field],DEPENDENCY.candidate[field]);
+  for(const field of ['sourceSha256','sourceInputsSha256'])assert.notEqual(m.candidate[field],DEPENDENCY.candidate[field]);
+  assert.equal(dependencyContextCandidate(m,{seed:publicFixture.seed,handoff:{...publicFixture.handoff,manifestHash:'current-be6-manifest'}}),base);
+  for(const field of Object.keys(m.candidate)){const changed=structuredClone(m);changed.candidate[field]=field==='sha'?DEPENDENCY.candidate.sha:'changed';assert.throws(()=>dependencyContextCandidate(changed),{code:'DEPENDENCY_CONTEXT_REQUIRED'});}
+  for(const patch of [{sha:DEPENDENCY.candidate.sha},{sourceProfile:DEPENDENCY.candidate.sourceProfile},{extra:true}])assert.throws(()=>dependencyContextCandidate({...m,candidate:{...m.candidate,...patch}}),{code:'DEPENDENCY_CONTEXT_REQUIRED'});
+  for(const dependencies of [undefined,null,{}, {...m.dependencies,extra:true}])assert.throws(()=>dependencyContextCandidate({...m,dependencies}),{code:'DEPENDENCY_CONTEXT_REQUIRED'});
+  for(const mutate of [s=>{s.files[0].sha256='f'.repeat(64);},s=>{s.files[0].bytes++;},s=>{s.files.pop();},s=>{s.credentialSha256='f'.repeat(64);},s=>{s.recipientPublicKeySha256='f'.repeat(64);},s=>{s.envelopeSha256='f'.repeat(64);},s=>{s.extra=true;}]){const seed=structuredClone(publicFixture.seed);mutate(seed);assert.throws(()=>dependencyContextCandidate(m,{seed}),{code:'DEPENDENCY_CONTEXT_REQUIRED'});}
+  for(const field of ['candidateSha','originalCandidateSha','candidateSalesforceSourceSha256','relevantInputs','artifacts']){const handoff=structuredClone(publicFixture.handoff);handoff[field]='changed';assert.throws(()=>dependencyContextCandidate(m,{handoff}),{code:'DEPENDENCY_CONTEXT_REQUIRED'});}
+});
+
+test('actual be6 CLI opens all four trusted jobs with original AAD and refuses wrong key', t => {
+  for(const job of ['dependencies_before','publish_before','dependencies_after','publish_after']){const f=archive(t,true,ORDINARY),r=cli(f,job);assert.equal(r.status,0,r.stderr);for(const file of f.files)assert.deepEqual(readFileSync(join(f.env.FCOS_HOSTED_DEPENDENCY_SETUP_OPENED_DIRECTORY,file.path)),file.bytes);assert.equal(f.manifest.candidate.sha,ORDINARY.candidate.sha);}
+  const f=archive(t,true,ORDINARY),r=cli(f,'dependencies_before',{FCOS_HOSTED_GITHUB_READ_TOKEN:'SYNTHETIC-wrong-token-12345'});assert.equal(r.status,1);assert.equal(r.stderr.trim(),'KEY_BINDING_REQUIRED');assert.equal(existsSync(f.env.FCOS_HOSTED_DEPENDENCY_SETUP_OPENED_DIRECTORY),false);assert.equal(r.stdout,'');assert.equal(r.stderr.includes(token),false);
+});
+test('actual be6 qualification opener retains source and typed baseline admission', t => {const f=qualificationArchive(t,ORDINARY),r=cli(f,'dependencies_before');assert.equal(r.status,0,r.stderr);assert.equal(f.setup.qualificationSource.candidateSha,ORDINARY.candidate.sha);for(const file of f.files)assert.deepEqual(readFileSync(join(f.env.FCOS_HOSTED_DEPENDENCY_SETUP_OPENED_DIRECTORY,file.path)),file.bytes);});
+test('actual be6 preservation consumer keeps original AAD and wrong database key refusal', t => assertInnerPreservation(t,ORDINARY));
+test('actual be6 NomB consumer keeps original handoff and evidence time', t => assertNomBContext(t,ORDINARY));

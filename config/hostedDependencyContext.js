@@ -77,9 +77,46 @@ export const RUNTIME_METERING_DEPENDENCY_CONTEXT = freeze({
   "handoffSha256": "0e5c9447a34c13f2c5d746f36ce2077f8eefa7778e0601095ff4bd9dc3885e3d"
 });
 
+// This exact runtime dependency child preserves the sealed parent dependencies.
+// Only its complete admitted source tuple may reuse the original AAD.
+export const RUNTIME_DEPENDENCY_CONTEXT = freeze({
+  "candidate": {
+    "sha": "9152fa655b6e507a568d773534404843595fe323",
+    "sourceProfile": "compat_runtime_dependency_20261024",
+    "sourceSha256": "d460d7c3a665799f229bec782322e7a97a52122e4c4ec75bad51551be82ec840",
+    "lockSha256": "9b3d6eb4824ea8688022b9ba249041e25c44b8cebc5443d59c55d8a2da5da378",
+    "configurationSha256": "9efd6b2020d05fa3f8e866cca7e7530031be97af3f9c8fc3d8b8eed284ffa7d4",
+    "salesforceSourceSha256": "4c2594c9986269e492487448d402334f43db35b06cb9c409377e728482739c64",
+    "sourceInputsSha256": "728ddf938efc5d89db1801038c4527de6773348d3e54aa141b040e48827c4ae7",
+    "branch": "codex/hosted-release-consolidation-20261017"
+  },
+  "contextCandidateSha": "2ef733d17dd12314c72971c2220b2b09903a6bf0",
+  "dependenciesSha256": "e0e2debcd48c8575a63ecd316a5853f9815625ce7224c2f31ef808ee57fe3067",
+  "seedSha256": "39dd8056e12b276ce31f08e0f9534fc7083b4cb0020ad4805c229d40e49297bf",
+  "handoffSha256": "0e5c9447a34c13f2c5d746f36ce2077f8eefa7778e0601095ff4bd9dc3885e3d"
+});
+
+// Exact ordinary-admission successor preserves only the original immutable dependency context.
+export const ORDINARY_ADMISSION_DEPENDENCY_CONTEXT = freeze({
+  "candidate": {
+    "sha": "be6daf6162480ca77ec8d4f04fe5aaa5b228a22c",
+    "sourceProfile": "compat_runtime_ordinary_admission_20261025",
+    "sourceSha256": "e4936669ba9a4874852d7c105ff48e5ab0cfb7fb56c46cee4875f674d33dd49f",
+    "lockSha256": "9b3d6eb4824ea8688022b9ba249041e25c44b8cebc5443d59c55d8a2da5da378",
+    "configurationSha256": "9efd6b2020d05fa3f8e866cca7e7530031be97af3f9c8fc3d8b8eed284ffa7d4",
+    "salesforceSourceSha256": "4c2594c9986269e492487448d402334f43db35b06cb9c409377e728482739c64",
+    "sourceInputsSha256": "f8d10f4b690cea4466563013dfed3e41aad7423989023b8ce787d9d961d2dfa5",
+    "branch": "codex/hosted-release-consolidation-20261017"
+  },
+  "contextCandidateSha": "2ef733d17dd12314c72971c2220b2b09903a6bf0",
+  "dependenciesSha256": "e0e2debcd48c8575a63ecd316a5853f9815625ce7224c2f31ef808ee57fe3067",
+  "seedSha256": "39dd8056e12b276ce31f08e0f9534fc7083b4cb0020ad4805c229d40e49297bf",
+  "handoffSha256": "0e5c9447a34c13f2c5d746f36ce2077f8eefa7778e0601095ff4bd9dc3885e3d"
+});
+
 export function dependencyContextCandidate(manifest, { seed, handoff } = {}) {
   const candidate = manifest?.candidate;
-  const pin = [DIAGNOSTIC_DEPENDENCY_CONTEXT, VERIFICATION_DEPENDENCY_CONTEXT, MEASUREMENT_DEPENDENCY_CONTEXT, RUNTIME_METERING_DEPENDENCY_CONTEXT].find(value =>
+  const pin = [DIAGNOSTIC_DEPENDENCY_CONTEXT, VERIFICATION_DEPENDENCY_CONTEXT, MEASUREMENT_DEPENDENCY_CONTEXT, RUNTIME_METERING_DEPENDENCY_CONTEXT, RUNTIME_DEPENDENCY_CONTEXT, ORDINARY_ADMISSION_DEPENDENCY_CONTEXT].find(value =>
     candidate?.sha === value.candidate.sha || candidate?.sourceProfile === value.candidate.sourceProfile);
   if (!pin) return candidate?.sha;
   const need = value => { if (!value) throw Object.assign(new Error('DEPENDENCY_CONTEXT_REQUIRED'), { code: 'DEPENDENCY_CONTEXT_REQUIRED' }); };

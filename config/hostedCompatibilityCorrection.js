@@ -222,9 +222,48 @@ export const COMPATIBILITY_RUNTIME_DEPENDENCY_CORRECTION = Object.freeze({
   "salesforceMetadataChanged": false,
   "cronSchedulesChanged": false
 });
+// Exact child uses ordinary Connections admission; all legacy financial paths stay unchanged.
+export const COMPATIBILITY_RUNTIME_ORDINARY_ADMISSION_CORRECTION = Object.freeze({
+  "baseSha": "9152fa655b6e507a568d773534404843595fe323",
+  "candidateSha": "be6daf6162480ca77ec8d4f04fe5aaa5b228a22c",
+  "sourceProfile": "compat_runtime_ordinary_admission_20261025",
+  "kind": "explicit_runtime_ordinary_connections_admission",
+  "probeProtocol": "xero_metered_v1",
+  "files": [
+    {
+      "path": "api/_xeroRuntimeObservation.js",
+      "sha256": "62cab83bf62cdc2711a8aad763c0661a51bdf817b8f6305a555e8f689bf10b0c",
+      "gitBlob": "eba1436a1ac86bb74313ba6f26870ff6f712d457"
+    },
+    {
+      "path": "api/_xeroSharedControl.js",
+      "sha256": "e42d0c5861fafb1c352f5f6d95341a0a65480a7223f79e7bd1304a621cbd23e8",
+      "gitBlob": "7e26e5a2d30ef74724ba4583b7479265108d0220"
+    },
+    {
+      "path": "tests/connectionRuntime.test.js",
+      "sha256": "6082e5d61f69db7251d27cc0f6ff6e94a4a7e6c5ae3bfc1b4424fcf129546937",
+      "gitBlob": "c7f8bdbe7ee1268fa5bb6146b68e14d316dc2a63"
+    },
+    {
+      "path": "tests/xeroRuntimeObservation.test.js",
+      "sha256": "799cbef9938f72cb239d0a564845a848204a32f156a944c5dd872211b7b2c31e",
+      "gitBlob": "0e70aed75f526241c6edab16c5cfa242ad223c88"
+    },
+    {
+      "path": "tests/xeroSharedControl.test.js",
+      "sha256": "6f94f09092b1fe040a44c9247ff87d9e5dd8c90c47fdaa1fa95216ec2c21dcf2",
+      "gitBlob": "dbf94cd5104ed259370022af0619cbb38a82186e"
+    }
+  ],
+  "existingUi": false,
+  "handoffs": [],
+  "salesforceMetadataChanged": false,
+  "cronSchedulesChanged": false
+});
 export function isFirstRuntimeCandidateSha(value) {
   return value === COMPATIBILITY_CORRECTION.baseSha || value === COMPATIBILITY_CORRECTION.candidateSha
-    || value === COMPATIBILITY_CONFIGURATION_CORRECTION.candidateSha || value === COMPATIBILITY_DIAGNOSTIC_CORRECTION.candidateSha || value === COMPATIBILITY_VERIFICATION_CORRECTION.candidateSha || value === COMPATIBILITY_MEASUREMENT_CORRECTION.candidateSha || value === COMPATIBILITY_RUNTIME_METERING_CORRECTION.candidateSha || value === COMPATIBILITY_RUNTIME_DEPENDENCY_CORRECTION.candidateSha;
+    || value === COMPATIBILITY_CONFIGURATION_CORRECTION.candidateSha || value === COMPATIBILITY_DIAGNOSTIC_CORRECTION.candidateSha || value === COMPATIBILITY_VERIFICATION_CORRECTION.candidateSha || value === COMPATIBILITY_MEASUREMENT_CORRECTION.candidateSha || value === COMPATIBILITY_RUNTIME_METERING_CORRECTION.candidateSha || value === COMPATIBILITY_RUNTIME_DEPENDENCY_CORRECTION.candidateSha || value === COMPATIBILITY_RUNTIME_ORDINARY_ADMISSION_CORRECTION.candidateSha;
 }
 export function firstRuntimeCandidateProfile(value) {
   return value === COMPATIBILITY_CORRECTION.baseSha ? 'frozen_04ee'
@@ -234,12 +273,13 @@ export function firstRuntimeCandidateProfile(value) {
           : value === COMPATIBILITY_VERIFICATION_CORRECTION.candidateSha ? COMPATIBILITY_VERIFICATION_CORRECTION.sourceProfile
             : value === COMPATIBILITY_MEASUREMENT_CORRECTION.candidateSha ? COMPATIBILITY_MEASUREMENT_CORRECTION.sourceProfile
               : value === COMPATIBILITY_RUNTIME_METERING_CORRECTION.candidateSha ? COMPATIBILITY_RUNTIME_METERING_CORRECTION.sourceProfile
-                : value === COMPATIBILITY_RUNTIME_DEPENDENCY_CORRECTION.candidateSha ? COMPATIBILITY_RUNTIME_DEPENDENCY_CORRECTION.sourceProfile : null;
+                : value === COMPATIBILITY_RUNTIME_DEPENDENCY_CORRECTION.candidateSha ? COMPATIBILITY_RUNTIME_DEPENDENCY_CORRECTION.sourceProfile
+                  : value === COMPATIBILITY_RUNTIME_ORDINARY_ADMISSION_CORRECTION.candidateSha ? COMPATIBILITY_RUNTIME_ORDINARY_ADMISSION_CORRECTION.sourceProfile : null;
 }
 // Old immutable compatibility source cannot acquire a new endpoint protocol by
 // adding a manifest marker. Other application source may explicitly opt in.
 export function runtimeProbeProtocolMatches(candidate, protocol) {
-  const pin = [COMPATIBILITY_RUNTIME_METERING_CORRECTION, COMPATIBILITY_RUNTIME_DEPENDENCY_CORRECTION]
+  const pin = [COMPATIBILITY_RUNTIME_METERING_CORRECTION, COMPATIBILITY_RUNTIME_DEPENDENCY_CORRECTION, COMPATIBILITY_RUNTIME_ORDINARY_ADMISSION_CORRECTION]
     .find(value => candidate?.sha === value.candidateSha || candidate?.sourceProfile === value.sourceProfile);
   if (pin)
     return candidate.sha === pin.candidateSha && candidate.sourceProfile === pin.sourceProfile && protocol === pin.probeProtocol;

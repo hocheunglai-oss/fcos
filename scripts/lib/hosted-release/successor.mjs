@@ -1,4 +1,4 @@
-import { COMPATIBILITY_CONFIGURATION_CORRECTION, COMPATIBILITY_DIAGNOSTIC_CORRECTION, COMPATIBILITY_RUNTIME_DEPENDENCY_CORRECTION } from '../../../config/hostedCompatibilityCorrection.js';
+import { COMPATIBILITY_CONFIGURATION_CORRECTION, COMPATIBILITY_DIAGNOSTIC_CORRECTION, COMPATIBILITY_RUNTIME_DEPENDENCY_CORRECTION, COMPATIBILITY_RUNTIME_ORDINARY_ADMISSION_CORRECTION } from '../../../config/hostedCompatibilityCorrection.js';
 import { canonical, digest, fail, FROZEN_COMPATIBILITY_SHA, validateManifest } from './contract.mjs';
 import { hostedProof } from './observations.mjs';
 
@@ -28,6 +28,14 @@ export const RUNTIME_DEPENDENCY_SUCCESSOR_PRODUCTION = Object.freeze({
   candidateSha: COMPATIBILITY_RUNTIME_DEPENDENCY_CORRECTION.candidateSha,
   sourceProfile: COMPATIBILITY_RUNTIME_DEPENDENCY_CORRECTION.sourceProfile,
   sourceSha256: 'd460d7c3a665799f229bec782322e7a97a52122e4c4ec75bad51551be82ec840',
+});
+
+// Exact ordinary-admission child still requires its own completed live Production proof.
+export const RUNTIME_ORDINARY_ADMISSION_SUCCESSOR_PRODUCTION = Object.freeze({
+  ...CONFIGURATION_SUCCESSOR_PRODUCTION,
+  candidateSha: COMPATIBILITY_RUNTIME_ORDINARY_ADMISSION_CORRECTION.candidateSha,
+  sourceProfile: COMPATIBILITY_RUNTIME_ORDINARY_ADMISSION_CORRECTION.sourceProfile,
+  sourceSha256: 'e4936669ba9a4874852d7c105ff48e5ab0cfb7fb56c46cee4875f674d33dd49f',
 });
 
 function configurationSuccessorAccepted({ manifest, prior, registered, actual, observation, reference, now, pin }) {
@@ -66,7 +74,7 @@ export async function collectCompatibilitySuccessor({ manifest, coordinator, env
   const actual = observation?.result;
   const original = registered?.candidate?.sha === FROZEN_COMPATIBILITY_SHA
     && actual?.sha === FROZEN_COMPATIBILITY_SHA && manifest.previousProduction.sha === FROZEN_COMPATIBILITY_SHA;
-  const pin = [CONFIGURATION_SUCCESSOR_PRODUCTION, DIAGNOSTIC_SUCCESSOR_PRODUCTION, RUNTIME_DEPENDENCY_SUCCESSOR_PRODUCTION]
+  const pin = [CONFIGURATION_SUCCESSOR_PRODUCTION, DIAGNOSTIC_SUCCESSOR_PRODUCTION, RUNTIME_DEPENDENCY_SUCCESSOR_PRODUCTION, RUNTIME_ORDINARY_ADMISSION_SUCCESSOR_PRODUCTION]
     .find(value => registered?.candidate?.sha === value.candidateSha);
   const configurationSuccessor = pin && actual
     && configurationSuccessorAccepted({ manifest, prior, registered, actual, observation, reference, now, pin });

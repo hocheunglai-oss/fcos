@@ -43,7 +43,8 @@
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
         "compat_runtime_metering_20261024",
-        "compat_runtime_dependency_20261024"
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
       ]
     },
     {
@@ -77,7 +78,8 @@
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
         "compat_runtime_metering_20261024",
-        "compat_runtime_dependency_20261024"
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
       ]
     },
     {
@@ -112,7 +114,8 @@
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
         "compat_runtime_metering_20261024",
-        "compat_runtime_dependency_20261024"
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
       ],
       "profileCommands": {
         "controller_v2": [
@@ -198,7 +201,8 @@
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
         "compat_runtime_metering_20261024",
-        "compat_runtime_dependency_20261024"
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
       ]
     },
     {
@@ -243,7 +247,8 @@
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
         "compat_runtime_metering_20261024",
-        "compat_runtime_dependency_20261024"
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
       ]
     },
     {
@@ -277,7 +282,8 @@
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
         "compat_runtime_metering_20261024",
-        "compat_runtime_dependency_20261024"
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
       ]
     },
     {
@@ -333,7 +339,8 @@
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
         "compat_runtime_metering_20261024",
-        "compat_runtime_dependency_20261024"
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
       ],
       "profileCommands": {
         "controller_v2": [
@@ -389,7 +396,8 @@
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
         "compat_runtime_metering_20261024",
-        "compat_runtime_dependency_20261024"
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
       ],
       "artifactInputs": [
         "dist"
@@ -455,7 +463,8 @@
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
         "compat_runtime_metering_20261024",
-        "compat_runtime_dependency_20261024"
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
       ]
     },
     {
@@ -491,7 +500,8 @@
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
         "compat_runtime_metering_20261024",
-        "compat_runtime_dependency_20261024"
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
       ]
     },
     {
@@ -554,7 +564,8 @@
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
         "compat_runtime_metering_20261024",
-        "compat_runtime_dependency_20261024"
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
       ]
     },
     {
@@ -590,7 +601,8 @@
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
         "compat_runtime_metering_20261024",
-        "compat_runtime_dependency_20261024"
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
       ]
     },
     {
@@ -628,7 +640,8 @@
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
         "compat_runtime_metering_20261024",
-        "compat_runtime_dependency_20261024"
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
       ],
       "profileCommands": {
         "compat_verification_harness_20261024": [
@@ -710,6 +723,22 @@
               "FCOS_MIGRATION_PARENT_PROOF_FILE": "/controller/output/disposable-migration-server.json"
             }
           }
+        ],
+        "compat_runtime_ordinary_admission_20261025": [
+          {
+            "program": "node",
+            "args": [
+              "scripts/verify-migrations.mjs"
+            ],
+            "env": {
+              "FCOS_MIGRATION_DATABASE_URL": "postgresql://postgres:postgres@127.0.0.1:54322/postgres",
+              "FCOS_MIGRATION_DISPOSABLE_CLUSTER": "1",
+              "FCOS_MIGRATION_DOCKER_CONTAINER": "supabase_db_fcos",
+              "FCOS_REQUIRE_LIVE_MIGRATION_CHECK": "1",
+              "FCOS_MIGRATION_PROJECT_ID": "fcos",
+              "FCOS_MIGRATION_PARENT_PROOF_FILE": "/controller/output/disposable-migration-server.json"
+            }
+          }
         ]
       }
     },
@@ -757,7 +786,8 @@
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
         "compat_runtime_metering_20261024",
-        "compat_runtime_dependency_20261024"
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
       ]
     },
     {
@@ -795,7 +825,8 @@
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
         "compat_runtime_metering_20261024",
-        "compat_runtime_dependency_20261024"
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
       ]
     },
     {
@@ -836,7 +867,8 @@
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
         "compat_runtime_metering_20261024",
-        "compat_runtime_dependency_20261024"
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
       ]
     },
     {
@@ -875,7 +907,8 @@
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
         "compat_runtime_metering_20261024",
-        "compat_runtime_dependency_20261024"
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
       ]
     },
     {
@@ -914,7 +947,8 @@
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
         "compat_runtime_metering_20261024",
-        "compat_runtime_dependency_20261024"
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
       ]
     },
     {
@@ -952,7 +986,8 @@
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
         "compat_runtime_metering_20261024",
-        "compat_runtime_dependency_20261024"
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
       ]
     },
     {
@@ -990,7 +1025,8 @@
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
         "compat_runtime_metering_20261024",
-        "compat_runtime_dependency_20261024"
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
       ]
     },
     {
@@ -1028,7 +1064,8 @@
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
         "compat_runtime_metering_20261024",
-        "compat_runtime_dependency_20261024"
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
       ]
     },
     {
@@ -1066,7 +1103,8 @@
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
         "compat_runtime_metering_20261024",
-        "compat_runtime_dependency_20261024"
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
       ]
     },
     {
@@ -1104,7 +1142,8 @@
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
         "compat_runtime_metering_20261024",
-        "compat_runtime_dependency_20261024"
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
       ]
     },
     {
@@ -1142,7 +1181,8 @@
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
         "compat_runtime_metering_20261024",
-        "compat_runtime_dependency_20261024"
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
       ]
     },
     {
@@ -1168,7 +1208,8 @@
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
         "compat_runtime_metering_20261024",
-        "compat_runtime_dependency_20261024"
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
       ]
     },
     {
@@ -1194,7 +1235,8 @@
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
         "compat_runtime_metering_20261024",
-        "compat_runtime_dependency_20261024"
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
       ]
     },
     {
@@ -1233,7 +1275,8 @@
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
         "compat_runtime_metering_20261024",
-        "compat_runtime_dependency_20261024"
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
       ],
       "artifactInputs": [
         "dist",
@@ -1278,7 +1321,8 @@
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
         "compat_runtime_metering_20261024",
-        "compat_runtime_dependency_20261024"
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
       ],
       "artifactInputs": [
         "dist",
@@ -1316,7 +1360,8 @@
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
         "compat_runtime_metering_20261024",
-        "compat_runtime_dependency_20261024"
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
       ]
     },
     {
@@ -1362,7 +1407,8 @@
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
         "compat_runtime_metering_20261024",
-        "compat_runtime_dependency_20261024"
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
       ]
     },
     {
@@ -1453,7 +1499,8 @@
         "compat_verification_harness_20261024",
         "compat_database_measurement_20261024",
         "compat_runtime_metering_20261024",
-        "compat_runtime_dependency_20261024"
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
       ]
     }
   ],
@@ -1507,6 +1554,12 @@
       "candidateSha": "9152fa655b6e507a568d773534404843595fe323",
       "purpose": "Complete original accepted business release scope.",
       "description": "Real child of1e ships the missing public runtime policy and scoped Connections RPC wiring only; original financial admission and all historical profiles remain unchanged.",
+      "probeProtocol": "xero_metered_v1"
+    },
+    "compat_runtime_ordinary_admission_20261025": {
+      "candidateSha": "be6daf6162480ca77ec8d4f04fe5aaa5b228a22c",
+      "purpose": "Complete original accepted business release scope.",
+      "description": "Exact five-file child of9152 uses the installed ordinary Connections RPC through a strict read-only runtime facade; original financial admission, all31 checks and inherited commands remain unchanged.",
       "probeProtocol": "xero_metered_v1"
     }
   }
