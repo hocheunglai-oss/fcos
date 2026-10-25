@@ -40,7 +40,7 @@ function clientFixture(profile = { id:'admin', email:'admin@example.test', activ
     rpc:async (name,p) => {
       if(name==='xero_shared_status'||name==='xero_shared_release')return {data:quota};
       if(name==='xero_shared_reserve')return {data:{id:p.p_id,tenant_id:p.p_tenant_id,owner_key:p.p_owner_key,state:'active',operation_remaining:1,verification_remaining:0,verification_reserved:0,expires_at:new Date(time+60000).toISOString()}};
-      if(name==='xero_shared_admit_scoped_v1')return {data:{requestId:p.p_id,tenantId:p.p_tenant_id,deadlineAt:new Date(time+120000).toISOString()}};
+      if(name==='xero_shared_admit')return {data:{requestId:p.p_id,tenantId:p.p_tenant_id,deadlineAt:new Date(time+120000).toISOString()}};
       if(name==='xero_shared_observe')return {data:{recorded:true}};
       throw Error('unexpected RPC');
     },

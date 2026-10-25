@@ -13,10 +13,10 @@ test('runtime connection admission is scoped to one metadata GET and preserves e
     calls.push({ name, payload }); return { data: {}, error: null };
   } });
   const scope = { tenantId: connection.tenantId, tokenVersion: 1, requestId: 'owned-request', budgetId: 'owned-budget' };
-  await control.admitRuntimeConnections({ ...scope, method: 'POST', resourcePath: '/Invoices', payloadJson: { ignored: true } });
-  assert.deepEqual(calls[0], { name: 'xero_shared_admit_scoped_v1', payload: {
+  await control.admitRuntimeConnectionRead({ ...scope, method: 'GET', resourceKey: 'Connections', resourcePath: '/connections' });
+  assert.deepEqual(calls[0], { name: 'xero_shared_admit', payload: {
     p_tenant_id: scope.tenantId, p_id: scope.requestId, p_token_version: 1,
-    p_method: 'GET', p_resource_key: 'Connections', p_resource_path: '/connections', p_payload_json: null,
+    p_method: 'GET', p_resource_key: 'Connections',
     p_budget_id: scope.budgetId, p_phase: 'operation', p_probe_id: null,
   } });
   await control.admit({ ...scope, method: 'POST', resourceKey: 'Invoices', budgetPhase: 'verification' });

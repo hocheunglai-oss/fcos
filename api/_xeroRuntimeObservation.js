@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { createXeroSharedControl } from './_xeroSharedControl.js';
+import { createRuntimeXeroReadControl } from './_xeroSharedControl.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const HASH = /^[0-9a-f]{64}$/;
@@ -7,10 +7,6 @@ const URL = 'https://api.xero.com/connections';
 const fail = code => { throw Object.assign(new Error(code), { code }); };
 const plain = value => value && Object.getPrototypeOf(value) === Object.prototype;
 export const runtimeProbeRequestId = value => typeof value === 'string' && UUID.test(value);
-function runtimeSharedControl(client) {
-  const control = createXeroSharedControl(client);
-  return { ...control, admit: control.admitRuntimeConnections };
-}
 export function createRuntimeProbeDeadline({ durationMs = 25000, monotonic = () => performance.now() } = {}) {
   const end = monotonic() + durationMs;
   const remaining = (maximum = 5000, minimum = 1) => {
@@ -72,7 +68,7 @@ async function bodyJson(response) {
  * Any refusal/throw/unknown stops ALL subsequent RPCs, including release.
  */
 export async function observeRuntimeXero({ client, actorId, requestId, binding, tenantId, fetchImpl = fetch,
-  now = Date.now, control = runtimeSharedControl(client), deadline = createRuntimeProbeDeadline() } = {}) {
+  now = Date.now, control = createRuntimeXeroReadControl(client), deadline = createRuntimeProbeDeadline() } = {}) {
   if (!runtimeProbeRequestId(actorId) || !runtimeProbeRequestId(requestId) || !runtimeProbeRequestId(tenantId)
     || !/^dpl_[A-Za-z0-9]+$/.test(binding?.deploymentId || '') || !/^[0-9a-f]{40}$/.test(binding?.sha || '')
     || !HASH.test(binding?.sourceDigest || '')) fail('RUNTIME_XERO_SCOPE_INVALID');

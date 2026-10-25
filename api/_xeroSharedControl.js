@@ -68,13 +68,17 @@ export function createXeroSharedControl(client) {
     admit: ({ tenantId, tokenVersion, requestId = randomUUID(), method, resourceKey, budgetId = null, budgetPhase = 'operation', probeId = null }) => rpc('xero_shared_admit', {
       p_tenant_id: tenantId, p_id: requestId, p_token_version: tokenVersion, p_method: method, p_resource_key: resourceKey, p_budget_id: budgetId, p_phase: budgetPhase, p_probe_id: probeId,
     }),
-    // The compatibility observer uses the current scoped RPC without changing
-    // admission for any existing accounting caller in this frozen application.
-    admitRuntimeConnections: ({ tenantId, tokenVersion, requestId, budgetId }) => rpc('xero_shared_admit_scoped_v1', {
-      p_tenant_id: tenantId, p_id: requestId, p_token_version: tokenVersion,
-      p_method: 'GET', p_resource_key: 'Connections', p_resource_path: '/connections', p_payload_json: null,
-      p_budget_id: budgetId, p_phase: 'operation', p_probe_id: null,
-    }),
+    // Runtime verification uses the installed ordinary admission contract. The
+    // draft-exception wrapper is a separate financial scope and is not a runtime
+    // prerequisite. Never fall back here after a failed scoped admission.
+    admitRuntimeConnectionRead: ({ tenantId, tokenVersion, requestId, method, resourceKey, resourcePath, payloadJson = null, budgetId, budgetPhase = 'operation', probeId = null }) => {
+      if (method !== 'GET' || resourceKey !== 'Connections' || resourcePath !== '/connections'
+        || payloadJson !== null || probeId !== null || budgetPhase !== 'operation'
+        || typeof budgetId !== 'string' || !budgetId || typeof requestId !== 'string' || !requestId)
+        throw xeroControlError('XERO_RUNTIME_READ_SCOPE_INVALID');
+      return rpc('xero_shared_admit', { p_tenant_id: tenantId, p_id: requestId, p_token_version: tokenVersion,
+        p_method: 'GET', p_resource_key: 'Connections', p_budget_id: budgetId, p_phase: 'operation', p_probe_id: null });
+    },
     observe: ({ tenantId, requestId, status = null, headers = null, outcomeUnknown = false }) => rpc('xero_shared_observe', {
       p_tenant_id: tenantId, p_request_id: requestId, p_status: status, p_snapshot: headers ? xeroRateLimitSnapshot(headers) : {}, p_outcome_unknown: outcomeUnknown,
     }),
@@ -84,6 +88,11 @@ export function createXeroSharedControl(client) {
     failRefresh: ({ tenantId, tokenVersion, leaseId, state }) => rpc('xero_refresh_fail', { p_tenant_id: tenantId, p_expected_version: tokenVersion, p_lease_id: leaseId, p_state: state }),
     reconnect: ({ tokenVersion, connection }) => rpc('xero_reconnect_store', { p_expected_version: tokenVersion, p_connection: connection }),
   };
+}
+export function createRuntimeXeroReadControl(client) {
+  const shared = createXeroSharedControl(client);
+  return Object.freeze({ status: shared.status, reserve: shared.reserve, admit: shared.admitRuntimeConnectionRead,
+    observe: shared.observe, release: shared.release });
 }
 export function readXeroSharedStatus(connection, options = {}) {
   return xeroSharedContext(connection, options).sharedControl.status(connection.tenantId);

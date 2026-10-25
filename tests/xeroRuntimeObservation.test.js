@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { observeRuntimeXero, runtimeXeroBudgetId, createRuntimeProbeDeadline } from '../api/_xeroRuntimeObservation.js';
+import { createRuntimeXeroReadControl } from '../api/_xeroSharedControl.js';
 
 const actorId = '11111111-1111-4111-8111-111111111111', requestId = '22222222-2222-4222-8222-222222222222';
 const tenantId = '33333333-3333-4333-8333-333333333333';
@@ -56,6 +57,51 @@ test('one live admin/source-bound read uses only ordinary current quota then rep
   assert.deepEqual(f.calls, ['session', 'status', 'reserve', 'admit', 'GET', 'observe', 'release']);
   assert.deepEqual(result, { auth: { state: 'authenticated', target: tenantId, mode: 'oauth' }, runtimeValidUntil: new Date(start + 3510000).toISOString() });
   assert.doesNotMatch(JSON.stringify(result), /private|access.token|refresh.token|477/);
+});
+test('the default runtime adapter reaches the installed ordinary RPC without the draft-exception migration', async () => {
+  const f = fixture(), names = [];
+  const client = { ...f.args.client, rpc: async (name, p) => {
+    names.push(name);
+    const handlers = {
+      xero_shared_status: () => f.args.control.status(p.p_tenant_id),
+      xero_shared_reserve: () => f.args.control.reserve({ tenantId: p.p_tenant_id, budgetId: p.p_id, ownerKey: p.p_owner_key,
+        operationCalls: p.p_operation_calls, verificationCalls: p.p_verification_calls, ttlSeconds: p.p_ttl_seconds }),
+      xero_shared_admit: () => {
+        assert.deepEqual(Object.keys(p).sort(), ['p_tenant_id', 'p_id', 'p_token_version', 'p_method', 'p_resource_key', 'p_budget_id', 'p_phase', 'p_probe_id'].sort());
+        return f.args.control.admit({ tenantId: p.p_tenant_id, tokenVersion: p.p_token_version, requestId: p.p_id,
+          method: p.p_method, resourceKey: p.p_resource_key, resourcePath: '/connections', payloadJson: null,
+          budgetId: p.p_budget_id, budgetPhase: p.p_phase, probeId: p.p_probe_id });
+      },
+      xero_shared_observe: () => f.args.control.observe({ status: p.p_status, outcomeUnknown: p.p_outcome_unknown }),
+      xero_shared_release: () => f.args.control.release({ budgetId: p.p_id }),
+    };
+    assert.ok(handlers[name], `Unexpected RPC ${name}`);
+    return { data: await handlers[name](), error: null };
+  } };
+  const { control, ...args } = f.args;
+  const result = await observeRuntimeXero({ ...args, client });
+  assert.equal(result.auth.state, 'authenticated');
+  assert.deepEqual(names, ['xero_shared_status', 'xero_shared_reserve', 'xero_shared_admit', 'xero_shared_observe', 'xero_shared_release']);
+  assert.equal(f.calls.filter(x => x === 'GET').length, 1);
+});
+test('ordinary runtime admission cannot widen into an accounting, write, probe or exception request', async () => {
+  let calls = 0;
+  const control = createRuntimeXeroReadControl({ rpc: async () => { calls++; return { data: {}, error: null }; } });
+  assert.deepEqual(Object.keys(control).sort(), ['status', 'reserve', 'admit', 'observe', 'release'].sort());
+  const input = { tenantId, tokenVersion: 477, requestId, method: 'GET', resourceKey: 'Connections', resourcePath: '/connections',
+    payloadJson: null, budgetId: runtimeXeroBudgetId(requestId), budgetPhase: 'operation', probeId: null };
+  for (const change of [{ method: 'POST' }, { resourceKey: 'Invoices' }, { resourcePath: '/Invoices' },
+    { payloadJson: {} }, { probeId: actorId }, { budgetPhase: 'verification' }, { budgetId: null }, { requestId: null }])
+    await assert.rejects(async () => control.admit({ ...input, ...change }), { code: 'XERO_RUNTIME_READ_SCOPE_INVALID' });
+  assert.equal(calls, 0);
+});
+test('ordinary admission refusal makes no fallback call to the scoped exception RPC', async () => {
+  const names = [], control = createRuntimeXeroReadControl({ rpc: async name => {
+    names.push(name); return { error: { message: 'XERO_RESERVE_PROTECTED private detail' } };
+  } });
+  await assert.rejects(control.admit({ tenantId, tokenVersion: 477, requestId, method: 'GET', resourceKey: 'Connections',
+    resourcePath: '/connections', budgetId: runtimeXeroBudgetId(requestId) }), { code: 'XERO_RESERVE_PROTECTED' });
+  assert.deepEqual(names, ['xero_shared_admit']);
 });
 test('same public request cannot get a rearmed budget or repeat its GET', async () => {
   const f = fixture(); await f.run(); const before = f.calls.length;
