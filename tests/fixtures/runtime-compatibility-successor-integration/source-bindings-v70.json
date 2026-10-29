@@ -1,0 +1,1349 @@
+{
+  "schemaVersion": 70,
+  "purpose": "Strict current-source binding for reviewed transport diagnostics and credential-free sentinel POST probe; no provider or financial authority added",
+  "sourceCommit": "1cb27ed2ddf1e13f8bd992e7e2e19c8b17f33c58",
+  "sourceTree": "e4adfdd15fa2e042f02e374d97f88f3cacd96ef9",
+  "historicalSourceBindingsSha256": "4e33b8b42a002cc46fde0fce41679417f25c58474cf474ca78af753c9b88e379",
+  "historicalPublicManifestSha256": "91e8ba3fdacb7cd03a2bed574248920a2d6416aa043c4e5daafd7a5f5ac53257",
+  "publicManifestSha256": "947b91a9731fb356a77f813d9bdc3cf2d47a087de554f2a1a4cf8db67327b500",
+  "publicPackSha256": "edb0c7a0d0ac7f45dba5fcfc8f6d98cbbf9667f01713a5d7f7764dc7e7380628",
+  "sources": [
+    {
+      "path": ".codex/config.toml",
+      "byteLength": 3617,
+      "sha256": "dbb025f5ff350045d5537402861a95e756b6b6234f83a4b0d83353a59c0fcb26"
+    },
+    {
+      "path": ".codex/control-policy.json",
+      "byteLength": 369,
+      "sha256": "5471c8173549b06852d25b2e3d7dfb07acfcfbbff1f7fe99ef1072f31734165c"
+    },
+    {
+      "path": ".codex/control-validation.mjs",
+      "byteLength": 2956,
+      "sha256": "47e10bbc5a471a91e26c0347363c35ce78af6f83388c659c2e2f63f484fc23b4"
+    },
+    {
+      "path": ".codex/environments/environment-2.toml",
+      "byteLength": 629,
+      "sha256": "47b46dd529e329cc51e3cce11e3042f041f470226e480bdc6b6634d49e67e19f"
+    },
+    {
+      "path": ".codex/environments/environment.toml",
+      "byteLength": 629,
+      "sha256": "47b46dd529e329cc51e3cce11e3042f041f470226e480bdc6b6634d49e67e19f"
+    },
+    {
+      "path": ".codex/README.md",
+      "byteLength": 3723,
+      "sha256": "c419b279e0b9111019012dc3eb89e512631e9d30d2175cc8cca39982df9143cf"
+    },
+    {
+      "path": ".codex/setup.mjs",
+      "byteLength": 6110,
+      "sha256": "b70610746072fb1566b536e61875d272c20ee183ae61c299cec5d0e8ffff6198"
+    },
+    {
+      "path": ".githooks/pre-push",
+      "byteLength": 4447,
+      "sha256": "20f62168c5de62165b81f93ec1ad099b50ed16e52c78be7a4f9189a169a40c1f"
+    },
+    {
+      "path": ".github/actions/release-executor/action.yml",
+      "byteLength": 275,
+      "sha256": "b8461444a58f2eb721e35d8ec38123821b6fc79e08a02b2cb2cc00b56e011b9b"
+    },
+    {
+      "path": ".github/actions/runtime-compatibility-materials/action.yml",
+      "byteLength": 212,
+      "sha256": "d2b8f5ad8afda4e6210a9bb654e1192deded729113a9dca96375c05c71eb4e1b"
+    },
+    {
+      "path": ".github/compatibility-admission/04ee-coordination-backend-review.json",
+      "byteLength": 15993,
+      "sha256": "5a890182a706b862f68a37c5b8edfc20a4afa132776003a7ad5d6cb27f445996"
+    },
+    {
+      "path": ".github/qualification/hosted-release-bootstrap.yml",
+      "byteLength": 22444,
+      "sha256": "0f2e0d6657c78fd44efc835ec7c87124ea8bd0372ab0728a63afa86faf4f9b8a"
+    },
+    {
+      "path": ".github/quality-candidates/f4576a8c918acef686f084c505b1715de11deeb8.json",
+      "byteLength": 474,
+      "sha256": "e1c48a5ed4a65f1bfa86cc37dd3ccec195f1fb4ed8002a3cb38f6e71fc73fd74"
+    },
+    {
+      "path": ".github/workflows/authenticated-release.yml",
+      "byteLength": 4997,
+      "sha256": "2d4fa7a983bc88d98c702852f0708f79bf9a39c8df3f4d0200e3caad073d2a31"
+    },
+    {
+      "path": ".github/workflows/candidate-quality.yml",
+      "byteLength": 10353,
+      "sha256": "1ce543d4d1c28a575c03a1db8bdedff0d488f88b46c54c5c718a9fd2b481b105"
+    },
+    {
+      "path": ".github/workflows/hosted-release-controller.yml",
+      "byteLength": 64417,
+      "sha256": "831a6907a566b765b0b445e79eee280eda86e8494f61afab961d953dcf31d528"
+    },
+    {
+      "path": ".github/workflows/hosted-release-toolchain.yml",
+      "byteLength": 8350,
+      "sha256": "b0b4ff32cdc408b049e34d5674c130d345476621adfb98c4621892deae9985b7"
+    },
+    {
+      "path": ".github/workflows/hosted-release.yml",
+      "byteLength": 6022,
+      "sha256": "7ce874e947c301e9f3c1fedbd8aff4c560678aaa84402ee5c155b1297292e211"
+    },
+    {
+      "path": ".github/workflows/hosted-xero-recovery-carrier.yml",
+      "byteLength": 10607,
+      "sha256": "621fde74b2071b56e8a6b4446492788edbae1c601decd6a2fa2484d8947029ec"
+    },
+    {
+      "path": ".github/workflows/normal-role-release.yml",
+      "byteLength": 2212,
+      "sha256": "e261a23e28137bb230ced75c99a4a0fd084acff541c6e8fed4369cd479f24628"
+    },
+    {
+      "path": ".github/workflows/preview-email-proof-build.yml",
+      "byteLength": 8047,
+      "sha256": "a0dfac8504f96df23638b89c1560fa3a504eefa051a7e845b7e9c7324fe39d37"
+    },
+    {
+      "path": ".github/workflows/quality.yml",
+      "byteLength": 25640,
+      "sha256": "1b5a4698f64078371e44123a4a3c8e4056808cb22c1cd5ee0716efb18c5d1c0e"
+    },
+    {
+      "path": ".github/workflows/release-coordination-proof.yml",
+      "byteLength": 1603,
+      "sha256": "c4298afc1cd628e804c9a9692a00929b58414ddde5a4ed8595f1fa1167bab5c3"
+    },
+    {
+      "path": ".github/workflows/routine-release.yml",
+      "byteLength": 8255,
+      "sha256": "82beee5ab3c7e0cf4092efa4ddc12b760799d29ac953ab95898d3c797fb79f33"
+    },
+    {
+      "path": ".github/workflows/runtime-compatibility-normal-role.yml",
+      "byteLength": 3025,
+      "sha256": "7b3cb045e6d28549cb5d8f86c21d4919808f3867fa9695748f3b99f6dca2c534"
+    },
+    {
+      "path": ".github/workflows/runtime-compatibility-release.yml",
+      "byteLength": 5742,
+      "sha256": "d83f73f7caf129e233b94e2072127c769a34c5972d3374b46fe08d1d7e79b9a7"
+    },
+    {
+      "path": "AGENTS.md",
+      "byteLength": 19510,
+      "sha256": "77c7d597c5d3e0016765cb3e2c7c44fce67b5d3960a977be16f42c4b76eacc33"
+    },
+    {
+      "path": "api/_emailRouterHandlers.js",
+      "byteLength": 19071,
+      "sha256": "4d3e301b18fba542e9cb8adc982a7653f0f338c704501780df9b146698a644ee"
+    },
+    {
+      "path": "api/_xeroRateLimit.js",
+      "byteLength": 6378,
+      "sha256": "7620261346f77bf32eb0b611bd7d62521832480b4ad9bfb9d8488fdfc419017e"
+    },
+    {
+      "path": "config/fcosCiIdentity.js",
+      "byteLength": 570,
+      "sha256": "598a051e4a8734e03c191a23da456a02c19eadff2e32328d6a5fd08ea736f89f"
+    },
+    {
+      "path": "config/fcosConnections.js",
+      "byteLength": 26030,
+      "sha256": "36132abd2ae8d82ac19f434b495b39f26e3bab99f0e364b0d4d70eb88b0f923d"
+    },
+    {
+      "path": "config/hosted-release-policy.json",
+      "byteLength": 1158,
+      "sha256": "d6f195dd18df7970a2161af3c86555bd2121ade7cb2ee6e0772ab209ab813e7a"
+    },
+    {
+      "path": "config/hostedCompatibilityCorrection.js",
+      "byteLength": 2703,
+      "sha256": "cba3192c5fa2a7a4cbd3764f3fe812f1c30a04d2010976ce6d854873772b02d9"
+    },
+    {
+      "path": "config/hostedReleaseQualification.js",
+      "byteLength": 1890,
+      "sha256": "f49608203d65a32cab41f2b0375ae476d878166cd26edbff5595509c49e7f921"
+    },
+    {
+      "path": "config/legacy-email-baseline-proof.json",
+      "byteLength": 2348,
+      "sha256": "7f76e2a25f33841f8237f6b7db070d4fed8ac9b9b290777fa9e3cf6a341c79c1"
+    },
+    {
+      "path": "config/legacyReleaseContainment.js",
+      "byteLength": 1357,
+      "sha256": "b2ab4e9dd277636c801a37d3f846a960480ff0dd847b852292969a3cb385ced0"
+    },
+    {
+      "path": "config/preview-parity-policy.json",
+      "byteLength": 8064,
+      "sha256": "fe95da075bca9aa9ae0757a838cbd79752f6db95892c9544dfde1fe6f911c586"
+    },
+    {
+      "path": "config/release-checks-v2.json",
+      "byteLength": 30904,
+      "sha256": "6c6d7adabfbd45382238c532e33a0aac08e47174180e22e415e30d1280958404"
+    },
+    {
+      "path": "config/runtime-compatibility-setup.json",
+      "byteLength": 276,
+      "sha256": "a22557be43d23f6b85993966a8714f5fe298e26f5fb086a989dee94cb655fda9"
+    },
+    {
+      "path": "config/runtime-compatibility-successor-live.json",
+      "byteLength": 1505,
+      "sha256": "aecc93e6152c23b0bee23834f045cc2a6ae8a9fd9057c205080c6ade7614a5c0"
+    },
+    {
+      "path": "config/runtime-compatibility-successor-source.json",
+      "byteLength": 9528,
+      "sha256": "867ebce63c4b34d0a73bbcbe0749a620f912e8a13c6484da269fda3850a9f432"
+    },
+    {
+      "path": "deploy/hosted-checks.Dockerfile",
+      "byteLength": 701,
+      "sha256": "7233e2d1a1e03d829f5635fb8b480aa08acfdb6bf52cdb2020d73069367ac093"
+    },
+    {
+      "path": "docs/hosted-production-release.md",
+      "byteLength": 15908,
+      "sha256": "7e7a6255614cd8c5001c9f0fe42d4bfa4910499c4d06b9d64ed59b9827e994d1"
+    },
+    {
+      "path": "docs/hosted-release-bootstrap.md",
+      "byteLength": 21988,
+      "sha256": "c6c5457f860c772727f02443cdfa3a7c3d272cccad490246b98ff6c5571ef647"
+    },
+    {
+      "path": "docs/hosted-release-coordinator.md",
+      "byteLength": 21242,
+      "sha256": "d23507d7477742c4a221b3eed119d19620b900ac612017d67572e25f39f36396"
+    },
+    {
+      "path": "docs/hosted-release-cutover.md",
+      "byteLength": 20160,
+      "sha256": "b18ebea9de4377540013939823ddd6eb7c8398a1c03d5973ef66c6e4de97641e"
+    },
+    {
+      "path": "docs/hosted-release-toolchain.md",
+      "byteLength": 4763,
+      "sha256": "2c0f424f7fce75fa6242e160cba16381dc331beac561420f2c38bbdf41837075"
+    },
+    {
+      "path": "docs/hosted-release-verification.md",
+      "byteLength": 61133,
+      "sha256": "bec491fb4869075b34fb30cde76c0b8465dd79ade8af15c23eaa87558d9b0c2a"
+    },
+    {
+      "path": "docs/preview-email-coordination.md",
+      "byteLength": 7056,
+      "sha256": "60d6440820e299d9629ff2df4c95c86c79528c96087b4209fcce5bf4e578b714"
+    },
+    {
+      "path": "docs/release-coordination.md",
+      "byteLength": 7606,
+      "sha256": "279e7532e643da70782f03fd37fffbdb38b97e15ca22a96497a4f3d9e3e8ee4c"
+    },
+    {
+      "path": "docs/xero-recovery-late-arm.md",
+      "byteLength": 7067,
+      "sha256": "62dcd96845b544723f91b4306ca9b35f474ad6a5837e0f0fa9a86e06c179f8ad"
+    },
+    {
+      "path": "docs/xero-recovery-v2-window.md",
+      "byteLength": 4747,
+      "sha256": "aac69d651c6d280eb8385021b9e8897358f09fa4e7ab450481889f94fdee8109"
+    },
+    {
+      "path": "package-lock.json",
+      "byteLength": 433624,
+      "sha256": "13506d3330b7e82f8280fc04438738c5fe6c776d640eb4d381c3d099a266a71d"
+    },
+    {
+      "path": "package.json",
+      "byteLength": 6226,
+      "sha256": "bbf43cb997ef6c90b2f8847bb47d997127bf09c376cea0f8257567e75e575fe7"
+    },
+    {
+      "path": "playwright.config.js",
+      "byteLength": 2065,
+      "sha256": "61d124964ad02e366d35f9d63e84e9f68283253b11470a6d632d05285af3767b"
+    },
+    {
+      "path": "scripts/candidate-quality-receipt.mjs",
+      "byteLength": 5773,
+      "sha256": "6894b4aaa7b466096441935297942c168d913b31963f333bba5fd9a9a86a07f7"
+    },
+    {
+      "path": "scripts/collect-preview-parity.mjs",
+      "byteLength": 21970,
+      "sha256": "d2921172f7ca536a0137f1bb6a2b5ad14dddc1a1a12e8d967dda61a36c828237"
+    },
+    {
+      "path": "scripts/deploy-salesforce-environments.mjs",
+      "byteLength": 14482,
+      "sha256": "ac1dfafce601de010d40843df082171e1898fda6c9c4618167be2200adeecaf8"
+    },
+    {
+      "path": "scripts/fcos-keychain-migrate.swift",
+      "byteLength": 5787,
+      "sha256": "4c39b451c5f321000edb49af9433dda9a8cd751520d3a8c4b8deb439f2ee9833"
+    },
+    {
+      "path": "scripts/hosted-cutover-bootstrap.mjs",
+      "byteLength": 900,
+      "sha256": "88ace686de5b5c96c34addd9f7fef84009b5ff6e456ee2876e73401e7bdf9564"
+    },
+    {
+      "path": "scripts/hosted-network-preflight.mjs",
+      "byteLength": 1300,
+      "sha256": "7323f9e7fbefdc762737c1716f16818bb3e88b1d61afabf77abc70435ad96bdb"
+    },
+    {
+      "path": "scripts/hosted-preservation-preflight.mjs",
+      "byteLength": 4985,
+      "sha256": "379ae7a717e2757743c1860ef5befd6572f5728e3249161ba6647eeb620c6483"
+    },
+    {
+      "path": "scripts/hosted-release-checks.mjs",
+      "byteLength": 2883,
+      "sha256": "5a5daba1525dcfe1a271d162469665dfdde57748bc115185bf15ea6d1b927ad0"
+    },
+    {
+      "path": "scripts/hosted-release-cutover.mjs",
+      "byteLength": 29808,
+      "sha256": "ec04c22724eaa7bf983fdd301562ca23c279822072dc0bc25222db91dd5f1260"
+    },
+    {
+      "path": "scripts/hosted-release-dependencies.mjs",
+      "byteLength": 5099,
+      "sha256": "47cd8f642c1af19c5769d73e5d39214a1bad1cd6c25c4b7d0c3b6b5ef3f86dd6"
+    },
+    {
+      "path": "scripts/hosted-release-dependency-seed.mjs",
+      "byteLength": 15028,
+      "sha256": "6d1a2459c9ebc23fa80af89ab302fbfd776415366f534965641459d5e2247ff0"
+    },
+    {
+      "path": "scripts/hosted-release-manifest.mjs",
+      "byteLength": 22274,
+      "sha256": "22a171c254f58c7eb0922bc5b250f3f6574344ad8268bedb2a9de69204c945be"
+    },
+    {
+      "path": "scripts/hosted-release-performance.mjs",
+      "byteLength": 426,
+      "sha256": "9c6575a5c439265eab8e39d65b563b16a28ae8a45cdbf5af62611f69356c1c42"
+    },
+    {
+      "path": "scripts/hosted-release-qualification.mjs",
+      "byteLength": 8160,
+      "sha256": "bb4ee45ebfc94356103ef18c5c034d0d4a268de5cda6ec13730a982f2dbe7904"
+    },
+    {
+      "path": "scripts/hosted-release-readiness.mjs",
+      "byteLength": 4296,
+      "sha256": "04f1a3e3b43261182dda96f04f6a7a3cde24a0ce5978be07bc0159af5a878453"
+    },
+    {
+      "path": "scripts/hosted-release-report.mjs",
+      "byteLength": 7298,
+      "sha256": "60a9b668e9df981f7493940e4a8392c2eb13cb446455a384bc8e8bb1d673ff99"
+    },
+    {
+      "path": "scripts/hosted-release.mjs",
+      "byteLength": 14641,
+      "sha256": "4d0ad149ab472b537e3412f0224cbf0da9cbde6b1f54cabe22ee86147da92183"
+    },
+    {
+      "path": "scripts/hosted-toolchain-admission.mjs",
+      "byteLength": 6175,
+      "sha256": "6da22fe8c310af1e742ecc4b76d878162ba53a91965b088fcbce98e362dabf49"
+    },
+    {
+      "path": "scripts/hosted-xero-recovery-carrier.mjs",
+      "byteLength": 32278,
+      "sha256": "f1083979827e85fe8b933bea1cc0f80aa245ba5a9889e5165db17af2a61743d3"
+    },
+    {
+      "path": "scripts/lib/build-provenance.mjs",
+      "byteLength": 11806,
+      "sha256": "e09e63875b79f7324e27424119d47612606a7a985bcf9056b3fa3a307320bd16"
+    },
+    {
+      "path": "scripts/lib/candidate-quality.mjs",
+      "byteLength": 17618,
+      "sha256": "49562f4ffc162e0a6e6b35cdb4728680922ed8966f2352be82661e7f6804307c"
+    },
+    {
+      "path": "scripts/lib/compatibility-browser-isolation.mjs",
+      "byteLength": 11418,
+      "sha256": "6394fa9d0f8f2c85f29ba28c4917b12e15a7a99f5f8e19f17e54ff361d2f5807"
+    },
+    {
+      "path": "scripts/lib/coordination-backend-result-archive.mjs",
+      "byteLength": 4246,
+      "sha256": "28b81b2374d6e128dbc68a1aa47e2c53989be9bdb13b00f55e57f500d72bc22c"
+    },
+    {
+      "path": "scripts/lib/github-provider-timestamp.mjs",
+      "byteLength": 644,
+      "sha256": "2bc7b5bef78e497b2051504367fc0d3912e043af7d14ac6d433ae6c5ec51d16e"
+    },
+    {
+      "path": "scripts/lib/hosted-release/admission.mjs",
+      "byteLength": 7166,
+      "sha256": "f287d905d5732ed69df0b973ccbe93df15f007b0e6d9bd974b71600c18ef7ffe"
+    },
+    {
+      "path": "scripts/lib/hosted-release/artifacts.mjs",
+      "byteLength": 6014,
+      "sha256": "6e246a097dc6cc9fa77aeb043114c1ffbabe5f588db6a7029963dcfb5635312b"
+    },
+    {
+      "path": "scripts/lib/hosted-release/browser-publisher.mjs",
+      "byteLength": 3279,
+      "sha256": "ab1712e5fdaafd3c6815ba1bcf5e40509fda0bbbe2ff98ea81086221b59e260a"
+    },
+    {
+      "path": "scripts/lib/hosted-release/browser.mjs",
+      "byteLength": 28368,
+      "sha256": "d5588da5741696981d0fe94595ddcfbbefab79b4cba1baeca732ce2a93db11d5"
+    },
+    {
+      "path": "scripts/lib/hosted-release/candidate-bootstrap.mjs",
+      "byteLength": 2995,
+      "sha256": "c760ff780ecfd044d30509130982ead7b193fadb32a416c2a94f432f24ac2311"
+    },
+    {
+      "path": "scripts/lib/hosted-release/checks.mjs",
+      "byteLength": 16790,
+      "sha256": "945091ee8df93d801e14d9b348f326336698b103d1087a18a25d38fbe8e94b39"
+    },
+    {
+      "path": "scripts/lib/hosted-release/configuration-selection.mjs",
+      "byteLength": 16100,
+      "sha256": "a9f9dd43cc0d0f8eec3c1c349c58f380cefd6dab6cc1a15c442eb5b5916b646e"
+    },
+    {
+      "path": "scripts/lib/hosted-release/contract.mjs",
+      "byteLength": 12108,
+      "sha256": "ade962bcb05d5c41e03fbecd2200b049f71f8fc4c50dab9e7f42e8bd40be3df3"
+    },
+    {
+      "path": "scripts/lib/hosted-release/controller.mjs",
+      "byteLength": 16621,
+      "sha256": "708c1034058d02a9693c5cc2765c95ef62eb85eb0c2a462f2e7d43ef644f968f"
+    },
+    {
+      "path": "scripts/lib/hosted-release/coordinator-client.mjs",
+      "byteLength": 4689,
+      "sha256": "6d5a24fbebeabb1557d503b9ed2deb26b69cd158df69791d7e8f273e4f7f232b"
+    },
+    {
+      "path": "scripts/lib/hosted-release/cutover-bootstrap.mjs",
+      "byteLength": 7444,
+      "sha256": "2ee46b322b7beb1962a9602be7829f02b033a74b8701c4bfc94b363daa8bf5e2"
+    },
+    {
+      "path": "scripts/lib/hosted-release/dependencies.mjs",
+      "byteLength": 27386,
+      "sha256": "fd5b9405de989c0fd9af6101b5875cb844c8ba9d9f1438b13a9c1b09b0d63ca3"
+    },
+    {
+      "path": "scripts/lib/hosted-release/dependency-publisher.mjs",
+      "byteLength": 27979,
+      "sha256": "cc6a06f7ab7b195027f6cc2c07210c2268e38173c1d3b5ae921eda1da78f5091"
+    },
+    {
+      "path": "scripts/lib/hosted-release/financial-coordination.mjs",
+      "byteLength": 9269,
+      "sha256": "e54ae7791a27b5456e21f3acc237bb7133349383398742c00acf3e37c14247e4"
+    },
+    {
+      "path": "scripts/lib/hosted-release/first-runtime.mjs",
+      "byteLength": 43186,
+      "sha256": "510afb0fd28da389e29169c8417ff5eefaaa828e88e826b5e68411ddc04ec930"
+    },
+    {
+      "path": "scripts/lib/hosted-release/github.mjs",
+      "byteLength": 7925,
+      "sha256": "b261d820a90875bee30bd9fe68346c1481cfb174894a2e154b14c61f2f593560"
+    },
+    {
+      "path": "scripts/lib/hosted-release/isolation.mjs",
+      "byteLength": 3200,
+      "sha256": "c923101d6bb54738079c0763400217b82fd055a4046b510eadf0331fe9ac7faa"
+    },
+    {
+      "path": "scripts/lib/hosted-release/json-contract.mjs",
+      "byteLength": 1118,
+      "sha256": "8bf2f9daf339ef9fecc54d486ba962c50800cace73a0909514ad049decc9b665"
+    },
+    {
+      "path": "scripts/lib/hosted-release/legacy-hosted-runtime-login.mjs",
+      "byteLength": 25024,
+      "sha256": "ef9dfbe3048f5db31e9a3137334efee10cbb2b35217a312bd9db2d2e20136646"
+    },
+    {
+      "path": "scripts/lib/hosted-release/legacy-salesforce-identity-observation.mjs",
+      "byteLength": 11775,
+      "sha256": "6e6bf3ac9c4728ab6cb951a9cc7df60d04b502f13418087a30c18761139bc42f"
+    },
+    {
+      "path": "scripts/lib/hosted-release/live-collector.mjs",
+      "byteLength": 15949,
+      "sha256": "e3d2bbef7e1b795cf36c66ce3fb33ead5cdf410a2589c300c3188f6fd8b36b18"
+    },
+    {
+      "path": "scripts/lib/hosted-release/manifest.mjs",
+      "byteLength": 10531,
+      "sha256": "3523fa936bf0df02d4754d898805d00a3366d94fe8549997cffe4aa67e54b56c"
+    },
+    {
+      "path": "scripts/lib/hosted-release/network-preflight.mjs",
+      "byteLength": 3292,
+      "sha256": "73abbbc1d40d5829976f5c9da533a8e7439332f3f7555f34da1d22275fdb98a8"
+    },
+    {
+      "path": "scripts/lib/hosted-release/observations.mjs",
+      "byteLength": 7987,
+      "sha256": "a9cac96faf4840a4eb46025ef1fc639a86030f2a6b4101dc301254839b073817"
+    },
+    {
+      "path": "scripts/lib/hosted-release/observer-target.mjs",
+      "byteLength": 2539,
+      "sha256": "ebe642dce725afca9e33d59321e5c258999f6db82628977bef644c54b8af82cd"
+    },
+    {
+      "path": "scripts/lib/hosted-release/preservation-preflight.mjs",
+      "byteLength": 4784,
+      "sha256": "9fd4ad23769c4c2052b0e40b2602671670a31caab9063bb2865baabcc52e355b"
+    },
+    {
+      "path": "scripts/lib/hosted-release/publisher.mjs",
+      "byteLength": 4565,
+      "sha256": "53e2fc41989c7eacd8594f8e4b6942a846e2e24d8b55770b5615787175c182fe"
+    },
+    {
+      "path": "scripts/lib/hosted-release/readiness.mjs",
+      "byteLength": 22140,
+      "sha256": "1b5ce0123083036793a6e986456ab9419f58a3610ce4c28f9b2a5579713e54ee"
+    },
+    {
+      "path": "scripts/lib/hosted-release/salesforce-read-auth.mjs",
+      "byteLength": 36848,
+      "sha256": "b1e2e0fb48f7bbec132eb0dd5c0646f44c0c38f4029edc53fb5cb4d4374f5f3f"
+    },
+    {
+      "path": "scripts/lib/hosted-release/session.mjs",
+      "byteLength": 3740,
+      "sha256": "ef82dacf06e80c5e838ba18e962b939694dd5fb01ce3b0059a11b3ad686e7bfa"
+    },
+    {
+      "path": "scripts/lib/hosted-release/signer.mjs",
+      "byteLength": 10000,
+      "sha256": "7bb28e01c6969fb0097ab72d94749c6f26c423f3c59e2915dd2ec65f91900724"
+    },
+    {
+      "path": "scripts/lib/hosted-release/successor.mjs",
+      "byteLength": 2060,
+      "sha256": "daaf686e9148cbbfa78d99146e9a5b12053e7fb5ab19e685a2e4d1d094d95b30"
+    },
+    {
+      "path": "scripts/lib/hosted-release/telemetry.mjs",
+      "byteLength": 2658,
+      "sha256": "ed36fcbd3ade948864515d51d33002ecf83f3bd204aaaf83f8ef28c5f65ff8f3"
+    },
+    {
+      "path": "scripts/lib/hosted-release/vercel-read-auth.mjs",
+      "byteLength": 8952,
+      "sha256": "eaee405f5b74905a65d5f49bdfba6428577feccd51e3ecd2c1790e3eec7e4f23"
+    },
+    {
+      "path": "scripts/lib/hosted-release/vercel-writer-auth.mjs",
+      "byteLength": 11415,
+      "sha256": "84495a7fa07bb61d15c0f4a5751a14bc5d3b102b5723e1d576d52505228d5f7d"
+    },
+    {
+      "path": "scripts/lib/hosted-release/vercel.mjs",
+      "byteLength": 32262,
+      "sha256": "b3e05477a5600fd9aae596cf75e2c6500bb23abe584d150aab1b234a085a2b92"
+    },
+    {
+      "path": "scripts/lib/hosted-release/xero-recovery-actor-auth.mjs",
+      "byteLength": 16693,
+      "sha256": "ac35a5618d37a5a1bff580204e12c635944d7604b61653206c990e42915472a7"
+    },
+    {
+      "path": "scripts/lib/hosted-release/xero-recovery-host.mjs",
+      "byteLength": 20720,
+      "sha256": "06d315f4172797daffbb9c9c0ff1e8c6666c7096ff316912bc47efe06685e6dc"
+    },
+    {
+      "path": "scripts/lib/hosted-release/xero-recovery-native-relay.mjs",
+      "byteLength": 102166,
+      "sha256": "a8f15ea0e0610a5fee84dfa5e23aec3ab09ac3f8224d5d0e2db2f0ad13da25be"
+    },
+    {
+      "path": "scripts/lib/hosted-release/xero-recovery-source-inventory.mjs",
+      "byteLength": 6354,
+      "sha256": "2d863865b3a4079e9ad650bbf42220941017215bdfc62e23cf0df7a1c07e7472"
+    },
+    {
+      "path": "scripts/lib/hosted-release/xero-recovery-step-actions.mjs",
+      "byteLength": 18830,
+      "sha256": "27ceb164cadbbadc015c06ae5f79bbb7d41d8f6201f19a279efac78eac9f1f48"
+    },
+    {
+      "path": "scripts/lib/hosted-release/xero-recovery-step-protocol.mjs",
+      "byteLength": 17516,
+      "sha256": "e3ebeb7a1ae02c0ad5bdf2b854f6258d2f2a93a0e5c26b0cbcfc3b99e4e71922"
+    },
+    {
+      "path": "scripts/lib/hosted-release/xero-recovery-vercel-ingress.mjs",
+      "byteLength": 13080,
+      "sha256": "8403b859a094889367d26a90c03573261568d91cbd52205929226fba80b33a2f"
+    },
+    {
+      "path": "scripts/lib/legacy-email-baseline-proof.mjs",
+      "byteLength": 9985,
+      "sha256": "f0e9cf662009bbea4267483533b20038828b83f9d2a0f5c9b47475adff5d0fee"
+    },
+    {
+      "path": "scripts/lib/normal-role-read-requests.mjs",
+      "byteLength": 8810,
+      "sha256": "e583bc4069be5a67243d90c74290551d3e1e11752b7feb9a1a07c83795a666e8"
+    },
+    {
+      "path": "scripts/lib/normal-role-verification-transport.mjs",
+      "byteLength": 6886,
+      "sha256": "e2e9e1f4bd8ac926cafef5b43f84e385b7f804580f3a51922b0d0aca21bb3f9e"
+    },
+    {
+      "path": "scripts/lib/preview-email-build-controls.mjs",
+      "byteLength": 2638,
+      "sha256": "d71d8085a5b16c9b29b75e5d0627402d4830ad72d816b9d1325d519c01f01c1e"
+    },
+    {
+      "path": "scripts/lib/preview-email-build.mjs",
+      "byteLength": 50998,
+      "sha256": "bd718748f2d38a2b3e9522ada5b0e293ae371cba4312ad55ba7bc34d6185a18a"
+    },
+    {
+      "path": "scripts/lib/preview-email-coordination-action.mjs",
+      "byteLength": 14179,
+      "sha256": "11e3253612f16e452047f7ea95bc5fe01e76ff32e61d7ea79770510edafcb0c8"
+    },
+    {
+      "path": "scripts/lib/preview-email-coordination-archive.mjs",
+      "byteLength": 4007,
+      "sha256": "f0b03fa83f7abf93d9f3b824d2858a8e7813a33d3796188d6869721718980d76"
+    },
+    {
+      "path": "scripts/lib/preview-email-coordination-collector.mjs",
+      "byteLength": 22754,
+      "sha256": "4b9deabf3a36d905994c65dc7dac6ade3efc8ebb2957a3277f7c8945c60d41a4"
+    },
+    {
+      "path": "scripts/lib/preview-email-coordination-ledger.py",
+      "byteLength": 15690,
+      "sha256": "f67b111364359085b735961a84beff1c109e607aa5faa222bc49468d53638ec4"
+    },
+    {
+      "path": "scripts/lib/preview-email-coordination.mjs",
+      "byteLength": 13517,
+      "sha256": "e38c171919c1de760511410674b0798b4fb23325902579cb0b9899c15974538e"
+    },
+    {
+      "path": "scripts/lib/preview-email-signer.mjs",
+      "byteLength": 13508,
+      "sha256": "e627b43917afb9e43aaa8d461436487f991af122f6188e35754694d60e61422f"
+    },
+    {
+      "path": "scripts/lib/preview-parity.mjs",
+      "byteLength": 18722,
+      "sha256": "71bfcc440f9368f773d3e3d95fd1a7b8a6b75e238ff536cbc84c82b938d8e20f"
+    },
+    {
+      "path": "scripts/lib/preview-vercel-authority.mjs",
+      "byteLength": 16491,
+      "sha256": "1b005c04c78e385541d4b4040941f3795b48ead0adf24c658b84d0928f80867e"
+    },
+    {
+      "path": "scripts/lib/preview-vercel-enrollment-recovery-ledger.py",
+      "byteLength": 19799,
+      "sha256": "090b7a36305df66010005ce9cc01912ad61c168c48dc65909e148020861f65e9"
+    },
+    {
+      "path": "scripts/lib/preview-vercel-enrollment-recovery.mjs",
+      "byteLength": 36435,
+      "sha256": "b7b3878ac5f207a0e0cca3460d1b69ad482caaaa21084bad2d199f7d94edaf76"
+    },
+    {
+      "path": "scripts/lib/preview-vercel-enrollment.mjs",
+      "byteLength": 16469,
+      "sha256": "f9b6f62f95bf20029d6cf4d0113c490483e6fe6590b5c625938239d3e119a8bd"
+    },
+    {
+      "path": "scripts/lib/preview-vercel-successor-attestation-ledger.py",
+      "byteLength": 19205,
+      "sha256": "dd581f99a0a61e63404669028923bc8c2592dc261a65cb9d2a88d452cd85fa96"
+    },
+    {
+      "path": "scripts/lib/preview-vercel-successor-attestation.mjs",
+      "byteLength": 50097,
+      "sha256": "5f7c5282d56c02f9338d9ade69d9c1e29ef20fa214bbc27b4fb08a06d4730e06"
+    },
+    {
+      "path": "scripts/lib/release-coordination-controls.mjs",
+      "byteLength": 1083,
+      "sha256": "c29b468506514cf2f53b5465b29df914cb1af3fd1fcbc5c94a78d8aa1337df0b"
+    },
+    {
+      "path": "scripts/lib/release-coordination-ledger.py",
+      "byteLength": 13980,
+      "sha256": "538dd7448d995e2c16878cc6e95f2b54121090856551a47cf29205b7e8c9b3c4"
+    },
+    {
+      "path": "scripts/lib/release-coordination-proof-worker.mjs",
+      "byteLength": 12842,
+      "sha256": "3d8e0550791440a53a0ce8da92a0cc940a0e42b353c3cb99cbdb5145b0b64145"
+    },
+    {
+      "path": "scripts/lib/release-coordination-transport.mjs",
+      "byteLength": 15450,
+      "sha256": "58dc6da94af2e33e07bdc0760cb05de7b6887d7d215f8267fa1831cf7ae4ed39"
+    },
+    {
+      "path": "scripts/lib/release-coordination-trust.mjs",
+      "byteLength": 4773,
+      "sha256": "9de8220a1023d051964c98b02b024c2bb956fcb2c47b7bfa3460ff8e847b54b0"
+    },
+    {
+      "path": "scripts/lib/release-coordination.mjs",
+      "byteLength": 9777,
+      "sha256": "79d1de3319df6bb82c2da8b6bdecf55695cd60835ef0b5843879da0d572f716c"
+    },
+    {
+      "path": "scripts/lib/release-evidence.mjs",
+      "byteLength": 24880,
+      "sha256": "3a5a9e92032e33b5d87949fda299a916791f308ea7cfc81e49c9d20dfc6ce5fe"
+    },
+    {
+      "path": "scripts/lib/release-github-async-reads.mjs",
+      "byteLength": 6889,
+      "sha256": "9158bb2283b17418df3db9e93e75da988bb9ad22fb5b01ca416b1ebeba6e4312"
+    },
+    {
+      "path": "scripts/lib/release-production.mjs",
+      "byteLength": 13343,
+      "sha256": "62525ead072463dab4f4f3d1e17ba442693b090094fea13eb6adfefcfae51078"
+    },
+    {
+      "path": "scripts/lib/release-readiness.mjs",
+      "byteLength": 10046,
+      "sha256": "6e3628555f40f5ab888883cbb979f5b251b1f0cb9fe8c3bb105fb798e191eb1f"
+    },
+    {
+      "path": "scripts/lib/release-workflow.mjs",
+      "byteLength": 5596,
+      "sha256": "0319a14d9795d3451c0a407b4d765dfcd41d8d3a6140cc2296901d5af6375e43"
+    },
+    {
+      "path": "scripts/lib/runtime-compatibility-material-transport.mjs",
+      "byteLength": 24749,
+      "sha256": "b4c89647e1c49e60692a7c58440296290d6a8524a308107c404f153c6b0a7eca"
+    },
+    {
+      "path": "scripts/lib/runtime-compatibility-observation.mjs",
+      "byteLength": 16298,
+      "sha256": "4ab88ed4c94afb171b588928cf9e5f0b55746cde0373102d70eb4984eb9ed8a9"
+    },
+    {
+      "path": "scripts/lib/runtime-compatibility-release.mjs",
+      "byteLength": 51765,
+      "sha256": "afdf51e40524dadcb3c25a234d02b8c1e42e6113f1dbb34b5e4deef7f8bc4541"
+    },
+    {
+      "path": "scripts/lib/runtime-compatibility-setup.mjs",
+      "byteLength": 4464,
+      "sha256": "60f7ab0b0905cee5bb0b4b4865ea7f6b9bca997dc5968fc4f09b10c68282e0ce"
+    },
+    {
+      "path": "scripts/lib/runtime-compatibility-successor-adapter.mjs",
+      "byteLength": 4774,
+      "sha256": "57fcee02930891c37cd58d15e1b552e492bda5da956af839ca6180f9f36ffd26"
+    },
+    {
+      "path": "scripts/lib/runtime-compatibility-successor-live.mjs",
+      "byteLength": 39501,
+      "sha256": "349143277c6ba10f8f478bffe4c698ad81f445b27b555eaf75158bbba1cf436e"
+    },
+    {
+      "path": "scripts/lib/runtime-compatibility-successor.mjs",
+      "byteLength": 14613,
+      "sha256": "f457df04f59a6f5808b9f9c63a968d9c5ee787da3c9670124df9be4728800aad"
+    },
+    {
+      "path": "scripts/lib/runtime-compatibility.mjs",
+      "byteLength": 10615,
+      "sha256": "ebc1f32f20f063e766e416d4e3a7e1f61c457fecaa3535f37b2cb4c1173b6d97"
+    },
+    {
+      "path": "scripts/lib/salesforce-promotion-journal.mjs",
+      "byteLength": 4535,
+      "sha256": "211460ee1c7494a2e3f4c6e271dac4fd328505d6c3a1e8b8937249e11838b711"
+    },
+    {
+      "path": "scripts/normal-role-release.mjs",
+      "byteLength": 24135,
+      "sha256": "babef145d7253df38289cf274949476902bb78e4e43cd41f20f5e15c102996a9"
+    },
+    {
+      "path": "scripts/package-xero-recovery-host.mjs",
+      "byteLength": 7763,
+      "sha256": "30e049a7b971c2c20944a8f9aa8575dcae499120b062fcf41b74682ce7f7555c"
+    },
+    {
+      "path": "scripts/preview-email-coordinator-local.mjs",
+      "byteLength": 16001,
+      "sha256": "3c2247c7d754fd9c93d9d1ce20ebfad549052fdd838a452748f5f3fb2afbec7d"
+    },
+    {
+      "path": "scripts/preview-email-proof-build.mjs",
+      "byteLength": 34939,
+      "sha256": "25706721681e1084f71c6d922ddad3f2153f83ad9e7f6bf61fb1557a2149b258"
+    },
+    {
+      "path": "scripts/preview-vercel-enrollment-recovery.mjs",
+      "byteLength": 884,
+      "sha256": "70d1295605337f2979459c8334a32a79d5b7a1ad406278bad926b7e62754f197"
+    },
+    {
+      "path": "scripts/preview-vercel-enrollment.mjs",
+      "byteLength": 30898,
+      "sha256": "b20786a5aa400474c206265f757a3e1293dde6bb3d2c226b0c8243eb30b26de3"
+    },
+    {
+      "path": "scripts/preview-vercel-successor-attest.mjs",
+      "byteLength": 917,
+      "sha256": "42ca3fb131e51709ed8702d89cd3e449008d3f5d2f06d28c06e256499cfcb0f4"
+    },
+    {
+      "path": "scripts/production-release.mjs",
+      "byteLength": 13894,
+      "sha256": "14833f273561283d4e3f4b830b0b57052ef056dde7b8cd04f320f30a38ebddc4"
+    },
+    {
+      "path": "scripts/release-action.mjs",
+      "byteLength": 1267,
+      "sha256": "a30255c6324989c35e9e565a79ccd08b137d811c91117b2c6d69c82d6b1af0f4"
+    },
+    {
+      "path": "scripts/release-coordination-proof.mjs",
+      "byteLength": 17860,
+      "sha256": "48891f960496f3e18a73d8fde644896042f78578b0ff98211468216f6546472a"
+    },
+    {
+      "path": "scripts/release-coordinator-local.mjs",
+      "byteLength": 12250,
+      "sha256": "6f111559652b400e31447bc85f51c68de45b0e147078e915ac52fec49c65d6d6"
+    },
+    {
+      "path": "scripts/runtime-compatibility-materials.mjs",
+      "byteLength": 11865,
+      "sha256": "6f0c5b209b8344984e31dbc8788d098c6945240e5b8fb3e972e5e521f2d5640a"
+    },
+    {
+      "path": "scripts/runtime-compatibility-normal-role.mjs",
+      "byteLength": 38283,
+      "sha256": "65c9c84f1d16e4e45b6104a5a77410b9aa1e1c7c07498676c5de5561b2c770dc"
+    },
+    {
+      "path": "scripts/runtime-compatibility-release.mjs",
+      "byteLength": 38837,
+      "sha256": "b544507a21da2d1d7d80c6eb48c2d364ec42c462313acb02ccdad2f0e9c8740d"
+    },
+    {
+      "path": "scripts/verify-e2e-candidate.mjs",
+      "byteLength": 10319,
+      "sha256": "f99491ce111f19bcc763684df9f5cea6add79e1798e1bb5f34c239b29c6177d6"
+    },
+    {
+      "path": "scripts/verify-migrations.mjs",
+      "byteLength": 14440,
+      "sha256": "ff924e0d22f8c88f18b933ccfd66bcfa2b9ac6718ecf92449ff830d65dc61564"
+    },
+    {
+      "path": "scripts/verify-runtime-compatibility-successor.mjs",
+      "byteLength": 11519,
+      "sha256": "f3ece87e194dad5d135e5a82f89cf0f11736c3c0088fd528fdecdb5acf52d5c4"
+    },
+    {
+      "path": "scripts/verify-runtime-compatibility.mjs",
+      "byteLength": 1927,
+      "sha256": "a181ba8a005422609c607bb5cdbb3c7e08d38317e4a34e0021b1d5df06c28eb4"
+    },
+    {
+      "path": "supabase/functions/release-coordinator/approval.mjs",
+      "byteLength": 11998,
+      "sha256": "459bb2e3922d98e0ed9a3ab00e8b75ad75acf0c7858efba4549e36956efc6ff9"
+    },
+    {
+      "path": "supabase/functions/release-coordinator/auth.mjs",
+      "byteLength": 6730,
+      "sha256": "539013a82e74b4fccfdd3e75952685d101018f22422d727b83421ef8f6e28254"
+    },
+    {
+      "path": "supabase/functions/release-coordinator/core.mjs",
+      "byteLength": 11787,
+      "sha256": "f5b7f09ad686215d9bd1ef53d99ac96ea9bb02ebe64f7def97827ed8c78e64da"
+    },
+    {
+      "path": "supabase/functions/release-coordinator/deno.json",
+      "byteLength": 79,
+      "sha256": "29ea751d42a854a1531a2548f9cd091badf5a029731742faf1e214885372ab2e"
+    },
+    {
+      "path": "supabase/functions/release-coordinator/Dockerfile",
+      "byteLength": 589,
+      "sha256": "5027ffb793599035358b87f8c9c1489ce53224ab33419cd7d565b648c3cdceac"
+    },
+    {
+      "path": "supabase/functions/release-coordinator/index.ts",
+      "byteLength": 11121,
+      "sha256": "52803513f43b23513ad4cd5ae574ecc800bb3679c132c72de31377a83dfeaabc"
+    },
+    {
+      "path": "supabase/functions/release-coordinator/legacy-containment.mjs",
+      "byteLength": 3868,
+      "sha256": "a5631f06df503d7ff74a1e5fba5d553dcd168e91b915a3cc1585b7504aacb4c3"
+    },
+    {
+      "path": "supabase/functions/release-coordinator/runtime.mjs",
+      "byteLength": 3879,
+      "sha256": "0f06529117db654b5f5f9c44465e6596e135702c7b6187721775ad75ee00405e"
+    },
+    {
+      "path": "supabase/functions/release-coordinator/server.mjs",
+      "byteLength": 2362,
+      "sha256": "61f679de1aaaf5b38d4de60ecc040705facc7e07fae7d8e821f676f88376c356"
+    },
+    {
+      "path": "supabase/functions/release-coordinator/supabase-root-2021.crt",
+      "byteLength": 1367,
+      "sha256": "700723581420dd1ac98fd7e9ac529f0ef210eadcaf87fc868a3ad7d114c2f3b7"
+    },
+    {
+      "path": "supabase/migrations/20261016190509_release_coordination.sql",
+      "byteLength": 39833,
+      "sha256": "208641637ac152192ddd63e9f7bd7287caf077f98557d4ea5ea8ae91cf13a42a"
+    },
+    {
+      "path": "supabase/migrations/20261018100701_xero_recovery_private_returned_token_custody.sql",
+      "byteLength": 13851,
+      "sha256": "4b02a6e26031eb4823afb7812c46de913cdd5185c9f6a990a64d260d6e25a958"
+    },
+    {
+      "path": "supabase/migrations/20261018103446_xero_recovery_durable_step_protocol.sql",
+      "byteLength": 24922,
+      "sha256": "da2f2508ead3dcee12235ff43578fce0cf9f1aaaae67557ecddfff677ce4dfed"
+    },
+    {
+      "path": "supabase/migrations/20261018112914_auth_maintenance_coordination.sql",
+      "byteLength": 26937,
+      "sha256": "9af7e8e61f3b63b4b223576110c0b08f67aebd745536889069f2b69331ac9101"
+    },
+    {
+      "path": "supabase/migrations/20261019171349_legacy_release_effect_containment.sql",
+      "byteLength": 17919,
+      "sha256": "e4e1b69a2ca427e1c79c562ae83c38e6b35de767de85dee6dc43fc7feaf6c319"
+    },
+    {
+      "path": "supabase/migrations/20261019190000_xero_recovery_v2_window.sql",
+      "byteLength": 4194,
+      "sha256": "a3c15eec4d4800cca43d2c298c8eeb2786a22c7874ddefb1ded2dbb62fb82075"
+    },
+    {
+      "path": "supabase/migrations/20261020080001_hosted_cutover_bootstrap.sql",
+      "byteLength": 29489,
+      "sha256": "774087aac8277479c65e8fc2c6722368eda005960c6398d768b457b844a01b58"
+    },
+    {
+      "path": "supabase/migrations/20261020140000_xero_recovery_v3_late_arm.sql",
+      "byteLength": 16214,
+      "sha256": "0b7154af686ea5cb594bec2d14cbb096b313bb24d0009511e713294285ab7efc"
+    },
+    {
+      "path": "tests/compatibility-browser-isolation.chromium.mjs",
+      "byteLength": 8934,
+      "sha256": "06330a240f04f4dee9526f9a9f0bc2d781f6471819a34c24c0e636dceb9354b3"
+    },
+    {
+      "path": "tests/fcosConnections.test.js",
+      "byteLength": 8296,
+      "sha256": "805c34d845b45cdc671400ecbcdcd6abbb8a138281bd1391349fbea81dd1d316"
+    },
+    {
+      "path": "tests/fixtures/coordination-backend-actual/actual-artifact-11670465501.zip",
+      "byteLength": 410,
+      "sha256": "25c12b7831db31503e7dc8bac2dd3e09aaf32fb5d57c112aa6fe4006800efa4c"
+    },
+    {
+      "path": "tests/fixtures/coordination-backend-actual/actual-artifact-11670710077.zip",
+      "byteLength": 1095,
+      "sha256": "2ca58c267a5d74feb698329b5ededc101014524e01d8b9dab0fad4ea10a16443"
+    },
+    {
+      "path": "tests/fixtures/coordination-backend-actual/actual-artifact-11670745040.zip",
+      "byteLength": 410,
+      "sha256": "b4490e73e3f46f9af93b5284b48bb176120cb151c39c435d502373d078e2e138"
+    },
+    {
+      "path": "tests/fixtures/coordination-backend-actual/review-readback-123320.json",
+      "byteLength": 20202,
+      "sha256": "341eb67e368a8713316579cf549db1396938b2451a30e22b1f350d1370bf7fe0"
+    },
+    {
+      "path": "tests/fixtures/coordination-backend-actual/terminal-artifact-boundary.json",
+      "byteLength": 28759,
+      "sha256": "f5ee1dd4ea39c08a043b8c7227125457d811df4bac10e8fc734e1251785810dd"
+    },
+    {
+      "path": "tests/fixtures/preview-verification-actual-github.json",
+      "byteLength": 1215,
+      "sha256": "9ea743df54415a43e384a830e0cabf712ae1f2d67ef12ee161bde613d353da97"
+    },
+    {
+      "path": "tests/fixtures/runtime-compatibility-successor/fixture-manifest.json",
+      "byteLength": 67781,
+      "sha256": "8d26d2512a91352a5f47ae05ff7045f07a1d5ff50dde34dbfff5714d6837cc09"
+    },
+    {
+      "path": "tests/fixtures/runtime-compatibility-successor/independent-application-review.json",
+      "byteLength": 25069,
+      "sha256": "935671186dd4cd2a483f45393468239acd7de49fea367b61592fb8755f586b4b"
+    },
+    {
+      "path": "tests/fixtures/runtime-compatibility-successor/objects.pack",
+      "byteLength": 489133,
+      "sha256": "ea9cd50f5e6874c15739f288a57ce17103ffa20302b6d218790334f809949f11"
+    },
+    {
+      "path": "tests/fixtures/runtime-compatibility-successor/proposal-ff8859.patch",
+      "byteLength": 36682,
+      "sha256": "ce5c6ec4581288eb074a002ad7ff85c0b52d48da9fbcc1ebed48b39bc1a00f93"
+    },
+    {
+      "path": "tests/fixtures/runtime-compatibility-successor/root-application-review.json",
+      "byteLength": 1902,
+      "sha256": "707dd2c7f5c0f87adb37943133508661ba6bbd04a85669093176a9554e54f7d0"
+    },
+    {
+      "path": "tests/fixtures/runtime-compatibility-successor/root-successor-admission-design.json",
+      "byteLength": 2370,
+      "sha256": "c8427525bc54b6797223f7fe06f4db1b7c1e872f00f1d3ab65d20322436d8a0b"
+    },
+    {
+      "path": "tests/fixtures/runtime-compatibility-successor/successor-control-sync/canonical-agents-control-sync.patch",
+      "byteLength": 4041,
+      "sha256": "5e3473b1f628e5419cd05f8b167ee30322aba7c5ea7847bdfb160cc120b6d43b"
+    },
+    {
+      "path": "tests/fixtures/runtime-compatibility-successor/successor-control-sync/independent-control-sync-review.json",
+      "byteLength": 13635,
+      "sha256": "773e716409b790f9a272ec99549da5dc2d3147862a1ba39259bb8507d5a61fd8"
+    },
+    {
+      "path": "tests/fixtures/runtime-compatibility-successor/successor-control-sync/root-control-sync-review.json",
+      "byteLength": 1046,
+      "sha256": "f803046a46911cd7855fb25bdd02e43179724d06030644cc03ccbacbaf7bbb6a"
+    },
+    {
+      "path": "tests/fixtures/runtime-compatibility-successor/successor-preparation/independent-source-admission-review.json",
+      "byteLength": 13592,
+      "sha256": "732180649feec5a3c018f223b0d42f07fc7e7f6c824ef87cccc99d285906a46b"
+    },
+    {
+      "path": "tests/fixtures/runtime-compatibility-successor/successor-preparation/root-source-admission-review.json",
+      "byteLength": 955,
+      "sha256": "4b79343056f0ebbbc4eb764f4ded853032c73e3e6aacf6279ce97d2f1f57f016"
+    },
+    {
+      "path": "tests/fixtures/xero-recovery/shared-control-f347.sql",
+      "byteLength": 29944,
+      "sha256": "e01a76c618231d4818d76cc173692001642e843e049cda7788610c1a7535878d"
+    },
+    {
+      "path": "tests/helpers/hosted-first-runtime-v2.mjs",
+      "byteLength": 5620,
+      "sha256": "c495634a83e70536ab43e53fbd01ba26d737c4ba83bbe087493eeb844a78e8cc"
+    },
+    {
+      "path": "tests/helpers/hosted-first-runtime.mjs",
+      "byteLength": 5210,
+      "sha256": "0b2d392a459f01cd3434f049c8f7be4f1790c3400b17e72912abe87dd5b6847e"
+    },
+    {
+      "path": "tests/helpers/hosted-vercel-writer.mjs",
+      "byteLength": 5481,
+      "sha256": "dfd1cced5ec6b699fa93dbdcc41986c4cca1aa4336f8080a7903593e6727af10"
+    },
+    {
+      "path": "tests/helpers/xero-recovery-fixture.mjs",
+      "byteLength": 773,
+      "sha256": "a94fe4c1aece4c194a5b8147932244f379eebb184b8e6d196e1e21d028c7378b"
+    },
+    {
+      "path": "tests/helpers/xero-recovery-joined-browser.mjs",
+      "byteLength": 10149,
+      "sha256": "afe531482f01562e547374f28aa06ef64849e82f4b91af05b81bfe5b1eeef71e"
+    },
+    {
+      "path": "tests/helpers/xero-recovery-joined-child.mjs",
+      "byteLength": 33638,
+      "sha256": "cb0b83d81d25944a1b29e0a46d47044c7337469bb876786ace85b94884a0542b"
+    },
+    {
+      "path": "tests/helpers/xero-recovery-joined-coordinator.fixture.py",
+      "byteLength": 35940,
+      "sha256": "8ed4eda312b62c3b02c3a0a768ddd024a2a819af5f0f1194da47ef2a2d62fd38"
+    },
+    {
+      "path": "tests/helpers/xero-recovery-joined-host.mjs",
+      "byteLength": 16040,
+      "sha256": "5efe8ff7355bcd163d9eae15477a358ef6b4401bc50cd328d8986035d4ccc6f1"
+    },
+    {
+      "path": "tests/hosted-compatibility-correction.test.js",
+      "byteLength": 5776,
+      "sha256": "740415a2ed25032d57531b80396e9f6cadba296f6da424f8ed235a4040bcea58"
+    },
+    {
+      "path": "tests/hosted-cutover-bootstrap.test.js",
+      "byteLength": 25581,
+      "sha256": "8943a8290187ad9fe371915459b733a0e67318e47e7e26552f63a1a765619965"
+    },
+    {
+      "path": "tests/hosted-preservation-preflight.test.js",
+      "byteLength": 12579,
+      "sha256": "fd77ee70e7a98cf6a7aca3d5e383d0daf1507038e1ffd45e110fce4bc3647e22"
+    },
+    {
+      "path": "tests/hosted-release-auth-maintenance.test.js",
+      "byteLength": 24288,
+      "sha256": "99436002875bb684237182c1bd2a8e23c3e9f81fcc61475c44e37c131b2e0f46"
+    },
+    {
+      "path": "tests/hosted-release-bootstrap.test.js",
+      "byteLength": 14847,
+      "sha256": "e7c7eec98a9e73752b612cf248b9a6ea508aaf53f9e46f9f265951c1d4fc083e"
+    },
+    {
+      "path": "tests/hosted-release-configuration-selection.test.js",
+      "byteLength": 8723,
+      "sha256": "9065c4dc3e5b4d224520087711b0427d3e12c145de31b2f8de4c9cd2696a33e8"
+    },
+    {
+      "path": "tests/hosted-release-controller.test.js",
+      "byteLength": 11868,
+      "sha256": "2db59f3b3fed3973760b42f299791b1dfd51d45306b8b4b7df384f5157c80a66"
+    },
+    {
+      "path": "tests/hosted-release-coordinator-metadata.test.js",
+      "byteLength": 8609,
+      "sha256": "bdbdb44906a5459f056405e26dd20a56a9c23262b84a360600e0e90f88836212"
+    },
+    {
+      "path": "tests/hosted-release-cutover.test.js",
+      "byteLength": 44587,
+      "sha256": "f173cf955ce7c0f8f53eae4476c7924d3b70d43b6790aa5628fc2a3e270e4025"
+    },
+    {
+      "path": "tests/hosted-release-dependency-publisher.test.js",
+      "byteLength": 30660,
+      "sha256": "5b9ef7d14d3a21b72286ab7a84782d661d7b957fc8fe6ff54fe296d828820f2b"
+    },
+    {
+      "path": "tests/hosted-release-dependency-seed-integration.test.js",
+      "byteLength": 14937,
+      "sha256": "7087e819322ab6905ecb3c50442c296a361a2e24186bd6edec254b3daa19a07e"
+    },
+    {
+      "path": "tests/hosted-release-dependency-seed.test.js",
+      "byteLength": 3232,
+      "sha256": "7265fc2f8895043b25649d27b64405a6a4161c074fa0095c85ae0a72b8ed13a2"
+    },
+    {
+      "path": "tests/hosted-release-first-runtime-v2.test.js",
+      "byteLength": 13193,
+      "sha256": "ab5ef78988be720247a4574b3c17f33ce3f2dabb9162dc21c93e6b9ef65e80fd"
+    },
+    {
+      "path": "tests/hosted-release-first-runtime.test.js",
+      "byteLength": 25853,
+      "sha256": "8e66b96fffa483f1a614b326d03c9f0b74116c45cb8dd9b368580d976594ab58"
+    },
+    {
+      "path": "tests/hosted-release-integration.test.js",
+      "byteLength": 17111,
+      "sha256": "f8d45fcf8607caeeac62e5df78c90795698d8a8c4cabc90a182a5157ec55f905"
+    },
+    {
+      "path": "tests/hosted-release-legacy-containment-postgres.test.js",
+      "byteLength": 27455,
+      "sha256": "8a82955a03f606e917e133fa556094a30652d880ad063063bd1965a1298dfe96"
+    },
+    {
+      "path": "tests/hosted-release-legacy-containment.test.js",
+      "byteLength": 5727,
+      "sha256": "c457a2993902944c9598aab20fbdcb54d010b1a5cc22f49f8005c92b4dba6c59"
+    },
+    {
+      "path": "tests/hosted-release-native-selection.test.js",
+      "byteLength": 24596,
+      "sha256": "0a3ba60b6538325dfb783dc89b80eedf32cd4ffdafa1dfa7fa05068ead7200a0"
+    },
+    {
+      "path": "tests/hosted-release-qualification-source.test.js",
+      "byteLength": 24576,
+      "sha256": "21e4e27ecdd001dd34bcee90151222556bfd5353c681941e3834287ceeb8b47f"
+    },
+    {
+      "path": "tests/hosted-release-setup-discovery.test.js",
+      "byteLength": 47147,
+      "sha256": "b4fc46ca0d0958fd3e156ee66063473a167c085a361625caf0fe5da75f7ac7e0"
+    },
+    {
+      "path": "tests/hosted-release-vercel-writer.test.js",
+      "byteLength": 21297,
+      "sha256": "49361ea8e2f34d35f18e55d2f1bf17496a45895cf71d9c79a458ddced37114e7"
+    },
+    {
+      "path": "tests/legacyHostedRuntimeLogin.test.js",
+      "byteLength": 39783,
+      "sha256": "5dd9d365ad1a7194bd1af390ff93bf97ce4b05b47fdb8c7549d7a229e5846ec0"
+    },
+    {
+      "path": "tests/legacySalesforceIdentityObservation.test.js",
+      "byteLength": 18811,
+      "sha256": "94136ba178a690ac9c6cebf930b2c0f5c31f1e8e2215cbc186c0a9825a0147a0"
+    },
+    {
+      "path": "tests/prePushHook.test.js",
+      "byteLength": 4380,
+      "sha256": "f03f0489690c15dd3b05fb64bf4601314f64d8306e30ffcf10f86de442899139"
+    },
+    {
+      "path": "tests/prePushSalesforceMetadata.test.js",
+      "byteLength": 9110,
+      "sha256": "f198557cae7561ce8ffe2e55f3e33b4e29d7661eee0e7abe9c255aa48fd76b63"
+    },
+    {
+      "path": "tests/previewParity.test.js",
+      "byteLength": 17241,
+      "sha256": "cecbeb4d499b722bdbb04a1d98022c2a890754ba500e69fc327a94c4d761e7ea"
+    },
+    {
+      "path": "tests/runtimeCompatibilitySuccessor.test.js",
+      "byteLength": 22235,
+      "sha256": "c7a69503d605a672c76e2474818551a2bec65098c444d6e76b7acce7c96feadd"
+    },
+    {
+      "path": "tests/runtimeCompatibilitySuccessorIntegration.hermetic.mjs",
+      "byteLength": 30259,
+      "sha256": "f3fec58269ff14c2a75480e6298baae09d12cbc16997e2c2ac9e210a3b29ccce"
+    },
+    {
+      "path": "tests/xeroRecoveryActorAuth.test.js",
+      "byteLength": 29746,
+      "sha256": "6a366043760da41baf4e1b5816d3db08b550c341ace68fc46d4a4e114346d474"
+    },
+    {
+      "path": "tests/xeroRecoveryCourier.test.js",
+      "byteLength": 107648,
+      "sha256": "174c0684c1658cfc3e2dd845fc6a88788df88e6702568182130877ed317f4167"
+    },
+    {
+      "path": "tests/xeroRecoveryHost.test.js",
+      "byteLength": 34258,
+      "sha256": "d5b5f08387713627331c8eddc48dd5203009d62b87d7e79f9743e2ad78e11628"
+    },
+    {
+      "path": "tests/xeroRecoveryJoinedTransport.test.js",
+      "byteLength": 1482,
+      "sha256": "1262ecadf6765755c2a77f72ce69c8846eda0ab019a47d32aa3a399a35437c1c"
+    },
+    {
+      "path": "tests/xeroRecoveryLateArm.test.js",
+      "byteLength": 9966,
+      "sha256": "9df1548ce4f9de108acee63a3ae335ab3fc716b399169627e3d83b2bc08dcef7"
+    },
+    {
+      "path": "tests/xeroRecoveryLateArmHost.test.js",
+      "byteLength": 1886,
+      "sha256": "501a0eed80ee9313ccd4762426855577f1c4732e178661b128abef4a095d760f"
+    },
+    {
+      "path": "tests/xeroRecoveryNativeLocator.test.js",
+      "byteLength": 16492,
+      "sha256": "a7c575476a77692ce98814c158189a6d21e57b0a6d52c7cdaeda6c0c7f7a1fcd"
+    },
+    {
+      "path": "tests/xeroRecoverySourceInventory.test.js",
+      "byteLength": 8331,
+      "sha256": "c32ccdfd2154b9cac6c9323dff431b660186a5eb7d1eb7ce80c0f4b98941903e"
+    },
+    {
+      "path": "tests/xeroRecoveryStepActions.test.js",
+      "byteLength": 17030,
+      "sha256": "283d0349bc25b04aad3cb156c71301c5e0bea17dd26c1709c3f0e9d1d16b8e50"
+    },
+    {
+      "path": "tests/xeroRecoveryStepIntegration.test.js",
+      "byteLength": 22359,
+      "sha256": "899cd71375e77cfa7040a97d9cb2ecc80b186aaf874db734ac0e07a3f86b3878"
+    },
+    {
+      "path": "tests/xeroRecoveryStepProtocol.test.js",
+      "byteLength": 18362,
+      "sha256": "7385852e41a32e06f6eaffc2c423aff8bfc961782448961a28e8032ce60374ca"
+    },
+    {
+      "path": "tests/xeroRecoveryStepProtocolDatabase.test.js",
+      "byteLength": 34345,
+      "sha256": "2a5fef83778af21412ae07f28a75217d78fa5ce1ccf7e94bcf49e44872ed82ef"
+    },
+    {
+      "path": "tests/xeroRecoveryTokenCustodyDatabase.test.js",
+      "byteLength": 19609,
+      "sha256": "9817e4a711610b41f008d4ec1636775479821dfc317832939521bff421cdec18"
+    },
+    {
+      "path": "tests/xeroRecoveryVercelIngress.test.js",
+      "byteLength": 28423,
+      "sha256": "2ccec45b79941334a6cd7aa3c3c123d373dccd122c04780348aaf4844018657d"
+    },
+    {
+      "path": "vercel.json",
+      "byteLength": 1719,
+      "sha256": "535150ca7b88c2fab4f9094ee7b0cd764711195a5d1682d7448a59b07594d68d"
+    }
+  ],
+  "previousSourceBindingsSha256": "bbfbf19328ddb32392642da10df02f6ef8055e79a4652a378f1dcde1e53db295",
+  "sourceCommitMeaning": "Exact reviewed transport diagnostic source 1cb27ed2. Only ingress module and ingress tests current-source byte rows change. This offline fixture grants no hosted qualification, financial, or Production authority."
+}

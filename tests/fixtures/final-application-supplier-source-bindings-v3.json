@@ -1,0 +1,42 @@
+{
+  "kind": "final_application_supplier_source_bindings_v1",
+  "schemaVersion": 3,
+  "historicalManifestSha256": "d8a99d562481840cd96bc67950be7074ec1d518be4648436ff35e2c076d22227",
+  "baseController": "e60d6f0e858f862bca3bcf3b67d4aa0c8fbefae1",
+  "acceptedApplication": "082aa0b556c9d0623a8882bf2a4204bc31e2c1e4",
+  "originalBindings": {
+    "api/_runtimeCache.js": "4acde7e0513f87e81523a52650ff06fc3b7895153b6001532b7b0a67ed3fd4b0",
+    "api/_supabaseConfig.js": "4313704adf8c6a6c891c7226775fbfdbe439de8a615d490b900da379b562187f",
+    "config/fcosConnections.js": "e826d82510a8aeabfa285a66e8d1c546265347536c6f17a7b861cff8c5da0c15",
+    "package-lock.json": "0f35c1e123ab566f5d065d187bc0b8a7d1e05f7968ec31a03cd67ac0070aa0ef",
+    "package.json": "ec6f54ad36bdfdbf4e895d6572782d87fcd21fb7325f36b82b673789d401f17f",
+    "tests/xeroSupplierFinancialBucketDatabase.fixture.js": "4660dea5d9656779c674f4c4983a17131b9745729e9d3424377bd89ae4ad16d9",
+    "tests/xeroSupplierFinancialBucketPreservation.test.js": "048a8ea327b74d34e9721f8367e02f54d21eb87a861eed818a8f333edf27c6cb",
+    "api/_xeroSharedControl.js": "0b2cd20fc0d3f48f2f5e1c7754aa57d18c102f676bbd11c81a6385ce67cf0631"
+  },
+  "sourceOverrides": {
+    "api/_runtimeCache.js": "0a798121eb697e6fb9ba3628863e04093a97ef19acbf700d6b854ad6be3698cd",
+    "api/_supabaseConfig.js": "070f4e7a31d2e899e7bfa5fc6a50980c96f0e53a11c91649330dafc4022bca05",
+    "config/fcosConnections.js": "2f2513db3636bda2a8b85ebec3737e018bfa9723a3a8fcbe5b385f4739e9e6d8",
+    "package-lock.json": "4771e077366d389088d5a6e9f159c603982574588ee1f5f3867c443581d33df2",
+    "package.json": "aa2cd228126b0348bd36ccd19ba5b6e2805d38fa7d55fafca81b3377d9630038",
+    "tests/xeroSupplierFinancialBucketDatabase.fixture.js": "27542fd1a802c7c89c666d1736df0046926509892d7769cc9e106f2adb9a6584",
+    "tests/xeroSupplierFinancialBucketPreservation.test.js": "54217b21cc338509200308c73679a8a875e7927485109dc15d7be6f9bb66e8c1",
+    "api/_xeroSharedControl.js": "ee17335a6590b1586382897bc2b471def7026141a33a793fd43fd36125898052"
+  },
+  "sevenRawFixtureRecordsUnchanged": true,
+  "algorithmBodiesUnchanged": true,
+  "generatorExecuted": false,
+  "privateFixtureRead": false,
+  "currentBusinessCase": false,
+  "financialAuthorityGranted": false,
+  "meaning": "Additive binding for the reviewed ordinary runtime admission shared-control change. Original v1/v2 compositions and seven raw successor fixtures/manifest/generator remain hash-pinned. Only the public import closure for api/_xeroSharedControl.js advances; no algorithm or financial authority changes.",
+  "previousSourceCompositionSha256": "a0545d4b883712811785a45673359c9cc7db7b7341b6065a4bca68e51ff4ff6c",
+  "runtimeAdmissionPortabilityOnly": {
+    "path": "api/_xeroSharedControl.js",
+    "historicalSha256": "0b2cd20fc0d3f48f2f5e1c7754aa57d18c102f676bbd11c81a6385ce67cf0631",
+    "currentSha256": "ee17335a6590b1586382897bc2b471def7026141a33a793fd43fd36125898052",
+    "sourceCommit": "082aa0b556c9d0623a8882bf2a4204bc31e2c1e4",
+    "sqlOrFinancialAlgorithmsChanged": false
+  }
+}

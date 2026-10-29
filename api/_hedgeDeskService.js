@@ -1,5 +1,8 @@
+import { isAllowedAiSelection } from './_aiModelRouting.js';
 import { createHash } from 'node:crypto';
 import { isReadOnlyCiProfile, requireReadOnlyCiOperation } from './_readOnlyCiAccess.js';
+import { isDeploymentReadOnly, requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
+import { isReadOnlyHedgeDeskAction } from './_hedgeDeskReadOnly.js';
 import { richTextPlainLength, sanitizeRichText } from './_richText.js';
 import {
   calcSwapFees,
@@ -293,6 +296,11 @@ function cleanPayload(config, payload, profile, { creating = false } = {}) {
 }
 
 function sanitizeAppConfigPayload(payload, configKey) {
+  if (configKey === 'assistant_model') {
+    const modelId = typeof payload?.value === 'string' ? payload.value : payload?.value?.modelId;
+    if (!isAllowedAiSelection(modelId)) throw httpError('Select a supported Trading Assistant model.');
+    return { ...payload, value: modelId };
+  }
   if (configKey !== 'email_settings') return payload;
   const value = payload?.value && typeof payload.value === 'object' ? payload.value : {};
   const subject = String(value.email_subject || '').trim().slice(0, 500);
@@ -665,7 +673,9 @@ async function loadMopsMonthVerifications(client, mops) {
 }
 
 export async function loadHedgeDeskSnapshot({ client, capabilities }) {
-  const expiryAutomation = await reconcilePaperHedgeExpiry(client);
+  const expiryAutomation = isDeploymentReadOnly()
+    ? { status: 'not_run', reason: 'deployment_read_only' }
+    : await reconcilePaperHedgeExpiry(client);
   const entries = await Promise.all(SNAPSHOT_ENTITIES.map(async ([key, entity, limit]) => [
     key,
     await listRows(client, entity, configFor(entity), { limit }),
@@ -686,6 +696,7 @@ export async function loadHedgeDeskSnapshot({ client, capabilities }) {
 }
 
 export async function handleHedgeDeskEntity(body, profile, { client, capabilities }) {
+  requireDeploymentMutationAllowed(!isReadOnlyHedgeDeskAction(body));
   const action = String(body?.action || 'list');
   if (action === 'snapshot') return loadHedgeDeskSnapshot({ client, capabilities });
   if (action === 'brokerSettlementUpdate') return saveBrokerSettlement(client, profile, capabilities, body);
@@ -813,7 +824,9 @@ export async function handleHedgeMarkets(body, profile, { client, capabilities }
   requireReadOnlyCiOperation(profile, 'hedgeMarkets', body);
   const action = String(body?.action || 'snapshot');
   if (action === 'snapshot') {
-    const expiryAutomation = isReadOnlyCiProfile(profile)
+    const expiryAutomation = isDeploymentReadOnly()
+      ? { status: 'not_run', reason: 'deployment_read_only' }
+      : isReadOnlyCiProfile(profile)
       ? { status: 'not_run', reason: 'read_only_identity' }
       : await reconcilePaperHedgeExpiry(client);
     const [mops, settingsResult, marketIntelligence] = await Promise.all([

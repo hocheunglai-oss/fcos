@@ -8,7 +8,7 @@ export default [
   {
     // Salesforce LWC decorators are compiled and validated by the Salesforce
     // deployment compiler; the FCOS web ESLint parser does not understand them.
-    ignores: ["force-app/**", ".fcos-cli/**"],
+    ignores: ["force-app/**", ".fcos-cli/**", "output/**", "outputs/**", "reports/**", "tmp/**"],
   },
   {
     files: [
@@ -93,4 +93,10 @@ export default [
       }],
     },
   },
+  {
+    // Preserve the exact historical suite bytes; the current successor remains linted.
+    files: ["tests/xeroSupplierFinancialBucketDatabase.historical-test.js"],
+    rules: { "unused-imports/no-unused-imports": "off" },
+  },
+  { files: ["api/connection-runtime.js", "api/_connectionRuntime.js"], languageOptions: { parserOptions: { ecmaVersion: 2025 } } },
 ];

@@ -80,10 +80,28 @@ function directoryFilters(value = {}) {
   const countryCodes = unique(Array.isArray(filters.countryCodes) ? filters.countryCodes : [])
     .map((country) => country.toUpperCase())
     .filter(Boolean);
-  if (accountIds.length > 2_000 || portIds.length > 2_000 || countryCodes.length > 200) {
+  const excludedCountryCodes = unique(Array.isArray(filters.excludedCountryCodes) ? filters.excludedCountryCodes : [])
+    .map((country) => country.toUpperCase())
+    .filter(Boolean);
+  const invalidCountry = [...countryCodes, ...excludedCountryCodes].some((country) => country.length > 100 || /[\u0000-\u001f\u007f]/.test(country));
+  if (invalidCountry || countryCodes.some((country) => excludedCountryCodes.includes(country))) {
+    throw serviceError('Dashboard country filters and exclusions are invalid.', 400, 'ACCOUNT_CREDIT_COUNTRY_FILTER_INVALID');
+  }
+  if (accountIds.length > 2_000 || portIds.length > 2_000 || countryCodes.length > 200 || excludedCountryCodes.length > 200) {
     throw serviceError('Dashboard Account Statement filters exceed the supported scope.', 400, 'ACCOUNT_CREDIT_FILTER_LIMIT');
   }
-  return { accountIds, portIds, countryCodes };
+  return { accountIds, portIds, countryCodes, excludedCountryCodes };
+}
+
+function stemMatchesDirectoryScope(stem, filters = {}, disputeOnly = false) {
+  const scopedPorts = new Set((filters.portIds || []).map(idKey));
+  const scopedCountries = new Set((filters.countryCodes || []).map((country) => country.toUpperCase()));
+  const excludedCountries = new Set((filters.excludedCountryCodes || []).map((country) => country.toUpperCase()));
+  const stemCountry = text(stem?.Port__r?.Country__c).toUpperCase();
+  return (!scopedPorts.size || scopedPorts.has(idKey(stem?.Port__c)))
+    && (!scopedCountries.size || scopedCountries.has(stemCountry))
+    && (!excludedCountries.size || !excludedCountries.has(stemCountry))
+    && (!disputeOnly || stem?.Dispute__c === true || Boolean(stem?.Dispute_Status__c && !/^no disputes?$/i.test(stem.Dispute_Status__c)));
 }
 
 function fieldMap(describe) {
@@ -254,7 +272,7 @@ export async function loadDashboardAccountCreditDirectory({ body = {}, accessCon
       const [accountDescribe, stemDescribe, portDescribe] = await Promise.all([
         describeObject('Account', force),
         describeObject('STEM__c', force),
-        filters.countryCodes.length ? describeObject('Port__c', force) : Promise.resolve(null),
+        filters.countryCodes.length || filters.excludedCountryCodes.length ? describeObject('Port__c', force) : Promise.resolve(null),
       ]);
       const accountFields = fieldMap(accountDescribe);
       const stemFields = fieldMap(stemDescribe);
@@ -274,6 +292,12 @@ export async function loadDashboardAccountCreditDirectory({ body = {}, accessCon
         conditions.push(locationPortIds.length
           ? `Id IN (SELECT Account__c FROM STEM__c WHERE Account__c != null AND Port__c IN (${locationPortIds.map((id) => `'${soql(id)}'`).join(',')}))`
           : 'Id = null');
+      }
+      if (filters.excludedCountryCodes.length) {
+        requireFields(stemFields, ['Port__c'], 'STEM__c');
+        requireFields(portFields, ['Country__c'], 'Port__c');
+        const excluded = filters.excludedCountryCodes.map((country) => `'${soql(country)}'`).join(',');
+        conditions.push(`Id IN (SELECT Account__c FROM STEM__c WHERE Account__c != null AND (Port__c = null OR Port__r.Country__c = null OR Port__r.Country__c NOT IN (${excluded})))`);
       }
       if (query) {
         const escaped = `%${soql(query)}%`;
@@ -860,11 +884,7 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
   const entityType = body.entityType === 'group' ? 'group' : 'account';
   const requestedAccountIds = normalizeRequestedGroupAccountIds(body.includedAccountIds);
   const locationFilters = directoryFilters(body.filters || body.dashboardScope?.filters);
-  const scopedPorts = new Set(locationFilters.portIds.map(idKey));
-  const scopedCountries = new Set(locationFilters.countryCodes.map((country) => country.toUpperCase()));
-  const matchesScope = (stem) => (!scopedPorts.size || scopedPorts.has(idKey(stem.Port__c)))
-    && (!scopedCountries.size || scopedCountries.has(text(stem.Port__r?.Country__c).toUpperCase()))
-    && (!body.disputeOnly || stem.Dispute__c === true || Boolean(stem.Dispute_Status__c && !/^no disputes?$/i.test(stem.Dispute_Status__c)));
+  const matchesScope = (stem) => stemMatchesDirectoryScope(stem, locationFilters, body.disputeOnly === true);
   const scope = normalizeAccountCreditScope(body.scope);
   const limit = Math.min(Math.max(Number(body.limit) || 50, 1), 100);
   const cursor = decodeAccountCreditCursor(body.cursor);
@@ -1211,4 +1231,6 @@ export const dashboardAccountCreditStatementServiceInternals = {
   supplierCreditCashflowSelectFields,
   statementRows,
   resolveGroupAccountScope,
+  directoryFilters,
+  stemMatchesDirectoryScope,
 };

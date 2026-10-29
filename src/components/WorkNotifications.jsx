@@ -56,6 +56,7 @@ function sourceBadgeClass(source) {
 }
 
 export default function WorkNotifications() {
+  const [verificationMessage, setVerificationMessage] = useState('');
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -165,11 +166,15 @@ export default function WorkNotifications() {
   const verifySystemIncident = useCallback(async (notification) => {
     if (!notification?.incidentSignature) return;
     setUpdating(true);
+    setVerificationMessage('');
     try {
       const response = await appClient.functions.invoke("systemErrorVerify", {
         incidentSignature: notification.incidentSignature,
       }, { force: true });
+      setVerificationMessage(response.data?.error || response.data?.message || "Recovery verified for this incident.");
       if (!response.data?.error) await loadNotifications({ quiet: true });
+    } catch {
+      setVerificationMessage('This incident could not be verified. Its unresolved status has been retained.');
     } finally {
       setUpdating(false);
     }
@@ -195,6 +200,7 @@ export default function WorkNotifications() {
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="glass-floating w-[calc(100vw-24px)] max-w-[400px] overflow-hidden p-0">
+        {verificationMessage && <p role="status" className="border-b p-3 text-xs text-muted-foreground">{verificationMessage}</p>}
         <div className="app-navigation-caption-material flex min-w-0 items-center justify-between gap-3 border-b border-border px-4 py-3">
           <div className="min-w-0">
             <div className="text-sm font-semibold">Notifications</div>
@@ -271,7 +277,7 @@ export default function WorkNotifications() {
                         </span>
                       )}
                       {notification.outcome && (
-                        <span className="mt-1 block text-[11px] text-muted-foreground">Save outcome: {notification.outcome}</span>
+                        <span className="mt-1 block text-[11px] text-muted-foreground">Outcome: {notification.outcome}</span>
                       )}
                       {notification.actionLabel && (
                         <span className="mt-1 block text-[11px] font-semibold text-blue-700">{notification.actionLabel}</span>

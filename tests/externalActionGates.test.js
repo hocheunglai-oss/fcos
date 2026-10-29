@@ -6,7 +6,7 @@ import { sfRequest } from '../api/_salesforce.js';
 
 test('established FCOS integrations stay live while new actions remain UAT gated', () => {
   const gates = externalActionGates({});
-  assert.deepEqual(Object.values(gates).map((gate) => gate.enabled), [true, true, true, false, false, false, false, false, false]);
+  assert.deepEqual(Object.values(gates).map((gate) => gate.enabled), [true, true, true, false, false, false, false, false, false, false]);
   assert.equal(isExternalActionEnabled('salesforce_write', { FCOS_DISABLE_SALESFORCE_WRITE: 'TRUE' }), false);
   assert.equal(isExternalActionEnabled('salesforce_write', { FCOS_DISABLE_SALESFORCE_WRITE: 'yes' }), true);
   assert.equal(isExternalActionEnabled('outlook_calendar', {}), false);
@@ -71,6 +71,7 @@ test('FCOS keeps its dedicated Supabase extension and scheduled email cadence', 
   assert.match(source, /serverSupabaseConfig\(\)/);
   assert.match(source, /createClient\(config\.url, config\.key/);
   assert.deepEqual(vercel.crons, [
+    { path: '/api/functions/missingNomBReminderCron', schedule: '*/5 * * * *' },
     { path: '/api/functions/outstandingBuyerInvoicesEmailCron', schedule: '0 0 * * 1-5' },
     { path: '/api/functions/outstandingBuyerInvoicesEmailCron', schedule: '0 6 * * 1-5' },
     { path: '/api/functions/paymentCollectionsReconcileCron', schedule: '30 23 * * 0-4' },

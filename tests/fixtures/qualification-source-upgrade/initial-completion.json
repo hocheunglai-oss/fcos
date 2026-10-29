@@ -1,0 +1,213 @@
+{
+  "schemaVersion": 1,
+  "kind": "fcos_qualification_plan_completion_v1",
+  "epoch": 1,
+  "operationId": "qualification-plan-completion-epoch1-39672498844-v1",
+  "previousRecoveryId": "qualification-schema-recovery-epoch1-39653018028-v1",
+  "previousRecoveryProofSha256": "fd40f2839bc75bc0dc0edd234f31a48fd96e9b8623c6e94c8cf009381ff09d6b",
+  "previousPlanSha256": "802501ab08bd3e9745c2758b8e359ba2982aafe46259cb1f6dbec046983ced12",
+  "setupSha256": "fea751d39a5c86c411fe69501a156d3f91cf9242209f4c56f07ece8cd8f84eb6",
+  "plan": {
+    "schemaVersion": 2,
+    "releaseId": "fcos-qualification-64aa338b-2ef733d1-schema-20261022",
+    "branch": "codex/compat-application-auth-correction-20261018",
+    "stage": "qualification",
+    "executionMode": "qualification",
+    "sourceProfile": "compat_source_config_20261020",
+    "scope": {
+      "sha256": "8321cb822a134e9f18145808e0e92b873faa5a3ec7c4acf92f8340dc08061eab",
+      "handoffs": [],
+      "existingUi": false,
+      "financialAuthority": false
+    },
+    "migration": {
+      "mode": "none",
+      "expectedSchemaSha256": "84ef2811eeefb87f8be4ef5219ab031f37fd3fd424a390e4c80b4afba7f13a4d"
+    },
+    "runtime": {
+      "expectedSha256": "7847f929a137c3b0001dbcd5174e0a6be4c8f7417a78b95a46acc44d11ef0fcf",
+      "expectedProduction": {
+        "flags": {
+          "VARIABLE_CHARGE_PAIRED_WORKFLOW_ENABLED": {
+            "state": "known",
+            "value": true
+          },
+          "FCOS_ENABLE_FCUNO_FEDERATION": {
+            "state": "known",
+            "value": true
+          },
+          "FCOS_ENABLE_FCUNO_IDENTITY_SYNC": {
+            "state": "known",
+            "value": true
+          },
+          "FCOS_ENABLE_FCUNO_LEGACY_PASSWORD_LOGIN": {
+            "state": "known",
+            "value": true
+          }
+        },
+        "safety": {
+          "readOnly": false,
+          "externalActions": {
+            "salesforce_write": true,
+            "google_drive": true,
+            "email_delivery": true,
+            "missing_nom_b_reminders": true,
+            "outlook_calendar": false,
+            "growth_coaching_email": false,
+            "bank_execution": false,
+            "payment_promotion": false,
+            "xero_contact_sync": true,
+            "xero_financial_sync": true
+          }
+        },
+        "auth": {
+          "supabase": {
+            "state": "authenticated",
+            "target": "pjforfvchygdyqfcgpmw",
+            "mode": "service_role"
+          },
+          "salesforce": {
+            "state": "authenticated",
+            "target": "00D2x000000Ei4oEAC",
+            "mode": "application"
+          },
+          "xero": {
+            "state": "authenticated",
+            "target": "aa8c08e2-17fd-4874-b7bc-10ffd82db9d0",
+            "mode": "oauth"
+          },
+          "drive": {
+            "state": "unknown",
+            "target": "",
+            "mode": ""
+          },
+          "fcuno": {
+            "state": "unknown",
+            "target": "",
+            "mode": ""
+          },
+          "microsoft": {
+            "state": "unknown",
+            "target": "",
+            "mode": ""
+          },
+          "openai": {
+            "state": "unknown",
+            "target": "",
+            "mode": ""
+          }
+        }
+      },
+      "expectedPreview": {
+        "flags": {
+          "VARIABLE_CHARGE_PAIRED_WORKFLOW_ENABLED": {
+            "state": "known",
+            "value": true
+          },
+          "FCOS_ENABLE_FCUNO_FEDERATION": {
+            "state": "known",
+            "value": true
+          },
+          "FCOS_ENABLE_FCUNO_IDENTITY_SYNC": {
+            "state": "known",
+            "value": true
+          },
+          "FCOS_ENABLE_FCUNO_LEGACY_PASSWORD_LOGIN": {
+            "state": "known",
+            "value": true
+          }
+        },
+        "safety": {
+          "readOnly": true,
+          "externalActions": {
+            "salesforce_write": false,
+            "google_drive": false,
+            "email_delivery": false,
+            "missing_nom_b_reminders": false,
+            "outlook_calendar": false,
+            "growth_coaching_email": false,
+            "bank_execution": false,
+            "payment_promotion": false,
+            "xero_contact_sync": false,
+            "xero_financial_sync": false
+          }
+        },
+        "auth": {
+          "supabase": {
+            "state": "authenticated",
+            "target": "pjforfvchygdyqfcgpmw",
+            "mode": "service_role"
+          },
+          "salesforce": {
+            "state": "authenticated",
+            "target": "00D2x000000Ei4oEAC",
+            "mode": "application"
+          },
+          "xero": {
+            "state": "authenticated",
+            "target": "aa8c08e2-17fd-4874-b7bc-10ffd82db9d0",
+            "mode": "oauth"
+          }
+        }
+      }
+    },
+    "changes": [
+      "Qualify the published hosted controller and explicit source-configuration compatibility successor; no Production execution, application handoff or financial mutation."
+    ]
+  },
+  "planSha256": "3abeb230576e29f708c89fea3330ffc1624cdaf0dcb8e3df9f072a5cd4e5aedc",
+  "terminalFailure": {
+    "runId": "39672498844",
+    "runAttempt": "1",
+    "status": "completed",
+    "conclusion": "failure",
+    "failedStep": "Prepare actual qualification manifest",
+    "code": "RUNTIME_EXPECTATIONS",
+    "beforeRegistration": true,
+    "providerEvidenceSha256": "8493774013ae81498e1ad0adb1150e65726b1c6b7daff20e7cc44d7eec2070d8",
+    "prepareLogSha256": "9b42d50ed8234a0977792410897b11c4a3d5522f6b7b6f6d0e970b7f7884879f"
+  },
+  "manifestPreflight": {
+    "accepted": true,
+    "complete": true,
+    "controllerSha": "64aa338b04cee7e05bde0ca9bfd10b81ac001a65",
+    "candidateSha": "2ef733d17dd12314c72971c2220b2b09903a6bf0",
+    "setupSha256": "fea751d39a5c86c411fe69501a156d3f91cf9242209f4c56f07ece8cd8f84eb6",
+    "previousPlanSha256": "802501ab08bd3e9745c2758b8e359ba2982aafe46259cb1f6dbec046983ced12",
+    "planSha256": "3abeb230576e29f708c89fea3330ffc1624cdaf0dcb8e3df9f072a5cd4e5aedc",
+    "manifestSha256": "e73dcbc3a6e4a75646218d6652dccbc7b422409d3faee7d52268cb67681b8e41",
+    "sourceEvidenceSha256": "44431a9c531e75a9b7b1aeef5f36b26f6ffc5ba5eb59a5c4f07a60e5aab946ab"
+  },
+  "ownerReadbackSha256": "7d26cc494f1f720f1d4119583945f345a3f95090d70e2430c07398327c955642",
+  "request": {
+    "method": "POST",
+    "route": "/repos/hocheunglai-oss/fcos/actions/workflows/authenticated-release.yml/dispatches",
+    "body": {
+      "ref": "codex/hosted-qualification-dependency-setup-20261020",
+      "inputs": {
+        "bootstrap_phase": "qualification",
+        "candidate_sha": "2ef733d17dd12314c72971c2220b2b09903a6bf0",
+        "plan": "{\"branch\":\"codex/compat-application-auth-correction-20261018\",\"changes\":[\"Qualify the published hosted controller and explicit source-configuration compatibility successor; no Production execution, application handoff or financial mutation.\"],\"executionMode\":\"qualification\",\"migration\":{\"expectedSchemaSha256\":\"84ef2811eeefb87f8be4ef5219ab031f37fd3fd424a390e4c80b4afba7f13a4d\",\"mode\":\"none\"},\"releaseId\":\"fcos-qualification-64aa338b-2ef733d1-schema-20261022\",\"runtime\":{\"expectedPreview\":{\"auth\":{\"salesforce\":{\"mode\":\"application\",\"state\":\"authenticated\",\"target\":\"00D2x000000Ei4oEAC\"},\"supabase\":{\"mode\":\"service_role\",\"state\":\"authenticated\",\"target\":\"pjforfvchygdyqfcgpmw\"},\"xero\":{\"mode\":\"oauth\",\"state\":\"authenticated\",\"target\":\"aa8c08e2-17fd-4874-b7bc-10ffd82db9d0\"}},\"flags\":{\"FCOS_ENABLE_FCUNO_FEDERATION\":{\"state\":\"known\",\"value\":true},\"FCOS_ENABLE_FCUNO_IDENTITY_SYNC\":{\"state\":\"known\",\"value\":true},\"FCOS_ENABLE_FCUNO_LEGACY_PASSWORD_LOGIN\":{\"state\":\"known\",\"value\":true},\"VARIABLE_CHARGE_PAIRED_WORKFLOW_ENABLED\":{\"state\":\"known\",\"value\":true}},\"safety\":{\"externalActions\":{\"bank_execution\":false,\"email_delivery\":false,\"google_drive\":false,\"growth_coaching_email\":false,\"missing_nom_b_reminders\":false,\"outlook_calendar\":false,\"payment_promotion\":false,\"salesforce_write\":false,\"xero_contact_sync\":false,\"xero_financial_sync\":false},\"readOnly\":true}},\"expectedProduction\":{\"auth\":{\"drive\":{\"mode\":\"\",\"state\":\"unknown\",\"target\":\"\"},\"fcuno\":{\"mode\":\"\",\"state\":\"unknown\",\"target\":\"\"},\"microsoft\":{\"mode\":\"\",\"state\":\"unknown\",\"target\":\"\"},\"openai\":{\"mode\":\"\",\"state\":\"unknown\",\"target\":\"\"},\"salesforce\":{\"mode\":\"application\",\"state\":\"authenticated\",\"target\":\"00D2x000000Ei4oEAC\"},\"supabase\":{\"mode\":\"service_role\",\"state\":\"authenticated\",\"target\":\"pjforfvchygdyqfcgpmw\"},\"xero\":{\"mode\":\"oauth\",\"state\":\"authenticated\",\"target\":\"aa8c08e2-17fd-4874-b7bc-10ffd82db9d0\"}},\"flags\":{\"FCOS_ENABLE_FCUNO_FEDERATION\":{\"state\":\"known\",\"value\":true},\"FCOS_ENABLE_FCUNO_IDENTITY_SYNC\":{\"state\":\"known\",\"value\":true},\"FCOS_ENABLE_FCUNO_LEGACY_PASSWORD_LOGIN\":{\"state\":\"known\",\"value\":true},\"VARIABLE_CHARGE_PAIRED_WORKFLOW_ENABLED\":{\"state\":\"known\",\"value\":true}},\"safety\":{\"externalActions\":{\"bank_execution\":false,\"email_delivery\":true,\"google_drive\":true,\"growth_coaching_email\":false,\"missing_nom_b_reminders\":true,\"outlook_calendar\":false,\"payment_promotion\":false,\"salesforce_write\":true,\"xero_contact_sync\":true,\"xero_financial_sync\":true},\"readOnly\":false}},\"expectedSha256\":\"7847f929a137c3b0001dbcd5174e0a6be4c8f7417a78b95a46acc44d11ef0fcf\"},\"schemaVersion\":2,\"scope\":{\"existingUi\":false,\"financialAuthority\":false,\"handoffs\":[],\"sha256\":\"8321cb822a134e9f18145808e0e92b873faa5a3ec7c4acf92f8340dc08061eab\"},\"sourceProfile\":\"compat_source_config_20261020\",\"stage\":\"qualification\"}",
+        "xero_recovery_mode": "disabled"
+      }
+    }
+  },
+  "rootReview": {
+    "kind": "fcos_qualification_plan_completion_review_v1",
+    "role": "root",
+    "reviewerId": "/root",
+    "accepted": true,
+    "subjectSha256": "551220da27b52112a5989621432a2df8239162eef577ffb1503894b236e7f93a",
+    "sourceEvidenceSha256": "b66c0fd4a7678743aa47ffbe439cf7b394beb72ac098cfb3eb845f8ef10a15a6",
+    "reviewedAt": "2026-10-21T21:18:36.562Z"
+  },
+  "independentReview": {
+    "kind": "fcos_qualification_plan_completion_review_v1",
+    "role": "independent",
+    "reviewerId": "/root/canonical_publication_review",
+    "accepted": true,
+    "subjectSha256": "551220da27b52112a5989621432a2df8239162eef577ffb1503894b236e7f93a",
+    "sourceEvidenceSha256": "7a0ad86efc9a43012e20b354fd6f43ee05a36d2bc65b6add742823838784ebe3",
+    "reviewedAt": "2026-10-21T21:14:48.651785Z"
+  }
+}

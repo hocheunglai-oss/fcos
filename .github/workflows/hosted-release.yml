@@ -1,0 +1,152 @@
+# The controller pin is intentionally independent of later main commits.
+# Enable only after isolated setup and reviewed admission. Qualification cannot promote Production.
+name: FCOS hosted release
+run-name: ${{ format('FCOS hosted release {0}', inputs.candidate_sha || 'resume saved manifest') }}
+'on':
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Exact reviewed candidate SHA for a new release.
+        type: string
+        required: false
+      plan:
+        description: Reviewed JSON business release plan. Required for a new release.
+        type: string
+        required: false
+      resume_manifest:
+        description: Saved unchanged release manifest for recovery. Do not generate a new release ID.
+        type: string
+        required: false
+permissions: {}
+jobs:
+  manifest:
+    name: Prepare immutable release manifest
+    if: ${{ vars.FCOS_HOSTED_CONTROLLER_ADMITTED == 'true' }}
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/hocheunglai-oss/fcos-release-checks@sha256:1cb176a00c6224f94a668f76de51186e2d0b3cd95d631af4289467451caf40ef
+      credentials:
+        username: hocheunglai-oss
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user 1001:1001
+    defaults:
+      run:
+        shell: bash
+    environment: fcos-hosted-verification
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      manifest: ${{ steps.manifest.outputs.manifest }}
+    env:
+      FCOS_CONTROLLER_DIRECTORY: controller
+      FCOS_CANDIDATE_DIRECTORY: candidate
+      FCOS_CONTROLLER_SHA: 6a3fbd8fd05a76c052e7e380d618aedf43e5b72e
+      FCOS_ADMITTED_RELEASE_SETUP: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP }}
+      FCOS_ADMITTED_RELEASE_SETUP_SHA256: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP_SHA256 }}
+      FCOS_CANDIDATE_SHA: ${{ fromJSON(inputs.resume_manifest || '{}').candidate.sha || inputs.candidate_sha }}
+      FCOS_RELEASE_PLAN: ${{ inputs.plan }}
+      FCOS_RESUME_MANIFEST: ${{ inputs.resume_manifest }}
+    steps:
+      - name: Check out admitted controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: 6a3fbd8fd05a76c052e7e380d618aedf43e5b72e
+          path: controller
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate dispatch inputs before reading candidate
+        run: >-
+          node --input-type=module <<'NODE'
+
+          if (!/^[a-f0-9]{40}$/.test(process.env.FCOS_CANDIDATE_SHA || '') || process.env.GITHUB_REF !==
+          'refs/heads/main' || process.env.GITHUB_REF_PROTECTED !== 'true') throw new Error('Admitted protected main and
+          exact candidate SHA required');
+
+          if (!!process.env.FCOS_RESUME_MANIFEST === !!process.env.FCOS_RELEASE_PLAN) throw new Error('Provide one new
+          plan or one unchanged recovery manifest');
+
+          NODE
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ env.FCOS_CANDIDATE_SHA }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install admitted controller dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Verify admitted trusted runtime
+        timeout-minutes: 1
+        run: |
+          node --input-type=commonjs <<'NODE'
+          const {accessSync,constants,readFileSync,realpathSync}=require('node:fs');
+          const {spawnSync}=require('node:child_process');
+          const playwright=require('playwright');
+          if(process.version!=='v24.18.0'||process.platform!=='linux'||process.arch!=='x64'||process.getuid()!==1001||process.getgid()!==1001
+            ||process.env.PLAYWRIGHT_BROWSERS_PATH!=='/ms-playwright'||require('playwright/package.json').version!=='1.62.1'
+            ||JSON.parse(readFileSync('/usr/local/lib/node_modules/vercel/package.json','utf8')).version!=='54.20.1'
+            ||realpathSync('/usr/local/bin/vercel')!=='/usr/local/lib/node_modules/vercel/dist/vc.js')throw Error('HOSTED_TRUSTED_TOOLCHAIN_MISMATCH');
+          accessSync('/usr/local/bin/vercel',constants.X_OK);
+          const chromium=playwright.chromium.executablePath();
+          if(!chromium.startsWith('/ms-playwright/'))throw Error('HOSTED_TRUSTED_BROWSER_PATH');
+          const python=spawnSync('/usr/bin/python3',['--version'],{encoding:'utf8',timeout:5000,maxBuffer:4096,env:{PATH:'/usr/local/bin:/usr/bin:/bin'}});
+          if(python.status!==0||python.signal||python.error||python.stdout.trim()!=='Python 3.11.2')throw Error('HOSTED_TRUSTED_PYTHON_MISMATCH');
+          for(const binary of [chromium,'/opt/google/chrome/chrome']){
+            accessSync(binary,constants.X_OK);
+            const result=spawnSync(binary,['--version'],{encoding:'utf8',timeout:5000,maxBuffer:4096,env:{PATH:'/usr/local/bin:/usr/bin:/bin'}});
+            if(result.status!==0||result.signal||result.error||!/^(?:Chromium|Google Chrome(?: for Testing)?) [0-9]+\./.test(result.stdout.trim()))throw Error('HOSTED_TRUSTED_BROWSER_UNAVAILABLE');
+          }
+          console.log(JSON.stringify({node:process.version,platform:process.platform,arch:process.arch,python:python.stdout.trim(),playwright:'1.62.1',vercel:'54.20.1',browserAvailabilityVerified:true}));
+          NODE
+        working-directory: controller
+      - name: Prepare actual manifest
+        id: manifest
+        run: node controller/scripts/hosted-release-manifest.mjs
+        env:
+          FCOS_HOSTED_VERCEL_READ_TOKEN: ${{ secrets.FCOS_HOSTED_VERCEL_READ_TOKEN }}
+          FCOS_HOSTED_SCHEMA_DATABASE_URL: ${{ secrets.FCOS_HOSTED_SCHEMA_DATABASE_URL }}
+          FCOS_PRODUCTION_VERIFICATION_BYPASS: ${{ secrets.FCOS_PRODUCTION_VERIFICATION_BYPASS }}
+          FCOS_HOSTED_RUNTIME_EMAIL: ${{ secrets.FCOS_HOSTED_RUNTIME_EMAIL }}
+          FCOS_HOSTED_RUNTIME_PASSWORD: ${{ secrets.FCOS_HOSTED_RUNTIME_PASSWORD }}
+          FCOS_HOSTED_RUNTIME_EXPECTED_ROLE: ${{ vars.FCOS_HOSTED_RUNTIME_EXPECTED_ROLE }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ format('fcos-release-manifest-{0}', github.run_id) }}
+          path: release-manifest.json
+          if-no-files-found: error
+          retention-days: 90
+  release:
+    name: release
+    needs:
+      - manifest
+    permissions:
+      contents: read
+      actions: read
+      packages: read
+      id-token: write
+    uses: hocheunglai-oss/fcos/.github/workflows/hosted-release-controller.yml@6a3fbd8fd05a76c052e7e380d618aedf43e5b72e
+    with:
+      manifest: ${{ needs.manifest.outputs.manifest }}
+    # Values remain in each called job's protected environment; no secrets: inherit.
+    secrets:
+      FCOS_E2E_VERCEL_BYPASS: ${{ secrets.FCOS_E2E_VERCEL_BYPASS }}
+      FCOS_HOSTED_FCUNO_READ_TOKEN: ${{ secrets.FCOS_HOSTED_FCUNO_READ_TOKEN }}
+      FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+      FCOS_HOSTED_NORMAL_EMAIL: ${{ secrets.FCOS_HOSTED_NORMAL_EMAIL }}
+      FCOS_HOSTED_NORMAL_PASSWORD: ${{ secrets.FCOS_HOSTED_NORMAL_PASSWORD }}
+      FCOS_HOSTED_PRESERVATION_DATABASE_URL: ${{ secrets.FCOS_HOSTED_PRESERVATION_DATABASE_URL }}
+      FCOS_HOSTED_RESTRICTED_EMAIL: ${{ secrets.FCOS_HOSTED_RESTRICTED_EMAIL }}
+      FCOS_HOSTED_RESTRICTED_FALLBACK_EMAIL: ${{ secrets.FCOS_E2E_EMAIL }}
+      FCOS_HOSTED_RESTRICTED_FALLBACK_PASSWORD: ${{ secrets.FCOS_E2E_PASSWORD }}
+      FCOS_HOSTED_RESTRICTED_PASSWORD: ${{ secrets.FCOS_HOSTED_RESTRICTED_PASSWORD }}
+      FCOS_HOSTED_RUNTIME_EMAIL: ${{ secrets.FCOS_HOSTED_RUNTIME_EMAIL }}
+      FCOS_HOSTED_RUNTIME_PASSWORD: ${{ secrets.FCOS_HOSTED_RUNTIME_PASSWORD }}
+      FCOS_HOSTED_SALESFORCE_CLIENT_SECRET: ${{ secrets.FCOS_HOSTED_SALESFORCE_CLIENT_SECRET }}
+      FCOS_HOSTED_SCHEMA_DATABASE_URL: ${{ secrets.FCOS_HOSTED_SCHEMA_DATABASE_URL }}
+      FCOS_HOSTED_VERCEL_READ_TOKEN: ${{ secrets.FCOS_HOSTED_VERCEL_READ_TOKEN }}
+      FCOS_HOSTED_VERCEL_TOKEN: ${{ secrets.FCOS_HOSTED_VERCEL_TOKEN }}
+      FCOS_PRODUCTION_VERIFICATION_BYPASS: ${{ secrets.FCOS_PRODUCTION_VERIFICATION_BYPASS }}

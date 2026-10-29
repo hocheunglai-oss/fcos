@@ -143,7 +143,7 @@ test("Projects & Tasks is a universal FCOS route with daily notification mainten
     readFile(appUrl, "utf8"),
     readFile(layoutUrl, "utf8"),
     readFile(new URL('../src/lib/workspaceStandards.js', import.meta.url), 'utf8'),
-    readFile(vercelUrl, "utf8"),
+    readFile(vercelUrl, "utf8").then(JSON.parse),
   ]);
   assert.match(
     appSource,
@@ -159,9 +159,8 @@ test("Projects & Tasks is a universal FCOS route with daily notification mainten
   );
   assert.match(layoutSource, /workspaceNavigation\('projects_tasks'/);
   assert.match(layoutSource, /<WorkNotifications \/>/);
-  assert.match(
-    vercelSource,
-    /"path": "\/api\/functions\/collaborationDailyCron"/,
+  assert.deepEqual(
+    vercelSource.crons.find(({ path }) => path === '/api/functions/collaborationDailyCron'),
+    { path: '/api/functions/collaborationDailyCron', schedule: '0 1 * * *' },
   );
-  assert.match(vercelSource, /"schedule": "0 1 \* \* \*"/);
 });

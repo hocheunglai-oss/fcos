@@ -25,3 +25,9 @@ test('local builds remain available but hosted scope cannot bypass via missing V
 test('configuration errors list names only, never raw environment contents', () => {
   assert.throws(() => assertFcunoBuildEnvironment({ ...approved, FCUNO_IDENTITY_ISSUER: 'private-sentinel', UNRELATED_SECRET: 'private-secret' }), error => !/private-sentinel|private-secret/.test(error.message));
 });
+test('publishable key alias is supported without relaxing public credential checks', () => {
+  const env = { ...approved, VITE_SUPABASE_ANON_KEY: undefined, VITE_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_fixture' };
+  assert.equal(assertFcunoBuildEnvironment(env).checked, true);
+  assert.equal(assertFcunoBuildEnvironment({ ...approved, VITE_SUPABASE_PUBLISHABLE_KEY: ' ' }).checked, true);
+  assert.throws(() => assertFcunoBuildEnvironment({ ...approved, VITE_SUPABASE_PUBLISHABLE_KEY: 'sb_secret_fixture' }), /FCUNO release configuration/);
+});

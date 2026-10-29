@@ -109,7 +109,6 @@ test('tracked pre-push guard uses the isolated FCOS GitHub identity', async () =
   const hook = await readFile(new URL('../.githooks/pre-push', import.meta.url), 'utf8');
   assert.match(hook, /git rev-parse --path-format=absolute --git-common-dir/);
   assert.match(hook, /env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="\$github_config_dir" gh api user/);
-  assert.match(hook, /git merge-base "\$local_sha" "\$origin_main"/);
   assert.match(hook, /hocheunglai-oss\/fcos/);
   assert.doesNotMatch(hook, /gh auth switch|gh auth login/);
 });

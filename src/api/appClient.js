@@ -69,6 +69,7 @@ async function requestAuthContext() {
   const { data } = await supabase.auth.getSession();
   return {
     accessToken: data?.session?.access_token || null,
+    providerToken: data?.session?.provider_token || null,
     scope: data?.session?.user?.id || 'anonymous',
   };
 }
@@ -175,6 +176,11 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
   if (DEDICATED_FUNCTION_ENDPOINTS[name]) headers['x-fcos-function-name'] = name;
   if (options.force) headers['x-fcos-cache-bypass'] = '1';
   if (authContext.accessToken) headers.authorization = `Bearer ${authContext.accessToken}`;
+  // Bootstrap only: never include the FCUNO proof in payloads, cache keys or
+  // unrelated API requests. Both tokens come from the same Supabase session.
+  if (name === 'authContext' && authContext.accessToken && authContext.providerToken) {
+    headers['x-fcos-fcuno-provider-token'] = authContext.providerToken;
+  }
   let res;
   try {
     res = await fetch(functionEndpoint(name), {
@@ -226,7 +232,9 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
 
   if (!responseIsJson) {
     return {
-      data: { error: 'The FCOS server API is unavailable. Start the full local FCOS runtime and try again.' },
+      data: { error: res.status === 504
+        ? 'The FCOS request timed out before it completed. Refresh the saved result before retrying.'
+        : 'The FCOS server API is unavailable. Start the full local FCOS runtime and try again.' },
       meta: {
         cached: false,
         cacheLayer: 'network',

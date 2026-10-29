@@ -372,6 +372,180 @@ private class HongKongBasicCallingBundleServiceTest {
     }
 
     @IsTest
+    static void outsideHongKongNeverCreatesOrRepopulatesManagedRows() {
+        STEM_Extra_Cost__c basic = [
+            SELECT Id, STEM__c, Supplier__c, Payment_Term__c
+            FROM STEM_Extra_Cost__c
+            WHERE Product2Id__r.Name = :HongKongBasicCallingBundleService.BASIC_CALLING_COST LIMIT 1
+        ];
+        STEM_Extra_Cost__c agency = [
+            SELECT Id, Lumpsum_Cost__c FROM STEM_Extra_Cost__c
+            WHERE Hong_Kong_Bundle_Managed__c = true AND Product2Id__r.Name = 'AGENCY FEE' LIMIT 1
+        ];
+        Port__c singapore = TestDataFactory.createTestPort('SINGAPORE', 'SINGAPORE', true);
+        Product2 agencyProduct = [SELECT Id FROM Product2 WHERE Name = 'AGENCY FEE' AND IsActive = true LIMIT 1];
+        Invoice__c invoice = new Invoice__c(Name = 'HK-BUNDLE-ISSUED', STEM__c = basic.STEM__c, Proforma__c = false);
+        STEM_Extra_Cost__c manualAgency = new STEM_Extra_Cost__c(
+            STEM__c = basic.STEM__c,
+            Supplier__c = basic.Supplier__c,
+            Product2Id__c = agencyProduct.Id,
+            RecordTypeId = Schema.SObjectType.STEM_Extra_Cost__c.getRecordTypeInfosByName().get('STEM Charge').getRecordTypeId(),
+            Payment_Term__c = basic.Payment_Term__c,
+            Fixed__c = true,
+            Lumpsum_Cost__c = 999,
+            Lumpsum_Price__c = 0,
+            Quantity__c = 1,
+            Quantity_Delivered_Per_BDN__c = 1,
+            Unit_of_Measure__c = '1.',
+            Cancelled__c = false
+        );
+
+        ContextManager.skipTriggers = true;
+        try {
+            update new STEM__c(Id = basic.STEM__c, Port__c = singapore.Id);
+            insert manualAgency;
+        } finally {
+            ContextManager.skipTriggers = false;
+        }
+
+        Account beforeSupplier = new Account(Id = basic.Supplier__c, Agency_Fee_USD__c = 250);
+        Account afterSupplier = new Account(Id = basic.Supplier__c, Agency_Fee_USD__c = 325);
+        HongKongBasicCallingBundleService.afterAccountChange(
+            new Map<Id, Account>{basic.Supplier__c => afterSupplier},
+            new Map<Id, Account>{basic.Supplier__c => beforeSupplier}
+        );
+        System.assertEquals(
+            agency.Lumpsum_Cost__c,
+            [SELECT Lumpsum_Cost__c FROM STEM_Extra_Cost__c WHERE Id = :agency.Id].Lumpsum_Cost__c,
+            'An Account fee change must not alter a managed row outside Hong Kong.'
+        );
+
+        ContextManager.skipTriggers = true;
+        ContextManager.avoidInvoiceFiring = true;
+        try {
+            insert invoice;
+            update new STEM_Extra_Cost__c(Id = agency.Id, Buyer_Invoice__c = invoice.Id);
+            insertBasicCallingCost();
+            Set<String> supportProductNames = new Set<String>{
+                HongKongBasicCallingBundleService.AGENCY_FEE,
+                HongKongBasicCallingBundleService.PORT_CLEARANCE_EXTENSION,
+                HongKongBasicCallingBundleService.LIGHT_DUES,
+                HongKongBasicCallingBundleService.ANCHORAGE_DUES
+            };
+            List<Product2> missingSupportProducts = [
+                SELECT Id, IsActive FROM Product2
+                WHERE Name IN :supportProductNames
+            ];
+            for (Product2 product : missingSupportProducts) product.IsActive = false;
+            update missingSupportProducts;
+        } finally {
+            ContextManager.avoidInvoiceFiring = false;
+            ContextManager.skipTriggers = false;
+        }
+
+        Test.startTest();
+        HongKongBasicCallingBundleService.synchronizeStemIds(new Set<Id>{basic.STEM__c});
+        HongKongBasicCallingBundleService.synchronizeStemIds(new Set<Id>{basic.STEM__c});
+        Test.stopTest();
+
+        List<STEM_Extra_Cost__c> rows = managedRows();
+        System.assertEquals(4, rows.size(), 'Repeated cleanup must not create replacement bundle rows.');
+        for (STEM_Extra_Cost__c row : rows) {
+            System.assertEquals(
+                row.Id == agency.Id ? false : true,
+                row.Cancelled__c,
+                'Only the invoice-linked managed row must remain active.'
+            );
+        }
+        System.assertEquals(false, [SELECT Cancelled__c FROM STEM_Extra_Cost__c WHERE Id = :manualAgency.Id].Cancelled__c);
+        System.assertEquals(
+            2,
+            [SELECT COUNT() FROM STEM_Extra_Cost__c WHERE STEM__c = :basic.STEM__c
+                AND Product2Id__r.Name = :HongKongBasicCallingBundleService.BASIC_CALLING_COST
+                AND Cancelled__c = false],
+            'Duplicate Basic Calling Costs outside Hong Kong must remain outside this bundle cleanup.'
+        );
+    }
+
+    @IsTest
+    static void outsideHongKongCleanupInvalidatesExistingReview() {
+        STEM_Extra_Cost__c basic = [
+            SELECT STEM__c, Supplier__c FROM STEM_Extra_Cost__c
+            WHERE Product2Id__r.Name = :HongKongBasicCallingBundleService.BASIC_CALLING_COST LIMIT 1
+        ];
+        STEM_Variable_Charge_Supplier__c stage = new STEM_Variable_Charge_Supplier__c(
+            STEM__c = basic.STEM__c,
+            Supplier__c = basic.Supplier__c,
+            Manual_Review_Required__c = true,
+            Supplier_Status__c = 'Pending'
+        );
+        insert stage;
+        stage.Supplier_Status__c = 'Verified';
+        stage.Verified_At__c = System.now();
+        stage.Verified_By_Email__c = 'supplier.trader@example.com';
+        stage.Reviewed_Source_Fingerprint__c = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+        stage.Buyer_Charge_Status__c = 'Verified';
+        stage.Buyer_Charge_Confirmed_At__c = System.now();
+        stage.Buyer_Charge_Confirmed_By_Email__c = 'buyer.trader@example.com';
+        stage.Buyer_Charge_Reviewed_Source_Fingerprint__c = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+        update stage;
+
+        Port__c singapore = TestDataFactory.createTestPort('SINGAPORE REVIEW', 'SINGAPORE', true);
+        ContextManager.skipTriggers = true;
+        try {
+            update new STEM__c(Id = basic.STEM__c, Port__c = singapore.Id);
+        } finally {
+            ContextManager.skipTriggers = false;
+        }
+
+        Test.startTest();
+        HongKongBasicCallingBundleService.synchronizeStemIds(new Set<Id>{basic.STEM__c});
+        Test.stopTest();
+
+        stage = [
+            SELECT Supplier_Status__c, Buyer_Charge_Status__c
+            FROM STEM_Variable_Charge_Supplier__c WHERE Id = :stage.Id
+        ];
+        System.assertEquals('Invalidated', stage.Supplier_Status__c);
+        System.assertEquals('Invalidated', stage.Buyer_Charge_Status__c);
+    }
+
+    @IsTest
+    static void noOpManagedSynchronizationPreservesVerifiedReview() {
+        STEM_Extra_Cost__c basic = [
+            SELECT STEM__c, Supplier__c FROM STEM_Extra_Cost__c
+            WHERE Product2Id__r.Name = :HongKongBasicCallingBundleService.BASIC_CALLING_COST LIMIT 1
+        ];
+        STEM_Variable_Charge_Supplier__c stage = new STEM_Variable_Charge_Supplier__c(
+            STEM__c = basic.STEM__c,
+            Supplier__c = basic.Supplier__c,
+            Manual_Review_Required__c = true,
+            Supplier_Status__c = 'Pending'
+        );
+        insert stage;
+        stage.Supplier_Status__c = 'Verified';
+        stage.Verified_At__c = System.now();
+        stage.Verified_By_Email__c = 'supplier.trader@example.com';
+        stage.Reviewed_Source_Fingerprint__c = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+        stage.Buyer_Charge_Status__c = 'Verified';
+        stage.Buyer_Charge_Confirmed_At__c = System.now();
+        stage.Buyer_Charge_Confirmed_By_Email__c = 'buyer.trader@example.com';
+        stage.Buyer_Charge_Reviewed_Source_Fingerprint__c = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+        update stage;
+
+        Test.startTest();
+        HongKongBasicCallingBundleService.synchronizeStemIds(new Set<Id>{basic.STEM__c});
+        Test.stopTest();
+
+        stage = [
+            SELECT Supplier_Status__c, Buyer_Charge_Status__c
+            FROM STEM_Variable_Charge_Supplier__c WHERE Id = :stage.Id
+        ];
+        System.assertEquals('Verified', stage.Supplier_Status__c);
+        System.assertEquals('Verified', stage.Buyer_Charge_Status__c);
+    }
+
+    @IsTest
     static void laterAccountFeeFillsOnlyBlankUnissuedAgencyRow() {
         STEM_Line_Item__c line = [SELECT Original_Supplier__c FROM STEM_Line_Item__c LIMIT 1];
         STEM_Extra_Cost__c agency = [

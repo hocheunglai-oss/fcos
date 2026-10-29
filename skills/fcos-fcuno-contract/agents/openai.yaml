@@ -1,0 +1,6 @@
+interface:
+  display_name: "FCOS–FCUNO Contract"
+  short_description: "Verify federation boundaries and recovery"
+  default_prompt: "Use $fcos-fcuno-contract to check the affected federation contract and semantic regressions."
+policy:
+  allow_implicit_invocation: true

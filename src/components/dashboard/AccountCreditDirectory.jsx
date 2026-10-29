@@ -61,7 +61,11 @@ export default function AccountCreditDirectory({ onOpen, counterparty = null, da
   const [error, setError] = useState(null);
   const requestRef = useRef(null);
   const exposureRef = useRef(null);
-  const directoryFilters = useMemo(() => ({ portIds: Array.isArray(filters.portIds) ? filters.portIds : [], countryCodes: Array.isArray(filters.countryCodes) ? filters.countryCodes : [] }), [filters.countryCodes, filters.portIds]);
+  const directoryFilters = useMemo(() => ({
+    portIds: Array.isArray(filters.portIds) ? filters.portIds : [],
+    countryCodes: Array.isArray(filters.countryCodes) ? filters.countryCodes : [],
+    excludedCountryCodes: Array.isArray(filters.excludedCountryCodes) ? filters.excludedCountryCodes : [],
+  }), [filters.countryCodes, filters.excludedCountryCodes, filters.portIds]);
   const load = useCallback(async ({ cursor = null, history = [], force = false } = {}) => {
     requestRef.current?.abort(); const controller = new AbortController(); requestRef.current = controller; setLoading(true); setError(null);
     try { const response = await appClient.functions.invoke('dashboardAccountCreditDirectory', { direction, counterparty, dateWindows, disputeOnly, filters: directoryFilters, cursor, limit: PAGE_SIZE, force }, { cache: true, cacheTtlMs: 60_000, cacheTags: ['dashboard', 'account-directory'], signal: controller.signal, force }); if (controller.signal.aborted) return; if (response.data?.error) throw new Error(response.data.error); setResult(response.data); setNavigation({ cursor, history }); setExposures([]); setExposureError(null); }

@@ -25,7 +25,7 @@ export default function AccountInsight() {
   [
     ['years', 'insightYears'], ['months', 'insightMonths'], ['disputeOnly', 'insightDisputeOnly'],
     ['accountIds', 'insightAccountIds'], ['supplierIds', 'insightSupplierIds'], ['portIds', 'insightPortIds'],
-    ['countryCodes', 'insightCountryCodes'], ['company', 'insightCompany'], ['group', 'insightGroup'],
+    ['countryCodes', 'insightCountryCodes'], ['excludedCountryCodes', 'insightExcludedCountryCodes'], ['company', 'insightCompany'], ['group', 'insightGroup'],
     ['port', 'insightPort'], ['country', 'insightCountry'],
   ].forEach(([from, to]) => copyQueryValue(searchParams, next, from, to));
   return <Navigate replace to={`/?${next.toString()}`} />;

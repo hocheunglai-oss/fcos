@@ -1,11 +1,12 @@
 import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, Download, ExternalLink, Loader2, Plus, RefreshCw, Search, ShieldCheck, Trash2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Eye, ExternalLink, Loader2, Plus, RefreshCw, Search, ShieldCheck, Trash2 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { appClient } from '@/api/appClient';
 import PageHeader from '@/components/common/PageHeader';
 import PageMethodology from '@/components/common/PageMethodology';
 import PageUserManual from '@/components/common/PageUserManual';
 import StateBlock from '@/components/common/StateBlock';
+import SpecialTermPdfPreviewDialog from '@/components/special-terms/SpecialTermPdfPreviewDialog';
 import DataStatus from '@/components/common/DataStatus';
 import WorkspaceViewBar from '@/components/common/WorkspaceViewBar';
 import WorkflowValidationSummary from '@/components/common/WorkflowValidationSummary';
@@ -19,7 +20,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
-import { SPECIAL_TERMS_METHODOLOGY } from '@/lib/pageMethodologies';
+import { SPECIAL_TERMS_METHODOLOGY } from '@/lib/pageMethodologyIndex';
 import { SPECIAL_TERMS_USER_MANUAL } from '@/lib/pageUserManuals';
 import { prefetchSpecialTermDetail } from '@/lib/specialTermDetailPrefetch';
 
@@ -47,17 +48,6 @@ function displayDate(value) {
   return HONG_KONG_DATE_FORMATTER.format(date);
 }
 
-function triggerDownload(result) {
-  const url = URL.createObjectURL(result.blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = result.filename;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
-}
-
 export default function SpecialTerms() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -81,6 +71,7 @@ export default function SpecialTerms() {
   const [deleteConfirmation, setDeleteConfirmation] = useState('');
   const [deleteSaveAttempted, setDeleteSaveAttempted] = useState(false);
   const [rowPending, setRowPending] = useState(() => new Set());
+  const [pdfRequest, setPdfRequest] = useState(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [advancedView, setAdvancedView] = useState('migration');
   const requestSequence = useRef(0);
@@ -169,25 +160,12 @@ export default function SpecialTerms() {
     navigate(`/special-terms/${response.data.id}`);
   };
 
-  const download = async (term, format) => {
-    const key = `download:${term.id}:${format}`;
-    if (rowPending.has(key)) return;
-    setRowPending((current) => new Set(current).add(key));
-    setError('');
-    try {
-      const result = await appClient.functions.download('specialTermsDocumentExport', {
-        termId: term.id,
-        format,
-        source: 'live',
-        expectedLastModifiedAt: term.lastModifiedAt,
-      });
-      triggerDownload(result);
-    } catch (downloadError) {
-      setError(downloadError.message || 'The document could not be downloaded.');
-    } finally {
-      setRowPending((current) => { const next = new Set(current); next.delete(key); return next; });
-    }
-  };
+  const previewPdf = (term) => setPdfRequest({
+    termId: term.id,
+    termName: term.name,
+    source: 'live',
+    expectedLastModifiedAt: term.lastModifiedAt,
+  });
 
   const previewDeletion = async (term) => {
     const key = `delete:${term.id}`;
@@ -241,6 +219,7 @@ export default function SpecialTerms() {
   ] : [];
   return (
     <div className="workspace-reference space-y-5 p-4 md:p-6">
+      <SpecialTermPdfPreviewDialog request={pdfRequest} onClose={() => setPdfRequest(null)} />
       <PageHeader
         title="Special Terms"
         description="Find a term, make the complete update in one editor, and publish it through Salesforce governance."
@@ -264,17 +243,17 @@ export default function SpecialTerms() {
           <div className="hidden overflow-x-auto md:block">
             <Table>
               <TableHeader><TableRow><TableHead>Special Term</TableHead><TableHead>Status</TableHead><TableHead>Contents</TableHead><TableHead>Updated</TableHead><TableHead className="w-80" /></TableRow></TableHeader>
-              <TableBody>{terms.map((term) => <TableRow key={term.id} className="content-auto" onMouseEnter={() => { void prefetchSpecialTermDetail(term.id).catch(() => {}); }}><TableCell><div className="font-medium">{term.name}</div><div className="mt-1 flex gap-1"><Badge variant="outline">{term.addToConfirmation ? 'Confirmation PDF' : 'No Confirmation PDF'}</Badge><Badge variant="outline">{term.addToNomination ? 'Nomination PDF' : 'No Nomination PDF'}</Badge></div></TableCell><TableCell><Badge variant={term.status === 'Approved' ? 'default' : term.status === 'Relink required' ? 'destructive' : 'secondary'}>{term.status}</Badge></TableCell><TableCell className="text-xs text-muted-foreground">{term.activeClauseCount} active · {term.proposedClauseCount} proposed · {term.ruleCount} rules{term.upgradeCount ? ` · ${term.upgradeCount} upgrades` : ''}</TableCell><TableCell className="text-xs text-muted-foreground">{displayDate(term.lastModifiedAt)}</TableCell><TableCell><div className="flex justify-end gap-1"><Button variant="ghost" size="sm" onClick={() => download(term, 'pdf')} disabled={rowPending.has(`download:${term.id}:pdf`)}><Download className="mr-1 h-3.5 w-3.5" />PDF</Button><Button variant="ghost" size="sm" onClick={() => download(term, 'docx')} disabled={rowPending.has(`download:${term.id}:docx`)}>Word</Button>{summary.instanceUrl ? <Button asChild variant="ghost" size="icon"><a href={`${summary.instanceUrl}/${term.id}`} target="_blank" rel="noreferrer" aria-label={`Open ${term.name} in Salesforce`}><ExternalLink className="h-4 w-4" /></a></Button> : null}{['Legacy', 'Draft'].includes(term.status) ? <Button variant="ghost" size="icon" className="text-destructive" onClick={() => previewDeletion(term)} disabled={rowPending.has(`delete:${term.id}`)} aria-label={`Delete ${term.name}`}><Trash2 className="h-4 w-4" /></Button> : null}<Button onMouseEnter={() => { void prefetchSpecialTermDetail(term.id).catch(() => {}); }} onFocus={() => { void prefetchSpecialTermDetail(term.id).catch(() => {}); }} onClick={() => openTerm(term)}>{ACTION_LABELS[term.nextAction] || 'Update'}</Button></div></TableCell></TableRow>)}</TableBody>
+              <TableBody>{terms.map((term) => <TableRow key={term.id} className="content-auto" onMouseEnter={() => { void prefetchSpecialTermDetail(term.id).catch(() => {}); }}><TableCell><div className="font-medium">{term.name}</div><div className="mt-1 flex gap-1"><Badge variant="outline">{term.addToConfirmation ? 'Confirmation PDF' : 'No Confirmation PDF'}</Badge><Badge variant="outline">{term.addToNomination ? 'Nomination PDF' : 'No Nomination PDF'}</Badge></div></TableCell><TableCell><Badge variant={term.status === 'Approved' ? 'default' : term.status === 'Relink required' ? 'destructive' : 'secondary'}>{term.status}</Badge></TableCell><TableCell className="text-xs text-muted-foreground">{term.activeClauseCount} active · {term.proposedClauseCount} proposed · {term.ruleCount} rules{term.upgradeCount ? ` · ${term.upgradeCount} upgrades` : ''}</TableCell><TableCell className="text-xs text-muted-foreground">{displayDate(term.lastModifiedAt)}</TableCell><TableCell><div className="flex justify-end gap-1"><Button variant="ghost" size="sm" onClick={() => previewPdf(term)} aria-label={`Preview ${term.name} PDF`}><Eye className="mr-1 h-3.5 w-3.5" />Preview PDF</Button>{summary.instanceUrl ? <Button asChild variant="ghost" size="icon"><a href={`${summary.instanceUrl}/${term.id}`} target="_blank" rel="noreferrer" aria-label={`Open ${term.name} in Salesforce`}><ExternalLink className="h-4 w-4" /></a></Button> : null}{['Legacy', 'Draft'].includes(term.status) ? <Button variant="ghost" size="icon" className="text-destructive" onClick={() => previewDeletion(term)} disabled={rowPending.has(`delete:${term.id}`)} aria-label={`Delete ${term.name}`}><Trash2 className="h-4 w-4" /></Button> : null}<Button onMouseEnter={() => { void prefetchSpecialTermDetail(term.id).catch(() => {}); }} onFocus={() => { void prefetchSpecialTermDetail(term.id).catch(() => {}); }} onClick={() => openTerm(term)}>{ACTION_LABELS[term.nextAction] || 'Update'}</Button></div></TableCell></TableRow>)}</TableBody>
             </Table>
           </div>
-          <div className="divide-y divide-border md:hidden">{terms.map((term) => <article key={term.id} className="space-y-3 p-4"><div className="flex items-start justify-between gap-3"><div><h2 className="font-semibold">{term.name}</h2><p className="mt-1 text-xs text-muted-foreground">{term.activeClauseCount} clauses · {term.ruleCount} rules · {displayDate(term.lastModifiedAt)}</p></div><Badge variant={term.status === 'Approved' ? 'default' : 'secondary'}>{term.status}</Badge></div><div className="flex flex-wrap justify-end gap-1"><Button variant="ghost" size="sm" onClick={() => download(term, 'pdf')} disabled={rowPending.has(`download:${term.id}:pdf`)}>PDF</Button><Button variant="ghost" size="sm" onClick={() => download(term, 'docx')} disabled={rowPending.has(`download:${term.id}:docx`)}>Word</Button><Button className="flex-1" onPointerEnter={() => { void prefetchSpecialTermDetail(term.id).catch(() => {}); }} onFocus={() => { void prefetchSpecialTermDetail(term.id).catch(() => {}); }} onClick={() => openTerm(term)}>{ACTION_LABELS[term.nextAction] || 'Update'}</Button></div></article>)}</div>
+          <div className="divide-y divide-border md:hidden">{terms.map((term) => <article key={term.id} className="space-y-3 p-4"><div className="flex items-start justify-between gap-3"><div><h2 className="font-semibold">{term.name}</h2><p className="mt-1 text-xs text-muted-foreground">{term.activeClauseCount} clauses · {term.ruleCount} rules · {displayDate(term.lastModifiedAt)}</p></div><Badge variant={term.status === 'Approved' ? 'default' : 'secondary'}>{term.status}</Badge></div><div className="flex flex-wrap justify-end gap-1"><Button variant="ghost" size="sm" onClick={() => previewPdf(term)} aria-label={`Preview ${term.name} PDF`}>Preview PDF</Button><Button className="flex-1" onPointerEnter={() => { void prefetchSpecialTermDetail(term.id).catch(() => {}); }} onFocus={() => { void prefetchSpecialTermDetail(term.id).catch(() => {}); }} onClick={() => openTerm(term)}>{ACTION_LABELS[term.nextAction] || 'Update'}</Button></div></article>)}</div>
           {!terms.length ? <div className="p-12 text-center text-sm text-muted-foreground">No Special Terms match these filters.</div> : null}
           <div className="flex items-center justify-between border-t border-border px-4 py-3"><p className="text-xs text-muted-foreground">{summary.total} matching term{summary.total === 1 ? '' : 's'} · up to 40 per page</p><div className="flex gap-2"><Button variant="outline" size="sm" onClick={previousPage} disabled={!cursorHistory.length}><ChevronLeft className="mr-1 h-4 w-4" />Previous</Button><Button variant="outline" size="sm" onClick={nextPage} disabled={!summary.nextCursor}>Next<ChevronRight className="ml-1 h-4 w-4" /></Button></div></div>
         </div> : null}
         <details className="rounded-lg border border-border bg-card p-4" open={advancedOpen} onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}><summary className="cursor-pointer text-sm font-semibold">Advanced migration and history tools</summary>{advancedOpen ? <div className="mt-4 space-y-4"><div className="flex gap-2"><Button size="sm" variant={advancedView === 'migration' ? 'default' : 'outline'} onClick={() => setAdvancedView('migration')}>Migration queue</Button>{summary?.canApproveClauses ? <Button size="sm" variant={advancedView === 'inventory' ? 'default' : 'outline'} onClick={() => setAdvancedView('inventory')}>Migration inventory</Button> : null}</div><Suspense fallback={<StateBlock title="Loading advanced tools" description="Loading only the selected administrative view." icon={Loader2} />}>{advancedView === 'migration' ? <MigrationBatchPanel canDraft={summary?.canDraft} canApprove={summary?.canApproveClauses} onOpenTerm={openTerm} /> : <MigrationInventoryPanel />}</Suspense></div> : null}</details>
       </> : <Suspense fallback={<StateBlock title="Loading Clause Library" description="Loading the selected Clause Library page." icon={Loader2} />}><ClauseBankPanel canManage={summary?.canDraft ?? true} canApprove={summary?.canApproveClauses ?? false} currentUserEmail={summary?.currentUserEmail || ''} categoryOptions={summary?.clauseCategoryOptions || []} onChanged={() => {}} onOpenTerm={openTerm} /></Suspense>}
 
-      <Dialog open={Boolean(createForm)} onOpenChange={(open) => { if (!open && !createBusy) { setCreateSaveAttempted(false); setCreateForm(null); } }}><DialogContent className="max-w-lg"><DialogHeader><DialogTitle>New Special Term</DialogTitle><DialogDescription>Create the Salesforce identity, then continue directly in the complete term editor.</DialogDescription></DialogHeader>{createForm ? <div className="space-y-4"><div className="space-y-1.5"><Label>Name</Label><Input value={createForm.name} onChange={(event) => setCreateForm((current) => ({ ...current, name: event.target.value }))} autoFocus /></div><label className="flex items-center gap-2 text-sm"><Checkbox checked={createForm.addToConfirmation} onCheckedChange={(value) => setCreateForm((current) => ({ ...current, addToConfirmation: value === true }))} />Attach approved PDF to Confirmation</label><label className="flex items-center gap-2 text-sm"><Checkbox checked={createForm.addToNomination} onCheckedChange={(value) => setCreateForm((current) => ({ ...current, addToNomination: value === true }))} />Attach approved PDF to Nomination</label><WorkflowValidationSummary issues={createSaveAttempted ? createValidationIssues : []} /></div> : null}<DialogFooter><Button variant="outline" onClick={() => { setCreateSaveAttempted(false); setCreateForm(null); }} disabled={createBusy}>Cancel</Button><Button onClick={createTerm} disabled={createBusy}>{createBusy ? 'Creating…' : 'Create and continue'}</Button></DialogFooter></DialogContent></Dialog>
+      <Dialog open={Boolean(createForm)} onOpenChange={(open) => { if (!open && !createBusy) { setCreateSaveAttempted(false); setCreateForm(null); } }}><DialogContent className="max-w-lg"><DialogHeader><DialogTitle>New Special Term</DialogTitle><DialogDescription>Create the Salesforce identity, then continue directly in the complete term editor.</DialogDescription></DialogHeader>{createForm ? <div className="space-y-4"><div className="space-y-1.5"><Label>Name <span aria-hidden="true">*</span></Label><Input data-field="name" aria-required="true" value={createForm.name} onChange={(event) => setCreateForm((current) => ({ ...current, name: event.target.value }))} autoFocus /></div><label className="flex items-center gap-2 text-sm"><Checkbox checked={createForm.addToConfirmation} onCheckedChange={(value) => setCreateForm((current) => ({ ...current, addToConfirmation: value === true }))} />Attach approved PDF to Confirmation</label><label className="flex items-center gap-2 text-sm"><Checkbox checked={createForm.addToNomination} onCheckedChange={(value) => setCreateForm((current) => ({ ...current, addToNomination: value === true }))} />Attach approved PDF to Nomination</label><WorkflowValidationSummary issues={createSaveAttempted ? createValidationIssues : []} /></div> : null}<DialogFooter><Button variant="outline" onClick={() => { setCreateSaveAttempted(false); setCreateForm(null); }} disabled={createBusy}>Cancel</Button><Button onClick={createTerm} disabled={createBusy}>{createBusy ? 'Creating…' : 'Create and continue'}</Button></DialogFooter></DialogContent></Dialog>
 
       <Dialog open={Boolean(deleteTarget)} onOpenChange={(open) => { if (!open) { setDeleteSaveAttempted(false); setDeleteTarget(null); } }}><DialogContent className="max-w-lg"><DialogHeader><DialogTitle>Delete unapproved Special Term?</DialogTitle><DialogDescription>Only never-approved, unreferenced Salesforce records are eligible. This action is permanent.</DialogDescription></DialogHeader>{deleteTarget ? <div className="space-y-4"><div className="space-y-1.5"><Label>Type {deleteTarget.preview.confirmationLabel}</Label><Input value={deleteConfirmation} onChange={(event) => setDeleteConfirmation(event.target.value)} autoFocus /></div><div className="space-y-1.5"><Label>Deletion reason</Label><Textarea value={deleteReason} onChange={(event) => setDeleteReason(event.target.value)} rows={3} /></div><WorkflowValidationSummary issues={deleteSaveAttempted ? deleteValidationIssues : []} /></div> : null}<DialogFooter><Button variant="outline" onClick={() => { setDeleteSaveAttempted(false); setDeleteTarget(null); }}>Cancel</Button><Button variant="destructive" onClick={deleteTerm}><Trash2 className="mr-2 h-4 w-4" />Delete</Button></DialogFooter></DialogContent></Dialog>
     </div>

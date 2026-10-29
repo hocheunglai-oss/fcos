@@ -1,0 +1,1566 @@
+{
+  "schemaVersion": 2,
+  "manifestId": "fcos-hosted-release-checks-v2",
+  "nodeMajor": 24,
+  "volatileMaximumAgeMs": 1800000,
+  "trustBoundary": {
+    "candidate": "Separate runner; no protected environment, OIDC write permission, provider credentials, controller credentials or credential-bearing files. Raw results are not trusted publication authority.",
+    "controller": "Immutable admitted controller manifest defines commands. A separate publisher verifies job outcome, source admission and artifact digest before accepting raw evidence."
+  },
+  "checks": [
+    {
+      "id": "controls",
+      "group": "code",
+      "phase": "deterministic",
+      "kind": "deterministic",
+      "executor": "candidate",
+      "required": true,
+      "requires": [],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [
+        {
+          "program": "node",
+          "args": [
+            "@controller/scripts/hosted-release-checks.mjs",
+            "--internal-check",
+            "controls",
+            "--candidate-directory",
+            "@candidate"
+          ],
+          "env": {}
+        }
+      ],
+      "profiles": [
+        "frozen_04ee",
+        "controller_v2",
+        "historical_f457",
+        "application_v2",
+        "compat_application_auth_20261018",
+        "compat_source_config_20261020",
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024",
+        "compat_database_measurement_20261024",
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
+      ]
+    },
+    {
+      "id": "compatibility",
+      "group": "code",
+      "phase": "deterministic",
+      "kind": "deterministic",
+      "executor": "candidate",
+      "required": true,
+      "requires": [],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [
+        {
+          "program": "node",
+          "args": [
+            "scripts/verify-compatibility-registry.mjs"
+          ],
+          "env": {}
+        }
+      ],
+      "profiles": [
+        "frozen_04ee",
+        "controller_v2",
+        "historical_f457",
+        "application_v2",
+        "compat_application_auth_20261018",
+        "compat_source_config_20261020",
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024",
+        "compat_database_measurement_20261024",
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
+      ]
+    },
+    {
+      "id": "unit",
+      "group": "code",
+      "phase": "deterministic",
+      "kind": "deterministic",
+      "executor": "candidate",
+      "required": true,
+      "requires": [],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [
+        {
+          "program": "node",
+          "args": [
+            "--test",
+            "tests/*.test.js"
+          ],
+          "env": {}
+        }
+      ],
+      "profiles": [
+        "frozen_04ee",
+        "controller_v2",
+        "historical_f457",
+        "application_v2",
+        "compat_application_auth_20261018",
+        "compat_source_config_20261020",
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024",
+        "compat_database_measurement_20261024",
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
+      ],
+      "profileCommands": {
+        "controller_v2": [
+          {
+            "program": "node",
+            "args": [
+              "--test",
+              "@deterministic-tests"
+            ],
+            "env": {}
+          }
+        ],
+        "application_v2": [
+          {
+            "program": "node",
+            "args": [
+              "--test",
+              "@deterministic-tests"
+            ],
+            "env": {}
+          }
+        ]
+      }
+    },
+    {
+      "id": "coordination",
+      "group": "code",
+      "phase": "deterministic",
+      "kind": "deterministic",
+      "executor": "candidate",
+      "required": true,
+      "requires": [],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [
+        {
+          "program": "python3",
+          "args": [
+            "-B",
+            "-m",
+            "unittest",
+            "tests.preview_email_coordination_ledger_test",
+            "tests.release_coordination_ledger_test"
+          ],
+          "env": {}
+        }
+      ],
+      "profiles": [
+        "controller_v2"
+      ]
+    },
+    {
+      "id": "lint",
+      "group": "code",
+      "phase": "deterministic",
+      "kind": "deterministic",
+      "executor": "candidate",
+      "required": true,
+      "requires": [],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [
+        {
+          "program": "node",
+          "args": [
+            "node_modules/eslint/bin/eslint.js",
+            ".",
+            "--quiet"
+          ],
+          "env": {}
+        }
+      ],
+      "profiles": [
+        "frozen_04ee",
+        "controller_v2",
+        "historical_f457",
+        "application_v2",
+        "compat_application_auth_20261018",
+        "compat_source_config_20261020",
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024",
+        "compat_database_measurement_20261024",
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
+      ]
+    },
+    {
+      "id": "typecheck",
+      "group": "code",
+      "phase": "deterministic",
+      "kind": "deterministic",
+      "executor": "candidate",
+      "required": true,
+      "requires": [],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [
+        {
+          "program": "node",
+          "args": [
+            "node_modules/typescript/bin/tsc",
+            "-p",
+            "./jsconfig.json"
+          ],
+          "env": {}
+        },
+        {
+          "program": "node",
+          "args": [
+            "node_modules/typescript/bin/tsc",
+            "-p",
+            "./jsconfig.core.json"
+          ],
+          "env": {}
+        }
+      ],
+      "profiles": [
+        "frozen_04ee",
+        "controller_v2",
+        "historical_f457",
+        "application_v2",
+        "compat_application_auth_20261018",
+        "compat_source_config_20261020",
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024",
+        "compat_database_measurement_20261024",
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
+      ]
+    },
+    {
+      "id": "graph",
+      "group": "code",
+      "phase": "deterministic",
+      "kind": "deterministic",
+      "executor": "candidate",
+      "required": true,
+      "requires": [],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [
+        {
+          "program": "node",
+          "args": [
+            "scripts/verify-production-source.mjs"
+          ],
+          "env": {}
+        }
+      ],
+      "profiles": [
+        "frozen_04ee",
+        "controller_v2",
+        "historical_f457",
+        "application_v2",
+        "compat_application_auth_20261018",
+        "compat_source_config_20261020",
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024",
+        "compat_database_measurement_20261024",
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
+      ]
+    },
+    {
+      "id": "build",
+      "group": "code",
+      "phase": "deterministic",
+      "kind": "deterministic",
+      "executor": "candidate",
+      "required": true,
+      "requires": [],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [
+        {
+          "program": "node",
+          "args": [
+            "scripts/write-methodology-assets.mjs"
+          ],
+          "env": {}
+        },
+        {
+          "program": "node",
+          "args": [
+            "scripts/verify-fcuno-build-environment.mjs"
+          ],
+          "env": {}
+        },
+        {
+          "program": "node",
+          "args": [
+            "scripts/write-app-version.mjs"
+          ],
+          "env": {}
+        },
+        {
+          "program": "node",
+          "args": [
+            "node_modules/vite/bin/vite.js",
+            "build"
+          ],
+          "env": {}
+        }
+      ],
+      "profiles": [
+        "frozen_04ee",
+        "controller_v2",
+        "historical_f457",
+        "application_v2",
+        "compat_application_auth_20261018",
+        "compat_source_config_20261020",
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024",
+        "compat_database_measurement_20261024",
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
+      ],
+      "profileCommands": {
+        "controller_v2": [
+          {
+            "program": "node",
+            "args": [
+              "scripts/write-app-version.mjs"
+            ],
+            "env": {}
+          },
+          {
+            "program": "node",
+            "args": [
+              "node_modules/vite/bin/vite.js",
+              "build"
+            ],
+            "env": {}
+          }
+        ]
+      },
+      "cacheable": false
+    },
+    {
+      "id": "client_performance",
+      "group": "code",
+      "phase": "deterministic",
+      "kind": "deterministic",
+      "executor": "candidate",
+      "required": true,
+      "requires": [
+        "build"
+      ],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [
+        {
+          "program": "node",
+          "args": [
+            "scripts/verify-performance-budgets.mjs"
+          ],
+          "env": {}
+        }
+      ],
+      "profiles": [
+        "frozen_04ee",
+        "controller_v2",
+        "historical_f457",
+        "application_v2",
+        "compat_application_auth_20261018",
+        "compat_source_config_20261020",
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024",
+        "compat_database_measurement_20261024",
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
+      ],
+      "artifactInputs": [
+        "dist"
+      ]
+    },
+    {
+      "id": "desktop_fixtures",
+      "group": "fixtures",
+      "phase": "deterministic",
+      "kind": "deterministic",
+      "executor": "candidate",
+      "required": true,
+      "requires": [],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [
+        {
+          "program": "node",
+          "args": [
+            "node_modules/@playwright/test/cli.js",
+            "test",
+            "--config",
+            "playwright.desktop-debug.config.js"
+          ],
+          "env": {}
+        }
+      ],
+      "profiles": [
+        "historical_f457"
+      ]
+    },
+    {
+      "id": "nom_b_fixtures",
+      "group": "fixtures",
+      "phase": "deterministic",
+      "kind": "deterministic",
+      "executor": "candidate",
+      "required": true,
+      "requires": [],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [
+        {
+          "program": "node",
+          "args": [
+            "node_modules/@playwright/test/cli.js",
+            "test",
+            "--config",
+            "playwright.nom-b.config.js"
+          ],
+          "env": {}
+        }
+      ],
+      "profiles": [
+        "frozen_04ee",
+        "historical_f457",
+        "application_v2",
+        "compat_application_auth_20261018",
+        "compat_source_config_20261020",
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024",
+        "compat_database_measurement_20261024",
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
+      ]
+    },
+    {
+      "id": "missing_nom_b_fixtures",
+      "group": "fixtures",
+      "phase": "deterministic",
+      "kind": "deterministic",
+      "executor": "candidate",
+      "required": true,
+      "requires": [],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [
+        {
+          "program": "node",
+          "args": [
+            "node_modules/@playwright/test/cli.js",
+            "test",
+            "--config",
+            "playwright.missing-nom-b.config.js"
+          ],
+          "env": {}
+        }
+      ],
+      "profiles": [
+        "frozen_04ee",
+        "historical_f457",
+        "application_v2",
+        "compat_application_auth_20261018",
+        "compat_source_config_20261020",
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024",
+        "compat_database_measurement_20261024",
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
+      ]
+    },
+    {
+      "id": "xero_integrity_fixtures",
+      "group": "fixtures",
+      "phase": "deterministic",
+      "kind": "deterministic",
+      "executor": "candidate",
+      "required": true,
+      "requires": [],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [
+        {
+          "program": "node",
+          "args": [
+            "node_modules/@playwright/test/cli.js",
+            "test",
+            "--config",
+            "playwright.xero-integrity.config.js"
+          ],
+          "env": {}
+        }
+      ],
+      "profiles": [
+        "historical_f457"
+      ]
+    },
+    {
+      "id": "people_access_fixtures",
+      "group": "fixtures",
+      "phase": "deterministic",
+      "kind": "deterministic",
+      "executor": "candidate",
+      "required": true,
+      "requires": [],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [
+        {
+          "program": "node",
+          "args": [
+            "node_modules/@playwright/test/cli.js",
+            "test",
+            "--config",
+            "playwright.people-access.config.js"
+          ],
+          "env": {}
+        }
+      ],
+      "profiles": [
+        "frozen_04ee",
+        "historical_f457",
+        "application_v2",
+        "compat_application_auth_20261018",
+        "compat_source_config_20261020",
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024",
+        "compat_database_measurement_20261024",
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
+      ]
+    },
+    {
+      "id": "xero_campaign_fixtures",
+      "group": "fixtures",
+      "phase": "deterministic",
+      "kind": "deterministic",
+      "executor": "candidate",
+      "required": true,
+      "requires": [],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [
+        {
+          "program": "node",
+          "args": [
+            "node_modules/@playwright/test/cli.js",
+            "test",
+            "--config",
+            "playwright.xero-campaign.config.js"
+          ],
+          "env": {}
+        }
+      ],
+      "profiles": [
+        "frozen_04ee",
+        "historical_f457",
+        "application_v2",
+        "compat_application_auth_20261018",
+        "compat_source_config_20261020",
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024",
+        "compat_database_measurement_20261024",
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
+      ]
+    },
+    {
+      "id": "migrations",
+      "group": "database",
+      "phase": "deterministic",
+      "kind": "deterministic",
+      "executor": "candidate",
+      "required": true,
+      "requires": [],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [
+        {
+          "program": "node",
+          "args": [
+            "scripts/verify-migrations.mjs"
+          ],
+          "env": {
+            "FCOS_MIGRATION_DATABASE_URL": "postgresql://postgres:postgres@127.0.0.1:54322/postgres",
+            "FCOS_MIGRATION_DISPOSABLE_CLUSTER": "1",
+            "FCOS_MIGRATION_DOCKER_CONTAINER": "supabase_db_fcos",
+            "FCOS_REQUIRE_LIVE_MIGRATION_CHECK": "1"
+          }
+        }
+      ],
+      "profiles": [
+        "frozen_04ee",
+        "historical_f457",
+        "application_v2",
+        "compat_application_auth_20261018",
+        "compat_source_config_20261020",
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024",
+        "compat_database_measurement_20261024",
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
+      ],
+      "profileCommands": {
+        "compat_verification_harness_20261024": [
+          {
+            "program": "node",
+            "args": [
+              "scripts/verify-migrations.mjs"
+            ],
+            "env": {
+              "FCOS_MIGRATION_DATABASE_URL": "postgresql://postgres:postgres@127.0.0.1:54322/postgres",
+              "FCOS_MIGRATION_DISPOSABLE_CLUSTER": "1",
+              "FCOS_MIGRATION_DOCKER_CONTAINER": "supabase_db_fcos",
+              "FCOS_REQUIRE_LIVE_MIGRATION_CHECK": "1",
+              "FCOS_MIGRATION_PROJECT_ID": "fcos",
+              "FCOS_MIGRATION_PARENT_PROOF_FILE": "/controller/output/disposable-migration-server.json"
+            }
+          }
+        ],
+        "application_v2": [
+          {
+            "program": "node",
+            "args": [
+              "scripts/verify-migrations.mjs"
+            ],
+            "env": {
+              "FCOS_MIGRATION_DATABASE_URL": "postgresql://postgres:postgres@127.0.0.1:54322/postgres",
+              "FCOS_MIGRATION_DISPOSABLE_CLUSTER": "1",
+              "FCOS_MIGRATION_DOCKER_CONTAINER": "supabase_db_fcos",
+              "FCOS_REQUIRE_LIVE_MIGRATION_CHECK": "1",
+              "FCOS_MIGRATION_PROJECT_ID": "fcos",
+              "FCOS_MIGRATION_PARENT_PROOF_FILE": "/controller/output/disposable-migration-server.json"
+            }
+          }
+        ],
+        "compat_database_measurement_20261024": [
+          {
+            "program": "node",
+            "args": [
+              "scripts/verify-migrations.mjs"
+            ],
+            "env": {
+              "FCOS_MIGRATION_DATABASE_URL": "postgresql://postgres:postgres@127.0.0.1:54322/postgres",
+              "FCOS_MIGRATION_DISPOSABLE_CLUSTER": "1",
+              "FCOS_MIGRATION_DOCKER_CONTAINER": "supabase_db_fcos",
+              "FCOS_REQUIRE_LIVE_MIGRATION_CHECK": "1",
+              "FCOS_MIGRATION_PROJECT_ID": "fcos",
+              "FCOS_MIGRATION_PARENT_PROOF_FILE": "/controller/output/disposable-migration-server.json"
+            }
+          }
+        ],
+        "compat_runtime_metering_20261024": [
+          {
+            "program": "node",
+            "args": [
+              "scripts/verify-migrations.mjs"
+            ],
+            "env": {
+              "FCOS_MIGRATION_DATABASE_URL": "postgresql://postgres:postgres@127.0.0.1:54322/postgres",
+              "FCOS_MIGRATION_DISPOSABLE_CLUSTER": "1",
+              "FCOS_MIGRATION_DOCKER_CONTAINER": "supabase_db_fcos",
+              "FCOS_REQUIRE_LIVE_MIGRATION_CHECK": "1",
+              "FCOS_MIGRATION_PROJECT_ID": "fcos",
+              "FCOS_MIGRATION_PARENT_PROOF_FILE": "/controller/output/disposable-migration-server.json"
+            }
+          }
+        ],
+        "compat_runtime_dependency_20261024": [
+          {
+            "program": "node",
+            "args": [
+              "scripts/verify-migrations.mjs"
+            ],
+            "env": {
+              "FCOS_MIGRATION_DATABASE_URL": "postgresql://postgres:postgres@127.0.0.1:54322/postgres",
+              "FCOS_MIGRATION_DISPOSABLE_CLUSTER": "1",
+              "FCOS_MIGRATION_DOCKER_CONTAINER": "supabase_db_fcos",
+              "FCOS_REQUIRE_LIVE_MIGRATION_CHECK": "1",
+              "FCOS_MIGRATION_PROJECT_ID": "fcos",
+              "FCOS_MIGRATION_PARENT_PROOF_FILE": "/controller/output/disposable-migration-server.json"
+            }
+          }
+        ],
+        "compat_runtime_ordinary_admission_20261025": [
+          {
+            "program": "node",
+            "args": [
+              "scripts/verify-migrations.mjs"
+            ],
+            "env": {
+              "FCOS_MIGRATION_DATABASE_URL": "postgresql://postgres:postgres@127.0.0.1:54322/postgres",
+              "FCOS_MIGRATION_DISPOSABLE_CLUSTER": "1",
+              "FCOS_MIGRATION_DOCKER_CONTAINER": "supabase_db_fcos",
+              "FCOS_REQUIRE_LIVE_MIGRATION_CHECK": "1",
+              "FCOS_MIGRATION_PROJECT_ID": "fcos",
+              "FCOS_MIGRATION_PARENT_PROOF_FILE": "/controller/output/disposable-migration-server.json"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "missing_nom_b_database",
+      "group": "database",
+      "phase": "deterministic",
+      "kind": "deterministic",
+      "executor": "candidate",
+      "required": true,
+      "requires": [
+        "migrations"
+      ],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [
+        {
+          "program": "node",
+          "args": [
+            "--input-type=module",
+            "-e",
+            "import pg from 'pg'; const c=new pg.Client({connectionString:'postgresql://postgres:postgres@127.0.0.1:54322/postgres'}); await c.connect(); try { const {rows:[i]}=await c.query('select current_database() as database, current_user as role'); if(i.database!=='postgres'||i.role!=='postgres') throw Error('Disposable database identity mismatch'); const {rows}=await c.query(\"select 1 from pg_database where datname = 'missing_nom_b_test'\"); if(rows.length) throw Error('Disposable Missing Nom B database already exists'); await c.query('create database missing_nom_b_test'); } finally {await c.end();}"
+          ],
+          "env": {}
+        },
+        {
+          "program": "node",
+          "args": [
+            "--test",
+            "tests/missingNomBMigration.test.js"
+          ],
+          "env": {
+            "FCOS_MISSING_NOM_B_TEST_DATABASE_URL": "postgresql://postgres:postgres@127.0.0.1:54322/missing_nom_b_test"
+          }
+        }
+      ],
+      "profiles": [
+        "frozen_04ee",
+        "historical_f457",
+        "application_v2",
+        "compat_application_auth_20261018",
+        "compat_source_config_20261020",
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024",
+        "compat_database_measurement_20261024",
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
+      ]
+    },
+    {
+      "id": "grouped_preservation",
+      "group": "database",
+      "phase": "deterministic",
+      "kind": "deterministic",
+      "executor": "candidate",
+      "required": true,
+      "requires": [
+        "migrations"
+      ],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [
+        {
+          "program": "node",
+          "args": [
+            "--test",
+            "tests/xeroGroupedPreservationDatabase.test.js"
+          ],
+          "env": {
+            "FCOS_GROUPED_TEST_DATABASE_URL": "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          }
+        }
+      ],
+      "profiles": [
+        "frozen_04ee",
+        "historical_f457",
+        "application_v2",
+        "compat_application_auth_20261018",
+        "compat_source_config_20261020",
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024",
+        "compat_database_measurement_20261024",
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
+      ]
+    },
+    {
+      "id": "financial_preview",
+      "group": "database",
+      "phase": "deterministic",
+      "kind": "deterministic",
+      "executor": "candidate",
+      "required": true,
+      "requires": [
+        "migrations"
+      ],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [
+        {
+          "program": "node",
+          "args": [
+            "--test",
+            "tests/xeroFinancialPreviewPersistence.test.js",
+            "tests/xeroPreviewStagedDatabase.test.js",
+            "tests/xeroPreviewPaymentsReferenceDatabase.test.js",
+            "tests/xeroPreviewFinalizeTimeoutDatabase.test.js"
+          ],
+          "env": {
+            "FCOS_PREVIEW_TEST_DATABASE_URL": "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          }
+        }
+      ],
+      "profiles": [
+        "frozen_04ee",
+        "historical_f457",
+        "application_v2",
+        "compat_application_auth_20261018",
+        "compat_source_config_20261020",
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024",
+        "compat_database_measurement_20261024",
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
+      ]
+    },
+    {
+      "id": "checkpoint_resume",
+      "group": "database",
+      "phase": "deterministic",
+      "kind": "deterministic",
+      "executor": "candidate",
+      "required": true,
+      "requires": [
+        "migrations"
+      ],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [
+        {
+          "program": "node",
+          "args": [
+            "--test",
+            "tests/xeroPreviewCheckpointDatabase.test.js",
+            "tests/xeroPreviewCheckpointChunksDatabase.test.js"
+          ],
+          "env": {
+            "FCOS_CHECKPOINT_TEST_DATABASE_URL": "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          }
+        }
+      ],
+      "profiles": [
+        "frozen_04ee",
+        "historical_f457",
+        "application_v2",
+        "compat_application_auth_20261018",
+        "compat_source_config_20261020",
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024",
+        "compat_database_measurement_20261024",
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
+      ]
+    },
+    {
+      "id": "issued_supplier",
+      "group": "database",
+      "phase": "deterministic",
+      "kind": "deterministic",
+      "executor": "candidate",
+      "required": true,
+      "requires": [
+        "migrations"
+      ],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [
+        {
+          "program": "node",
+          "args": [
+            "--test",
+            "tests/xeroIssuedSupplierPreservationDatabase.test.js",
+            "tests/xeroIssuedSupplierRoundingDatabase.test.js"
+          ],
+          "env": {
+            "FCOS_ISSUED_TEST_DATABASE_URL": "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          }
+        }
+      ],
+      "profiles": [
+        "frozen_04ee",
+        "historical_f457",
+        "application_v2",
+        "compat_application_auth_20261018",
+        "compat_source_config_20261020",
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024",
+        "compat_database_measurement_20261024",
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
+      ]
+    },
+    {
+      "id": "issued_petroleum",
+      "group": "database",
+      "phase": "deterministic",
+      "kind": "deterministic",
+      "executor": "candidate",
+      "required": true,
+      "requires": [
+        "migrations"
+      ],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [
+        {
+          "program": "node",
+          "args": [
+            "--test",
+            "tests/xeroIssuedPetroleumPreservationDatabase.test.js"
+          ],
+          "env": {
+            "FCOS_ISSUED_PETROLEUM_TEST_DATABASE_URL": "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          }
+        }
+      ],
+      "profiles": [
+        "frozen_04ee",
+        "historical_f457",
+        "application_v2",
+        "compat_application_auth_20261018",
+        "compat_source_config_20261020",
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024",
+        "compat_database_measurement_20261024",
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
+      ]
+    },
+    {
+      "id": "document_corrections",
+      "group": "database",
+      "phase": "deterministic",
+      "kind": "deterministic",
+      "executor": "candidate",
+      "required": true,
+      "requires": [
+        "migrations"
+      ],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [
+        {
+          "program": "node",
+          "args": [
+            "--test",
+            "tests/xeroDocumentCorrectionDatabase.test.js"
+          ],
+          "env": {
+            "FCOS_CORRECTION_TEST_DATABASE_URL": "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          }
+        }
+      ],
+      "profiles": [
+        "frozen_04ee",
+        "historical_f457",
+        "application_v2",
+        "compat_application_auth_20261018",
+        "compat_source_config_20261020",
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024",
+        "compat_database_measurement_20261024",
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
+      ]
+    },
+    {
+      "id": "group_payment",
+      "group": "database",
+      "phase": "deterministic",
+      "kind": "deterministic",
+      "executor": "candidate",
+      "required": true,
+      "requires": [
+        "migrations"
+      ],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [
+        {
+          "program": "node",
+          "args": [
+            "--test",
+            "tests/xeroGroupPaymentPersistence.test.js"
+          ],
+          "env": {
+            "FCOS_GROUP_PAYMENT_TEST_DATABASE_URL": "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          }
+        }
+      ],
+      "profiles": [
+        "frozen_04ee",
+        "historical_f457",
+        "application_v2",
+        "compat_application_auth_20261018",
+        "compat_source_config_20261020",
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024",
+        "compat_database_measurement_20261024",
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
+      ]
+    },
+    {
+      "id": "nom_b_concurrency",
+      "group": "database",
+      "phase": "deterministic",
+      "kind": "deterministic",
+      "executor": "candidate",
+      "required": true,
+      "requires": [
+        "migrations"
+      ],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [
+        {
+          "program": "node",
+          "args": [
+            "--test",
+            "tests/dashboardNomBConcurrency.test.js"
+          ],
+          "env": {
+            "FCOS_NOM_B_TEST_DATABASE_URL": "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          }
+        }
+      ],
+      "profiles": [
+        "frozen_04ee",
+        "historical_f457",
+        "application_v2",
+        "compat_application_auth_20261018",
+        "compat_source_config_20261020",
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024",
+        "compat_database_measurement_20261024",
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
+      ]
+    },
+    {
+      "id": "shared_control",
+      "group": "database",
+      "phase": "deterministic",
+      "kind": "deterministic",
+      "executor": "candidate",
+      "required": true,
+      "requires": [
+        "migrations"
+      ],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [
+        {
+          "program": "node",
+          "args": [
+            "--test",
+            "tests/xeroSharedControlDatabase.test.js"
+          ],
+          "env": {
+            "FCOS_SHARED_TEST_DATABASE_URL": "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          }
+        }
+      ],
+      "profiles": [
+        "frozen_04ee",
+        "historical_f457",
+        "application_v2",
+        "compat_application_auth_20261018",
+        "compat_source_config_20261020",
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024",
+        "compat_database_measurement_20261024",
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
+      ]
+    },
+    {
+      "id": "reconciliation_campaign",
+      "group": "database",
+      "phase": "deterministic",
+      "kind": "deterministic",
+      "executor": "candidate",
+      "required": true,
+      "requires": [
+        "migrations"
+      ],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [
+        {
+          "program": "node",
+          "args": [
+            "--test",
+            "tests/xeroReconciliationCampaignDatabase.test.js"
+          ],
+          "env": {
+            "FCOS_CAMPAIGN_TEST_DATABASE_URL": "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          }
+        }
+      ],
+      "profiles": [
+        "frozen_04ee",
+        "historical_f457",
+        "application_v2",
+        "compat_application_auth_20261018",
+        "compat_source_config_20261020",
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024",
+        "compat_database_measurement_20261024",
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
+      ]
+    },
+    {
+      "id": "fcuno_contract",
+      "group": "acceptance",
+      "phase": "final",
+      "kind": "volatile",
+      "executor": "controller",
+      "required": true,
+      "requires": [],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [],
+      "profiles": [
+        "frozen_04ee",
+        "controller_v2",
+        "historical_f457",
+        "application_v2",
+        "compat_application_auth_20261018",
+        "compat_source_config_20261020",
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024",
+        "compat_database_measurement_20261024",
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
+      ]
+    },
+    {
+      "id": "preview_binding",
+      "group": "acceptance",
+      "phase": "final",
+      "kind": "volatile",
+      "executor": "controller",
+      "required": true,
+      "requires": [],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [],
+      "profiles": [
+        "frozen_04ee",
+        "controller_v2",
+        "historical_f457",
+        "application_v2",
+        "compat_application_auth_20261018",
+        "compat_source_config_20261020",
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024",
+        "compat_database_measurement_20261024",
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
+      ]
+    },
+    {
+      "id": "server_bundles",
+      "group": "code",
+      "phase": "deterministic",
+      "kind": "deterministic",
+      "executor": "candidate",
+      "required": true,
+      "requires": [
+        "build"
+      ],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [
+        {
+          "program": "node",
+          "args": [
+            "/usr/local/lib/node_modules/vercel/dist/index.js",
+            "build",
+            "--yes",
+            "--target=preview"
+          ],
+          "env": {}
+        }
+      ],
+      "profiles": [
+        "frozen_04ee",
+        "controller_v2",
+        "historical_f457",
+        "application_v2",
+        "compat_application_auth_20261018",
+        "compat_source_config_20261020",
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024",
+        "compat_database_measurement_20261024",
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
+      ],
+      "artifactInputs": [
+        "dist",
+        ".vercel/output"
+      ],
+      "cacheable": false
+    },
+    {
+      "id": "server_performance",
+      "group": "code",
+      "phase": "deterministic",
+      "kind": "deterministic",
+      "executor": "candidate",
+      "required": true,
+      "requires": [
+        "build",
+        "server_bundles"
+      ],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [
+        {
+          "program": "node",
+          "args": [
+            "@controller/scripts/hosted-release-performance.mjs",
+            "@candidate"
+          ],
+          "env": {
+            "FCOS_REQUIRE_SERVER_BUNDLES": "1"
+          }
+        }
+      ],
+      "profiles": [
+        "frozen_04ee",
+        "controller_v2",
+        "historical_f457",
+        "application_v2",
+        "compat_application_auth_20261018",
+        "compat_source_config_20261020",
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024",
+        "compat_database_measurement_20261024",
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
+      ],
+      "artifactInputs": [
+        "dist",
+        ".vercel/output"
+      ]
+    },
+    {
+      "id": "restricted_browser",
+      "group": "acceptance",
+      "phase": "final",
+      "kind": "volatile",
+      "executor": "controller",
+      "required": true,
+      "requires": [
+        "preview_binding",
+        "fcuno_contract"
+      ],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [],
+      "coverage": [
+        "dashboard",
+        "markets",
+        "api_denials"
+      ],
+      "profiles": [
+        "frozen_04ee",
+        "controller_v2",
+        "historical_f457",
+        "application_v2",
+        "compat_application_auth_20261018",
+        "compat_source_config_20261020",
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024",
+        "compat_database_measurement_20261024",
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
+      ]
+    },
+    {
+      "id": "normal_role",
+      "group": "acceptance",
+      "phase": "final",
+      "kind": "volatile",
+      "executor": "controller",
+      "required": true,
+      "requires": [
+        "preview_binding",
+        "restricted_browser"
+      ],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [],
+      "coverage": [
+        "dashboard",
+        "markets",
+        "review",
+        "disputes",
+        "buyer_invoices",
+        "unofficial_compensation",
+        "incoming_payments",
+        "cashflow_forecast",
+        "brokers",
+        "master_contracts",
+        "special_terms",
+        "hedge_desk",
+        "xero_portal",
+        "email_router",
+        "settings"
+      ],
+      "profiles": [
+        "frozen_04ee",
+        "controller_v2",
+        "historical_f457",
+        "application_v2",
+        "compat_application_auth_20261018",
+        "compat_source_config_20261020",
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024",
+        "compat_database_measurement_20261024",
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
+      ]
+    },
+    {
+      "id": "controller_database",
+      "group": "database",
+      "phase": "deterministic",
+      "kind": "deterministic",
+      "executor": "candidate",
+      "required": true,
+      "requires": [],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [
+        {
+          "program": "node",
+          "args": [
+            "--test",
+            "tests/hosted-release-coordinator-postgres.test.js",
+            "tests/hosted-release-qualification.test.js",
+            "tests/hosted-release-schema-observation.test.js"
+          ],
+          "env": {
+            "FCOS_REQUIRE_NATIVE_COORDINATOR_DATABASE": "1"
+          }
+        }
+      ],
+      "profiles": [
+        "controller_v2",
+        "application_v2"
+      ]
+    },
+    {
+      "id": "final_acceptance",
+      "group": "acceptance",
+      "phase": "final",
+      "kind": "volatile",
+      "executor": "aggregate",
+      "required": true,
+      "requires": [
+        "controls",
+        "compatibility",
+        "unit",
+        "coordination",
+        "lint",
+        "typecheck",
+        "graph",
+        "build",
+        "client_performance",
+        "desktop_fixtures",
+        "nom_b_fixtures",
+        "missing_nom_b_fixtures",
+        "xero_integrity_fixtures",
+        "people_access_fixtures",
+        "xero_campaign_fixtures",
+        "migrations",
+        "missing_nom_b_database",
+        "grouped_preservation",
+        "financial_preview",
+        "checkpoint_resume",
+        "issued_supplier",
+        "issued_petroleum",
+        "document_corrections",
+        "group_payment",
+        "nom_b_concurrency",
+        "shared_control",
+        "reconciliation_campaign",
+        "fcuno_contract",
+        "preview_binding",
+        "server_bundles",
+        "server_performance",
+        "restricted_browser",
+        "normal_role",
+        "controller_database"
+      ],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [],
+      "profiles": [
+        "frozen_04ee",
+        "controller_v2",
+        "historical_f457",
+        "application_v2",
+        "compat_application_auth_20261018",
+        "compat_source_config_20261020",
+        "compat_source_diagnostics_20261023",
+        "compat_verification_harness_20261024",
+        "compat_database_measurement_20261024",
+        "compat_runtime_metering_20261024",
+        "compat_runtime_dependency_20261024",
+        "compat_runtime_ordinary_admission_20261025"
+      ]
+    }
+  ],
+  "sourceProfiles": {
+    "frozen_04ee": {
+      "candidateSha": "04ee3425aac7a49089eda781eb3c976aea1f6785",
+      "purpose": "Complete original accepted business release scope."
+    },
+    "controller_v2": {
+      "purpose": "Consolidation controller code verification; does not replace frozen business candidate checks."
+    },
+    "historical_f457": {
+      "candidateSha": "f4576a8c918acef686f084c505b1715de11deeb8",
+      "purpose": "Historical quality scope, unchanged v1 admission remains authoritative."
+    },
+    "application_v2": {
+      "purpose": "Final separately admitted application scope after observed compatibility Production."
+    },
+    "compat_application_auth_20261018": {
+      "candidateSha": "8f39dde6a6885292ce3b70cb61a78f8b86b947c3",
+      "purpose": "Complete original accepted business release scope.",
+      "description": "Explicit three-file Salesforce application-auth diagnostic correction of frozen04ee; same complete check requirements."
+    },
+    "compat_source_config_20261020": {
+      "candidateSha": "2ef733d17dd12314c72971c2220b2b09903a6bf0",
+      "purpose": "Complete original accepted business release scope.",
+      "description": "Explicit one-file vercel.json canonicalization successor of8f39: exact observed name:fcos/version:2 source bytes; unchanged complete31 checks. Frozen04ee and application-auth correction histories remain immutable."
+    },
+    "compat_source_diagnostics_20261023": {
+      "candidateSha": "160edcccc3347596ac18bb5c9dcb34ecc26df02b",
+      "purpose": "Complete original accepted business release scope.",
+      "description": "Explicit one-file diagnostic-only child of2ef. Fixed public source hashes/counts on attestation failure; source/mode/cleanliness refusal gates and all31 required checks remain unchanged. No remote mismatch cause or successful deployment is inferred."
+    },
+    "compat_verification_harness_20261024": {
+      "candidateSha": "bf517a8ba86f8c210eacd2b9dd859ca7c4d48e3d",
+      "purpose": "Complete original accepted business release scope.",
+      "description": "Explicit six-file verification-only child of160ed: current auth reset/outbox assertions, unchanged browser XLS encoding path at65537 rows, source-bound read-only parent disposable-database proof. All31 required checks and historical profiles remain unchanged."
+    },
+    "compat_database_measurement_20261024": {
+      "candidateSha": "8d4cb87391c55de6debab92b9ab34827af17bea3",
+      "purpose": "Complete original accepted business release scope.",
+      "description": "Explicit four-file measurement-only child ofbf517: trusted parent RSS reader for the unchanged4408-row payment and25MB checkpoint bounds. Runtime, financial business scope, original31 requiredchecks and historical profiles remain unchanged."
+    },
+    "compat_runtime_metering_20261024": {
+      "candidateSha": "1e25147dc9fc9ba008096f1200b681993d49d428",
+      "purpose": "Complete original accepted business release scope.",
+      "description": "Explicit seven-file read-only runtime observer child of8d4: shared quota admission for one source-bound Connections request, finite token validity and no refresh. All31 checks and historical profiles remain unchanged.",
+      "probeProtocol": "xero_metered_v1"
+    },
+    "compat_runtime_dependency_20261024": {
+      "candidateSha": "9152fa655b6e507a568d773534404843595fe323",
+      "purpose": "Complete original accepted business release scope.",
+      "description": "Real child of1e ships the missing public runtime policy and scoped Connections RPC wiring only; original financial admission and all historical profiles remain unchanged.",
+      "probeProtocol": "xero_metered_v1"
+    },
+    "compat_runtime_ordinary_admission_20261025": {
+      "candidateSha": "be6daf6162480ca77ec8d4f04fe5aaa5b228a22c",
+      "purpose": "Complete original accepted business release scope.",
+      "description": "Exact five-file child of9152 uses the installed ordinary Connections RPC through a strict read-only runtime facade; original financial admission, all31 checks and inherited commands remain unchanged.",
+      "probeProtocol": "xero_metered_v1"
+    }
+  }
+}

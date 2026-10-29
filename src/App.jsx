@@ -9,9 +9,11 @@ import { AuthProvider, useAuth } from '@/lib/AuthContext';
 import UserNotRegisteredError from '@/components/UserNotRegisteredError';
 import ModuleGate from '@/components/ModuleGate';
 import ModuleGateAny from '@/components/ModuleGateAny';
+import ProtectedRoute from '@/components/ProtectedRoute';
 import Layout from '@/components/Layout';
 import WorkspaceErrorBoundary from '@/components/WorkspaceErrorBoundary';
 
+const StemWorkspace = lazy(() => import('@/pages/StemWorkspace'));
 const DashboardSettings = lazy(() => import('@/pages/DashboardSettings'));
 const AccountInsight = lazy(() => import('@/pages/AccountInsight'));
 const StemPnlReport = lazy(() => import('@/pages/StemPnlReport'));
@@ -87,17 +89,12 @@ const AuthenticatedApp = () => {
     <Suspense fallback={<RouteLoader />}>
     <Routes>
       <Route path="/login" element={<Login />} />
-      {authError?.type === 'auth_required' && (
-        <Route path="*" element={<Navigate to="/login" replace state={loginRedirectState} />} />
-      )}
-      {authError && authError.type !== 'auth_required' && (
-        <Route path="*" element={<AuthErrorScreen authError={authError} />} />
-      )}
-      {!authError && !isAuthenticated && (
-        <Route path="*" element={<Navigate to="/login" replace state={loginRedirectState} />} />
-      )}
-      {!authError && isAuthenticated && (
-        <>
+      <Route element={<ProtectedRoute
+        fallback={<RouteLoader />}
+        unauthenticatedElement={authError && authError.type !== 'auth_required'
+          ? <AuthErrorScreen authError={authError} />
+          : <Navigate to="/login" replace state={loginRedirectState} />}
+      />}>
           <Route path="/apps" element={<Navigate to="/" replace />} />
           <Route path="/v2/*" element={<RedirectLegacyWorkspace />} />
           <Route element={<Layout />}>
@@ -107,6 +104,8 @@ const AuthenticatedApp = () => {
             <Route path="/fcos-improvements" element={<FcosImprovements />} />
             <Route path="/email-router" element={<ModuleGate moduleId="email_router"><EmailRouter /></ModuleGate>} />
             <Route path="/" element={<ModuleGate moduleId="dashboard"><DashboardSettings /></ModuleGate>} />
+            <Route path="/stems/:stemId" element={<ModuleGateAny moduleIds={['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'cashflow_forecast', 'pnl', 'brokers', 'hedge_desk']}><StemWorkspace /></ModuleGateAny>} />
+            <Route path="/missing-nom-b" element={<ModuleGate moduleId="dashboard"><Navigate to="/my-commitments?source=nom_b" replace /></ModuleGate>} />
             <Route path="/accounts/:accountId" element={<ModuleGate moduleId="dashboard"><AccountInsight /></ModuleGate>} />
             <Route path="/settings" element={<SettingsWorkspace />} />
             <Route path="/pnl" element={<ModuleGate moduleId="pnl"><StemPnlReport /></ModuleGate>} />
@@ -132,8 +131,7 @@ const AuthenticatedApp = () => {
             <Route path="/admin" element={<RedirectWithSection section="people" />} />
             <Route path="*" element={<PageNotFound />} />
           </Route>
-        </>
-      )}
+      </Route>
     </Routes>
     </Suspense>
     </WorkspaceErrorBoundary>

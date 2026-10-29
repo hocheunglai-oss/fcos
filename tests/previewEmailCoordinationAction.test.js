@@ -1,3 +1,4 @@
+import { historicalCoordinationCapsule } from './helpers/historicalCoordinationCapsule.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createHash } from 'node:crypto';
@@ -20,7 +21,6 @@ import { validateReleaseCoordinationBinding } from '../scripts/lib/release-coord
 import { decodeCoordinationBackendResultArchive } from '../scripts/lib/coordination-backend-result-archive.mjs';
 import { decodePreviewCoordinationArchive } from '../scripts/lib/preview-email-coordination-archive.mjs';
 import { assertPreviewCoordinationIssuerEvidenceCurrent } from '../scripts/preview-email-coordinator-local.mjs';
-import { execFileSync } from 'node:child_process';
 
 const digest = value => createHash('sha256').update(value).digest('hex'), iso = value => new Date(value).toISOString();
 const now = Date.parse('2026-10-10T12:35:00.000Z'), operator = fcosConnectionIdentifier('github', 'Required account');
@@ -205,7 +205,8 @@ test('issuer final refresh refuses changed action, enrollment, metadata and admi
   assert.throws(() => assertPreviewCoordinationIssuerEvidenceCurrent(original, current, { ...projection, actionSha256: 'f'.repeat(64) }));
 });
 
-test('saved actual accepted archives pass complete offline backend collection with exact original result filename', async () => {
+test('saved actual accepted archives pass complete offline historical collection; current dependency drift still refuses', async t => {
+  const capsule = await historicalCoordinationCapsule(t);
   const directory = new URL('./fixtures/coordination-backend-actual/', import.meta.url);
   const snapshot = (name, expected) => { const bytes = readFileSync(new URL(name, directory)); assert.equal(digest(bytes), expected); return JSON.parse(bytes); };
   const terminal = snapshot('terminal-artifact-boundary.json', 'f5ee1dd4ea39c08a043b8c7227125457d811df4bac10e8fc734e1251785810dd');
@@ -214,10 +215,10 @@ test('saved actual accepted archives pass complete offline backend collection wi
   const { binding: originalBinding, actualReport } = accepted.acceptance.value;
   const content = (path, bytes) => ({ type: 'file', path, encoding: 'base64', content: bytes.toString('base64'),
     sha: createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex') });
-  const old = new Map(accepted.value.sources.map(row => [row.path,
-    execFileSync('/usr/bin/git', ['show', `${originalBinding.harnessSha}:${row.path}`])]));
-  const tree = { truncated: false, tree: execFileSync('/usr/bin/git', ['ls-tree', '-r', '--full-tree', originalBinding.harnessSha], { encoding: 'utf8' })
-    .split('\n').filter(Boolean).map(line => { const [mode, type, object, path] = line.split(/[\t ]/); return { path, mode, type, sha: object }; }) };
+  const old = new Map(capsule.backend.sourceContents.map(row => [row.path, Buffer.from(row.content, 'base64')]));
+  const tree = capsule.backend.treeResponse;
+  assert.equal(tree.truncated, false);
+  assert.equal(tree.tree.length, 1750);
   const artifacts = new Map(Object.values(accepted.acceptance.value.archives).map(row => [row.metadata.id, row]));
   const reads = { json(endpoint) {
     if (endpoint.includes(`/contents/${COORDINATION_BACKEND_REVIEW_PATH}?`)) return content(COORDINATION_BACKEND_REVIEW_PATH, Buffer.from(raw));
@@ -232,7 +233,8 @@ test('saved actual accepted archives pass complete offline backend collection wi
     const id = Number(/artifacts\/(\d+)/.exec(endpoint)[1]), bytes = readFileSync(new URL(`actual-artifact-${id}.zip`, directory));
     assert.equal(digest(bytes), artifacts.get(id).archive.sha256); return bytes;
   } };
-  const proof = await collectCoordinationBackendProof(reads, 'b'.repeat(40));
+  await assert.rejects(collectCoordinationBackendProof(reads, 'b'.repeat(40)), /Exact coordination action and actual closed backend proof required/);
+  const proof = await capsule.collector.collectCoordinationBackendProof(reads, 'b'.repeat(40));
   assert.equal(proof.acceptanceSha256, accepted.acceptance.sha256); assert.equal(proof.closureSha256, accepted.closure.sha256);
   const result = reads.archive('artifacts/11670710077/zip');
   assert.deepEqual(decodeCoordinationBackendResultArchive(result, originalBinding.runId), actualReport);

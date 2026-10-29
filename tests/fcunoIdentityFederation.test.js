@@ -138,10 +138,49 @@ function federationClient(link, profile) {
   };
 }
 
+function trackedFederationClient(link, profile) {
+  const writes = [];
+  return {
+    writes,
+    from(table) {
+      if (table === 'fcos_external_identity_links') {
+        const query = {
+          select() { return query; },
+          eq() { return query; },
+          is() { return query; },
+          maybeSingle: async () => ({ data: link, error: null }),
+          update() { writes.push('identity_link_claim'); return query; },
+        };
+        return query;
+      }
+      if (table === 'user_profiles') {
+        const query = {
+          select() { return query; },
+          eq() { return query; },
+          maybeSingle: async () => ({ data: profile, error: null }),
+          upsert(row) {
+            writes.push('profile_provision');
+            profile = { ...row };
+            return { error: null };
+          },
+        };
+        return query;
+      }
+      throw new Error(`Unexpected table ${table}`);
+    },
+  };
+}
+
 function syncClient() {
   const state = { transaction: null, link: null, audit: [] };
   return {
     state,
+    async rpc(name) {
+      assert.equal(name, 'fcos_finalize_identity_sync');
+      state.transaction.status = 'applied';
+      state.audit.push({ action: 'sync_access_projected' });
+      return { data: { ok: true, duplicate: false, eventId: state.transaction.event_id, revision: state.link.revision, access: 'active' }, error: null };
+    },
     from(table) {
       if (table === 'fcos_external_identity_sync_transactions') {
         return {
@@ -155,7 +194,7 @@ function syncClient() {
             return query;
           },
           update(patch) {
-            return { eq: async () => { Object.assign(state.transaction, patch); return { error: null }; } };
+            return { eq: () => ({ in: async () => { Object.assign(state.transaction, patch); return { error: null }; } }) };
           },
         };
       }
@@ -244,6 +283,11 @@ test('a concurrently applied newer identity revision prevents stale profile proj
     { id: 'link-1', revision: 3, auth_user_id: 'auth-1' },
   ];
   const client = {
+    async rpc(name) {
+      assert.equal(name, 'fcos_finalize_identity_sync');
+      transaction.status = 'ignored';
+      return { data: { ok: true, ignored: true, eventId: 'event-race-2', revision: 2 }, error: null };
+    },
     from(table) {
       if (table === 'fcos_external_identity_sync_transactions') {
         return {
@@ -252,7 +296,7 @@ test('a concurrently applied newer identity revision prevents stale profile proj
             return { select: () => ({ maybeSingle: async () => ({ data: transaction, error: null }) }) };
           },
           update(patch) {
-            return { eq: async () => { Object.assign(transaction, patch); return { error: null }; } };
+            return { eq: () => ({ in: async () => { Object.assign(transaction, patch); return { error: null }; } }) };
           },
         };
       }
@@ -294,7 +338,7 @@ test('every FCOS auth boundary rejects a source-disabled FCUNO identity before m
       client,
       authUser: { id: profile.id, identities: [{ provider: 'custom:fcuno', provider_id: 'fcuno-user-1', identity_data: { sub: 'fcuno-user-1' } }] },
       profile,
-      accessToken: accessToken({ iat: Math.floor(Date.now() / 1000) }),
+      accessToken: accessToken({ sub: profile.id, session_id: '33333333-3333-4333-8333-333333333333', iat: Math.floor(Date.now() / 1000), amr: [{ method: 'oauth', timestamp: Math.floor(Date.now() / 1000) }] }),
       env: { FCOS_ENABLE_FCUNO_FEDERATION: 'true', FCUNO_IDENTITY_ISSUER: issuer },
     }),
     (error) => error.code === 'FCUNO_IDENTITY_ACCESS_REVOKED' && error.status === 403,
@@ -312,11 +356,24 @@ test('FCUNO revocation timestamp rejects an otherwise active session issued befo
       client,
       authUser: { id: profile.id, identities: [{ provider: 'custom:fcuno', provider_id: 'fcuno-user-1' }] },
       profile,
-      accessToken: accessToken({ iat: Math.floor(Date.parse('2026-08-30T23:59:00.000Z') / 1000) }),
+      accessToken: accessToken({ sub: profile.id, session_id: '33333333-3333-4333-8333-333333333333', iat: Math.floor(Date.parse('2026-08-30T23:59:00.000Z') / 1000), amr: [{ method: 'oauth', timestamp: Math.floor(Date.parse('2026-08-30T23:59:00.000Z') / 1000) }] }),
       env: { FCOS_ENABLE_FCUNO_FEDERATION: 'true', FCUNO_IDENTITY_ISSUER: issuer },
     }),
     (error) => error.code === 'FCUNO_IDENTITY_SESSION_REVOKED' && error.status === 401,
   );
+});
+
+test('unproved federated sessions cannot bind or provision in Preview, read-only or Production', async () => {
+  const authUser = { id:'24b02cff-beb0-444c-a80c-d539a70b5840', email:'user@fcuno.example', identities:[{provider:'custom:fcuno',provider_id:'fcuno-user-1'}] };
+  const linked = { id:'a8c3cbfd-5662-40b4-9a51-bbbd5170e357',auth_user_id:authUser.id,source_active:true,use_fcos:true,email:authUser.email,full_name:'FCUNO User' };
+  const profile={id:authUser.id,email:authUser.email,active:true};
+  for(const configuration of [{VERCEL_ENV:'preview'},{FCOS_ENABLE_READ_ONLY_CI:'true'},{VERCEL_ENV:'production'}]){
+    for(const [link,currentProfile] of [[{...linked,auth_user_id:null},profile],[linked,null],[linked,profile]]){
+      const client=trackedFederationClient(link,currentProfile);
+      await assert.rejects(enforceFcunoFederatedAccess({client,authUser,profile:currentProfile,env:{FCOS_ENABLE_FCUNO_FEDERATION:'true',FCUNO_IDENTITY_ISSUER:issuer,...configuration}}),{status:401,code:'FCUNO_IDENTITY_REAUTHENTICATION_REQUIRED'});
+      assert.deepEqual(client.writes,[]);
+    }
+  }
 });
 
 test('FCOS uses the custom FCUNO OIDC provider behind public migration flags and enforces federation at server boundaries', async () => {

@@ -202,3 +202,20 @@ test('exact build-only cache keys can differ without weakening VERCEL_ENV or oth
   const unsafe = structuredClone(policy); unsafe.buildOnlyKeys.push('APP_URL');
   blocked(() => {}, 'POLICY_SCOPE_WEAKENED', { ...options, policy: unsafe });
 });
+
+// Application provenance does not claim which private grant was selected.
+test('application-owned Salesforce proof retains exact org and complete private grant requirements', () => {
+  for (const grant of ['jwt','refresh','session']) {
+    const evidence=fixture();
+    for(const name of ['production','candidate']) {
+      const keys=evidence[name].env.keys;evidence[name].runtime.auth.salesforce.mode='application';
+      if(grant!=='jwt') for(const key of ['SALESFORCE_JWT_PRIVATE_KEY','SALESFORCE_JWT_USERNAME','SALESFORCE_JWT_CLIENT_ID']) delete keys[key];
+      if(grant==='refresh')Object.assign(keys,{SALESFORCE_CLIENT_ID:known('pinned-client'),SALESFORCE_CLIENT_SECRET:opaque(),SALESFORCE_REFRESH_TOKEN:opaque()});
+      if(grant==='session')keys.SALESFORCE_ACCESS_TOKEN=opaque();
+    }
+    assert.equal(evaluatePreviewParity(evidence,options).pass,true,grant);
+  }
+  blocked(e=>{for(const name of ['production','candidate']){e[name].runtime.auth.salesforce.mode='application';delete e[name].env.keys.SALESFORCE_JWT_PRIVATE_KEY;}},'PROVIDER_CREDENTIALS_MISSING');
+  blocked(e=>{e.candidate.runtime.auth.salesforce.mode='application';e.candidate.runtime.auth.salesforce.target='foreign';},'PROVIDER_AUTH_UNKNOWN');
+  blocked(e=>{e.candidate.runtime.auth.salesforce.mode='application';e.candidate.runtime.auth.salesforce.state='unknown';},'PROVIDER_AUTH_UNKNOWN');
+});

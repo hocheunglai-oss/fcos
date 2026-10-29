@@ -718,7 +718,9 @@ public class StemExtraCostTriggerHandler {
         Set<Id> oldSupplierIds = new Set<Id>();
         Set<Id> stemIds = new Set<Id>();
         for(STEM_Extra_Cost__c stemExtraCost : stemExtraCosts){
-            if(stemExtraCost.Payment_Term__c != oldStemExtraCostMap.get(stemExtraCost.Id).Payment_Term__c && oldStemExtraCostMap.get(stemExtraCost.Id).Payment_Term__c == 'Deposit'){
+            if((stemExtraCost.Payment_Term__c != oldStemExtraCostMap.get(stemExtraCost.Id).Payment_Term__c
+                ||stemExtraCost.Cancelled__c != oldStemExtraCostMap.get(stemExtraCost.Id).Cancelled__c)
+                && oldStemExtraCostMap.get(stemExtraCost.Id).Payment_Term__c == 'Deposit'){
                 supplierIds.add(stemExtraCost.Supplier__c);
                 stemIds.add(stemExtraCost.STEM__c);
                 oldSupplierIds.add(oldStemExtraCostMap.get(stemExtraCost.Id).Supplier__c);

@@ -94,6 +94,7 @@ test('release gates scope credentials, enforce strict checks, and always clean p
     environment: validEnvironment,
     checkedOutCommit: () => releaseSha,
     verify: async () => proof,
+    verifyPrivateMaterial: () => { lifecycle.push('private-material'); },
     prepare: async options => { lifecycle.push('prepare'); assert.equal(options.dependencies.allowExisting, false); },
     cleanup: async () => { lifecycle.push('cleanup'); },
     run: (command, args, options) => {
@@ -101,7 +102,7 @@ test('release gates scope credentials, enforce strict checks, and always clean p
       return { status: args.includes('test:e2e') ? 1 : 0 };
     },
   }), /Read-only browser smoke tests/);
-  assert.deepEqual(lifecycle, ['prepare', 'cleanup']);
+  assert.deepEqual(lifecycle, ['private-material', 'prepare', 'cleanup']);
   const browser = calls.at(-1);
   assert.equal(browser.env.FCOS_E2E_EXPECTED_COMMIT, releaseSha);
   assert.equal(browser.env.FCOS_E2E_BASE_URL, candidateUrl);
@@ -112,6 +113,7 @@ test('release gates scope credentials, enforce strict checks, and always clean p
     for (const key of ['FCOS_E2E_PASSWORD', 'FCOS_E2E_VERCEL_BYPASS', 'GITHUB_TOKEN']) assert.equal(call.env[key], undefined);
   }
   assert.equal(calls.find(call => call.args.includes('verify:migrations')).env.FCOS_REQUIRE_LIVE_MIGRATION_CHECK, '1');
+  assert.equal(calls.find(call => call.args.includes('build')).env.FCOS_REQUIRE_CLEAN_BUILD, '1');
   assert.equal(calls.find(call => call.args.includes('verify:performance')).env.FCOS_REQUIRE_SERVER_BUNDLES, '1');
   assert.ok(calls.some(call => call.args.includes('verify:compatibility')));
 });
@@ -124,4 +126,10 @@ test('release fails before any command or state creation on mismatched checkout 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /FCOS_E2E_CANDIDATE_URL is required/);
   assert.doesNotMatch(result.stdout, /\[release gate\]/);
+});
+
+test('missing private originals proof refuses release before commands and browser state', async () => {
+  const unexpected = () => { throw new Error('must not run'); };
+  await assert.rejects(() => verifyRelease({ environment: validEnvironment, checkedOutCommit: () => releaseSha,
+    verify: async () => proof, run: unexpected, prepare: unexpected, cleanup: unexpected }), /ORIGINAL54_EXACT_CANDIDATE_PRIVATE_MATERIAL_PROOF_REQUIRED/);
 });

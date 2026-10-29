@@ -65,9 +65,9 @@ export default function HedgeAssistantAiSettings() {
   return (
     <AiModelSettingsCard
       title="Hedge Desk Trading Assistant"
-      description="Select the model used for compact book and market summaries. The assistant remains advisory and cannot change the hedge book."
+      description="Choose automatic routing or a manual model. The assistant cannot change the hedge book."
       icon={Bot}
-      modelLabel="Trading Assistant model"
+      modelLabel="Trading Assistant AI selection"
       models={settings?.models || []}
       selectedModelId={settings?.modelId || ''}
       savedModelId={savedModelId}
@@ -83,6 +83,7 @@ export default function HedgeAssistantAiSettings() {
       onSave={save}
       onRefresh={load}
       updatedAt={settings?.updatedAt}
+      automaticRouting={settings?.automaticRouting}
       privacyNote="Only compact server-prepared book and market summaries are sent; customer identities, email addresses, Salesforce IDs, and secrets are excluded."
       permissionNote="Hedge Desk administration permission is required to change this model."
     />

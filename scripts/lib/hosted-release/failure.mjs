@@ -1,0 +1,138 @@
+import { FCOS_CONNECTION_POLICY } from '../../../config/fcosConnections.js';
+import { canonicalFcosE2eCandidateUrl } from '../../verify-e2e-candidate.mjs';
+import { safeRuntimeMismatch } from './runtime-mismatch.mjs';
+import { ReleaseError } from './json-contract.mjs';
+import { safeVercelCommandFailure } from './vercel-command-failure.mjs';
+import { safeVercelSourceApiFailure } from './vercel-source-api.mjs';
+
+// These are code-owned labels, never provider values, error messages or paths.
+export const RELEASE_BOUNDARIES = Object.freeze([
+  'diagnostic.identity', 'diagnostic.source', 'diagnostic.setup',
+  'session.controller', 'session.setup', 'session.source', 'session.github', 'session.identity',
+  'preview.register', 'preview.snapshot', 'preview.admit', 'preview.operation', 'preview.ready', 'preview.artifact',
+  'vercel.artifact.version', 'runtime.protection', 'runtime.identity', 'runtime.identity.target',
+  'runtime.login.browser', 'runtime.login.context', 'runtime.login.navigation', 'runtime.login.issuer',
+  'runtime.login.form', 'runtime.login.submit', 'runtime.login.callback', 'runtime.login.identity', 'runtime.login.cleanup',
+  'vercel.manifest', 'vercel.context', 'vercel.credential', 'vercel.source',
+  'vercel.version', 'vercel.project', 'vercel.selection_source', 'vercel.selection_environment',
+  'vercel.token', 'vercel.project_identity', 'vercel.project_list', 'vercel.user_scope',
+  'vercel.team_scope', 'vercel.effective_scope', 'vercel.configuration', 'vercel.local_link',
+]);
+export const isReleaseBoundary = value => RELEASE_BOUNDARIES.includes(value);
+
+export function boundaryFailure(error, boundary) {
+  if (!isReleaseBoundary(boundary)) throw new ReleaseError('RELEASE_DIAGNOSTIC_BOUNDARY_INVALID', 'diagnostic', 'Correct the diagnostic implementation.');
+  const failure = error instanceof ReleaseError ? error : new ReleaseError('RELEASE_BOUNDARY_FAILED', boundary,
+    'Inspect the fixed boundary and retained sanitized diagnostic. Read the journal before any consequential operation.');
+  // Preserve the innermost known boundary, but never copy a raw exception.
+  if (!isReleaseBoundary(failure.boundary)) failure.boundary = boundary;
+  return failure;
+}
+
+export function atReleaseBoundary(boundary, callback, observe) {
+  if (!isReleaseBoundary(boundary)) throw boundaryFailure(null, boundary);
+  observe?.(boundary);
+  try {
+    const result = callback();
+    return result && typeof result.then === 'function'
+      ? result.catch(error => { throw boundaryFailure(error, boundary); }) : result;
+  } catch (error) { throw boundaryFailure(error, boundary); }
+}
+
+// Closed response diagnostics: never publish provider text, query, fragments,
+// session data or arbitrary navigation paths from an authentication failure.
+export const RUNTIME_LOGIN_ERROR_CODES = Object.freeze(['UNCLASSIFIED',
+  'FCUNO_IDENTITY_CONFIG_MISSING', 'FCUNO_IDENTITY_CONFIG_INVALID',
+  'FCUNO_IDENTITY_REAUTHENTICATION_REQUIRED', 'FCUNO_IDENTITY_SESSION_REVOKED',
+  'FCUNO_IDENTITY_LINK_REQUIRED', 'FCUNO_IDENTITY_ACCESS_REVOKED']);
+export function safeRuntimeLoginFailure(value) {
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype
+    || Object.keys(value).sort().join(',') !== 'errorCode,httpStatus,origin,pathname'
+    || !Number.isInteger(value.httpStatus) || value.httpStatus < 100 || value.httpStatus > 599 || value.httpStatus === 200
+    || !RUNTIME_LOGIN_ERROR_CODES.includes(value.errorCode)
+    || ![null, '/', '/login', '/admin'].includes(value.pathname)) return undefined;
+  if (value.origin !== null) {
+    try {
+      const issuer = new URL(FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation.issuer).origin;
+      const production = new URL(FCOS_CONNECTION_POLICY.attestation.endpoint).origin;
+      if (value.origin !== issuer && value.origin !== production && canonicalFcosE2eCandidateUrl(value.origin) !== value.origin) return undefined;
+    } catch { return undefined; }
+  }
+  return { httpStatus: value.httpStatus, errorCode: value.errorCode, origin: value.origin, pathname: value.pathname };
+}
+
+// Closed public diagnostic vocabulary. Unknown typed errors are redacted too.
+const diagnosticCodes = new Set(`
+  ADMITTED_SETUP_CHANGED ADMITTED_SETUP_MISSING APPLICATION_SUCCESSOR_ORDER
+  ARTIFACT_BUILD_CONFIGURATION_MISMATCH ARTIFACT_DOWNLOAD_UNAVAILABLE ARTIFACT_IDENTITY
+  ARTIFACT_READ_FAILED ARTIFACT_READ_UNAVAILABLE ARTIFACT_REDIRECT_INVALID
+  ARTIFACT_SOURCE_MISMATCH ARTIFACT_TOO_LARGE AUTHORIZATION_SCOPE
+  AUTOMATIC_DEPLOYMENT_ENABLED CANDIDATE_BINDING CHECK_COVERAGE
+  CONFIGURATION_SELECTION_SOURCE_INVALID CONFIGURATION_SELECTION_ENTRY_INVALID
+  CONFIGURATION_SELECTION_SYSTEM_ENV_REQUIRED CONFIGURATION_SELECTION_ENV_INCOMPLETE
+  CONFIGURATION_SELECTION_ENV_OVERRIDE CONFIGURATION_SELECTION_ROOT_CHANGED
+  CONFIGURATION_SELECTION_SOURCE_BUILD_UNPROVEN CONTROLLER_BINDING CONTROLLER_CHECKOUT_CHANGED
+  CREDENTIAL_CLASS_MISMATCH DEPLOYMENT_LIST_INVALID DEPLOYMENT_OPERATION
+  DEPLOYMENT_READBACK_INCOMPLETE DEPLOYMENT_READBACK_MISMATCH DEPLOYMENT_REFERENCE
+  DEPLOYMENT_RESPONSE_UNRESOLVED DEPLOYMENT_TARGET DIAGNOSTIC_CALLER_CONTEXT
+  DIAGNOSTIC_CALLER_IDENTITY DIAGNOSTIC_CHECKOUT_CHANGED DIAGNOSTIC_READ_FORBIDDEN
+  DIAGNOSTIC_SOURCE_BINDING DIAGNOSTIC_WRITE_FORBIDDEN DISCOVERY_LEGACY_VERSION
+  DISCOVERY_PRODUCTION_BINDING DISCOVERY_PRODUCTION_MOVED DISCOVERY_PUBLIC_VERSION
+  EVIDENCE_INVALID EVIDENCE_KIND EXECUTABLE_DEPLOY_CONFIGURATION
+  FIRST_RUNTIME_OWNER_REFRESH_INVALID FROZEN_SCOPE_CHANGED GITHUB_METADATA_CREDENTIAL_MISSING
+  GITHUB_PAGINATION_LIMIT GITHUB_READ_TIMEOUT_INVALID GITHUB_READ_UNAVAILABLE
+  GITHUB_RESPONSE_INVALID GITHUB_TARGET_MISMATCH HOSTED_ADMISSION_CONFIG
+  HOSTED_CONTROLLER_REQUIRED HOSTED_IDENTITY_BINDING HOSTED_IDENTITY_INVALID
+  HOSTED_IDENTITY_REQUEST HOSTED_IDENTITY_REQUIRED HOSTED_IDENTITY_UNAVAILABLE
+  HOSTED_VERCEL_CREDENTIAL_MISSING LIVE_EVIDENCE_EXPIRED MANIFEST_CHANGED
+  MANIFEST_INPUT MANIFEST_JSON MANIFEST_SCHEMA
+  MIGRATION_SCOPE NORMAL_ROLE_COVERAGE PREVIEW_RUNTIME_MISMATCH
+  PREVIOUS_PRODUCTION_BINDING PREVIOUS_PRODUCTION_READBACK PREVIOUS_RUNTIME_UNOBSERVED
+  PRODUCTION_RUNTIME_MISMATCH PRODUCTION_SOURCE_PROFILE PUBLIC_BUILD_INPUT
+  PUBLIC_PROJECT_SETTINGS QUALIFICATION_BOOTSTRAP_ONLY QUALIFICATION_PRODUCTION_ENVIRONMENT_FORBIDDEN
+  QUALIFICATION_SOURCE_CONTEXT QUALIFICATION_SOURCE_DRIFT RELEASE_BOUNDARY_FAILED
+  RELEASE_DIAGNOSTIC_BOUNDARY_INVALID RELEASE_SUMMARY REQUIRED_CHECKS_CHANGED
+  RESTRICTED_IDENTITY_COVERAGE ROLLBACK_PUBLIC_READBACK ROLLBACK_SCHEMA_OBSERVATION_REQUIRED
+  RUNTIME_EXPECTATIONS RUNTIME_OBSERVATION_MISSING SALESFORCE_READ_AUTHENTICATION_REQUIRED
+  SALESFORCE_READ_CREDENTIAL_BINDING SALESFORCE_READ_EFFECTIVE_PERMISSIONS_CHANGED SALESFORCE_READ_EXCHANGE_BINDING
+  SALESFORCE_READ_FILE_VISIBILITY_REQUIRED SALESFORCE_READ_FIXED_RUN_AS_PROOF_REQUIRED SALESFORCE_READ_FIXTURE_IDENTITY_CHANGED
+  SALESFORCE_READ_HOSTED_CONTEXT SALESFORCE_READ_IDENTITY_CHANGED SALESFORCE_READ_IDENTITY_OR_SCOPE_CHANGED
+  SALESFORCE_READ_PERMISSION_RECIPE_REQUIRED SALESFORCE_READ_PRIVATE_INPUT_REQUIRED SALESFORCE_READ_PROVIDER_READ_ONLY_PROOF_REQUIRED
+  SALESFORCE_READ_RECIPE_BINDING SALESFORCE_READ_ROUTE_FORBIDDEN SALESFORCE_READ_SESSION_EXPIRED
+  SALESFORCE_READ_SETUP_PROOF_REQUIRED SALESFORCE_READ_UNAVAILABLE SCOPE_BINDING
+  SERVER_BUNDLES_REQUIRED SOURCE_ADMISSION SOURCE_CHANGED
+  TARGET_MISMATCH VERCEL_API_PATH VERCEL_BUILD_CONFIGURATION_CHANGED
+  VERCEL_CLI_VERSION VERCEL_CLI_PROJECT_SCOPE_UNSUPPORTED VERCEL_COMMAND_UNRESOLVED VERCEL_LINK_MISMATCH
+  VERCEL_OIDC_TOKEN VERCEL_PREVIEW_WRITER_FOR_PRODUCTION VERCEL_PREVIEW_WRITER_SETUP_REQUIRED
+  VERCEL_PRODUCTION_WRITER_CONTEXT VERCEL_PRODUCTION_WRITER_CREDENTIAL_BINDING VERCEL_PRODUCTION_WRITER_CREDENTIAL_SUBSTITUTED
+  VERCEL_PRODUCTION_WRITER_FOR_PREVIEW VERCEL_PRODUCTION_WRITER_ORIGINAL_PROOF_REQUIRED VERCEL_PRODUCTION_WRITER_RIGHTS_PROOF_REQUIRED
+  VERCEL_PROJECT_IDENTITY VERCEL_PROJECT_SCOPE VERCEL_READ_CONFIGURATION_CHANGED
+  VERCEL_READ_CREDENTIAL_BINDING VERCEL_READ_CREDENTIAL_REQUIRED VERCEL_READ_CREDENTIAL_SUBSTITUTED
+  VERCEL_READ_JSON_INVALID VERCEL_READ_OAUTH_PROOF_REQUIRED VERCEL_READ_REDIRECT
+  VERCEL_READ_ROUTE_FORBIDDEN VERCEL_READ_UNAVAILABLE VERCEL_READ_WRITE_CREDENTIAL_FORBIDDEN
+  VERCEL_READ_WRITE_FORBIDDEN VERCEL_TOKEN VERCEL_TOKEN_AUTHORITY
+  VERCEL_WRITER_CONTEXT VERCEL_WRITER_CREDENTIALS_NOT_SEPARATE VERCEL_WRITER_CREDENTIAL_BINDING
+  VERCEL_WRITER_CREDENTIAL_SUBSTITUTED VERCEL_WRITER_ORIGINAL_PROOF_REQUIRED VERIFICATION_ENVIRONMENT
+  VERIFICATION_SETUP_REQUIRED RUNTIME_LOGIN_AUTH_CONTEXT_HTTP SOURCE_API_PUBLIC_RUNTIME_ISSUER
+  SOURCE_API_TRANSPORT_NOT_ADMITTED SOURCE_API_PRODUCTION_NOT_IMPLEMENTED SOURCE_API_WRITER_CONTEXT
+  SOURCE_API_SOURCE_CHANGED SOURCE_API_PROJECT_CONFIGURATION SOURCE_API_PROJECT_IDENTITY
+  SOURCE_API_PRIVATE_OR_INVALID_PATH SOURCE_API_REGULAR_FILES_REQUIRED SOURCE_API_SOURCE_TOO_LARGE
+  SOURCE_API_SOURCE_EMPTY SOURCE_API_CONFIGURATION_OVERRIDE SOURCE_API_ARCHIVE_ENTRIES
+  SOURCE_API_ARCHIVE_INVALID SOURCE_API_PAYLOAD_TOO_LARGE SOURCE_API_MANIFEST_CHANGED
+  SOURCE_API_OPERATION_BINDING SOURCE_API_SUBMISSION_CONTEXT SOURCE_API_SYNCHRONOUS_CONTEXT_REQUIRED
+  SOURCE_API_RECOVERY_REQUEST_CHANGED VERCEL_SOURCE_API_OUTCOME_UNKNOWN
+`.trim().split(/\s+/));
+const diagnosticPhases = new Set([...RELEASE_BOUNDARIES, 'admission', 'identity', 'github.read', 'vercel.preview', 'vercel.read', 'vercel.write', 'vercel.transport', 'vercel.source_api.prepare', 'vercel.source_api.write', 'preview', 'first_runtime.owner_refresh']);
+export function safeDiagnosticFailure(error) {
+  const runtimeMismatch = error instanceof ReleaseError && error.code==='PREVIEW_RUNTIME_MISMATCH' && error.phase==='preview' ? safeRuntimeMismatch(error.detail?.runtimeMismatch) : undefined;
+  const commandFailure = error instanceof ReleaseError ? safeVercelCommandFailure(error.detail?.commandFailure) : undefined;
+  const sourceApiFailure = error instanceof ReleaseError ? safeVercelSourceApiFailure(error.detail?.sourceApiFailure) : undefined;
+  const runtimeLogin = error instanceof ReleaseError && error.code === 'RUNTIME_LOGIN_AUTH_CONTEXT_HTTP' ? safeRuntimeLoginFailure(error.detail?.runtimeLogin) : undefined;
+  const boundary = isReleaseBoundary(error?.boundary) ? error.boundary : undefined;
+  const known = error instanceof ReleaseError && (diagnosticCodes.has(error.code)
+    || /^(?:GITHUB|VERCEL)_READ_HTTP_[1-5][0-9]{2}$/.test(error.code));
+  return { status: 'intervention_required', code: known ? error.code : 'DIAGNOSTIC_FAILURE_UNCLASSIFIED',
+    phase: known && diagnosticPhases.has(error.phase) ? error.phase : boundary || 'diagnostic',
+    recovery: 'Inspect this admission diagnostic. It authorizes no deployment or release retry.',
+    ...(boundary ? { boundary } : {}), ...(known && commandFailure ? { commandFailure } : {}), ...(known && sourceApiFailure ? { sourceApiFailure } : {}), ...(known && runtimeMismatch ? {runtimeMismatch} : {}), ...(known && runtimeLogin ? { runtimeLogin } : {}) };
+}

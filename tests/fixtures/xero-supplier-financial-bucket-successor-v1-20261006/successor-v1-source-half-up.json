@@ -1,0 +1,2075 @@
+{
+  "kind": "supplier_financial_bucket_successor_fixture_v1",
+  "family": "xero-supplier-financial-bucket-successor-v1-20261006",
+  "caseName": "source-half-up",
+  "synthetic": true,
+  "nonExecutablePreparation": true,
+  "recoveredOriginal": false,
+  "originalCaseEquivalence": false,
+  "currentBusinessCase": false,
+  "labels": {
+    "reviewFingerprintLabel": "xero-supplier-financial-bucket-successor-v1-20261006:source-half-up:review",
+    "legacyReviewFingerprintLabel": "xero-supplier-financial-bucket-successor-v1-20261006:source-half-up:synthetic-legacy-review"
+  },
+  "input": {
+    "policyVersion": "supplier_financial_bucket_preserve_v1",
+    "tenantId": "00000000-0000-4000-8000-000000000001",
+    "source": {
+      "orgId": "00D2x000000Ei4oEAC",
+      "salesforceObject": "Supplier_Invoice__c",
+      "sourceFingerprint": "15d8eab46aa8d1ee43d66e1a438208458cf86932c7bb13f7fd9ae32f9dc45205",
+      "financialFingerprint": "8e4469aeb35e6e05fafd3875503172e4c20d64b795ed2bad88dfc0d780fc41f8",
+      "parent": {
+        "Id": "a06000000000001",
+        "IsDeleted": false,
+        "Name": "SYNTHETIC-SUCCESSOR-V1-SOURCE-HALF-UP",
+        "Supplier__c": "001000000000001",
+        "STEM__c": "a0H000000000001",
+        "Supplier__r": {
+          "Name": "EXAMPLE SUPPLY LTD",
+          "Company_Code__c": "HKEXAMPLE",
+          "Company__c": "a0B000000000001",
+          "Company__r": {
+            "Full_Name__c": "EXAMPLE SUPPLY LTD"
+          }
+        },
+        "STEM__r": {
+          "KeyStem__c": "HK2626001T",
+          "Vessel__c": "a0V000000000001",
+          "Vessel__r": {
+            "Name": "SYNTHETIC SUCCESSOR VESSEL"
+          },
+          "Delivery_Date__c": "2026-03-17"
+        },
+        "Invoice_Amount__c": "20050.01",
+        "Invoice_Date__c": "2026-04-01",
+        "Invoice_Due_Date__c": "2026-04-15",
+        "CurrencyIsoCode": "USD",
+        "LastModifiedDate": "2026-10-04T09:00:00.000Z"
+      },
+      "safetyContext": {
+        "fields": {
+          "Invoice__c": [
+            "Id",
+            "CurrencyIsoCode"
+          ],
+          "Supplier_Invoice__c": [
+            "Id",
+            "CurrencyIsoCode"
+          ],
+          "STEM__c": [
+            "Id",
+            "CurrencyIsoCode"
+          ],
+          "STEM_Line_Item__c": [
+            "Id",
+            "CurrencyIsoCode"
+          ],
+          "STEM_Extra_Cost__c": [
+            "Id",
+            "CurrencyIsoCode"
+          ],
+          "Payment__c": [
+            "Id",
+            "CurrencyIsoCode"
+          ]
+        },
+        "singleCurrency": false,
+        "corporateCurrency": null
+      },
+      "children": [
+        {
+          "Id": "a05000000000001",
+          "IsDeleted": false,
+          "Cancelled__c": false,
+          "Supplier_Invoice__c": "a06000000000001",
+          "STEM__c": "a0H000000000001",
+          "Original_Supplier__c": "001000000000001",
+          "Buyer_Invoice__c": "a0K000000000001",
+          "Product__c": "01t000000000001",
+          "Product__r": {
+            "Name": "SYNTHETIC RMG380 S0.5%"
+          },
+          "Quantity_Delivered_Per_BDN__c": 1,
+          "Quantity__c": "999",
+          "Unit_Buy_At__c": "0.005",
+          "Total_Cost__c": "0.01",
+          "Unit_of_Measure__c": "MT",
+          "CurrencyIsoCode": "USD",
+          "LastModifiedDate": "2026-10-04T09:00:00.000Z",
+          "Cost_Per_Unit__c": null
+        },
+        {
+          "Id": "a05000000000002",
+          "IsDeleted": false,
+          "Cancelled__c": false,
+          "Supplier_Invoice__c": "a06000000000001",
+          "STEM__c": "a0H000000000001",
+          "Original_Supplier__c": "001000000000001",
+          "Buyer_Invoice__c": "a0K000000000001",
+          "Product__c": "01t000000000001",
+          "Product__r": {
+            "Name": "SYNTHETIC RMG380 S0.5%"
+          },
+          "Quantity_Delivered_Per_BDN__c": "200",
+          "Quantity__c": "999",
+          "Unit_Buy_At__c": "100",
+          "Total_Cost__c": "20000",
+          "Unit_of_Measure__c": "MT",
+          "CurrencyIsoCode": "USD",
+          "LastModifiedDate": "2026-10-04T09:00:00.000Z",
+          "Cost_Per_Unit__c": null
+        }
+      ],
+      "charges": [
+        {
+          "Id": "a04000000000001",
+          "IsDeleted": false,
+          "Cancelled__c": false,
+          "Supplier_Invoice__c": "a06000000000001",
+          "STEM__c": "a0H000000000001",
+          "Supplier__c": "001000000000001",
+          "Buyer_Invoice__c": null,
+          "Product2Id__c": "01t000000000002",
+          "Product2Id__r": {
+            "Name": "SYNTHETIC SURCHARGE"
+          },
+          "Line_Total_Buy__c": "50",
+          "Lumpsum_Cost__c": "50",
+          "CurrencyIsoCode": "USD",
+          "Quantity__c": 1,
+          "Unit_Cost__c": 0
+        }
+      ],
+      "buyers": [
+        {
+          "Id": "a0K000000000001",
+          "Name": "SYN-BUYER-INV",
+          "STEM__c": "a0H000000000001",
+          "IsDeleted": false,
+          "Proforma__c": false,
+          "Deprecated__c": false,
+          "Amount__c": "30050",
+          "Delivery_Date__c": "2026-03-17",
+          "Invoice_Date__c": "2026-03-19"
+        }
+      ],
+      "sourcePayload": {
+        "salesforceObject": "Supplier_Invoice__c",
+        "salesforceId": "a06000000000001",
+        "documentNumber": "SYNTHETIC-SUCCESSOR-V1-SOURCE-HALF-UP",
+        "documentKind": "supplier_bill",
+        "xeroType": "ACCPAY",
+        "xeroCollection": "Invoices",
+        "accountId": "001000000000001",
+        "accountName": "EXAMPLE SUPPLY LTD",
+        "companyCode": "HKEXAMPLE",
+        "contactId": "00000000-0000-4000-8000-000000000002",
+        "contactName": "EXAMPLE SUPPLY LTD",
+        "stemId": "a0H000000000001",
+        "stemName": "HK2626001T",
+        "stemKey": "HK2626001T",
+        "invoiceDate": "2026-04-01",
+        "dueDate": "2026-04-15",
+        "deliveryDate": "2026-03-17",
+        "currency": "USD",
+        "postingMode": "draft",
+        "readiness": {
+          "ready": false,
+          "blockers": [
+            "Supplier invoice has no verified issued source file."
+          ],
+          "file": null,
+          "snapshot": null,
+          "linkedChildren": [
+            "a04000000000001",
+            "a05000000000001",
+            "a05000000000002"
+          ]
+        },
+        "signedTotal": 20050.01,
+        "total": 20050.01,
+        "reference": "HK2626001T · Salesforce supplier invoice",
+        "lines": [
+          {
+            "sourceId": "a05000000000001",
+            "sourceType": "STEM_Line_Item__c",
+            "productId": "01t000000000001",
+            "productName": "SYNTHETIC RMG380 S0.5%",
+            "description": "SYNTHETIC RMG380 S0.5% · 1 MT",
+            "quantity": 1,
+            "unitAmount": 0.01,
+            "accountCode": "51100",
+            "taxType": "NONE"
+          },
+          {
+            "sourceId": "a05000000000002",
+            "sourceType": "STEM_Line_Item__c",
+            "productId": "01t000000000001",
+            "productName": "SYNTHETIC RMG380 S0.5%",
+            "description": "SYNTHETIC RMG380 S0.5% · 200 MT",
+            "quantity": 1,
+            "unitAmount": 20000,
+            "accountCode": "51100",
+            "taxType": "NONE"
+          },
+          {
+            "sourceId": "a04000000000001",
+            "sourceType": "STEM_Extra_Cost__c",
+            "productId": "01t000000000002",
+            "productName": "SYNTHETIC SURCHARGE",
+            "description": "SYNTHETIC SURCHARGE",
+            "quantity": 1,
+            "unitAmount": 50,
+            "accountCode": "51100",
+            "taxType": "NONE"
+          }
+        ],
+        "blockers": [],
+        "lastModifiedDate": "2026-10-04T09:00:00.000Z",
+        "sourceFingerprint": "15d8eab46aa8d1ee43d66e1a438208458cf86932c7bb13f7fd9ae32f9dc45205",
+        "financialFingerprint": "8e4469aeb35e6e05fafd3875503172e4c20d64b795ed2bad88dfc0d780fc41f8",
+        "documentFieldProjection": {
+          "policy": "document_field_correction_v1",
+          "scope": "current",
+          "fields": {
+            "Date": "2026-03-17",
+            "DueDate": "2026-04-15",
+            "InvoiceNumber": null,
+            "Description": "19/3/2026"
+          },
+          "evidence": {
+            "direction": "supplier",
+            "cutoff": "2026-01-01",
+            "sourceId": "a06000000000001",
+            "originalName": "SYNTHETIC-SUCCESSOR-V1-SOURCE-HALF-UP",
+            "stemId": "a0H000000000001",
+            "resolution": "linked_buyers",
+            "buyers": [
+              {
+                "id": "a0K000000000001",
+                "name": "SYN-BUYER-INV",
+                "stemId": "a0H000000000001",
+                "deliveryDate": "2026-03-17",
+                "invoiceDate": "2026-03-19",
+                "proforma": false,
+                "deprecated": false,
+                "inactive": false,
+                "credit": false
+              }
+            ],
+            "links": [
+              {
+                "id": "a05000000000001",
+                "buyerId": "a0K000000000001",
+                "supplierId": "a06000000000001",
+                "stemId": "a0H000000000001"
+              },
+              {
+                "id": "a05000000000002",
+                "buyerId": "a0K000000000001",
+                "supplierId": "a06000000000001",
+                "stemId": "a0H000000000001"
+              },
+              {
+                "id": "a04000000000001",
+                "buyerId": null,
+                "supplierId": "a06000000000001",
+                "stemId": "a0H000000000001"
+              }
+            ],
+            "vesselName": "SYNTHETIC SUCCESSOR VESSEL",
+            "refCode": null,
+            "dueDate": "2026-04-15",
+            "dateSource": "Invoice__c.Delivery_Date__c",
+            "descriptionSource": "Invoice__c.Invoice_Date__c",
+            "dueDateSource": "Supplier_Invoice__c.Invoice_Due_Date__c"
+          },
+          "blockers": [
+            "The STEM RefCode must contain a nonempty suffix after its first four characters."
+          ],
+          "blockerCodes": [
+            "DOCUMENT_FIELD_REFCODE_MISSING"
+          ],
+          "fingerprint": "86f96b7bea53335a3fd7d4636572f9fffc8e678384918f1b766f3c9717b66712"
+        },
+        "vesselName": "SYNTHETIC SUCCESSOR VESSEL",
+        "documentFieldSourceFingerprint": "d0dd184868474e0aa7617c859a1e1b02a1020909e4ad23941e7144219e775801"
+      }
+    },
+    "target": {
+      "InvoiceID": "00000000-0000-4000-8000-000000000003",
+      "Type": "ACCPAY",
+      "Status": "AUTHORISED",
+      "Contact": {
+        "ContactID": "00000000-0000-4000-8000-000000000002",
+        "Name": "EXAMPLE SUPPLY LTD"
+      },
+      "InvoiceNumber": "SYNTHETIC-SUCCESSOR-V1-SOURCE-HALF-UP",
+      "Reference": "SYNTHETIC ONLY; NOT CURRENT BUSINESS DATA",
+      "Date": "2026-03-01",
+      "DueDate": "2026-03-05",
+      "CurrencyCode": "USD",
+      "CurrencyRate": 1,
+      "Total": "20050.01",
+      "SubTotal": "20050.01",
+      "TotalTax": 0,
+      "IsDiscounted": false,
+      "LineAmountTypes": "Exclusive",
+      "AmountPaid": 0,
+      "AmountCredited": 0,
+      "AmountDue": "20050.01",
+      "Payments": [],
+      "CreditNotes": [],
+      "UpdatedDateUTC": "2026-10-04T09:00:00.000Z",
+      "SentToContact": false,
+      "LegacyExtension": {
+        "unchanged": "original"
+      },
+      "LineItems": [
+        {
+          "LineItemID": "00000000-0000-4000-8000-000000000004",
+          "Description": "UNMODIFIED LEGACY",
+          "Quantity": 1,
+          "UnitAmount": "20050.01",
+          "LineAmount": "20050.01",
+          "AccountCode": "51100",
+          "AccountID": "00000000-0000-4000-8000-000000000005",
+          "TaxType": "NONE",
+          "TaxAmount": 0,
+          "Tracking": [],
+          "UnownedField": "original line"
+        }
+      ],
+      "Prepayments": [],
+      "Overpayments": [],
+      "HasErrors": false
+    },
+    "identity": {
+      "accounts": [
+        {
+          "id": "001000000000001",
+          "name": "EXAMPLE SUPPLY LTD",
+          "companyCode": "HKEXAMPLE",
+          "recordType": "Supplier",
+          "inactiveSuspended": false
+        }
+      ],
+      "contacts": [
+        {
+          "id": "00000000-0000-4000-8000-000000000002",
+          "name": "EXAMPLE SUPPLY LTD",
+          "status": "ACTIVE",
+          "contactNumber": "",
+          "accountNumber": ""
+        }
+      ],
+      "sourceClaims": [
+        {
+          "Id": "a06000000000001",
+          "IsDeleted": false,
+          "Name": "SYNTHETIC-SUCCESSOR-V1-SOURCE-HALF-UP",
+          "Supplier__c": "001000000000001",
+          "STEM__c": "a0H000000000001",
+          "Supplier__r": {
+            "Name": "EXAMPLE SUPPLY LTD",
+            "Company_Code__c": "HKEXAMPLE",
+            "Company__c": "a0B000000000001",
+            "Company__r": {
+              "Full_Name__c": "EXAMPLE SUPPLY LTD"
+            }
+          },
+          "STEM__r": {
+            "KeyStem__c": "HK2626001T",
+            "Vessel__c": "a0V000000000001",
+            "Vessel__r": {
+              "Name": "SYNTHETIC SUCCESSOR VESSEL"
+            },
+            "Delivery_Date__c": "2026-03-17"
+          },
+          "Invoice_Amount__c": "20050.01",
+          "Invoice_Date__c": "2026-04-01",
+          "Invoice_Due_Date__c": "2026-04-15",
+          "CurrencyIsoCode": "USD",
+          "LastModifiedDate": "2026-10-04T09:00:00.000Z"
+        }
+      ],
+      "targetClaims": [
+        {
+          "InvoiceID": "00000000-0000-4000-8000-000000000003",
+          "Type": "ACCPAY",
+          "Status": "AUTHORISED",
+          "Contact": {
+            "ContactID": "00000000-0000-4000-8000-000000000002",
+            "Name": "EXAMPLE SUPPLY LTD"
+          },
+          "InvoiceNumber": "SYNTHETIC-SUCCESSOR-V1-SOURCE-HALF-UP",
+          "Reference": "SYNTHETIC ONLY; NOT CURRENT BUSINESS DATA",
+          "Date": "2026-03-01",
+          "DueDate": "2026-03-05",
+          "CurrencyCode": "USD",
+          "CurrencyRate": 1,
+          "Total": "20050.01",
+          "SubTotal": "20050.01",
+          "TotalTax": 0,
+          "IsDiscounted": false,
+          "LineAmountTypes": "Exclusive",
+          "AmountPaid": 0,
+          "AmountCredited": 0,
+          "AmountDue": "20050.01",
+          "Payments": [],
+          "CreditNotes": [],
+          "UpdatedDateUTC": "2026-10-04T09:00:00.000Z",
+          "SentToContact": false,
+          "LegacyExtension": {
+            "unchanged": "original"
+          },
+          "LineItems": [
+            {
+              "LineItemID": "00000000-0000-4000-8000-000000000004",
+              "Description": "UNMODIFIED LEGACY",
+              "Quantity": 1,
+              "UnitAmount": "20050.01",
+              "LineAmount": "20050.01",
+              "AccountCode": "51100",
+              "AccountID": "00000000-0000-4000-8000-000000000005",
+              "TaxType": "NONE",
+              "TaxAmount": 0,
+              "Tracking": [],
+              "UnownedField": "original line"
+            }
+          ],
+          "Prepayments": [],
+          "Overpayments": [],
+          "HasErrors": false
+        }
+      ],
+      "creditClaims": [],
+      "sourceMappings": [],
+      "targetMappings": [],
+      "referenceClaims": [],
+      "postingClaims": [],
+      "disputes": [],
+      "coverage": {
+        "scope": "complete_selected_owner_union_v1",
+        "globalDiscoveryFingerprint": "ce136abe8ef00afe25ee405afe12ffcdfb1ed8fb30ea7050410f098eab4a1028",
+        "globalAccountCount": 13564,
+        "globalContactCount": 779,
+        "sourceAccountIds": [
+          "001000000000001"
+        ],
+        "stemIds": [
+          "a0H000000000001"
+        ],
+        "xeroContactIds": [
+          "00000000-0000-4000-8000-000000000002"
+        ],
+        "sourceQueryAll": true,
+        "sourceComplete": true,
+        "targetComplete": true,
+        "targetIncludesArchived": true,
+        "creditComplete": true,
+        "globalAccountsComplete": true,
+        "globalContactsComplete": true,
+        "claimsComplete": true,
+        "mappingsComplete": true,
+        "sourceCount": 1,
+        "targetCount": 1,
+        "creditCount": 0,
+        "queryFingerprints": [
+          "5ae618353a992d296ac7a6c5a82058fe0cf8fdbba0a50f460c9abdfaba91491e",
+          "d8bfa7c45690e266fa2daf6b21e28fa51576bbf1b75fc4bd9d25e017d18e8c5d",
+          "2cdbae82be73c33314ed83a4136e783862f3b9ec49daca3e1f91eff7a71decb3",
+          "4ace183e183c2d25a2ea099edb72b7bf4ad941f481d863076d9d525fc0446ca9",
+          "fd40fb8448b3a1a18adfb92a398af9e2a08f2a12f6c22d0d8cc1504a1bceead3",
+          "26d1b35b5fe56612db89ba4ad341b736caca32ed93eca484ec04e8d91a2a790d",
+          "8d7e46e072df28cd4b84771552afb2746e53bfa9a8c64897324918548ad3eabd",
+          "fd7c09339fefb0355831237ab667e87fe78660616d08230b7ba9733d28c0222e",
+          "07cdb70853a84ce3037572efeef8719d4907b44a49fdde83e11651bb8ec0c518"
+        ],
+        "dependenciesComplete": true,
+        "queryFingerprint": "eac68e84dc5938378703f051f3958924b55c4f897e40e17896309da90559cfcd"
+      },
+      "coverageFingerprint": "c6866723cbe05ebfa3151da6f2c6f261bf24fd52321e3e10b192c0bbb0c9d9b1",
+      "selection": {
+        "contract": "supplier_financial_selected_identity_v1",
+        "tenantId": "00000000-0000-4000-8000-000000000001",
+        "salesforceOrgId": "00D2x000000Ei4o",
+        "sourceId": "a06000000000001",
+        "stemId": "a0H000000000001",
+        "accountId": "001000000000001",
+        "contactId": "00000000-0000-4000-8000-000000000002",
+        "targetId": "00000000-0000-4000-8000-000000000003",
+        "sourceFingerprint": "15d8eab46aa8d1ee43d66e1a438208458cf86932c7bb13f7fd9ae32f9dc45205",
+        "financialFingerprint": "8e4469aeb35e6e05fafd3875503172e4c20d64b795ed2bad88dfc0d780fc41f8",
+        "reviewedBy": "00000000-0000-4000-8000-000000000007",
+        "reviewedAt": "2026-10-04T09:00:00.000Z",
+        "basis": "synthetic independently selected original supplier obligation"
+      }
+    },
+    "organisation": {
+      "OrganisationID": "00000000-0000-4000-8000-000000000001",
+      "Name": "Synthetic organisation",
+      "BaseCurrency": "USD",
+      "APIKey": "PRIVATE_SYNTHETIC_PROVIDER_IDENTITY"
+    },
+    "productMappings": [
+      {
+        "id": "00000000-0000-4000-8000-000000000010",
+        "direction": "supplier",
+        "salesforce_product_id": "01t000000000001",
+        "enabled": true,
+        "revision": 1,
+        "xero_account_code": "51100",
+        "xero_tax_type": "NONE",
+        "approved_by": "00000000-0000-4000-8000-000000000020",
+        "approved_by_email": "finance@example.test",
+        "approved_at": "2026-10-04T09:00:00.000Z"
+      },
+      {
+        "id": "00000000-0000-4000-8000-000000000011",
+        "direction": "supplier",
+        "salesforce_product_id": "01t000000000002",
+        "enabled": true,
+        "revision": 1,
+        "xero_account_code": "51100",
+        "xero_tax_type": "NONE",
+        "approved_by": "00000000-0000-4000-8000-000000000020",
+        "approved_by_email": "finance@example.test",
+        "approved_at": "2026-10-04T09:00:00.000Z"
+      }
+    ],
+    "accountTax": {
+      "accounts": [
+        {
+          "AccountID": "00000000-0000-4000-8000-000000000005",
+          "Code": "51100",
+          "Type": "DIRECTCOSTS",
+          "Status": "ACTIVE"
+        }
+      ],
+      "taxes": [
+        {
+          "TaxType": "NONE",
+          "Status": "ACTIVE",
+          "DisplayTaxRate": 0,
+          "EffectiveRate": 0,
+          "CanApplyToExpenses": true
+        }
+      ]
+    },
+    "sourceDependencies": {
+      "payments": [
+        {
+          "Id": "a0S000000000001",
+          "IsDeleted": false,
+          "Supplier_Invoice__c": "a06000000000001",
+          "STEM__c": "a0H000000000001",
+          "Account__c": "001000000000001",
+          "Is_Volume_Discount__c": false,
+          "Amount__c": "123.45",
+          "Remittance__c": null
+        },
+        {
+          "Id": "a0S000000000002",
+          "IsDeleted": true,
+          "Supplier_Invoice__c": "a06000000000001",
+          "STEM__c": "a0H000000000001",
+          "Account__c": "001000000000001",
+          "Is_Volume_Discount__c": true,
+          "Amount__c": 0.46000000000001,
+          "Remittance__c": null
+        }
+      ],
+      "families": [],
+      "coverage": {
+        "contract": "complete_supplier_payment_family_scope_v1",
+        "complete": true,
+        "queryAll": true,
+        "sourceId": "a06000000000001",
+        "stemId": "a0H000000000001",
+        "accountId": "001000000000001",
+        "queryFingerprint": "f689877068fc0819b8522e98b5f65037f9d5a1119e5b0ecf77e589ccae404db7",
+        "paymentCount": 2,
+        "familyCount": 0
+      }
+    }
+  },
+  "proof": {
+    "policyVersion": "supplier_financial_bucket_preserve_v1",
+    "proofValid": true,
+    "financiallyEquivalent": true,
+    "workflowEligible": false,
+    "approvalGranted": false,
+    "accepted": false,
+    "proposedPayload": null,
+    "financialWrites": 0,
+    "documentVerification": "UNVERIFIED",
+    "fingerprint": "deed508493a01a6d83f88414ce679d27852f6c20aa0ce8613bb656bafee27382",
+    "evidenceFingerprint": "deed508493a01a6d83f88414ce679d27852f6c20aa0ce8613bb656bafee27382",
+    "evidence": {
+      "policyVersion": "supplier_financial_bucket_preserve_v1",
+      "accounting": {
+        "contract": "financial_bucket_preservation_v1",
+        "tenantId": "00000000-0000-4000-8000-000000000001",
+        "salesforceOrgId": "00D2x000000Ei4o",
+        "sourceId": "a06000000000001",
+        "stemId": "a0H000000000001",
+        "accountId": "001000000000001",
+        "contactId": "00000000-0000-4000-8000-000000000002",
+        "targetId": "00000000-0000-4000-8000-000000000003",
+        "currency": "USD",
+        "representation": "Exclusive",
+        "totalCents": "2005001",
+        "subTotalCents": "2005001",
+        "totalTaxCents": "0",
+        "sourceFingerprint": "15d8eab46aa8d1ee43d66e1a438208458cf86932c7bb13f7fd9ae32f9dc45205",
+        "financialFingerprint": "8e4469aeb35e6e05fafd3875503172e4c20d64b795ed2bad88dfc0d780fc41f8",
+        "source": {
+          "orgId": "00D2x000000Ei4oEAC",
+          "salesforceObject": "Supplier_Invoice__c",
+          "sourceFingerprint": "15d8eab46aa8d1ee43d66e1a438208458cf86932c7bb13f7fd9ae32f9dc45205",
+          "financialFingerprint": "8e4469aeb35e6e05fafd3875503172e4c20d64b795ed2bad88dfc0d780fc41f8",
+          "parent": {
+            "Id": "a06000000000001",
+            "IsDeleted": false,
+            "Name": "SYNTHETIC-SUCCESSOR-V1-SOURCE-HALF-UP",
+            "Supplier__c": "001000000000001",
+            "STEM__c": "a0H000000000001",
+            "Supplier__r": {
+              "Name": "EXAMPLE SUPPLY LTD",
+              "Company_Code__c": "HKEXAMPLE",
+              "Company__c": "a0B000000000001",
+              "Company__r": {
+                "Full_Name__c": "EXAMPLE SUPPLY LTD"
+              }
+            },
+            "STEM__r": {
+              "KeyStem__c": "HK2626001T",
+              "Vessel__c": "a0V000000000001",
+              "Vessel__r": {
+                "Name": "SYNTHETIC SUCCESSOR VESSEL"
+              },
+              "Delivery_Date__c": "2026-03-17"
+            },
+            "Invoice_Amount__c": "20050.01",
+            "Invoice_Date__c": "2026-04-01",
+            "Invoice_Due_Date__c": "2026-04-15",
+            "CurrencyIsoCode": "USD",
+            "LastModifiedDate": "2026-10-04T09:00:00.000Z"
+          },
+          "safetyContext": {
+            "fields": {
+              "Invoice__c": [
+                "Id",
+                "CurrencyIsoCode"
+              ],
+              "Supplier_Invoice__c": [
+                "Id",
+                "CurrencyIsoCode"
+              ],
+              "STEM__c": [
+                "Id",
+                "CurrencyIsoCode"
+              ],
+              "STEM_Line_Item__c": [
+                "Id",
+                "CurrencyIsoCode"
+              ],
+              "STEM_Extra_Cost__c": [
+                "Id",
+                "CurrencyIsoCode"
+              ],
+              "Payment__c": [
+                "Id",
+                "CurrencyIsoCode"
+              ]
+            },
+            "singleCurrency": false,
+            "corporateCurrency": null
+          },
+          "children": [
+            {
+              "Id": "a05000000000001",
+              "IsDeleted": false,
+              "Cancelled__c": false,
+              "Supplier_Invoice__c": "a06000000000001",
+              "STEM__c": "a0H000000000001",
+              "Original_Supplier__c": "001000000000001",
+              "Buyer_Invoice__c": "a0K000000000001",
+              "Product__c": "01t000000000001",
+              "Product__r": {
+                "Name": "SYNTHETIC RMG380 S0.5%"
+              },
+              "Quantity_Delivered_Per_BDN__c": 1,
+              "Quantity__c": "999",
+              "Unit_Buy_At__c": "0.005",
+              "Total_Cost__c": "0.01",
+              "Unit_of_Measure__c": "MT",
+              "CurrencyIsoCode": "USD",
+              "LastModifiedDate": "2026-10-04T09:00:00.000Z",
+              "Cost_Per_Unit__c": null
+            },
+            {
+              "Id": "a05000000000002",
+              "IsDeleted": false,
+              "Cancelled__c": false,
+              "Supplier_Invoice__c": "a06000000000001",
+              "STEM__c": "a0H000000000001",
+              "Original_Supplier__c": "001000000000001",
+              "Buyer_Invoice__c": "a0K000000000001",
+              "Product__c": "01t000000000001",
+              "Product__r": {
+                "Name": "SYNTHETIC RMG380 S0.5%"
+              },
+              "Quantity_Delivered_Per_BDN__c": "200",
+              "Quantity__c": "999",
+              "Unit_Buy_At__c": "100",
+              "Total_Cost__c": "20000",
+              "Unit_of_Measure__c": "MT",
+              "CurrencyIsoCode": "USD",
+              "LastModifiedDate": "2026-10-04T09:00:00.000Z",
+              "Cost_Per_Unit__c": null
+            }
+          ],
+          "charges": [
+            {
+              "Id": "a04000000000001",
+              "IsDeleted": false,
+              "Cancelled__c": false,
+              "Supplier_Invoice__c": "a06000000000001",
+              "STEM__c": "a0H000000000001",
+              "Supplier__c": "001000000000001",
+              "Buyer_Invoice__c": null,
+              "Product2Id__c": "01t000000000002",
+              "Product2Id__r": {
+                "Name": "SYNTHETIC SURCHARGE"
+              },
+              "Line_Total_Buy__c": "50",
+              "Lumpsum_Cost__c": "50",
+              "CurrencyIsoCode": "USD",
+              "Quantity__c": 1,
+              "Unit_Cost__c": 0
+            }
+          ],
+          "buyers": [
+            {
+              "Id": "a0K000000000001",
+              "Name": "SYN-BUYER-INV",
+              "STEM__c": "a0H000000000001",
+              "IsDeleted": false,
+              "Proforma__c": false,
+              "Deprecated__c": false,
+              "Amount__c": "30050",
+              "Delivery_Date__c": "2026-03-17",
+              "Invoice_Date__c": "2026-03-19"
+            }
+          ],
+          "sourcePayload": {
+            "salesforceObject": "Supplier_Invoice__c",
+            "salesforceId": "a06000000000001",
+            "documentNumber": "SYNTHETIC-SUCCESSOR-V1-SOURCE-HALF-UP",
+            "documentKind": "supplier_bill",
+            "xeroType": "ACCPAY",
+            "xeroCollection": "Invoices",
+            "accountId": "001000000000001",
+            "accountName": "EXAMPLE SUPPLY LTD",
+            "companyCode": "HKEXAMPLE",
+            "contactId": "00000000-0000-4000-8000-000000000002",
+            "contactName": "EXAMPLE SUPPLY LTD",
+            "stemId": "a0H000000000001",
+            "stemName": "HK2626001T",
+            "stemKey": "HK2626001T",
+            "invoiceDate": "2026-04-01",
+            "dueDate": "2026-04-15",
+            "deliveryDate": "2026-03-17",
+            "currency": "USD",
+            "postingMode": "draft",
+            "readiness": {
+              "ready": false,
+              "blockers": [
+                "Supplier invoice has no verified issued source file."
+              ],
+              "file": null,
+              "snapshot": null,
+              "linkedChildren": [
+                "a04000000000001",
+                "a05000000000001",
+                "a05000000000002"
+              ]
+            },
+            "signedTotal": 20050.01,
+            "total": 20050.01,
+            "reference": "HK2626001T · Salesforce supplier invoice",
+            "lines": [
+              {
+                "sourceId": "a05000000000001",
+                "sourceType": "STEM_Line_Item__c",
+                "productId": "01t000000000001",
+                "productName": "SYNTHETIC RMG380 S0.5%",
+                "description": "SYNTHETIC RMG380 S0.5% · 1 MT",
+                "quantity": 1,
+                "unitAmount": 0.01,
+                "accountCode": "51100",
+                "taxType": "NONE"
+              },
+              {
+                "sourceId": "a05000000000002",
+                "sourceType": "STEM_Line_Item__c",
+                "productId": "01t000000000001",
+                "productName": "SYNTHETIC RMG380 S0.5%",
+                "description": "SYNTHETIC RMG380 S0.5% · 200 MT",
+                "quantity": 1,
+                "unitAmount": 20000,
+                "accountCode": "51100",
+                "taxType": "NONE"
+              },
+              {
+                "sourceId": "a04000000000001",
+                "sourceType": "STEM_Extra_Cost__c",
+                "productId": "01t000000000002",
+                "productName": "SYNTHETIC SURCHARGE",
+                "description": "SYNTHETIC SURCHARGE",
+                "quantity": 1,
+                "unitAmount": 50,
+                "accountCode": "51100",
+                "taxType": "NONE"
+              }
+            ],
+            "blockers": [],
+            "lastModifiedDate": "2026-10-04T09:00:00.000Z",
+            "sourceFingerprint": "15d8eab46aa8d1ee43d66e1a438208458cf86932c7bb13f7fd9ae32f9dc45205",
+            "financialFingerprint": "8e4469aeb35e6e05fafd3875503172e4c20d64b795ed2bad88dfc0d780fc41f8",
+            "documentFieldProjection": {
+              "policy": "document_field_correction_v1",
+              "scope": "current",
+              "fields": {
+                "Date": "2026-03-17",
+                "DueDate": "2026-04-15",
+                "InvoiceNumber": null,
+                "Description": "19/3/2026"
+              },
+              "evidence": {
+                "direction": "supplier",
+                "cutoff": "2026-01-01",
+                "sourceId": "a06000000000001",
+                "originalName": "SYNTHETIC-SUCCESSOR-V1-SOURCE-HALF-UP",
+                "stemId": "a0H000000000001",
+                "resolution": "linked_buyers",
+                "buyers": [
+                  {
+                    "id": "a0K000000000001",
+                    "name": "SYN-BUYER-INV",
+                    "stemId": "a0H000000000001",
+                    "deliveryDate": "2026-03-17",
+                    "invoiceDate": "2026-03-19",
+                    "proforma": false,
+                    "deprecated": false,
+                    "inactive": false,
+                    "credit": false
+                  }
+                ],
+                "links": [
+                  {
+                    "id": "a05000000000001",
+                    "buyerId": "a0K000000000001",
+                    "supplierId": "a06000000000001",
+                    "stemId": "a0H000000000001"
+                  },
+                  {
+                    "id": "a05000000000002",
+                    "buyerId": "a0K000000000001",
+                    "supplierId": "a06000000000001",
+                    "stemId": "a0H000000000001"
+                  },
+                  {
+                    "id": "a04000000000001",
+                    "buyerId": null,
+                    "supplierId": "a06000000000001",
+                    "stemId": "a0H000000000001"
+                  }
+                ],
+                "vesselName": "SYNTHETIC SUCCESSOR VESSEL",
+                "refCode": null,
+                "dueDate": "2026-04-15",
+                "dateSource": "Invoice__c.Delivery_Date__c",
+                "descriptionSource": "Invoice__c.Invoice_Date__c",
+                "dueDateSource": "Supplier_Invoice__c.Invoice_Due_Date__c"
+              },
+              "blockers": [
+                "The STEM RefCode must contain a nonempty suffix after its first four characters."
+              ],
+              "blockerCodes": [
+                "DOCUMENT_FIELD_REFCODE_MISSING"
+              ],
+              "fingerprint": "86f96b7bea53335a3fd7d4636572f9fffc8e678384918f1b766f3c9717b66712"
+            },
+            "vesselName": "SYNTHETIC SUCCESSOR VESSEL",
+            "documentFieldSourceFingerprint": "d0dd184868474e0aa7617c859a1e1b02a1020909e4ad23941e7144219e775801"
+          }
+        },
+        "target": {
+          "InvoiceID": "00000000-0000-4000-8000-000000000003",
+          "Type": "ACCPAY",
+          "Status": "AUTHORISED",
+          "Contact": {
+            "ContactID": "00000000-0000-4000-8000-000000000002",
+            "Name": "EXAMPLE SUPPLY LTD"
+          },
+          "InvoiceNumber": "SYNTHETIC-SUCCESSOR-V1-SOURCE-HALF-UP",
+          "Reference": "SYNTHETIC ONLY; NOT CURRENT BUSINESS DATA",
+          "Date": "2026-03-01",
+          "DueDate": "2026-03-05",
+          "CurrencyCode": "USD",
+          "CurrencyRate": 1,
+          "Total": "20050.01",
+          "SubTotal": "20050.01",
+          "TotalTax": 0,
+          "IsDiscounted": false,
+          "LineAmountTypes": "Exclusive",
+          "AmountPaid": 0,
+          "AmountCredited": 0,
+          "AmountDue": "20050.01",
+          "Payments": [],
+          "CreditNotes": [],
+          "UpdatedDateUTC": "2026-10-04T09:00:00.000Z",
+          "SentToContact": false,
+          "LegacyExtension": {
+            "unchanged": "original"
+          },
+          "LineItems": [
+            {
+              "LineItemID": "00000000-0000-4000-8000-000000000004",
+              "Description": "UNMODIFIED LEGACY",
+              "Quantity": 1,
+              "UnitAmount": "20050.01",
+              "LineAmount": "20050.01",
+              "AccountCode": "51100",
+              "AccountID": "00000000-0000-4000-8000-000000000005",
+              "TaxType": "NONE",
+              "TaxAmount": 0,
+              "Tracking": [],
+              "UnownedField": "original line"
+            }
+          ],
+          "Prepayments": [],
+          "Overpayments": [],
+          "HasErrors": false
+        },
+        "sourceLines": [
+          {
+            "id": "a05000000000001",
+            "productId": "01t000000000001",
+            "sourceType": "STEM_Line_Item__c",
+            "amountCents": "1",
+            "taxAmountCents": "0",
+            "grossAmountCents": "1",
+            "accountCode": "51100",
+            "taxType": "NONE",
+            "currencyCode": "USD",
+            "calculationBasis": {
+              "contract": "explicit_source_unit_usd_half_up_v1",
+              "quantityField": "Quantity_Delivered_Per_BDN__c",
+              "quantity": 1,
+              "unitField": "Unit_Buy_At__c",
+              "unitAmount": "0.005",
+              "totalField": "Total_Cost__c",
+              "authoritativeTotal": "0.01",
+              "unroundedProduct": {
+                "integer": "5",
+                "scale": 3
+              },
+              "calculatedAmountCents": "1"
+            }
+          },
+          {
+            "id": "a05000000000002",
+            "productId": "01t000000000001",
+            "sourceType": "STEM_Line_Item__c",
+            "amountCents": "2000000",
+            "taxAmountCents": "0",
+            "grossAmountCents": "2000000",
+            "accountCode": "51100",
+            "taxType": "NONE",
+            "currencyCode": "USD",
+            "calculationBasis": {
+              "contract": "explicit_source_unit_arithmetic_v1",
+              "quantityField": "Quantity_Delivered_Per_BDN__c",
+              "quantity": "200",
+              "unitField": "Unit_Buy_At__c",
+              "unitAmount": "100",
+              "totalField": "Total_Cost__c",
+              "authoritativeTotal": "20000"
+            }
+          },
+          {
+            "id": "a04000000000001",
+            "productId": "01t000000000002",
+            "sourceType": "STEM_Extra_Cost__c",
+            "amountCents": "5000",
+            "taxAmountCents": "0",
+            "grossAmountCents": "5000",
+            "accountCode": "51100",
+            "taxType": "NONE",
+            "currencyCode": "USD",
+            "calculationBasis": {
+              "contract": "explicit_source_quantity_one_lump_sum_v1",
+              "quantity": 1,
+              "unitCostPlaceholder": 0,
+              "lumpSum": "50",
+              "authoritativeTotal": "50"
+            }
+          }
+        ],
+        "targetLines": [
+          {
+            "id": "00000000-0000-4000-8000-000000000004",
+            "amountCents": "2005001",
+            "taxAmountCents": "0",
+            "grossAmountCents": "2005001",
+            "accountCode": "51100",
+            "taxType": "NONE",
+            "currencyCode": "USD"
+          }
+        ],
+        "sourceBuckets": [
+          {
+            "accountCode": "51100",
+            "taxType": "NONE",
+            "currencyCode": "USD",
+            "netCents": "2005001",
+            "taxCents": "0",
+            "grossCents": "2005001"
+          }
+        ],
+        "targetBuckets": [
+          {
+            "accountCode": "51100",
+            "taxType": "NONE",
+            "currencyCode": "USD",
+            "netCents": "2005001",
+            "taxCents": "0",
+            "grossCents": "2005001"
+          }
+        ],
+        "productMappings": [
+          {
+            "id": "00000000-0000-4000-8000-000000000010",
+            "direction": "supplier",
+            "salesforce_product_id": "01t000000000001",
+            "enabled": true,
+            "revision": 1,
+            "xero_account_code": "51100",
+            "xero_tax_type": "NONE",
+            "approved_by": "00000000-0000-4000-8000-000000000020",
+            "approved_by_email": "finance@example.test",
+            "approved_at": "2026-10-04T09:00:00.000Z"
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000000011",
+            "direction": "supplier",
+            "salesforce_product_id": "01t000000000002",
+            "enabled": true,
+            "revision": 1,
+            "xero_account_code": "51100",
+            "xero_tax_type": "NONE",
+            "approved_by": "00000000-0000-4000-8000-000000000020",
+            "approved_by_email": "finance@example.test",
+            "approved_at": "2026-10-04T09:00:00.000Z"
+          }
+        ],
+        "accountTax": {
+          "accounts": [
+            {
+              "AccountID": "00000000-0000-4000-8000-000000000005",
+              "Code": "51100",
+              "Type": "DIRECTCOSTS",
+              "Status": "ACTIVE"
+            }
+          ],
+          "taxes": [
+            {
+              "TaxType": "NONE",
+              "Status": "ACTIVE",
+              "DisplayTaxRate": 0,
+              "EffectiveRate": 0,
+              "CanApplyToExpenses": true
+            }
+          ]
+        },
+        "organisation": {
+          "OrganisationID": "00000000-0000-4000-8000-000000000001",
+          "Name": "Synthetic organisation",
+          "BaseCurrency": "USD",
+          "APIKey": "PRIVATE_SYNTHETIC_PROVIDER_IDENTITY"
+        },
+        "identity": {
+          "accounts": [
+            {
+              "id": "001000000000001",
+              "name": "EXAMPLE SUPPLY LTD",
+              "companyCode": "HKEXAMPLE",
+              "recordType": "Supplier",
+              "inactiveSuspended": false
+            }
+          ],
+          "contacts": [
+            {
+              "id": "00000000-0000-4000-8000-000000000002",
+              "name": "EXAMPLE SUPPLY LTD",
+              "status": "ACTIVE",
+              "contactNumber": "",
+              "accountNumber": ""
+            }
+          ],
+          "sourceClaims": [
+            {
+              "Id": "a06000000000001",
+              "IsDeleted": false,
+              "Name": "SYNTHETIC-SUCCESSOR-V1-SOURCE-HALF-UP",
+              "Supplier__c": "001000000000001",
+              "STEM__c": "a0H000000000001",
+              "Supplier__r": {
+                "Name": "EXAMPLE SUPPLY LTD",
+                "Company_Code__c": "HKEXAMPLE",
+                "Company__c": "a0B000000000001",
+                "Company__r": {
+                  "Full_Name__c": "EXAMPLE SUPPLY LTD"
+                }
+              },
+              "STEM__r": {
+                "KeyStem__c": "HK2626001T",
+                "Vessel__c": "a0V000000000001",
+                "Vessel__r": {
+                  "Name": "SYNTHETIC SUCCESSOR VESSEL"
+                },
+                "Delivery_Date__c": "2026-03-17"
+              },
+              "Invoice_Amount__c": "20050.01",
+              "Invoice_Date__c": "2026-04-01",
+              "Invoice_Due_Date__c": "2026-04-15",
+              "CurrencyIsoCode": "USD",
+              "LastModifiedDate": "2026-10-04T09:00:00.000Z"
+            }
+          ],
+          "targetClaims": [
+            {
+              "InvoiceID": "00000000-0000-4000-8000-000000000003",
+              "Type": "ACCPAY",
+              "Status": "AUTHORISED",
+              "Contact": {
+                "ContactID": "00000000-0000-4000-8000-000000000002",
+                "Name": "EXAMPLE SUPPLY LTD"
+              },
+              "InvoiceNumber": "SYNTHETIC-SUCCESSOR-V1-SOURCE-HALF-UP",
+              "Reference": "SYNTHETIC ONLY; NOT CURRENT BUSINESS DATA",
+              "Date": "2026-03-01",
+              "DueDate": "2026-03-05",
+              "CurrencyCode": "USD",
+              "CurrencyRate": 1,
+              "Total": "20050.01",
+              "SubTotal": "20050.01",
+              "TotalTax": 0,
+              "IsDiscounted": false,
+              "LineAmountTypes": "Exclusive",
+              "AmountPaid": 0,
+              "AmountCredited": 0,
+              "AmountDue": "20050.01",
+              "Payments": [],
+              "CreditNotes": [],
+              "UpdatedDateUTC": "2026-10-04T09:00:00.000Z",
+              "SentToContact": false,
+              "LegacyExtension": {
+                "unchanged": "original"
+              },
+              "LineItems": [
+                {
+                  "LineItemID": "00000000-0000-4000-8000-000000000004",
+                  "Description": "UNMODIFIED LEGACY",
+                  "Quantity": 1,
+                  "UnitAmount": "20050.01",
+                  "LineAmount": "20050.01",
+                  "AccountCode": "51100",
+                  "AccountID": "00000000-0000-4000-8000-000000000005",
+                  "TaxType": "NONE",
+                  "TaxAmount": 0,
+                  "Tracking": [],
+                  "UnownedField": "original line"
+                }
+              ],
+              "Prepayments": [],
+              "Overpayments": [],
+              "HasErrors": false
+            }
+          ],
+          "creditClaims": [],
+          "sourceMappings": [],
+          "targetMappings": [],
+          "referenceClaims": [],
+          "postingClaims": [],
+          "disputes": [],
+          "coverage": {
+            "scope": "complete_selected_owner_union_v1",
+            "globalDiscoveryFingerprint": "ce136abe8ef00afe25ee405afe12ffcdfb1ed8fb30ea7050410f098eab4a1028",
+            "globalAccountCount": 13564,
+            "globalContactCount": 779,
+            "sourceAccountIds": [
+              "001000000000001"
+            ],
+            "stemIds": [
+              "a0H000000000001"
+            ],
+            "xeroContactIds": [
+              "00000000-0000-4000-8000-000000000002"
+            ],
+            "sourceQueryAll": true,
+            "sourceComplete": true,
+            "targetComplete": true,
+            "targetIncludesArchived": true,
+            "creditComplete": true,
+            "globalAccountsComplete": true,
+            "globalContactsComplete": true,
+            "claimsComplete": true,
+            "mappingsComplete": true,
+            "sourceCount": 1,
+            "targetCount": 1,
+            "creditCount": 0,
+            "queryFingerprints": [
+              "5ae618353a992d296ac7a6c5a82058fe0cf8fdbba0a50f460c9abdfaba91491e",
+              "d8bfa7c45690e266fa2daf6b21e28fa51576bbf1b75fc4bd9d25e017d18e8c5d",
+              "2cdbae82be73c33314ed83a4136e783862f3b9ec49daca3e1f91eff7a71decb3",
+              "4ace183e183c2d25a2ea099edb72b7bf4ad941f481d863076d9d525fc0446ca9",
+              "fd40fb8448b3a1a18adfb92a398af9e2a08f2a12f6c22d0d8cc1504a1bceead3",
+              "26d1b35b5fe56612db89ba4ad341b736caca32ed93eca484ec04e8d91a2a790d",
+              "8d7e46e072df28cd4b84771552afb2746e53bfa9a8c64897324918548ad3eabd",
+              "fd7c09339fefb0355831237ab667e87fe78660616d08230b7ba9733d28c0222e",
+              "07cdb70853a84ce3037572efeef8719d4907b44a49fdde83e11651bb8ec0c518"
+            ],
+            "dependenciesComplete": true,
+            "queryFingerprint": "eac68e84dc5938378703f051f3958924b55c4f897e40e17896309da90559cfcd"
+          },
+          "coverageFingerprint": "c6866723cbe05ebfa3151da6f2c6f261bf24fd52321e3e10b192c0bbb0c9d9b1",
+          "selection": {
+            "contract": "supplier_financial_selected_identity_v1",
+            "tenantId": "00000000-0000-4000-8000-000000000001",
+            "salesforceOrgId": "00D2x000000Ei4o",
+            "sourceId": "a06000000000001",
+            "stemId": "a0H000000000001",
+            "accountId": "001000000000001",
+            "contactId": "00000000-0000-4000-8000-000000000002",
+            "targetId": "00000000-0000-4000-8000-000000000003",
+            "sourceFingerprint": "15d8eab46aa8d1ee43d66e1a438208458cf86932c7bb13f7fd9ae32f9dc45205",
+            "financialFingerprint": "8e4469aeb35e6e05fafd3875503172e4c20d64b795ed2bad88dfc0d780fc41f8",
+            "reviewedBy": "00000000-0000-4000-8000-000000000007",
+            "reviewedAt": "2026-10-04T09:00:00.000Z",
+            "basis": "synthetic independently selected original supplier obligation"
+          }
+        },
+        "sourceDependencies": {
+          "payments": [
+            {
+              "Id": "a0S000000000001",
+              "IsDeleted": false,
+              "Supplier_Invoice__c": "a06000000000001",
+              "STEM__c": "a0H000000000001",
+              "Account__c": "001000000000001",
+              "Is_Volume_Discount__c": false,
+              "Amount__c": "123.45",
+              "Remittance__c": null
+            },
+            {
+              "Id": "a0S000000000002",
+              "IsDeleted": true,
+              "Supplier_Invoice__c": "a06000000000001",
+              "STEM__c": "a0H000000000001",
+              "Account__c": "001000000000001",
+              "Is_Volume_Discount__c": true,
+              "Amount__c": 0.46000000000001,
+              "Remittance__c": null
+            }
+          ],
+          "families": [],
+          "coverage": {
+            "contract": "complete_supplier_payment_family_scope_v1",
+            "complete": true,
+            "queryAll": true,
+            "sourceId": "a06000000000001",
+            "stemId": "a0H000000000001",
+            "accountId": "001000000000001",
+            "queryFingerprint": "f689877068fc0819b8522e98b5f65037f9d5a1119e5b0ecf77e589ccae404db7",
+            "paymentCount": 2,
+            "familyCount": 0
+          }
+        },
+        "settlement": {
+          "contract": "authorised_zero_settlement_v1",
+          "status": "AUTHORISED",
+          "ledgerPaymentProof": null
+        },
+        "retainedDifferences": {
+          "targetTracking": [],
+          "sourceTrackingEquivalenceEstablished": false,
+          "targetHeaderPresentationRetained": true
+        },
+        "documentVerification": "UNVERIFIED"
+      }
+    },
+    "localClaimScope": {
+      "contract": "supplier_financial_local_claim_scope_v1",
+      "tenantId": "00000000-0000-4000-8000-000000000001",
+      "salesforceOrgId": "00D2x000000Ei4o",
+      "sourceId": "a06000000000001",
+      "stemId": "a0H000000000001",
+      "targetId": "00000000-0000-4000-8000-000000000003",
+      "sourcePaymentIds": [
+        "a0S000000000001",
+        "a0S000000000002"
+      ],
+      "xeroPaymentIds": [],
+      "sourceDependencyHash": "c2681cd07b892c9a100852ac69a1ed002de1c9ef799e9edabe469d56005fe9df",
+      "coverageFingerprint": "c6866723cbe05ebfa3151da6f2c6f261bf24fd52321e3e10b192c0bbb0c9d9b1"
+    },
+    "limits": {
+      "freshnessEstablished": false,
+      "providerCompletenessIndependentlyVerified": false,
+      "bankRemittanceProven": false,
+      "sourcePaymentMatchProven": false,
+      "sourceTrackingEquivalenceEstablished": false
+    },
+    "blockers": [],
+    "financialBlockers": []
+  },
+  "review": {
+    "policyVersion": "supplier_financial_bucket_preserve_v1",
+    "fingerprint": "deed508493a01a6d83f88414ce679d27852f6c20aa0ce8613bb656bafee27382",
+    "evidenceFingerprint": "deed508493a01a6d83f88414ce679d27852f6c20aa0ce8613bb656bafee27382",
+    "approvalMaterialHash": "fb1de2b6a1ff135c5f7de3d9158c5d179b9e395dafe0694cee77b2197cdc6fd2",
+    "reviewFingerprint": "065c513f1da501f377b05e5aca8be1bcc9a2ee9247df41f36627a557dc8dc301",
+    "legacyReviewFingerprint": "644cff666fd45364848484cdd9158a2f0ce301e690100fd94e2e26e9090f6885",
+    "evidence": {
+      "policyVersion": "supplier_financial_bucket_preserve_v1",
+      "accounting": {
+        "contract": "financial_bucket_preservation_v1",
+        "tenantId": "00000000-0000-4000-8000-000000000001",
+        "salesforceOrgId": "00D2x000000Ei4o",
+        "sourceId": "a06000000000001",
+        "stemId": "a0H000000000001",
+        "accountId": "001000000000001",
+        "contactId": "00000000-0000-4000-8000-000000000002",
+        "targetId": "00000000-0000-4000-8000-000000000003",
+        "currency": "USD",
+        "representation": "Exclusive",
+        "totalCents": "2005001",
+        "subTotalCents": "2005001",
+        "totalTaxCents": "0",
+        "sourceFingerprint": "15d8eab46aa8d1ee43d66e1a438208458cf86932c7bb13f7fd9ae32f9dc45205",
+        "financialFingerprint": "8e4469aeb35e6e05fafd3875503172e4c20d64b795ed2bad88dfc0d780fc41f8",
+        "source": {
+          "orgId": "00D2x000000Ei4oEAC",
+          "salesforceObject": "Supplier_Invoice__c",
+          "sourceFingerprint": "15d8eab46aa8d1ee43d66e1a438208458cf86932c7bb13f7fd9ae32f9dc45205",
+          "financialFingerprint": "8e4469aeb35e6e05fafd3875503172e4c20d64b795ed2bad88dfc0d780fc41f8",
+          "parent": {
+            "Id": "a06000000000001",
+            "IsDeleted": false,
+            "Name": "SYNTHETIC-SUCCESSOR-V1-SOURCE-HALF-UP",
+            "Supplier__c": "001000000000001",
+            "STEM__c": "a0H000000000001",
+            "Supplier__r": {
+              "Name": "EXAMPLE SUPPLY LTD",
+              "Company_Code__c": "HKEXAMPLE",
+              "Company__c": "a0B000000000001",
+              "Company__r": {
+                "Full_Name__c": "EXAMPLE SUPPLY LTD"
+              }
+            },
+            "STEM__r": {
+              "KeyStem__c": "HK2626001T",
+              "Vessel__c": "a0V000000000001",
+              "Vessel__r": {
+                "Name": "SYNTHETIC SUCCESSOR VESSEL"
+              },
+              "Delivery_Date__c": "2026-03-17"
+            },
+            "Invoice_Amount__c": "20050.01",
+            "Invoice_Date__c": "2026-04-01",
+            "Invoice_Due_Date__c": "2026-04-15",
+            "CurrencyIsoCode": "USD",
+            "LastModifiedDate": "2026-10-04T09:00:00.000Z"
+          },
+          "safetyContext": {
+            "fields": {
+              "Invoice__c": [
+                "Id",
+                "CurrencyIsoCode"
+              ],
+              "Supplier_Invoice__c": [
+                "Id",
+                "CurrencyIsoCode"
+              ],
+              "STEM__c": [
+                "Id",
+                "CurrencyIsoCode"
+              ],
+              "STEM_Line_Item__c": [
+                "Id",
+                "CurrencyIsoCode"
+              ],
+              "STEM_Extra_Cost__c": [
+                "Id",
+                "CurrencyIsoCode"
+              ],
+              "Payment__c": [
+                "Id",
+                "CurrencyIsoCode"
+              ]
+            },
+            "singleCurrency": false,
+            "corporateCurrency": null
+          },
+          "children": [
+            {
+              "Id": "a05000000000001",
+              "IsDeleted": false,
+              "Cancelled__c": false,
+              "Supplier_Invoice__c": "a06000000000001",
+              "STEM__c": "a0H000000000001",
+              "Original_Supplier__c": "001000000000001",
+              "Buyer_Invoice__c": "a0K000000000001",
+              "Product__c": "01t000000000001",
+              "Product__r": {
+                "Name": "SYNTHETIC RMG380 S0.5%"
+              },
+              "Quantity_Delivered_Per_BDN__c": 1,
+              "Quantity__c": "999",
+              "Unit_Buy_At__c": "0.005",
+              "Total_Cost__c": "0.01",
+              "Unit_of_Measure__c": "MT",
+              "CurrencyIsoCode": "USD",
+              "LastModifiedDate": "2026-10-04T09:00:00.000Z",
+              "Cost_Per_Unit__c": null
+            },
+            {
+              "Id": "a05000000000002",
+              "IsDeleted": false,
+              "Cancelled__c": false,
+              "Supplier_Invoice__c": "a06000000000001",
+              "STEM__c": "a0H000000000001",
+              "Original_Supplier__c": "001000000000001",
+              "Buyer_Invoice__c": "a0K000000000001",
+              "Product__c": "01t000000000001",
+              "Product__r": {
+                "Name": "SYNTHETIC RMG380 S0.5%"
+              },
+              "Quantity_Delivered_Per_BDN__c": "200",
+              "Quantity__c": "999",
+              "Unit_Buy_At__c": "100",
+              "Total_Cost__c": "20000",
+              "Unit_of_Measure__c": "MT",
+              "CurrencyIsoCode": "USD",
+              "LastModifiedDate": "2026-10-04T09:00:00.000Z",
+              "Cost_Per_Unit__c": null
+            }
+          ],
+          "charges": [
+            {
+              "Id": "a04000000000001",
+              "IsDeleted": false,
+              "Cancelled__c": false,
+              "Supplier_Invoice__c": "a06000000000001",
+              "STEM__c": "a0H000000000001",
+              "Supplier__c": "001000000000001",
+              "Buyer_Invoice__c": null,
+              "Product2Id__c": "01t000000000002",
+              "Product2Id__r": {
+                "Name": "SYNTHETIC SURCHARGE"
+              },
+              "Line_Total_Buy__c": "50",
+              "Lumpsum_Cost__c": "50",
+              "CurrencyIsoCode": "USD",
+              "Quantity__c": 1,
+              "Unit_Cost__c": 0
+            }
+          ],
+          "buyers": [
+            {
+              "Id": "a0K000000000001",
+              "Name": "SYN-BUYER-INV",
+              "STEM__c": "a0H000000000001",
+              "IsDeleted": false,
+              "Proforma__c": false,
+              "Deprecated__c": false,
+              "Amount__c": "30050",
+              "Delivery_Date__c": "2026-03-17",
+              "Invoice_Date__c": "2026-03-19"
+            }
+          ],
+          "sourcePayload": {
+            "salesforceObject": "Supplier_Invoice__c",
+            "salesforceId": "a06000000000001",
+            "documentNumber": "SYNTHETIC-SUCCESSOR-V1-SOURCE-HALF-UP",
+            "documentKind": "supplier_bill",
+            "xeroType": "ACCPAY",
+            "xeroCollection": "Invoices",
+            "accountId": "001000000000001",
+            "accountName": "EXAMPLE SUPPLY LTD",
+            "companyCode": "HKEXAMPLE",
+            "contactId": "00000000-0000-4000-8000-000000000002",
+            "contactName": "EXAMPLE SUPPLY LTD",
+            "stemId": "a0H000000000001",
+            "stemName": "HK2626001T",
+            "stemKey": "HK2626001T",
+            "invoiceDate": "2026-04-01",
+            "dueDate": "2026-04-15",
+            "deliveryDate": "2026-03-17",
+            "currency": "USD",
+            "postingMode": "draft",
+            "readiness": {
+              "ready": false,
+              "blockers": [
+                "Supplier invoice has no verified issued source file."
+              ],
+              "file": null,
+              "snapshot": null,
+              "linkedChildren": [
+                "a04000000000001",
+                "a05000000000001",
+                "a05000000000002"
+              ]
+            },
+            "signedTotal": 20050.01,
+            "total": 20050.01,
+            "reference": "HK2626001T · Salesforce supplier invoice",
+            "lines": [
+              {
+                "sourceId": "a05000000000001",
+                "sourceType": "STEM_Line_Item__c",
+                "productId": "01t000000000001",
+                "productName": "SYNTHETIC RMG380 S0.5%",
+                "description": "SYNTHETIC RMG380 S0.5% · 1 MT",
+                "quantity": 1,
+                "unitAmount": 0.01,
+                "accountCode": "51100",
+                "taxType": "NONE"
+              },
+              {
+                "sourceId": "a05000000000002",
+                "sourceType": "STEM_Line_Item__c",
+                "productId": "01t000000000001",
+                "productName": "SYNTHETIC RMG380 S0.5%",
+                "description": "SYNTHETIC RMG380 S0.5% · 200 MT",
+                "quantity": 1,
+                "unitAmount": 20000,
+                "accountCode": "51100",
+                "taxType": "NONE"
+              },
+              {
+                "sourceId": "a04000000000001",
+                "sourceType": "STEM_Extra_Cost__c",
+                "productId": "01t000000000002",
+                "productName": "SYNTHETIC SURCHARGE",
+                "description": "SYNTHETIC SURCHARGE",
+                "quantity": 1,
+                "unitAmount": 50,
+                "accountCode": "51100",
+                "taxType": "NONE"
+              }
+            ],
+            "blockers": [],
+            "lastModifiedDate": "2026-10-04T09:00:00.000Z",
+            "sourceFingerprint": "15d8eab46aa8d1ee43d66e1a438208458cf86932c7bb13f7fd9ae32f9dc45205",
+            "financialFingerprint": "8e4469aeb35e6e05fafd3875503172e4c20d64b795ed2bad88dfc0d780fc41f8",
+            "documentFieldProjection": {
+              "policy": "document_field_correction_v1",
+              "scope": "current",
+              "fields": {
+                "Date": "2026-03-17",
+                "DueDate": "2026-04-15",
+                "InvoiceNumber": null,
+                "Description": "19/3/2026"
+              },
+              "evidence": {
+                "direction": "supplier",
+                "cutoff": "2026-01-01",
+                "sourceId": "a06000000000001",
+                "originalName": "SYNTHETIC-SUCCESSOR-V1-SOURCE-HALF-UP",
+                "stemId": "a0H000000000001",
+                "resolution": "linked_buyers",
+                "buyers": [
+                  {
+                    "id": "a0K000000000001",
+                    "name": "SYN-BUYER-INV",
+                    "stemId": "a0H000000000001",
+                    "deliveryDate": "2026-03-17",
+                    "invoiceDate": "2026-03-19",
+                    "proforma": false,
+                    "deprecated": false,
+                    "inactive": false,
+                    "credit": false
+                  }
+                ],
+                "links": [
+                  {
+                    "id": "a05000000000001",
+                    "buyerId": "a0K000000000001",
+                    "supplierId": "a06000000000001",
+                    "stemId": "a0H000000000001"
+                  },
+                  {
+                    "id": "a05000000000002",
+                    "buyerId": "a0K000000000001",
+                    "supplierId": "a06000000000001",
+                    "stemId": "a0H000000000001"
+                  },
+                  {
+                    "id": "a04000000000001",
+                    "buyerId": null,
+                    "supplierId": "a06000000000001",
+                    "stemId": "a0H000000000001"
+                  }
+                ],
+                "vesselName": "SYNTHETIC SUCCESSOR VESSEL",
+                "refCode": null,
+                "dueDate": "2026-04-15",
+                "dateSource": "Invoice__c.Delivery_Date__c",
+                "descriptionSource": "Invoice__c.Invoice_Date__c",
+                "dueDateSource": "Supplier_Invoice__c.Invoice_Due_Date__c"
+              },
+              "blockers": [
+                "The STEM RefCode must contain a nonempty suffix after its first four characters."
+              ],
+              "blockerCodes": [
+                "DOCUMENT_FIELD_REFCODE_MISSING"
+              ],
+              "fingerprint": "86f96b7bea53335a3fd7d4636572f9fffc8e678384918f1b766f3c9717b66712"
+            },
+            "vesselName": "SYNTHETIC SUCCESSOR VESSEL",
+            "documentFieldSourceFingerprint": "d0dd184868474e0aa7617c859a1e1b02a1020909e4ad23941e7144219e775801"
+          }
+        },
+        "target": {
+          "InvoiceID": "00000000-0000-4000-8000-000000000003",
+          "Type": "ACCPAY",
+          "Status": "AUTHORISED",
+          "Contact": {
+            "ContactID": "00000000-0000-4000-8000-000000000002",
+            "Name": "EXAMPLE SUPPLY LTD"
+          },
+          "InvoiceNumber": "SYNTHETIC-SUCCESSOR-V1-SOURCE-HALF-UP",
+          "Reference": "SYNTHETIC ONLY; NOT CURRENT BUSINESS DATA",
+          "Date": "2026-03-01",
+          "DueDate": "2026-03-05",
+          "CurrencyCode": "USD",
+          "CurrencyRate": 1,
+          "Total": "20050.01",
+          "SubTotal": "20050.01",
+          "TotalTax": 0,
+          "IsDiscounted": false,
+          "LineAmountTypes": "Exclusive",
+          "AmountPaid": 0,
+          "AmountCredited": 0,
+          "AmountDue": "20050.01",
+          "Payments": [],
+          "CreditNotes": [],
+          "UpdatedDateUTC": "2026-10-04T09:00:00.000Z",
+          "SentToContact": false,
+          "LegacyExtension": {
+            "unchanged": "original"
+          },
+          "LineItems": [
+            {
+              "LineItemID": "00000000-0000-4000-8000-000000000004",
+              "Description": "UNMODIFIED LEGACY",
+              "Quantity": 1,
+              "UnitAmount": "20050.01",
+              "LineAmount": "20050.01",
+              "AccountCode": "51100",
+              "AccountID": "00000000-0000-4000-8000-000000000005",
+              "TaxType": "NONE",
+              "TaxAmount": 0,
+              "Tracking": [],
+              "UnownedField": "original line"
+            }
+          ],
+          "Prepayments": [],
+          "Overpayments": [],
+          "HasErrors": false
+        },
+        "sourceLines": [
+          {
+            "id": "a05000000000001",
+            "productId": "01t000000000001",
+            "sourceType": "STEM_Line_Item__c",
+            "amountCents": "1",
+            "taxAmountCents": "0",
+            "grossAmountCents": "1",
+            "accountCode": "51100",
+            "taxType": "NONE",
+            "currencyCode": "USD",
+            "calculationBasis": {
+              "contract": "explicit_source_unit_usd_half_up_v1",
+              "quantityField": "Quantity_Delivered_Per_BDN__c",
+              "quantity": 1,
+              "unitField": "Unit_Buy_At__c",
+              "unitAmount": "0.005",
+              "totalField": "Total_Cost__c",
+              "authoritativeTotal": "0.01",
+              "unroundedProduct": {
+                "integer": "5",
+                "scale": 3
+              },
+              "calculatedAmountCents": "1"
+            }
+          },
+          {
+            "id": "a05000000000002",
+            "productId": "01t000000000001",
+            "sourceType": "STEM_Line_Item__c",
+            "amountCents": "2000000",
+            "taxAmountCents": "0",
+            "grossAmountCents": "2000000",
+            "accountCode": "51100",
+            "taxType": "NONE",
+            "currencyCode": "USD",
+            "calculationBasis": {
+              "contract": "explicit_source_unit_arithmetic_v1",
+              "quantityField": "Quantity_Delivered_Per_BDN__c",
+              "quantity": "200",
+              "unitField": "Unit_Buy_At__c",
+              "unitAmount": "100",
+              "totalField": "Total_Cost__c",
+              "authoritativeTotal": "20000"
+            }
+          },
+          {
+            "id": "a04000000000001",
+            "productId": "01t000000000002",
+            "sourceType": "STEM_Extra_Cost__c",
+            "amountCents": "5000",
+            "taxAmountCents": "0",
+            "grossAmountCents": "5000",
+            "accountCode": "51100",
+            "taxType": "NONE",
+            "currencyCode": "USD",
+            "calculationBasis": {
+              "contract": "explicit_source_quantity_one_lump_sum_v1",
+              "quantity": 1,
+              "unitCostPlaceholder": 0,
+              "lumpSum": "50",
+              "authoritativeTotal": "50"
+            }
+          }
+        ],
+        "targetLines": [
+          {
+            "id": "00000000-0000-4000-8000-000000000004",
+            "amountCents": "2005001",
+            "taxAmountCents": "0",
+            "grossAmountCents": "2005001",
+            "accountCode": "51100",
+            "taxType": "NONE",
+            "currencyCode": "USD"
+          }
+        ],
+        "sourceBuckets": [
+          {
+            "accountCode": "51100",
+            "taxType": "NONE",
+            "currencyCode": "USD",
+            "netCents": "2005001",
+            "taxCents": "0",
+            "grossCents": "2005001"
+          }
+        ],
+        "targetBuckets": [
+          {
+            "accountCode": "51100",
+            "taxType": "NONE",
+            "currencyCode": "USD",
+            "netCents": "2005001",
+            "taxCents": "0",
+            "grossCents": "2005001"
+          }
+        ],
+        "productMappings": [
+          {
+            "id": "00000000-0000-4000-8000-000000000010",
+            "direction": "supplier",
+            "salesforce_product_id": "01t000000000001",
+            "enabled": true,
+            "revision": 1,
+            "xero_account_code": "51100",
+            "xero_tax_type": "NONE",
+            "approved_by": "00000000-0000-4000-8000-000000000020",
+            "approved_by_email": "finance@example.test",
+            "approved_at": "2026-10-04T09:00:00.000Z"
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000000011",
+            "direction": "supplier",
+            "salesforce_product_id": "01t000000000002",
+            "enabled": true,
+            "revision": 1,
+            "xero_account_code": "51100",
+            "xero_tax_type": "NONE",
+            "approved_by": "00000000-0000-4000-8000-000000000020",
+            "approved_by_email": "finance@example.test",
+            "approved_at": "2026-10-04T09:00:00.000Z"
+          }
+        ],
+        "accountTax": {
+          "accounts": [
+            {
+              "AccountID": "00000000-0000-4000-8000-000000000005",
+              "Code": "51100",
+              "Type": "DIRECTCOSTS",
+              "Status": "ACTIVE"
+            }
+          ],
+          "taxes": [
+            {
+              "TaxType": "NONE",
+              "Status": "ACTIVE",
+              "DisplayTaxRate": 0,
+              "EffectiveRate": 0,
+              "CanApplyToExpenses": true
+            }
+          ]
+        },
+        "organisation": {
+          "OrganisationID": "00000000-0000-4000-8000-000000000001",
+          "Name": "Synthetic organisation",
+          "BaseCurrency": "USD",
+          "APIKey": "PRIVATE_SYNTHETIC_PROVIDER_IDENTITY"
+        },
+        "identity": {
+          "accounts": [
+            {
+              "id": "001000000000001",
+              "name": "EXAMPLE SUPPLY LTD",
+              "companyCode": "HKEXAMPLE",
+              "recordType": "Supplier",
+              "inactiveSuspended": false
+            }
+          ],
+          "contacts": [
+            {
+              "id": "00000000-0000-4000-8000-000000000002",
+              "name": "EXAMPLE SUPPLY LTD",
+              "status": "ACTIVE",
+              "contactNumber": "",
+              "accountNumber": ""
+            }
+          ],
+          "sourceClaims": [
+            {
+              "Id": "a06000000000001",
+              "IsDeleted": false,
+              "Name": "SYNTHETIC-SUCCESSOR-V1-SOURCE-HALF-UP",
+              "Supplier__c": "001000000000001",
+              "STEM__c": "a0H000000000001",
+              "Supplier__r": {
+                "Name": "EXAMPLE SUPPLY LTD",
+                "Company_Code__c": "HKEXAMPLE",
+                "Company__c": "a0B000000000001",
+                "Company__r": {
+                  "Full_Name__c": "EXAMPLE SUPPLY LTD"
+                }
+              },
+              "STEM__r": {
+                "KeyStem__c": "HK2626001T",
+                "Vessel__c": "a0V000000000001",
+                "Vessel__r": {
+                  "Name": "SYNTHETIC SUCCESSOR VESSEL"
+                },
+                "Delivery_Date__c": "2026-03-17"
+              },
+              "Invoice_Amount__c": "20050.01",
+              "Invoice_Date__c": "2026-04-01",
+              "Invoice_Due_Date__c": "2026-04-15",
+              "CurrencyIsoCode": "USD",
+              "LastModifiedDate": "2026-10-04T09:00:00.000Z"
+            }
+          ],
+          "targetClaims": [
+            {
+              "InvoiceID": "00000000-0000-4000-8000-000000000003",
+              "Type": "ACCPAY",
+              "Status": "AUTHORISED",
+              "Contact": {
+                "ContactID": "00000000-0000-4000-8000-000000000002",
+                "Name": "EXAMPLE SUPPLY LTD"
+              },
+              "InvoiceNumber": "SYNTHETIC-SUCCESSOR-V1-SOURCE-HALF-UP",
+              "Reference": "SYNTHETIC ONLY; NOT CURRENT BUSINESS DATA",
+              "Date": "2026-03-01",
+              "DueDate": "2026-03-05",
+              "CurrencyCode": "USD",
+              "CurrencyRate": 1,
+              "Total": "20050.01",
+              "SubTotal": "20050.01",
+              "TotalTax": 0,
+              "IsDiscounted": false,
+              "LineAmountTypes": "Exclusive",
+              "AmountPaid": 0,
+              "AmountCredited": 0,
+              "AmountDue": "20050.01",
+              "Payments": [],
+              "CreditNotes": [],
+              "UpdatedDateUTC": "2026-10-04T09:00:00.000Z",
+              "SentToContact": false,
+              "LegacyExtension": {
+                "unchanged": "original"
+              },
+              "LineItems": [
+                {
+                  "LineItemID": "00000000-0000-4000-8000-000000000004",
+                  "Description": "UNMODIFIED LEGACY",
+                  "Quantity": 1,
+                  "UnitAmount": "20050.01",
+                  "LineAmount": "20050.01",
+                  "AccountCode": "51100",
+                  "AccountID": "00000000-0000-4000-8000-000000000005",
+                  "TaxType": "NONE",
+                  "TaxAmount": 0,
+                  "Tracking": [],
+                  "UnownedField": "original line"
+                }
+              ],
+              "Prepayments": [],
+              "Overpayments": [],
+              "HasErrors": false
+            }
+          ],
+          "creditClaims": [],
+          "sourceMappings": [],
+          "targetMappings": [],
+          "referenceClaims": [],
+          "postingClaims": [],
+          "disputes": [],
+          "coverage": {
+            "scope": "complete_selected_owner_union_v1",
+            "globalDiscoveryFingerprint": "ce136abe8ef00afe25ee405afe12ffcdfb1ed8fb30ea7050410f098eab4a1028",
+            "globalAccountCount": 13564,
+            "globalContactCount": 779,
+            "sourceAccountIds": [
+              "001000000000001"
+            ],
+            "stemIds": [
+              "a0H000000000001"
+            ],
+            "xeroContactIds": [
+              "00000000-0000-4000-8000-000000000002"
+            ],
+            "sourceQueryAll": true,
+            "sourceComplete": true,
+            "targetComplete": true,
+            "targetIncludesArchived": true,
+            "creditComplete": true,
+            "globalAccountsComplete": true,
+            "globalContactsComplete": true,
+            "claimsComplete": true,
+            "mappingsComplete": true,
+            "sourceCount": 1,
+            "targetCount": 1,
+            "creditCount": 0,
+            "queryFingerprints": [
+              "5ae618353a992d296ac7a6c5a82058fe0cf8fdbba0a50f460c9abdfaba91491e",
+              "d8bfa7c45690e266fa2daf6b21e28fa51576bbf1b75fc4bd9d25e017d18e8c5d",
+              "2cdbae82be73c33314ed83a4136e783862f3b9ec49daca3e1f91eff7a71decb3",
+              "4ace183e183c2d25a2ea099edb72b7bf4ad941f481d863076d9d525fc0446ca9",
+              "fd40fb8448b3a1a18adfb92a398af9e2a08f2a12f6c22d0d8cc1504a1bceead3",
+              "26d1b35b5fe56612db89ba4ad341b736caca32ed93eca484ec04e8d91a2a790d",
+              "8d7e46e072df28cd4b84771552afb2746e53bfa9a8c64897324918548ad3eabd",
+              "fd7c09339fefb0355831237ab667e87fe78660616d08230b7ba9733d28c0222e",
+              "07cdb70853a84ce3037572efeef8719d4907b44a49fdde83e11651bb8ec0c518"
+            ],
+            "dependenciesComplete": true,
+            "queryFingerprint": "eac68e84dc5938378703f051f3958924b55c4f897e40e17896309da90559cfcd"
+          },
+          "coverageFingerprint": "c6866723cbe05ebfa3151da6f2c6f261bf24fd52321e3e10b192c0bbb0c9d9b1",
+          "selection": {
+            "contract": "supplier_financial_selected_identity_v1",
+            "tenantId": "00000000-0000-4000-8000-000000000001",
+            "salesforceOrgId": "00D2x000000Ei4o",
+            "sourceId": "a06000000000001",
+            "stemId": "a0H000000000001",
+            "accountId": "001000000000001",
+            "contactId": "00000000-0000-4000-8000-000000000002",
+            "targetId": "00000000-0000-4000-8000-000000000003",
+            "sourceFingerprint": "15d8eab46aa8d1ee43d66e1a438208458cf86932c7bb13f7fd9ae32f9dc45205",
+            "financialFingerprint": "8e4469aeb35e6e05fafd3875503172e4c20d64b795ed2bad88dfc0d780fc41f8",
+            "reviewedBy": "00000000-0000-4000-8000-000000000007",
+            "reviewedAt": "2026-10-04T09:00:00.000Z",
+            "basis": "synthetic independently selected original supplier obligation"
+          }
+        },
+        "sourceDependencies": {
+          "payments": [
+            {
+              "Id": "a0S000000000001",
+              "IsDeleted": false,
+              "Supplier_Invoice__c": "a06000000000001",
+              "STEM__c": "a0H000000000001",
+              "Account__c": "001000000000001",
+              "Is_Volume_Discount__c": false,
+              "Amount__c": "123.45",
+              "Remittance__c": null
+            },
+            {
+              "Id": "a0S000000000002",
+              "IsDeleted": true,
+              "Supplier_Invoice__c": "a06000000000001",
+              "STEM__c": "a0H000000000001",
+              "Account__c": "001000000000001",
+              "Is_Volume_Discount__c": true,
+              "Amount__c": 0.46000000000001,
+              "Remittance__c": null
+            }
+          ],
+          "families": [],
+          "coverage": {
+            "contract": "complete_supplier_payment_family_scope_v1",
+            "complete": true,
+            "queryAll": true,
+            "sourceId": "a06000000000001",
+            "stemId": "a0H000000000001",
+            "accountId": "001000000000001",
+            "queryFingerprint": "f689877068fc0819b8522e98b5f65037f9d5a1119e5b0ecf77e589ccae404db7",
+            "paymentCount": 2,
+            "familyCount": 0
+          }
+        },
+        "settlement": {
+          "contract": "authorised_zero_settlement_v1",
+          "status": "AUTHORISED",
+          "ledgerPaymentProof": null
+        },
+        "retainedDifferences": {
+          "targetTracking": [],
+          "sourceTrackingEquivalenceEstablished": false,
+          "targetHeaderPresentationRetained": true
+        },
+        "documentVerification": "UNVERIFIED"
+      }
+    },
+    "accountingCanonical": "{\"accounting\":{\"accountId\":\"001000000000001\",\"accountTax\":{\"accounts\":[{\"AccountID\":\"00000000-0000-4000-8000-000000000005\",\"Code\":\"51100\",\"Status\":\"ACTIVE\",\"Type\":\"DIRECTCOSTS\"}],\"taxes\":[{\"CanApplyToExpenses\":true,\"DisplayTaxRate\":0,\"EffectiveRate\":0,\"Status\":\"ACTIVE\",\"TaxType\":\"NONE\"}]},\"contactId\":\"00000000-0000-4000-8000-000000000002\",\"contract\":\"financial_bucket_preservation_v1\",\"currency\":\"USD\",\"documentVerification\":\"UNVERIFIED\",\"financialFingerprint\":\"8e4469aeb35e6e05fafd3875503172e4c20d64b795ed2bad88dfc0d780fc41f8\",\"identity\":{\"accounts\":[{\"companyCode\":\"HKEXAMPLE\",\"id\":\"001000000000001\",\"inactiveSuspended\":false,\"name\":\"EXAMPLE SUPPLY LTD\",\"recordType\":\"Supplier\"}],\"contacts\":[{\"accountNumber\":\"\",\"contactNumber\":\"\",\"id\":\"00000000-0000-4000-8000-000000000002\",\"name\":\"EXAMPLE SUPPLY LTD\",\"status\":\"ACTIVE\"}],\"coverage\":{\"claimsComplete\":true,\"creditComplete\":true,\"creditCount\":0,\"dependenciesComplete\":true,\"globalAccountCount\":13564,\"globalAccountsComplete\":true,\"globalContactCount\":779,\"globalContactsComplete\":true,\"globalDiscoveryFingerprint\":\"ce136abe8ef00afe25ee405afe12ffcdfb1ed8fb30ea7050410f098eab4a1028\",\"mappingsComplete\":true,\"queryFingerprint\":\"eac68e84dc5938378703f051f3958924b55c4f897e40e17896309da90559cfcd\",\"queryFingerprints\":[\"5ae618353a992d296ac7a6c5a82058fe0cf8fdbba0a50f460c9abdfaba91491e\",\"d8bfa7c45690e266fa2daf6b21e28fa51576bbf1b75fc4bd9d25e017d18e8c5d\",\"2cdbae82be73c33314ed83a4136e783862f3b9ec49daca3e1f91eff7a71decb3\",\"4ace183e183c2d25a2ea099edb72b7bf4ad941f481d863076d9d525fc0446ca9\",\"fd40fb8448b3a1a18adfb92a398af9e2a08f2a12f6c22d0d8cc1504a1bceead3\",\"26d1b35b5fe56612db89ba4ad341b736caca32ed93eca484ec04e8d91a2a790d\",\"8d7e46e072df28cd4b84771552afb2746e53bfa9a8c64897324918548ad3eabd\",\"fd7c09339fefb0355831237ab667e87fe78660616d08230b7ba9733d28c0222e\",\"07cdb70853a84ce3037572efeef8719d4907b44a49fdde83e11651bb8ec0c518\"],\"scope\":\"complete_selected_owner_union_v1\",\"sourceAccountIds\":[\"001000000000001\"],\"sourceComplete\":true,\"sourceCount\":1,\"sourceQueryAll\":true,\"stemIds\":[\"a0H000000000001\"],\"targetComplete\":true,\"targetCount\":1,\"targetIncludesArchived\":true,\"xeroContactIds\":[\"00000000-0000-4000-8000-000000000002\"]},\"coverageFingerprint\":\"c6866723cbe05ebfa3151da6f2c6f261bf24fd52321e3e10b192c0bbb0c9d9b1\",\"creditClaims\":[],\"disputes\":[],\"postingClaims\":[],\"referenceClaims\":[],\"selection\":{\"accountId\":\"001000000000001\",\"basis\":\"synthetic independently selected original supplier obligation\",\"contactId\":\"00000000-0000-4000-8000-000000000002\",\"contract\":\"supplier_financial_selected_identity_v1\",\"financialFingerprint\":\"8e4469aeb35e6e05fafd3875503172e4c20d64b795ed2bad88dfc0d780fc41f8\",\"reviewedAt\":\"2026-10-04T09:00:00.000Z\",\"reviewedBy\":\"00000000-0000-4000-8000-000000000007\",\"salesforceOrgId\":\"00D2x000000Ei4o\",\"sourceFingerprint\":\"15d8eab46aa8d1ee43d66e1a438208458cf86932c7bb13f7fd9ae32f9dc45205\",\"sourceId\":\"a06000000000001\",\"stemId\":\"a0H000000000001\",\"targetId\":\"00000000-0000-4000-8000-000000000003\",\"tenantId\":\"00000000-0000-4000-8000-000000000001\"},\"sourceClaims\":[{\"CurrencyIsoCode\":\"USD\",\"Id\":\"a06000000000001\",\"Invoice_Amount__c\":\"20050.01\",\"Invoice_Date__c\":\"2026-04-01\",\"Invoice_Due_Date__c\":\"2026-04-15\",\"IsDeleted\":false,\"LastModifiedDate\":\"2026-10-04T09:00:00.000Z\",\"Name\":\"SYNTHETIC-SUCCESSOR-V1-SOURCE-HALF-UP\",\"STEM__c\":\"a0H000000000001\",\"STEM__r\":{\"Delivery_Date__c\":\"2026-03-17\",\"KeyStem__c\":\"HK2626001T\",\"Vessel__c\":\"a0V000000000001\",\"Vessel__r\":{\"Name\":\"SYNTHETIC SUCCESSOR VESSEL\"}},\"Supplier__c\":\"001000000000001\",\"Supplier__r\":{\"Company_Code__c\":\"HKEXAMPLE\",\"Company__c\":\"a0B000000000001\",\"Company__r\":{\"Full_Name__c\":\"EXAMPLE SUPPLY LTD\"},\"Name\":\"EXAMPLE SUPPLY LTD\"}}],\"sourceMappings\":[],\"targetClaims\":[{\"AmountCredited\":0,\"AmountDue\":\"20050.01\",\"AmountPaid\":0,\"Contact\":{\"ContactID\":\"00000000-0000-4000-8000-000000000002\",\"Name\":\"EXAMPLE SUPPLY LTD\"},\"CreditNotes\":[],\"CurrencyCode\":\"USD\",\"CurrencyRate\":1,\"Date\":\"2026-03-01\",\"DueDate\":\"2026-03-05\",\"HasErrors\":false,\"InvoiceID\":\"00000000-0000-4000-8000-000000000003\",\"InvoiceNumber\":\"SYNTHETIC-SUCCESSOR-V1-SOURCE-HALF-UP\",\"IsDiscounted\":false,\"LegacyExtension\":{\"unchanged\":\"original\"},\"LineAmountTypes\":\"Exclusive\",\"LineItems\":[{\"AccountCode\":\"51100\",\"AccountID\":\"00000000-0000-4000-8000-000000000005\",\"Description\":\"UNMODIFIED LEGACY\",\"LineAmount\":\"20050.01\",\"LineItemID\":\"00000000-0000-4000-8000-000000000004\",\"Quantity\":1,\"TaxAmount\":0,\"TaxType\":\"NONE\",\"Tracking\":[],\"UnitAmount\":\"20050.01\",\"UnownedField\":\"original line\"}],\"Overpayments\":[],\"Payments\":[],\"Prepayments\":[],\"Reference\":\"SYNTHETIC ONLY; NOT CURRENT BUSINESS DATA\",\"SentToContact\":false,\"Status\":\"AUTHORISED\",\"SubTotal\":\"20050.01\",\"Total\":\"20050.01\",\"TotalTax\":0,\"Type\":\"ACCPAY\",\"UpdatedDateUTC\":\"2026-10-04T09:00:00.000Z\"}],\"targetMappings\":[]},\"organisation\":{\"APIKey\":\"PRIVATE_SYNTHETIC_PROVIDER_IDENTITY\",\"BaseCurrency\":\"USD\",\"Name\":\"Synthetic organisation\",\"OrganisationID\":\"00000000-0000-4000-8000-000000000001\"},\"productMappings\":[{\"approved_at\":\"2026-10-04T09:00:00.000Z\",\"approved_by\":\"00000000-0000-4000-8000-000000000020\",\"approved_by_email\":\"finance@example.test\",\"direction\":\"supplier\",\"enabled\":true,\"id\":\"00000000-0000-4000-8000-000000000010\",\"revision\":1,\"salesforce_product_id\":\"01t000000000001\",\"xero_account_code\":\"51100\",\"xero_tax_type\":\"NONE\"},{\"approved_at\":\"2026-10-04T09:00:00.000Z\",\"approved_by\":\"00000000-0000-4000-8000-000000000020\",\"approved_by_email\":\"finance@example.test\",\"direction\":\"supplier\",\"enabled\":true,\"id\":\"00000000-0000-4000-8000-000000000011\",\"revision\":1,\"salesforce_product_id\":\"01t000000000002\",\"xero_account_code\":\"51100\",\"xero_tax_type\":\"NONE\"}],\"representation\":\"Exclusive\",\"retainedDifferences\":{\"sourceTrackingEquivalenceEstablished\":false,\"targetHeaderPresentationRetained\":true,\"targetTracking\":[]},\"salesforceOrgId\":\"00D2x000000Ei4o\",\"settlement\":{\"contract\":\"authorised_zero_settlement_v1\",\"ledgerPaymentProof\":null,\"status\":\"AUTHORISED\"},\"source\":{\"buyers\":[{\"Amount__c\":\"30050\",\"Delivery_Date__c\":\"2026-03-17\",\"Deprecated__c\":false,\"Id\":\"a0K000000000001\",\"Invoice_Date__c\":\"2026-03-19\",\"IsDeleted\":false,\"Name\":\"SYN-BUYER-INV\",\"Proforma__c\":false,\"STEM__c\":\"a0H000000000001\"}],\"charges\":[{\"Buyer_Invoice__c\":null,\"Cancelled__c\":false,\"CurrencyIsoCode\":\"USD\",\"Id\":\"a04000000000001\",\"IsDeleted\":false,\"Line_Total_Buy__c\":\"50\",\"Lumpsum_Cost__c\":\"50\",\"Product2Id__c\":\"01t000000000002\",\"Product2Id__r\":{\"Name\":\"SYNTHETIC SURCHARGE\"},\"Quantity__c\":1,\"STEM__c\":\"a0H000000000001\",\"Supplier_Invoice__c\":\"a06000000000001\",\"Supplier__c\":\"001000000000001\",\"Unit_Cost__c\":0}],\"children\":[{\"Buyer_Invoice__c\":\"a0K000000000001\",\"Cancelled__c\":false,\"Cost_Per_Unit__c\":null,\"CurrencyIsoCode\":\"USD\",\"Id\":\"a05000000000001\",\"IsDeleted\":false,\"LastModifiedDate\":\"2026-10-04T09:00:00.000Z\",\"Original_Supplier__c\":\"001000000000001\",\"Product__c\":\"01t000000000001\",\"Product__r\":{\"Name\":\"SYNTHETIC RMG380 S0.5%\"},\"Quantity_Delivered_Per_BDN__c\":1,\"Quantity__c\":\"999\",\"STEM__c\":\"a0H000000000001\",\"Supplier_Invoice__c\":\"a06000000000001\",\"Total_Cost__c\":\"0.01\",\"Unit_Buy_At__c\":\"0.005\",\"Unit_of_Measure__c\":\"MT\"},{\"Buyer_Invoice__c\":\"a0K000000000001\",\"Cancelled__c\":false,\"Cost_Per_Unit__c\":null,\"CurrencyIsoCode\":\"USD\",\"Id\":\"a05000000000002\",\"IsDeleted\":false,\"LastModifiedDate\":\"2026-10-04T09:00:00.000Z\",\"Original_Supplier__c\":\"001000000000001\",\"Product__c\":\"01t000000000001\",\"Product__r\":{\"Name\":\"SYNTHETIC RMG380 S0.5%\"},\"Quantity_Delivered_Per_BDN__c\":\"200\",\"Quantity__c\":\"999\",\"STEM__c\":\"a0H000000000001\",\"Supplier_Invoice__c\":\"a06000000000001\",\"Total_Cost__c\":\"20000\",\"Unit_Buy_At__c\":\"100\",\"Unit_of_Measure__c\":\"MT\"}],\"financialFingerprint\":\"8e4469aeb35e6e05fafd3875503172e4c20d64b795ed2bad88dfc0d780fc41f8\",\"orgId\":\"00D2x000000Ei4oEAC\",\"parent\":{\"CurrencyIsoCode\":\"USD\",\"Id\":\"a06000000000001\",\"Invoice_Amount__c\":\"20050.01\",\"Invoice_Date__c\":\"2026-04-01\",\"Invoice_Due_Date__c\":\"2026-04-15\",\"IsDeleted\":false,\"LastModifiedDate\":\"2026-10-04T09:00:00.000Z\",\"Name\":\"SYNTHETIC-SUCCESSOR-V1-SOURCE-HALF-UP\",\"STEM__c\":\"a0H000000000001\",\"STEM__r\":{\"Delivery_Date__c\":\"2026-03-17\",\"KeyStem__c\":\"HK2626001T\",\"Vessel__c\":\"a0V000000000001\",\"Vessel__r\":{\"Name\":\"SYNTHETIC SUCCESSOR VESSEL\"}},\"Supplier__c\":\"001000000000001\",\"Supplier__r\":{\"Company_Code__c\":\"HKEXAMPLE\",\"Company__c\":\"a0B000000000001\",\"Company__r\":{\"Full_Name__c\":\"EXAMPLE SUPPLY LTD\"},\"Name\":\"EXAMPLE SUPPLY LTD\"}},\"safetyContext\":{\"corporateCurrency\":null,\"fields\":{\"Invoice__c\":[\"Id\",\"CurrencyIsoCode\"],\"Payment__c\":[\"Id\",\"CurrencyIsoCode\"],\"STEM_Extra_Cost__c\":[\"Id\",\"CurrencyIsoCode\"],\"STEM_Line_Item__c\":[\"Id\",\"CurrencyIsoCode\"],\"STEM__c\":[\"Id\",\"CurrencyIsoCode\"],\"Supplier_Invoice__c\":[\"Id\",\"CurrencyIsoCode\"]},\"singleCurrency\":false},\"salesforceObject\":\"Supplier_Invoice__c\",\"sourceFingerprint\":\"15d8eab46aa8d1ee43d66e1a438208458cf86932c7bb13f7fd9ae32f9dc45205\",\"sourcePayload\":{\"accountId\":\"001000000000001\",\"accountName\":\"EXAMPLE SUPPLY LTD\",\"blockers\":[],\"companyCode\":\"HKEXAMPLE\",\"contactId\":\"00000000-0000-4000-8000-000000000002\",\"contactName\":\"EXAMPLE SUPPLY LTD\",\"currency\":\"USD\",\"deliveryDate\":\"2026-03-17\",\"documentFieldProjection\":{\"blockerCodes\":[\"DOCUMENT_FIELD_REFCODE_MISSING\"],\"blockers\":[\"The STEM RefCode must contain a nonempty suffix after its first four characters.\"],\"evidence\":{\"buyers\":[{\"credit\":false,\"deliveryDate\":\"2026-03-17\",\"deprecated\":false,\"id\":\"a0K000000000001\",\"inactive\":false,\"invoiceDate\":\"2026-03-19\",\"name\":\"SYN-BUYER-INV\",\"proforma\":false,\"stemId\":\"a0H000000000001\"}],\"cutoff\":\"2026-01-01\",\"dateSource\":\"Invoice__c.Delivery_Date__c\",\"descriptionSource\":\"Invoice__c.Invoice_Date__c\",\"direction\":\"supplier\",\"dueDate\":\"2026-04-15\",\"dueDateSource\":\"Supplier_Invoice__c.Invoice_Due_Date__c\",\"links\":[{\"buyerId\":\"a0K000000000001\",\"id\":\"a05000000000001\",\"stemId\":\"a0H000000000001\",\"supplierId\":\"a06000000000001\"},{\"buyerId\":\"a0K000000000001\",\"id\":\"a05000000000002\",\"stemId\":\"a0H000000000001\",\"supplierId\":\"a06000000000001\"},{\"buyerId\":null,\"id\":\"a04000000000001\",\"stemId\":\"a0H000000000001\",\"supplierId\":\"a06000000000001\"}],\"originalName\":\"SYNTHETIC-SUCCESSOR-V1-SOURCE-HALF-UP\",\"refCode\":null,\"resolution\":\"linked_buyers\",\"sourceId\":\"a06000000000001\",\"stemId\":\"a0H000000000001\",\"vesselName\":\"SYNTHETIC SUCCESSOR VESSEL\"},\"fields\":{\"Date\":\"2026-03-17\",\"Description\":\"19/3/2026\",\"DueDate\":\"2026-04-15\",\"InvoiceNumber\":null},\"fingerprint\":\"86f96b7bea53335a3fd7d4636572f9fffc8e678384918f1b766f3c9717b66712\",\"policy\":\"document_field_correction_v1\",\"scope\":\"current\"},\"documentFieldSourceFingerprint\":\"d0dd184868474e0aa7617c859a1e1b02a1020909e4ad23941e7144219e775801\",\"documentKind\":\"supplier_bill\",\"documentNumber\":\"SYNTHETIC-SUCCESSOR-V1-SOURCE-HALF-UP\",\"dueDate\":\"2026-04-15\",\"financialFingerprint\":\"8e4469aeb35e6e05fafd3875503172e4c20d64b795ed2bad88dfc0d780fc41f8\",\"invoiceDate\":\"2026-04-01\",\"lastModifiedDate\":\"2026-10-04T09:00:00.000Z\",\"lines\":[{\"accountCode\":\"51100\",\"description\":\"SYNTHETIC RMG380 S0.5% · 1 MT\",\"productId\":\"01t000000000001\",\"productName\":\"SYNTHETIC RMG380 S0.5%\",\"quantity\":1,\"sourceId\":\"a05000000000001\",\"sourceType\":\"STEM_Line_Item__c\",\"taxType\":\"NONE\",\"unitAmount\":0.01},{\"accountCode\":\"51100\",\"description\":\"SYNTHETIC RMG380 S0.5% · 200 MT\",\"productId\":\"01t000000000001\",\"productName\":\"SYNTHETIC RMG380 S0.5%\",\"quantity\":1,\"sourceId\":\"a05000000000002\",\"sourceType\":\"STEM_Line_Item__c\",\"taxType\":\"NONE\",\"unitAmount\":20000},{\"accountCode\":\"51100\",\"description\":\"SYNTHETIC SURCHARGE\",\"productId\":\"01t000000000002\",\"productName\":\"SYNTHETIC SURCHARGE\",\"quantity\":1,\"sourceId\":\"a04000000000001\",\"sourceType\":\"STEM_Extra_Cost__c\",\"taxType\":\"NONE\",\"unitAmount\":50}],\"postingMode\":\"draft\",\"readiness\":{\"blockers\":[\"Supplier invoice has no verified issued source file.\"],\"file\":null,\"linkedChildren\":[\"a04000000000001\",\"a05000000000001\",\"a05000000000002\"],\"ready\":false,\"snapshot\":null},\"reference\":\"HK2626001T · Salesforce supplier invoice\",\"salesforceId\":\"a06000000000001\",\"salesforceObject\":\"Supplier_Invoice__c\",\"signedTotal\":20050.01,\"sourceFingerprint\":\"15d8eab46aa8d1ee43d66e1a438208458cf86932c7bb13f7fd9ae32f9dc45205\",\"stemId\":\"a0H000000000001\",\"stemKey\":\"HK2626001T\",\"stemName\":\"HK2626001T\",\"total\":20050.01,\"vesselName\":\"SYNTHETIC SUCCESSOR VESSEL\",\"xeroCollection\":\"Invoices\",\"xeroType\":\"ACCPAY\"}},\"sourceBuckets\":[{\"accountCode\":\"51100\",\"currencyCode\":\"USD\",\"grossCents\":\"2005001\",\"netCents\":\"2005001\",\"taxCents\":\"0\",\"taxType\":\"NONE\"}],\"sourceDependencies\":{\"coverage\":{\"accountId\":\"001000000000001\",\"complete\":true,\"contract\":\"complete_supplier_payment_family_scope_v1\",\"familyCount\":0,\"paymentCount\":2,\"queryAll\":true,\"queryFingerprint\":\"f689877068fc0819b8522e98b5f65037f9d5a1119e5b0ecf77e589ccae404db7\",\"sourceId\":\"a06000000000001\",\"stemId\":\"a0H000000000001\"},\"families\":[],\"payments\":[{\"Account__c\":\"001000000000001\",\"Amount__c\":\"123.45\",\"Id\":\"a0S000000000001\",\"IsDeleted\":false,\"Is_Volume_Discount__c\":false,\"Remittance__c\":null,\"STEM__c\":\"a0H000000000001\",\"Supplier_Invoice__c\":\"a06000000000001\"},{\"Account__c\":\"001000000000001\",\"Amount__c\":0.46000000000001,\"Id\":\"a0S000000000002\",\"IsDeleted\":true,\"Is_Volume_Discount__c\":true,\"Remittance__c\":null,\"STEM__c\":\"a0H000000000001\",\"Supplier_Invoice__c\":\"a06000000000001\"}]},\"sourceFingerprint\":\"15d8eab46aa8d1ee43d66e1a438208458cf86932c7bb13f7fd9ae32f9dc45205\",\"sourceId\":\"a06000000000001\",\"sourceLines\":[{\"accountCode\":\"51100\",\"amountCents\":\"1\",\"calculationBasis\":{\"authoritativeTotal\":\"0.01\",\"calculatedAmountCents\":\"1\",\"contract\":\"explicit_source_unit_usd_half_up_v1\",\"quantity\":1,\"quantityField\":\"Quantity_Delivered_Per_BDN__c\",\"totalField\":\"Total_Cost__c\",\"unitAmount\":\"0.005\",\"unitField\":\"Unit_Buy_At__c\",\"unroundedProduct\":{\"integer\":\"5\",\"scale\":3}},\"currencyCode\":\"USD\",\"grossAmountCents\":\"1\",\"id\":\"a05000000000001\",\"productId\":\"01t000000000001\",\"sourceType\":\"STEM_Line_Item__c\",\"taxAmountCents\":\"0\",\"taxType\":\"NONE\"},{\"accountCode\":\"51100\",\"amountCents\":\"2000000\",\"calculationBasis\":{\"authoritativeTotal\":\"20000\",\"contract\":\"explicit_source_unit_arithmetic_v1\",\"quantity\":\"200\",\"quantityField\":\"Quantity_Delivered_Per_BDN__c\",\"totalField\":\"Total_Cost__c\",\"unitAmount\":\"100\",\"unitField\":\"Unit_Buy_At__c\"},\"currencyCode\":\"USD\",\"grossAmountCents\":\"2000000\",\"id\":\"a05000000000002\",\"productId\":\"01t000000000001\",\"sourceType\":\"STEM_Line_Item__c\",\"taxAmountCents\":\"0\",\"taxType\":\"NONE\"},{\"accountCode\":\"51100\",\"amountCents\":\"5000\",\"calculationBasis\":{\"authoritativeTotal\":\"50\",\"contract\":\"explicit_source_quantity_one_lump_sum_v1\",\"lumpSum\":\"50\",\"quantity\":1,\"unitCostPlaceholder\":0},\"currencyCode\":\"USD\",\"grossAmountCents\":\"5000\",\"id\":\"a04000000000001\",\"productId\":\"01t000000000002\",\"sourceType\":\"STEM_Extra_Cost__c\",\"taxAmountCents\":\"0\",\"taxType\":\"NONE\"}],\"stemId\":\"a0H000000000001\",\"subTotalCents\":\"2005001\",\"target\":{\"AmountCredited\":0,\"AmountDue\":\"20050.01\",\"AmountPaid\":0,\"Contact\":{\"ContactID\":\"00000000-0000-4000-8000-000000000002\",\"Name\":\"EXAMPLE SUPPLY LTD\"},\"CreditNotes\":[],\"CurrencyCode\":\"USD\",\"CurrencyRate\":1,\"Date\":\"2026-03-01\",\"DueDate\":\"2026-03-05\",\"HasErrors\":false,\"InvoiceID\":\"00000000-0000-4000-8000-000000000003\",\"InvoiceNumber\":\"SYNTHETIC-SUCCESSOR-V1-SOURCE-HALF-UP\",\"IsDiscounted\":false,\"LegacyExtension\":{\"unchanged\":\"original\"},\"LineAmountTypes\":\"Exclusive\",\"LineItems\":[{\"AccountCode\":\"51100\",\"AccountID\":\"00000000-0000-4000-8000-000000000005\",\"Description\":\"UNMODIFIED LEGACY\",\"LineAmount\":\"20050.01\",\"LineItemID\":\"00000000-0000-4000-8000-000000000004\",\"Quantity\":1,\"TaxAmount\":0,\"TaxType\":\"NONE\",\"Tracking\":[],\"UnitAmount\":\"20050.01\",\"UnownedField\":\"original line\"}],\"Overpayments\":[],\"Payments\":[],\"Prepayments\":[],\"Reference\":\"SYNTHETIC ONLY; NOT CURRENT BUSINESS DATA\",\"SentToContact\":false,\"Status\":\"AUTHORISED\",\"SubTotal\":\"20050.01\",\"Total\":\"20050.01\",\"TotalTax\":0,\"Type\":\"ACCPAY\",\"UpdatedDateUTC\":\"2026-10-04T09:00:00.000Z\"},\"targetBuckets\":[{\"accountCode\":\"51100\",\"currencyCode\":\"USD\",\"grossCents\":\"2005001\",\"netCents\":\"2005001\",\"taxCents\":\"0\",\"taxType\":\"NONE\"}],\"targetId\":\"00000000-0000-4000-8000-000000000003\",\"targetLines\":[{\"accountCode\":\"51100\",\"amountCents\":\"2005001\",\"currencyCode\":\"USD\",\"grossAmountCents\":\"2005001\",\"id\":\"00000000-0000-4000-8000-000000000004\",\"taxAmountCents\":\"0\",\"taxType\":\"NONE\"}],\"tenantId\":\"00000000-0000-4000-8000-000000000001\",\"totalCents\":\"2005001\",\"totalTaxCents\":\"0\"},\"policyVersion\":\"supplier_financial_bucket_preserve_v1\"}",
+    "evidenceCanonical": "{\"accounting\":{\"accountId\":\"001000000000001\",\"accountTax\":{\"accounts\":[{\"AccountID\":\"00000000-0000-4000-8000-000000000005\",\"Code\":\"51100\",\"Status\":\"ACTIVE\",\"Type\":\"DIRECTCOSTS\"}],\"taxes\":[{\"CanApplyToExpenses\":true,\"DisplayTaxRate\":0,\"EffectiveRate\":0,\"Status\":\"ACTIVE\",\"TaxType\":\"NONE\"}]},\"contactId\":\"00000000-0000-4000-8000-000000000002\",\"contract\":\"financial_bucket_preservation_v1\",\"currency\":\"USD\",\"documentVerification\":\"UNVERIFIED\",\"financialFingerprint\":\"8e4469aeb35e6e05fafd3875503172e4c20d64b795ed2bad88dfc0d780fc41f8\",\"identity\":{\"accounts\":[{\"companyCode\":\"HKEXAMPLE\",\"id\":\"001000000000001\",\"inactiveSuspended\":false,\"name\":\"EXAMPLE SUPPLY LTD\",\"recordType\":\"Supplier\"}],\"contacts\":[{\"accountNumber\":\"\",\"contactNumber\":\"\",\"id\":\"00000000-0000-4000-8000-000000000002\",\"name\":\"EXAMPLE SUPPLY LTD\",\"status\":\"ACTIVE\"}],\"coverage\":{\"claimsComplete\":true,\"creditComplete\":true,\"creditCount\":0,\"dependenciesComplete\":true,\"globalAccountCount\":13564,\"globalAccountsComplete\":true,\"globalContactCount\":779,\"globalContactsComplete\":true,\"globalDiscoveryFingerprint\":\"ce136abe8ef00afe25ee405afe12ffcdfb1ed8fb30ea7050410f098eab4a1028\",\"mappingsComplete\":true,\"queryFingerprint\":\"eac68e84dc5938378703f051f3958924b55c4f897e40e17896309da90559cfcd\",\"queryFingerprints\":[\"5ae618353a992d296ac7a6c5a82058fe0cf8fdbba0a50f460c9abdfaba91491e\",\"d8bfa7c45690e266fa2daf6b21e28fa51576bbf1b75fc4bd9d25e017d18e8c5d\",\"2cdbae82be73c33314ed83a4136e783862f3b9ec49daca3e1f91eff7a71decb3\",\"4ace183e183c2d25a2ea099edb72b7bf4ad941f481d863076d9d525fc0446ca9\",\"fd40fb8448b3a1a18adfb92a398af9e2a08f2a12f6c22d0d8cc1504a1bceead3\",\"26d1b35b5fe56612db89ba4ad341b736caca32ed93eca484ec04e8d91a2a790d\",\"8d7e46e072df28cd4b84771552afb2746e53bfa9a8c64897324918548ad3eabd\",\"fd7c09339fefb0355831237ab667e87fe78660616d08230b7ba9733d28c0222e\",\"07cdb70853a84ce3037572efeef8719d4907b44a49fdde83e11651bb8ec0c518\"],\"scope\":\"complete_selected_owner_union_v1\",\"sourceAccountIds\":[\"001000000000001\"],\"sourceComplete\":true,\"sourceCount\":1,\"sourceQueryAll\":true,\"stemIds\":[\"a0H000000000001\"],\"targetComplete\":true,\"targetCount\":1,\"targetIncludesArchived\":true,\"xeroContactIds\":[\"00000000-0000-4000-8000-000000000002\"]},\"coverageFingerprint\":\"c6866723cbe05ebfa3151da6f2c6f261bf24fd52321e3e10b192c0bbb0c9d9b1\",\"creditClaims\":[],\"disputes\":[],\"postingClaims\":[],\"referenceClaims\":[],\"selection\":{\"accountId\":\"001000000000001\",\"basis\":\"synthetic independently selected original supplier obligation\",\"contactId\":\"00000000-0000-4000-8000-000000000002\",\"contract\":\"supplier_financial_selected_identity_v1\",\"financialFingerprint\":\"8e4469aeb35e6e05fafd3875503172e4c20d64b795ed2bad88dfc0d780fc41f8\",\"reviewedAt\":\"2026-10-04T09:00:00.000Z\",\"reviewedBy\":\"00000000-0000-4000-8000-000000000007\",\"salesforceOrgId\":\"00D2x000000Ei4o\",\"sourceFingerprint\":\"15d8eab46aa8d1ee43d66e1a438208458cf86932c7bb13f7fd9ae32f9dc45205\",\"sourceId\":\"a06000000000001\",\"stemId\":\"a0H000000000001\",\"targetId\":\"00000000-0000-4000-8000-000000000003\",\"tenantId\":\"00000000-0000-4000-8000-000000000001\"},\"sourceClaims\":[{\"CurrencyIsoCode\":\"USD\",\"Id\":\"a06000000000001\",\"Invoice_Amount__c\":\"20050.01\",\"Invoice_Date__c\":\"2026-04-01\",\"Invoice_Due_Date__c\":\"2026-04-15\",\"IsDeleted\":false,\"LastModifiedDate\":\"2026-10-04T09:00:00.000Z\",\"Name\":\"SYNTHETIC-SUCCESSOR-V1-SOURCE-HALF-UP\",\"STEM__c\":\"a0H000000000001\",\"STEM__r\":{\"Delivery_Date__c\":\"2026-03-17\",\"KeyStem__c\":\"HK2626001T\",\"Vessel__c\":\"a0V000000000001\",\"Vessel__r\":{\"Name\":\"SYNTHETIC SUCCESSOR VESSEL\"}},\"Supplier__c\":\"001000000000001\",\"Supplier__r\":{\"Company_Code__c\":\"HKEXAMPLE\",\"Company__c\":\"a0B000000000001\",\"Company__r\":{\"Full_Name__c\":\"EXAMPLE SUPPLY LTD\"},\"Name\":\"EXAMPLE SUPPLY LTD\"}}],\"sourceMappings\":[],\"targetClaims\":[{\"AmountCredited\":0,\"AmountDue\":\"20050.01\",\"AmountPaid\":0,\"Contact\":{\"ContactID\":\"00000000-0000-4000-8000-000000000002\",\"Name\":\"EXAMPLE SUPPLY LTD\"},\"CreditNotes\":[],\"CurrencyCode\":\"USD\",\"CurrencyRate\":1,\"Date\":\"2026-03-01\",\"DueDate\":\"2026-03-05\",\"HasErrors\":false,\"InvoiceID\":\"00000000-0000-4000-8000-000000000003\",\"InvoiceNumber\":\"SYNTHETIC-SUCCESSOR-V1-SOURCE-HALF-UP\",\"IsDiscounted\":false,\"LegacyExtension\":{\"unchanged\":\"original\"},\"LineAmountTypes\":\"Exclusive\",\"LineItems\":[{\"AccountCode\":\"51100\",\"AccountID\":\"00000000-0000-4000-8000-000000000005\",\"Description\":\"UNMODIFIED LEGACY\",\"LineAmount\":\"20050.01\",\"LineItemID\":\"00000000-0000-4000-8000-000000000004\",\"Quantity\":1,\"TaxAmount\":0,\"TaxType\":\"NONE\",\"Tracking\":[],\"UnitAmount\":\"20050.01\",\"UnownedField\":\"original line\"}],\"Overpayments\":[],\"Payments\":[],\"Prepayments\":[],\"Reference\":\"SYNTHETIC ONLY; NOT CURRENT BUSINESS DATA\",\"SentToContact\":false,\"Status\":\"AUTHORISED\",\"SubTotal\":\"20050.01\",\"Total\":\"20050.01\",\"TotalTax\":0,\"Type\":\"ACCPAY\",\"UpdatedDateUTC\":\"2026-10-04T09:00:00.000Z\"}],\"targetMappings\":[]},\"organisation\":{\"APIKey\":\"PRIVATE_SYNTHETIC_PROVIDER_IDENTITY\",\"BaseCurrency\":\"USD\",\"Name\":\"Synthetic organisation\",\"OrganisationID\":\"00000000-0000-4000-8000-000000000001\"},\"productMappings\":[{\"approved_at\":\"2026-10-04T09:00:00.000Z\",\"approved_by\":\"00000000-0000-4000-8000-000000000020\",\"approved_by_email\":\"finance@example.test\",\"direction\":\"supplier\",\"enabled\":true,\"id\":\"00000000-0000-4000-8000-000000000010\",\"revision\":1,\"salesforce_product_id\":\"01t000000000001\",\"xero_account_code\":\"51100\",\"xero_tax_type\":\"NONE\"},{\"approved_at\":\"2026-10-04T09:00:00.000Z\",\"approved_by\":\"00000000-0000-4000-8000-000000000020\",\"approved_by_email\":\"finance@example.test\",\"direction\":\"supplier\",\"enabled\":true,\"id\":\"00000000-0000-4000-8000-000000000011\",\"revision\":1,\"salesforce_product_id\":\"01t000000000002\",\"xero_account_code\":\"51100\",\"xero_tax_type\":\"NONE\"}],\"representation\":\"Exclusive\",\"retainedDifferences\":{\"sourceTrackingEquivalenceEstablished\":false,\"targetHeaderPresentationRetained\":true,\"targetTracking\":[]},\"salesforceOrgId\":\"00D2x000000Ei4o\",\"settlement\":{\"contract\":\"authorised_zero_settlement_v1\",\"ledgerPaymentProof\":null,\"status\":\"AUTHORISED\"},\"source\":{\"buyers\":[{\"Amount__c\":\"30050\",\"Delivery_Date__c\":\"2026-03-17\",\"Deprecated__c\":false,\"Id\":\"a0K000000000001\",\"Invoice_Date__c\":\"2026-03-19\",\"IsDeleted\":false,\"Name\":\"SYN-BUYER-INV\",\"Proforma__c\":false,\"STEM__c\":\"a0H000000000001\"}],\"charges\":[{\"Buyer_Invoice__c\":null,\"Cancelled__c\":false,\"CurrencyIsoCode\":\"USD\",\"Id\":\"a04000000000001\",\"IsDeleted\":false,\"Line_Total_Buy__c\":\"50\",\"Lumpsum_Cost__c\":\"50\",\"Product2Id__c\":\"01t000000000002\",\"Product2Id__r\":{\"Name\":\"SYNTHETIC SURCHARGE\"},\"Quantity__c\":1,\"STEM__c\":\"a0H000000000001\",\"Supplier_Invoice__c\":\"a06000000000001\",\"Supplier__c\":\"001000000000001\",\"Unit_Cost__c\":0}],\"children\":[{\"Buyer_Invoice__c\":\"a0K000000000001\",\"Cancelled__c\":false,\"Cost_Per_Unit__c\":null,\"CurrencyIsoCode\":\"USD\",\"Id\":\"a05000000000001\",\"IsDeleted\":false,\"LastModifiedDate\":\"2026-10-04T09:00:00.000Z\",\"Original_Supplier__c\":\"001000000000001\",\"Product__c\":\"01t000000000001\",\"Product__r\":{\"Name\":\"SYNTHETIC RMG380 S0.5%\"},\"Quantity_Delivered_Per_BDN__c\":1,\"Quantity__c\":\"999\",\"STEM__c\":\"a0H000000000001\",\"Supplier_Invoice__c\":\"a06000000000001\",\"Total_Cost__c\":\"0.01\",\"Unit_Buy_At__c\":\"0.005\",\"Unit_of_Measure__c\":\"MT\"},{\"Buyer_Invoice__c\":\"a0K000000000001\",\"Cancelled__c\":false,\"Cost_Per_Unit__c\":null,\"CurrencyIsoCode\":\"USD\",\"Id\":\"a05000000000002\",\"IsDeleted\":false,\"LastModifiedDate\":\"2026-10-04T09:00:00.000Z\",\"Original_Supplier__c\":\"001000000000001\",\"Product__c\":\"01t000000000001\",\"Product__r\":{\"Name\":\"SYNTHETIC RMG380 S0.5%\"},\"Quantity_Delivered_Per_BDN__c\":\"200\",\"Quantity__c\":\"999\",\"STEM__c\":\"a0H000000000001\",\"Supplier_Invoice__c\":\"a06000000000001\",\"Total_Cost__c\":\"20000\",\"Unit_Buy_At__c\":\"100\",\"Unit_of_Measure__c\":\"MT\"}],\"financialFingerprint\":\"8e4469aeb35e6e05fafd3875503172e4c20d64b795ed2bad88dfc0d780fc41f8\",\"orgId\":\"00D2x000000Ei4oEAC\",\"parent\":{\"CurrencyIsoCode\":\"USD\",\"Id\":\"a06000000000001\",\"Invoice_Amount__c\":\"20050.01\",\"Invoice_Date__c\":\"2026-04-01\",\"Invoice_Due_Date__c\":\"2026-04-15\",\"IsDeleted\":false,\"LastModifiedDate\":\"2026-10-04T09:00:00.000Z\",\"Name\":\"SYNTHETIC-SUCCESSOR-V1-SOURCE-HALF-UP\",\"STEM__c\":\"a0H000000000001\",\"STEM__r\":{\"Delivery_Date__c\":\"2026-03-17\",\"KeyStem__c\":\"HK2626001T\",\"Vessel__c\":\"a0V000000000001\",\"Vessel__r\":{\"Name\":\"SYNTHETIC SUCCESSOR VESSEL\"}},\"Supplier__c\":\"001000000000001\",\"Supplier__r\":{\"Company_Code__c\":\"HKEXAMPLE\",\"Company__c\":\"a0B000000000001\",\"Company__r\":{\"Full_Name__c\":\"EXAMPLE SUPPLY LTD\"},\"Name\":\"EXAMPLE SUPPLY LTD\"}},\"safetyContext\":{\"corporateCurrency\":null,\"fields\":{\"Invoice__c\":[\"Id\",\"CurrencyIsoCode\"],\"Payment__c\":[\"Id\",\"CurrencyIsoCode\"],\"STEM_Extra_Cost__c\":[\"Id\",\"CurrencyIsoCode\"],\"STEM_Line_Item__c\":[\"Id\",\"CurrencyIsoCode\"],\"STEM__c\":[\"Id\",\"CurrencyIsoCode\"],\"Supplier_Invoice__c\":[\"Id\",\"CurrencyIsoCode\"]},\"singleCurrency\":false},\"salesforceObject\":\"Supplier_Invoice__c\",\"sourceFingerprint\":\"15d8eab46aa8d1ee43d66e1a438208458cf86932c7bb13f7fd9ae32f9dc45205\",\"sourcePayload\":{\"accountId\":\"001000000000001\",\"accountName\":\"EXAMPLE SUPPLY LTD\",\"blockers\":[],\"companyCode\":\"HKEXAMPLE\",\"contactId\":\"00000000-0000-4000-8000-000000000002\",\"contactName\":\"EXAMPLE SUPPLY LTD\",\"currency\":\"USD\",\"deliveryDate\":\"2026-03-17\",\"documentFieldProjection\":{\"blockerCodes\":[\"DOCUMENT_FIELD_REFCODE_MISSING\"],\"blockers\":[\"The STEM RefCode must contain a nonempty suffix after its first four characters.\"],\"evidence\":{\"buyers\":[{\"credit\":false,\"deliveryDate\":\"2026-03-17\",\"deprecated\":false,\"id\":\"a0K000000000001\",\"inactive\":false,\"invoiceDate\":\"2026-03-19\",\"name\":\"SYN-BUYER-INV\",\"proforma\":false,\"stemId\":\"a0H000000000001\"}],\"cutoff\":\"2026-01-01\",\"dateSource\":\"Invoice__c.Delivery_Date__c\",\"descriptionSource\":\"Invoice__c.Invoice_Date__c\",\"direction\":\"supplier\",\"dueDate\":\"2026-04-15\",\"dueDateSource\":\"Supplier_Invoice__c.Invoice_Due_Date__c\",\"links\":[{\"buyerId\":\"a0K000000000001\",\"id\":\"a05000000000001\",\"stemId\":\"a0H000000000001\",\"supplierId\":\"a06000000000001\"},{\"buyerId\":\"a0K000000000001\",\"id\":\"a05000000000002\",\"stemId\":\"a0H000000000001\",\"supplierId\":\"a06000000000001\"},{\"buyerId\":null,\"id\":\"a04000000000001\",\"stemId\":\"a0H000000000001\",\"supplierId\":\"a06000000000001\"}],\"originalName\":\"SYNTHETIC-SUCCESSOR-V1-SOURCE-HALF-UP\",\"refCode\":null,\"resolution\":\"linked_buyers\",\"sourceId\":\"a06000000000001\",\"stemId\":\"a0H000000000001\",\"vesselName\":\"SYNTHETIC SUCCESSOR VESSEL\"},\"fields\":{\"Date\":\"2026-03-17\",\"Description\":\"19/3/2026\",\"DueDate\":\"2026-04-15\",\"InvoiceNumber\":null},\"fingerprint\":\"86f96b7bea53335a3fd7d4636572f9fffc8e678384918f1b766f3c9717b66712\",\"policy\":\"document_field_correction_v1\",\"scope\":\"current\"},\"documentFieldSourceFingerprint\":\"d0dd184868474e0aa7617c859a1e1b02a1020909e4ad23941e7144219e775801\",\"documentKind\":\"supplier_bill\",\"documentNumber\":\"SYNTHETIC-SUCCESSOR-V1-SOURCE-HALF-UP\",\"dueDate\":\"2026-04-15\",\"financialFingerprint\":\"8e4469aeb35e6e05fafd3875503172e4c20d64b795ed2bad88dfc0d780fc41f8\",\"invoiceDate\":\"2026-04-01\",\"lastModifiedDate\":\"2026-10-04T09:00:00.000Z\",\"lines\":[{\"accountCode\":\"51100\",\"description\":\"SYNTHETIC RMG380 S0.5% · 1 MT\",\"productId\":\"01t000000000001\",\"productName\":\"SYNTHETIC RMG380 S0.5%\",\"quantity\":1,\"sourceId\":\"a05000000000001\",\"sourceType\":\"STEM_Line_Item__c\",\"taxType\":\"NONE\",\"unitAmount\":0.01},{\"accountCode\":\"51100\",\"description\":\"SYNTHETIC RMG380 S0.5% · 200 MT\",\"productId\":\"01t000000000001\",\"productName\":\"SYNTHETIC RMG380 S0.5%\",\"quantity\":1,\"sourceId\":\"a05000000000002\",\"sourceType\":\"STEM_Line_Item__c\",\"taxType\":\"NONE\",\"unitAmount\":20000},{\"accountCode\":\"51100\",\"description\":\"SYNTHETIC SURCHARGE\",\"productId\":\"01t000000000002\",\"productName\":\"SYNTHETIC SURCHARGE\",\"quantity\":1,\"sourceId\":\"a04000000000001\",\"sourceType\":\"STEM_Extra_Cost__c\",\"taxType\":\"NONE\",\"unitAmount\":50}],\"postingMode\":\"draft\",\"readiness\":{\"blockers\":[\"Supplier invoice has no verified issued source file.\"],\"file\":null,\"linkedChildren\":[\"a04000000000001\",\"a05000000000001\",\"a05000000000002\"],\"ready\":false,\"snapshot\":null},\"reference\":\"HK2626001T · Salesforce supplier invoice\",\"salesforceId\":\"a06000000000001\",\"salesforceObject\":\"Supplier_Invoice__c\",\"signedTotal\":20050.01,\"sourceFingerprint\":\"15d8eab46aa8d1ee43d66e1a438208458cf86932c7bb13f7fd9ae32f9dc45205\",\"stemId\":\"a0H000000000001\",\"stemKey\":\"HK2626001T\",\"stemName\":\"HK2626001T\",\"total\":20050.01,\"vesselName\":\"SYNTHETIC SUCCESSOR VESSEL\",\"xeroCollection\":\"Invoices\",\"xeroType\":\"ACCPAY\"}},\"sourceBuckets\":[{\"accountCode\":\"51100\",\"currencyCode\":\"USD\",\"grossCents\":\"2005001\",\"netCents\":\"2005001\",\"taxCents\":\"0\",\"taxType\":\"NONE\"}],\"sourceDependencies\":{\"coverage\":{\"accountId\":\"001000000000001\",\"complete\":true,\"contract\":\"complete_supplier_payment_family_scope_v1\",\"familyCount\":0,\"paymentCount\":2,\"queryAll\":true,\"queryFingerprint\":\"f689877068fc0819b8522e98b5f65037f9d5a1119e5b0ecf77e589ccae404db7\",\"sourceId\":\"a06000000000001\",\"stemId\":\"a0H000000000001\"},\"families\":[],\"payments\":[{\"Account__c\":\"001000000000001\",\"Amount__c\":\"123.45\",\"Id\":\"a0S000000000001\",\"IsDeleted\":false,\"Is_Volume_Discount__c\":false,\"Remittance__c\":null,\"STEM__c\":\"a0H000000000001\",\"Supplier_Invoice__c\":\"a06000000000001\"},{\"Account__c\":\"001000000000001\",\"Amount__c\":0.46000000000001,\"Id\":\"a0S000000000002\",\"IsDeleted\":true,\"Is_Volume_Discount__c\":true,\"Remittance__c\":null,\"STEM__c\":\"a0H000000000001\",\"Supplier_Invoice__c\":\"a06000000000001\"}]},\"sourceFingerprint\":\"15d8eab46aa8d1ee43d66e1a438208458cf86932c7bb13f7fd9ae32f9dc45205\",\"sourceId\":\"a06000000000001\",\"sourceLines\":[{\"accountCode\":\"51100\",\"amountCents\":\"1\",\"calculationBasis\":{\"authoritativeTotal\":\"0.01\",\"calculatedAmountCents\":\"1\",\"contract\":\"explicit_source_unit_usd_half_up_v1\",\"quantity\":1,\"quantityField\":\"Quantity_Delivered_Per_BDN__c\",\"totalField\":\"Total_Cost__c\",\"unitAmount\":\"0.005\",\"unitField\":\"Unit_Buy_At__c\",\"unroundedProduct\":{\"integer\":\"5\",\"scale\":3}},\"currencyCode\":\"USD\",\"grossAmountCents\":\"1\",\"id\":\"a05000000000001\",\"productId\":\"01t000000000001\",\"sourceType\":\"STEM_Line_Item__c\",\"taxAmountCents\":\"0\",\"taxType\":\"NONE\"},{\"accountCode\":\"51100\",\"amountCents\":\"2000000\",\"calculationBasis\":{\"authoritativeTotal\":\"20000\",\"contract\":\"explicit_source_unit_arithmetic_v1\",\"quantity\":\"200\",\"quantityField\":\"Quantity_Delivered_Per_BDN__c\",\"totalField\":\"Total_Cost__c\",\"unitAmount\":\"100\",\"unitField\":\"Unit_Buy_At__c\"},\"currencyCode\":\"USD\",\"grossAmountCents\":\"2000000\",\"id\":\"a05000000000002\",\"productId\":\"01t000000000001\",\"sourceType\":\"STEM_Line_Item__c\",\"taxAmountCents\":\"0\",\"taxType\":\"NONE\"},{\"accountCode\":\"51100\",\"amountCents\":\"5000\",\"calculationBasis\":{\"authoritativeTotal\":\"50\",\"contract\":\"explicit_source_quantity_one_lump_sum_v1\",\"lumpSum\":\"50\",\"quantity\":1,\"unitCostPlaceholder\":0},\"currencyCode\":\"USD\",\"grossAmountCents\":\"5000\",\"id\":\"a04000000000001\",\"productId\":\"01t000000000002\",\"sourceType\":\"STEM_Extra_Cost__c\",\"taxAmountCents\":\"0\",\"taxType\":\"NONE\"}],\"stemId\":\"a0H000000000001\",\"subTotalCents\":\"2005001\",\"target\":{\"AmountCredited\":0,\"AmountDue\":\"20050.01\",\"AmountPaid\":0,\"Contact\":{\"ContactID\":\"00000000-0000-4000-8000-000000000002\",\"Name\":\"EXAMPLE SUPPLY LTD\"},\"CreditNotes\":[],\"CurrencyCode\":\"USD\",\"CurrencyRate\":1,\"Date\":\"2026-03-01\",\"DueDate\":\"2026-03-05\",\"HasErrors\":false,\"InvoiceID\":\"00000000-0000-4000-8000-000000000003\",\"InvoiceNumber\":\"SYNTHETIC-SUCCESSOR-V1-SOURCE-HALF-UP\",\"IsDiscounted\":false,\"LegacyExtension\":{\"unchanged\":\"original\"},\"LineAmountTypes\":\"Exclusive\",\"LineItems\":[{\"AccountCode\":\"51100\",\"AccountID\":\"00000000-0000-4000-8000-000000000005\",\"Description\":\"UNMODIFIED LEGACY\",\"LineAmount\":\"20050.01\",\"LineItemID\":\"00000000-0000-4000-8000-000000000004\",\"Quantity\":1,\"TaxAmount\":0,\"TaxType\":\"NONE\",\"Tracking\":[],\"UnitAmount\":\"20050.01\",\"UnownedField\":\"original line\"}],\"Overpayments\":[],\"Payments\":[],\"Prepayments\":[],\"Reference\":\"SYNTHETIC ONLY; NOT CURRENT BUSINESS DATA\",\"SentToContact\":false,\"Status\":\"AUTHORISED\",\"SubTotal\":\"20050.01\",\"Total\":\"20050.01\",\"TotalTax\":0,\"Type\":\"ACCPAY\",\"UpdatedDateUTC\":\"2026-10-04T09:00:00.000Z\"},\"targetBuckets\":[{\"accountCode\":\"51100\",\"currencyCode\":\"USD\",\"grossCents\":\"2005001\",\"netCents\":\"2005001\",\"taxCents\":\"0\",\"taxType\":\"NONE\"}],\"targetId\":\"00000000-0000-4000-8000-000000000003\",\"targetLines\":[{\"accountCode\":\"51100\",\"amountCents\":\"2005001\",\"currencyCode\":\"USD\",\"grossAmountCents\":\"2005001\",\"id\":\"00000000-0000-4000-8000-000000000004\",\"taxAmountCents\":\"0\",\"taxType\":\"NONE\"}],\"tenantId\":\"00000000-0000-4000-8000-000000000001\",\"totalCents\":\"2005001\",\"totalTaxCents\":\"0\"},\"policyVersion\":\"supplier_financial_bucket_preserve_v1\"}",
+    "localClaimScope": {
+      "contract": "supplier_financial_local_claim_scope_v1",
+      "tenantId": "00000000-0000-4000-8000-000000000001",
+      "salesforceOrgId": "00D2x000000Ei4o",
+      "sourceId": "a06000000000001",
+      "stemId": "a0H000000000001",
+      "targetId": "00000000-0000-4000-8000-000000000003",
+      "sourcePaymentIds": [
+        "a0S000000000001",
+        "a0S000000000002"
+      ],
+      "xeroPaymentIds": [],
+      "sourceDependencyHash": "c2681cd07b892c9a100852ac69a1ed002de1c9ef799e9edabe469d56005fe9df",
+      "coverageFingerprint": "c6866723cbe05ebfa3151da6f2c6f261bf24fd52321e3e10b192c0bbb0c9d9b1"
+    },
+    "localClaimScopeCanonical": "{\"contract\":\"supplier_financial_local_claim_scope_v1\",\"coverageFingerprint\":\"c6866723cbe05ebfa3151da6f2c6f261bf24fd52321e3e10b192c0bbb0c9d9b1\",\"salesforceOrgId\":\"00D2x000000Ei4o\",\"sourceDependencyHash\":\"c2681cd07b892c9a100852ac69a1ed002de1c9ef799e9edabe469d56005fe9df\",\"sourceId\":\"a06000000000001\",\"sourcePaymentIds\":[\"a0S000000000001\",\"a0S000000000002\"],\"stemId\":\"a0H000000000001\",\"targetId\":\"00000000-0000-4000-8000-000000000003\",\"tenantId\":\"00000000-0000-4000-8000-000000000001\",\"xeroPaymentIds\":[]}"
+  }
+}

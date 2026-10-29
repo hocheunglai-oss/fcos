@@ -1,0 +1,882 @@
+{
+  "setup": {
+    "controllerSha": "f0bb486474d3267b324704acbe3fef5576126576",
+    "dependencies": {
+      "nom_b": {
+        "artifactsSha256": "b154540dd4096d952467e3112b05156796fd58e9fa86ee0c3c180064c6b4e854",
+        "handoffSha256": "61f666f39df06b8282e485eb1009204141fa5acc790e1aab682a17a04df15106",
+        "recipeSha256": "cd972c2a679d6bf9fe48a551d28fa0cfc0e801591d718867def265c0b9bc13f8"
+      },
+      "preservation": {
+        "envelopeSha256": "fa8ce6afdf169c19ffd1789b565153ac5f6c85f0577517e7ca8d8087f5461ed9",
+        "membershipSha256": "eba1d15b059d53a25dd8c46cf39a4fdae84b8a52853d5fcaa3f68a779a60e481",
+        "rowCount": 9769,
+        "snapshotSha256": "fe79c00851723466f8b30f44a2dfe4e5c82feb1b9273045ddbc6dffe8b3653c1",
+        "tableCount": 6
+      },
+      "schemaVersion": 1
+    },
+    "dependencyArtifact": {
+      "name": "fcos-dependency-setup-39372565169",
+      "runId": "39372565169",
+      "seed": {
+        "credentialSha256": "da1d36cf372fdf322bb07a3cb854467999c8e01312bf58fbc74bd096a5bf1c16",
+        "envelopeSha256": "83629b8fed0e3d1f9264a98e547782ef138bc92336685e92c8ab54c51566fb37",
+        "files": [
+          {
+            "bytes": 1579,
+            "path": "handoff.json",
+            "sha256": "61f666f39df06b8282e485eb1009204141fa5acc790e1aab682a17a04df15106"
+          },
+          {
+            "bytes": 1026211,
+            "path": "artifacts.json",
+            "sha256": "b154540dd4096d952467e3112b05156796fd58e9fa86ee0c3c180064c6b4e854"
+          },
+          {
+            "bytes": 9790,
+            "path": "recipe.json",
+            "sha256": "cd972c2a679d6bf9fe48a551d28fa0cfc0e801591d718867def265c0b9bc13f8"
+          },
+          {
+            "bytes": 113940,
+            "path": "membership.encrypted.json",
+            "sha256": "fa8ce6afdf169c19ffd1789b565153ac5f6c85f0577517e7ca8d8087f5461ed9"
+          },
+          {
+            "bytes": 18636,
+            "path": "legacy-harness/guards.mjs.txt",
+            "sha256": "67bea4a6dca2a39a325e06fa9c5ba90566a5092f84af8ae2b7451fe5f64b66e9"
+          },
+          {
+            "bytes": 15369,
+            "path": "legacy-harness/run.mjs.txt",
+            "sha256": "77df2040f26f7434aa0e0266bfedc6da11aabba8154d4ec86f6103e50289033f"
+          },
+          {
+            "bytes": 5131,
+            "path": "legacy-harness/desktop-check.mjs.txt",
+            "sha256": "88615a8314389cccb9af01ee2da2e5d60c0c1e1fd37a6a67b4d9f176c1f32316"
+          },
+          {
+            "bytes": 19416,
+            "path": "legacy-harness/safety.test.mjs.txt",
+            "sha256": "40b2b2052f32a419c895d05ec5b1c767daafcb59ce67cf8c6d1749c645dd8115"
+          },
+          {
+            "bytes": 10326,
+            "path": "legacy-harness/lease.py.txt",
+            "sha256": "197cbec9f9d694600efa2db21697f075bb8635550c1532afdfbca5146d8bc51f"
+          },
+          {
+            "bytes": 5940,
+            "path": "legacy-harness/lease_test.py.txt",
+            "sha256": "6712eef3a92d5e449652cade2944399c5d46f204250d4ce1509c4e20dee81397"
+          },
+          {
+            "bytes": 1121,
+            "path": "retained/scope.json",
+            "sha256": "f498d06ae769d8f6eef52d4610e02cc710556c53fda67f1dff21c20ae436cbb2"
+          },
+          {
+            "bytes": 6100,
+            "path": "retained/cleanup.json",
+            "sha256": "d34a30eaf169295d83f4b4441fa2015511d1c49b2ffe6b98285b8a62a617bb9b"
+          }
+        ],
+        "recipientPublicKeySha256": "188c6fc418109fef400b5c123bf2f23cc56ab423129980fefc683dde8a348f7a"
+      }
+    },
+    "epoch": 1,
+    "firstRuntimeBaseline": {
+      "json": "{\"schemaVersion\":2,\"kind\":\"fcos_first_runtime_baseline_v2\",\"candidateSha\":\"2ef733d17dd12314c72971c2220b2b09903a6bf0\",\"candidateSourceProfile\":\"compat_source_config_20261020\",\"targets\":{\"repository\":\"hocheunglai-oss/fcos\",\"vercelTeam\":\"team_MbKDazzCrou3eKTuausPv4X2\",\"vercelProject\":\"prj_0pUORPGfFPyKtYhKr6ecwJ9ydvEs\",\"supabaseProject\":\"pjforfvchygdyqfcgpmw\",\"productionOrigin\":\"https://fcos.fcuno.com\"},\"previous\":{\"deploymentId\":\"dpl_KmyVbNkg7okjW4PPjR8ZJXRz19AL\",\"sha\":\"f3472492ff4d0b0c70248a3c8e5c0012981a94b3\",\"url\":\"https://fcos-3nt36gqot-hocheunglai-6535s-projects.vercel.app\",\"sourceSha256\":\"9ce0445de15bff7992867e689328c1189b9c586a850149f5ad26384482f1b7f6\",\"createdAt\":\"2026-09-30T15:37:19.737Z\"},\"source\":{\"helperRevision\":\"4ab88ed4c94afb171b588928cf9e5f0b55746cde0373102d70eb4984eb9ed8a9\",\"declarationsSha256\":\"9d3e995e37da97e912a01d82d1cdf0d711badfdb8544bb891d8dfabd9baf7afc\",\"observationKind\":\"historical_endpoint_and_current_configuration_copy_separated\"},\"configurationCopy\":{\"kind\":\"current_production_configuration_copy\",\"complete\":true,\"deployedHistoricalValuesObserved\":false,\"projectRecordCount\":58,\"projectRecordKeys\":[\"BUYER_INVOICE_REPORT_APP_URL\",\"CRON_SECRET\",\"FCOS_EMAIL_ROUTER_ATTACHMENT_SECRET\",\"FCOS_EMAIL_ROUTER_SYNC_SECRET\",\"FCOS_EMAIL_ROUTER_WEBHOOK_CLIENT_STATE\",\"FCOS_EMAIL_ROUTER_WEBHOOK_URL\",\"FCOS_ENABLE_FCUNO_FEDERATION\",\"FCOS_ENABLE_FCUNO_IDENTITY_SYNC\",\"FCOS_ENABLE_FCUNO_LEGACY_PASSWORD_LOGIN\",\"FCOS_ENABLE_MISSING_NOM_B_REMINDERS\",\"FCOS_ENABLE_XERO_CONTACT_SYNC\",\"FCOS_ENABLE_XERO_FINANCIAL_SYNC\",\"FCOS_MICROSOFT_CLIENT_ID\",\"FCOS_MICROSOFT_TENANT_ID\",\"FCOS_PORTAL_ISSUER\",\"FCOS_PORTAL_SIGNING_KEY_ID\",\"FCOS_PORTAL_SIGNING_PRIVATE_KEY\",\"FCOS_PUBLIC_URL\",\"FCOS_SPECIAL_TERMS_PREVIEW_SECRET\",\"FCUNO_IDENTITY_ISSUER\",\"FCUNO_IDENTITY_JWKS_URI\",\"FCUNO_IDENTITY_JWT_ALGORITHMS\",\"FCUNO_IDENTITY_SYNC_AUDIENCE\",\"GOOGLE_DRIVE_CLIENT_ID\",\"GOOGLE_DRIVE_CLIENT_SECRET\",\"GOOGLE_DRIVE_MARKET_REFRESH_TOKEN\",\"INCOMING_PAYMENT_REPORT_APP_URL\",\"OPENAI_API_KEY\",\"SALESFORCE_ACCESS_TOKEN\",\"SALESFORCE_API_VERSION\",\"SALESFORCE_CLIENT_ID\",\"SALESFORCE_CLIENT_SECRET\",\"SALESFORCE_CONTACT_SYNC_MAX_SKEW_SECONDS\",\"SALESFORCE_CONTACT_SYNC_SECRET\",\"SALESFORCE_EXPECTED_ORG_ID\",\"SALESFORCE_INSTANCE_URL\",\"SALESFORCE_JWT_CLIENT_ID\",\"SALESFORCE_JWT_PRIVATE_KEY\",\"SALESFORCE_JWT_USERNAME\",\"SALESFORCE_LOGIN_URL\",\"SALESFORCE_REFRESH_TOKEN\",\"SUPABASE_SERVICE_ROLE_KEY\",\"VARIABLE_CHARGE_PAIRED_WORKFLOW_ENABLED\",\"VITE_BASE44_APP_BASE_URL\",\"VITE_BASE44_APP_ID\",\"VITE_FCOS_ENABLE_FCUNO_LEGACY_PASSWORD_LOGIN\",\"VITE_FCOS_ENABLE_FCUNO_OIDC\",\"VITE_SUPABASE_ANON_KEY\",\"VITE_SUPABASE_URL\",\"XERO_CLIENT_ID\",\"XERO_CLIENT_SECRET\",\"XERO_CONTACT_AUTO_CREATE_CACHE_FRESH_MINUTES\",\"XERO_CONTACT_SYNC_DELAY_MS\",\"XERO_MAX_RETRY_AFTER_MS\",\"XERO_REFRESH_TOKEN\",\"XERO_SCOPES\",\"XERO_TENANT_ID\",\"XERO_TENANT_NAME\"],\"projectRecordsSha256\":\"e19587210a59f8d9a930350e0ed0a61fdc207f6b040813c5cede2584f82c9c5f\",\"valuesSha256\":\"bf96271055b51f86c7b69a34cb799f203a225d626fb2f505ef46eaf5251b47a4\",\"capturedAt\":\"2026-10-18T07:31:24.470Z\",\"diagnostic\":{\"operationId\":\"a19e4a01a3b52865f0c451caa905c318d3f7d90c75e19fea159528a23357425e\",\"deploymentId\":\"dpl_Fdv5anHQ68amCMBbJ243oLaTQQzf\",\"url\":\"https://fcos-94267jwm4-hocheunglai-6535s-projects.vercel.app\",\"projectId\":\"prj_0pUORPGfFPyKtYhKr6ecwJ9ydvEs\",\"target\":\"preview\",\"targetEnvironment\":\"fcos-legacy-diag-a19e4a01a3b5\",\"copyFrom\":\"production\",\"httpStatus\":200,\"observedAt\":\"2026-10-18T07:31:22.977Z\",\"issuedAt\":1792308024371,\"notAfter\":1792394424371,\"baselineAccepted\":false,\"fullQualificationAccepted\":false}},\"endpointAbsence\":{\"url\":\"https://fcos-3nt36gqot-hocheunglai-6535s-projects.vercel.app/api/connection-runtime\",\"method\":\"GET\",\"httpStatus\":404,\"redirected\":false,\"capturedAt\":\"2026-10-18T10:27:23.549Z\",\"sourceAbsent\":true},\"schema\":{\"projectRef\":\"pjforfvchygdyqfcgpmw\",\"sha256\":\"84ef2811eeefb87f8be4ef5219ab031f37fd3fd424a390e4c80b4afba7f13a4d\",\"capturedAt\":\"2026-10-21T18:42:32.995955+00:00\",\"readOnly\":true},\"nativeEvidence\":{\"identity\":{\"sha256\":\"30512a7a2d810c3251b27be296524ab742429e4b1be6272562f19640e69dea14\",\"capturedAt\":\"2026-10-18T05:50:07.154Z\"},\"project\":{\"sha256\":\"bd74690932e3a687173093510f36dff67b5155a210f3b0db046c42ab9b264fa8\",\"capturedAt\":\"2026-10-18T05:50:07.154Z\"},\"deployment\":{\"sha256\":\"af7e95133f883a8c2ec0b219a91ba4bf001a504d0cea40af02192942b0b889f2\",\"capturedAt\":\"2026-10-18 04:15:03 UTC\"},\"aliasBefore\":{\"sha256\":\"d4d23150776d46d883920b512d2c742abdd3a0ac6a2fe9c492a2ce9e72e71876\",\"capturedAt\":\"2026-10-18T07:22:34.356Z\"},\"aliasAfter\":{\"sha256\":\"5ce3c836b4587974ef9198c79068bd88b37fa3bee1329de4723161c127f468ba\",\"capturedAt\":\"2026-10-18T07:37:54.491Z\"},\"version\":{\"sha256\":\"19ffe4f79cea439e49a6085f795c5d130c390e69c631251ee17c855ad0954dd6\",\"capturedAt\":\"2026-10-18T10:27:20.576Z\"},\"endpointAbsence\":{\"sha256\":\"7f4c7b5cc290689649eaceb1a92be6095cb0ac3c27b663c73a7b69602c225b04\",\"capturedAt\":\"2026-10-18T10:27:23.549Z\"},\"schema\":{\"sha256\":\"2a0d1b00da7dc9804228d133d9db6bedcda58a82279a530a4b1258ef67b38d57\",\"capturedAt\":\"2026-10-21T18:42:32.995955+00:00\"}},\"publicEvidence\":{\"diagnosticObservation\":{\"sha256\":\"5eba647f93579b8a7d6126f4b87e9d98468c5bbbb9a27d7ab9670e88df781adc\",\"capturedAt\":\"2026-10-18T07:31:24.470Z\"},\"diagnosticAcceptance\":{\"sha256\":\"c16e9e89a845a7e3a04a44949cbf9b808a0de7af3e5629c6a3486cd8b8c8e99c\",\"capturedAt\":\"2026-10-18T07:33:00.794Z\"},\"preservationPrecision\":{\"sha256\":\"1a837d1ea091083eb99f277851d503a0237c393f40d88d7359056f6b46f26ed8\",\"capturedAt\":\"2026-10-18T07:42:24.618653+00:00\"},\"legacySalesforceIdentity\":{\"sha256\":\"fc7ba05b0c1490091e93cb0700db88f24dc7872f1d9fe285610f49c6aeabfbe1\",\"capturedAt\":\"2026-10-18T10:27:35.902Z\"}},\"runtime\":{\"capturedAt\":\"2026-10-18T10:27:23.549Z\",\"deploymentId\":\"dpl_KmyVbNkg7okjW4PPjR8ZJXRz19AL\",\"sha\":\"f3472492ff4d0b0c70248a3c8e5c0012981a94b3\",\"flags\":{\"VARIABLE_CHARGE_PAIRED_WORKFLOW_ENABLED\":{\"state\":\"unknown\"},\"FCOS_ENABLE_FCUNO_FEDERATION\":{\"state\":\"unknown\"},\"FCOS_ENABLE_FCUNO_IDENTITY_SYNC\":{\"state\":\"unknown\"},\"FCOS_ENABLE_FCUNO_LEGACY_PASSWORD_LOGIN\":{\"state\":\"unknown\"}},\"safety\":{\"readOnly\":null,\"externalActions\":{\"salesforce_write\":null,\"google_drive\":null,\"email_delivery\":null,\"missing_nom_b_reminders\":null,\"outlook_calendar\":null,\"growth_coaching_email\":null,\"bank_execution\":null,\"payment_promotion\":null,\"xero_contact_sync\":null,\"xero_financial_sync\":null}},\"auth\":{\"supabase\":{\"state\":\"unknown\",\"target\":\"\",\"mode\":\"\"},\"salesforce\":{\"state\":\"unknown\",\"target\":\"\",\"mode\":\"\"},\"xero\":{\"state\":\"unknown\",\"target\":\"\",\"mode\":\"\"},\"drive\":{\"state\":\"unknown\",\"target\":\"\",\"mode\":\"\"},\"fcuno\":{\"state\":\"unknown\",\"target\":\"\",\"mode\":\"\"},\"microsoft\":{\"state\":\"unknown\",\"target\":\"\",\"mode\":\"\"},\"openai\":{\"state\":\"unknown\",\"target\":\"\",\"mode\":\"\"}}},\"desiredRuntime\":{\"flags\":{\"VARIABLE_CHARGE_PAIRED_WORKFLOW_ENABLED\":{\"state\":\"known\",\"value\":true},\"FCOS_ENABLE_FCUNO_FEDERATION\":{\"state\":\"known\",\"value\":true},\"FCOS_ENABLE_FCUNO_IDENTITY_SYNC\":{\"state\":\"known\",\"value\":true},\"FCOS_ENABLE_FCUNO_LEGACY_PASSWORD_LOGIN\":{\"state\":\"known\",\"value\":true}},\"safety\":{\"readOnly\":false,\"externalActions\":{\"salesforce_write\":true,\"google_drive\":true,\"email_delivery\":true,\"missing_nom_b_reminders\":true,\"outlook_calendar\":false,\"growth_coaching_email\":false,\"bank_execution\":false,\"payment_promotion\":false,\"xero_contact_sync\":true,\"xero_financial_sync\":true}},\"auth\":{\"supabase\":{\"state\":\"authenticated\",\"target\":\"pjforfvchygdyqfcgpmw\",\"mode\":\"service_role\"},\"salesforce\":{\"state\":\"authenticated\",\"target\":\"00D2x000000Ei4oEAC\",\"mode\":\"application\"},\"xero\":{\"state\":\"authenticated\",\"target\":\"aa8c08e2-17fd-4874-b7bc-10ffd82db9d0\",\"mode\":\"oauth\"},\"drive\":{\"state\":\"unknown\",\"target\":\"\",\"mode\":\"\"},\"fcuno\":{\"state\":\"unknown\",\"target\":\"\",\"mode\":\"\"},\"microsoft\":{\"state\":\"unknown\",\"target\":\"\",\"mode\":\"\"},\"openai\":{\"state\":\"unknown\",\"target\":\"\",\"mode\":\"\"}}},\"originalOwners\":{\"supabase\":{\"ownerId\":\"01a0f08b-7fcb-7870-9edc-343e16052b62\",\"authority\":{\"sha256\":\"e871daecc3769f1e22146d3616af07b25681aa7f0e1ba9fda1a64e7384e351c3\",\"capturedAt\":\"2026-10-20T04:04:46.140859+00:00\"}},\"salesforce\":{\"ownerId\":\"01a0f08b-7fcb-7870-9edc-343e16052b62\",\"authority\":{\"sha256\":\"e871daecc3769f1e22146d3616af07b25681aa7f0e1ba9fda1a64e7384e351c3\",\"capturedAt\":\"2026-10-20T04:04:46.140859+00:00\"}},\"xero\":{\"ownerId\":\"01a0f08b-7fcb-7870-9edc-343e16052b62\",\"authority\":{\"sha256\":\"e871daecc3769f1e22146d3616af07b25681aa7f0e1ba9fda1a64e7384e351c3\",\"capturedAt\":\"2026-10-20T04:04:46.140859+00:00\"}}}}",
+      "sha256": "a34025dd5f89a9df15e7e45e023861ce82478479efd86f6d6d8f72021bd87b16",
+      "acceptance": {
+        "json": "{\"schemaVersion\":2,\"kind\":\"fcos_root_accepted_first_runtime_baseline_v2\",\"accepted\":true,\"reviewerId\":\"/root\",\"repository\":\"hocheunglai-oss/fcos\",\"baselineSha256\":\"a34025dd5f89a9df15e7e45e023861ce82478479efd86f6d6d8f72021bd87b16\",\"evidenceSha256\":\"dcd37692690555c14f495d69d0b12b343474781aab8849fd0b64518708bbca53\",\"originalObservationTimesSha256\":\"24775bee387fbbf30042bb584e5f5e6ea66ce7228657379999e9828d15baf8d9\",\"firstCutoverException\":{\"kind\":\"previous-runtime-endpoint-absent-typed-v2\",\"scopeSha256\":\"fae9dd5f610de802e7791f8bea20c5b5f490dc88fc6cb6b74a5375c83a69d747\",\"accepted\":true},\"finalManifestApprovalRequired\":true,\"reviewedAt\":\"2026-10-21T18:53:52.697Z\"}",
+        "sha256": "d01489c7790cf828c245eb3aace1a3d28b76e183410fa74a4a9bb73e56218b6e"
+      }
+    },
+    "legacyReleaseContainment": {
+      "effects": [
+        {
+          "effectSha256": "f37c5d416e0ae56cb4d3c8225a62eb700c543a9646c3be57351a29fd5fab013a",
+          "importId": "exact04ee-pr114-permission-corrected-three-successor-b53f1cbd-80ca-4f28-ac48-698a21e35b29",
+          "kind": "legacy_preview_env_row"
+        },
+        {
+          "effectSha256": "b7f6d3a679ea4691c62aff60c5039bd784d0f81887617faac8131cc0caf52bd7",
+          "importId": "production-execution-environment-d706f8b8-92c2-4f80-b85b-8724ea35e5c0",
+          "kind": "production_resume_environment_policy"
+        }
+      ],
+      "policy": "legacy_control_plane_effects_v1",
+      "schemaVersion": 1,
+      "selection": "detached_node24_before_candidate_v1"
+    },
+    "previousProduction": null,
+    "qualificationSource": {
+      "ref": "refs/heads/codex/hosted-qualification-archive-f0bb486474d3",
+      "bootstrapSha": "ec69968da3c3c08f861bb410c97db570d118b2f4",
+      "callerWorkflowRef": "hocheunglai-oss/fcos/.github/workflows/authenticated-release.yml@refs/heads/codex/hosted-qualification-archive-f0bb486474d3",
+      "controllerSha": "f0bb486474d3267b324704acbe3fef5576126576",
+      "candidateSha": "2ef733d17dd12314c72971c2220b2b09903a6bf0"
+    },
+    "salesforceReadCredentialAcceptance": {
+      "json": "{\"schemaVersion\":3,\"kind\":\"fcos_root_accepted_salesforce_client_credentials_setup\",\"accepted\":true,\"reviewerId\":\"/root\",\"operator\":\"hocheunglai-oss\",\"reviewedAt\":\"2026-10-18T04:20:54.969137+00:00\",\"originalSetupReceiptSha256\":\"96a7f429ac7457b8cd91cc20fd045aba5ac0a44e7aa955dfa7a4e711355627a8\",\"clientConfigurationReadbackSha256\":\"7cc7f88d9ac2ef8b14d4d7d6660625d12aac419f736f3bff892426541a90fb38\",\"userPermissionsReadbackSha256\":\"b41cd4be76d5918c1abcc7b6cb16c8dbebffaa1b4942d1b438abcbfe0bd24a1f\",\"secretStorageReadbackSha256\":\"6ea922126f98bb7d3c3a26ed2bfa9deeea9cd4c1cca7a4be3f7cda278213c030\",\"environment\":\"fcos-hosted-dependency-verification\",\"environmentOnly\":true,\"credential\":{\"clientId\":\"3MVG9Gdzj3taRxuO3r7fSl43gCfsDeiAiRqLtEc.y3AXs0djUQZpJPsQcUciYWOVP96zm5ouril_BhL.bu7Cf\",\"externalClientApplicationId\":\"0xIHF00000022iT2AQ\",\"orgId\":\"00D1m0000008kioEAA\",\"username\":\"fcos.hosted.reader.00d1m0000008kioeaa@cosulich.com.hk.devee\",\"userId\":\"005HF0000067BOIYA2\",\"profileId\":\"00e1m000000k0mgAAA\",\"profileName\":\"Minimum Access - API Only Integrations\",\"userLicenseId\":\"1001m000000M4TXAA0\",\"userLicenseName\":\"Salesforce Integration\",\"instanceUrl\":\"https://fratellicosulich--devee.sandbox.my.salesforce.com\",\"isSandbox\":true,\"apiVersion\":\"v67.0\",\"authenticationProtocol\":\"client_credentials\",\"scopes\":[\"api\",\"id\"],\"clientConfigurationReadbackSha256\":\"7cc7f88d9ac2ef8b14d4d7d6660625d12aac419f736f3bff892426541a90fb38\",\"runAsAcceptanceSha256\":\"bea3431c30eac3f5b14cce322dfb7035c2881571227ce35933ae5f1a452b5224\",\"issuedAt\":1792291377000,\"notAfter\":1794787200000,\"sessionUseSeconds\":300,\"providerPermissionMode\":\"provider_business_data_read_only\",\"readOnlyScope\":[\"business_records\",\"metadata\",\"administration\",\"executable_grants\"],\"providerWideReadOnly\":false,\"residualCapabilities\":[\"chatter_collaboration\",\"user_profile_self_service\"],\"originalFixtureIdentitySha256\":\"149b054ee2b95dbbfc1a4715481908a91e0ae4532d34da0b874bb95dc2f4b8bd\",\"effectivePermissionsSha256\":\"814f9d2945b7bbbf371f96dd39c056aae73e18725933075c274f8ee4bdac0ae5\",\"permissionRecipeSha256\":\"3675eeae219e215c1a799757e48d1d468a41eb9cf3df3d3eb06111b9318082e3\"},\"runAsAcceptance\":{\"schemaVersion\":2,\"kind\":\"fcos_salesforce_eca_client_credentials_run_as_acceptance\",\"orgId\":\"00D1m0000008kioEAA\",\"clientId\":\"3MVG9Gdzj3taRxuO3r7fSl43gCfsDeiAiRqLtEc.y3AXs0djUQZpJPsQcUciYWOVP96zm5ouril_BhL.bu7Cf\",\"externalClientApplicationId\":\"0xIHF00000022iT2AQ\",\"runAsUsername\":\"fcos.hosted.reader.00d1m0000008kioeaa@cosulich.com.hk.devee\",\"runAsUserId\":\"005HF0000067BOIYA2\",\"capturedAt\":\"2026-10-18T03:53:13.069Z\",\"clientConfigurationReadbackSha256\":\"7cc7f88d9ac2ef8b14d4d7d6660625d12aac419f736f3bff892426541a90fb38\",\"serverEnforcedRunAs\":true,\"clientCredentialsEnabled\":true,\"jwtBearerEnabled\":false,\"credentialAloneUserSelectionEnabled\":false,\"interactiveAuthorizationRequiresUserAuthentication\":true},\"providerReadOnlyAcceptance\":{\"schemaVersion\":2,\"kind\":\"fcos_salesforce_provider_business_data_read_only_acceptance\",\"orgId\":\"00D1m0000008kioEAA\",\"username\":\"fcos.hosted.reader.00d1m0000008kioeaa@cosulich.com.hk.devee\",\"userId\":\"005HF0000067BOIYA2\",\"profileId\":\"00e1m000000k0mgAAA\",\"profileName\":\"Minimum Access - API Only Integrations\",\"userLicenseId\":\"1001m000000M4TXAA0\",\"userLicenseName\":\"Salesforce Integration\",\"capturedAt\":\"2026-10-18T03:53:13.069Z\",\"allPermissionSourcesReviewed\":true,\"businessRecordWrites\":false,\"readOnlyScope\":[\"business_records\",\"metadata\",\"administration\",\"executable_grants\"],\"providerWideReadOnly\":false,\"residualCapabilities\":[\"chatter_collaboration\",\"user_profile_self_service\"],\"metadataWrites\":false,\"administrativePermissions\":false,\"executableWritePaths\":false,\"providerFixedRunAs\":true,\"profileReadbackSha256\":\"132b921a21b2626b7ab7d92b4077357dbc52d803fc7bc234ab5272ef891c80b6\",\"permissionAssignmentsReadbackSha256\":\"5d4d0e26756445de7b7611d8b9ecf189f4a440803073daca468f24ca4bdb34c2\",\"permissionSetGroupsReadbackSha256\":\"5d4d0e26756445de7b7611d8b9ecf189f4a440803073daca468f24ca4bdb34c2\",\"effectiveSystemPermissionsReadbackSha256\":\"bdc092ea5b77906f82540d6e17fb6a1e953572e918cfa5079aa6f48f25055bc4\",\"effectiveObjectPermissionsReadbackSha256\":\"8cc7a9afc1db53a45d82f969117887594aea53d847403f6d7934527605992947\",\"effectiveFieldPermissionsReadbackSha256\":\"4637e163595799d6648a325ad2143ae1358b84f9819a29d3474b682c26a3327f\",\"executableAccessReadbackSha256\":\"dbcfd35cd412f649711681520d19ecb4bd6f04b203d0ca50c468cbfd1cd05417\",\"licenceReadbackSha256\":\"d87249063b78ab7c6dd0a0b1733ae8fa40a6e94d0655b96a27a487728aca6f02\",\"clientRunAsReadbackSha256\":\"7cc7f88d9ac2ef8b14d4d7d6660625d12aac419f736f3bff892426541a90fb38\"},\"permissionIntrospection\":{\"schemaVersion\":3,\"kind\":\"fcos_salesforce_fresh_business_data_read_only_permission_recipe\",\"orgId\":\"00D1m0000008kioEAA\",\"userId\":\"005HF0000067BOIYA2\",\"profileId\":\"00e1m000000k0mgAAA\",\"apiVersion\":\"v67.0\",\"permissionReadbackSha256\":\"b41cd4be76d5918c1abcc7b6cb16c8dbebffaa1b4942d1b438abcbfe0bd24a1f\",\"maxRows\":200,\"permissionSets\":[{\"id\":\"0PS1m000000oTiJGAU\",\"name\":\"X00e1m000000k0mgAAA\",\"isOwnedByProfile\":true,\"trueSystemPermissions\":[\"PermissionsApiEnabled\",\"PermissionsApiUserOnly\",\"PermissionsChatterInternalUser\"]},{\"id\":\"0PSHF000001Q03p4AC\",\"name\":\"FCOS_Hosted_NomB_Read\",\"isOwnedByProfile\":false,\"trueSystemPermissions\":[\"PermissionsQueryAllFiles\",\"PermissionsViewAllCustomSettings\",\"PermissionsViewAllData\",\"PermissionsViewAllForecasts\",\"PermissionsViewAllUsers\",\"PermissionsViewEventLogFiles\",\"PermissionsViewPublicDashboards\",\"PermissionsViewPublicReports\",\"PermissionsViewRoles\",\"PermissionsViewSetup\"]}],\"systemPermissionFields\":[\"PermissionsAICreateInsightObjects\",\"PermissionsAIViewInsightObjects\",\"PermissionsAcceptInboundBundling\",\"PermissionsAccessBankingRelationshipAssistance\",\"PermissionsAccessBankingServiceAgent\",\"PermissionsAccessCMC\",\"PermissionsAccessContentBuilder\",\"PermissionsAccessDisputePrompts\",\"PermissionsAccessOrchestrationObjects\",\"PermissionsAccessPolicyAgent\",\"PermissionsAccessServiceEinstein\",\"PermissionsAccessSfDrive\",\"PermissionsAccessToComplaintAgent\",\"PermissionsAccessToComplaintMgmt\",\"PermissionsAccessToDisputeManagement\",\"PermissionsAccessToServiceProcess\",\"PermissionsAccessWealthAdvisorAgent\",\"PermissionsAccountSwitcherUser\",\"PermissionsActivateContract\",\"PermissionsActivateOrder\",\"PermissionsActivateSystemModeFlows\",\"PermissionsActivitiesAccess\",\"PermissionsAddAnalyticsRemoteConnections\",\"PermissionsAddDirectMessageMembers\",\"PermissionsAddWaveNotificationRecipients\",\"PermissionsAdvancedCsvDataImportUser\",\"PermissionsAgentforceServiceAgentUser\",\"PermissionsAllowEmailIC\",\"PermissionsAllowLightningLogin\",\"PermissionsAllowViewEditConvertedLeads\",\"PermissionsApexRestServices\",\"PermissionsApiEnabled\",\"PermissionsApiUserOnly\",\"PermissionsAppFrameworkManageApp\",\"PermissionsAppFrameworkManageTemplate\",\"PermissionsAppFrameworkViewApp\",\"PermissionsApprovalAdmin\",\"PermissionsApprovalDesigner\",\"PermissionsAssignPermissionSets\",\"PermissionsAssignTopics\",\"PermissionsAttributionModelUser\",\"PermissionsAuthorApex\",\"PermissionsAutomaticActivityCapture\",\"PermissionsB2BMarketingAnalyticsUser\",\"PermissionsBreakGlassLoginAllowed\",\"PermissionsBulkApiHardDelete\",\"PermissionsBulkMacrosAllowed\",\"PermissionsCMSECEAuthoringAccess\",\"PermissionsCampaignInfluence2\",\"PermissionsCanApproveFeedPost\",\"PermissionsCanApproveUninstalledApps\",\"PermissionsCanDoActAsUser\",\"PermissionsCanEditDataPrepRecipe\",\"PermissionsCanEditPrompts\",\"PermissionsCanInsertFeedSystemFields\",\"PermissionsCanManageMaps\",\"PermissionsCanQueryForeignTables\",\"PermissionsCanUpdateEmailMessage\",\"PermissionsCanUseNewDashboardBuilder\",\"PermissionsCanVerifyComment\",\"PermissionsCanViewDataPrepRecipe\",\"PermissionsCdcReportingCreateReports\",\"PermissionsCdcReportingManageFolders\",\"PermissionsCdcReportingViewReports\",\"PermissionsChangeDashboardColors\",\"PermissionsChatterComposeUiCodesnippet\",\"PermissionsChatterEditOwnPost\",\"PermissionsChatterEditOwnRecordPost\",\"PermissionsChatterFileLink\",\"PermissionsChatterInternalUser\",\"PermissionsChatterInviteExternalUsers\",\"PermissionsChatterOwnGroups\",\"PermissionsClientSecretRotation\",\"PermissionsCloseConversations\",\"PermissionsCodeBuilderUser\",\"PermissionsConfigCustomRecs\",\"PermissionsConfigureDataspaceScope\",\"PermissionsConnectOrgToEnvironmentHub\",\"PermissionsConsentApiUpdate\",\"PermissionsContactInspectorUser\",\"PermissionsContentAdministrator\",\"PermissionsContentHubUser\",\"PermissionsContentWorkspaces\",\"PermissionsConvertLeads\",\"PermissionsCreateCustomizeDashboards\",\"PermissionsCreateCustomizeFilters\",\"PermissionsCreateCustomizeReports\",\"PermissionsCreateDashboardFolders\",\"PermissionsCreateLtngTempFolder\",\"PermissionsCreateLtngTempInPub\",\"PermissionsCreatePackaging\",\"PermissionsCreateReportFolders\",\"PermissionsCreateReportInLightning\",\"PermissionsCreateTopics\",\"PermissionsCreateWorkBadgeDefinition\",\"PermissionsCreateWorkspaces\",\"PermissionsCustomMobileAppsAccess\",\"PermissionsCustomSidebarOnAllPages\",\"PermissionsCustomizeApplication\",\"PermissionsDataExport\",\"PermissionsDelegatedTwoFactor\",\"PermissionsDeleteActivatedContract\",\"PermissionsDeleteCrMemoAndInvoice\",\"PermissionsDeleteSalesforceFiles\",\"PermissionsDeleteTopics\",\"PermissionsDigitalLendingAdminUser\",\"PermissionsDigitalLendingEditReadOnly\",\"PermissionsDigitalLendingUser\",\"PermissionsDigitalLendingWorkbench\",\"PermissionsDistributeFromPersWksp\",\"PermissionsDownloadMaliciousFiles\",\"PermissionsDownloadPackageVersionZips\",\"PermissionsEditActivatedOrders\",\"PermissionsEditBillingInfo\",\"PermissionsEditBrandTemplates\",\"PermissionsEditCaseComments\",\"PermissionsEditEvent\",\"PermissionsEditHtmlTemplates\",\"PermissionsEditMyDashboards\",\"PermissionsEditMyReports\",\"PermissionsEditOppLineItemUnitPrice\",\"PermissionsEditPublicDocuments\",\"PermissionsEditPublicFilters\",\"PermissionsEditPublicTemplates\",\"PermissionsEditReadonlyFields\",\"PermissionsEditTask\",\"PermissionsEditTopics\",\"PermissionsEmailAdministration\",\"PermissionsEmailMass\",\"PermissionsEmailSingle\",\"PermissionsEmailTemplateManagement\",\"PermissionsEnableBCTransactionPolling\",\"PermissionsEnableIPFSUpload\",\"PermissionsEnableNotifications\",\"PermissionsEngagementConfigUser\",\"PermissionsEnhancedSalesMobileExp\",\"PermissionsExportReport\",\"PermissionsExternalClientAppAdmin\",\"PermissionsExternalClientAppDeveloper\",\"PermissionsExternalClientAppViewer\",\"PermissionsFSCArcGraphCommunityUser\",\"PermissionsFSCComprehensiveUserAccess\",\"PermissionsFeedPinning\",\"PermissionsFlowUFLRequired\",\"PermissionsForceTwoFactor\",\"PermissionsFreezeUsers\",\"PermissionsGiveRecognitionBadge\",\"PermissionsGovernNetworks\",\"PermissionsGrantOutboundBundling\",\"PermissionsHasUnlimitedErbScoringRequests\",\"PermissionsHasUnlimitedNBAExecutions\",\"PermissionsHeadlessCMSAccess\",\"PermissionsHeadlessPublishNudges\",\"PermissionsHideReadByList\",\"PermissionsIdentityConnect\",\"PermissionsIdentityEnabled\",\"PermissionsImportCustomObjects\",\"PermissionsImportLeads\",\"PermissionsImportPersonal\",\"PermissionsInboundMigrationToolsUser\",\"PermissionsInsightsAppAdmin\",\"PermissionsInsightsAppDashboardEditor\",\"PermissionsInsightsAppEltEditor\",\"PermissionsInsightsAppUploadUser\",\"PermissionsInsightsAppUser\",\"PermissionsInsightsCreateApplication\",\"PermissionsInstallPackaging\",\"PermissionsIntelligentDocumentProcessing\",\"PermissionsIsotopeAccess\",\"PermissionsIsotopeCToCUser\",\"PermissionsIsotopeLEX\",\"PermissionsLMEndMessagingSessionUserPerm\",\"PermissionsLMOutboundMessagingUserPerm\",\"PermissionsLeadInspectorUser\",\"PermissionsLightningConsoleAllowedForUser\",\"PermissionsLightningExperienceUser\",\"PermissionsListEmailSend\",\"PermissionsLobbyManagementUserAccess\",\"PermissionsLtngPromoReserved01UserPerm\",\"PermissionsMCPMetadataApi\",\"PermissionsManageAccessPolicies\",\"PermissionsManageAgentforceServiceAgent\",\"PermissionsManageAnalyticSnapshots\",\"PermissionsManageApiNamedQueries\",\"PermissionsManageAuthProviders\",\"PermissionsManageBusinessHourHolidays\",\"PermissionsManageC360AConnections\",\"PermissionsManageCMS\",\"PermissionsManageCallCenters\",\"PermissionsManageCases\",\"PermissionsManageCategories\",\"PermissionsManageCdpMlModels\",\"PermissionsManageCertificates\",\"PermissionsManageCertificatesExpiration\",\"PermissionsManageChatterMessages\",\"PermissionsManageContentPermissions\",\"PermissionsManageContentProperties\",\"PermissionsManageContentTaxonomy\",\"PermissionsManageContentTypes\",\"PermissionsManageCoreGovernance\",\"PermissionsManageCustomDomains\",\"PermissionsManageCustomPermissions\",\"PermissionsManageCustomReportTypes\",\"PermissionsManageCustomerDataOptOut\",\"PermissionsManageDashbdsInPubFolders\",\"PermissionsManageDataCategories\",\"PermissionsManageDataIntegrations\",\"PermissionsManageDataspaceScope\",\"PermissionsManageDevSandboxes\",\"PermissionsManageDynamicDashboards\",\"PermissionsManageEmailClientConfig\",\"PermissionsManageExchangeConfig\",\"PermissionsManageExternalConnections\",\"PermissionsManageFilesAndAttachments\",\"PermissionsManageForecastingCustomData\",\"PermissionsManageHealthAssessments\",\"PermissionsManageHealthCheck\",\"PermissionsManageHubConnections\",\"PermissionsManageIntegrationConnections\",\"PermissionsManageIntegrationPortals\",\"PermissionsManageInteraction\",\"PermissionsManageInternalUsers\",\"PermissionsManageIpAddresses\",\"PermissionsManageLeads\",\"PermissionsManageLoginAccessPolicies\",\"PermissionsManageMaliciousFiles\",\"PermissionsManageMobile\",\"PermissionsManageNamedCredentials\",\"PermissionsManageNetworks\",\"PermissionsManageOrchInstsAndWorkItems\",\"PermissionsManageOrchestrationRuns\",\"PermissionsManagePackageLicenses\",\"PermissionsManagePasswordPolicies\",\"PermissionsManageProfilesPermissionsets\",\"PermissionsManagePropositions\",\"PermissionsManagePvtRptsAndDashbds\",\"PermissionsManageQuotas\",\"PermissionsManageRecommendationStrategies\",\"PermissionsManageReleaseUpdates\",\"PermissionsManageRemoteAccess\",\"PermissionsManageReportsInPubFolders\",\"PermissionsManageRoles\",\"PermissionsManageSandboxes\",\"PermissionsManageSessionPermissionSets\",\"PermissionsManageSharedListViews\",\"PermissionsManageSharing\",\"PermissionsManageSolutions\",\"PermissionsManageSubscriptions\",\"PermissionsManageSurveys\",\"PermissionsManageSynonyms\",\"PermissionsManageTemplatedApp\",\"PermissionsManageTrustMeasures\",\"PermissionsManageTwoFactor\",\"PermissionsManageUnlistedGroups\",\"PermissionsManageUsers\",\"PermissionsMassInlineEdit\",\"PermissionsMeetingEngagementUser\",\"PermissionsMergeTopics\",\"PermissionsMetadataStudioUser\",\"PermissionsMngBenVerfForAssistiveAgnt\",\"PermissionsModerateChatter\",\"PermissionsModerateNetworkUsers\",\"PermissionsModifyAccessAllowPolicies\",\"PermissionsModifyAccessDenyPolicies\",\"PermissionsModifyAllData\",\"PermissionsModifyAllPolicyCenterPolicies\",\"PermissionsModifyDataClassification\",\"PermissionsModifyMetadata\",\"PermissionsMonitorLoginHistory\",\"PermissionsMustUseSso\",\"PermissionsNativeWebviewScrolling\",\"PermissionsNewReportBuilder\",\"PermissionsOutboundMigrationToolsUser\",\"PermissionsOverrideForecasts\",\"PermissionsPackaging2\",\"PermissionsPackaging2Delete\",\"PermissionsPasswordNeverExpires\",\"PermissionsPersonalizationDecisioningUser\",\"PermissionsPersonalizationIntelUser\",\"PermissionsPersonalizationPlatform\",\"PermissionsPersonalizedFinanceUserAccess\",\"PermissionsPreventClassicExperience\",\"PermissionsPrismBackofficeUser\",\"PermissionsPrismPlaygroundUser\",\"PermissionsPrivacyDataAccess\",\"PermissionsPrmExtIntPrtnrAdminUser\",\"PermissionsPublishPackaging\",\"PermissionsQrCodeGeneratorMobilePublisherPlayground\",\"PermissionsQueryAllFiles\",\"PermissionsQueryNonVetoedFiles\",\"PermissionsQuipMetricsAccess\",\"PermissionsQuipUserEngagementMetrics\",\"PermissionsReassignOrchestrationWorkItems\",\"PermissionsRemoveDirectMessageMembers\",\"PermissionsResetPasswords\",\"PermissionsRunFlow\",\"PermissionsRunMyDayUser\",\"PermissionsRunReports\",\"PermissionsSalesConsole\",\"PermissionsSalesInsightsUser\",\"PermissionsSalesforceIQInbox\",\"PermissionsSalesforceIQInternal\",\"PermissionsSandboxTestingInCommunityApp\",\"PermissionsScheduleJob\",\"PermissionsScheduleReports\",\"PermissionsSegmentIntelligenceUser\",\"PermissionsSelectFilesFromSalesforce\",\"PermissionsSendAnnouncementEmails\",\"PermissionsSendCustomNotifications\",\"PermissionsSendExternalEmailAvailable\",\"PermissionsSendSitRequests\",\"PermissionsShowCompanyNameAsUserBadge\",\"PermissionsSimpleCsvDataImportUser\",\"PermissionsSkipIdentityConfirmation\",\"PermissionsSolutionImport\",\"PermissionsStageManagementDesignUser\",\"PermissionsStdAutomaticActivityCapture\",\"PermissionsSubmitMacrosAllowed\",\"PermissionsSubscribeDashboardRolesGrps\",\"PermissionsSubscribeDashboardToOtherUsers\",\"PermissionsSubscribeReportRolesGrps\",\"PermissionsSubscribeReportToOtherUsers\",\"PermissionsSubscribeReportsRunAsUser\",\"PermissionsSubscribeToLightningDashboards\",\"PermissionsSubscribeToLightningReports\",\"PermissionsSuitesAgentEscalationPerm\",\"PermissionsTraceXdsQueries\",\"PermissionsTransactionalEmailSend\",\"PermissionsTransferAnyCase\",\"PermissionsTransferAnyEntity\",\"PermissionsTransferAnyLead\",\"PermissionsTwoFactorApi\",\"PermissionsUpdateReportTypeReferences\",\"PermissionsUseAnyApiAuth\",\"PermissionsUseAssistantDialog\",\"PermissionsUseInboxSchedulingOnBehalfOf\",\"PermissionsUseMySearch\",\"PermissionsUseQuerySuggestions\",\"PermissionsUseRestrictedTheme\",\"PermissionsUseServicePartReturn\",\"PermissionsUseSetupWithAgentforce\",\"PermissionsUseSubscriptionEmails\",\"PermissionsUseTeamReassignWizards\",\"PermissionsUseTeamsForEmployee\",\"PermissionsUseTeamsForItSrvcs\",\"PermissionsUseTemplatedApp\",\"PermissionsUseWebLink\",\"PermissionsUserCanDeployStore\",\"PermissionsUserHasALMSimpleDeployAccess\",\"PermissionsUserInteractionInsights\",\"PermissionsViewAccessPolicies\",\"PermissionsViewAllActivities\",\"PermissionsViewAllCustomSettings\",\"PermissionsViewAllData\",\"PermissionsViewAllFieldsGlobal\",\"PermissionsViewAllForecasts\",\"PermissionsViewAllForeignKeyNames\",\"PermissionsViewAllPolicyCenterPolicies\",\"PermissionsViewAllProfiles\",\"PermissionsViewAllUsers\",\"PermissionsViewApiNamedQueries\",\"PermissionsViewCaseInteraction\",\"PermissionsViewClientSecret\",\"PermissionsViewContent\",\"PermissionsViewContentTaxonomy\",\"PermissionsViewCoreGovernance\",\"PermissionsViewDataAssessment\",\"PermissionsViewDataCategories\",\"PermissionsViewDeveloperName\",\"PermissionsViewEncryptedData\",\"PermissionsViewEventLogFiles\",\"PermissionsViewHealthAssessments\",\"PermissionsViewHealthCheck\",\"PermissionsViewHelpLink\",\"PermissionsViewMLModels\",\"PermissionsViewMyTeamsDashboards\",\"PermissionsViewOnlyEmbeddedAppUser\",\"PermissionsViewOrchestrationsInAutomApp\",\"PermissionsViewPrivateStaticResources\",\"PermissionsViewPublicDashboards\",\"PermissionsViewPublicReports\",\"PermissionsViewRecommendations\",\"PermissionsViewRestrictionAndScopingRules\",\"PermissionsViewRoles\",\"PermissionsViewSecurityCommandCenter\",\"PermissionsViewSetup\",\"PermissionsViewSetupAuditTrail\",\"PermissionsViewTrustMeasures\",\"PermissionsViewUserPII\",\"PermissionsWaveCommunityUser\",\"PermissionsWaveManagePrivateAssetsUser\",\"PermissionsWaveTabularDownload\",\"PermissionsYourAccountCDAPublishEvents\"],\"readableObjects\":[\"AIInsightReason\",\"AIRecordInsight\",\"Account\",\"ActorReactiveAskRespEvent\",\"Agreed_Compensation__c\",\"AiMetadataSyncStatus\",\"ApiProtectionPolicy\",\"ApiPrtcPolicyChangeEvent\",\"AppAnalyticsInfraPvsngSt\",\"AppAnalyticsQueryRequest\",\"ApprovalSubmission\",\"ApprovalWorkItem\",\"ArchiveJobSession\",\"Asset\",\"AuthDomainStatusEvent\",\"BackgroundOperation\",\"Broker_Enquiry__c\",\"Campaign\",\"Case\",\"Cashflow__c\",\"Commission_Invoice__c\",\"Company__c\",\"Consultation__c\",\"Contact\",\"ContactRequest\",\"Contract\",\"Deposit__c\",\"DevopsActivityLog\",\"DevopsDeployComponent\",\"DevopsEnvDeployment\",\"DevopsEnvDeploymentMbr\",\"DevopsEnvironment\",\"DevopsRequestInfo\",\"DevopsTestProvider\",\"Dispute__c\",\"Document\",\"DuplicateRecordSet\",\"Enquiry_Special_Term__c\",\"FCOS_Nomination_Filing__c\",\"FlowVersionMilestone\",\"Idea\",\"Image\",\"InsEmailRoutingAddress\",\"Invoice__c\",\"Last_Invoice_Form__c\",\"Lead\",\"LiveAgentSession\",\"LiveChatTranscript\",\"LiveChatVisitor\",\"Location\",\"LocationTrustMeasure\",\"MYOB_Invoice__c\",\"Macro\",\"Mailing_Record__c\",\"Market_Portfolio_Formula__c\",\"Market_Portfolio_Item__c\",\"Market_Portfolio__c\",\"McpServerAccess\",\"McpServerDefinition\",\"Nomination__c\",\"Office__c\",\"Opportunity\",\"Order\",\"PSPRS_Form__c\",\"Payment_Term__c\",\"Payment__c\",\"Port_Supplier__c\",\"Port__c\",\"Preferred_Supplier__c\",\"PreviewOrgInfo\",\"Pricebook2\",\"ProcessException\",\"Product2\",\"ProfileSkill\",\"ProfileSkillEndorsement\",\"ProfileSkillUser\",\"Public_Day_Off__c\",\"PublishApplication\",\"PublishApplicationResource\",\"PushTopic\",\"QLIK_Data_Cache__c\",\"QuickText\",\"Quote\",\"Quote_Buyer_Broker__c\",\"Quote_Line_Item_Buyer_Broker__c\",\"RebatePayoutSnapshot\",\"Refresh_Quote_Page__e\",\"STEM_Buyer_Broker__c\",\"STEM_Extra_Cost__c\",\"STEM_Line_Item_Buyer_Broker__c\",\"STEM_Line_Item__c\",\"STEM_Payment_Overview__c\",\"STEM_Variable_Charge_Supplier__c\",\"STEM__c\",\"Scorecard\",\"ScorecardAssociation\",\"ScorecardMetric\",\"ServiceOpPriorityConfig\",\"SfdcPartnerSbscrOffer\",\"SocialPost\",\"Solution\",\"Special_Term_Clause_Assignment__c\",\"Special_Term_Clause_Consolidation_Map__c\",\"Special_Term_Clause_Consolidation__c\",\"Special_Term_Clause_Version__c\",\"Special_Term_Clause__c\",\"Special_Term_Revision_Clause__c\",\"Special_Term_Revision_Rule__c\",\"Special_Term_Revision__c\",\"Special_Term_Rule__c\",\"Special_Term__c\",\"Special_Terms_Link__c\",\"SrvcMgmntEmailRoutgAddr\",\"SrvcMgmtCollabAppFldDef\",\"SrvcMgmtCollabAppObjDef\",\"SrvcMgmtObjCollabAppCnfg\",\"Stem_Status__c\",\"StreamingChannel\",\"Supplier_Bid_Extra_Cost__c\",\"Supplier_Bid__c\",\"Supplier_Invoice__c\",\"SynchronizeBrokers__e\",\"Trade_Cash_Allocation__c\",\"Trade_Cash_Event__c\",\"Trade_Currency_Side__c\",\"Trade_Document_Line__c\",\"Unofficial_Compensation__c\",\"UserDefinedLabel\",\"UserDevopsPreference\",\"UserExternalCredential\",\"Vessel_Processing_Done__e\",\"Vessel__c\",\"Volume_Discount_Item__c\",\"Volume_Discount__c\",\"WebCartDocument\"],\"objectPermissionsSha256\":\"8cc7a9afc1db53a45d82f969117887594aea53d847403f6d7934527605992947\",\"fieldPermissionsSha256\":\"4637e163595799d6648a325ad2143ae1358b84f9819a29d3474b682c26a3327f\",\"nonExecutableSetupEntityGrants\":[{\"id\":\"0J01m00000ZiBtaCAF\",\"parentId\":\"0PS1m000000oTiJGAU\",\"setupEntityId\":\"02u1m000000QzcZAAS\",\"setupEntityType\":\"TabSet\"},{\"id\":\"0J0HF000006CKjn0AG\",\"parentId\":\"0PS1m000000oTiJGAU\",\"setupEntityId\":\"02uHF000000nZXjYAM\",\"setupEntityType\":\"TabSet\"},{\"id\":\"0J0HF000006CKu60AG\",\"parentId\":\"0PS1m000000oTiJGAU\",\"setupEntityId\":\"02uHF000000nZhOYAU\",\"setupEntityType\":\"TabSet\"},{\"id\":\"0J0HF000006CXJV0A4\",\"parentId\":\"0PS1m000000oTiJGAU\",\"setupEntityId\":\"02uHF000000nfV4YAI\",\"setupEntityType\":\"TabSet\"},{\"id\":\"0J0HF000009S5u40AC\",\"parentId\":\"0PS1m000000oTiJGAU\",\"setupEntityId\":\"02uHF0000018w33YAA\",\"setupEntityType\":\"TabSet\"},{\"id\":\"0J0Io000000Qw1pKAC\",\"parentId\":\"0PS1m000000oTiJGAU\",\"setupEntityId\":\"02uIo000000PbJvIAK\",\"setupEntityType\":\"TabSet\"},{\"id\":\"0J0Io000001tEYCKA2\",\"parentId\":\"0PS1m000000oTiJGAU\",\"setupEntityId\":\"02uIo000000PcAuIAK\",\"setupEntityType\":\"TabSet\"},{\"id\":\"0J0Io000002TniAKAS\",\"parentId\":\"0PS1m000000oTiJGAU\",\"setupEntityId\":\"02uIo000000PdumIAC\",\"setupEntityType\":\"TabSet\"},{\"id\":\"0J0Io000002TnsFKAS\",\"parentId\":\"0PS1m000000oTiJGAU\",\"setupEntityId\":\"02uIo000000PdvkIAC\",\"setupEntityType\":\"TabSet\"}],\"clientAuthorizationGrant\":{\"id\":\"0J0HF000009buin0AA\",\"parentId\":\"0PSHF000001Q03p4AC\",\"setupEntityId\":\"0xIHF00000022iT2AQ\",\"setupEntityType\":\"ExternalClientApplication\"},\"paths\":[\"/services/data/v67.0/sobjects/PermissionSet/describe\",\"/services/data/v67.0/query?q=SELECT%20FIELDS(ALL)%20FROM%20PermissionSetAssignment%20WHERE%20AssigneeId%20%3D%20'005HF0000067BOIYA2'%20ORDER%20BY%20Id%20LIMIT%20200\",\"/services/data/v67.0/query?q=SELECT%20FIELDS(ALL)%20FROM%20PermissionSet%20WHERE%20Id%20IN%20('0PS1m000000oTiJGAU'%2C'0PSHF000001Q03p4AC')%20ORDER%20BY%20Id%20LIMIT%20200\",\"/services/data/v67.0/query?q=SELECT%20FIELDS(ALL)%20FROM%20ObjectPermissions%20WHERE%20ParentId%20IN%20('0PS1m000000oTiJGAU'%2C'0PSHF000001Q03p4AC')%20ORDER%20BY%20Id%20LIMIT%20200\",\"/services/data/v67.0/query?q=SELECT%20Id%2CParentId%2CSobjectType%2CField%2CPermissionsEdit%2CPermissionsRead%2CSystemModstamp%20FROM%20FieldPermissions%20WHERE%20ParentId%20IN%20('0PS1m000000oTiJGAU'%2C'0PSHF000001Q03p4AC')%20ORDER%20BY%20Id%20LIMIT%20500\",\"/services/data/v67.0/query?q=SELECT%20FIELDS(ALL)%20FROM%20SetupEntityAccess%20WHERE%20ParentId%20IN%20('0PS1m000000oTiJGAU'%2C'0PSHF000001Q03p4AC')%20ORDER%20BY%20Id%20LIMIT%20200\",\"/services/data/v67.0/sobjects/FieldPermissions/describe\"]}}\n",
+      "sha256": "f8c67620c8707674ebbffd4e0c60034093385fd424f6e067b655ecc4505bd6c7"
+    },
+    "schemaVersion": 2,
+    "targetsSha256": "6c6bec3f2aabeb2265620272e9ce900fdda8090dbf9512387cfa2b329db840a4",
+    "vercelPreviewWriterCredentialAcceptance": {
+      "json": "{\n  \"schemaVersion\": 1,\n  \"kind\": \"fcos_root_accepted_original_preview_writer\",\n  \"accepted\": true,\n  \"reviewerId\": \"/root\",\n  \"operator\": \"hocheunglai-oss\",\n  \"reviewedAt\": \"2026-10-17T15:55:14.691935+00:00\",\n  \"credential\": {\n    \"operationId\": \"preview-writer-297aa8b8-6303-4dd4-bf05-d81284bc6d43\",\n    \"tokenId\": \"Xw5cYekGQ3K8TlcsA922erQDGKayLDCmkyMXDmKNoZAmWGBL\",\n    \"name\": \"fcos-hosted-preview-writer-297aa8b8-6303-4dd4-bf05-d81284bc6d43\",\n    \"bearerSha256\": \"fc04d03f679f7cf79372e4e24bdcef2d9bacbf7d84379dacf05a290e3c44ccad\",\n    \"teamId\": \"team_MbKDazzCrou3eKTuausPv4X2\",\n    \"projectId\": \"prj_0pUORPGfFPyKtYhKr6ecwJ9ydvEs\",\n    \"createdAt\": 1792250300863,\n    \"expiresAt\": 1794787200000,\n    \"originalIssuanceResponseSha256\": \"3395f6d33de51ef27238b8b068327992fdaec8b3fc71d5ef33c46aa5ebd29c9e\",\n    \"exactIdMetadataReadbackSha256\": \"77882c6794cbfedbaae9e4317b2c01267f330c4de5254c263e50b5c377cbf6e5\"\n  },\n  \"provenance\": {\n    \"originalPlanSha256\": \"1d8c30e575d116d3284893668f0e1424bba423f33a02b0169d93ed83adc0ad7d\",\n    \"originalIssuanceIntentSha256\": \"fa0504d477279fb3ce21c606576c7fdb1eff584d56e05423c83d05bcfb0295a5\",\n    \"originalCustodyReceiptSha256\": \"5516909f7799e041a3e04621f079e9a8510f39630d58e33ead3c9e3a28f6814e\",\n    \"metadataAuthority\": \"verified_existing_manager_exact_original_id_get\",\n    \"singleTeamScope\": \"team_MbKDazzCrou3eKTuausPv4X2\"\n  },\n  \"independentReview\": {\n    \"reviewerId\": \"/root/hosted_setup_boundary_review\",\n    \"sha256\": \"c8ee9cd239fafd2a7e77d018b798c5c43b41f78ce0b71bf8cb241c823ce72d68\"\n  }\n}\n",
+      "sha256": "89b4f947ca505a2117d38f6dc488475f8ce3c99838a02ad0010b5b9b826c97e0"
+    },
+    "vercelReadCredentialAcceptance": {
+      "json": "{\n  \"schemaVersion\": 1,\n  \"kind\": \"fcos_root_accepted_vercel_oauth_exchange\",\n  \"accepted\": true,\n  \"reviewerId\": \"/root\",\n  \"operator\": \"hocheunglai-oss\",\n  \"reviewedAt\": \"2026-10-17T14:46:07.985360+00:00\",\n  \"originalExchangeReceiptSha256\": \"f4edf9615b24a3c15d30d5584b8cf05abb6a317dfc9d3d4784dc0c84341ec977\",\n  \"configurationReadbackSha256\": \"a81435cef8b55f39b11d99e7570d3cc6573e9e62672e0cea713c040843000a5c\",\n  \"credential\": {\n    \"bearerSha256\": \"5a6e3e28d76a81be53cb7750be2f12a8474cd869faa978fdf409e5d31bf0b8a1\",\n    \"clientId\": \"oac_RCDKFCdeiUQEEN0QUuErv3Mb\",\n    \"integrationId\": \"oac_RCDKFCdeiUQEEN0QUuErv3Mb\",\n    \"configurationId\": \"icfg_31eMXz0LcLRKcPAjC1PvsigR\",\n    \"teamId\": \"team_MbKDazzCrou3eKTuausPv4X2\",\n    \"projectId\": \"prj_0pUORPGfFPyKtYhKr6ecwJ9ydvEs\",\n    \"scopes\": [\n      \"read:deployment\",\n      \"read:integration-configuration\",\n      \"read:project\"\n    ],\n    \"issuedAt\": 1792247917271,\n    \"notAfter\": 1794787200000\n  }\n}\n",
+      "sha256": "7ea70a15d2ea187572ac53286e47a1067f11fc7df603b98542901cf8f0b5f419"
+    },
+    "verification": {
+      "projectSettings": {
+        "buildCommand": "npm run build",
+        "devCommand": null,
+        "framework": "vite",
+        "installCommand": "npm install",
+        "nodeVersion": "24.x",
+        "outputDirectory": null,
+        "rootDirectory": null
+      },
+      "publicBuildEnvironment": {
+        "FCOS_ENABLE_FCUNO_FEDERATION": "true",
+        "FCUNO_IDENTITY_ISSUER": "https://fcuno.com",
+        "VITE_FCOS_ENABLE_FCUNO_OIDC": "true",
+        "VITE_SUPABASE_ANON_KEY": "sb_publishable_J13FEkUAVHqa2GVLthqi-w_AXVaqVcT",
+        "VITE_SUPABASE_URL": "https://pjforfvchygdyqfcgpmw.supabase.co"
+      },
+      "runtime": {
+        "arch": "x64",
+        "image": "ghcr.io/hocheunglai-oss/fcos-release-checks@sha256:1cb176a00c6224f94a668f76de51186e2d0b3cd95d631af4289467451caf40ef",
+        "node": "v24.18.0",
+        "platform": "linux",
+        "python": "Python 3.11.2"
+      },
+      "salesforceReadCredential": {
+        "apiVersion": "v67.0",
+        "authenticationProtocol": "client_credentials",
+        "clientConfigurationReadbackSha256": "7cc7f88d9ac2ef8b14d4d7d6660625d12aac419f736f3bff892426541a90fb38",
+        "clientId": "3MVG9Gdzj3taRxuO3r7fSl43gCfsDeiAiRqLtEc.y3AXs0djUQZpJPsQcUciYWOVP96zm5ouril_BhL.bu7Cf",
+        "effectivePermissionsSha256": "814f9d2945b7bbbf371f96dd39c056aae73e18725933075c274f8ee4bdac0ae5",
+        "externalClientApplicationId": "0xIHF00000022iT2AQ",
+        "instanceUrl": "https://fratellicosulich--devee.sandbox.my.salesforce.com",
+        "isSandbox": true,
+        "issuedAt": 1792291377000,
+        "kind": "fcos_salesforce_client_credentials_recipe_reader",
+        "notAfter": 1794787200000,
+        "orgId": "00D1m0000008kioEAA",
+        "originalFixtureIdentitySha256": "149b054ee2b95dbbfc1a4715481908a91e0ae4532d34da0b874bb95dc2f4b8bd",
+        "originalSetupReceiptSha256": "96a7f429ac7457b8cd91cc20fd045aba5ac0a44e7aa955dfa7a4e711355627a8",
+        "permissionRecipeSha256": "3675eeae219e215c1a799757e48d1d468a41eb9cf3df3d3eb06111b9318082e3",
+        "profileId": "00e1m000000k0mgAAA",
+        "profileName": "Minimum Access - API Only Integrations",
+        "providerPermissionMode": "provider_business_data_read_only",
+        "providerWideReadOnly": false,
+        "readOnlyScope": [
+          "business_records",
+          "metadata",
+          "administration",
+          "executable_grants"
+        ],
+        "residualCapabilities": [
+          "chatter_collaboration",
+          "user_profile_self_service"
+        ],
+        "rootAcceptanceSha256": "f8c67620c8707674ebbffd4e0c60034093385fd424f6e067b655ecc4505bd6c7",
+        "runAsAcceptanceSha256": "bea3431c30eac3f5b14cce322dfb7035c2881571227ce35933ae5f1a452b5224",
+        "schemaVersion": 3,
+        "scopes": [
+          "api",
+          "id"
+        ],
+        "sessionUseSeconds": 300,
+        "userId": "005HF0000067BOIYA2",
+        "userLicenseId": "1001m000000M4TXAA0",
+        "userLicenseName": "Salesforce Integration",
+        "username": "fcos.hosted.reader.00d1m0000008kioeaa@cosulich.com.hk.devee"
+      },
+      "vercelPreviewWriterCredential": {
+        "bearerSha256": "fc04d03f679f7cf79372e4e24bdcef2d9bacbf7d84379dacf05a290e3c44ccad",
+        "createdAt": 1792250300863,
+        "exactIdMetadataReadbackSha256": "77882c6794cbfedbaae9e4317b2c01267f330c4de5254c263e50b5c377cbf6e5",
+        "expiresAt": 1794787200000,
+        "kind": "fcos_vercel_preview_project_writer",
+        "name": "fcos-hosted-preview-writer-297aa8b8-6303-4dd4-bf05-d81284bc6d43",
+        "operationId": "preview-writer-297aa8b8-6303-4dd4-bf05-d81284bc6d43",
+        "originalIssuanceResponseSha256": "3395f6d33de51ef27238b8b068327992fdaec8b3fc71d5ef33c46aa5ebd29c9e",
+        "projectId": "prj_0pUORPGfFPyKtYhKr6ecwJ9ydvEs",
+        "rootAcceptanceSha256": "89b4f947ca505a2117d38f6dc488475f8ce3c99838a02ad0010b5b9b826c97e0",
+        "schemaVersion": 1,
+        "teamId": "team_MbKDazzCrou3eKTuausPv4X2",
+        "tokenId": "Xw5cYekGQ3K8TlcsA922erQDGKayLDCmkyMXDmKNoZAmWGBL"
+      },
+      "vercelReadCredential": {
+        "bearerSha256": "5a6e3e28d76a81be53cb7750be2f12a8474cd869faa978fdf409e5d31bf0b8a1",
+        "clientId": "oac_RCDKFCdeiUQEEN0QUuErv3Mb",
+        "configurationId": "icfg_31eMXz0LcLRKcPAjC1PvsigR",
+        "integrationId": "oac_RCDKFCdeiUQEEN0QUuErv3Mb",
+        "issuedAt": 1792247917271,
+        "kind": "fcos_vercel_read_integration",
+        "notAfter": 1794787200000,
+        "oauthExchangeReceiptSha256": "f4edf9615b24a3c15d30d5584b8cf05abb6a317dfc9d3d4784dc0c84341ec977",
+        "projectId": "prj_0pUORPGfFPyKtYhKr6ecwJ9ydvEs",
+        "rootAcceptanceSha256": "7ea70a15d2ea187572ac53286e47a1067f11fc7df603b98542901cf8f0b5f419",
+        "schemaVersion": 1,
+        "scopes": [
+          "read:deployment",
+          "read:integration-configuration",
+          "read:project"
+        ],
+        "teamId": "team_MbKDazzCrou3eKTuausPv4X2"
+      },
+      "vercelSourceTransport": "fcos_source_api_archive_v1"
+    }
+  },
+  "plan": {
+    "schemaVersion": 2,
+    "releaseId": "fcos-qualification-f0bb486474d3-2ef733d1-archive",
+    "branch": "codex/compat-application-auth-correction-20261018",
+    "stage": "qualification",
+    "executionMode": "qualification",
+    "sourceProfile": "compat_source_config_20261020",
+    "scope": {
+      "sha256": "8321cb822a134e9f18145808e0e92b873faa5a3ec7c4acf92f8340dc08061eab",
+      "handoffs": [],
+      "existingUi": false,
+      "financialAuthority": false
+    },
+    "migration": {
+      "mode": "none",
+      "expectedSchemaSha256": "84ef2811eeefb87f8be4ef5219ab031f37fd3fd424a390e4c80b4afba7f13a4d"
+    },
+    "runtime": {
+      "expectedSha256": "7847f929a137c3b0001dbcd5174e0a6be4c8f7417a78b95a46acc44d11ef0fcf",
+      "expectedProduction": {
+        "flags": {
+          "VARIABLE_CHARGE_PAIRED_WORKFLOW_ENABLED": {
+            "state": "known",
+            "value": true
+          },
+          "FCOS_ENABLE_FCUNO_FEDERATION": {
+            "state": "known",
+            "value": true
+          },
+          "FCOS_ENABLE_FCUNO_IDENTITY_SYNC": {
+            "state": "known",
+            "value": true
+          },
+          "FCOS_ENABLE_FCUNO_LEGACY_PASSWORD_LOGIN": {
+            "state": "known",
+            "value": true
+          }
+        },
+        "safety": {
+          "readOnly": false,
+          "externalActions": {
+            "salesforce_write": true,
+            "google_drive": true,
+            "email_delivery": true,
+            "missing_nom_b_reminders": true,
+            "outlook_calendar": false,
+            "growth_coaching_email": false,
+            "bank_execution": false,
+            "payment_promotion": false,
+            "xero_contact_sync": true,
+            "xero_financial_sync": true
+          }
+        },
+        "auth": {
+          "supabase": {
+            "state": "authenticated",
+            "target": "pjforfvchygdyqfcgpmw",
+            "mode": "service_role"
+          },
+          "salesforce": {
+            "state": "authenticated",
+            "target": "00D2x000000Ei4oEAC",
+            "mode": "application"
+          },
+          "xero": {
+            "state": "authenticated",
+            "target": "aa8c08e2-17fd-4874-b7bc-10ffd82db9d0",
+            "mode": "oauth"
+          },
+          "drive": {
+            "state": "unknown",
+            "target": "",
+            "mode": ""
+          },
+          "fcuno": {
+            "state": "unknown",
+            "target": "",
+            "mode": ""
+          },
+          "microsoft": {
+            "state": "unknown",
+            "target": "",
+            "mode": ""
+          },
+          "openai": {
+            "state": "unknown",
+            "target": "",
+            "mode": ""
+          }
+        }
+      },
+      "expectedPreview": {
+        "flags": {
+          "VARIABLE_CHARGE_PAIRED_WORKFLOW_ENABLED": {
+            "state": "known",
+            "value": true
+          },
+          "FCOS_ENABLE_FCUNO_FEDERATION": {
+            "state": "known",
+            "value": true
+          },
+          "FCOS_ENABLE_FCUNO_IDENTITY_SYNC": {
+            "state": "known",
+            "value": true
+          },
+          "FCOS_ENABLE_FCUNO_LEGACY_PASSWORD_LOGIN": {
+            "state": "known",
+            "value": true
+          }
+        },
+        "safety": {
+          "readOnly": true,
+          "externalActions": {
+            "salesforce_write": false,
+            "google_drive": false,
+            "email_delivery": false,
+            "missing_nom_b_reminders": false,
+            "outlook_calendar": false,
+            "growth_coaching_email": false,
+            "bank_execution": false,
+            "payment_promotion": false,
+            "xero_contact_sync": false,
+            "xero_financial_sync": false
+          }
+        },
+        "auth": {
+          "supabase": {
+            "state": "authenticated",
+            "target": "pjforfvchygdyqfcgpmw",
+            "mode": "service_role"
+          },
+          "salesforce": {
+            "state": "authenticated",
+            "target": "00D2x000000Ei4oEAC",
+            "mode": "application"
+          },
+          "xero": {
+            "state": "authenticated",
+            "target": "aa8c08e2-17fd-4874-b7bc-10ffd82db9d0",
+            "mode": "oauth"
+          }
+        }
+      }
+    },
+    "changes": [
+      "Qualify the published hosted controller and explicit source-configuration compatibility successor; no Production execution, application handoff or financial mutation."
+    ]
+  },
+  "manifest": {
+    "schemaVersion": 2,
+    "contract": "fcos-hosted-release/v2",
+    "releaseId": "fcos-qualification-f0bb486474d3-2ef733d1-archive",
+    "stage": "qualification",
+    "executionMode": "qualification",
+    "epoch": 1,
+    "setupSha256": "e7da38e499cf8b12ec8d5f3d9a381cc2a18938558308c2877a83763a15a53cf9",
+    "candidate": {
+      "sha": "2ef733d17dd12314c72971c2220b2b09903a6bf0",
+      "sourceProfile": "compat_source_config_20261020",
+      "sourceSha256": "00d3ef338dfd55db06eeecacb0ca803878586645edfb9e4dea61efe8319a8515",
+      "lockSha256": "9b3d6eb4824ea8688022b9ba249041e25c44b8cebc5443d59c55d8a2da5da378",
+      "configurationSha256": "331e9f360dd8fa0f9e1e2cafb8f0d5f50ecf26e2ac76323972e9bb7ff742a866",
+      "salesforceSourceSha256": "4c2594c9986269e492487448d402334f43db35b06cb9c409377e728482739c64",
+      "sourceInputsSha256": "cfe108218d157d88b1e726ec1534da032fe5bf4d3a9a514d9ed2d6e13bb1f891",
+      "branch": "codex/compat-application-auth-correction-20261018"
+    },
+    "controller": {
+      "sha": "f0bb486474d3267b324704acbe3fef5576126576",
+      "checkManifestSha256": "6c6d7adabfbd45382238c532e33a0aac08e47174180e22e415e30d1280958404",
+      "configurationSha256": "d6f195dd18df7970a2161af3c86555bd2121ade7cb2ee6e0772ab209ab813e7a",
+      "workflow": ".github/workflows/hosted-release-controller.yml"
+    },
+    "targets": {
+      "repository": "hocheunglai-oss/fcos",
+      "vercelTeam": "team_MbKDazzCrou3eKTuausPv4X2",
+      "vercelProject": "prj_0pUORPGfFPyKtYhKr6ecwJ9ydvEs",
+      "supabaseProject": "pjforfvchygdyqfcgpmw",
+      "productionOrigin": "https://fcos.fcuno.com"
+    },
+    "scope": {
+      "sha256": "8321cb822a134e9f18145808e0e92b873faa5a3ec7c4acf92f8340dc08061eab",
+      "handoffs": [],
+      "existingUi": false,
+      "financialAuthority": false
+    },
+    "previousProduction": {
+      "deploymentId": "dpl_KmyVbNkg7okjW4PPjR8ZJXRz19AL",
+      "sha": "f3472492ff4d0b0c70248a3c8e5c0012981a94b3",
+      "sourceSha256": "9ce0445de15bff7992867e689328c1189b9c586a850149f5ad26384482f1b7f6",
+      "schemaSha256": "84ef2811eeefb87f8be4ef5219ab031f37fd3fd424a390e4c80b4afba7f13a4d",
+      "runtimeSha256": "0ebb367d45e288d78ac8cd8b23aaf0379fb81bd8b9156ac553e3644864577da6",
+      "firstRuntime": {
+        "kind": "previous-runtime-endpoint-absent-typed-v2",
+        "baselineSha256": "a34025dd5f89a9df15e7e45e023861ce82478479efd86f6d6d8f72021bd87b16",
+        "previousUrl": "https://fcos-3nt36gqot-hocheunglai-6535s-projects.vercel.app",
+        "candidateSha": "2ef733d17dd12314c72971c2220b2b09903a6bf0",
+        "rollbackEligible": false,
+        "desiredRuntimeSha256": "7847f929a137c3b0001dbcd5174e0a6be4c8f7417a78b95a46acc44d11ef0fcf"
+      }
+    },
+    "requiredChecks": [
+      "build",
+      "checkpoint_resume",
+      "client_performance",
+      "compatibility",
+      "controls",
+      "document_corrections",
+      "fcuno_contract",
+      "financial_preview",
+      "graph",
+      "group_payment",
+      "grouped_preservation",
+      "issued_petroleum",
+      "issued_supplier",
+      "lint",
+      "live_schema",
+      "migrations",
+      "missing_nom_b_database",
+      "missing_nom_b_fixtures",
+      "nom_b",
+      "nom_b_concurrency",
+      "nom_b_fixtures",
+      "normal_role",
+      "people_access_fixtures",
+      "preservation",
+      "preview_binding",
+      "reconciliation_campaign",
+      "restricted_browser",
+      "runtime_parity",
+      "server_bundles",
+      "server_performance",
+      "shared_control",
+      "typecheck",
+      "unit",
+      "xero_campaign_fixtures"
+    ],
+    "authorization": {
+      "validitySeconds": 86400,
+      "actions": [
+        "preview.create",
+        "production.stage",
+        "production.promote",
+        "production.rollback"
+      ],
+      "rollback": {
+        "mode": "compatible_previous_only",
+        "schemaRollback": false
+      }
+    },
+    "migration": {
+      "mode": "none",
+      "expectedSchemaSha256": "84ef2811eeefb87f8be4ef5219ab031f37fd3fd424a390e4c80b4afba7f13a4d"
+    },
+    "runtime": {
+      "expectedSha256": "7847f929a137c3b0001dbcd5174e0a6be4c8f7417a78b95a46acc44d11ef0fcf",
+      "expectedProduction": {
+        "flags": {
+          "VARIABLE_CHARGE_PAIRED_WORKFLOW_ENABLED": {
+            "state": "known",
+            "value": true
+          },
+          "FCOS_ENABLE_FCUNO_FEDERATION": {
+            "state": "known",
+            "value": true
+          },
+          "FCOS_ENABLE_FCUNO_IDENTITY_SYNC": {
+            "state": "known",
+            "value": true
+          },
+          "FCOS_ENABLE_FCUNO_LEGACY_PASSWORD_LOGIN": {
+            "state": "known",
+            "value": true
+          }
+        },
+        "safety": {
+          "readOnly": false,
+          "externalActions": {
+            "salesforce_write": true,
+            "google_drive": true,
+            "email_delivery": true,
+            "missing_nom_b_reminders": true,
+            "outlook_calendar": false,
+            "growth_coaching_email": false,
+            "bank_execution": false,
+            "payment_promotion": false,
+            "xero_contact_sync": true,
+            "xero_financial_sync": true
+          }
+        },
+        "auth": {
+          "supabase": {
+            "state": "authenticated",
+            "target": "pjforfvchygdyqfcgpmw",
+            "mode": "service_role"
+          },
+          "salesforce": {
+            "state": "authenticated",
+            "target": "00D2x000000Ei4oEAC",
+            "mode": "application"
+          },
+          "xero": {
+            "state": "authenticated",
+            "target": "aa8c08e2-17fd-4874-b7bc-10ffd82db9d0",
+            "mode": "oauth"
+          },
+          "drive": {
+            "state": "unknown",
+            "target": "",
+            "mode": ""
+          },
+          "fcuno": {
+            "state": "unknown",
+            "target": "",
+            "mode": ""
+          },
+          "microsoft": {
+            "state": "unknown",
+            "target": "",
+            "mode": ""
+          },
+          "openai": {
+            "state": "unknown",
+            "target": "",
+            "mode": ""
+          }
+        }
+      },
+      "expectedPreview": {
+        "flags": {
+          "VARIABLE_CHARGE_PAIRED_WORKFLOW_ENABLED": {
+            "state": "known",
+            "value": true
+          },
+          "FCOS_ENABLE_FCUNO_FEDERATION": {
+            "state": "known",
+            "value": true
+          },
+          "FCOS_ENABLE_FCUNO_IDENTITY_SYNC": {
+            "state": "known",
+            "value": true
+          },
+          "FCOS_ENABLE_FCUNO_LEGACY_PASSWORD_LOGIN": {
+            "state": "known",
+            "value": true
+          }
+        },
+        "safety": {
+          "readOnly": true,
+          "externalActions": {
+            "salesforce_write": false,
+            "google_drive": false,
+            "email_delivery": false,
+            "missing_nom_b_reminders": false,
+            "outlook_calendar": false,
+            "growth_coaching_email": false,
+            "bank_execution": false,
+            "payment_promotion": false,
+            "xero_contact_sync": false,
+            "xero_financial_sync": false
+          }
+        },
+        "auth": {
+          "supabase": {
+            "state": "authenticated",
+            "target": "pjforfvchygdyqfcgpmw",
+            "mode": "service_role"
+          },
+          "salesforce": {
+            "state": "authenticated",
+            "target": "00D2x000000Ei4oEAC",
+            "mode": "application"
+          },
+          "xero": {
+            "state": "authenticated",
+            "target": "aa8c08e2-17fd-4874-b7bc-10ffd82db9d0",
+            "mode": "oauth"
+          }
+        }
+      }
+    },
+    "changes": [
+      "Qualify the published hosted controller and explicit source-configuration compatibility successor; no Production execution, application handoff or financial mutation."
+    ],
+    "verification": {
+      "projectSettings": {
+        "buildCommand": "npm run build",
+        "devCommand": null,
+        "framework": "vite",
+        "installCommand": "npm install",
+        "nodeVersion": "24.x",
+        "outputDirectory": null,
+        "rootDirectory": null
+      },
+      "publicBuildEnvironment": {
+        "FCOS_ENABLE_FCUNO_FEDERATION": "true",
+        "FCUNO_IDENTITY_ISSUER": "https://fcuno.com",
+        "VITE_FCOS_ENABLE_FCUNO_OIDC": "true",
+        "VITE_SUPABASE_ANON_KEY": "sb_publishable_J13FEkUAVHqa2GVLthqi-w_AXVaqVcT",
+        "VITE_SUPABASE_URL": "https://pjforfvchygdyqfcgpmw.supabase.co"
+      },
+      "runtime": {
+        "arch": "x64",
+        "image": "ghcr.io/hocheunglai-oss/fcos-release-checks@sha256:1cb176a00c6224f94a668f76de51186e2d0b3cd95d631af4289467451caf40ef",
+        "node": "v24.18.0",
+        "platform": "linux",
+        "python": "Python 3.11.2"
+      },
+      "salesforceReadCredential": {
+        "apiVersion": "v67.0",
+        "authenticationProtocol": "client_credentials",
+        "clientConfigurationReadbackSha256": "7cc7f88d9ac2ef8b14d4d7d6660625d12aac419f736f3bff892426541a90fb38",
+        "clientId": "3MVG9Gdzj3taRxuO3r7fSl43gCfsDeiAiRqLtEc.y3AXs0djUQZpJPsQcUciYWOVP96zm5ouril_BhL.bu7Cf",
+        "effectivePermissionsSha256": "814f9d2945b7bbbf371f96dd39c056aae73e18725933075c274f8ee4bdac0ae5",
+        "externalClientApplicationId": "0xIHF00000022iT2AQ",
+        "instanceUrl": "https://fratellicosulich--devee.sandbox.my.salesforce.com",
+        "isSandbox": true,
+        "issuedAt": 1792291377000,
+        "kind": "fcos_salesforce_client_credentials_recipe_reader",
+        "notAfter": 1794787200000,
+        "orgId": "00D1m0000008kioEAA",
+        "originalFixtureIdentitySha256": "149b054ee2b95dbbfc1a4715481908a91e0ae4532d34da0b874bb95dc2f4b8bd",
+        "originalSetupReceiptSha256": "96a7f429ac7457b8cd91cc20fd045aba5ac0a44e7aa955dfa7a4e711355627a8",
+        "permissionRecipeSha256": "3675eeae219e215c1a799757e48d1d468a41eb9cf3df3d3eb06111b9318082e3",
+        "profileId": "00e1m000000k0mgAAA",
+        "profileName": "Minimum Access - API Only Integrations",
+        "providerPermissionMode": "provider_business_data_read_only",
+        "providerWideReadOnly": false,
+        "readOnlyScope": [
+          "business_records",
+          "metadata",
+          "administration",
+          "executable_grants"
+        ],
+        "residualCapabilities": [
+          "chatter_collaboration",
+          "user_profile_self_service"
+        ],
+        "rootAcceptanceSha256": "f8c67620c8707674ebbffd4e0c60034093385fd424f6e067b655ecc4505bd6c7",
+        "runAsAcceptanceSha256": "bea3431c30eac3f5b14cce322dfb7035c2881571227ce35933ae5f1a452b5224",
+        "schemaVersion": 3,
+        "scopes": [
+          "api",
+          "id"
+        ],
+        "sessionUseSeconds": 300,
+        "userId": "005HF0000067BOIYA2",
+        "userLicenseId": "1001m000000M4TXAA0",
+        "userLicenseName": "Salesforce Integration",
+        "username": "fcos.hosted.reader.00d1m0000008kioeaa@cosulich.com.hk.devee"
+      },
+      "vercelPreviewWriterCredential": {
+        "bearerSha256": "fc04d03f679f7cf79372e4e24bdcef2d9bacbf7d84379dacf05a290e3c44ccad",
+        "createdAt": 1792250300863,
+        "exactIdMetadataReadbackSha256": "77882c6794cbfedbaae9e4317b2c01267f330c4de5254c263e50b5c377cbf6e5",
+        "expiresAt": 1794787200000,
+        "kind": "fcos_vercel_preview_project_writer",
+        "name": "fcos-hosted-preview-writer-297aa8b8-6303-4dd4-bf05-d81284bc6d43",
+        "operationId": "preview-writer-297aa8b8-6303-4dd4-bf05-d81284bc6d43",
+        "originalIssuanceResponseSha256": "3395f6d33de51ef27238b8b068327992fdaec8b3fc71d5ef33c46aa5ebd29c9e",
+        "projectId": "prj_0pUORPGfFPyKtYhKr6ecwJ9ydvEs",
+        "rootAcceptanceSha256": "89b4f947ca505a2117d38f6dc488475f8ce3c99838a02ad0010b5b9b826c97e0",
+        "schemaVersion": 1,
+        "teamId": "team_MbKDazzCrou3eKTuausPv4X2",
+        "tokenId": "Xw5cYekGQ3K8TlcsA922erQDGKayLDCmkyMXDmKNoZAmWGBL"
+      },
+      "vercelReadCredential": {
+        "bearerSha256": "5a6e3e28d76a81be53cb7750be2f12a8474cd869faa978fdf409e5d31bf0b8a1",
+        "clientId": "oac_RCDKFCdeiUQEEN0QUuErv3Mb",
+        "configurationId": "icfg_31eMXz0LcLRKcPAjC1PvsigR",
+        "integrationId": "oac_RCDKFCdeiUQEEN0QUuErv3Mb",
+        "issuedAt": 1792247917271,
+        "kind": "fcos_vercel_read_integration",
+        "notAfter": 1794787200000,
+        "oauthExchangeReceiptSha256": "f4edf9615b24a3c15d30d5584b8cf05abb6a317dfc9d3d4784dc0c84341ec977",
+        "projectId": "prj_0pUORPGfFPyKtYhKr6ecwJ9ydvEs",
+        "rootAcceptanceSha256": "7ea70a15d2ea187572ac53286e47a1067f11fc7df603b98542901cf8f0b5f419",
+        "schemaVersion": 1,
+        "scopes": [
+          "read:deployment",
+          "read:integration-configuration",
+          "read:project"
+        ],
+        "teamId": "team_MbKDazzCrou3eKTuausPv4X2"
+      },
+      "vercelSourceTransport": "fcos_source_api_archive_v1"
+    },
+    "qualificationSource": {
+      "ref": "refs/heads/codex/hosted-qualification-archive-f0bb486474d3",
+      "bootstrapSha": "ec69968da3c3c08f861bb410c97db570d118b2f4",
+      "callerWorkflowRef": "hocheunglai-oss/fcos/.github/workflows/authenticated-release.yml@refs/heads/codex/hosted-qualification-archive-f0bb486474d3",
+      "controllerSha": "f0bb486474d3267b324704acbe3fef5576126576",
+      "candidateSha": "2ef733d17dd12314c72971c2220b2b09903a6bf0"
+    },
+    "legacyReleaseContainment": {
+      "effects": [
+        {
+          "effectSha256": "f37c5d416e0ae56cb4d3c8225a62eb700c543a9646c3be57351a29fd5fab013a",
+          "importId": "exact04ee-pr114-permission-corrected-three-successor-b53f1cbd-80ca-4f28-ac48-698a21e35b29",
+          "kind": "legacy_preview_env_row"
+        },
+        {
+          "effectSha256": "b7f6d3a679ea4691c62aff60c5039bd784d0f81887617faac8131cc0caf52bd7",
+          "importId": "production-execution-environment-d706f8b8-92c2-4f80-b85b-8724ea35e5c0",
+          "kind": "production_resume_environment_policy"
+        }
+      ],
+      "policy": "legacy_control_plane_effects_v1",
+      "schemaVersion": 1,
+      "selection": "detached_node24_before_candidate_v1"
+    },
+    "dependencies": {
+      "nom_b": {
+        "artifactsSha256": "b154540dd4096d952467e3112b05156796fd58e9fa86ee0c3c180064c6b4e854",
+        "handoffSha256": "61f666f39df06b8282e485eb1009204141fa5acc790e1aab682a17a04df15106",
+        "recipeSha256": "cd972c2a679d6bf9fe48a551d28fa0cfc0e801591d718867def265c0b9bc13f8"
+      },
+      "preservation": {
+        "envelopeSha256": "fa8ce6afdf169c19ffd1789b565153ac5f6c85f0577517e7ca8d8087f5461ed9",
+        "membershipSha256": "eba1d15b059d53a25dd8c46cf39a4fdae84b8a52853d5fcaa3f68a779a60e481",
+        "rowCount": 9769,
+        "snapshotSha256": "fe79c00851723466f8b30f44a2dfe4e5c82feb1b9273045ddbc6dffe8b3653c1",
+        "tableCount": 6
+      },
+      "schemaVersion": 1
+    }
+  },
+  "policy": {
+    "repository": "hocheunglai-oss/fcos",
+    "repositoryId": "1278654816",
+    "ref": "refs/heads/main",
+    "registrationJob": "release / prepare",
+    "approvalJobPrefix": "release / production / ",
+    "resumeJobPrefix": "release / execute / ",
+    "workflows": [
+      {
+        "callerWorkflowRef": "hocheunglai-oss/fcos/.github/workflows/hosted-release.yml@refs/heads/main",
+        "jobWorkflowRef": "hocheunglai-oss/fcos/.github/workflows/hosted-release-controller.yml@64aa338b04cee7e05bde0ca9bfd10b81ac001a65",
+        "jobWorkflowSha": "64aa338b04cee7e05bde0ca9bfd10b81ac001a65"
+      }
+    ],
+    "qualificationAdmission": {
+      "repository": "hocheunglai-oss/fcos",
+      "repositoryId": "1278654816",
+      "ref": "refs/heads/codex/hosted-qualification-archive-f0bb486474d3",
+      "bootstrapSha": "ec69968da3c3c08f861bb410c97db570d118b2f4",
+      "callerWorkflowRef": "hocheunglai-oss/fcos/.github/workflows/authenticated-release.yml@refs/heads/codex/hosted-qualification-archive-f0bb486474d3",
+      "callerWorkflowSha": "ec69968da3c3c08f861bb410c97db570d118b2f4",
+      "jobWorkflowRef": "hocheunglai-oss/fcos/.github/workflows/hosted-release-controller.yml@f0bb486474d3267b324704acbe3fef5576126576",
+      "jobWorkflowSha": "f0bb486474d3267b324704acbe3fef5576126576",
+      "candidateSha": "2ef733d17dd12314c72971c2220b2b09903a6bf0",
+      "setupSha256": "e7da38e499cf8b12ec8d5f3d9a381cc2a18938558308c2877a83763a15a53cf9"
+    }
+  },
+  "checkerManifest": [
+    {
+      "path": ".dockerignore",
+      "sha256": "bcdf99161727e31d318680f629325c33c3be4e598083bc4dfea707e2a9c7b8b4",
+      "byteLength": 270
+    },
+    {
+      "path": "Dockerfile.vercel",
+      "sha256": "5027ffb793599035358b87f8c9c1489ce53224ab33419cd7d565b648c3cdceac",
+      "byteLength": 589
+    },
+    {
+      "path": "config/fcosConnections.js",
+      "sha256": "36132abd2ae8d82ac19f434b495b39f26e3bab99f0e364b0d4d70eb88b0f923d",
+      "byteLength": 26030
+    },
+    {
+      "path": "config/legacyReleaseContainment.js",
+      "sha256": "b2ab4e9dd277636c801a37d3f846a960480ff0dd847b852292969a3cb385ced0",
+      "byteLength": 1357
+    },
+    {
+      "path": "package-lock.json",
+      "sha256": "13506d3330b7e82f8280fc04438738c5fe6c776d640eb4d381c3d099a266a71d",
+      "byteLength": 433624
+    },
+    {
+      "path": "package.json",
+      "sha256": "bbf43cb997ef6c90b2f8847bb47d997127bf09c376cea0f8257567e75e575fe7",
+      "byteLength": 6226
+    },
+    {
+      "path": "supabase/functions/release-coordinator/Dockerfile",
+      "sha256": "5027ffb793599035358b87f8c9c1489ce53224ab33419cd7d565b648c3cdceac",
+      "byteLength": 589
+    },
+    {
+      "path": "supabase/functions/release-coordinator/approval.mjs",
+      "sha256": "258fc2e259b4a48648f1b183b28640ce107ffc664889edfc5489ac687cf87b1e",
+      "byteLength": 12017
+    },
+    {
+      "path": "supabase/functions/release-coordinator/auth.mjs",
+      "sha256": "ab42c8c9dcf4690d9fa902e1b476ec49e976527a453088b3a5422489a5a20f61",
+      "byteLength": 7165
+    },
+    {
+      "path": "supabase/functions/release-coordinator/core.mjs",
+      "sha256": "4537350292775bfa7934174985c1b8d19af02f67ca4b4215da90660f02100808",
+      "byteLength": 15259
+    },
+    {
+      "path": "supabase/functions/release-coordinator/deno.json",
+      "sha256": "29ea751d42a854a1531a2548f9cd091badf5a029731742faf1e214885372ab2e",
+      "byteLength": 79
+    },
+    {
+      "path": "supabase/functions/release-coordinator/index.ts",
+      "sha256": "52803513f43b23513ad4cd5ae574ecc800bb3679c132c72de31377a83dfeaabc",
+      "byteLength": 11121
+    },
+    {
+      "path": "supabase/functions/release-coordinator/legacy-containment.mjs",
+      "sha256": "a5631f06df503d7ff74a1e5fba5d553dcd168e91b915a3cc1585b7504aacb4c3",
+      "byteLength": 3868
+    },
+    {
+      "path": "supabase/functions/release-coordinator/runtime.mjs",
+      "sha256": "0f06529117db654b5f5f9c44465e6596e135702c7b6187721775ad75ee00405e",
+      "byteLength": 3879
+    },
+    {
+      "path": "supabase/functions/release-coordinator/server.mjs",
+      "sha256": "61f679de1aaaf5b38d4de60ecc040705facc7e07fae7d8e821f676f88376c356",
+      "byteLength": 2362
+    },
+    {
+      "path": "supabase/functions/release-coordinator/supabase-root-2021.crt",
+      "sha256": "700723581420dd1ac98fd7e9ac529f0ef210eadcaf87fc868a3ad7d114c2f3b7",
+      "byteLength": 1367
+    },
+    {
+      "path": "vercel.json",
+      "sha256": "5494052d829a3b3611b651ad88c489e4148d479d560c6fd809b733ca13c2c9e6",
+      "byteLength": 169
+    }
+  ]
+}

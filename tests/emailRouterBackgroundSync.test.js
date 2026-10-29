@@ -30,13 +30,13 @@ test('Email Router background cadence is thirty seconds on every FCOS page', asy
   assert.match(client, /emailRouterBackgroundSync/);
 });
 
-test('server synchronization uses a short dedupe window and non-mutating browser policy', () => {
+test('server synchronization uses a short dedupe window and a mutation policy for its mailbox claims', () => {
   const nowMs = Date.parse('2026-08-06T10:00:30.000Z');
   assert.equal(emailRouterBackgroundSyncDue('2026-08-06T10:00:02.000Z', { nowMs }), true);
   assert.equal(emailRouterBackgroundSyncDue('2026-08-06T10:00:03.000Z', { nowMs }), false);
   assert.equal(emailRouterBackgroundSyncDue(null, { nowMs }), true);
   const policy = registeredHandlerBehavior('emailRouterBackgroundSync');
-  assert.equal(policy.mutation, false);
+  assert.equal(policy.mutation, true);
   assert.equal(policy.cache, 'none');
 });
 
