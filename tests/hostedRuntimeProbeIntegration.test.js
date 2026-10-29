@@ -31,7 +31,7 @@ test('metered collector and protected runtime endpoint agree on identity, quota 
       rpcCalls.push(name);
       if(name==='xero_shared_status'||name==='xero_shared_release')return {data:quota};
       if(name==='xero_shared_reserve')return {data:{id:p.p_id,tenant_id:tenant,owner_key:p.p_owner_key,state:'active',operation_remaining:1,verification_remaining:0,verification_reserved:0,expires_at:new Date(now+60000).toISOString()}};
-      if(name==='xero_shared_admit_scoped_v1'){assert.equal(p.p_id,requestId);return {data:{requestId,tenantId:tenant,deadlineAt:new Date(now+120000).toISOString()}};}
+      if(name==='xero_shared_admit'){assert.equal(p.p_id,requestId);return {data:{requestId,tenantId:tenant,deadlineAt:new Date(now+120000).toISOString()}};}
       if(name==='xero_shared_observe')return {data:{recorded:true}};
       throw Error('Unexpected RPC');
     }};
@@ -59,7 +59,7 @@ test('metered collector and protected runtime endpoint agree on identity, quota 
       }});
     assert.equal(result.auth.xero.state,'authenticated');assert.equal(result.auth.xero.target,tenant);
     assert.equal(result.runtimeValidUntil,new Date(now+30000).toISOString());
-    assert.deepEqual(rpcCalls,['xero_shared_status','xero_shared_reserve','xero_shared_admit_scoped_v1','xero_shared_observe','xero_shared_release']);
+    assert.deepEqual(rpcCalls,['xero_shared_status','xero_shared_reserve','xero_shared_admit','xero_shared_observe','xero_shared_release']);
     assert.equal(gets.length,3);assert.doesNotMatch(JSON.stringify(result),/private-|access_token|refresh_token/);
   }.toString()})(${JSON.stringify(urls)}).catch(e=>{console.error(e);process.exitCode=1;});`;
   const child = spawnSync(process.execPath,['--input-type=module','-e',script],{env:{},encoding:'utf8',timeout:10000});
