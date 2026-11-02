@@ -1,14 +1,24 @@
 /** Isolated Node 24 deployment target. Do not deploy inside an app/provider secret environment. */
 import { createServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
+import { createHash } from 'node:crypto';
 import pg from 'pg';
 import { createConfiguredCoordinator } from './index.ts';
 import { coordinatorDatabaseOptions, verifyDatabaseIdentity } from './runtime.mjs';
+import { canonicalJson } from './core.mjs';
 /** Bridge the peer connection lifetime into the Fetch request. A completed input
  * stream is not a disconnect; only an aborted input or unfinished response close
  * cancels future work. Never race or abandon an already-started database call. */
-export function createNodeCoordinatorServer(handle) {
+export function createNodeCoordinatorServer(handle,{policySha256}={}) {
+  if(policySha256!==undefined&&!/^[a-f0-9]{64}$/.test(policySha256))throw new Error('COORDINATION_HEALTH_POLICY_INVALID');
   return createServer(async(req,res)=>{
+    // This digest attests only the loaded, validated public policy. It never
+    // enters the authenticated handler or reads credentials or journal data.
+    if(req.url==='/health'&&policySha256!==undefined){
+      const headers={'content-type':'application/json','cache-control':'no-store'};
+      if(req.method!=='GET'){res.writeHead(405,{...headers,allow:'GET'});res.end();return;}
+      res.writeHead(200,headers);res.end(JSON.stringify({kind:'fcos_coordinator_health_v1',policySha256}));return;
+    }
     const controller=new AbortController(),cancel=()=>controller.abort();
     const close=()=>{if(!res.writableFinished)cancel();};
     req.once('aborted',cancel);res.once('close',close);
@@ -36,7 +46,8 @@ export async function startCoordinatorServer({env=process.env}={}) {
   try {
     await verifyDatabaseIdentity(query);
     const handle=createConfiguredCoordinator({env,query});
-    const server=createNodeCoordinatorServer(handle);
+    const policySha256=createHash('sha256').update(canonicalJson(JSON.parse(env.FCOS_COORDINATOR_POLICY))).digest('hex');
+    const server=createNodeCoordinatorServer(handle,{policySha256});
     const port=Number(env.PORT??8080);if(!Number.isSafeInteger(port)||port<1||port>65535) throw new Error('COORDINATION_PORT_INVALID');
     await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,resolve);});
     return {server,close:async()=>{await new Promise(resolve=>server.close(resolve));await pool.end();}};
