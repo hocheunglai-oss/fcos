@@ -17,7 +17,7 @@ import { successorLiveNormalCoverageVerified } from './lib/runtime-compatibility
 import { githubReleaseReads, RELEASE_REPOSITORY } from './lib/release-evidence.mjs';
 import { collectPreviewEmailSignerEvidence, previewEmailSignerEnabled } from './lib/preview-email-signer.mjs';
 import { assertHostedOrdinaryBrowserSource, assertHostedOrdinaryBrowserContext } from './lib/hosted-release/browser-profile.mjs';
-import { BE6_NORMAL_BROWSER_SHA, BE6_NORMAL_BROWSER_CONTRACT, isBe6NormalSpec, BE6_EMAIL_ROUTER_FAILURE_CODES,
+import { BE6_NORMAL_BROWSER_SHA, BE6_NORMAL_BROWSER_CONTRACT, isCurrentNormalSpec, BE6_EMAIL_ROUTER_FAILURE_CODES,
   be6EmailRouterFailureCode, be6BuyerInvoicesDueRead, be6HedgeResponseKind, be6NormalDataLoaded,
   be6NormalOpenSurface, be6NormalSurfaceReason, be6NormalSurfaceUnavailable } from './lib/be6-normal-browser-contract.mjs';
 
@@ -169,7 +169,7 @@ export function assertCompatibilityNormalIdentity(auth, { approvedEmail } = {}) 
 }
 
 export function compatibilityNormalDataLoaded(spec, payload) {
-  const candidateResult = isBe6NormalSpec(spec) ? be6NormalDataLoaded(spec, payload) : null;
+  const candidateResult = isCurrentNormalSpec(spec) ? be6NormalDataLoaded(spec, payload) : null;
   if (candidateResult) return candidateResult;
   const data = payload?.data ?? payload;
   if (!data || typeof data !== 'object' || data.error || data.cancelled || data.status === 'unavailable') return { loaded: false, rows: null };
@@ -181,30 +181,30 @@ export function compatibilityNormalDataLoaded(spec, payload) {
 }
 
 // Public diagnostics retain an outcome enum, never response content or errors.
-export async function compatibilityNormalReadResponse(spec, response) {
+export async function compatibilityNormalReadResponse(spec, response, dataLoaded = compatibilityNormalDataLoaded) {
   if (!response.ok()) {
     let errorCode;
-    if (isBe6NormalSpec(spec) && spec.module === 'email_router') {
+    if (isCurrentNormalSpec(spec) && spec.module === 'email_router') {
       try { errorCode = be6EmailRouterFailureCode(await response.json()); } catch { /* HTTP failure stays fatal. */ }
     }
     return { loaded: false, rows: null, reason: 'DATA_NON_2XX', ...(errorCode ? { errorCode } : {}) };
   }
   let payload;
   try { payload = await response.json(); } catch { return { loaded: false, rows: null, reason: 'DATA_JSON_FAILURE' }; }
-  const result = compatibilityNormalDataLoaded(spec, payload);
+  const result = dataLoaded(spec, payload);
   return result.loaded ? result : { ...result, reason: 'DATA_SHAPE_REJECTED' };
 }
 
 // The runtime and ordering tests share the actual response observer. Every
 // failed relevant response remains sticky even when a later response succeeds.
-export function createCompatibilityNormalResponseObserver(spec, responseSettlement, responses, failures, dataResponses = []) {
+export function createCompatibilityNormalResponseObserver(spec, responseSettlement, responses, failures, dataResponses = [], dataLoaded = compatibilityNormalDataLoaded) {
   const state = { workflowLoaded: false, settingsLoaded: false, responseSeen: false, pending: 0 };
   const observe = response => {
     let pathname;
     try { pathname = new URL(response.url()).pathname; } catch { failures.push('UNAVAILABLE_SURFACE'); return; }
     const workflow = spec.module === 'review' && pathname === '/api/functions/exceptionReviewWorkflowList';
     if (!workflow && pathname !== `/api/functions/${spec.handler}`) return;
-    const hedgeKind = isBe6NormalSpec(spec) && spec.module === 'hedge_desk' ? be6HedgeResponseKind(response) : null;
+    const hedgeKind = isCurrentNormalSpec(spec) && spec.module === 'hedge_desk' ? be6HedgeResponseKind(response) : null;
     if (hedgeKind === 'invalid') { failures.push('DATA_SHAPE_REJECTED'); return; }
     const dataResponse = !workflow ? { module: spec.module, handler: spec.handler,
       status: typeof response.status === 'function' ? response.status() : 0,
@@ -226,7 +226,7 @@ export function createCompatibilityNormalResponseObserver(spec, responseSettleme
           state.settingsLoaded = !payload?.error && Array.isArray(payload?.data);
           if (!state.settingsLoaded) failures.push('DATA_SHAPE_REJECTED');
         } else {
-          const loaded = await compatibilityNormalReadResponse(spec, response);
+          const loaded = await compatibilityNormalReadResponse(spec, response, dataLoaded);
           responses.push(loaded);
           if (dataResponse && loaded.errorCode) dataResponse.errorCode = loaded.errorCode;
           if (loaded.reason) failures.push(loaded.reason);
@@ -280,7 +280,7 @@ export function compatibilityNormalModuleTerminalReason({ reason, failures = [],
 // Navigate the frozen business UI to the surface backed by each mandatory
 // handler. Controls here select views only; mutation buttons are never used.
 export async function compatibilityNormalOpenSurface(spec, page) {
-  if (isBe6NormalSpec(spec)) {
+  if (isCurrentNormalSpec(spec)) {
     await be6NormalOpenSurface(spec, page);
     if (spec.module === 'markets') return;
   }
@@ -294,7 +294,7 @@ export async function compatibilityNormalOpenSurface(spec, page) {
 }
 
 async function compatibilityNormalSurfaceReasonOnce(spec, page, loaded, body) {
-  if (isBe6NormalSpec(spec)) {
+  if (isCurrentNormalSpec(spec)) {
     const result = await be6NormalSurfaceReason(spec, page, loaded);
     if (result !== undefined) return result;
   }
@@ -477,16 +477,16 @@ async function runCompatibilityNormalRole({ env = process.env, fetchImpl = globa
         headingLoaded = true;
         await compatibilityNormalOpenSurface(spec, page);
         const deadline = Date.now() + 30000;
-        while ((!responses.some(item => item.loaded) || isBe6NormalSpec(spec) && spec.module === 'hedge_desk' && !observed.state.settingsLoaded) && !failures.length && !blockReason() && Date.now() < deadline) await page.waitForTimeout(250);
+        while ((!responses.some(item => item.loaded) || isCurrentNormalSpec(spec) && spec.module === 'hedge_desk' && !observed.state.settingsLoaded) && !failures.length && !blockReason() && Date.now() < deadline) await page.waitForTimeout(250);
         const loaded = responses.find(item => item.loaded);
         if (blockReason()) { failModule(blockReason()); continue; }
         if (failures.length) { failModule(failures[0]); continue; }
-        if (isBe6NormalSpec(spec) && spec.module === 'hedge_desk' && !observed.state.settingsLoaded) { failModule(observed.state.pending ? 'DATA_DEADLINE' : 'DATA_NO_RESPONSE'); continue; }
+        if (isCurrentNormalSpec(spec) && spec.module === 'hedge_desk' && !observed.state.settingsLoaded) { failModule(observed.state.pending ? 'DATA_DEADLINE' : 'DATA_NO_RESPONSE'); continue; }
         if (!loaded) { failModule(!observed.state.responseSeen ? 'DATA_NO_RESPONSE' : observed.state.pending ? 'DATA_DEADLINE' : 'DATA_SHAPE_REJECTED'); continue; }
         if (/\/login(?:\?|$)/.test(page.url())) { failModule('LOGIN_REDIRECT'); continue; }
         const body = await page.locator('body').innerText();
         if (/Access denied/i.test(body)) { failModule('ACCESS_MISSING'); continue; }
-        if (isBe6NormalSpec(spec) ? await be6NormalSurfaceUnavailable(page) : /Something went wrong|temporarily unavailable|could not (?:load|read|verify)|Unavailable/i.test(body)) { failModule('UNAVAILABLE_SURFACE'); continue; }
+        if (isCurrentNormalSpec(spec) ? await be6NormalSurfaceUnavailable(page) : /Something went wrong|temporarily unavailable|could not (?:load|read|verify)|Unavailable/i.test(body)) { failModule('UNAVAILABLE_SURFACE'); continue; }
         const surfaceReason = await compatibilityNormalSurfaceReason(spec, page, loaded, body);
         if (surfaceReason) { failModule(surfaceReason); continue; }
         if (spec.workflow) {
@@ -495,7 +495,7 @@ async function runCompatibilityNormalRole({ env = process.env, fetchImpl = globa
             // rendered after filtering; no Save/Approve/Settle control is used.
             await page.getByRole('button', { name: 'All', exact: true }).click();
             if (blockReason()) { failModule(blockReason()); continue; }
-            if (isBe6NormalSpec(spec) ? Boolean(await compatibilityNormalSurfaceReason(spec, page, loaded, body)) : !await page.locator('table tbody tr').count() && !/No .*found|No .*match/i.test(await page.locator('body').innerText())) { failModule('WORKFLOW_MISSING'); continue; }
+            if (isCurrentNormalSpec(spec) ? Boolean(await compatibilityNormalSurfaceReason(spec, page, loaded, body)) : !await page.locator('table tbody tr').count() && !/No .*found|No .*match/i.test(await page.locator('body').innerText())) { failModule('WORKFLOW_MISSING'); continue; }
             if (!observed.state.workflowLoaded || !responses.some(item => item.loaded)) { failModule('WORKFLOW_MISSING'); continue; }
           } else if (!/Workflow|Next owner/i.test(body) || loaded.rows === 0) { failModule('WORKFLOW_MISSING'); continue; }
         }

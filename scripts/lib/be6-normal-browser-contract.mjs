@@ -2,6 +2,10 @@
 // It is not a fallback for a future application or the frozen first rollout.
 export const BE6_NORMAL_BROWSER_SHA = 'be6daf6162480ca77ec8d4f04fe5aaa5b228a22c';
 export const BE6_NORMAL_BROWSER_CONTRACT = 'be6_normal_read_v1';
+// The admitted application harness shares these UI contracts, but never joins
+// the immutable be6 compatibility profile or its candidate/source admission.
+export const APPLICATION_NORMAL_UI_CONTRACT = 'application_v2_current_read_v1';
+export const isCurrentNormalSpec = spec => [BE6_NORMAL_BROWSER_CONTRACT, APPLICATION_NORMAL_UI_CONTRACT].includes(spec?.sourceContract);
 export const BE6_EMAIL_ROUTER_FAILURE_CODES = Object.freeze([
   'EMAIL_ROUTER_STORAGE_NOT_CONFIGURED', 'EMAIL_ROUTER_USER_INACTIVE', 'EMAIL_ROUTER_SIGN_IN_REQUIRED',
   'EMAIL_ROUTER_SESSION_INVALID', 'EMAIL_ROUTER_MAILBOX_UNRESOLVED', 'EMAIL_ROUTER_CONNECTION_UNAVAILABLE',
@@ -67,9 +71,12 @@ export async function be6NormalOpenSurface(spec, page) {
 // Visible request failures remain fatal. Plain business-cell placeholders and
 // accurate read-only notices are not an assertion that a successful read failed.
 export async function be6NormalSurfaceUnavailable(page) {
-  return Boolean(await page.getByText(/^(?:Something went wrong|Unable to load (?:incoming payments|buyer invoices)|Access denied)$/i).count()
-    || await page.locator('[role="alert"]:visible, .text-destructive:visible').count()
-    || await page.locator('[aria-label]:visible').filter({ hasText: /(?:Data|Salesforce) · Unavailable/ }).count());
+  // DashboardSettings.ErrorBlock uses this exact source-owned combination;
+  // text-destructive alone also styles legitimate negative business amounts.
+  if (await page.locator('[role="alert"]:visible, [class~="border-destructive/20"][class~="bg-destructive/10"]:visible').count()) return true;
+  const fixed = page.getByText(/^(?:Something went wrong|Unable to load (?:incoming payments|buyer invoices)|Access denied)$/i);
+  for (let index = 0; index < await fixed.count(); index += 1) if (await fixed.nth(index).isVisible()) return true;
+  return Boolean(await page.locator('[aria-label]:visible').filter({ hasText: /(?:Data|Salesforce) · Unavailable/ }).count());
 }
 
 export async function be6NormalSurfaceReason(spec, page, loaded) {

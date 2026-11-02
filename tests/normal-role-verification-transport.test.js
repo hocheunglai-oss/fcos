@@ -215,7 +215,16 @@ test('dedicated notifications forwards only literal non-secret selector and boun
     assert.equal(await run(f), 1);
     assert.deepEqual(f.calls.map(row => row.kind), ['abort']);
   }
-  assert.equal(await run(fixture({ url: `${origin}/api/work-notifications`, body, requestHeaders: headers }), normalRoleRequestAllowed), 1);
+  const applicationRead = fixture({ url: `${origin}/api/work-notifications`, body, requestHeaders: headers });
+  assert.equal(await run(applicationRead, normalRoleRequestAllowed), 0);
+  assert.deepEqual(applicationRead.calls.map(row => row.kind), ['fetch', 'fulfill']);
+  for (const changed of [{ body: { ...body, sync: false } }, { body: { ...body, limit: 101 } },
+    { requestHeaders: { ...headers, 'x-fcos-function-name': 'workNotificationsState' } },
+    { url: `${origin}/api/work-notifications?selector=list` }]) {
+    const denied = fixture({ url: `${origin}/api/work-notifications`, body, requestHeaders: headers, ...changed });
+    assert.equal(await run(denied, normalRoleRequestAllowed), 1);
+    assert.deepEqual(denied.calls.map(row => row.kind), ['abort']);
+  }
 });
 
 test('only exact optional script is excluded before fetch; escaped writes remain fatal with fixed categories', async () => {

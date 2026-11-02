@@ -11,6 +11,7 @@ import {BE6_NORMAL_BROWSER_SHA} from '../scripts/lib/be6-normal-browser-contract
 import {BE6_COMPATIBILITY_NORMAL_MODULES, COMPATIBILITY_NORMAL_MODULES, be6CompatibilityNormalRequestAllowed,
   compatibilityNormalOpenSurface, compatibilityNormalSurfaceReason, compatibilityNormalDataLoaded,
   createCompatibilityNormalResponseObserver, createCompatibilityNormalResponseSettlement, compatibilityNormalModuleTerminalReason} from '../scripts/runtime-compatibility-normal-role.mjs';
+import{NORMAL_ROLE_MODULES,normalModuleDataLoaded,normalRoleRequestAllowed}from'../scripts/normal-role-release.mjs';
 import {be6NormalSurfaceUnavailable} from '../scripts/lib/be6-normal-browser-contract.mjs';
 // Local-only actual immutable components and actual hooks/API serializers.
 // Only appClient/auth/context/chrome integrations are replaced. Every network
@@ -32,10 +33,11 @@ const entry=`import React,{useState}from'react';import{createRoot}from'react-dom
 import Review from'@/pages/ReviewQueue';import Collections from'@/pages/PaymentCollections';import Markets from'@/pages/Markets';import HedgeDesk from'@/pages/HedgeDesk';
 import DashboardStemTable from'@/components/dashboard/DashboardStemTable';import DashboardKpis from'@/components/dashboard/DashboardKpis';
 import{Tabs,TabsList,TabsTrigger,TabsContent}from'@/components/ui/tabs';
-function Dashboard({empty=false,hidden=false}){const[tab,setTab]=useState('overview');return <><h1>Dashboard</h1><DashboardKpis summary={{}}/><Tabs value={tab} onValueChange={setTab}><TabsList><TabsTrigger value="overview">Overview</TabsTrigger><TabsTrigger value="stems">STEMs</TabsTrigger></TabsList><TabsContent value="overview">Overview</TabsContent><TabsContent value="stems"><div style={hidden?{display:'none'}:{}}><DashboardStemTable result={{stems:empty?[]:[{Id:'local-stem',Name:'LOCAL STEM'}],total:empty?0:1}} loading={false}/></div></TabsContent></Tabs></>}
+function Dashboard({empty=false,hidden=false,failure=false,hiddenFailure=false}){const[tab,setTab]=useState('overview');return <><h1>Dashboard</h1><p className="text-destructive">-$1,200.00</p><p role="status">This environment is read-only. Data remain available.</p>{failure?<div role="alert" style={hiddenFailure?{display:'none'}:{}}>Unable to load buyer invoices</div>:null}<DashboardKpis summary={{}}/><Tabs value={tab} onValueChange={setTab}><TabsList><TabsTrigger value="overview">Overview</TabsTrigger><TabsTrigger value="stems">STEMs</TabsTrigger></TabsList><TabsContent value="overview">Overview</TabsContent><TabsContent value="stems"><div style={hidden?{display:'none'}:{}}><DashboardStemTable result={{stems:empty?[]:[{Id:'local-stem',Name:'LOCAL STEM'}],total:empty?0:1}} loading={false}/></div></TabsContent></Tabs></>}
 let root;window.renderBe6=options=>{root?.unmount();root=createRoot(document.getElementById('root'));const page=options.kind==='review'?<Review/>:options.kind==='markets'?<Markets/>:options.kind==='hedge_desk'?<HedgeDesk/>:options.kind==='dashboard'?<Dashboard {...options}/>:<Collections/>;root.render(<MemoryRouter initialEntries={[options.route||'/']}>{page}</MemoryRouter>);};`;
-let browser,bundle,correctedBundle,correctedReviewSource;let contexts=0,networkCalls=0;
-async function compile(reviewOverride){
+function applicationSource(root,path){const content=readFileSync(root+'/'+path,'utf8');applicationSources.set(path,createHash('sha256').update(content).digest('hex'));return content;}
+let browser,bundle,correctedBundle,correctedReviewSource,applicationBundle;const applicationSources=new Map();let contexts=0,networkCalls=0;
+async function compile(reviewOverride,sourceRoot){
  const built=await build({stdin:{contents:entry,sourcefile:'be6-local-fixture.jsx',resolveDir:cwd,loader:'jsx'},bundle:true,write:false,format:'iife',platform:'browser',jsx:'automatic',logLevel:'silent',define:{'import.meta.env':'{}','import.meta.url':JSON.stringify('https://fcos-abcdefghi-hocheunglai-6535s-projects.vercel.app/local-fixture.js')},loader:{'.css':'empty'},plugins:[{name:'immutable-be6',setup(api){
   api.onResolve({filter:/^(?:@\/|\.\.?\/)/},args=>{
    if(args.namespace!=='be6'&&!args.path.startsWith('@/'))return;
@@ -45,12 +47,13 @@ async function compile(reviewOverride){
    if(!file)throw Error(`Immutable dependency missing: ${path}`);
    return{path:file,namespace:'be6'};
   });
-  api.onLoad({filter:/.*/,namespace:'be6'},args=>({contents:args.path.endsWith('.css')?'':args.path==='src/pages/ReviewQueue.jsx'&&reviewOverride?reviewOverride:source(args.path),loader:args.path.endsWith('.css')?'empty':args.path.endsWith('.jsx')?'jsx':'js',resolveDir:cwd}));
+  api.onLoad({filter:/.*/,namespace:'be6'},args=>({contents:args.path.endsWith('.css')?'':sourceRoot?applicationSource(sourceRoot,args.path):args.path==='src/pages/ReviewQueue.jsx'&&reviewOverride?reviewOverride:source(args.path),loader:args.path.endsWith('.css')?'empty':args.path.endsWith('.jsx')?'jsx':'js',resolveDir:cwd}));
   api.onLoad({filter:/.*/,namespace:'local-provider-fixture'},args=>({contents:stubs.get(args.path),loader:'js',resolveDir:cwd}));
  }}]});return built.outputFiles[0].text;
 }
 before(async()=>{
  bundle=await compile();
+ if(process.env.FCOS_CURRENT_APPLICATION_SOURCE_ROOT)applicationBundle=await compile(null,process.env.FCOS_CURRENT_APPLICATION_SOURCE_ROOT);
  if(process.env.FCOS_REVIEW_CORRECTION_SOURCE){
   const contents=readFileSync(process.env.FCOS_REVIEW_CORRECTION_SOURCE,'utf8');
   const sha256=createHash('sha256').update(contents).digest('hex');
@@ -60,7 +63,7 @@ before(async()=>{
  browser=await chromium.launch({headless:true});
 });
 after(async()=>{await browser?.close();if(browser)assert.equal(browser.isConnected(),false);assert.equal(contexts,0);assert.equal(networkCalls,0);
- if(process.env.FCOS_BE6_SOURCE_PROOF)writeFileSync(process.env.FCOS_BE6_SOURCE_PROOF,JSON.stringify({kind:'local_immutable_be6_render_proof',candidateSha:sha,sourceHashes:Object.fromEntries([...sources].map(([path,content])=>[path,createHash('sha256').update(content).digest('hex')])),stubbedProviderEntrypoints:[...stubs.keys()],correctedReviewSource,nodeVersion:process.version,browserVersion:browser?.version(),liveCoverage:false,externalCalls:networkCalls,browserClosed:true},null,2)+'\n',{flag:'wx'});
+ if(process.env.FCOS_BE6_SOURCE_PROOF)writeFileSync(process.env.FCOS_BE6_SOURCE_PROOF,JSON.stringify({kind:'local_immutable_be6_render_proof',candidateSha:sha,sourceHashes:Object.fromEntries([...sources].map(([path,content])=>[path,createHash('sha256').update(content).digest('hex')])),stubbedProviderEntrypoints:[...stubs.keys()],correctedReviewSource,currentApplicationSourceRoot:process.env.FCOS_CURRENT_APPLICATION_SOURCE_ROOT,applicationSourceHashes:Object.fromEntries(applicationSources),nodeVersion:process.version,browserVersion:browser?.version(),liveCoverage:false,externalCalls:networkCalls,browserClosed:true},null,2)+'\n',{flag:'wx'});
 });
 const origin='https://fcos-abcdefghi-hocheunglai-6535s-projects.vercel.app';
 const spec=kind=>BE6_COMPATIBILITY_NORMAL_MODULES.find(row=>row.module===kind);
@@ -68,11 +71,12 @@ const pulse={complete:true,asOfDate:'2026-10-30',latestMopsPublicationDate:'2026
 const snapshot={physicals:[],swaps:[],mops:[],clearing:[],counterparties:[],invoices:[],auditLogs:[],capabilities:{}};
 const clearStem={Id:'local-review',Name:'LOCAL REVIEW',Delivery_Date__c:'2026-10-01',Total_Invoice_Amount__c:1000,Total_Invoiced_Amount_From_Suppliers__c:900,QLIK_Total_Profit__c:100};
 async function fixture(options,run){const context=await browser.newContext({viewport:{width:1440,height:1000},serviceWorkers:'block'});contexts++;
- const calls=[],failures=[],responses=[],errors=[],settlement=createCompatibilityNormalResponseSettlement(),observed=createCompatibilityNormalResponseObserver(spec(options.kind),settlement,responses,failures);
+ const activeSpec=options.application?NORMAL_ROLE_MODULES.find(row=>row.module===options.kind):spec(options.kind);
+ const calls=[],failures=[],responses=[],errors=[],settlement=createCompatibilityNormalResponseSettlement(),observed=createCompatibilityNormalResponseObserver(activeSpec,settlement,responses,failures,[],options.application?normalModuleDataLoaded:compatibilityNormalDataLoaded);
  await context.route('**/*',async route=>{if(route.request().resourceType()==='document'&&route.request().url()===origin+'/'){await route.fulfill({status:200,contentType:'text/html',body:'<!doctype html><style>.hidden{display:none} @media(min-width:768px){.md\\:block{display:block}.md\\:hidden{display:none}} .market-price-board__mobile{display:none}</style><main id="root"></main>'});return;}networkCalls++;await route.abort();});
  let page;try{page=await context.newPage();page.setDefaultTimeout(4000);page.on('pageerror',e=>errors.push(e.message));
   await page.exposeFunction('localFixtureInvoke',async(name,body)=>{
-   calls.push({name,body});assert.equal(be6CompatibilityNormalRequestAllowed({url:origin+'/api/functions/'+name,method:'POST',body},origin),true,`actual candidate read policy: ${name}`);
+   calls.push({name,body});assert.equal((options.application?normalRoleRequestAllowed:be6CompatibilityNormalRequestAllowed)({url:origin+'/api/functions/'+name,method:'POST',body},origin),true,`actual candidate read policy: ${name}`);
    let data;
    if(name==='salesforceDashboardFiltered')data={recentStems:[options.exception?{...clearStem,QLIK_Total_Profit__c:-100}:clearStem]};
    else if(name==='exceptionReviewWorkflowList')data={byStemId:{},ownerOptions:[]};
@@ -89,7 +93,7 @@ async function fixture(options,run){const context=await browser.newContext({view
    await new Promise(resolve=>setTimeout(resolve,options.delay||0));return{data};
   });
   await page.goto(origin);
-  await page.addScriptTag({content:options.correctedReview?correctedBundle:bundle});assert.deepEqual(errors,[]);await page.evaluate(options=>window.renderBe6(options),options);
+  await page.addScriptTag({content:options.application?applicationBundle:options.correctedReview?correctedBundle:bundle});assert.deepEqual(errors,[]);await page.evaluate(options=>window.renderBe6(options),options);
   await run(page,{calls,failures,responses,observed,errors});if(!options.expectedPageError)assert.deepEqual(errors,[]);
   await page.close();await settlement.settle();
  }catch(error){throw new Error(String(error)+'\nLocal page errors: '+JSON.stringify(errors)+'\nCalls: '+JSON.stringify(calls)+'\nBody: '+(await page?.locator('body').innerText()),{cause:error});}finally{await context.close();contexts--;}
@@ -138,6 +142,14 @@ test('real be6 Dashboard table validates selected STEM rows despite truthful una
   assert.equal(await reason('dashboard',page,1,100),hidden?'UNAVAILABLE_SURFACE':null);
  });
 });
+test('real negative-value styling and read-only notices pass while visible semantic load errors fail',async()=>{
+ for(const hiddenFailure of [false,true])await fixture({kind:'dashboard',failure:true,hiddenFailure},async page=>{
+  await page.getByRole('heading',{name:'Dashboard',exact:true}).waitFor();await compatibilityNormalOpenSurface(spec('dashboard'),page);
+  assert.match(await page.locator('body').innerText(),/-\$1,200.00/);
+  assert.equal(await reason('dashboard',page,1),null);
+  assert.equal(await be6NormalSurfaceUnavailable(page),!hiddenFailure);
+ });
+});
 test('separate root application correction renders real exception amounts and preserves raw CSV values',{skip:!process.env.FCOS_REVIEW_CORRECTION_SOURCE},async()=>{
  await fixture({kind:'review',exception:true,correctedReview:true,delay:35},async(page,state)=>{
   await page.getByText('1 STEMs scanned',{exact:true}).waitFor();await compatibilityNormalOpenSurface(spec('review'),page);
@@ -149,6 +161,21 @@ test('separate root application correction renders real exception amounts and pr
   assert.match(download.suggestedFilename(),/^exception_review_.*\.csv$/);assert.match(csv,/Buyer Invoice,Supplier Invoice,Gross Profit/);
   assert.match(csv,/,1000,900,-100(?:\n|$)/);assert.deepEqual(state.errors,[]);
  });
+});
+test('actual current application components satisfy their separate fourteen-module shared contract',{skip:!process.env.FCOS_CURRENT_APPLICATION_SOURCE_ROOT},async()=>{
+ for(const kind of ['dashboard','review','buyer_invoices','incoming_payments','markets','hedge_desk'])await fixture({kind,application:true,exception:kind==='review',delay:35,route:NORMAL_ROLE_MODULES.find(row=>row.module===kind).path},async(page,state)=>{
+  const current=NORMAL_ROLE_MODULES.find(row=>row.module===kind);
+  if(kind==='review')await page.getByText('1 STEMs scanned',{exact:true}).waitFor();
+  else if(kind==='hedge_desk')await page.getByText('No position exposure',{exact:true}).waitFor();
+  else await page.getByRole('heading',{name:current.title}).first().waitFor();
+  await compatibilityNormalOpenSurface(current,page);await page.waitForTimeout(150);
+  const loaded=state.responses.find(row=>row.loaded)||{rows:1};
+  assert.equal(await compatibilityNormalSurfaceReason(current,page,loaded,'',{timeoutMs:1000}),null);
+  assert.equal(await be6NormalSurfaceUnavailable(page),false);assert.deepEqual(state.failures,[]);
+ });
+ const relevant=['src/pages/Markets.jsx','src/pages/BuyerInvoices.jsx','src/pages/PaymentCollections.jsx','src/pages/IncomingPayments.jsx','src/pages/HedgeDesk.jsx','src/hedge/api/entities.js','src/hedge/hooks/useDeskData.js','src/hedge/hooks/useAppSettings.js','src/components/dashboard/DashboardStemTable.jsx','src/components/dashboard/DashboardKpis.jsx','src/components/common/PageHeader.jsx','src/lib/pageCopy.js','src/hedge/views/MarketIntelligenceWorkspace.jsx','src/hedge/views/market-intelligence/MarketDecisionBrief.jsx','src/components/markets/MarketPriceBoard.jsx'];
+ for(const path of relevant)assert.equal(applicationSources.get(path),createHash('sha256').update(source(path)).digest('hex'),path+' exact be6-to-application UI contract equality');
+ assert.equal(applicationSources.get('src/pages/ReviewQueue.jsx'),process.env.FCOS_REVIEW_CORRECTION_SHA256,'only separately corrected review page differs');
 });
 test('all source bindings stay immutable, no component fixture grants live fifteen-module evidence',()=>{
  assert.equal(sha,'be6daf6162480ca77ec8d4f04fe5aaa5b228a22c');assert.equal(BE6_COMPATIBILITY_NORMAL_MODULES.length,15);assert.equal(COMPATIBILITY_NORMAL_MODULES.length,15);

@@ -4,22 +4,26 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from '@playwright/test';
 import { FCOS_READ_ONLY_CI } from '../config/fcosCiIdentity.js';
 import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
-import { normalRoleReadRequest } from './lib/normal-role-read-requests.mjs';
+import { normalRoleReadRequest, compatibilityWorkNotificationsListRead } from './lib/normal-role-read-requests.mjs';
 import { createNormalRoleVerificationRoute } from './lib/normal-role-verification-transport.mjs';
 import { canonicalFcosE2eCandidateUrl, resolveFcosE2eCandidate } from './verify-e2e-candidate.mjs';
 import { collectRuntimeObservation } from './collect-preview-parity.mjs';
 import { collectPreviewEmailSignerEvidence, previewEmailSignerEnabled } from './lib/preview-email-signer.mjs';
+import { acquireCompatibilityBrowserIsolation, compatibilityTelemetryScriptExcluded, assertCompatibilityWorkspacePreferences, compatibilityBrowserIsolationVerified } from './lib/compatibility-browser-isolation.mjs';
+import { APPLICATION_NORMAL_UI_CONTRACT, be6BuyerInvoicesDueRead, be6NormalDataLoaded, be6NormalSurfaceUnavailable } from './lib/be6-normal-browser-contract.mjs';
+import { compatibilityNormalOpenSurface, compatibilityNormalSurfaceReason, compatibilityNormalModuleTerminalReason,
+  createCompatibilityNormalResponseObserver, createCompatibilityNormalResponseSettlement } from './runtime-compatibility-normal-role.mjs';
 
 // Every pass needs a successful module data response and a rendered business
 // surface. Headings alone, an invented zero, and denied/unavailable data fail.
 export const NORMAL_ROLE_MODULES = Object.freeze([
-  { module: 'dashboard', path: '/', handler: 'dashboardStemList', fields: ['stems'], title: /Dashboard/i },
-  { module: 'markets', path: '/markets', handler: 'hedgeMarkets', fields: ['mops'], title: /Markets/i },
+  { module: 'dashboard', path: '/?tab=stems', handler: 'dashboardStemList', fields: ['stems'], title: /Dashboard/i },
+  { module: 'markets', path: '/markets', handler: 'marketPulseSnapshot', fields: ['products'], title: /Markets/i },
   { module: 'review', path: '/review', handler: 'salesforceDashboardFiltered', fields: ['recentStems'], title: /Exception Review/i, workflow: true },
   { module: 'disputes', path: '/disputes', handler: 'disputeWorkflowList', fields: ['rows'], title: /Dispute Workflow/i, workflow: true },
-  { module: 'buyer_invoices', path: '/payment-collections?tab=collections', handler: 'buyerInvoiceCollectionList', fields: ['items'], title: /Payment Collections/i },
+  { module: 'buyer_invoices', path: '/payment-collections?tab=collections', handler: 'salesforceBuyerInvoicesDue', fields: ['rows'], title: /Payment Collections/i },
   { module: 'unofficial_compensation', path: '/unofficial-compensation', handler: 'unofficialCompensationList', fields: ['accounts'], title: /Unofficial Compensation|Agreed Compensation/i },
-  { module: 'incoming_payments', path: '/payment-collections?tab=incoming', handler: 'incomingPaymentsList', fields: ['rows', 'payments'], title: /Payment Collections/i },
+  { module: 'incoming_payments', path: '/payment-collections?tab=incoming', handler: 'incomingPaymentsList', fields: ['rows', 'payments'], title: /^Incoming Payments$/i },
   { module: 'cashflow_forecast', path: '/cashflow-forecast', handler: 'cashflowForecast', fields: ['rows'], title: /Cashflow/i },
   { module: 'brokers', path: '/brokers', handler: 'salesforceBrokerRegister', fields: ['rows'], title: /Broker/i },
   { module: 'master_contracts', path: '/master-contracts', handler: 'masterContractsList', fields: ['contracts'], title: /Master Contracts/i },
@@ -27,8 +31,8 @@ export const NORMAL_ROLE_MODULES = Object.freeze([
   { module: 'hedge_desk', path: '/hedge-desk', handler: 'hedgeDeskEntity', fields: ['physicals'], title: /Hedge Desk|Position control/i },
   { module: 'xero_portal', path: '/xero-portal', handler: 'xeroIntegrityReport', fields: ['rows'], title: /Salesforce–Xero integrity/i },
   { module: 'email_router', path: '/email-router', handler: 'emailRouterList', fields: ['messages', 'items'], title: /Email Router/i },
-  { module: 'settings', path: '/settings?section=finance', handler: 'financeSettingsGet', fields: [], title: /Finance settings|Settings/i },
-]);
+  { module: 'settings', path: '/settings?section=finance', handler: 'financeSettingsGet', fields: [], title: /^Finance$/i },
+].map(spec => Object.freeze({ ...spec, ...(spec.module !== 'xero_portal' ? { sourceContract: APPLICATION_NORMAL_UI_CONTRACT } : {}) })));
 
 const XERO_INTEGRITY_COVERAGE = Object.freeze(['sales', 'bills', 'payments', 'contacts']);
 const XERO_INTEGRITY_KINDS = new Set(['buyer_invoice', 'buyer_credit', 'supplier_bill', 'supplier_credit', 'payment', 'contact']);
@@ -113,7 +117,7 @@ export function normalXeroIntegrityReportLoaded(payload) {
   return { loaded: true, rows: report.rows.length, report };
 }
 
-export function normalRoleRequestAllowed({ url, method, body }, origin) {
+export function normalRoleRequestAllowed({ url, method, body, functionName, jsonContentType }, origin) {
   let target;
   try { target = new URL(url); } catch { return false; }
   const supabaseOrigin = `https://${fcosConnectionIdentifier('supabase', 'Project ref')}.supabase.co`;
@@ -125,9 +129,13 @@ export function normalRoleRequestAllowed({ url, method, body }, origin) {
     if (target.pathname !== '/api' && !target.pathname.startsWith('/api/')) return true;
     return false;
   } else if (method !== 'POST') return false;
-  if (target.origin !== origin || !target.pathname.startsWith('/api/functions/')) return false;
+  if (target.origin !== origin) return false;
+  if (target.pathname === '/api/work-notifications') return !target.search && !target.hash
+    && functionName === 'workNotificationsList' && jsonContentType === true && compatibilityWorkNotificationsListRead(body);
+  if (!target.pathname.startsWith('/api/functions/')) return false;
   const name = target.pathname.slice('/api/functions/'.length);
   if (!/^[A-Za-z][A-Za-z0-9]+$/.test(name)) return false;
+  if (name === 'salesforceBuyerInvoicesDue') return !target.search && !target.hash && be6BuyerInvoicesDueRead(body);
   if (name === 'xeroIntegrityReport') return normalRoleXeroIntegrityRequest(body || {});
   return normalRoleReadRequest(name, body || {});
 }
@@ -141,6 +149,8 @@ export function assertNormalRoleIdentity(auth, { approvedEmail } = {}) {
 }
 
 export function normalModuleDataLoaded(spec, payload) {
+  const current = spec.module !== 'xero_portal' ? be6NormalDataLoaded(spec, payload) : null;
+  if (current) return current;
   const data = payload?.data ?? payload;
   if (!data || typeof data !== 'object' || data.error || data.cancelled || data.status === 'unavailable') return { loaded: false, rows: null };
   if (spec.module === 'xero_portal') return normalXeroIntegrityReportLoaded(data);
@@ -191,39 +201,42 @@ export async function verifyNormalRoleRelease({ env = process.env, fetchImpl = g
     ? await collectSigner({ origin: url, deploymentId: version.deploymentId, sha: verified.commit,
       sourceDigest: version.provenance.sourceDigest, bearerToken: token, protectionBypass: env.FCOS_E2E_VERCEL_BYPASS, fetchImpl })
     : undefined;
-  let browser, context;
+  const preferenceResponse = await fetchImpl(`${url}/api/functions/workspacePreferencesGet`, { method: 'POST', body: '{}', redirect: 'error', signal: AbortSignal.timeout(20000),
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json',
+      ...(env.FCOS_E2E_VERCEL_BYPASS ? { 'x-vercel-protection-bypass': env.FCOS_E2E_VERCEL_BYPASS } : {}) } });
+  if (!preferenceResponse.ok || preferenceResponse.redirected) throw new Error('Existing workspace preference read is unavailable.');
+  const workspacePreferences = assertCompatibilityWorkspacePreferences(await preferenceResponse.json());
+  let browser, context, isolation, contextClosed = false, blockedMutations = 0, telemetryAbortedRequests = 0;
   const checks = [];
   try {
     browser = await browserType.launch({ headless: true });
     context = await browser.newContext({ storageState: state, viewport: { width: 1440, height: 1000 }, serviceWorkers: 'block' });
-    let blockedMutations = 0;
     await context.route('**/*', createNormalRoleVerificationRoute({ origin: url, protectionBypass: env.FCOS_E2E_VERCEL_BYPASS,
-      requestAllowed: normalRoleRequestAllowed, onBlockedMutation: () => { blockedMutations += 1; } }));
+      requestAllowed: normalRoleRequestAllowed, deniedReadsFatal: true, excludeRequest: compatibilityTelemetryScriptExcluded,
+      onExcludedRequest: () => { telemetryAbortedRequests += 1; }, onBlockedMutation: () => { blockedMutations += 1; } }));
+    isolation = await acquireCompatibilityBrowserIsolation({ context, origin: url, version, harnessSha: env.GITHUB_SHA });
     for (const spec of NORMAL_ROLE_MODULES) {
-      if (identity.moduleAccess[spec.module] !== true) continue;
+      await isolation.assertHeld(spec.module, 'before');
+      if (identity.moduleAccess[spec.module] !== true) { await isolation.assertHeld(spec.module, 'after'); continue; }
       const page = await context.newPage(), responses = [], failures = [];
-      let reviewWorkflowLoaded = false;
+      const responseSettlement = createCompatibilityNormalResponseSettlement();
+      const observed = createCompatibilityNormalResponseObserver(spec, responseSettlement, responses, failures, [], normalModuleDataLoaded);
       const mutationStart = blockedMutations;
+      let checkAdded = false;
       page.on('pageerror', () => failures.push('PAGE_ERROR'));
-      page.on('response', async res => {
-        if (spec.module === 'review' && new URL(res.url()).pathname === '/api/functions/exceptionReviewWorkflowList') {
-          try { const data = await res.json(); reviewWorkflowLoaded = res.ok() && !data.error && data.byStemId !== null
-            && typeof data.byStemId === 'object' && !Array.isArray(data.byStemId) && Array.isArray(data.ownerOptions); } catch { /* Unknown workflow stays blocked. */ }
-        }
-        if (new URL(res.url()).pathname !== `/api/functions/${spec.handler}`) return;
-        try { if (res.ok()) responses.push(normalModuleDataLoaded(spec, await res.json())); } catch { failures.push('RESPONSE_INVALID'); }
-      });
+      page.on('response', observed.observe);
       try {
         await page.goto(`${url}${spec.path}`, { waitUntil: 'domcontentloaded', timeout: 45000 });
         await page.getByRole('heading', { name: spec.title }).first().waitFor({ timeout: 30000 });
+        if (spec.module !== 'xero_portal') await compatibilityNormalOpenSurface(spec, page);
         const deadline = Date.now() + 30000;
-        while (!responses.some(item => item.loaded) && Date.now() < deadline) await page.waitForTimeout(250);
+        while ((!responses.some(item => item.loaded) || spec.module === 'hedge_desk' && !observed.state.settingsLoaded) && !failures.length && blockedMutations === mutationStart && Date.now() < deadline) await page.waitForTimeout(250);
         const loaded = responses.find(item => item.loaded);
-        if (!loaded || failures.length || blockedMutations !== mutationStart || /\/login(?:\?|$)/.test(page.url())) continue;
+        if (!loaded || spec.module === 'hedge_desk' && !observed.state.settingsLoaded || failures.length || blockedMutations !== mutationStart || /\/login(?:\?|$)/.test(page.url())) continue;
         const body = await page.locator('body').innerText();
-        if (spec.module !== 'xero_portal' && /Access denied|Something went wrong|temporarily unavailable|could not (?:load|read|verify)|Unavailable/i.test(body)) continue;
+        if (spec.module !== 'xero_portal' && (/Access denied/i.test(body) || await be6NormalSurfaceUnavailable(page))) continue;
         if (spec.module === 'settings') {
-          if (!await page.getByLabel(/Annual interest rate/i).count()) continue;
+          if (await compatibilityNormalSurfaceReason(spec, page, loaded, body)) continue;
         } else if (spec.module === 'xero_portal') {
           // The portal must prove a genuine saved report, then exercise only its
           // read workflow: filter a rendered record and reveal its comparison.
@@ -253,27 +266,46 @@ export async function verifyNormalRoleRelease({ env = process.env, fetchImpl = g
           if (!await comparisonValues.count() || !await comparisonValues.getByText('Salesforce', { exact: true }).count()
             || !await comparisonValues.getByText('Xero', { exact: true }).count()) continue;
           if (normalRoleXeroPortalLoadFailed(await page.locator('[role="alert"]').allInnerTexts())) continue;
-        } else if (loaded.rows === 0) {
-          if (!/No (?:records|rows|items|invoices|payments|receipts|messages|contracts|terms|trades|positions|data|STEMs|matching|Dispute Workflow)/i.test(body)) continue;
-        } else if (!await page.locator('table tbody tr').count()) continue;
+        } else if (await compatibilityNormalSurfaceReason(spec, page, loaded, body)) continue;
         if (spec.workflow) {
           if (spec.module === 'review') {
             // Exercise read-only queue scope and confirm workflow state remains
             // rendered after filtering; no Save/Approve/Settle control is used.
             await page.getByRole('button', { name: 'All', exact: true }).click();
-            if (!await page.locator('table tbody tr').count() && !/No .*found|No .*match/i.test(await page.locator('body').innerText())) continue;
-            if (!reviewWorkflowLoaded || !responses.some(item => item.loaded)) continue;
+            if (await compatibilityNormalSurfaceReason(spec, page, loaded, body)) continue;
+            if (!observed.state.workflowLoaded || !responses.some(item => item.loaded)) continue;
           } else if (!/Workflow|Next owner/i.test(body) || loaded.rows === 0) continue;
         }
         checks.push({ module: spec.module, role: identity.role, result: 'pass', kind: spec.workflow ? 'workflow_read' : 'read',
           evidenceId: `normal-role:${env.GITHUB_RUN_ID}:${spec.module}` });
+        checkAdded = true;
       } catch { /* Keep this module missing; never serialize private page errors. */ }
-      finally { await page.close(); }
+      finally {
+        let closeFailed = false;
+        try { await page.close(); } catch { closeFailed = true; }
+        page.off('response', observed.observe);
+        try { await responseSettlement.settle(); } catch { failures.push(observed.state.pending ? 'DATA_DEADLINE' : 'DATA_JSON_FAILURE'); }
+        const terminal = compatibilityNormalModuleTerminalReason({ failures, closeFailed, blocked: blockedMutations !== mutationStart,
+          workflowRequired: spec.module === 'review', workflowLoaded: observed.state.workflowLoaded });
+        if (checkAdded && terminal) checks.pop();
+        await isolation.assertHeld(spec.module, 'after');
+      }
     }
+    await isolation.assertHeld(undefined, 'final');
     if (blockedMutations) throw new Error('The application attempted a non-read request during normal-role verification. It was blocked; no complete coverage can be published.');
-  } finally { if (context) await context.close(); if (browser) await browser.close(); }
+  } finally {
+    let cleanupError;
+    try { if (isolation) await isolation.release(); } catch (error) { cleanupError = error; }
+    try { if (context) { await context.close(); contextClosed = true; } } catch (error) { cleanupError ||= error; }
+    try { if (browser) await browser.close(); } catch (error) { cleanupError ||= error; }
+    if (cleanupError) throw cleanupError;
+  }
+  if (blockedMutations) throw new Error('The application attempted a non-read request during normal-role verification. It was blocked; no complete coverage can be published.');
+  const browserIsolation = isolation.evidence({ workspacePreferences, telemetryAbortedRequests, blockedRequests: blockedMutations, contextClosed });
+  if (!compatibilityBrowserIsolationVerified(browserIsolation, { candidateUrl: url, sha: verified.commit, deploymentId: version.deploymentId,
+    sourceDigest: version.provenance.sourceDigest, harnessSha: env.GITHUB_SHA }, NORMAL_ROLE_MODULES.map(spec => spec.module))) throw new Error('Normal-role browser isolation is incomplete.');
   const evidence = { schemaVersion: 1, candidateSha: verified.commit, candidateUrl: url, deploymentId: version.deploymentId,
-    sourceDigest: version.provenance.sourceDigest, harnessSha: env.GITHUB_SHA, capturedAt: new Date().toISOString(), checks,
+    sourceDigest: version.provenance.sourceDigest, harnessSha: env.GITHUB_SHA, capturedAt: new Date().toISOString(), checks, browserIsolation,
     ...(emailSigner ? { emailSigner } : {}) };
   if (!env.RUNNER_TEMP) throw new Error('A private runner evidence directory is required.');
   await writeEvidence(evidence);

@@ -74,8 +74,8 @@ function fixture(t) {
           waitForResponse:async()=>({status:()=>200,json:async()=>auth}),close:async()=>{}};return page;
       }
       const handlers=new Map();let location=origin,closed=false,held=false;
-      const locator=(name='')=>({first:()=>locator(name),filter:()=>locator(name),locator:s=>locator(s),getByText:s=>locator(String(s)),getByRole:(kind,o)=>locator(kind+':'+o.name),isVisible:async()=>!name.includes('No position exposure'),
-        waitFor:async()=>{},isVisible:async()=>true,getAttribute:async()=>'',click:async()=>{events.push('ui:'+name);},
+      const locator=(name='')=>({first:()=>locator(name),filter:()=>locator(name),locator:s=>locator(s),getByText:s=>locator(String(s)),getByRole:(kind,o)=>locator(kind+':'+o.name),
+        waitFor:async()=>{},isVisible:async()=>!name.includes('No position exposure'),getAttribute:async()=>'',click:async()=>{events.push('ui:'+name);},
         count:async()=>name.includes('No receipts stored')||name.includes('[role="alert"]')||name.includes('[aria-label]')||name.includes('Unable to load')?0:1,innerText:async()=>name.includes('latest MOPS')?'500.00 USD/MT':'Workflow Next owner business row'});
       const page={url:()=>location,isClosed:()=>closed,context:()=>context,close:async()=>{closed=true;},on:(k,v)=>handlers.set(k,v),off:k=>handlers.delete(k),
         getByRole:(kind,o)=>locator(kind+':'+o.name),getByLabel:name=>locator(name),getByText:name=>locator(String(name)),locator,
