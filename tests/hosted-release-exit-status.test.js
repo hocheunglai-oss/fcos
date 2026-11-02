@@ -5,9 +5,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import yaml from 'js-yaml';
 
 // Exercise the actual CLI and persisted report. Only admission and candidate
 // execution are local fixtures; no provider or credential path is entered.
+// Use the supported application profile so the real composition preflight runs;
+// a made-up profile must never be admitted just to exercise report/exit handling.
 for (const status of ['passed','failed']) test(`checks CLI reports ${status} through both its file and process exit`, t => {
   const directory=mkdtempSync(join(tmpdir(),'fcos-cli-exit-'));t.after(()=>rmSync(directory,{recursive:true,force:true}));
   const mocks={
@@ -19,7 +22,7 @@ for (const status of ['passed','failed']) test(`checks CLI reports ${status} thr
   const loader=join(directory,'loader.mjs');
   writeFileSync(loader,`const mocks=${JSON.stringify(mocks)};export async function resolve(s,c,next){if(c.parentURL?.endsWith('/scripts/hosted-release.mjs')&&Object.hasOwn(mocks,s))return{url:'data:text/javascript,'+encodeURIComponent(mocks[s]),shortCircuit:true};return next(s,c);}`);
   const output=join(directory,'database.json'),script=fileURLToPath(new URL('../scripts/hosted-release.mjs',import.meta.url));
-  const manifest={candidate:{sha:'a'.repeat(40),sourceProfile:'local-fixture'},controller:{sha:'b'.repeat(40)},verification:{runtime:{image:'local-fixture'},publicBuildEnvironment:{}}};
+  const manifest={candidate:{sha:'a'.repeat(40),sourceProfile:'application_v2'},controller:{sha:'b'.repeat(40)},verification:{runtime:{image:'local-fixture'},publicBuildEnvironment:{}}};
   const r=spawnSync(process.execPath,['--no-warnings','--experimental-loader',pathToFileURL(loader).href,script,'checks'],{
     env:{PATH:process.env.PATH,HOME:directory,FCOS_RELEASE_MANIFEST:JSON.stringify(manifest),FCOS_RELEASE_OUTPUT:output,FCOS_CHECK_GROUP:'database',TEST_CHECK_STATUS:status},encoding:'utf8',timeout:10000,maxBuffer:65536,
   });
@@ -34,4 +37,18 @@ test('failed check artifact remains available while publication still requires s
   const checks=workflow.slice(workflow.indexOf('\n  checks:'),workflow.indexOf('\n  preview:'));
   assert.match(checks,/uses: actions\/upload-artifact@[^\n]+\n\s+if: \$\{\{ always\(\) && steps\.run\.outcome != 'skipped' && steps\.run\.outcome != '' \}\}/);
   assert.match(workflow,/needs\.checks\.result == 'success' \|\| needs\.checks\.result == 'skipped'/);
+});
+
+// Exercise workflow ordering, not just the existence of a helper that CI may
+// forget to invoke. The ordinary full suite remains mandatory afterwards.
+test('quality catches composed verifier and sealed-source drift before full suite and contract reads',()=>{
+  const workflow=yaml.load(readFileSync(new URL('../.github/workflows/quality.yml',import.meta.url),'utf8'));
+  const steps=workflow.jobs['code-and-database'].steps;
+  const index=steps.findIndex(s=>s.name==='Verify hosted workflow composition and sealed source');
+  assert.ok(index>steps.findIndex(s=>s.run==='npm ci'));
+  for(const command of ['npm run verify:fcuno-contract','npm test']) assert.ok(index<steps.findIndex(s=>s.run===command));
+  const step=steps[index];
+  assert.equal(step.if, "${{ vars.FCOS_HOSTED_READINESS_ENABLED != 'true' }}");
+  assert.equal(step.run,'node --test tests/hosted-browser-composition.test.js tests/hosted-release-exit-status.test.js tests/runtimeCompatibilitySuccessorPhysical.test.js');
+  assert.equal(step.env,undefined);assert.equal(step['continue-on-error'],undefined);
 });

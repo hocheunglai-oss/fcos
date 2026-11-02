@@ -145,6 +145,11 @@ jobs:
           cache: npm
       - run: npm ci
         if: ${{ vars.FCOS_HOSTED_READINESS_ENABLED != 'true' }}
+      - name: Verify hosted workflow composition and sealed source
+        if: ${{ vars.FCOS_HOSTED_READINESS_ENABLED != 'true' }}
+        # Cheap local composition/source checks precede network contract reads
+        # and the complete suite. No login, provider credentials or live calls.
+        run: node --test tests/hosted-browser-composition.test.js tests/hosted-release-exit-status.test.js tests/runtimeCompatibilitySuccessorPhysical.test.js
       - run: npm run verify:fcuno-contract
         env:
           # Read-only token required to fetch FCUNO's pinned contract. It is
