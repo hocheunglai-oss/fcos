@@ -19,6 +19,7 @@ import { admitPreviewWriterFixture, admitProductionWriterFixture } from './helpe
 import { vercelReadFixture } from './helpers/hosted-vercel-read.mjs';
 import { LEGACY_RELEASE_EFFECTS } from '../config/legacyReleaseContainment.js';
 import { PREVIEW_PARITY_POLICY } from '../scripts/lib/preview-parity.mjs';
+import { assertPublicRuntimeIdentityPrerequisites, publicRuntimeIdentityEnvironment } from '../scripts/lib/hosted-release/public-runtime-identities.mjs';
 
 const H = 'a'.repeat(64), dummy = 'OfflineDummyCredentialOnly';
 const publicTenant = '11111111-1111-4111-8111-111111111111';
@@ -155,6 +156,50 @@ test('actual deployment payload carries only four phase-specific public flags an
 test('generic fixtures omit whole runtime families without inserting assumed flags or tenant', async t => {
   const f = fixture(t), payload = JSON.parse((await f.prepare()).body);
   assert.deepEqual(payload.env, { FCOS_BUILD_COMMIT_SHA: f.manifest.candidate.sha, FCOS_ENABLE_READ_ONLY_CI: 'true' });
+});
+
+test('reviewed public Microsoft identities enter Preview runtime only, without changing build or Production configuration', async t => {
+  const identities = { FCOS_MICROSOFT_TENANT_ID: '11111111-1111-4111-8111-111111111111',
+    FCOS_MICROSOFT_CLIENT_ID: '22222222-2222-4222-8222-222222222222' };
+  for (const production of [false, true]) {
+    const f = production ? integrated(t, { production: true }) : fixture(t);
+    f.manifest.verification.publicPreviewRuntimeIdentityEnvironment = identities;
+    const phase = production ? 'production.stage' : 'preview.create';
+    const prepared = await f.prepare({ phase, operationId: `${f.manifest.releaseId}-${phase.replaceAll('.', '-')}` });
+    const payload = JSON.parse(prepared.body);
+    for (const [key, value] of Object.entries(identities)) {
+      assert.equal(payload.env[key], production ? undefined : value);
+      assert.equal(payload.build.env[key], undefined);
+    }
+    assert.equal(prepared.receipt.bodySha256, digest(prepared.body));
+    assert.equal(Object.hasOwn(payload, 'projectSettings'), false);
+  }
+});
+
+test('public identity input rejects secret keys, partial pairs and arbitrary values before archive or transport', async t => {
+  const identities = { FCOS_MICROSOFT_TENANT_ID: '11111111-1111-4111-8111-111111111111',
+    FCOS_MICROSOFT_CLIENT_ID: '22222222-2222-4222-8222-222222222222' };
+  const f = fixture(t);
+  for (const value of [null, [], 'private', {}, { FCOS_MICROSOFT_TENANT_ID: identities.FCOS_MICROSOFT_TENANT_ID },
+    { ...identities, MICROSOFT_CLIENT_SECRET: dummy }, { ...identities, FCOS_MICROSOFT_CLIENT_ID: dummy },
+    { ...identities, FCOS_MICROSOFT_CLIENT_ID: identities.FCOS_MICROSOFT_CLIENT_ID + '\n' }]) {
+    f.manifest.verification.publicPreviewRuntimeIdentityEnvironment = value;
+    await assert.rejects(f.prepare(), /PUBLIC_RUNTIME_IDENTITY_INPUT/);
+  }
+  const candidate = { sha: 'be6daf6162480ca77ec8d4f04fe5aaa5b228a22c' };
+  assert.throws(() => assertPublicRuntimeIdentityPrerequisites({ candidate, verification: {} }), /SOURCE_API_GRAPH_IDENTITY_REQUIRED/);
+  assert.deepEqual(assertPublicRuntimeIdentityPrerequisites({ candidate,
+    verification: { publicPreviewRuntimeIdentityEnvironment: identities } }), identities);
+  assert.deepEqual(publicRuntimeIdentityEnvironment(undefined), {});
+});
+
+test('direct application Production preparation cannot bypass the reviewed Preview identity prerequisite', async t => {
+  const f = integrated(t, { production: true });
+  f.manifest.candidate.sourceProfile = 'application_v2';
+  await assert.rejects(f.prepare({ phase: 'production.stage', operationId: `${f.manifest.releaseId}-production-stage` }),
+    { code: 'SOURCE_API_GRAPH_IDENTITY_REQUIRED' });
+  assert.equal(f.posts, 0);
+  assert.equal(f.begins, 0);
 });
 
 test('provided runtime flags refuse unknown, partial, non-boolean and private-key expectations before an intent', async t => {

@@ -38,6 +38,15 @@ export const RUNTIME_ORDINARY_ADMISSION_SUCCESSOR_PRODUCTION = Object.freeze({
   sourceSha256: 'e4936669ba9a4874852d7c105ff48e5ab0cfb7fb56c46cee4875f674d33dd49f',
 });
 
+// The admitted ordinary candidate's current schema is independently observed
+// by the N8 hosted run. Keep the historical tuple intact. This additional exact
+// tuple still requires a completed compatibility Production registration and
+// its unchanged live observation; qualification cannot satisfy that requirement.
+export const RUNTIME_ORDINARY_CURRENT_SCHEMA_SUCCESSOR_PRODUCTION = Object.freeze({
+  ...RUNTIME_ORDINARY_ADMISSION_SUCCESSOR_PRODUCTION,
+  schemaSha256: '4b7028ff29ede16c9ba5c125abe2757112e0b7b25339845e22ce4550cde58b6e',
+});
+
 function configurationSuccessorAccepted({ manifest, prior, registered, actual, observation, reference, now, pin }) {
   try { validateManifest(registered); validateManifest(manifest); } catch { return false; }
   // The next manifest's previousProduction comes from its fresh authenticated
@@ -74,8 +83,10 @@ export async function collectCompatibilitySuccessor({ manifest, coordinator, env
   const actual = observation?.result;
   const original = registered?.candidate?.sha === FROZEN_COMPATIBILITY_SHA
     && actual?.sha === FROZEN_COMPATIBILITY_SHA && manifest.previousProduction.sha === FROZEN_COMPATIBILITY_SHA;
-  const pin = [CONFIGURATION_SUCCESSOR_PRODUCTION, DIAGNOSTIC_SUCCESSOR_PRODUCTION, RUNTIME_DEPENDENCY_SUCCESSOR_PRODUCTION, RUNTIME_ORDINARY_ADMISSION_SUCCESSOR_PRODUCTION]
-    .find(value => registered?.candidate?.sha === value.candidateSha);
+  const pin = [CONFIGURATION_SUCCESSOR_PRODUCTION, DIAGNOSTIC_SUCCESSOR_PRODUCTION, RUNTIME_DEPENDENCY_SUCCESSOR_PRODUCTION,
+    RUNTIME_ORDINARY_ADMISSION_SUCCESSOR_PRODUCTION, RUNTIME_ORDINARY_CURRENT_SCHEMA_SUCCESSOR_PRODUCTION]
+    .find(value => registered?.candidate?.sha === value.candidateSha
+      && registered?.migration?.expectedSchemaSha256 === value.schemaSha256);
   const configurationSuccessor = pin && actual
     && configurationSuccessorAccepted({ manifest, prior, registered, actual, observation, reference, now, pin });
   if (prior.status !== 'complete' || prior.finished !== true || registered?.stage !== 'compatibility'

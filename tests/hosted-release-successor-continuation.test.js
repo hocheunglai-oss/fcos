@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import yaml from 'js-yaml';
 import { BOOTSTRAP_SOURCE } from '../scripts/lib/hosted-release/cutover-bootstrap.mjs';
 import { digest } from '../scripts/lib/hosted-release/contract.mjs';
-import { CONFIGURATION_SUCCESSOR_PRODUCTION as PIN, DIAGNOSTIC_SUCCESSOR_PRODUCTION as DIAGNOSTIC, RUNTIME_DEPENDENCY_SUCCESSOR_PRODUCTION as DEPENDENCY, RUNTIME_ORDINARY_ADMISSION_SUCCESSOR_PRODUCTION as ORDINARY, collectCompatibilitySuccessor } from '../scripts/lib/hosted-release/successor.mjs';
+import { CONFIGURATION_SUCCESSOR_PRODUCTION as PIN, DIAGNOSTIC_SUCCESSOR_PRODUCTION as DIAGNOSTIC, RUNTIME_DEPENDENCY_SUCCESSOR_PRODUCTION as DEPENDENCY, RUNTIME_ORDINARY_ADMISSION_SUCCESSOR_PRODUCTION as ORDINARY, RUNTIME_ORDINARY_CURRENT_SCHEMA_SUCCESSOR_PRODUCTION as CURRENT_ORDINARY, collectCompatibilitySuccessor } from '../scripts/lib/hosted-release/successor.mjs';
 import { fixtureManifest } from './helpers/hosted-release-manifest.mjs';
 
 const NOW = Date.parse('2026-10-22T00:00:00Z');
@@ -27,8 +27,9 @@ function configuredFixture(pin = PIN) {
   const registered = { ...structuredClone(qualification), releaseId: 'synthetic-completed-configuration-release', stage: 'compatibility', executionMode: 'release' };
   delete registered.qualificationSource;
   registered.candidate.sha=pin.candidateSha;registered.candidate.sourceProfile=pin.sourceProfile;registered.candidate.sourceSha256=pin.sourceSha256;
+  registered.migration.expectedSchemaSha256=pin.schemaSha256;
   registered.previousProduction.firstRuntime.candidateSha=pin.candidateSha;
-  if (pin === DEPENDENCY || pin === ORDINARY) registered.runtime.probeProtocol = 'xero_metered_v1';
+  if (pin === DEPENDENCY || pin === ORDINARY || pin === CURRENT_ORDINARY) registered.runtime.probeProtocol = 'xero_metered_v1';
   const actual = { id: 'dpl_SyntheticCompletedProduction', sha: pin.candidateSha, sourceSha256: pin.sourceSha256,
     projectId: registered.targets.vercelProject, teamId: registered.targets.vercelTeam, target: 'production', state: 'READY' };
   const observation = { capturedAt: '2026-10-21T12:00:00Z', result: actual };
@@ -90,7 +91,7 @@ test('only explicit source/profile/schema/runtime tuples are added, even with se
     f => { f.registered.runtime.expectedPreview.safety.externalActions.salesforce_write = true; },
     f => { f.registered.migration.mode = 'separately_authorized'; f.registered.migration.acceptedMigrationProofSha256 = 'b'.repeat(64); },
   ];
-  for (const pin of [PIN,DIAGNOSTIC,DEPENDENCY,ORDINARY])for (const mutate of mutations) { const f = configuredFixture(pin); mutate(f); bind(f); await assert.rejects(collect(f), refused); }
+  for (const pin of [PIN,DIAGNOSTIC,DEPENDENCY,ORDINARY,CURRENT_ORDINARY])for (const mutate of mutations) { const f = configuredFixture(pin); mutate(f); bind(f); await assert.rejects(collect(f), refused); }
 });
 
 test('qualification, rollback, incomplete, foreign target and changed live/source tuples never count as Production', async () => {
@@ -109,10 +110,10 @@ test('qualification, rollback, incomplete, foreign target and changed live/sourc
     f => { f.manifest.scope.handoffs = []; }, f => { f.manifest.scope.financialAuthority = true; },
     f => { f.observation.capturedAt = 'invalid'; }, f => { f.observation.capturedAt = new Date(NOW + 30001).toISOString(); },
   ];
-  for (const pin of [PIN,DIAGNOSTIC,DEPENDENCY,ORDINARY])for (const mutate of mutations) { const f = configuredFixture(pin); mutate(f); bind(f); await assert.rejects(collect(f), refused); }
+  for (const pin of [PIN,DIAGNOSTIC,DEPENDENCY,ORDINARY,CURRENT_ORDINARY])for (const mutate of mutations) { const f = configuredFixture(pin); mutate(f); bind(f); await assert.rejects(collect(f), refused); }
   for (const mutate of [f => { f.manifest.scope.compatibilityProductionObservationSha256 = 'b'.repeat(64); },
     f => { f.manifest.scope.compatibilityRelease.manifestHash = 'b'.repeat(64); }, f => { f.actual.manifestHash = 'b'.repeat(64); }]) {
-    for(const pin of [PIN,DIAGNOSTIC,DEPENDENCY,ORDINARY]){const f = configuredFixture(pin); mutate(f); await assert.rejects(collect(f), refused);}
+    for(const pin of [PIN,DIAGNOSTIC,DEPENDENCY,ORDINARY,CURRENT_ORDINARY]){const f = configuredFixture(pin); mutate(f); await assert.rejects(collect(f), refused);}
   }
 });
 
@@ -196,4 +197,26 @@ test('ordinary Connections child has its own exact live successor and all31 inhe
   const selected=checks.checks.filter(x=>x.profiles.includes(ORDINARY.sourceProfile)); assert.equal(selected.length,31);
   assert.deepEqual(selected.map(x=>x.id),checks.checks.filter(x=>x.profiles.includes(DEPENDENCY.sourceProfile)).map(x=>x.id));
   for(const check of checks.checks) assert.deepEqual(check.profileCommands?.[ORDINARY.sourceProfile],check.profileCommands?.[DEPENDENCY.sourceProfile]);
+});
+
+test('current be6 schema can follow completed compatibility Production while its historical schema remains exact', async () => {
+  assert.equal(ORDINARY.schemaSha256, '84ef2811eeefb87f8be4ef5219ab031f37fd3fd424a390e4c80b4afba7f13a4d');
+  assert.equal(CURRENT_ORDINARY.schemaSha256, '4b7028ff29ede16c9ba5c125abe2757112e0b7b25339845e22ce4550cde58b6e');
+  for (const key of ['candidateSha', 'sourceProfile', 'sourceSha256', 'runtimeSha256', 'previewRuntimeSha256'])
+    assert.equal(CURRENT_ORDINARY[key], ORDINARY[key]);
+  for (const pin of [ORDINARY, CURRENT_ORDINARY]) {
+    const f = configuredFixture(pin), before = structuredClone(f), proof = await collect(f);
+    assert.deepEqual(f, before);
+    assert.equal(proof.result.originalCapturedAt, f.observation.capturedAt);
+    assert.equal(proof.result.observationSha256, digest(f.observation));
+    assert.equal(proof.result.financialAuthority, false);
+  }
+  // An old registered schema cannot borrow the newly observed schema, or vice
+  // versa, even when all caller-controlled manifest/observation hashes match.
+  for (const [registeredPin, previousPin] of [[ORDINARY, CURRENT_ORDINARY], [CURRENT_ORDINARY, ORDINARY]]) {
+    const f = configuredFixture(registeredPin);
+    f.manifest.previousProduction.schemaSha256 = previousPin.schemaSha256;
+    bind(f);
+    await assert.rejects(collect(f), refused);
+  }
 });

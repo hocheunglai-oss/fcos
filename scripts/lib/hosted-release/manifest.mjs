@@ -6,6 +6,7 @@ import { validateVercelReadAcceptance } from './vercel-read-auth.mjs';
 import { CONTRACT_VERSION, CONTROLLER_WORKFLOW, digest, fail, REQUIRED_LIVE_CHECKS, releaseTargets, validateManifest, WRITE_PHASES } from './contract.mjs';
 import { assertFirstRuntimeSetup, admittedFirstRuntimeBaseline, FIRST_RUNTIME } from './first-runtime.mjs';
 import { validateLegacyRuntimePublicAuth } from './legacy-hosted-runtime-login.mjs';
+import { assertPublicRuntimeIdentityPrerequisites } from './public-runtime-identities.mjs';
 
 /** Source hashes and check sets are computed by the admitted controller. The
  * release plan supplies business scope, never a replacement check definition. */
@@ -35,7 +36,9 @@ function releaseManifestDraft({ plan, setup, previousProduction, candidateDirect
   return manifest;
 }
 export function buildReleaseManifest(options) {
-  const manifest=releaseManifestDraft(options);validateManifest(manifest);assertFirstRuntimeSetup({setup:options.setup,manifest});return manifest;
+  const manifest=releaseManifestDraft(options);validateManifest(manifest);assertFirstRuntimeSetup({setup:options.setup,manifest});
+  if (manifest.verification?.vercelSourceTransport) assertPublicRuntimeIdentityPrerequisites(manifest);
+  return manifest;
 }
 
 export async function prepareReleaseManifest({ plan, setup, candidateDirectory, controllerDirectory, controllerSha, candidateSha,
@@ -45,6 +48,7 @@ export async function prepareReleaseManifest({ plan, setup, candidateDirectory, 
   // never a seed required merely to construct the observation transport.
   const provisional = releaseManifestDraft({ plan, setup,
     candidateDirectory, controllerDirectory, controllerSha, candidateSha, collectSource });
+  if (provisional.verification?.vercelSourceTransport) assertPublicRuntimeIdentityPrerequisites(provisional);
   const observed = await observePreviousProduction(provisional);
   if (observed?.readOnly !== true || !Number.isFinite(Date.parse(observed.capturedAt))
     || now() - Date.parse(observed.capturedAt) > 300000 || Date.parse(observed.capturedAt) > now() + 30000) fail('PRODUCTION_OBSERVATION_EXPIRED');

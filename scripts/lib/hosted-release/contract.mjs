@@ -8,6 +8,7 @@ import { validateSalesforceReadBinding } from './salesforce-read-auth.mjs';
 import { validateVercelReadBinding } from './vercel-read-auth.mjs';
 import { validateVercelPreviewWriterBinding, validateVercelProductionWriterBinding } from './vercel-writer-auth.mjs';
 import { assertFirstRuntimeManifest } from './first-runtime.mjs';
+import { publicRuntimeIdentityEnvironment } from './public-runtime-identities.mjs';
 
 export const CONTRACT_VERSION = 'fcos-hosted-release/v2';
 export const CONTROLLER_WORKFLOW = '.github/workflows/hosted-release-controller.yml';
@@ -79,6 +80,7 @@ export function validateManifest(manifest) {
     validateVercelProductionWriterBinding(manifest.verification.vercelProductionWriterCredential,
       { targets: manifest.targets, previewBinding: manifest.verification.vercelPreviewWriterCredential });
   if (manifest.verification) {
+    publicRuntimeIdentityEnvironment(manifest.verification.publicPreviewRuntimeIdentityEnvironment);
     if (Object.hasOwn(manifest.verification,'vercelSourceTransport')
       && (manifest.verification.vercelSourceTransport!=='fcos_source_api_archive_v1'
         || !manifest.legacyReleaseContainment || !manifest.verification.vercelPreviewWriterCredential

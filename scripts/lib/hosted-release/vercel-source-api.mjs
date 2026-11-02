@@ -9,6 +9,7 @@ import { collectBuildProvenance, deploymentSourceFilter, isCredentialPath } from
 import { canonicalFcosE2eCandidateUrl } from '../../verify-e2e-candidate.mjs';
 import { assertSelectionSource, selectionBuildGuard } from './configuration-selection.mjs';
 import { canonical, digest, fail, ReleaseError, validateManifest } from './contract.mjs';
+import { assertPublicRuntimeIdentityPrerequisites } from './public-runtime-identities.mjs';
 
 export const SOURCE_API_TRANSPORT = 'fcos_source_api_archive_v1';
 export const SOURCE_API_MAX_BODY_BYTES = 16 * 1024 * 1024;
@@ -165,7 +166,9 @@ function sourceConfiguration(files, manifest) {
 // Copy only admitted public values. Generic manifests may omit a whole runtime
 // expectation family; a supplied family must be complete in both phases.
 function publicRuntimeEnvironment(manifest, production) {
-  const phases = [manifest.runtime.expectedPreview, manifest.runtime.expectedProduction], result = {};
+  const identities = assertPublicRuntimeIdentityPrerequisites(manifest);
+  const phases = [manifest.runtime.expectedPreview, manifest.runtime.expectedProduction],
+    result = production ? {} : identities;
   if (phases.some(value => !value || Object.getPrototypeOf(value) !== Object.prototype)) fail('SOURCE_API_PUBLIC_RUNTIME_EXPECTATIONS');
   if (phases.some(value => Object.hasOwn(value, 'flags'))) {
     for (const value of phases) {

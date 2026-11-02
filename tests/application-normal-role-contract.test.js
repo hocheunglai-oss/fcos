@@ -1,4 +1,4 @@
-import test from 'node:test';import assert from 'node:assert/strict';import{readFileSync}from'node:fs';import{execFileSync}from'node:child_process';import{createHash}from'node:crypto';
+import test from 'node:test';import assert from 'node:assert/strict';import{readFileSync}from'node:fs';import{createHash}from'node:crypto';
 import{NORMAL_ROLE_MODULES,normalRoleRequestAllowed,normalModuleDataLoaded,verifyNormalRoleRelease}from'../scripts/normal-role-release.mjs';
 import{BE6_COMPATIBILITY_NORMAL_MODULES}from'../scripts/runtime-compatibility-normal-role.mjs';
 import{APPLICATION_NORMAL_UI_CONTRACT,BE6_NORMAL_BROWSER_CONTRACT}from'../scripts/lib/be6-normal-browser-contract.mjs';
@@ -25,8 +25,9 @@ test('real application normal harness still requires all15 including strict save
 test('late non2xx, pending JSON and page errors withdraw tentative application module passes after cleanup',async()=>{for(const late of[{module:'email_router',kind:'http'},{module:'hedge_desk',kind:'json'},{module:'dashboard',kind:'pageerror'},{module:'xero_portal',kind:'http'}]){const f=fixture(late);await assert.rejects(verifyNormalRoleRelease(f.options),/coverage remains incomplete/);assert.equal(f.written.checks.some(row=>row.module===late.module),false);}});
 test('a denied request arriving during final context cleanup cannot publish complete application coverage',async()=>{const f=fixture({kind:'deny'});await assert.rejects(verifyNormalRoleRelease(f.options),/non-read request/);assert.equal(f.written,undefined);});
 test('strict Xero workflow body is byte-equivalent to predecessor while common terminal observer is additive',()=>{
- const old=execFileSync('git',['show','54416d94d881e8065cdf63b9beccf8183beb81a2:scripts/normal-role-release.mjs'],{encoding:'utf8'}),current=readFileSync(new URL('../scripts/normal-role-release.mjs',import.meta.url),'utf8');
+ // Pinned from published63bd; no ambient Git object or checkout is needed.
+ const current=readFileSync(new URL('../scripts/normal-role-release.mjs',import.meta.url),'utf8');
  const block=value=>value.slice(value.indexOf('          // The portal must prove'),value.indexOf("        } else if (",value.indexOf('          // The portal must prove')));
- assert.equal(createHash('sha256').update(block(current)).digest('hex'),createHash('sha256').update(block(old)).digest('hex'));
+ assert.equal(createHash('sha256').update(block(current)).digest('hex'),'a82eed35f5eb627fbdb1bfd5254ace664c45fd5fb0c6d4a09d853b1066bfdb34');
  assert.equal(normalModuleDataLoaded(NORMAL_ROLE_MODULES.find(row=>row.module==='xero_portal'),{rows:[{}]}).loaded,false);
 });

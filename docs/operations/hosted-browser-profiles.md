@@ -81,3 +81,32 @@ workflow-shaped environment has no harness-enable flags and executes the real
 FCUNO login logic, selected verifier, isolation engine and publisher validation
 with hermetic native/provider IO. It is not actual hosted authentication or a
 Production proof.
+
+The be6 ordinary catalogue follows its actual components and request contracts:
+the public Market price board uses `marketPulseSnapshot`; Open Collections uses
+the bounded `salesforceBuyerInvoicesDue` read; Incoming Payments uses the rendered
+page-copy heading. Exception Review checks the scanned universe separately from
+the classified exception rows, including its explicit empty state. Hedge Desk
+matches the exact snapshot request separately from its mandatory AppConfig read.
+Successful unrelated responses cannot replace a required response, and a failed
+required response remains fatal. Legitimate unavailable financial calculations
+or negative amounts do not become page-load failures merely because of their
+text or styling.
+
+The current application verifier shares these business-surface contracts while
+keeping its distinct saved Xero integrity report and workflow checks. It does not
+enroll another SHA in the exact be6 compatibility profile. Same-context background
+isolation, telemetry exclusion, denied-request handling and complete response
+settlement remain part of verification, including late failures during cleanup.
+
+Source-archive Preview deployments use detached HEAD, so historical branch-only
+settings do not supply Microsoft Graph identities to a new Preview. The reviewed
+`verification.publicPreviewRuntimeIdentityEnvironment` binds exactly the existing
+Microsoft tenant and application UUIDs. It enters Preview server runtime only:
+never the build environment, Production overrides or project-wide settings.
+There are no passwords, client secrets, bearer tokens or new credentials in this
+projection. The ordinary be6 and application source-archive paths reject a
+missing pair before collecting the first Production observation or preparing a
+deployment intent. This configuration check proves neither Microsoft consent
+nor authentication; the actual module read must still pass. Local component
+fixtures and source checks do not replace that hosted evidence.
