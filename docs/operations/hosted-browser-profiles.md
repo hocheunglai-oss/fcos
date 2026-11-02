@@ -41,8 +41,9 @@ An uploaded failed report is diagnostic; it cannot become a passing check.
 Failures retain fixed browser stages and codes. Compatibility diagnostics contain
 only reviewed stage/reason/module/handler/category enums and bounded HTTP status.
 No raw exception, response, URL query, credential, cookie or browser state is
-published. A submit timeout means `AUTH_CONTEXT_RESPONSE_NOT_OBSERVED`; it does
-not establish invalid credentials. Both browser phases upload their redacted
+published. A submit timeout with no observed authentication response emits
+`AUTH_CONTEXT_RESPONSE_NOT_OBSERVED`; it does not establish invalid credentials.
+A click timeout after an observed response retains the generic submit boundary. Both browser phases upload their redacted
 report when the browser step ran, including on failure.
 
 The maintained CLI browser path validates the already-bound `runtime_parity`
