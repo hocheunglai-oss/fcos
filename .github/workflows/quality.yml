@@ -149,7 +149,7 @@ jobs:
         if: ${{ vars.FCOS_HOSTED_READINESS_ENABLED != 'true' }}
         # Cheap local composition/source checks precede network contract reads
         # and the complete suite. No login, provider credentials or live calls.
-        run: node --test tests/hosted-browser-composition.test.js tests/hosted-release-exit-status.test.js tests/runtimeCompatibilitySuccessorPhysical.test.js
+        run: node --test tests/hosted-browser-composition.test.js tests/hosted-release-exit-status.test.js tests/runtimeCompatibilitySuccessorPhysical.test.js tests/retainedQualitySteps.test.js tests/releaseControlInstallation.test.js tests/hosted-release-readiness.test.js
       - run: npm run verify:fcuno-contract
         env:
           # Read-only token required to fetch FCUNO's pinned contract. It is

@@ -49,6 +49,6 @@ test('quality catches composed verifier and sealed-source drift before full suit
   for(const command of ['npm run verify:fcuno-contract','npm test']) assert.ok(index<steps.findIndex(s=>s.run===command));
   const step=steps[index];
   assert.equal(step.if, "${{ vars.FCOS_HOSTED_READINESS_ENABLED != 'true' }}");
-  assert.equal(step.run,'node --test tests/hosted-browser-composition.test.js tests/hosted-release-exit-status.test.js tests/runtimeCompatibilitySuccessorPhysical.test.js');
+  assert.equal(step.run,'node --test tests/hosted-browser-composition.test.js tests/hosted-release-exit-status.test.js tests/runtimeCompatibilitySuccessorPhysical.test.js tests/retainedQualitySteps.test.js tests/releaseControlInstallation.test.js tests/hosted-release-readiness.test.js');
   assert.equal(step.env,undefined);assert.equal(step['continue-on-error'],undefined);
 });

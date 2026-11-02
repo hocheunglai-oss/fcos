@@ -1,16 +1,20 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-const bytes = readFileSync(new URL('../fixtures/release-workflows/quality-approved-additions.json', import.meta.url));
-assert.equal(createHash('sha256').update(bytes).digest('hex'), 'de0e48b530c90ebfad7fa6914915b48c170e23683201d83f516ab9289802abd4', 'Reviewed additive quality-step fixture changed');
+const previousBytes = readFileSync(new URL('../fixtures/release-workflows/quality-approved-additions.json', import.meta.url));
+const previousHash = createHash('sha256').update(previousBytes).digest('hex');
+assert.equal(previousHash, 'de0e48b530c90ebfad7fa6914915b48c170e23683201d83f516ab9289802abd4', 'Original additive quality-step fixture changed');
+const bytes = readFileSync(new URL('../fixtures/release-workflows/quality-approved-additions-v2.json', import.meta.url));
+assert.equal(createHash('sha256').update(bytes).digest('hex'), 'ac2f1ffeaab499fe9243c868ab72c8c13b0739513a805a2a467ff2e17d86eb35', 'Reviewed additive quality-step fixture changed');
 const rules = JSON.parse(bytes);
+assert.equal(rules.previousApprovedAdditionsSha256, previousHash);
 export function retainedQualitySteps(workflow, { fixture72 = false } = {}) {
   const raw = workflow.jobs['code-and-database'].steps;
   assert.equal(raw.length, rules.rawSteps, 'Unknown or missing approved quality step');
   assert.deepEqual(raw[0], rules.sharedReceiptStep.expected);
   const normalized = raw.slice(1).map((step, i) => {
     const copy = structuredClone(step);
-    if (i === 31) assert.equal(copy.if, rules.exactConditions.cleanup);
+    if (i === rules.normalizedCleanupIndex) assert.equal(copy.if, rules.exactConditions.cleanup);
     else { assert.equal(copy.if, rules.exactConditions.ordinaryLegacyAndAdditions); delete copy.if; }
     return copy;
   });
