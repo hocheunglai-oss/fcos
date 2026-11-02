@@ -87,6 +87,35 @@ export function safeRuntimeLoginObservation(value) {
   return result;
 }
 
+// FCUNO's public /admin form POSTs only to /api/admin/login. These labels
+// describe observed protocol results, never account/password validity. In the
+// issuer implementation a 401 also masks unavailable configuration/database.
+export const ISSUER_SUBMIT_RESPONSE_CODES = Object.freeze(['UNOBSERVED', 'CREDENTIALS_REJECTED',
+  'PASSWORD_RESET_REQUIRED', 'LOGIN_ACCEPTED', 'SESSION_UNAVAILABLE', 'HTTP_REFUSED', 'RESPONSE_UNREADABLE', 'RESPONSE_UNRECOGNIZED']);
+export function safeRuntimeIssuerSubmit(value) {
+  const keys = ['requestObserved', 'responseObserved', 'requestFailed', 'httpStatus', 'responseCode',
+    'formState', 'formChallenge', 'submitEventObserved', 'submitHandlerObserved', 'scriptErrorObserved', 'continuation'];
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype
+    || Object.keys(value).length !== keys.length || !keys.every(key => Object.hasOwn(value, key))) return undefined;
+  const result = Object.fromEntries(keys.map(key => [key, value[key]]));
+  if (!['requestObserved', 'responseObserved', 'requestFailed', 'submitEventObserved', 'scriptErrorObserved']
+    .every(key => typeof result[key] === 'boolean')
+    || ![null, true, false].includes(result.submitHandlerObserved)
+    || !['UNOBSERVED', 'VALID', 'INVALID'].includes(result.formState)
+    || !['UNOBSERVED', 'PASSWORD_RESET_REQUIRED'].includes(result.formChallenge)
+    || !['UNOBSERVED', 'OIDC', 'MISSING', 'REJECTED'].includes(result.continuation)
+    || !ISSUER_SUBMIT_RESPONSE_CODES.includes(result.responseCode)
+    || !(result.httpStatus === null || Number.isInteger(result.httpStatus) && result.httpStatus >= 100 && result.httpStatus <= 599)
+    || !result.requestObserved && (result.responseObserved || result.requestFailed)
+    || !result.responseObserved && (result.httpStatus !== null || result.responseCode !== 'UNOBSERVED')
+    || !result.submitEventObserved && result.submitHandlerObserved !== null
+    || ['PASSWORD_RESET_REQUIRED', 'LOGIN_ACCEPTED'].includes(result.responseCode) && result.httpStatus !== 200
+    || result.responseCode === 'CREDENTIALS_REJECTED' && result.httpStatus !== 401
+    || result.responseCode === 'SESSION_UNAVAILABLE' && result.httpStatus !== 503
+    || result.responseCode === 'HTTP_REFUSED' && !(result.httpStatus >= 300)) return undefined;
+  return result;
+}
+
 // Closed public diagnostic vocabulary. Unknown typed errors are redacted too.
 const diagnosticCodes = new Set(`
   ADMITTED_SETUP_CHANGED ADMITTED_SETUP_MISSING APPLICATION_SUCCESSOR_ORDER
@@ -149,6 +178,7 @@ const diagnosticCodes = new Set(`
   SOURCE_API_RECOVERY_REQUEST_CHANGED VERCEL_SOURCE_API_OUTCOME_UNKNOWN
   HOSTED_BROWSER_PROFILE_INVALID HOSTED_BROWSER_COMPOSITION_INVALID HOSTED_BROWSER_CONTEXT_INVALID
   HOSTED_BROWSER_SOURCE_BINDING HOSTED_NORMAL_ROLE_FAILED RUNTIME_LOGIN_RESPONSE_UNOBSERVED
+  RUNTIME_LOGIN_ISSUER_REFUSED RUNTIME_LOGIN_ISSUER_TRANSPORT RUNTIME_LOGIN_PASSWORD_RESET_REQUIRED
 `.trim().split(/\s+/));
 const diagnosticPhases = new Set([...RELEASE_BOUNDARIES, 'admission', 'identity', 'github.read', 'vercel.preview', 'vercel.read', 'vercel.write', 'vercel.transport', 'vercel.source_api.prepare', 'vercel.source_api.write', 'preview', 'first_runtime.owner_refresh']);
 export function safeDiagnosticFailure(error) {
@@ -162,11 +192,13 @@ export function safeDiagnosticFailure(error) {
   const stage = boundary || (isReleaseBoundary(error?.phase) ? error.phase : undefined);
   const runtimeLoginObservation = known && stage?.startsWith('runtime.login.')
     ? safeRuntimeLoginObservation(error.detail?.runtimeLoginObservation) : undefined;
+  const issuerSubmit = known && stage?.startsWith('runtime.login.')
+    ? safeRuntimeIssuerSubmit(error.detail?.issuerSubmit) : undefined;
   return { status: 'intervention_required', code: known ? error.code : 'DIAGNOSTIC_FAILURE_UNCLASSIFIED',
     phase: known && diagnosticPhases.has(error.phase) ? error.phase : boundary || 'diagnostic',
     recovery: 'Inspect this admission diagnostic. It authorizes no deployment or release retry.',
     ...(boundary ? { boundary } : {}), ...(known && commandFailure ? { commandFailure } : {}), ...(known && sourceApiFailure ? { sourceApiFailure } : {}), ...(known && runtimeMismatch ? {runtimeMismatch} : {}), ...(known && runtimeLogin ? { runtimeLogin } : {}),
-    ...(runtimeLoginObservation ? { runtimeLoginObservation } : {}) };
+    ...(runtimeLoginObservation ? { runtimeLoginObservation } : {}), ...(issuerSubmit ? { issuerSubmit } : {}) };
 }
 
 const isKnownDiagnosticCode = code => typeof code === 'string' && (diagnosticCodes.has(code)
@@ -188,6 +220,7 @@ export function safeHostedBrowserDiagnostic(error) {
     ...(stage ? { stage } : {}),
     ...(runtimeLogin ? { runtimeLogin } : {}),
     ...(diagnostic.runtimeLoginObservation ? { runtimeLoginObservation: diagnostic.runtimeLoginObservation } : {}),
+    ...(diagnostic.issuerSubmit ? { issuerSubmit: diagnostic.issuerSubmit } : {}),
     ...(normalRole ? { normalRole } : {}),
     ...(error.code === 'RUNTIME_LOGIN_RESPONSE_UNOBSERVED' && stage === 'runtime.login.submit'
       ? { loginOutcome: 'AUTH_CONTEXT_RESPONSE_NOT_OBSERVED' } : {}),
@@ -201,12 +234,15 @@ export function safeHostedBrowserResultFields(result) {
   const runtimeLogin = safeRuntimeLoginFailure(result.runtimeLogin);
   const runtimeLoginObservation = diagnosticCode && stage?.startsWith('runtime.login.')
     ? safeRuntimeLoginObservation(result.runtimeLoginObservation) : undefined;
+  const issuerSubmit = diagnosticCode && stage?.startsWith('runtime.login.')
+    ? safeRuntimeIssuerSubmit(result.issuerSubmit) : undefined;
   return {
     errorCode: 'HOSTED_BROWSER_VERIFICATION_FAILED',
     ...(diagnosticCode ? { diagnosticCode } : {}),
     ...(stage ? { stage } : {}),
     ...(runtimeLogin ? { runtimeLogin } : {}),
     ...(runtimeLoginObservation ? { runtimeLoginObservation } : {}),
+    ...(issuerSubmit ? { issuerSubmit } : {}),
     ...(diagnosticCode === 'HOSTED_NORMAL_ROLE_FAILED' && stage === 'browser.normal'
       ? { normalRole: normalizeCompatibilityNormalDiagnostic(result.normalRole) } : {}),
     ...(diagnosticCode === 'RUNTIME_LOGIN_RESPONSE_UNOBSERVED' && stage === 'runtime.login.submit'

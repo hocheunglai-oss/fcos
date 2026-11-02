@@ -12,7 +12,7 @@ import { candidateAuthenticationState } from '../../e2e-private-state.mjs';
 import { prepareCandidateProtection } from '../../e2e-protection-state.mjs';
 import { collectRuntimeObservation } from '../../collect-preview-parity.mjs';
 import { assertNormalRoleIdentity, NORMAL_ROLE_MODULES, verifyNormalRoleRelease } from '../../normal-role-release.mjs';
-import { COMPATIBILITY_NORMAL_MODULES, verifyRuntimeCompatibilityNormalRole, verifyHostedOrdinaryCompatibilityNormalRole,
+import { COMPATIBILITY_NORMAL_MODULES, BE6_COMPATIBILITY_NORMAL_MODULES, verifyRuntimeCompatibilityNormalRole, verifyHostedOrdinaryCompatibilityNormalRole,
   normalizeCompatibilityNormalDiagnostic } from '../../runtime-compatibility-normal-role.mjs';
 import { hostedBrowserProfile, hostedBrowserHarnessEnvironment, assertHostedOrdinaryBrowserSource, assertHostedBrowserJobContext,
   hostedBrowserHarnessActivation } from './browser-profile.mjs';
@@ -21,7 +21,7 @@ import { compatibilityBrowserIsolationVerified } from '../compatibility-browser-
 import { createVercelIntegrationReader } from './vercel-read-auth.mjs';
 import { legacyRuntimeLoginFailureCode } from './legacy-hosted-runtime-login.mjs';
 import { ReleaseError } from './json-contract.mjs';
-import { atReleaseBoundary, boundaryFailure, RUNTIME_LOGIN_ERROR_CODES, safeHostedBrowserDiagnostic } from './failure.mjs';
+import { atReleaseBoundary, boundaryFailure, RUNTIME_LOGIN_ERROR_CODES, safeHostedBrowserDiagnostic, safeRuntimeIssuerSubmit } from './failure.mjs';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const FROZEN = '04ee3425aac7a49089eda781eb3c976aea1f6785';
@@ -42,7 +42,8 @@ const fresh = (value, now) => Number.isFinite(Date.parse(value)) && Date.parse(v
 
 export function assertHostedBrowserComposition(manifest) {
   const profile = hostedBrowserProfile(manifest), compatibility = profile !== 'application';
-  const modules = compatibility ? COMPATIBILITY_NORMAL_MODULES : NORMAL_ROLE_MODULES;
+  const modules = profile === 'ordinary_compatibility' ? BE6_COMPATIBILITY_NORMAL_MODULES
+    : compatibility ? COMPATIBILITY_NORMAL_MODULES : NORMAL_ROLE_MODULES;
   const harness = profile === 'ordinary_compatibility' ? verifyHostedOrdinaryCompatibilityNormalRole
     : compatibility ? verifyRuntimeCompatibilityNormalRole : verifyNormalRoleRelease;
   const activation = hostedBrowserHarnessActivation(profile);
@@ -158,11 +159,145 @@ async function arriveAtHostedIssuer(page, origin, issuer) {
   requireFact(atIssuer());
 }
 
+// Public issuer contract: bunker-map@a26850dbaabc94db2caef68938041308b5d8838b
+// app/admin/page.tsx and app/api/admin/login/route.ts. The deployed public
+// /admin bundle was independently inspected too. This observer never reads a
+// request body, credential, cookie or token, and never publishes provider text.
+export function createHostedIssuerSubmitObserver({ issuer, onTerminal = () => {} }) {
+  requireFact(issuer === new URL(FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation.issuer).origin);
+  const value = { requestObserved: false, responseObserved: false, requestFailed: false, httpStatus: null,
+    responseCode: 'UNOBSERVED', formState: 'UNOBSERVED', formChallenge: 'UNOBSERVED', submitEventObserved: false,
+    submitHandlerObserved: null, scriptErrorObserved: false, continuation: 'UNOBSERVED' };
+  const pending = new Set();
+  let closed = false, terminal = null;
+  const finish = code => { if (!closed && !terminal) { terminal = code; onTerminal(code); } };
+  const matches = request => {
+    try { return request.url() === `${issuer}/api/admin/login` && request.method() === 'POST'; }
+    catch { return false; }
+  };
+  const observeRequest = request => { if (!closed && matches(request)) value.requestObserved = true; };
+  const observeFailed = request => {
+    if (closed || !matches(request) || value.responseObserved) return;
+    value.requestObserved = true; value.requestFailed = true;
+    finish('RUNTIME_LOGIN_ISSUER_TRANSPORT');
+  };
+  const observeResponse = response => {
+    try { if (closed || !matches(response.request()) || value.responseObserved) return; }
+    catch { return; }
+    value.requestObserved = true; value.responseObserved = true;
+    try { const status = response.status(); if (Number.isInteger(status) && status >= 100 && status <= 599) value.httpStatus = status; }
+    catch { /* Unknown remains null. */ }
+    const work = (async () => {
+      let timer;
+      try {
+        const status = value.httpStatus;
+        // A 500 can contain an arbitrary internal exception; do not read it.
+        if (![200, 401, 503].includes(status)) {
+          value.responseCode = status >= 300 ? 'HTTP_REFUSED' : 'RESPONSE_UNREADABLE';
+        } else {
+          const bytes = await Promise.race([response.body(), new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error('ISSUER_DIAGNOSTIC_TIMEOUT')), 1000);
+          })]);
+          if (closed) return;
+          if (bytes.length > 8192) throw new Error('ISSUER_DIAGNOSTIC_SIZE');
+          const body = JSON.parse(bytes.toString('utf8'));
+          value.responseCode = 'RESPONSE_UNRECOGNIZED';
+          if (status === 401) value.responseCode = body?.success === false && body?.message === 'Invalid username or password.'
+            ? 'CREDENTIALS_REJECTED' : 'HTTP_REFUSED';
+          else if (status === 503) value.responseCode = body?.success === false
+            && body?.message === 'Unable to create a secure admin session. Please try again.' ? 'SESSION_UNAVAILABLE' : 'HTTP_REFUSED';
+          else if (body?.success === true && body.user && typeof body.user.resetRequired === 'boolean')
+            value.responseCode = body.user.resetRequired ? 'PASSWORD_RESET_REQUIRED' : 'LOGIN_ACCEPTED';
+        }
+      } catch { if (!closed) value.responseCode = 'RESPONSE_UNREADABLE'; }
+      finally { clearTimeout(timer); }
+      if (closed) return;
+      if (value.responseCode === 'PASSWORD_RESET_REQUIRED') finish('RUNTIME_LOGIN_PASSWORD_RESET_REQUIRED');
+      else if (value.httpStatus >= 300 || value.responseCode === 'RESPONSE_UNRECOGNIZED') finish('RUNTIME_LOGIN_ISSUER_REFUSED');
+    })();
+    pending.add(work); work.finally(() => pending.delete(work));
+  };
+  const installForm = async page => {
+    try {
+      const url = new URL(page.url());
+      if (url.origin !== issuer || url.pathname !== '/admin') return;
+      const entries = url.searchParams.getAll('returnTo'), raw = entries[0];
+      if (!entries.length) value.continuation = 'MISSING';
+      else {
+        let target;
+        try { if (entries.length === 1 && raw && raw.length <= 4096 && !raw.includes('#')) target = new URL(raw, issuer); } catch { /* Rejected. */ }
+        value.continuation = target?.origin === issuer && !target.username && !target.password
+          && target.pathname === '/api/oidc/authorize' && target.search ? 'OIDC' : 'REJECTED';
+      }
+      // A closed event signal survives a fast navigation/reload. No app state
+      // or event/input data crosses this binding, only these three literals.
+      await page.exposeBinding?.('__fcosHostedIssuerSubmitSignalV1', (source, signal) => {
+        try {
+          const current = new URL(source.frame.url());
+          if (closed || source.page !== page || source.frame !== page.mainFrame()
+            || current.origin !== issuer || current.pathname !== '/admin') return;
+          if (signal === 'SUBMIT') value.submitEventObserved = true;
+          else if (value.submitEventObserved && ['HANDLED', 'UNHANDLED'].includes(signal))
+            value.submitHandlerObserved = signal === 'HANDLED';
+        } catch { /* A departed document remains unobserved. */ }
+      });
+      await page.evaluate?.(expectedIssuer => {
+        if (window.location.origin !== expectedIssuer || window.location.pathname !== '/admin') return;
+        const form = document.querySelector('form.fc-admin-login-form');
+        if (!form) return;
+        const state = { submitEventObserved: false, submitHandlerObserved: null };
+        form.addEventListener('submit', event => {
+          state.submitEventObserved = true;
+          window.__fcosHostedIssuerSubmitSignalV1?.('SUBMIT');
+        }, { capture: true });
+        // React delegates the source-owned handler at its root. A document
+        // bubble listener runs after it; a microtask from a capture listener
+        // can run before React's listener and would mislabel a handled submit.
+        document.addEventListener('submit', event => {
+          if (event.target !== form) return;
+          state.submitHandlerObserved = event.defaultPrevented;
+          window.__fcosHostedIssuerSubmitSignalV1?.(event.defaultPrevented ? 'HANDLED' : 'UNHANDLED');
+        });
+        Object.defineProperty(window, '__fcosHostedIssuerSubmitDiagnosticV1', { value: { form, state }, configurable: true });
+      }, issuer);
+    } catch { /* Diagnostics cannot replace or relax the real login checks. */ }
+  };
+  const readForm = async (page, captureValidity = false) => {
+    try {
+      const url = new URL(page.url());
+      if (closed || url.origin !== issuer || url.pathname !== '/admin') return;
+      const state = await page.evaluate?.(expectedIssuer => {
+        if (window.location.origin !== expectedIssuer || window.location.pathname !== '/admin') return null;
+        const resetRequired = Boolean(document.querySelector('section[aria-label="Change password"]'));
+        const record = window.__fcosHostedIssuerSubmitDiagnosticV1;
+        return { resetRequired, ...(record ? {
+          valid: [...record.form.elements].every(element => !element.willValidate || element.validity.valid),
+          submitEventObserved: record.state.submitEventObserved, submitHandlerObserved: record.state.submitHandlerObserved } : {}) };
+      }, issuer);
+      if (state?.resetRequired === true) {
+        value.formChallenge = 'PASSWORD_RESET_REQUIRED'; finish('RUNTIME_LOGIN_PASSWORD_RESET_REQUIRED');
+      }
+      if (captureValidity && typeof state?.valid === 'boolean') value.formState = state.valid ? 'VALID' : 'INVALID';
+      if (state?.submitEventObserved === true) {
+        value.submitEventObserved = true;
+        if (typeof state.submitHandlerObserved === 'boolean') value.submitHandlerObserved = state.submitHandlerObserved;
+      }
+    } catch { /* Cross-document/unavailable instrumentation remains unobserved. */ }
+  };
+  return { request: observeRequest, response: observeResponse, failed: observeFailed, installForm, readForm,
+    pageError: () => { if (!closed) value.scriptErrorObserved = true; },
+    drain: async () => { await Promise.all([...pending]); },
+    snapshot: () => safeRuntimeIssuerSubmit(value), failureCode: () => terminal, close: () => { closed = true; } };
+}
+
 // Fresh dedicated test login only. Browser state remains opaque and candidate-scoped;
 // the existing normal-role harness consumes its newly issued bearer only in memory.
 export async function loginHostedFcuno({ origin, credentials, mode, protectionState, browserType = chromium, launchEnvironment = hostedBrowserLaunchEnvironment() }) {
   const issuer = new URL(FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation.issuer).origin;
   let browser, context, page;
+  let refuseIssuer;
+  const issuerRefusal = new Promise(resolve => { refuseIssuer = resolve; });
+  const issuerSubmit = createHostedIssuerSubmitObserver({ issuer, onTerminal: code => refuseIssuer(code) });
   const observation = { clickCompleted: false, authContextRequestObserved: false, authContextResponseObserved: false,
     authContextHttpStatus: null, navigationMilestones: [], finalLocation: 'other' };
   const observeLocation = raw => {
@@ -192,7 +327,8 @@ export async function loginHostedFcuno({ origin, credentials, mode, protectionSt
   const observedFailure = error => {
     observeLocation();
     const failure = error instanceof ReleaseError ? error : boundaryFailure(error, 'runtime.login.identity');
-    failure.detail = { ...failure.detail, runtimeLoginObservation: { ...observation, navigationMilestones: [...observation.navigationMilestones] } };
+    failure.detail = { ...failure.detail, runtimeLoginObservation: { ...observation, navigationMilestones: [...observation.navigationMilestones] },
+      issuerSubmit: issuerSubmit.snapshot() };
     return failure;
   };
   try {
@@ -204,19 +340,35 @@ export async function loginHostedFcuno({ origin, credentials, mode, protectionSt
     observeLocation();
     await atReleaseBoundary('runtime.login.issuer', () => arriveAtHostedIssuer(page, origin, issuer));
     observeLocation();
+    page.on?.('request', issuerSubmit.request);
+    page.on?.('response', issuerSubmit.response);
+    page.on?.('requestfailed', issuerSubmit.failed);
+    page.on?.('pageerror', issuerSubmit.pageError);
     const issuerLocation = () => { const url = new URL(page.url()); requireFact(url.origin === issuer && url.pathname === '/admin'); };
     await atReleaseBoundary('runtime.login.form', async () => {
+      // The public SSR response contains only Loading...; this form is rendered
+      // by the hydrated client after its session check. Wait for that source-
+      // owned milestone before instrumenting or filling, never a fixed sleep.
+      issuerLocation();
+      await page.locator?.('.fc-admin-loading').waitFor({ state: 'hidden', timeout: 30000 });
+      await page.locator?.('form.fc-admin-login-form').waitFor({ state: 'visible', timeout: 30000 });
+      issuerLocation(); await issuerSubmit.installForm(page);
       issuerLocation(); await page.getByLabel('Username', { exact: true }).fill(credentials.email);
       issuerLocation(); await page.getByLabel('Password', { exact: true }).fill(credentials.password);
       issuerLocation();
     });
+    await issuerSubmit.readForm(page, true);
     page.on?.('request', observeRequest);
     page.on?.('response', responseListener);
     const [response] = await atReleaseBoundary('runtime.login.submit', async () => {
       try {
         return await Promise.all([
-          page.waitForResponse(res => res.url() === `${origin}/api/functions/authContext` && res.request().method() === 'POST', { timeout: 60000 })
-            .then(value => { observeResponse(value); return value; }),
+          Promise.race([
+            page.waitForResponse(res => res.url() === `${origin}/api/functions/authContext` && res.request().method() === 'POST', { timeout: 60000 })
+              .then(value => { observeResponse(value); return value; }),
+            issuerRefusal.then(code => { throw new ReleaseError(code, 'runtime.login.submit',
+              'Inspect the closed issuer submission result. Private account action requires its actual demonstrated condition.'); }),
+          ]),
           page.getByRole('button', { name: 'Login', exact: true }).click().then(() => { observation.clickCompleted = true; }),
         ]);
       } catch (error) {
@@ -224,6 +376,11 @@ export async function loginHostedFcuno({ origin, credentials, mode, protectionSt
           throw new ReleaseError('RUNTIME_LOGIN_RESPONSE_UNOBSERVED', 'runtime.login.submit', 'No authentication response was observed; this does not establish invalid credentials.');
         throw error;
       }
+    });
+    await atReleaseBoundary('runtime.login.submit', async () => {
+      await issuerSubmit.drain();
+      const code = issuerSubmit.failureCode();
+      if (code) throw new ReleaseError(code, 'runtime.login.submit', 'Inspect the closed issuer submission result.');
     });
     await atReleaseBoundary('runtime.login.identity', async () => {
       const httpStatus = response.status();
@@ -266,14 +423,23 @@ export async function loginHostedFcuno({ origin, credentials, mode, protectionSt
     }
     return { state, token, auth };
   } catch (error) {
-    throw observedFailure(error);
+    await issuerSubmit.drain();
+    await issuerSubmit.readForm(page);
+    const code = issuerSubmit.failureCode();
+    throw observedFailure(code && error?.code === 'RUNTIME_LOGIN_RESPONSE_UNOBSERVED'
+      ? new ReleaseError(code, 'runtime.login.submit', 'Inspect the closed issuer submission result.') : error);
   }
   finally {
     observeLocation();
+    issuerSubmit.close();
     try {
       page?.off?.('framenavigated', navigationListener);
       page?.off?.('request', observeRequest);
       page?.off?.('response', responseListener);
+      page?.off?.('request', issuerSubmit.request);
+      page?.off?.('response', issuerSubmit.response);
+      page?.off?.('requestfailed', issuerSubmit.failed);
+      page?.off?.('pageerror', issuerSubmit.pageError);
     } catch { /* Context closure below removes any remaining listeners. */ }
     let cleanupFailed = false;
     try { await context?.close(); } catch { cleanupFailed = true; }
@@ -474,11 +640,11 @@ export async function runHostedBrowser({ manifest, preview, mode, env = process.
         && Array.isArray(evidence.checks) && evidence.checks.length === 15 && new Set(evidence.checks.map(c => c.module)).size === 15
         && modules.every(spec => evidence.checks.some(c => c.module === spec.module && c.role === identity.role && c.result === 'pass'
           && c.kind === (spec.workflow ? 'workflow_read' : 'read'))));
-      if (composition.compatibility) requireFact(compatibilityBrowserIsolationVerified(evidence.browserIsolation, { candidateUrl: deployment.url, sha: manifest.candidate.sha,
+      requireFact(compatibilityBrowserIsolationVerified(evidence.browserIsolation, { candidateUrl: deployment.url, sha: manifest.candidate.sha,
           harnessSha: manifest.controller.sha, deploymentId: deployment.id, sourceDigest: manifest.candidate.sourceSha256 }, modules.map(s => s.module)));
       capturedAt = evidence.capturedAt;
       result = { identity: 'normal_role', browserProfile: composition.profile, role: identity.role, modules: evidence.checks.map(c => c.module), actualData: true, unexpectedWrites: 0,
-        ...(composition.compatibility ? { browserIsolation: evidence.browserIsolation } : {}),
+        browserIsolation: evidence.browserIsolation,
         ...(frozen ? { emailSigner: sanitiseHostedSignerEvidence(evidence.emailSigner, { manifest, deployment, sourceProof: signerProof, now: now().getTime() }) } : {}) };
     }
     return { ...base, status: 'passed', deploymentId: deployment.id, candidateUrl: deployment.url, sourceSha256: manifest.candidate.sourceSha256,

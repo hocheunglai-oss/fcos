@@ -12,10 +12,12 @@ import { fileURLToPath } from 'node:url';
 import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier } from '../config/fcosConnections.js';
 import { FCOS_READ_ONLY_CI } from '../config/fcosCiIdentity.js';
 import { admitVercelReadFixture } from './helpers/hosted-vercel-read.mjs';
-import { COMPATIBILITY_NORMAL_MODULES, verifyRuntimeCompatibilityNormalRole } from '../scripts/runtime-compatibility-normal-role.mjs';
+import { COMPATIBILITY_NORMAL_MODULES, BE6_COMPATIBILITY_NORMAL_MODULES, verifyRuntimeCompatibilityNormalRole } from '../scripts/runtime-compatibility-normal-role.mjs';
+import { ORDINARY_BROWSER_CANDIDATE } from '../scripts/lib/hosted-release/browser-profile.mjs';
+import { NORMAL_ROLE_MODULES } from '../scripts/normal-role-release.mjs';
 import { PREVIEW_EMAIL_SIGNER_MAILBOX_REGISTRY_ID } from '../scripts/lib/preview-email-signer.mjs';
 import { runHostedBrowser, loginHostedFcuno, runHostedRestrictedHarness, createHostedRuntimeTokenProvider,
-  assertHostedBrowserBinding, recheckHostedPreviewProvider, hostedBrowserLaunchEnvironment } from '../scripts/lib/hosted-release/browser.mjs';
+  assertHostedBrowserBinding, assertHostedBrowserComposition, recheckHostedPreviewProvider, hostedBrowserLaunchEnvironment } from '../scripts/lib/hosted-release/browser.mjs';
 
 const FROZEN = '04ee3425aac7a49089eda781eb3c976aea1f6785';
 const origin = 'https://fcos-abcdefghi-hocheunglai-6535s-projects.vercel.app';
@@ -93,6 +95,57 @@ test('frozen adapter requires exact source plus signer setup; preserves all15, a
   assert.doesNotMatch(JSON.stringify(result), /PRIVATE_|password|access_token/);
   const missing = fixture(t, 'normal_role'); delete missing.options.signerAdapter;
   const pending = await runHostedBrowser(missing.options); assert.equal(pending.status, 'waiting_dependency'); assert.deepEqual(pending.missing, ['frozen_04ee_signer_source_and_synthetic_probe_adapter']); assert.ok(!missing.events.includes('login'));
+});
+
+test('application normal path requires and publishes exact isolation without borrowing the compatibility profile or Xero catalogue', async t => {
+  const make = () => {
+    const f = fixture(t, 'normal_role'), sha = '2'.repeat(40);
+    f.manifest.candidate.sha = sha; f.manifest.candidate.sourceProfile = 'application_v2';
+    f.preview.sha = sha; f.preview.manifestHash = digest(f.manifest); f.runtime.sha = sha; f.version.commit = sha;
+    f.evidence.candidateSha = sha; f.evidence.browserIsolation = isolation(f.manifest, f.preview);
+    f.evidence.browserIsolation.backgroundSync.modules = NORMAL_ROLE_MODULES.map(s => ({ module: s.module, before: true, after: true }));
+    f.evidence.checks = NORMAL_ROLE_MODULES.map(s => ({ module: s.module, role: 'finance', result: 'pass', kind: s.workflow ? 'workflow_read' : 'read' }));
+    f.options.normalHarness = async dependencies => {
+      assert.equal(dependencies.env.FCOS_NORMAL_ROLE_E2E_ENABLED, 'true');
+      assert.equal(dependencies.env.FCOS_COMPATIBILITY_NORMAL_ROLE_ENABLED, undefined);
+      assert.equal(dependencies.env.GITHUB_SHA, f.manifest.controller.sha);
+      assert.equal(dependencies.admitHostedSource, undefined); assert.equal(dependencies.signerEnabled, undefined);
+      return f.evidence;
+    };
+    return f;
+  };
+  const f = make(), composition = assertHostedBrowserComposition(f.manifest);
+  assert.equal(composition.profile, 'application');
+  assert.equal(composition.modules.find(s => s.module === 'xero_portal').handler, 'xeroIntegrityReport');
+  const result = await runHostedBrowser(f.options);
+  assert.equal(result.status, 'passed'); assert.equal(result.result.browserProfile, 'application');
+  assert.deepEqual(result.result.browserIsolation, f.evidence.browserIsolation);
+  assert.equal(result.result.modules.length, 15);
+  for (const mutate of [g => { delete g.evidence.browserIsolation; },
+    g => { g.evidence.browserIsolation.harnessSha = 'f'.repeat(40); },
+    g => { g.evidence.browserIsolation.candidateSha = FROZEN; },
+    g => { g.evidence.browserIsolation.backgroundSync.released = false; },
+    g => { g.evidence.browserIsolation.backgroundSync.modules.reverse(); }]) {
+    const g = make(); mutate(g); const denied = await runHostedBrowser(g.options);
+    assert.equal(denied.status, 'failed'); assert.equal(denied.stage, 'browser.coverage');
+  }
+});
+
+test('composition exposes the exact be6 request catalogue while frozen and application contracts stay distinct', () => {
+  const ordinary = assertHostedBrowserComposition({ candidate: structuredClone(ORDINARY_BROWSER_CANDIDATE) });
+  assert.equal(ordinary.modules, BE6_COMPATIBILITY_NORMAL_MODULES);
+  assert.equal(ordinary.modules.find(s => s.module === 'markets').handler, 'marketPulseSnapshot');
+  assert.equal(ordinary.modules.find(s => s.module === 'buyer_invoices').handler, 'salesforceBuyerInvoicesDue');
+  assert.equal(ordinary.modules.find(s => s.module === 'xero_portal').handler, 'xeroPortalReceiptsList');
+  assert.equal(ordinary.modules.length, 15);
+  const frozen = assertHostedBrowserComposition({ candidate: { sha: FROZEN } });
+  assert.equal(frozen.modules, COMPATIBILITY_NORMAL_MODULES);
+  assert.equal(frozen.modules.find(s => s.module === 'markets').handler, 'hedgeMarkets');
+  assert.equal(frozen.modules.find(s => s.module === 'buyer_invoices').handler, 'buyerInvoiceCollectionList');
+  const app = assertHostedBrowserComposition({ candidate: { sha: '2'.repeat(40), sourceProfile: 'application_v2' } });
+  assert.equal(app.modules, NORMAL_ROLE_MODULES);
+  assert.equal(app.modules.find(s => s.module === 'xero_portal').handler, 'xeroIntegrityReport');
+  assert.throws(() => assertHostedBrowserComposition({ candidate: { ...ORDINARY_BROWSER_CANDIDATE, sourceSha256: '0'.repeat(64) } }));
 });
 
 test('missing modules, incorrect roles, failed isolation or signer token leakage cannot publish normal coverage', async t => {
