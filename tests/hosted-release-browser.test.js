@@ -1,5 +1,5 @@
 import { safeFailure } from '../scripts/lib/hosted-release/controller.mjs';
-import { safeDiagnosticFailure, safeRuntimeLoginFailure } from '../scripts/lib/hosted-release/failure.mjs';
+import { safeDiagnosticFailure, safeRuntimeLoginFailure, safeRuntimeLoginObservation, safeHostedBrowserDiagnostic, safeHostedBrowserResultFields } from '../scripts/lib/hosted-release/failure.mjs';
 import { ReleaseError } from '../scripts/lib/hosted-release/json-contract.mjs';
 import { releaseResultSummary } from '../scripts/hosted-release.mjs';
 import test from 'node:test';
@@ -136,25 +136,42 @@ test('readonly Vercel adapter uses only pinned GET endpoints and rejects a misma
 });
 
 function fakeLoginBrowser(auth, state, { foreign = false, cleanupFail = false, failAt = null, httpStatus = 200, responseBody = null, bodyPending = false } = {}) {
-  let location = origin, fills = 0, closed = 0, waits = 0;
-  const waiting = new Set();
-  const move = url => { location = url; for (const wait of waiting) if (wait.predicate(new URL(url))) { waiting.delete(wait); wait.resolve(); } };
+  let location = origin, fills = 0, closed = 0, waits = 0, submissions = 0;
+  const waiting = new Set(), listeners = new Map(), frame = { url: () => location };
+  const move = url => { location = url; listeners.get('framenavigated')?.(frame); for (const wait of waiting) if (wait.predicate(new URL(url))) { waiting.delete(wait); wait.resolve(); } };
   const issuer = new URL(FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation.issuer).origin;
-  const response = { status: () => httpStatus, body: async () => bodyPending ? new Promise(() => {}) : Buffer.from(responseBody ?? JSON.stringify(auth)), json: async () => { if (failAt === 'identity') throw new SyntaxError('PRIVATE_RESPONSE_BODY'); return auth; } };
+  const request = { url: () => `${origin}/api/functions/authContext`, method: () => 'POST' };
+  const response = { request: () => request, status: () => httpStatus, body: async () => bodyPending ? new Promise(() => {}) : Buffer.from(responseBody ?? JSON.stringify(auth)), json: async () => { if (failAt === 'identity') throw new SyntaxError('PRIVATE_RESPONSE_BODY'); return auth; } };
   const page = { goto: async () => { if (failAt === 'navigation') throw Error('PRIVATE_NAVIGATION_TOKEN'); move(foreign ? 'https://foreign.invalid/admin' : `${origin}/login`); }, url: () => location,
+    on: (event, listener) => listeners.set(event, listener), off: (event, listener) => { if (listeners.get(event) === listener) listeners.delete(event); }, mainFrame: () => frame,
     getByRole: (_, { name }) => {
-      const click = async () => { if (failAt === 'submit' && name === 'Login') throw Error('PRIVATE_SUBMIT_PASSWORD'); if (failAt === 'submit_timeout_after_response' && name === 'Login') throw Object.assign(Error('PRIVATE_CLICK_TIMEOUT'), { name: 'TimeoutError' }); move(name === 'Continue with FCUNO' ? (foreign ? location : `${issuer}/admin`) : origin); };
+      const click = async () => {
+        if (name === 'Login') {
+          submissions++;
+          if (failAt === 'submit') throw Error('PRIVATE_SUBMIT_PASSWORD');
+          if (failAt === 'submit_timeout_after_response') throw Object.assign(Error('PRIVATE_CLICK_TIMEOUT'), { name: 'TimeoutError' });
+          if (failAt === 'response_timeout') { listeners.get('request')?.(request); return; }
+          if (failAt === 'request_not_observed') { move(`${origin}/login?federated=1&error_description=PRIVATE_TICKET#PRIVATE_TOKEN`); return; }
+          if (failAt === 'callback_off_origin') { move('https://foreign.invalid/private-path?ticket=PRIVATE_TICKET#PRIVATE_TOKEN'); return; }
+        }
+        move(name === 'Continue with FCUNO' ? (foreign ? location : `${issuer}/admin`) : origin);
+      };
       return { click, waitFor: async () => {}, elementHandle: async () => ({ click, dispose: async () => {} }) };
     },
     getByLabel: () => ({ fill: async () => { if (failAt === 'form') throw Error('PRIVATE_FORM_EMAIL'); fills++; assert.equal(new URL(location).origin, issuer); } }),
     waitForURL: predicate => {
       waits++; if (failAt === 'callback' && waits === 2) return Promise.reject(Error('PRIVATE_CALLBACK_TICKET'));
+      if (failAt === 'callback_off_origin' && waits === 2) return Promise.reject(Error('PRIVATE_CALLBACK_URL'));
       if (predicate(new URL(location))) return Promise.resolve();
       if (foreign) return Promise.reject(Error('PRIVATE_WRONG_LOCATION'));
       return new Promise((resolve, reject) => waiting.add({ predicate, resolve, reject }));
-    }, waitForResponse: async () => { if (failAt === 'response_timeout') throw Object.assign(new Error('PRIVATE_RESPONSE_PASSWORD'), { name: 'TimeoutError' }); return response; } };
+    }, waitForResponse: async () => {
+      if (['response_timeout', 'request_not_observed'].includes(failAt)) throw Object.assign(new Error('PRIVATE_RESPONSE_PASSWORD'), { name: 'TimeoutError' });
+      listeners.get('request')?.(request); listeners.get('response')?.(response); return response;
+    } };
   const context = { newPage: async () => page, storageState: async () => state, close: async () => { closed++; for (const wait of waiting) wait.reject(Error('PRIVATE_PAGE_CLOSED')); waiting.clear(); if (cleanupFail) throw Error('PRIVATE_CLEANUP_ERROR'); } };
-  return { browserType: { launch: async () => ({ newContext: async () => context, close: async () => { closed++; } }) }, counts: () => ({ fills, closed }), waits: () => waits };
+  return { browserType: { launch: async () => ({ newContext: async () => context, close: async () => { closed++; } }) }, counts: () => ({ fills, closed }), waits: () => waits,
+    submissions: () => submissions, remainingListeners: () => listeners.size };
 }
 
 test('fresh FCUNO login only fills pinned issuer and yields candidate-only new state; foreign issuer fails before password entry', async t => {
@@ -365,6 +382,11 @@ test('restricted submit timeout means response unobserved, with no invalid-passw
   assert.equal(result.stage, 'runtime.login.submit'); assert.equal(result.diagnosticCode, 'RUNTIME_LOGIN_RESPONSE_UNOBSERVED');
   assert.equal(result.loginOutcome, 'AUTH_CONTEXT_RESPONSE_NOT_OBSERVED');
   assert.equal(releaseResultSummary(result).loginOutcome, result.loginOutcome);
+  assert.deepEqual(result.runtimeLoginObservation, { clickCompleted: true, authContextRequestObserved: true,
+    authContextResponseObserved: false, authContextHttpStatus: null,
+    navigationMilestones: ['candidate_login', 'issuer_login'], finalLocation: 'issuer_login' });
+  assert.deepEqual(releaseResultSummary(result).runtimeLoginObservation, result.runtimeLoginObservation);
+  assert.equal(browser.submissions(), 1); assert.equal(browser.remainingListeners(), 0);
   assert.doesNotMatch(JSON.stringify(result), /PRIVATE_|password|invalid.credentials/i);
   assert.deepEqual(browser.counts(), { fills: 2, closed: 2 });
 });
@@ -390,7 +412,70 @@ test('submit click timeout after observed auth response does not claim response 
   f.options.login=args=>loginHostedFcuno({...args,browserType:browser.browserType});
   const result=await runHostedBrowser(f.options);
   assert.equal(result.stage,'runtime.login.submit');assert.equal(result.diagnosticCode,'RELEASE_BOUNDARY_FAILED');assert.equal(result.loginOutcome,undefined);
+  assert.deepEqual(result.runtimeLoginObservation, { clickCompleted: false, authContextRequestObserved: true,
+    authContextResponseObserved: true, authContextHttpStatus: 200,
+    navigationMilestones: ['candidate_login', 'issuer_login'], finalLocation: 'issuer_login' });
+  assert.equal(browser.submissions(),1);assert.equal(browser.remainingListeners(),0);
   assert.doesNotMatch(JSON.stringify(result),/PRIVATE_/);
+});
+
+test('missing bootstrap request differs from missing response and callback queries stay private', async t => {
+  const f=fixture(t),browser=fakeLoginBrowser(identity('restricted'),f.state,{failAt:'request_not_observed'});
+  f.options.login=args=>loginHostedFcuno({...args,browserType:browser.browserType});
+  const result=await runHostedBrowser(f.options);
+  assert.equal(result.stage,'runtime.login.submit');assert.equal(result.diagnosticCode,'RUNTIME_LOGIN_RESPONSE_UNOBSERVED');
+  assert.deepEqual(result.runtimeLoginObservation,{clickCompleted:true,authContextRequestObserved:false,
+    authContextResponseObserved:false,authContextHttpStatus:null,
+    navigationMilestones:['candidate_login','issuer_login','candidate_callback'],finalLocation:'candidate_callback'});
+  assert.deepEqual(releaseResultSummary(result).runtimeLoginObservation,result.runtimeLoginObservation);
+  assert.doesNotMatch(JSON.stringify(result),/PRIVATE_|federated|error_description|ticket|access_token/);
+  assert.equal(browser.submissions(),1);assert.equal(browser.remainingListeners(),0);assert.deepEqual(browser.counts(),{fills:2,closed:2});
+});
+
+test('off-origin callback fails existing fence and retains only other navigation class', async t => {
+  const f=fixture(t),browser=fakeLoginBrowser(identity('restricted'),f.state,{failAt:'callback_off_origin'});
+  f.options.login=args=>loginHostedFcuno({...args,browserType:browser.browserType});
+  const result=await runHostedBrowser(f.options);
+  assert.equal(result.stage,'runtime.login.callback');assert.equal(result.status,'failed');
+  assert.equal(result.runtimeLoginObservation.finalLocation,'other');
+  assert.deepEqual(result.runtimeLoginObservation.navigationMilestones,['candidate_login','issuer_login','other']);
+  assert.equal(result.runtimeLoginObservation.clickCompleted,true);assert.equal(result.runtimeLoginObservation.authContextHttpStatus,200);
+  assert.doesNotMatch(JSON.stringify(result),/foreign|private-path|PRIVATE_|ticket|https:/);
+  assert.equal(browser.submissions(),1);assert.equal(browser.remainingListeners(),0);assert.deepEqual(browser.counts(),{fills:2,closed:2});
+});
+
+test('unreadable observed status remains null and cleanup failure retains safe observations', async t => {
+  for(const options of [{httpStatus:0},{cleanupFail:true}]){
+    const f=fixture(t),browser=fakeLoginBrowser(identity('restricted'),f.state,options);
+    f.options.login=args=>loginHostedFcuno({...args,browserType:browser.browserType});
+    const result=await runHostedBrowser(f.options);
+    assert.equal(result.status,'failed');assert.equal(result.stage,options.cleanupFail?'runtime.login.cleanup':'runtime.login.identity');
+    assert.equal(result.runtimeLoginObservation.authContextResponseObserved,true);
+    assert.equal(result.runtimeLoginObservation.authContextHttpStatus,options.cleanupFail?200:null);
+    assert.equal(browser.submissions(),1);assert.equal(browser.remainingListeners(),0);assert.deepEqual(browser.counts(),{fills:2,closed:2});
+  }
+});
+
+test('login observation sanitizer rejects arbitrary or inconsistent data and requires known typed login failure',()=>{
+  const value={clickCompleted:false,authContextRequestObserved:false,authContextResponseObserved:false,authContextHttpStatus:null,
+    navigationMilestones:['issuer_login'],finalLocation:'issuer_login'};
+  const valid=safeRuntimeLoginObservation(value);assert.deepEqual(valid,value);assert.notEqual(valid.navigationMilestones,value.navigationMilestones);
+  let reads=0;const changing={...value,get clickCompleted(){return reads++===0?false:'PRIVATE_CHANGED_VALUE';}};
+  assert.deepEqual(safeRuntimeLoginObservation(changing),value);assert.equal(reads,1);
+  for(const bad of [{...value,rawUrl:'PRIVATE_TICKET'},{...value,authContextHttpStatus:200},{...value,authContextHttpStatus:0},
+    {...value,clickCompleted:'true'},{...value,navigationMilestones:['https://private.invalid/?token=PRIVATE']},
+    {...value,finalLocation:'candidate_app'},{...value,navigationMilestones:['issuer_login','issuer_login']}]) assert.equal(safeRuntimeLoginObservation(bad),undefined);
+  const detail={runtimeLoginObservation:value};
+  const typed=new ReleaseError('RELEASE_BOUNDARY_FAILED','runtime.login.submit','LOCAL',detail);
+  assert.deepEqual(safeDiagnosticFailure(typed).runtimeLoginObservation,value);
+  assert.deepEqual(safeHostedBrowserDiagnostic(typed).runtimeLoginObservation,value);
+  assert.equal(safeHostedBrowserDiagnostic({code:typed.code,phase:typed.phase,detail}).runtimeLoginObservation,undefined);
+  assert.equal(safeHostedBrowserDiagnostic(new ReleaseError('PRIVATE_UNKNOWN','runtime.login.submit','LOCAL',detail)).runtimeLoginObservation,undefined);
+  assert.equal(safeHostedBrowserDiagnostic(new ReleaseError('RELEASE_BOUNDARY_FAILED','browser.normal','LOCAL',detail)).runtimeLoginObservation,undefined);
+  const envelope={status:'failed',errorCode:'HOSTED_BROWSER_VERIFICATION_FAILED',diagnosticCode:typed.code,stage:typed.phase,runtimeLoginObservation:value};
+  assert.deepEqual(safeHostedBrowserResultFields(envelope).runtimeLoginObservation,value);
+  assert.equal(safeHostedBrowserResultFields({...envelope,diagnosticCode:'PRIVATE_UNKNOWN'}).runtimeLoginObservation,undefined);
+  assert.equal(safeHostedBrowserResultFields({...envelope,runtimeLoginObservation:{...value,cookie:'PRIVATE'}}).runtimeLoginObservation,undefined);
 });
 
 test('non200 diagnostic body cannot strand login cleanup beyond its bounded read', async t => {

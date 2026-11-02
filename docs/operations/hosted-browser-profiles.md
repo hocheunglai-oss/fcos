@@ -46,6 +46,23 @@ published. A submit timeout with no observed authentication response emits
 A click timeout after an observed response retains the generic submit boundary. Both browser phases upload their redacted
 report when the browser step ran, including on failure.
 
+Known typed login failures also retain a closed `runtimeLoginObservation` block:
+whether the single Login click completed, whether the exact same-origin
+`POST /api/functions/authContext` request and response were observed, and its
+actual HTTP status (or `null` when unknown). Passive main-frame navigation
+observations retain only `candidate_login`, `candidate_callback`, `candidate_app`,
+`issuer_login` or `other`, plus the final class. The callback class means the
+candidate `/login` route has `federated=1`; its URL and parameters are not saved.
+Milestones contain unique observed classes, not a complete redirect trace.
+
+These observations add no request, click, login, retry or DOM/body read. False
+means not observed; it does not establish that an event never happened. No
+generic form-error category is emitted because there is no reviewed issuer
+error selector. Raw URLs, query/fragment values, exception text, headers, bodies,
+credentials and state stay private. The report and CLI summary accept only the
+closed fields on known typed login failures; existing identity, origin, callback,
+cleanup and freshness requirements remain mandatory.
+
 The maintained CLI browser path validates the already-bound `runtime_parity`
 proof and supplies its saved runtime to both the outer adapter and selected
 harness. Keep this path for a retained Preview: do not call the standalone

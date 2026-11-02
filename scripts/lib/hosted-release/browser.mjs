@@ -162,29 +162,65 @@ async function arriveAtHostedIssuer(page, origin, issuer) {
 // the existing normal-role harness consumes its newly issued bearer only in memory.
 export async function loginHostedFcuno({ origin, credentials, mode, protectionState, browserType = chromium, launchEnvironment = hostedBrowserLaunchEnvironment() }) {
   const issuer = new URL(FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation.issuer).origin;
-  let browser, context;
+  let browser, context, page;
+  const observation = { clickCompleted: false, authContextRequestObserved: false, authContextResponseObserved: false,
+    authContextHttpStatus: null, navigationMilestones: [], finalLocation: 'other' };
+  const observeLocation = raw => {
+    if (!page && raw === undefined) return;
+    let location = 'other';
+    try {
+      const url = new URL(raw === undefined ? page.url() : raw);
+      if (url.origin === origin) location = url.pathname === '/login'
+        ? (url.searchParams.get('federated') === '1' ? 'candidate_callback' : 'candidate_login') : 'candidate_app';
+      else if (url.origin === issuer && url.pathname === '/admin') location = 'issuer_login';
+    } catch { /* No raw navigation value is retained. */ }
+    observation.finalLocation = location;
+    if (!observation.navigationMilestones.includes(location)) observation.navigationMilestones.push(location);
+  };
+  const expectedRequest = value => {
+    try { return value.url() === `${origin}/api/functions/authContext` && value.method() === 'POST'; }
+    catch { return false; }
+  };
+  const observeRequest = value => { if (expectedRequest(value)) observation.authContextRequestObserved = true; };
+  const observeResponse = value => {
+    observation.authContextResponseObserved = true;
+    try { const status = value.status(); if (Number.isInteger(status) && status >= 100 && status <= 599) observation.authContextHttpStatus = status; }
+    catch { /* An unreadable status remains unknown. */ }
+  };
+  const responseListener = value => { try { if (expectedRequest(value.request())) observeResponse(value); } catch { /* No raw response is retained. */ } };
+  const navigationListener = frame => { try { if (frame === page.mainFrame()) observeLocation(frame.url()); } catch { /* Ignore non-main-frame/closed-page events. */ } };
+  const observedFailure = error => {
+    observeLocation();
+    const failure = error instanceof ReleaseError ? error : boundaryFailure(error, 'runtime.login.identity');
+    failure.detail = { ...failure.detail, runtimeLoginObservation: { ...observation, navigationMilestones: [...observation.navigationMilestones] } };
+    return failure;
+  };
   try {
     browser = await atReleaseBoundary('runtime.login.browser', () => browserType.launch({ headless: true, env: launchEnvironment }));
     context = await atReleaseBoundary('runtime.login.context', () => browser.newContext({ storageState: protectionState, viewport: { width: 1440, height: 1000 }, serviceWorkers: 'block' }));
-    const page = await atReleaseBoundary('runtime.login.context', () => context.newPage());
+    page = await atReleaseBoundary('runtime.login.context', () => context.newPage());
+    page.on?.('framenavigated', navigationListener);
     await atReleaseBoundary('runtime.login.navigation', () => page.goto(`${origin}/login`, { waitUntil: 'domcontentloaded', timeout: 45000 }));
+    observeLocation();
     await atReleaseBoundary('runtime.login.issuer', () => arriveAtHostedIssuer(page, origin, issuer));
+    observeLocation();
     const issuerLocation = () => { const url = new URL(page.url()); requireFact(url.origin === issuer && url.pathname === '/admin'); };
     await atReleaseBoundary('runtime.login.form', async () => {
       issuerLocation(); await page.getByLabel('Username', { exact: true }).fill(credentials.email);
       issuerLocation(); await page.getByLabel('Password', { exact: true }).fill(credentials.password);
       issuerLocation();
     });
-    const submit = { responseObserved: false };
+    page.on?.('request', observeRequest);
+    page.on?.('response', responseListener);
     const [response] = await atReleaseBoundary('runtime.login.submit', async () => {
       try {
         return await Promise.all([
           page.waitForResponse(res => res.url() === `${origin}/api/functions/authContext` && res.request().method() === 'POST', { timeout: 60000 })
-            .then(value => { submit.responseObserved = true; return value; }),
-          page.getByRole('button', { name: 'Login', exact: true }).click(),
+            .then(value => { observeResponse(value); return value; }),
+          page.getByRole('button', { name: 'Login', exact: true }).click().then(() => { observation.clickCompleted = true; }),
         ]);
       } catch (error) {
-        if (error?.name === 'TimeoutError' && !submit.responseObserved)
+        if (error?.name === 'TimeoutError' && !observation.authContextResponseObserved)
           throw new ReleaseError('RUNTIME_LOGIN_RESPONSE_UNOBSERVED', 'runtime.login.submit', 'No authentication response was observed; this does not establish invalid credentials.');
         throw error;
       }
@@ -230,14 +266,19 @@ export async function loginHostedFcuno({ origin, credentials, mode, protectionSt
     }
     return { state, token, auth };
   } catch (error) {
-    if (error instanceof ReleaseError) throw error;
-    throw boundaryFailure(error, 'runtime.login.identity');
+    throw observedFailure(error);
   }
   finally {
+    observeLocation();
+    try {
+      page?.off?.('framenavigated', navigationListener);
+      page?.off?.('request', observeRequest);
+      page?.off?.('response', responseListener);
+    } catch { /* Context closure below removes any remaining listeners. */ }
     let cleanupFailed = false;
     try { await context?.close(); } catch { cleanupFailed = true; }
     try { await browser?.close(); } catch { cleanupFailed = true; }
-    if (cleanupFailed) throw boundaryFailure(null, 'runtime.login.cleanup');
+    if (cleanupFailed) throw observedFailure(boundaryFailure(null, 'runtime.login.cleanup'));
   }
 }
 

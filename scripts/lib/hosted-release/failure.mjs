@@ -65,6 +65,28 @@ export function safeRuntimeLoginFailure(value) {
   return { httpStatus: value.httpStatus, errorCode: value.errorCode, origin: value.origin, pathname: value.pathname };
 }
 
+const runtimeLoginLocations = new Set(['candidate_login', 'candidate_callback', 'candidate_app', 'issuer_login', 'other']);
+// Closed observations only. False means not observed; null never invents an HTTP status.
+export function safeRuntimeLoginObservation(value) {
+  const keys = ['clickCompleted', 'authContextRequestObserved', 'authContextResponseObserved', 'authContextHttpStatus', 'navigationMilestones', 'finalLocation'];
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype
+    || Object.keys(value).length !== keys.length || !keys.every(key => Object.hasOwn(value, key))) return undefined;
+  // Read each field once; a changing accessor cannot pass validation then leak a
+  // different value into the returned public record.
+  const result = Object.fromEntries(keys.map(key => [key, value[key]]));
+  if (!Array.isArray(result.navigationMilestones) || result.navigationMilestones.length > runtimeLoginLocations.size) return undefined;
+  result.navigationMilestones = [...result.navigationMilestones];
+  if (!['clickCompleted', 'authContextRequestObserved', 'authContextResponseObserved'].every(key => typeof result[key] === 'boolean')
+    || !(result.authContextHttpStatus === null || Number.isInteger(result.authContextHttpStatus)
+      && result.authContextHttpStatus >= 100 && result.authContextHttpStatus <= 599)
+    || !result.authContextResponseObserved && result.authContextHttpStatus !== null
+    || new Set(result.navigationMilestones).size !== result.navigationMilestones.length
+    || !result.navigationMilestones.every(location => runtimeLoginLocations.has(location))
+    || !runtimeLoginLocations.has(result.finalLocation)
+    || (result.navigationMilestones.length ? !result.navigationMilestones.includes(result.finalLocation) : result.finalLocation !== 'other')) return undefined;
+  return result;
+}
+
 // Closed public diagnostic vocabulary. Unknown typed errors are redacted too.
 const diagnosticCodes = new Set(`
   ADMITTED_SETUP_CHANGED ADMITTED_SETUP_MISSING APPLICATION_SUCCESSOR_ORDER
@@ -137,10 +159,14 @@ export function safeDiagnosticFailure(error) {
   const boundary = isReleaseBoundary(error?.boundary) ? error.boundary : undefined;
   const known = error instanceof ReleaseError && (diagnosticCodes.has(error.code)
     || /^(?:GITHUB|VERCEL)_READ_HTTP_[1-5][0-9]{2}$/.test(error.code));
+  const stage = boundary || (isReleaseBoundary(error?.phase) ? error.phase : undefined);
+  const runtimeLoginObservation = known && stage?.startsWith('runtime.login.')
+    ? safeRuntimeLoginObservation(error.detail?.runtimeLoginObservation) : undefined;
   return { status: 'intervention_required', code: known ? error.code : 'DIAGNOSTIC_FAILURE_UNCLASSIFIED',
     phase: known && diagnosticPhases.has(error.phase) ? error.phase : boundary || 'diagnostic',
     recovery: 'Inspect this admission diagnostic. It authorizes no deployment or release retry.',
-    ...(boundary ? { boundary } : {}), ...(known && commandFailure ? { commandFailure } : {}), ...(known && sourceApiFailure ? { sourceApiFailure } : {}), ...(known && runtimeMismatch ? {runtimeMismatch} : {}), ...(known && runtimeLogin ? { runtimeLogin } : {}) };
+    ...(boundary ? { boundary } : {}), ...(known && commandFailure ? { commandFailure } : {}), ...(known && sourceApiFailure ? { sourceApiFailure } : {}), ...(known && runtimeMismatch ? {runtimeMismatch} : {}), ...(known && runtimeLogin ? { runtimeLogin } : {}),
+    ...(runtimeLoginObservation ? { runtimeLoginObservation } : {}) };
 }
 
 const isKnownDiagnosticCode = code => typeof code === 'string' && (diagnosticCodes.has(code)
@@ -161,6 +187,7 @@ export function safeHostedBrowserDiagnostic(error) {
     ...(diagnosticCode ? { diagnosticCode } : {}),
     ...(stage ? { stage } : {}),
     ...(runtimeLogin ? { runtimeLogin } : {}),
+    ...(diagnostic.runtimeLoginObservation ? { runtimeLoginObservation: diagnostic.runtimeLoginObservation } : {}),
     ...(normalRole ? { normalRole } : {}),
     ...(error.code === 'RUNTIME_LOGIN_RESPONSE_UNOBSERVED' && stage === 'runtime.login.submit'
       ? { loginOutcome: 'AUTH_CONTEXT_RESPONSE_NOT_OBSERVED' } : {}),
@@ -172,11 +199,14 @@ export function safeHostedBrowserResultFields(result) {
   const stage = isReleaseBoundary(result.stage) ? result.stage : undefined;
   const diagnosticCode = isKnownDiagnosticCode(result.diagnosticCode) ? result.diagnosticCode : undefined;
   const runtimeLogin = safeRuntimeLoginFailure(result.runtimeLogin);
+  const runtimeLoginObservation = diagnosticCode && stage?.startsWith('runtime.login.')
+    ? safeRuntimeLoginObservation(result.runtimeLoginObservation) : undefined;
   return {
     errorCode: 'HOSTED_BROWSER_VERIFICATION_FAILED',
     ...(diagnosticCode ? { diagnosticCode } : {}),
     ...(stage ? { stage } : {}),
     ...(runtimeLogin ? { runtimeLogin } : {}),
+    ...(runtimeLoginObservation ? { runtimeLoginObservation } : {}),
     ...(diagnosticCode === 'HOSTED_NORMAL_ROLE_FAILED' && stage === 'browser.normal'
       ? { normalRole: normalizeCompatibilityNormalDiagnostic(result.normalRole) } : {}),
     ...(diagnosticCode === 'RUNTIME_LOGIN_RESPONSE_UNOBSERVED' && stage === 'runtime.login.submit'
