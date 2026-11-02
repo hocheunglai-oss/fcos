@@ -55,12 +55,21 @@ observations retain only `candidate_login`, `candidate_callback`, `candidate_app
 candidate `/login` route has `federated=1`; its URL and parameters are not saved.
 Milestones contain unique observed classes, not a complete redirect trace.
 
-These observations add no request, click, login, retry or DOM/body read. False
-means not observed; it does not establish that an event never happened. No
-generic form-error category is emitted because there is no reviewed issuer
-error selector. Raw URLs, query/fragment values, exception text, headers, bodies,
-credentials and state stay private. The report and CLI summary accept only the
-closed fields on known typed login failures; existing identity, origin, callback,
+These passive navigation observations add no request, click, login or retry.
+False means not observed; it does not establish that an event never happened.
+The separately source-attested issuer diagnostic observes only the exact
+`POST /api/admin/login` transport and source-owned form events. It waits for the
+client-rendered form, retains bounded HTTP status and closed result enums, and
+distinguishes a required password-reset panel from a rejected or unobserved
+submission. A provider 401 does not prove a bad password: the inspected issuer
+also maps some database/configuration failures to that response. Its inspected
+form has no MFA branch; an unsupported challenge remains unresolved.
+
+Only fixed booleans/enums leave the issuer observer. Input values, request bodies,
+raw responses, URLs, query/fragment values, exception text, headers, credentials
+and private state are never published. No automatic resubmission or account
+change follows a diagnostic. The report and CLI summary accept only closed
+fields on known typed login failures; existing identity, origin, callback,
 cleanup and freshness requirements remain mandatory.
 
 The maintained CLI browser path validates the already-bound `runtime_parity`

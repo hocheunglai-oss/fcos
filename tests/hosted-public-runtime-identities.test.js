@@ -1,8 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { prepareReleaseManifest } from '../scripts/lib/hosted-release/manifest.mjs';
-import { digest, releaseTargets } from '../scripts/lib/hosted-release/contract.mjs';
+import { digest, releaseTargets, ReleaseError } from '../scripts/lib/hosted-release/contract.mjs';
 import { assertPublicRuntimeIdentityPrerequisites } from '../scripts/lib/hosted-release/public-runtime-identities.mjs';
+import { safeDiagnosticFailure } from '../scripts/lib/hosted-release/failure.mjs';
+
+test('public identity prerequisite failures retain fixed codes without private manifest or exception data', () => {
+  for (const code of ['PUBLIC_RUNTIME_IDENTITY_INPUT', 'SOURCE_API_GRAPH_IDENTITY_REQUIRED']) {
+    const result = safeDiagnosticFailure(new ReleaseError(code, 'admission', 'PRIVATE_SENTINEL', { secret: 'PRIVATE_SENTINEL' }));
+    assert.equal(result.code, code);
+    assert.equal(result.phase, 'admission');
+    assert.equal(JSON.stringify(result).includes('PRIVATE_SENTINEL'), false);
+  }
+});
 
 test('application Preview requires its own public identity binding without silently enrolling into the compatibility profile', () => {
   assert.throws(() => assertPublicRuntimeIdentityPrerequisites({
