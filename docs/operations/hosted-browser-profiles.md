@@ -119,3 +119,9 @@ missing pair before collecting the first Production observation or preparing a
 deployment intent. This configuration check proves neither Microsoft consent
 nor authentication; the actual module read must still pass. Local component
 fixtures and source checks do not replace that hosted evidence.
+
+The actual offline issuer form fixture runs explicitly with
+`node --test tests/hosted-release-issuer-submit.chromium.mjs` when Chromium is
+installed. Its pure observer/handler tests remain in the ordinary unit suite.
+This keeps the code/database unit job independent of a browser installation;
+the separate hosted browser gates remain mandatory.
