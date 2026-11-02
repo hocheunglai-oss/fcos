@@ -12,7 +12,10 @@ import { candidateAuthenticationState } from '../../e2e-private-state.mjs';
 import { prepareCandidateProtection } from '../../e2e-protection-state.mjs';
 import { collectRuntimeObservation } from '../../collect-preview-parity.mjs';
 import { assertNormalRoleIdentity, NORMAL_ROLE_MODULES, verifyNormalRoleRelease } from '../../normal-role-release.mjs';
-import { COMPATIBILITY_NORMAL_MODULES, verifyRuntimeCompatibilityNormalRole } from '../../runtime-compatibility-normal-role.mjs';
+import { COMPATIBILITY_NORMAL_MODULES, verifyRuntimeCompatibilityNormalRole, verifyHostedOrdinaryCompatibilityNormalRole,
+  normalizeCompatibilityNormalDiagnostic } from '../../runtime-compatibility-normal-role.mjs';
+import { hostedBrowserProfile, hostedBrowserHarnessEnvironment, assertHostedOrdinaryBrowserSource, assertHostedBrowserJobContext,
+  hostedBrowserHarnessActivation } from './browser-profile.mjs';
 import { PREVIEW_EMAIL_SIGNER_MAILBOX_REGISTRY_ID } from '../preview-email-signer.mjs';
 import { compatibilityBrowserIsolationVerified } from '../compatibility-browser-isolation.mjs';
 import { createVercelIntegrationReader } from './vercel-read-auth.mjs';
@@ -36,6 +39,20 @@ export class HostedBrowserSetupError extends Error {
 function setup(input) { throw new HostedBrowserSetupError(input); }
 function requireFact(value) { if (!value) throw new Error('Hosted browser binding or coverage failed.'); }
 const fresh = (value, now) => Number.isFinite(Date.parse(value)) && Date.parse(value) <= now + 30000 && now - Date.parse(value) <= 1800000;
+
+export function assertHostedBrowserComposition(manifest) {
+  const profile = hostedBrowserProfile(manifest), compatibility = profile !== 'application';
+  const modules = compatibility ? COMPATIBILITY_NORMAL_MODULES : NORMAL_ROLE_MODULES;
+  const harness = profile === 'ordinary_compatibility' ? verifyHostedOrdinaryCompatibilityNormalRole
+    : compatibility ? verifyRuntimeCompatibilityNormalRole : verifyNormalRoleRelease;
+  const activation = hostedBrowserHarnessActivation(profile);
+  if (modules.length !== 15 || new Set(modules.map(row => row.module)).size !== 15
+      || NORMAL_ROLE_MODULES.some(row => !modules.some(other => other.module === row.module))
+      || Object.keys(activation).length !== 1 || activation[compatibility ? 'FCOS_COMPATIBILITY_NORMAL_ROLE_ENABLED' : 'FCOS_NORMAL_ROLE_E2E_ENABLED'] !== 'true'
+      || modules.find(row => row.module === 'xero_portal')?.handler !== (compatibility ? 'xeroPortalReceiptsList' : 'xeroIntegrityReport'))
+    throw new ReleaseError('HOSTED_BROWSER_COMPOSITION_INVALID', 'browser.profile', 'Correct the selected real harness and complete module catalogue.');
+  return { profile, compatibility, modules, harness, activation };
+}
 
 export function assertHostedBrowserBinding(manifest, preview) {
   const deployment = preview?.deployment || preview;
@@ -149,7 +166,7 @@ export async function loginHostedFcuno({ origin, credentials, mode, protectionSt
   try {
     browser = await atReleaseBoundary('runtime.login.browser', () => browserType.launch({ headless: true, env: launchEnvironment }));
     context = await atReleaseBoundary('runtime.login.context', () => browser.newContext({ storageState: protectionState, viewport: { width: 1440, height: 1000 }, serviceWorkers: 'block' }));
-    const page = await context.newPage();
+    const page = await atReleaseBoundary('runtime.login.context', () => context.newPage());
     await atReleaseBoundary('runtime.login.navigation', () => page.goto(`${origin}/login`, { waitUntil: 'domcontentloaded', timeout: 45000 }));
     await atReleaseBoundary('runtime.login.issuer', () => arriveAtHostedIssuer(page, origin, issuer));
     const issuerLocation = () => { const url = new URL(page.url()); requireFact(url.origin === issuer && url.pathname === '/admin'); };
@@ -158,10 +175,20 @@ export async function loginHostedFcuno({ origin, credentials, mode, protectionSt
       issuerLocation(); await page.getByLabel('Password', { exact: true }).fill(credentials.password);
       issuerLocation();
     });
-    const [response] = await atReleaseBoundary('runtime.login.submit', () => Promise.all([
-      page.waitForResponse(res => res.url() === `${origin}/api/functions/authContext` && res.request().method() === 'POST', { timeout: 60000 }),
-      page.getByRole('button', { name: 'Login', exact: true }).click(),
-    ]));
+    const submit = { responseObserved: false };
+    const [response] = await atReleaseBoundary('runtime.login.submit', async () => {
+      try {
+        return await Promise.all([
+          page.waitForResponse(res => res.url() === `${origin}/api/functions/authContext` && res.request().method() === 'POST', { timeout: 60000 })
+            .then(value => { submit.responseObserved = true; return value; }),
+          page.getByRole('button', { name: 'Login', exact: true }).click(),
+        ]);
+      } catch (error) {
+        if (error?.name === 'TimeoutError' && !submit.responseObserved)
+          throw new ReleaseError('RUNTIME_LOGIN_RESPONSE_UNOBSERVED', 'runtime.login.submit', 'No authentication response was observed; this does not establish invalid credentials.');
+        throw error;
+      }
+    });
     await atReleaseBoundary('runtime.login.identity', async () => {
       const httpStatus = response.status();
       if (httpStatus === 200) return;
@@ -190,21 +217,21 @@ export async function loginHostedFcuno({ origin, credentials, mode, protectionSt
         { runtimeLogin: { httpStatus, errorCode, origin: observedOrigin, pathname } });
     });
     await atReleaseBoundary('runtime.login.callback', () => page.waitForURL(url => url.origin === origin && !/\/login(?:\?|$)/.test(url.pathname), { timeout: 30000 }));
-    requireFact(response.status() === 200 && new URL(page.url()).origin === origin);
+    atReleaseBoundary('runtime.login.callback', () => requireFact(response.status() === 200 && new URL(page.url()).origin === origin));
     const auth = await atReleaseBoundary('runtime.login.identity', () => response.json());
     atReleaseBoundary('runtime.login.identity', () => assertHostedBrowserIdentity(auth, { mode, credentials }));
-    const state = candidateAuthenticationState(await context.storageState(), origin);
+    const state = await atReleaseBoundary('runtime.login.identity', async () => candidateAuthenticationState(await context.storageState(), origin));
     let token;
     if (mode !== 'restricted') {
       const name = `sb-${fcosConnectionIdentifier('supabase', 'Project ref')}-auth-token`;
       const item = state.origins.find(o => o.origin === origin)?.localStorage?.find(v => v.name === name);
       try { token = JSON.parse(item.value).access_token; } catch { /* Missing new auth session stays blocked. */ }
-      requireFact(typeof token === 'string' && token.length > 0);
+      atReleaseBoundary('runtime.login.identity', () => requireFact(typeof token === 'string' && token.length > 0));
     }
     return { state, token, auth };
   } catch (error) {
     if (error instanceof ReleaseError) throw error;
-    throw new Error('Dedicated hosted FCUNO login failed.');
+    throw boundaryFailure(error, 'runtime.login.identity');
   }
   finally {
     let cleanupFailed = false;
@@ -306,20 +333,31 @@ export async function runHostedBrowser({ manifest, preview, mode, env = process.
   const checkId = mode === 'restricted' ? 'restricted_browser' : 'normal_role';
   const base = { schemaVersion: 2, kind: 'fcos_hosted_browser_raw', checkId, id: checkId,
     manifestHash: manifest ? digest(manifest) : undefined, candidateSha: manifest?.candidate?.sha, controllerSha: manifest?.controller?.sha };
-  let directory;
+  let directory, boundary = 'browser.configuration';
   try {
     requireFact(['restricted', 'normal_role'].includes(mode)); assertHostedBrowserCredentialBoundary(env, mode);
     if (env.FCOS_HOSTED_BROWSER_ENABLED !== 'true') setup('hosted_browser_enabled');
+    boundary = 'browser.profile';
+    const composition = assertHostedBrowserComposition(manifest);
+    if (mode === 'normal_role') {
+      // Validate the protected job context now; do not activate its harness yet.
+      assertHostedBrowserJobContext(env, manifest, composition.profile);
+    }
+    boundary = 'browser.binding';
     const deployment = assertHostedBrowserBinding(manifest, preview);
+    boundary = 'browser.controller';
     await verifyController({ manifest, controllerDirectory });
+    boundary = 'browser.provider';
     const provider = await verifyPreview({ manifest, preview: deployment, env, fetchImpl });
     assertHostedBrowserBinding(manifest, provider); requireFact(provider.id === deployment.id && provider.url === deployment.url);
+    boundary = 'browser.version';
     const response = await fetchImpl(`${deployment.url}/app-version.json`, { redirect: 'error', signal: AbortSignal.timeout(20000),
       headers: env.FCOS_E2E_VERCEL_BYPASS ? { 'x-vercel-protection-bypass': env.FCOS_E2E_VERCEL_BYPASS } : {} });
     requireFact(response.ok && !response.redirected && (!response.url || response.url === `${deployment.url}/app-version.json`));
     const version = await response.json();
     requireFact(version.commit === manifest.candidate.sha && version.deploymentId === deployment.id
       && version.provenance?.sourceDigest === manifest.candidate.sourceSha256 && version.provenance.releaseEligible === true);
+    boundary = 'browser.runtime';
     const runtime = await observeRuntime({ url: deployment.url, deployment, sourceDigest: manifest.candidate.sourceSha256,
       token: env.FCOS_RELEASE_PREVIEW_RUNTIME_TOKEN, protectionBypass: env.FCOS_E2E_VERCEL_BYPASS, fetchImpl, now: now().getTime() });
     requireFact(runtime && fresh(runtime.capturedAt, now().getTime()) && runtime.deploymentId === deployment.id && runtime.sha === manifest.candidate.sha
@@ -327,6 +365,13 @@ export async function runHostedBrowser({ manifest, preview, mode, env = process.
       && Object.values(runtime.safety.externalActions).every(v => v === false)
       && canonical({ flags: runtime.flags, safety: runtime.safety, auth: runtime.auth }) === canonical(manifest.runtime.expectedPreview));
     let sourceReceipt, signerProof;
+    boundary = 'browser.source';
+    if (mode === 'normal_role' && composition.profile === 'ordinary_compatibility') {
+      if (typeof admitHostedSource !== 'function') setup('ordinary_compatibility_source_admission');
+      sourceReceipt = await admitHostedSource({ manifest, preview: deployment, version, runtime });
+      assertHostedOrdinaryBrowserSource({ manifest, source: sourceReceipt,
+        env: { ...env, GITHUB_SHA: manifest.controller.sha, FCOS_E2E_EXPECTED_COMMIT: manifest.candidate.sha } });
+    }
     if (mode === 'normal_role' && manifest.candidate.sha === FROZEN) {
       if (typeof admitHostedSource !== 'function') setup('frozen_04ee_source_and_observation_admission');
       sourceReceipt = await admitHostedSource({ manifest, preview: deployment, version, runtime });
@@ -334,6 +379,7 @@ export async function runHostedBrowser({ manifest, preview, mode, env = process.
         && sourceReceipt.candidateSha === manifest.candidate.sha && sourceReceipt.controllerSha === manifest.controller.sha
         && sourceReceipt.sourceDigest === manifest.candidate.sourceSha256 && sourceReceipt.lockSha256 === manifest.candidate.lockSha256
         && sourceReceipt.configurationSha256 === manifest.candidate.configurationSha256 && sourceReceipt.manifestHash === digest(manifest));
+      boundary = 'browser.signer';
       if (!signerAdapter || typeof signerAdapter.verifySource !== 'function' || typeof signerAdapter.collect !== 'function') setup('frozen_04ee_signer_source_and_synthetic_probe_adapter');
       signerProof = await signerAdapter.verifySource({ manifest, preview: deployment, sourceReceipt });
       requireFact(signerProof?.sourceVerified === true && signerProof.candidateSha === manifest.candidate.sha
@@ -341,6 +387,7 @@ export async function runHostedBrowser({ manifest, preview, mode, env = process.
         && canonical(Object.keys(signerProof.sourceHashes || {}).sort()) === canonical(['api/_emailRouterCore.js', 'api/_emailRouterHandlers.js', 'api/functions/[name].js'])
         && Object.values(signerProof.sourceHashes).every(v => HASH.test(v)));
     }
+    boundary = 'browser.credentials';
     const credentials = await getCredentials(env, mode);
     requireFact(credentials && credentials.email && credentials.password);
     if (!env.FCOS_E2E_VERCEL_BYPASS) setup('preview_protection_access');
@@ -349,14 +396,18 @@ export async function runHostedBrowser({ manifest, preview, mode, env = process.
       FCOS_E2E_VERCEL_BYPASS: env.FCOS_E2E_VERCEL_BYPASS, FCOS_E2E_STATE_DIR: directory,
       FCOS_E2E_STORAGE_STATE: join(directory, 'auth.json'), FCOS_E2E_PROTECTION_STATE: join(directory, 'protection.json') };
     let protectionState;
+    boundary = 'browser.protection';
     await prepareProtection({ env: privateEnv, request: requestType, verify: async () => ({ commit: manifest.candidate.sha, candidateUrl: deployment.url }),
       writeState: async ({ state }) => { protectionState = state; } });
     requireFact(protectionState);
     const protectedBrowserType = isolatedBrowserType(browserType, env);
+    boundary = 'browser.login';
     const authenticated = await login({ origin: deployment.url, credentials, mode, protectionState, browserType: protectedBrowserType });
+    boundary = 'browser.identity';
     const identity = assertHostedBrowserIdentity(authenticated.auth, { mode, credentials });
     let result, capturedAt;
     if (mode === 'restricted') {
+      boundary = 'browser.restricted';
       result = await restrictedHarness({ origin: deployment.url, state: authenticated.state, directory, controllerDirectory, env });
       requireFact(result.actualData === true && result.unexpectedWrites === 0
         && canonical([...result.modules].sort()) === canonical(['api_denials', 'dashboard', 'markets']));
@@ -364,26 +415,30 @@ export async function runHostedBrowser({ manifest, preview, mode, env = process.
       result = { identity: 'restricted', modules: ['dashboard', 'markets', 'api_denials'], actualData: true, unexpectedWrites: 0, testsPassed: result.testsPassed }; capturedAt = now().toISOString();
     } else {
       const frozen = manifest.candidate.sha === FROZEN;
-      const harness = normalHarness || (frozen ? verifyRuntimeCompatibilityNormalRole : verifyNormalRoleRelease);
-      const harnessEnv = { ...env, GITHUB_SHA: manifest.controller.sha, FCOS_E2E_CANDIDATE_URL: deployment.url,
+      const harness = normalHarness || composition.harness;
+      boundary = 'browser.normal';
+      const harnessEnv = { ...hostedBrowserHarnessEnvironment(env, manifest, composition.profile), FCOS_E2E_CANDIDATE_URL: deployment.url,
         FCOS_E2E_EXPECTED_COMMIT: manifest.candidate.sha, FCOS_NORMAL_ROLE_APPROVED_EMAIL: credentials.email, RUNNER_TEMP: directory };
       const evidence = await harness({ env: harnessEnv, fetchImpl, browserType: protectedBrowserType,
         resolveCandidate: async () => ({ commit: manifest.candidate.sha, candidateUrl: deployment.url }), observeRuntime: async () => runtime,
         authenticate: async () => ({ state: authenticated.state, token: authenticated.token }), writeEvidence: async () => {},
+        ...(composition.profile === 'ordinary_compatibility' ? { manifest, admitHostedSource: async () => sourceReceipt } : {}),
         ...(frozen ? { admitHostedSource: async () => sourceReceipt, signerEnabled: () => true,
           collectSigner: async options => signerAdapter.collect({ ...options, manifest, sourceProof: signerProof }) } : {}) });
-      const modules = frozen ? COMPATIBILITY_NORMAL_MODULES : NORMAL_ROLE_MODULES;
+      boundary = 'browser.coverage';
+      const modules = composition.modules;
       requireFact(evidence.candidateSha === manifest.candidate.sha && evidence.harnessSha === manifest.controller.sha
         && evidence.deploymentId === deployment.id && evidence.sourceDigest === manifest.candidate.sourceSha256
         && evidence.candidateUrl === deployment.url && fresh(evidence.capturedAt, now().getTime())
         && Array.isArray(evidence.checks) && evidence.checks.length === 15 && new Set(evidence.checks.map(c => c.module)).size === 15
         && modules.every(spec => evidence.checks.some(c => c.module === spec.module && c.role === identity.role && c.result === 'pass'
           && c.kind === (spec.workflow ? 'workflow_read' : 'read'))));
-      if (frozen) requireFact(compatibilityBrowserIsolationVerified(evidence.browserIsolation, { candidateUrl: deployment.url, sha: manifest.candidate.sha,
+      if (composition.compatibility) requireFact(compatibilityBrowserIsolationVerified(evidence.browserIsolation, { candidateUrl: deployment.url, sha: manifest.candidate.sha,
           harnessSha: manifest.controller.sha, deploymentId: deployment.id, sourceDigest: manifest.candidate.sourceSha256 }, modules.map(s => s.module)));
       capturedAt = evidence.capturedAt;
-      result = { identity: 'normal_role', role: identity.role, modules: evidence.checks.map(c => c.module), actualData: true, unexpectedWrites: 0,
-        ...(frozen ? { browserIsolation: evidence.browserIsolation, emailSigner: sanitiseHostedSignerEvidence(evidence.emailSigner, { manifest, deployment, sourceProof: signerProof, now: now().getTime() }) } : {}) };
+      result = { identity: 'normal_role', browserProfile: composition.profile, role: identity.role, modules: evidence.checks.map(c => c.module), actualData: true, unexpectedWrites: 0,
+        ...(composition.compatibility ? { browserIsolation: evidence.browserIsolation } : {}),
+        ...(frozen ? { emailSigner: sanitiseHostedSignerEvidence(evidence.emailSigner, { manifest, deployment, sourceProof: signerProof, now: now().getTime() }) } : {}) };
     }
     return { ...base, status: 'passed', deploymentId: deployment.id, candidateUrl: deployment.url, sourceSha256: manifest.candidate.sourceSha256,
       inputsSha256: digest({ manifestHash: digest(manifest), deploymentId: deployment.id, source: manifest.candidate.sourceSha256, mode,
@@ -397,7 +452,11 @@ export async function runHostedBrowser({ manifest, preview, mode, env = process.
     if (error instanceof HostedBrowserSetupError) {
       return { ...base, status: 'waiting_dependency', missing: [error.input], capturedAt, completedAt: capturedAt };
     }
+    const failure = boundary === 'browser.normal' && error?.normalRoleDiagnostic
+      ? new ReleaseError('HOSTED_NORMAL_ROLE_FAILED', 'browser.normal', 'Inspect the retained fixed normal-role diagnostic.',
+        { normalRole: normalizeCompatibilityNormalDiagnostic(error.normalRoleDiagnostic) })
+      : boundaryFailure(error, boundary);
     return { ...base, status: 'failed', errorCode: 'HOSTED_BROWSER_VERIFICATION_FAILED',
-      ...safeHostedBrowserDiagnostic(error), capturedAt, completedAt: capturedAt };
+      ...safeHostedBrowserDiagnostic(failure), capturedAt, completedAt: capturedAt };
   } finally { if (directory) rmSync(directory, { recursive: true, force: true }); }
 }

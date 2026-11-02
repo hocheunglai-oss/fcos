@@ -652,6 +652,7 @@ jobs:
           FCOS_HOSTED_NORMAL_EXPECTED_ROLE: ${{ vars.FCOS_HOSTED_NORMAL_EXPECTED_ROLE }}
           FCOS_NORMAL_ROLE_APPROVED_EMAIL: ${{ matrix.mode == 'normal_role' && vars.FCOS_NORMAL_ROLE_APPROVED_EMAIL || '' }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ always() && steps.run.outcome != 'skipped' && steps.run.outcome != '' }}
         with:
           name: ${{ format('fcos-{0}-before-{1}', needs.prepare.outputs.release_id, matrix.mode) }}
           path: ${{ matrix.mode == 'restricted' && 'restricted.json' || 'normal-role.json' }}
@@ -1070,6 +1071,7 @@ jobs:
           FCOS_HOSTED_NORMAL_EXPECTED_ROLE: ${{ vars.FCOS_HOSTED_NORMAL_EXPECTED_ROLE }}
           FCOS_NORMAL_ROLE_APPROVED_EMAIL: ${{ matrix.mode == 'normal_role' && vars.FCOS_NORMAL_ROLE_APPROVED_EMAIL || '' }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ always() && steps.run.outcome != 'skipped' && steps.run.outcome != '' }}
         with:
           name: ${{ format('fcos-{0}-after-{1}', needs.prepare.outputs.release_id, matrix.mode) }}
           path: ${{ matrix.mode == 'restricted' && 'restricted.json' || 'normal-role.json' }}

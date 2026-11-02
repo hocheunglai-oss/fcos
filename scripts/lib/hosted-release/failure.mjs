@@ -4,6 +4,7 @@ import { safeRuntimeMismatch } from './runtime-mismatch.mjs';
 import { ReleaseError } from './json-contract.mjs';
 import { safeVercelCommandFailure } from './vercel-command-failure.mjs';
 import { safeVercelSourceApiFailure } from './vercel-source-api.mjs';
+import { normalizeCompatibilityNormalDiagnostic } from '../../runtime-compatibility-normal-role.mjs';
 
 // These are code-owned labels, never provider values, error messages or paths.
 export const RELEASE_BOUNDARIES = Object.freeze([
@@ -13,6 +14,9 @@ export const RELEASE_BOUNDARIES = Object.freeze([
   'vercel.artifact.version', 'runtime.protection', 'runtime.identity', 'runtime.identity.target',
   'runtime.login.browser', 'runtime.login.context', 'runtime.login.navigation', 'runtime.login.issuer',
   'runtime.login.form', 'runtime.login.submit', 'runtime.login.callback', 'runtime.login.identity', 'runtime.login.cleanup',
+  'browser.configuration', 'browser.profile', 'browser.binding', 'browser.controller', 'browser.provider', 'browser.version',
+  'browser.runtime', 'browser.source', 'browser.signer', 'browser.credentials', 'browser.protection', 'browser.login',
+  'browser.identity', 'browser.restricted', 'browser.normal', 'browser.coverage', 'browser.cleanup',
   'vercel.manifest', 'vercel.context', 'vercel.credential', 'vercel.source',
   'vercel.version', 'vercel.project', 'vercel.selection_source', 'vercel.selection_environment',
   'vercel.token', 'vercel.project_identity', 'vercel.project_list', 'vercel.user_scope',
@@ -121,6 +125,8 @@ const diagnosticCodes = new Set(`
   SOURCE_API_ARCHIVE_INVALID SOURCE_API_PAYLOAD_TOO_LARGE SOURCE_API_MANIFEST_CHANGED
   SOURCE_API_OPERATION_BINDING SOURCE_API_SUBMISSION_CONTEXT SOURCE_API_SYNCHRONOUS_CONTEXT_REQUIRED
   SOURCE_API_RECOVERY_REQUEST_CHANGED VERCEL_SOURCE_API_OUTCOME_UNKNOWN
+  HOSTED_BROWSER_PROFILE_INVALID HOSTED_BROWSER_COMPOSITION_INVALID HOSTED_BROWSER_CONTEXT_INVALID
+  HOSTED_BROWSER_SOURCE_BINDING HOSTED_NORMAL_ROLE_FAILED RUNTIME_LOGIN_RESPONSE_UNOBSERVED
 `.trim().split(/\s+/));
 const diagnosticPhases = new Set([...RELEASE_BOUNDARIES, 'admission', 'identity', 'github.read', 'vercel.preview', 'vercel.read', 'vercel.write', 'vercel.transport', 'vercel.source_api.prepare', 'vercel.source_api.write', 'preview', 'first_runtime.owner_refresh']);
 export function safeDiagnosticFailure(error) {
@@ -148,11 +154,16 @@ export function safeHostedBrowserDiagnostic(error) {
   const stage = hostedBrowserStage(error);
   const diagnosticCode = isKnownDiagnosticCode(diagnostic.code) ? diagnostic.code : undefined;
   const runtimeLogin = diagnostic.runtimeLogin;
+  const normalRole = error.code === 'HOSTED_NORMAL_ROLE_FAILED' && stage === 'browser.normal'
+    ? normalizeCompatibilityNormalDiagnostic(error.detail?.normalRole) : undefined;
   if (!stage && !diagnosticCode && !runtimeLogin) return {};
   return {
     ...(diagnosticCode ? { diagnosticCode } : {}),
     ...(stage ? { stage } : {}),
     ...(runtimeLogin ? { runtimeLogin } : {}),
+    ...(normalRole ? { normalRole } : {}),
+    ...(error.code === 'RUNTIME_LOGIN_RESPONSE_UNOBSERVED' && stage === 'runtime.login.submit'
+      ? { loginOutcome: 'AUTH_CONTEXT_RESPONSE_NOT_OBSERVED' } : {}),
   };
 }
 
@@ -166,5 +177,9 @@ export function safeHostedBrowserResultFields(result) {
     ...(diagnosticCode ? { diagnosticCode } : {}),
     ...(stage ? { stage } : {}),
     ...(runtimeLogin ? { runtimeLogin } : {}),
+    ...(diagnosticCode === 'HOSTED_NORMAL_ROLE_FAILED' && stage === 'browser.normal'
+      ? { normalRole: normalizeCompatibilityNormalDiagnostic(result.normalRole) } : {}),
+    ...(diagnosticCode === 'RUNTIME_LOGIN_RESPONSE_UNOBSERVED' && stage === 'runtime.login.submit'
+      && result.loginOutcome === 'AUTH_CONTEXT_RESPONSE_NOT_OBSERVED' ? { loginOutcome: result.loginOutcome } : {}),
   };
 }

@@ -143,7 +143,7 @@ function fakeLoginBrowser(auth, state, { foreign = false, cleanupFail = false, f
   const response = { status: () => httpStatus, body: async () => bodyPending ? new Promise(() => {}) : Buffer.from(responseBody ?? JSON.stringify(auth)), json: async () => { if (failAt === 'identity') throw new SyntaxError('PRIVATE_RESPONSE_BODY'); return auth; } };
   const page = { goto: async () => { if (failAt === 'navigation') throw Error('PRIVATE_NAVIGATION_TOKEN'); move(foreign ? 'https://foreign.invalid/admin' : `${origin}/login`); }, url: () => location,
     getByRole: (_, { name }) => {
-      const click = async () => { if (failAt === 'submit' && name === 'Login') throw Error('PRIVATE_SUBMIT_PASSWORD'); move(name === 'Continue with FCUNO' ? (foreign ? location : `${issuer}/admin`) : origin); };
+      const click = async () => { if (failAt === 'submit' && name === 'Login') throw Error('PRIVATE_SUBMIT_PASSWORD'); if (failAt === 'submit_timeout_after_response' && name === 'Login') throw Object.assign(Error('PRIVATE_CLICK_TIMEOUT'), { name: 'TimeoutError' }); move(name === 'Continue with FCUNO' ? (foreign ? location : `${issuer}/admin`) : origin); };
       return { click, waitFor: async () => {}, elementHandle: async () => ({ click, dispose: async () => {} }) };
     },
     getByLabel: () => ({ fill: async () => { if (failAt === 'form') throw Error('PRIVATE_FORM_EMAIL'); fills++; assert.equal(new URL(location).origin, issuer); } }),
@@ -152,7 +152,7 @@ function fakeLoginBrowser(auth, state, { foreign = false, cleanupFail = false, f
       if (predicate(new URL(location))) return Promise.resolve();
       if (foreign) return Promise.reject(Error('PRIVATE_WRONG_LOCATION'));
       return new Promise((resolve, reject) => waiting.add({ predicate, resolve, reject }));
-    }, waitForResponse: async () => response };
+    }, waitForResponse: async () => { if (failAt === 'response_timeout') throw Object.assign(new Error('PRIVATE_RESPONSE_PASSWORD'), { name: 'TimeoutError' }); return response; } };
   const context = { newPage: async () => page, storageState: async () => state, close: async () => { closed++; for (const wait of waiting) wait.reject(Error('PRIVATE_PAGE_CLOSED')); waiting.clear(); if (cleanupFail) throw Error('PRIVATE_CLEANUP_ERROR'); } };
   return { browserType: { launch: async () => ({ newContext: async () => context, close: async () => { closed++; } }) }, counts: () => ({ fills, closed }), waits: () => waits };
 }
@@ -358,19 +358,39 @@ test('hosted browser report and public summary keep only closed login stage diag
   }
 });
 
-test('unclassified hosted browser failure stays generic and never copies private error text', async t => {
+test('restricted submit timeout means response unobserved, with no invalid-password claim or new request', async t => {
+  const f = fixture(t), browser = fakeLoginBrowser(identity('restricted'), f.state, { failAt: 'response_timeout' });
+  f.options.login = args => loginHostedFcuno({ ...args, browserType: browser.browserType });
+  const result = await runHostedBrowser(f.options);
+  assert.equal(result.stage, 'runtime.login.submit'); assert.equal(result.diagnosticCode, 'RUNTIME_LOGIN_RESPONSE_UNOBSERVED');
+  assert.equal(result.loginOutcome, 'AUTH_CONTEXT_RESPONSE_NOT_OBSERVED');
+  assert.equal(releaseResultSummary(result).loginOutcome, result.loginOutcome);
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE_|password|invalid.credentials/i);
+  assert.deepEqual(browser.counts(), { fills: 2, closed: 2 });
+});
+
+test('plain hosted browser failure retains a fixed boundary without private error text', async t => {
   const f = fixture(t, 'normal_role');
   f.options.login = async () => { throw new Error('PRIVATE_PASSWORD https://issuer.invalid/admin?ticket=PRIVATE'); };
   const result = await runHostedBrowser(f.options);
   assert.equal(result.status, 'failed');
   assert.equal(result.errorCode, 'HOSTED_BROWSER_VERIFICATION_FAILED');
-  assert.equal(result.stage, undefined);
-  assert.equal(result.diagnosticCode, undefined);
+  assert.equal(result.stage, 'browser.login');
+  assert.equal(result.diagnosticCode, 'RELEASE_BOUNDARY_FAILED');
   assert.equal(result.runtimeLogin, undefined);
   assert.doesNotMatch(JSON.stringify(result), /PRIVATE|ticket|password|issuer\.invalid/);
   assert.deepEqual(releaseResultSummary(result), {
     status: 'failed', phase: undefined, missing: undefined, errorCode: 'HOSTED_BROWSER_VERIFICATION_FAILED',
+    stage: 'browser.login', diagnosticCode: 'RELEASE_BOUNDARY_FAILED',
   });
+});
+
+test('submit click timeout after observed auth response does not claim response was unobserved', async t => {
+  const f=fixture(t), browser=fakeLoginBrowser(identity('restricted'),f.state,{failAt:'submit_timeout_after_response'});
+  f.options.login=args=>loginHostedFcuno({...args,browserType:browser.browserType});
+  const result=await runHostedBrowser(f.options);
+  assert.equal(result.stage,'runtime.login.submit');assert.equal(result.diagnosticCode,'RELEASE_BOUNDARY_FAILED');assert.equal(result.loginOutcome,undefined);
+  assert.doesNotMatch(JSON.stringify(result),/PRIVATE_/);
 });
 
 test('non200 diagnostic body cannot strand login cleanup beyond its bounded read', async t => {

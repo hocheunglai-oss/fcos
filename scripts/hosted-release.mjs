@@ -12,7 +12,7 @@ import { publishDeterministicGroup } from './lib/hosted-release/artifacts.mjs';
 import { publishDependencies } from './lib/hosted-release/dependency-publisher.mjs';
 import { publishBrowser } from './lib/hosted-release/browser-publisher.mjs';
 import { createLiveCollector } from './lib/hosted-release/live-collector.mjs';
-import { runHostedBrowser } from './lib/hosted-release/browser.mjs';
+import { runHostedBrowser, assertHostedBrowserComposition } from './lib/hosted-release/browser.mjs';
 import { collectCompatibilitySuccessor } from './lib/hosted-release/successor.mjs';
 
 const commands = new Set(['prepare','checks','reconcile','preview','observe','browser','publish','ready','approve','execute','qualify','qualify-publish']);
@@ -47,6 +47,9 @@ export async function hostedRelease(command, { env = process.env, wait = sleep, 
   const controllerDirectory = resolve(env.FCOS_CONTROLLER_DIRECTORY || 'controller'), phase = env.FCOS_VERIFICATION_PHASE || 'before';
   const binding = { releaseId: manifest.releaseId, manifestHash: digest(manifest) };
   const output = value => { writeJson(env.FCOS_RELEASE_OUTPUT || 'release-result.json', value); return value; };
+  // Pure source/profile/catalogue composition only: no credentials, network or
+  // new gate. Fail before registration, reconciliation or Preview/probe work.
+  if (['prepare', 'reconcile', 'checks', 'browser'].includes(command)) assertHostedBrowserComposition(manifest);
   if (command === 'checks') {
     assertHostedController({ controllerDirectory, controllerSha: manifest.controller.sha, manifest, env });
     assertHostedSetup({ manifest, env });
@@ -111,7 +114,9 @@ export async function hostedRelease(command, { env = process.env, wait = sleep, 
       admitHostedSource: async () => ({ sourceVerified: true, observationSourcesVerified: true,
         candidateSha: manifest.candidate.sha, controllerSha: manifest.controller.sha, manifestHash: binding.manifestHash,
         sourceDigest: admission.candidate.sourceSha256, lockSha256: admission.candidate.lockSha256,
-        configurationSha256: admission.candidate.configurationSha256 }), signerAdapter });
+        configurationSha256: admission.candidate.configurationSha256, sourceProfile: admission.candidate.sourceProfile,
+        sourceInputsSha256: admission.candidate.sourceInputsSha256, salesforceSourceSha256: admission.candidate.salesforceSourceSha256,
+        branch: manifest.candidate.branch }), signerAdapter });
     return output(report);
   }
   if (command === 'preview' || command === 'execute') {

@@ -16,6 +16,7 @@ import { SUCCESSOR_LIVE_CONTRACT, collectSuccessorLiveOperationAdmission, succes
 import { successorLiveNormalCoverageVerified } from './lib/runtime-compatibility-successor-adapter.mjs';
 import { githubReleaseReads, RELEASE_REPOSITORY } from './lib/release-evidence.mjs';
 import { collectPreviewEmailSignerEvidence, previewEmailSignerEnabled } from './lib/preview-email-signer.mjs';
+import { assertHostedOrdinaryBrowserSource, assertHostedOrdinaryBrowserContext } from './lib/hosted-release/browser-profile.mjs';
 
 // Frozen v288 read paths for the exact reviewed read-only first rollout only.
 // Never import the evolving v293 module catalogue or use this as a fallback.
@@ -291,14 +292,29 @@ function compatibilityNormalStorage(source, origin) {
   return { state, token };
 }
 
-export async function verifyRuntimeCompatibilityNormalRole({ env = process.env, fetchImpl = globalThis.fetch,
+// Keep the historical public entrypoint's candidate guard unchanged. Only the
+// separate exact hosted adapter can select the ordinary successor below.
+export async function verifyRuntimeCompatibilityNormalRole(options = {}) {
+  return runCompatibilityNormalRole(options);
+}
+
+export async function verifyHostedOrdinaryCompatibilityNormalRole({ manifest, ...options } = {}) {
+  assertHostedOrdinaryBrowserContext({ manifest, env: options.env });
+  if (typeof options.admitHostedSource !== 'function') throw compatibilityNormalDiagnosticError('SOURCE_SCOPE', 'READ_ONLY_GUARD_MISSING');
+  const source = await options.admitHostedSource();
+  assertHostedOrdinaryBrowserSource({ manifest, source, env: options.env });
+  return runCompatibilityNormalRole({ ...options, admitHostedSource: async () => source }, { manifest, source });
+}
+
+async function runCompatibilityNormalRole({ env = process.env, fetchImpl = globalThis.fetch,
   resolveCandidate = resolveFcosE2eCandidate, observeRuntime = collectRuntimeObservation,
   authenticate = ({ env, url }) => compatibilityNormalStorage(env.FCOS_NORMAL_ROLE_STORAGE_STATE_BASE64, url),
   browserType = chromium, admitHostedSource, signerEnabled, collectSigner = collectPreviewEmailSignerEvidence,
   writeEvidence = evidence => writeFileSync(join(env.RUNNER_TEMP, 'fcos-normal-role-evidence.json'), `${JSON.stringify(evidence)}\n`, { mode: 0o600, flag: 'wx' }),
-} = {}) {
+} = {}, ordinaryHosted) {
   const root = fileURLToPath(new URL('..', import.meta.url)), successor = env.FCOS_E2E_EXPECTED_COMMIT === SUCCESSOR_LIVE_CONTRACT.candidateSha;
-  if (env.FCOS_COMPATIBILITY_NORMAL_ROLE_ENABLED !== 'true' || env.GITHUB_ACTIONS !== 'true' || env.GITHUB_REF_PROTECTED !== 'true' || env.GITHUB_REPOSITORY !== fcosConnectionIdentifier('github', 'Repository') || ![FIRST_RUNTIME_ROLLOUT.candidateSha, SUCCESSOR_LIVE_CONTRACT.candidateSha].includes(env.FCOS_E2E_EXPECTED_COMMIT) || !/^[0-9a-f]{40}$/.test(env.GITHUB_SHA || '')) throw compatibilityNormalDiagnosticError('CONFIGURATION', 'CONFIGURATION_INVALID');
+  if (ordinaryHosted) assertHostedOrdinaryBrowserSource({ manifest: ordinaryHosted.manifest, source: ordinaryHosted.source, env });
+  if (env.FCOS_COMPATIBILITY_NORMAL_ROLE_ENABLED !== 'true' || env.GITHUB_ACTIONS !== 'true' || env.GITHUB_REF_PROTECTED !== 'true' || env.GITHUB_REPOSITORY !== fcosConnectionIdentifier('github', 'Repository') || (!ordinaryHosted && ![FIRST_RUNTIME_ROLLOUT.candidateSha, SUCCESSOR_LIVE_CONTRACT.candidateSha].includes(env.FCOS_E2E_EXPECTED_COMMIT)) || !/^[0-9a-f]{40}$/.test(env.GITHUB_SHA || '')) throw compatibilityNormalDiagnosticError('CONFIGURATION', 'CONFIGURATION_INVALID');
   let admission, operationBinding;
   let hostedSource;
   if (admitHostedSource) {

@@ -2,6 +2,7 @@ import { collectWorkflowArtifact } from './artifacts.mjs';
 import { assertBoundEvidence, digest, fail, hash, NORMAL_MODULES, canonical } from './contract.mjs';
 import { assertHostedJob, publishChecks } from './publisher.mjs';
 import { compatibilityBrowserIsolationVerified } from '../compatibility-browser-isolation.mjs';
+import { hostedBrowserProfile } from './browser-profile.mjs';
 
 export async function publishBrowser({ manifest, github, coordinator, runId, phase, mode, preview }) {
   if (!['before', 'after'].includes(phase) || !['restricted', 'normal_role'].includes(mode)) fail('BROWSER_PHASE');
@@ -17,7 +18,14 @@ export async function publishBrowser({ manifest, github, coordinator, runId, pha
     return { status: 'waiting_dependency', missing: checkId };
   }
   const proofs = await publishChecks({ manifest, ...collected, expectedJobName: jobName, coordinator,
-    validateReport: report => {
+    validateReport: report => validateHostedBrowserReport({ manifest, report, mode, preview }) });
+  return { status: 'passed', checks: proofs.map(row => row.checkId) };
+}
+
+// The producer and publisher share this closed profile/isolation contract. A
+// retained failure artifact is diagnostic and can never become a passing check.
+export function validateHostedBrowserReport({ manifest, report, mode, preview }) {
+  const checkId = mode === 'restricted' ? 'restricted_browser' : 'normal_role';
       if (report?.schemaVersion !== 2 || report.kind !== 'fcos_hosted_browser_raw' || report.status !== 'passed'
         || report.manifestHash !== digest(manifest) || report.candidateSha !== manifest.candidate.sha || report.controllerSha !== manifest.controller.sha
         || report.checkId !== checkId || report.deploymentId !== preview.id || report.candidateUrl !== preview.url
@@ -25,12 +33,17 @@ export async function publishBrowser({ manifest, github, coordinator, runId, pha
         || report.completedAt !== report.capturedAt || report.result?.actualData !== true || report.result.unexpectedWrites !== 0) fail('BROWSER_RAW_BINDING');
       const expected = mode === 'restricted' ? ['dashboard', 'markets', 'api_denials'] : NORMAL_MODULES;
       if (canonical([...report.result.modules].sort()) !== canonical([...expected].sort()) || report.result.identity !== mode) fail('BROWSER_COVERAGE');
+      if (mode === 'normal_role') {
+        const profile = hostedBrowserProfile(manifest);
+        if (report.result.browserProfile !== profile) fail('BROWSER_COVERAGE');
+        if (profile !== 'application' && !compatibilityBrowserIsolationVerified(report.result.browserIsolation,
+          { candidateUrl: preview.url, sha: manifest.candidate.sha, harnessSha: manifest.controller.sha, deploymentId: preview.id,
+            sourceDigest: manifest.candidate.sourceSha256 }, NORMAL_MODULES)) fail('FROZEN_BROWSER_ISOLATION');
+      }
       if (mode === 'normal_role' && manifest.candidate.sourceProfile === 'frozen_04ee'
         && (!report.result.emailSigner || !compatibilityBrowserIsolationVerified(report.result.browserIsolation,
           { candidateUrl: preview.url, sha: manifest.candidate.sha, harnessSha: manifest.controller.sha, deploymentId: preview.id,
             sourceDigest: manifest.candidate.sourceSha256 }, NORMAL_MODULES))) fail('FROZEN_BROWSER_ISOLATION');
       return [{ id: checkId, kind: 'volatile', status: 'passed', inputsSha256: report.inputsSha256,
         completedAt: report.completedAt, maxAgeSeconds: 1800, result: report.result }];
-    } });
-  return { status: 'passed', checks: proofs.map(row => row.checkId) };
 }
