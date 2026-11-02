@@ -17,6 +17,9 @@ import { successorLiveNormalCoverageVerified } from './lib/runtime-compatibility
 import { githubReleaseReads, RELEASE_REPOSITORY } from './lib/release-evidence.mjs';
 import { collectPreviewEmailSignerEvidence, previewEmailSignerEnabled } from './lib/preview-email-signer.mjs';
 import { assertHostedOrdinaryBrowserSource, assertHostedOrdinaryBrowserContext } from './lib/hosted-release/browser-profile.mjs';
+import { BE6_NORMAL_BROWSER_SHA, BE6_NORMAL_BROWSER_CONTRACT, isBe6NormalSpec, BE6_EMAIL_ROUTER_FAILURE_CODES,
+  be6EmailRouterFailureCode, be6BuyerInvoicesDueRead, be6HedgeResponseKind, be6NormalDataLoaded,
+  be6NormalOpenSurface, be6NormalSurfaceReason, be6NormalSurfaceUnavailable } from './lib/be6-normal-browser-contract.mjs';
 
 // Frozen v288 read paths for the exact reviewed read-only first rollout only.
 // Never import the evolving v293 module catalogue or use this as a fallback.
@@ -40,6 +43,16 @@ export const COMPATIBILITY_NORMAL_MODULES = Object.freeze([
   { module: 'settings', path: '/settings?section=finance', handler: 'financeSettingsGet', fields: [], title: /^Finance$/i },
 ]);
 
+// Selected only after the exact ordinary candidate and source receipts pass.
+export const BE6_COMPATIBILITY_NORMAL_MODULES = Object.freeze(COMPATIBILITY_NORMAL_MODULES.map(spec => Object.freeze({ ...spec,
+  sourceContract: BE6_NORMAL_BROWSER_CONTRACT,
+  ...(spec.module === 'dashboard' ? { path: '/?tab=stems' } : {}),
+  ...(spec.module === 'markets' ? { handler: 'marketPulseSnapshot', fields: ['products'] } : {}),
+  ...(spec.module === 'buyer_invoices' ? { handler: 'salesforceBuyerInvoicesDue', fields: ['rows'] } : {}),
+  ...(spec.module === 'incoming_payments' ? { title: /^Incoming Payments$/i } : {}),
+})));
+const diagnosticModuleSpecs = [...COMPATIBILITY_NORMAL_MODULES, ...BE6_COMPATIBILITY_NORMAL_MODULES];
+
 const normalRoleDiagnosticStages = new Set([
   'CONFIGURATION', 'SOURCE_SCOPE', 'OBSERVATION_SOURCES', 'CANDIDATE_URL', 'CANDIDATE_RESOLUTION',
   'VERSION_FETCH', 'VERSION_PARSE', 'VERSION_PROVENANCE', 'RUNTIME_OBSERVATION', 'RUNTIME_SAFETY',
@@ -56,9 +69,10 @@ const normalRoleDiagnosticReasons = new Set([
 
 function normalRoleDiagnosticModules(moduleReasons, modules) {
   return COMPATIBILITY_NORMAL_MODULES.map(spec => {
-    const saved = modules?.find(row => row?.module === spec.module && row?.handler === spec.handler)?.reason;
+    const savedRow = modules?.find(row => row?.module === spec.module && diagnosticModuleSpecs.some(known => known.module === row.module && known.handler === row.handler));
+    const saved = savedRow?.reason;
     const reason = moduleReasons instanceof Map ? moduleReasons.get(spec.module) : undefined;
-    return { module: spec.module, handler: spec.handler,
+    return { module: spec.module, handler: savedRow?.handler || spec.handler,
       reason: normalRoleDiagnosticReasons.has(reason) ? reason : normalRoleDiagnosticReasons.has(saved) ? saved : 'NOT_REACHED' };
   });
 }
@@ -68,13 +82,19 @@ export function normalizeCompatibilityNormalDiagnostic(input = {}) {
     stage: normalRoleDiagnosticStages.has(input.stage) ? input.stage : 'CONFIGURATION',
     reason: normalRoleDiagnosticReasons.has(input.reason) ? input.reason : 'STAGE_FAILED',
   };
-  const spec = COMPATIBILITY_NORMAL_MODULES.find(candidate => candidate.module === input.module && candidate.handler === input.handler);
+  const spec = diagnosticModuleSpecs.find(candidate => candidate.module === input.module && candidate.handler === input.handler);
   if (spec) {
     diagnostic.module = spec.module;
     diagnostic.handler = spec.handler;
   }
   if (Number.isInteger(input.status) && input.status >= 100 && input.status <= 599) diagnostic.status = input.status;
   if (input.moduleReasons instanceof Map || Array.isArray(input.modules)) diagnostic.modules = normalRoleDiagnosticModules(input.moduleReasons, input.modules);
+  if (Array.isArray(input.dataResponses)) diagnostic.dataResponses = input.dataResponses.slice(0, 64).filter(row =>
+    diagnosticModuleSpecs.some(spec => spec.module === row?.module && spec.handler === row?.handler)
+    && Number.isInteger(row.status) && row.status >= 100 && row.status <= 599
+    && ['PRIMARY', 'HEDGE_SNAPSHOT', 'HEDGE_SETTINGS'].includes(row.selector)).map(row =>
+      ({ module: row.module, handler: row.handler, status: row.status, selector: row.selector,
+        ...(row.module === 'email_router' && BE6_EMAIL_ROUTER_FAILURE_CODES.includes(row.errorCode) ? { errorCode: row.errorCode } : {}) }));
   if (NORMAL_ROLE_TRANSPORT_BLOCKED_REASONS.includes(input.blockedRequest)) diagnostic.blockedRequest = input.blockedRequest;
   if (Array.isArray(input.deniedRequests)) diagnostic.deniedRequests = input.deniedRequests.slice(0, 32).filter(row =>
     NORMAL_ROLE_REQUEST_CATEGORIES.includes(row?.category) && ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'OTHER'].includes(row?.method)
@@ -131,6 +151,15 @@ export function compatibilityNormalRequestAllowed({ url, method, body, functionN
   return normalRoleReadRequest(name, body) || compatibilityLegacyXeroReadRequest(name, body);
 }
 
+export function be6CompatibilityNormalRequestAllowed(request, origin) {
+  let target;
+  try { target = new URL(request.url); } catch { return false; }
+  if (target.origin === origin && target.pathname === '/api/functions/salesforceBuyerInvoicesDue') {
+    return request.method === 'POST' && !target.search && !target.hash && be6BuyerInvoicesDueRead(request.body);
+  }
+  return compatibilityNormalRequestAllowed(request, origin);
+}
+
 export function assertCompatibilityNormalIdentity(auth, { approvedEmail } = {}) {
   const user = auth?.user;
   if (!approvedEmail || approvedEmail.toLowerCase() === FCOS_READ_ONLY_CI.email || user?.email?.toLowerCase() !== approvedEmail.toLowerCase()
@@ -140,6 +169,8 @@ export function assertCompatibilityNormalIdentity(auth, { approvedEmail } = {}) 
 }
 
 export function compatibilityNormalDataLoaded(spec, payload) {
+  const candidateResult = isBe6NormalSpec(spec) ? be6NormalDataLoaded(spec, payload) : null;
+  if (candidateResult) return candidateResult;
   const data = payload?.data ?? payload;
   if (!data || typeof data !== 'object' || data.error || data.cancelled || data.status === 'unavailable') return { loaded: false, rows: null };
   const numeric = value => (typeof value === 'number' || typeof value === 'string' && value.trim() !== '') && Number.isFinite(Number(value));
@@ -151,7 +182,13 @@ export function compatibilityNormalDataLoaded(spec, payload) {
 
 // Public diagnostics retain an outcome enum, never response content or errors.
 export async function compatibilityNormalReadResponse(spec, response) {
-  if (!response.ok()) return { loaded: false, rows: null, reason: 'DATA_NON_2XX' };
+  if (!response.ok()) {
+    let errorCode;
+    if (isBe6NormalSpec(spec) && spec.module === 'email_router') {
+      try { errorCode = be6EmailRouterFailureCode(await response.json()); } catch { /* HTTP failure stays fatal. */ }
+    }
+    return { loaded: false, rows: null, reason: 'DATA_NON_2XX', ...(errorCode ? { errorCode } : {}) };
+  }
   let payload;
   try { payload = await response.json(); } catch { return { loaded: false, rows: null, reason: 'DATA_JSON_FAILURE' }; }
   const result = compatibilityNormalDataLoaded(spec, payload);
@@ -160,14 +197,20 @@ export async function compatibilityNormalReadResponse(spec, response) {
 
 // The runtime and ordering tests share the actual response observer. Every
 // failed relevant response remains sticky even when a later response succeeds.
-export function createCompatibilityNormalResponseObserver(spec, responseSettlement, responses, failures) {
-  const state = { workflowLoaded: false, responseSeen: false, pending: 0 };
+export function createCompatibilityNormalResponseObserver(spec, responseSettlement, responses, failures, dataResponses = []) {
+  const state = { workflowLoaded: false, settingsLoaded: false, responseSeen: false, pending: 0 };
   const observe = response => {
     let pathname;
     try { pathname = new URL(response.url()).pathname; } catch { failures.push('UNAVAILABLE_SURFACE'); return; }
     const workflow = spec.module === 'review' && pathname === '/api/functions/exceptionReviewWorkflowList';
     if (!workflow && pathname !== `/api/functions/${spec.handler}`) return;
-    if (!workflow) state.responseSeen = true;
+    const hedgeKind = isBe6NormalSpec(spec) && spec.module === 'hedge_desk' ? be6HedgeResponseKind(response) : null;
+    if (hedgeKind === 'invalid') { failures.push('DATA_SHAPE_REJECTED'); return; }
+    const dataResponse = !workflow ? { module: spec.module, handler: spec.handler,
+      status: typeof response.status === 'function' ? response.status() : 0,
+      selector: hedgeKind === 'settings' ? 'HEDGE_SETTINGS' : hedgeKind === 'snapshot' ? 'HEDGE_SNAPSHOT' : 'PRIMARY' } : null;
+    if (dataResponse && dataResponses.length < 64) dataResponses.push(dataResponse);
+    if (!workflow && hedgeKind !== 'settings') state.responseSeen = true;
     state.pending += 1;
     responseSettlement.track((async () => {
       try {
@@ -177,9 +220,15 @@ export function createCompatibilityNormalResponseObserver(spec, responseSettleme
           state.workflowLoaded = Boolean(data && !data.error && data.byStemId !== null
             && typeof data.byStemId === 'object' && !Array.isArray(data.byStemId) && Array.isArray(data.ownerOptions));
           if (!state.workflowLoaded) failures.push('DATA_SHAPE_REJECTED');
+        } else if (hedgeKind === 'settings') {
+          if (!response.ok()) { failures.push('DATA_NON_2XX'); return; }
+          const payload = await response.json();
+          state.settingsLoaded = !payload?.error && Array.isArray(payload?.data);
+          if (!state.settingsLoaded) failures.push('DATA_SHAPE_REJECTED');
         } else {
           const loaded = await compatibilityNormalReadResponse(spec, response);
           responses.push(loaded);
+          if (dataResponse && loaded.errorCode) dataResponse.errorCode = loaded.errorCode;
           if (loaded.reason) failures.push(loaded.reason);
         }
       } catch { failures.push('DATA_JSON_FAILURE'); }
@@ -231,6 +280,10 @@ export function compatibilityNormalModuleTerminalReason({ reason, failures = [],
 // Navigate the frozen business UI to the surface backed by each mandatory
 // handler. Controls here select views only; mutation buttons are never used.
 export async function compatibilityNormalOpenSurface(spec, page) {
+  if (isBe6NormalSpec(spec)) {
+    await be6NormalOpenSurface(spec, page);
+    if (spec.module === 'markets') return;
+  }
   if (spec.module === 'dashboard') await page.getByRole('tab', { name: 'STEMs', exact: true }).click();
   else if (spec.module === 'xero_portal') await page.getByRole('tab', { name: 'Receipts', exact: true }).click();
   else if (spec.module === 'markets') {
@@ -241,6 +294,10 @@ export async function compatibilityNormalOpenSurface(spec, page) {
 }
 
 async function compatibilityNormalSurfaceReasonOnce(spec, page, loaded, body) {
+  if (isBe6NormalSpec(spec)) {
+    const result = await be6NormalSurfaceReason(spec, page, loaded);
+    if (result !== undefined) return result;
+  }
   if (spec.module === 'settings') return await page.getByLabel('Annual financing rate (%)', { exact: true }).isVisible() ? null : 'SETTINGS_FIELD_MISSING';
   if (spec.module === 'markets') {
     const section = page.locator('details:visible').filter({ has: page.locator('summary').filter({ hasText: /^Settlement MOPS control$/ }) });
@@ -312,6 +369,7 @@ async function runCompatibilityNormalRole({ env = process.env, fetchImpl = globa
   browserType = chromium, admitHostedSource, signerEnabled, collectSigner = collectPreviewEmailSignerEvidence,
   writeEvidence = evidence => writeFileSync(join(env.RUNNER_TEMP, 'fcos-normal-role-evidence.json'), `${JSON.stringify(evidence)}\n`, { mode: 0o600, flag: 'wx' }),
 } = {}, ordinaryHosted) {
+  const moduleSpecs = ordinaryHosted?.manifest?.candidate?.sha === BE6_NORMAL_BROWSER_SHA ? BE6_COMPATIBILITY_NORMAL_MODULES : COMPATIBILITY_NORMAL_MODULES;
   const root = fileURLToPath(new URL('..', import.meta.url)), successor = env.FCOS_E2E_EXPECTED_COMMIT === SUCCESSOR_LIVE_CONTRACT.candidateSha;
   if (ordinaryHosted) assertHostedOrdinaryBrowserSource({ manifest: ordinaryHosted.manifest, source: ordinaryHosted.source, env });
   if (env.FCOS_COMPATIBILITY_NORMAL_ROLE_ENABLED !== 'true' || env.GITHUB_ACTIONS !== 'true' || env.GITHUB_REF_PROTECTED !== 'true' || env.GITHUB_REPOSITORY !== fcosConnectionIdentifier('github', 'Repository') || (!ordinaryHosted && ![FIRST_RUNTIME_ROLLOUT.candidateSha, SUCCESSOR_LIVE_CONTRACT.candidateSha].includes(env.FCOS_E2E_EXPECTED_COMMIT)) || !/^[0-9a-f]{40}$/.test(env.GITHUB_SHA || '')) throw compatibilityNormalDiagnosticError('CONFIGURATION', 'CONFIGURATION_INVALID');
@@ -376,14 +434,14 @@ async function runCompatibilityNormalRole({ env = process.env, fetchImpl = globa
   let browser, context, isolation, browserIsolation, contextClosed = false;
   let blockedMutations = 0, telemetryAbortedRequests = 0;
   let lastBlockedRequest;
-  const deniedRequests = [];
+  const deniedRequests = [], dataResponses = [];
   const checks = [];
   const moduleReasons = new Map();
   try {
     browser = await browserType.launch({ headless: true });
     context = await browser.newContext({ storageState: state, viewport: { width: 1440, height: 1000 }, serviceWorkers: 'block' });
     await context.route('**/*', createNormalRoleVerificationRoute({ origin: url, protectionBypass: env.FCOS_E2E_VERCEL_BYPASS,
-      requestAllowed: compatibilityNormalRequestAllowed, deniedReadsFatal: true,
+      requestAllowed: ordinaryHosted ? be6CompatibilityNormalRequestAllowed : compatibilityNormalRequestAllowed, deniedReadsFatal: true,
       excludeRequest: compatibilityTelemetryScriptExcluded, onExcludedRequest: () => { telemetryAbortedRequests += 1; },
       onBlockedMutation: (reason, detail) => {
         blockedMutations += 1;
@@ -393,7 +451,7 @@ async function runCompatibilityNormalRole({ env = process.env, fetchImpl = globa
         if (NORMAL_ROLE_TRANSPORT_BLOCKED_REASONS.includes(reason)) lastBlockedRequest = reason;
       } }));
     isolation = await normalRoleDiagnosticStage('BROWSER_ISOLATION', () => acquireCompatibilityBrowserIsolation({ context, origin: url, version, harnessSha: env.GITHUB_SHA }), 'ISOLATION_FAILED');
-    for (const spec of COMPATIBILITY_NORMAL_MODULES) {
+    for (const spec of moduleSpecs) {
       await normalRoleDiagnosticStage('BROWSER_ISOLATION', () => isolation.assertHeld(spec.module, 'before'), 'ISOLATION_FAILED');
       if (identity.moduleAccess[spec.module] !== true) {
         moduleReasons.set(spec.module, 'ACCESS_MISSING');
@@ -404,7 +462,7 @@ async function runCompatibilityNormalRole({ env = process.env, fetchImpl = globa
       const responses = [], failures = [];
       const responseSettlement = createCompatibilityNormalResponseSettlement();
       let responseObserver;
-      const observed = createCompatibilityNormalResponseObserver(spec, responseSettlement, responses, failures);
+      const observed = createCompatibilityNormalResponseObserver(spec, responseSettlement, responses, failures, dataResponses);
       const mutationStart = blockedMutations;
       const blockReason = () => blockedMutations !== mutationStart ? 'BLOCKED_REQUEST' : null;
       const failModule = reason => { if (!moduleReason) moduleReason = reason; };
@@ -419,15 +477,16 @@ async function runCompatibilityNormalRole({ env = process.env, fetchImpl = globa
         headingLoaded = true;
         await compatibilityNormalOpenSurface(spec, page);
         const deadline = Date.now() + 30000;
-        while (!responses.some(item => item.loaded) && !failures.length && !blockReason() && Date.now() < deadline) await page.waitForTimeout(250);
+        while ((!responses.some(item => item.loaded) || isBe6NormalSpec(spec) && spec.module === 'hedge_desk' && !observed.state.settingsLoaded) && !failures.length && !blockReason() && Date.now() < deadline) await page.waitForTimeout(250);
         const loaded = responses.find(item => item.loaded);
         if (blockReason()) { failModule(blockReason()); continue; }
         if (failures.length) { failModule(failures[0]); continue; }
+        if (isBe6NormalSpec(spec) && spec.module === 'hedge_desk' && !observed.state.settingsLoaded) { failModule(observed.state.pending ? 'DATA_DEADLINE' : 'DATA_NO_RESPONSE'); continue; }
         if (!loaded) { failModule(!observed.state.responseSeen ? 'DATA_NO_RESPONSE' : observed.state.pending ? 'DATA_DEADLINE' : 'DATA_SHAPE_REJECTED'); continue; }
         if (/\/login(?:\?|$)/.test(page.url())) { failModule('LOGIN_REDIRECT'); continue; }
         const body = await page.locator('body').innerText();
         if (/Access denied/i.test(body)) { failModule('ACCESS_MISSING'); continue; }
-        if (/Something went wrong|temporarily unavailable|could not (?:load|read|verify)|Unavailable/i.test(body)) { failModule('UNAVAILABLE_SURFACE'); continue; }
+        if (isBe6NormalSpec(spec) ? await be6NormalSurfaceUnavailable(page) : /Something went wrong|temporarily unavailable|could not (?:load|read|verify)|Unavailable/i.test(body)) { failModule('UNAVAILABLE_SURFACE'); continue; }
         const surfaceReason = await compatibilityNormalSurfaceReason(spec, page, loaded, body);
         if (surfaceReason) { failModule(surfaceReason); continue; }
         if (spec.workflow) {
@@ -436,7 +495,7 @@ async function runCompatibilityNormalRole({ env = process.env, fetchImpl = globa
             // rendered after filtering; no Save/Approve/Settle control is used.
             await page.getByRole('button', { name: 'All', exact: true }).click();
             if (blockReason()) { failModule(blockReason()); continue; }
-            if (!await page.locator('table tbody tr').count() && !/No .*found|No .*match/i.test(await page.locator('body').innerText())) { failModule('WORKFLOW_MISSING'); continue; }
+            if (isBe6NormalSpec(spec) ? Boolean(await compatibilityNormalSurfaceReason(spec, page, loaded, body)) : !await page.locator('table tbody tr').count() && !/No .*found|No .*match/i.test(await page.locator('body').innerText())) { failModule('WORKFLOW_MISSING'); continue; }
             if (!observed.state.workflowLoaded || !responses.some(item => item.loaded)) { failModule('WORKFLOW_MISSING'); continue; }
           } else if (!/Workflow|Next owner/i.test(body) || loaded.rows === 0) { failModule('WORKFLOW_MISSING'); continue; }
         }
@@ -457,10 +516,10 @@ async function runCompatibilityNormalRole({ env = process.env, fetchImpl = globa
       }
     }
     await normalRoleDiagnosticStage('BROWSER_ISOLATION', () => isolation.assertHeld(undefined, 'final'), 'ISOLATION_FAILED');
-    if (blockedMutations) throw compatibilityNormalDiagnosticError('MODULES', 'BLOCKED_REQUEST', { moduleReasons, blockedRequest: lastBlockedRequest, deniedRequests });
+    if (blockedMutations) throw compatibilityNormalDiagnosticError('MODULES', 'BLOCKED_REQUEST', { moduleReasons, modules: moduleSpecs.map(spec => ({module: spec.module, handler: spec.handler, reason: moduleReasons.get(spec.module)})), blockedRequest: lastBlockedRequest, deniedRequests, dataResponses });
   } catch (error) {
     if (error?.normalRoleDiagnostic) throw error;
-    throw compatibilityNormalDiagnosticError('BROWSER_SETUP', 'BROWSER_UNAVAILABLE', { moduleReasons });
+    throw compatibilityNormalDiagnosticError('BROWSER_SETUP', 'BROWSER_UNAVAILABLE', { moduleReasons, modules: moduleSpecs.map(spec => ({module: spec.module, handler: spec.handler, reason: moduleReasons.get(spec.module)})), dataResponses });
   } finally {
     let cleanupError;
     try { if (isolation) await normalRoleDiagnosticStage('BROWSER_ISOLATION', () => isolation.release(), 'ISOLATION_FAILED'); } catch (error) { cleanupError = error; }
@@ -468,23 +527,23 @@ async function runCompatibilityNormalRole({ env = process.env, fetchImpl = globa
     try { await browser?.close(); } catch { cleanupError ||= compatibilityNormalDiagnosticError('BROWSER_SETUP', 'BROWSER_UNAVAILABLE'); }
     if (cleanupError) throw cleanupError;
   }
-  if (blockedMutations) throw compatibilityNormalDiagnosticError('MODULES', 'BLOCKED_REQUEST', { moduleReasons, blockedRequest: lastBlockedRequest, deniedRequests });
+  if (blockedMutations) throw compatibilityNormalDiagnosticError('MODULES', 'BLOCKED_REQUEST', { moduleReasons, modules: moduleSpecs.map(spec => ({module: spec.module, handler: spec.handler, reason: moduleReasons.get(spec.module)})), blockedRequest: lastBlockedRequest, deniedRequests, dataResponses });
   browserIsolation = isolation.evidence({ workspacePreferences, telemetryAbortedRequests, blockedRequests: blockedMutations, contextClosed });
   if (!compatibilityBrowserIsolationVerified(browserIsolation, { candidateUrl: url, sha: verified.commit, deploymentId: version.deploymentId,
-    sourceDigest: version.provenance.sourceDigest, harnessSha: env.GITHUB_SHA }, COMPATIBILITY_NORMAL_MODULES.map(spec => spec.module))) {
+    sourceDigest: version.provenance.sourceDigest, harnessSha: env.GITHUB_SHA }, moduleSpecs.map(spec => spec.module))) {
     throw compatibilityNormalDiagnosticError('BROWSER_ISOLATION', 'ISOLATION_FAILED');
   }
   const evidence = { schemaVersion: 1, baseSha: FIRST_RUNTIME_ROLLOUT.previousSha, candidateSha: verified.commit, candidateUrl: url, deploymentId: version.deploymentId,
     sourceDigest: version.provenance.sourceDigest, harnessSha: env.GITHUB_SHA, capturedAt: new Date().toISOString(), checks, browserIsolation,
     ...(successor ? { lockHash: hostedSource?.lockSha256 || admission.candidate.lockHash, configurationRevision: hostedSource?.configurationSha256 || admission.context.configurationRevision } : {}),
     ...(emailSigner ? { emailSigner } : {}) };
-  if (!compatibilityNormalCoverageVerified({ checks }) || checks.length !== COMPATIBILITY_NORMAL_MODULES.length) throw compatibilityNormalDiagnosticError('COVERAGE', 'COVERAGE_INCOMPLETE', { moduleReasons });
+  if (!compatibilityNormalCoverageVerified({ checks }) || checks.length !== moduleSpecs.length) throw compatibilityNormalDiagnosticError('COVERAGE', 'COVERAGE_INCOMPLETE', { moduleReasons, modules: moduleSpecs.map(spec => ({module: spec.module, handler: spec.handler, reason: moduleReasons.get(spec.module)})), dataResponses });
   if (successor && !hostedSource) {
     successorLiveSelection(admission);
     if (!successorLiveNormalCoverageVerified({ admission, normal: { ...evidence, kind: 'normal_role', sha: verified.commit },
-      candidate: { id: version.deploymentId, url, createdAt: version.builtAt } })) throw compatibilityNormalDiagnosticError('COVERAGE', 'COVERAGE_INCOMPLETE', { moduleReasons });
+      candidate: { id: version.deploymentId, url, createdAt: version.builtAt } })) throw compatibilityNormalDiagnosticError('COVERAGE', 'COVERAGE_INCOMPLETE', { moduleReasons, modules: moduleSpecs.map(spec => ({module: spec.module, handler: spec.handler, reason: moduleReasons.get(spec.module)})), dataResponses });
   }
-  if (!env.RUNNER_TEMP) throw compatibilityNormalDiagnosticError('EVIDENCE', 'EVIDENCE_WRITE_FAILED', { moduleReasons });
+  if (!env.RUNNER_TEMP) throw compatibilityNormalDiagnosticError('EVIDENCE', 'EVIDENCE_WRITE_FAILED', { moduleReasons, modules: moduleSpecs.map(spec => ({module: spec.module, handler: spec.handler, reason: moduleReasons.get(spec.module)})), dataResponses });
   await normalRoleDiagnosticStage('EVIDENCE', () => writeEvidence(evidence), 'EVIDENCE_WRITE_FAILED');
   return evidence;
 }

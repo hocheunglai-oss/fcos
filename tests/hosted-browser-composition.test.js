@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runHostedBrowser, assertHostedBrowserComposition } from '../scripts/lib/hosted-release/browser.mjs';
 import { ORDINARY_BROWSER_CANDIDATE, hostedBrowserProfile } from '../scripts/lib/hosted-release/browser-profile.mjs';
-import { COMPATIBILITY_NORMAL_MODULES, verifyRuntimeCompatibilityNormalRole } from '../scripts/runtime-compatibility-normal-role.mjs';
+import { BE6_COMPATIBILITY_NORMAL_MODULES, COMPATIBILITY_NORMAL_MODULES, verifyRuntimeCompatibilityNormalRole } from '../scripts/runtime-compatibility-normal-role.mjs';
 import { releaseResultSummary, hostedRelease } from '../scripts/hosted-release.mjs';
 import { digest, releaseTargets } from '../scripts/lib/hosted-release/contract.mjs';
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
@@ -74,9 +74,9 @@ function fixture(t) {
           waitForResponse:async()=>({status:()=>200,json:async()=>auth}),close:async()=>{}};return page;
       }
       const handlers=new Map();let location=origin,closed=false,held=false;
-      const locator=(name='')=>({first:()=>locator(name),filter:()=>locator(name),locator:s=>locator(s),getByText:s=>locator(String(s)),
+      const locator=(name='')=>({first:()=>locator(name),filter:()=>locator(name),locator:s=>locator(s),getByText:s=>locator(String(s)),getByRole:(kind,o)=>locator(kind+':'+o.name),isVisible:async()=>!name.includes('No position exposure'),
         waitFor:async()=>{},isVisible:async()=>true,getAttribute:async()=>'',click:async()=>{events.push('ui:'+name);},
-        count:async()=>name.includes('No receipts stored')?0:1,innerText:async()=>'Workflow Next owner business row'});
+        count:async()=>name.includes('No receipts stored')||name.includes('[role="alert"]')||name.includes('[aria-label]')||name.includes('Unable to load')?0:1,innerText:async()=>name.includes('latest MOPS')?'500.00 USD/MT':'Workflow Next owner business row'});
       const page={url:()=>location,isClosed:()=>closed,context:()=>context,close:async()=>{closed=true;},on:(k,v)=>handlers.set(k,v),off:k=>handlers.delete(k),
         getByRole:(kind,o)=>locator(kind+':'+o.name),getByLabel:name=>locator(name),getByText:name=>locator(String(name)),locator,
         waitForTimeout:async()=>{await Promise.resolve();},evaluate:async(fn,arg)=>{
@@ -87,10 +87,13 @@ function fixture(t) {
         },goto:async url=>{
           location=url;
           if(url.endsWith('/app-version.json'))return{status:()=>200,url:()=>url,request:()=>({redirectedFrom:()=>null}),headers:()=>({'content-type':'application/json'}),json:async()=>version};
-          const spec=COMPATIBILITY_NORMAL_MODULES.find(s=>new URL(origin+s.path).pathname===new URL(url).pathname&&new URL(origin+s.path).search===new URL(url).search);
-          assert.ok(spec,'Real harness used an admitted legacy route');events.push('module:'+spec.module);
-          const data=scenario.invalidModule===spec.module?{}:spec.module==='settings'?{settings:{annualInterestRatePct:1,bankChargesUsd:{UBS:1,DBS:1}}}:Object.fromEntries(spec.fields.map(field=>[field,[{id:'LOCAL_ROW'}]]));
-          handlers.get('response')?.({url:()=>origin+'/api/functions/'+spec.handler,ok:()=>true,json:async()=>data});
+          const spec=BE6_COMPATIBILITY_NORMAL_MODULES.find(s=>new URL(origin+s.path).pathname===new URL(url).pathname&&new URL(origin+s.path).search===new URL(url).search);
+          assert.ok(spec,'Real harness used the exact admitted be6 route');events.push('module:'+spec.module);
+          let data=scenario.invalidModule===spec.module?{}:spec.module==='settings'?{settings:{annualInterestRatePct:1,bankChargesUsd:{UBS:1,DBS:1}}}:Object.fromEntries(spec.fields.map(field=>[field,[{id:'LOCAL_ROW'}]]));
+          if(scenario.invalidModule!==spec.module&&spec.module==='markets')data={complete:true,asOfDate:'2026-10-01',latestMopsPublicationDate:'2026-10-01',reportCompleteness:{complete:true},products:['hsfo380','vlsfo','lsmgo'].map(productKey=>({productKey,unit:'USD/MT',latestMops:{value:500,publicationDate:'2026-10-01'}}))};
+          if(scenario.invalidModule!==spec.module&&spec.module==='hedge_desk')data={data:{physicals:[{}],swaps:[],mops:[],clearing:[],counterparties:[],invoices:[],capabilities:{}}};
+          handlers.get('response')?.({request:()=>({method:()=> 'POST',postDataJSON:()=>({action:'snapshot'})}),url:()=>origin+'/api/functions/'+spec.handler,ok:()=>true,json:async()=>data});
+          if(spec.module==='hedge_desk')handlers.get('response')?.({request:()=>({method:()=> 'POST',postDataJSON:()=>({action:'list',entity:'AppConfig',sort:'-created_date',limit:1000})}),url:()=>origin+'/api/functions/hedgeDeskEntity',ok:()=>true,json:async()=>({data:[]})});
           if(spec.module==='review')handlers.get('response')?.({url:()=>origin+'/api/functions/exceptionReviewWorkflowList',ok:()=>true,json:async()=>({byStemId:{},ownerOptions:[]})});
           return{};
         }};return page;
