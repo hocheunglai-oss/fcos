@@ -1,5 +1,7 @@
 import { safeFailure } from '../scripts/lib/hosted-release/controller.mjs';
 import { safeDiagnosticFailure, safeRuntimeLoginFailure } from '../scripts/lib/hosted-release/failure.mjs';
+import { ReleaseError } from '../scripts/lib/hosted-release/json-contract.mjs';
+import { releaseResultSummary } from '../scripts/hosted-release.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -315,6 +317,61 @@ test('200 callback failure keeps callback boundary and rejects unsafe diagnostic
   assert.equal(browser.counts().closed, 2);
 });
 
+
+test('hosted browser report and public summary keep only closed login stage diagnostics', async t => {
+  const cases = [
+    {
+      error: Object.assign(new ReleaseError('RUNTIME_LOGIN_AUTH_CONTEXT_HTTP', 'runtime.login.identity',
+        'Inspect the bound authentication response and configuration; do not replay the consumed runtime request.',
+        { runtimeLogin: { httpStatus: 401, errorCode: 'UNCLASSIFIED', origin, pathname: '/login' } }),
+      { boundary: 'runtime.login.identity' }),
+      expected: { diagnosticCode: 'RUNTIME_LOGIN_AUTH_CONTEXT_HTTP', stage: 'runtime.login.identity',
+        runtimeLogin: { httpStatus: 401, errorCode: 'UNCLASSIFIED', origin, pathname: '/login' } },
+    },
+    {
+      error: Object.assign(new ReleaseError('RELEASE_BOUNDARY_FAILED', 'runtime.login.callback',
+        'Inspect the fixed boundary and retained sanitized diagnostic. Read the journal before any consequential operation.'),
+      { boundary: 'runtime.login.callback' }),
+      expected: { diagnosticCode: 'RELEASE_BOUNDARY_FAILED', stage: 'runtime.login.callback' },
+    },
+    {
+      error: Object.assign(new ReleaseError('RELEASE_BOUNDARY_FAILED', 'runtime.login.identity',
+        'Inspect the fixed boundary and retained sanitized diagnostic. Read the journal before any consequential operation.'),
+      { boundary: 'runtime.login.identity' }),
+      expected: { diagnosticCode: 'RELEASE_BOUNDARY_FAILED', stage: 'runtime.login.identity' },
+    },
+  ];
+  for (const { error, expected } of cases) {
+    const f = fixture(t, 'normal_role');
+    f.options.login = async () => { throw error; };
+    const result = await runHostedBrowser(f.options);
+    assert.equal(result.status, 'failed');
+    assert.equal(result.errorCode, 'HOSTED_BROWSER_VERIFICATION_FAILED');
+    assert.equal(result.diagnosticCode, expected.diagnosticCode);
+    assert.equal(result.stage, expected.stage);
+    assert.deepEqual(result.runtimeLogin, expected.runtimeLogin);
+    assert.doesNotMatch(JSON.stringify(result), /PRIVATE|ticket|password/);
+    assert.deepEqual(releaseResultSummary(result), {
+      status: 'failed', phase: undefined, missing: undefined,
+      errorCode: 'HOSTED_BROWSER_VERIFICATION_FAILED', ...expected,
+    });
+  }
+});
+
+test('unclassified hosted browser failure stays generic and never copies private error text', async t => {
+  const f = fixture(t, 'normal_role');
+  f.options.login = async () => { throw new Error('PRIVATE_PASSWORD https://issuer.invalid/admin?ticket=PRIVATE'); };
+  const result = await runHostedBrowser(f.options);
+  assert.equal(result.status, 'failed');
+  assert.equal(result.errorCode, 'HOSTED_BROWSER_VERIFICATION_FAILED');
+  assert.equal(result.stage, undefined);
+  assert.equal(result.diagnosticCode, undefined);
+  assert.equal(result.runtimeLogin, undefined);
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE|ticket|password|issuer\.invalid/);
+  assert.deepEqual(releaseResultSummary(result), {
+    status: 'failed', phase: undefined, missing: undefined, errorCode: 'HOSTED_BROWSER_VERIFICATION_FAILED',
+  });
+});
 
 test('non200 diagnostic body cannot strand login cleanup beyond its bounded read', async t => {
   const f = fixture(t, 'normal_role'), browser = fakeLoginBrowser(identity(), f.state, { httpStatus: 503, bodyPending: true });

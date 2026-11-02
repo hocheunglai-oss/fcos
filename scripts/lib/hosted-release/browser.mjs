@@ -18,7 +18,7 @@ import { compatibilityBrowserIsolationVerified } from '../compatibility-browser-
 import { createVercelIntegrationReader } from './vercel-read-auth.mjs';
 import { legacyRuntimeLoginFailureCode } from './legacy-hosted-runtime-login.mjs';
 import { ReleaseError } from './json-contract.mjs';
-import { atReleaseBoundary, boundaryFailure, RUNTIME_LOGIN_ERROR_CODES } from './failure.mjs';
+import { atReleaseBoundary, boundaryFailure, RUNTIME_LOGIN_ERROR_CODES, safeHostedBrowserDiagnostic } from './failure.mjs';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const FROZEN = '04ee3425aac7a49089eda781eb3c976aea1f6785';
@@ -393,8 +393,11 @@ export async function runHostedBrowser({ manifest, preview, mode, env = process.
         signerSourceHashes: signerProof?.sourceHashes || null }),
       capturedAt, completedAt: capturedAt, result };
   } catch (error) {
-    return { ...base, status: error instanceof HostedBrowserSetupError ? 'waiting_dependency' : 'failed',
-      ...(error instanceof HostedBrowserSetupError ? { missing: [error.input] } : { errorCode: 'HOSTED_BROWSER_VERIFICATION_FAILED' }),
-      capturedAt: now().toISOString(), completedAt: now().toISOString() };
+    const capturedAt = now().toISOString();
+    if (error instanceof HostedBrowserSetupError) {
+      return { ...base, status: 'waiting_dependency', missing: [error.input], capturedAt, completedAt: capturedAt };
+    }
+    return { ...base, status: 'failed', errorCode: 'HOSTED_BROWSER_VERIFICATION_FAILED',
+      ...safeHostedBrowserDiagnostic(error), capturedAt, completedAt: capturedAt };
   } finally { if (directory) rmSync(directory, { recursive: true, force: true }); }
 }

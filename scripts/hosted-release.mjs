@@ -7,6 +7,7 @@ import { hostedSession, readManifest, writeJson, workflowOutput } from './lib/ho
 import { prepareCandidateChecks, assertPublicBuildInputs } from './lib/hosted-release/candidate-bootstrap.mjs';
 import { runReleaseChecks } from './lib/hosted-release/checks.mjs';
 import { collectAcceptance, executeHostedProduction, preparePreview, reconcilePending, safeFailure, terminalReleaseStatus } from './lib/hosted-release/controller.mjs';
+import { safeHostedBrowserResultFields } from './lib/hosted-release/failure.mjs';
 import { publishDeterministicGroup } from './lib/hosted-release/artifacts.mjs';
 import { publishDependencies } from './lib/hosted-release/dependency-publisher.mjs';
 import { publishBrowser } from './lib/hosted-release/browser-publisher.mjs';
@@ -24,6 +25,7 @@ export function releaseResultSummary(result) {
     summary.deploymentId = result.deploymentId;
     summary.state = result.state;
   }
+  if (result.status === 'failed') Object.assign(summary, safeHostedBrowserResultFields(result));
   return summary;
 }
 function previewFrom(snapshot) {

@@ -33,6 +33,26 @@ test('known failed Preview summary retains only its public deployment identity a
     assert.equal(JSON.stringify(result).includes('PRIVATE_SENTINEL'), false);
   }
 });
+test('failed hosted browser summary retains only allowlisted stage and login fields', () => {
+  const origin = 'https://fcos-abcdefghi-hocheunglai-6535s-projects.vercel.app';
+  const known = { status: 'failed', errorCode: 'HOSTED_BROWSER_VERIFICATION_FAILED',
+    diagnosticCode: 'RUNTIME_LOGIN_AUTH_CONTEXT_HTTP', stage: 'runtime.login.identity',
+    runtimeLogin: { httpStatus: 401, errorCode: 'UNCLASSIFIED', origin, pathname: '/login' } };
+  const publicSummary = value => JSON.parse(JSON.stringify(releaseResultSummary(value)));
+  assert.deepEqual(publicSummary({ ...known, token: 'PRIVATE_SENTINEL', rawProviderError: 'PRIVATE_SENTINEL' }), known);
+  for (const patch of [
+    { stage: 'PRIVATE_STAGE' }, { diagnosticCode: 'PRIVATE_CODE' },
+    { runtimeLogin: { httpStatus: 401, errorCode: 'UNCLASSIFIED', origin: `${origin}?ticket=PRIVATE_SENTINEL`, pathname: '/login' } },
+    { runtimeLogin: { httpStatus: 401, errorCode: 'UNCLASSIFIED', origin, pathname: '/private/USER', ticket: 'PRIVATE_SENTINEL' } },
+  ]) {
+    const result = publicSummary({ ...known, ...patch, token: 'PRIVATE_SENTINEL' });
+    assert.equal(result.errorCode, 'HOSTED_BROWSER_VERIFICATION_FAILED');
+    assert.equal(JSON.stringify(result).includes('PRIVATE_SENTINEL'), false);
+    if (patch.stage) assert.equal(Object.hasOwn(result, 'stage'), false);
+    if (patch.diagnosticCode) assert.equal(Object.hasOwn(result, 'diagnosticCode'), false);
+    if (patch.runtimeLogin) assert.equal(Object.hasOwn(result, 'runtimeLogin'), false);
+  }
+});
 test('hosted public publishable-key alias preserves controller credential isolation', () => {
   const values = { VITE_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_public_fixture' };
   const f = setupFixture();

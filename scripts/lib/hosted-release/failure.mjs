@@ -136,3 +136,35 @@ export function safeDiagnosticFailure(error) {
     recovery: 'Inspect this admission diagnostic. It authorizes no deployment or release retry.',
     ...(boundary ? { boundary } : {}), ...(known && commandFailure ? { commandFailure } : {}), ...(known && sourceApiFailure ? { sourceApiFailure } : {}), ...(known && runtimeMismatch ? {runtimeMismatch} : {}), ...(known && runtimeLogin ? { runtimeLogin } : {}) };
 }
+
+const isKnownDiagnosticCode = code => typeof code === 'string' && (diagnosticCodes.has(code)
+  || /^(?:GITHUB|VERCEL)_READ_HTTP_[1-5][0-9]{2}$/.test(code));
+const hostedBrowserStage = error => isReleaseBoundary(error?.boundary) ? error.boundary
+  : isReleaseBoundary(error?.phase) ? error.phase : undefined;
+
+export function safeHostedBrowserDiagnostic(error) {
+  if (!(error instanceof ReleaseError)) return {};
+  const diagnostic = safeDiagnosticFailure(error);
+  const stage = hostedBrowserStage(error);
+  const diagnosticCode = isKnownDiagnosticCode(diagnostic.code) ? diagnostic.code : undefined;
+  const runtimeLogin = diagnostic.runtimeLogin;
+  if (!stage && !diagnosticCode && !runtimeLogin) return {};
+  return {
+    ...(diagnosticCode ? { diagnosticCode } : {}),
+    ...(stage ? { stage } : {}),
+    ...(runtimeLogin ? { runtimeLogin } : {}),
+  };
+}
+
+export function safeHostedBrowserResultFields(result) {
+  if (!result || result.status !== 'failed' || result.errorCode !== 'HOSTED_BROWSER_VERIFICATION_FAILED') return {};
+  const stage = isReleaseBoundary(result.stage) ? result.stage : undefined;
+  const diagnosticCode = isKnownDiagnosticCode(result.diagnosticCode) ? result.diagnosticCode : undefined;
+  const runtimeLogin = safeRuntimeLoginFailure(result.runtimeLogin);
+  return {
+    errorCode: 'HOSTED_BROWSER_VERIFICATION_FAILED',
+    ...(diagnosticCode ? { diagnosticCode } : {}),
+    ...(stage ? { stage } : {}),
+    ...(runtimeLogin ? { runtimeLogin } : {}),
+  };
+}
