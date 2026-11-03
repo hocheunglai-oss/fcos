@@ -300,7 +300,7 @@ jobs:
     if: ${{ inputs.xero_recovery_mode == 'disabled' && inputs.bootstrap_phase == 'qualification' && vars.FCOS_HOSTED_QUALIFICATION_ADMITTED == 'true' }}
     runs-on: ubuntu-24.04
     container:
-      image: ghcr.io/hocheunglai-oss/fcos-release-checks@sha256:1cb176a00c6224f94a668f76de51186e2d0b3cd95d631af4289467451caf40ef
+      image: ghcr.io/hocheunglai-oss/fcos-release-checks@sha256:374ac067450affd652fe11f719c34100a67ebd7770aca03230d2c2b2e1076662
       credentials:
         username: hocheunglai-oss
         password: ${{ secrets.GITHUB_TOKEN }}
