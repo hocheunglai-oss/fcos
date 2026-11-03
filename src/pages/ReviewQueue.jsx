@@ -18,6 +18,7 @@ import StatCard from '@/components/dashboard/StatCard';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
 import { matchesExceptionReviewSearch } from '@/lib/exceptionReviewSearch';
 import { classifyExceptionReviewStem } from '@/lib/exceptionReviewClassifier';
+import { readExceptionReviewWorkflow } from '@/lib/exceptionReviewWorkflow';
 import {
   EXCEPTION_REVIEW_DATE_BASIS,
   buildExceptionReviewDateWindows,
@@ -79,7 +80,7 @@ export default function ReviewQueue() {
   const [data, setData] = useState(null);
   const [lastRefresh, setLastRefresh] = useState(null);
   const [responseMeta, setResponseMeta] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedStemId, setSelectedStemId] = useState(null);
   const [workflowByStemId, setWorkflowByStemId] = useState({});
@@ -106,42 +107,60 @@ export default function ReviewQueue() {
   );
 
   const load = async (yrs = selectedYears, mos = selectedMonths, options = {}) => {
-    workflowRequestRef.current += 1;
+    const requestId = ++workflowRequestRef.current;
     setLoading(true);
     setError(null);
     const dateWindows = buildExceptionReviewDateWindows(yrs, mos);
+    let applySequence = 0;
+    let workflowTask;
     const applyExceptionData = (res) => {
-      setResponseMeta(res.data?.error ? { ...res.meta, cacheStatus: 'UNAVAILABLE' } : res.meta);
-      if (res.data?.error) {
-        setError(res.data.error);
-        return;
-      }
-      setError(null);
-      setData(res.data);
-      setLastRefresh(new Date(res.meta?.cachedAt || Date.now()));
-      const stemIds = (res.data?.recentStems || []).map((row) => row.Id).filter(Boolean);
-      const workflowRequestId = ++workflowRequestRef.current;
-      appClient.functions.invoke('exceptionReviewWorkflowList', { stemIds }, { cache: false }).then((workflowRes) => {
-        if (workflowRequestId !== workflowRequestRef.current) return;
-        if (workflowRes.data?.error) setError(workflowRes.data.error);
-        else {
-          setWorkflowByStemId(workflowRes.data.byStemId || {});
-          setOwnerOptions(workflowRes.data.ownerOptions || []);
+      const sequence = ++applySequence;
+      const isCurrent = () => requestId === workflowRequestRef.current && sequence === applySequence;
+      if (!isCurrent()) return;
+      setLoading(true);
+      workflowTask = (async () => {
+        try {
+          if (res.data?.error) throw new Error(res.data.error);
+          const workflow = await readExceptionReviewWorkflow(
+            (res.data?.recentStems || []).map(row => row.Id),
+            { invoke: appClient.functions.invoke, isCurrent },
+          );
+          if (!workflow || !isCurrent()) return;
+          setData(res.data);
+          setResponseMeta(res.meta);
+          setLastRefresh(new Date(res.meta?.cachedAt || Date.now()));
+          setWorkflowByStemId(workflow.byStemId);
+          setOwnerOptions(workflow.ownerOptions);
+          setError(null);
+        } catch (error) {
+          if (isCurrent()) {
+            setResponseMeta({ ...res.meta, cacheStatus: 'UNAVAILABLE' });
+            setError(error.message || 'Exception workflow data could not be loaded.');
+          }
+        } finally {
+          if (isCurrent()) setLoading(false);
         }
-      });
+      })();
     };
-    await requestExceptionData({
-      name: 'salesforceDashboardFiltered',
-      payload: {
-        mode: 'exception_review',
-        trendYear: THIS_YEAR,
-        dateBasis: EXCEPTION_REVIEW_DATE_BASIS,
-        dateWindows,
-      },
-      force: options.force,
-      apply: applyExceptionData,
-    });
-    setLoading(false);
+    try {
+      await requestExceptionData({
+        name: 'salesforceDashboardFiltered',
+        payload: {
+          mode: 'exception_review',
+          trendYear: THIS_YEAR,
+          dateBasis: EXCEPTION_REVIEW_DATE_BASIS,
+          dateWindows,
+        },
+        force: options.force,
+        apply: applyExceptionData,
+      });
+      await workflowTask;
+    } catch (error) {
+      if (requestId === workflowRequestRef.current) {
+        setError(error.message || 'Exception data could not be loaded.');
+        setLoading(false);
+      }
+    }
   };
 
   useEffect(() => {
@@ -150,8 +169,12 @@ export default function ReviewQueue() {
 
   useEffect(() => {
     clearTimeout(debounceRef.current);
+    setLoading(true);
     debounceRef.current = setTimeout(() => load(selectedYears, selectedMonths), 350);
-    return () => clearTimeout(debounceRef.current);
+    return () => {
+      clearTimeout(debounceRef.current);
+      workflowRequestRef.current += 1;
+    };
   }, [selectedYears, selectedMonths]);
 
   const selectedYearLabel = selectedYears.slice().sort((a, b) => a - b).join(', ');
@@ -249,7 +272,7 @@ export default function ReviewQueue() {
   };
 
   return (
-    <div className="p-6 lg:p-8 max-w-7xl mx-auto">
+    <div className="p-6 lg:p-8 max-w-7xl mx-auto" data-testid="review-workflow-readiness" aria-busy={loading}>
       <PageHeader
         icon={ClipboardCheck}
         eyebrow="Finance Exceptions"
