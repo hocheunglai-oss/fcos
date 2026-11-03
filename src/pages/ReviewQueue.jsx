@@ -252,8 +252,8 @@ export default function ReviewQueue() {
       row.Buyer_Name__c || row.Buyer__c || '',
       row.Delivery_Date__c || '',
       row._Exception_Schedule?.displayLabel || '',
-      row[BUYER_FIELD] ?? '',
-      row[SUPPLIER_FIELD] ?? '',
+      row.Total_Invoice_Amount__c ?? '',
+      row.Total_Invoiced_Amount_From_Suppliers__c ?? '',
       row.grossProfit ?? '',
     ]);
     const csv = [headers, ...rows]
@@ -471,8 +471,8 @@ export default function ReviewQueue() {
                     </td>
                     <td className="py-2.5 px-3 whitespace-nowrap text-muted-foreground">{row.exceptionWorkflow?.ownerName || 'Unassigned'}</td>
                     <td className="py-2.5 px-3 whitespace-nowrap text-muted-foreground">{fmtDate(row.exceptionWorkflow?.dueDate)}</td>
-                    <td className="py-2.5 px-3 text-right tabular-nums text-foreground whitespace-nowrap">{fmtMoney(row[BUYER_FIELD])}</td>
-                    <td className="py-2.5 px-3 text-right tabular-nums text-foreground whitespace-nowrap">{fmtMoney(row[SUPPLIER_FIELD])}</td>
+                    <td className="py-2.5 px-3 text-right tabular-nums text-foreground whitespace-nowrap">{fmtMoney(row.Total_Invoice_Amount__c)}</td>
+                    <td className="py-2.5 px-3 text-right tabular-nums text-foreground whitespace-nowrap">{fmtMoney(row.Total_Invoiced_Amount_From_Suppliers__c)}</td>
                     <td className={cn(
                       'py-2.5 px-3 text-right tabular-nums font-semibold whitespace-nowrap',
                       row.grossProfit == null ? 'text-muted-foreground' : row.grossProfit >= 0 ? 'text-emerald-600' : 'text-red-600'
