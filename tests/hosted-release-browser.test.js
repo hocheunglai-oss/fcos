@@ -1,6 +1,7 @@
 import { safeFailure } from '../scripts/lib/hosted-release/controller.mjs';
 import { safeDiagnosticFailure, safeRuntimeLoginFailure, safeRuntimeLoginObservation, safeHostedBrowserDiagnostic, safeHostedBrowserResultFields } from '../scripts/lib/hosted-release/failure.mjs';
 import { ReleaseError } from '../scripts/lib/hosted-release/json-contract.mjs';
+import { restrictedBrowserReportDiagnostic, safeRestrictedBrowserDiagnostic } from '../scripts/lib/hosted-release/restricted-browser-report.mjs';
 import { releaseResultSummary } from '../scripts/hosted-release.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -8,7 +9,7 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier } from '../config/fcosConnections.js';
 import { FCOS_READ_ONLY_CI } from '../config/fcosCiIdentity.js';
 import { admitVercelReadFixture } from './helpers/hosted-vercel-read.mjs';
@@ -163,15 +164,70 @@ test('browser jobs refuse coordinator/provider write/OIDC credentials, cross-rol
 
 test('fixed restricted subprocess runs trusted suites with no renewable/provider credentials and no trace/screenshots', async t => {
   const f = fixture(t); const root = fileURLToPath(new URL('..', import.meta.url));
-  const result = await runHostedRestrictedHarness({ origin, state: f.state, directory: f.directory, controllerDirectory: root,
+  const protectionState = { cookies: [{ name: '_vercel_jwt', value: 'PRIVATE_PROTECTION' }], origins: [] };
+  const result = await runHostedRestrictedHarness({ origin, state: f.state, protectionState, directory: f.directory, controllerDirectory: root,
     env: { PATH: '/bin', HOME: '/tmp', FCOS_HOSTED_RESTRICTED_PASSWORD: 'PRIVATE', FCOS_E2E_VERCEL_BYPASS: 'PRIVATE', GH_TOKEN: 'PRIVATE' },
-    run: (program, args, opts) => {
+    run: async (program, args, opts) => {
       assert.equal(program, process.execPath); assert.equal(args[0], join(root, 'node_modules/@playwright/test/cli.js')); assert.equal(opts.shell, false);
       assert.doesNotMatch(JSON.stringify(opts.env), /PRIVATE|PASSWORD|TOKEN|BYPASS/);
       const config = readFileSync(args[args.indexOf('--config') + 1], 'utf8'); assert.match(config, /globalSetup:undefined/); assert.match(config, /screenshot:'off'/); assert.match(config, /trace:'off'/); assert.match(config, /dependencies:\[\]/);
+      const actualConfig = (await import(pathToFileURL(args[args.indexOf('--config') + 1]).href)).default;
+      assert.deepEqual(JSON.parse(readFileSync(actualConfig.use.storageState)), protectionState);
+      assert.equal(actualConfig.projects[0].use.storageState, actualConfig.use.storageState);
+      assert.notEqual(actualConfig.use.storageState, opts.env.FCOS_E2E_STORAGE_STATE);
+      assert.deepEqual(JSON.parse(readFileSync(opts.env.FCOS_E2E_STORAGE_STATE)), f.state);
+      for (const suite of ['workspace-smoke.spec.js', 'dashboard.spec.js', 'api-denials.spec.js']) {
+        assert.match(readFileSync(join(root, 'e2e', suite), 'utf8'), /test\.use\(\{ storageState: authState \}\)/);
+      }
       return { status: 0, stdout: JSON.stringify({ stats: { expected: 21, unexpected: 0, skipped: 0, flaky: 0 }, suites: ['workspace-smoke.spec.js', 'dashboard.spec.js', 'api-denials.spec.js'].map(file => ({ file })) }) };
     } });
   assert.equal(result.testsPassed, 21);
+});
+
+test('restricted harness retains safe failing test locations through the hosted summary', async t => {
+  const f = fixture(t), protectionState = { cookies: [], origins: [] };
+  let failure;
+  await assert.rejects(runHostedRestrictedHarness({ origin, state: f.state, protectionState, directory: f.directory,
+    run: () => ({ status: 1, stdout: JSON.stringify({ stats: { expected: 20, unexpected: 1, skipped: 0, flaky: 0 },
+      errors: [{ message: 'PRIVATE_RAW_ERROR' }], suites: [{ file: '/PRIVATE/workspace-smoke.spec.js', specs: [{ line: 43,
+        title: 'PRIVATE_TEST_TITLE', tests: [{ results: [{ status: 'timedOut', error: { message: 'PRIVATE_PASSWORD' } }] }] }] }] }) }) }),
+  error => { failure = error; return error.code === 'HOSTED_RESTRICTED_HARNESS_FAILED'; });
+  const safe = safeHostedBrowserDiagnostic(failure);
+  assert.deepEqual(safe.restrictedHarness.failedTests, [{ file: 'workspace-smoke.spec.js', line: 43, status: 'timedOut' }]);
+  const result = safeHostedBrowserResultFields({ status: 'failed', errorCode: 'HOSTED_BROWSER_VERIFICATION_FAILED', ...safe });
+  assert.deepEqual(result.restrictedHarness, safe.restrictedHarness);
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE|message|title|password/i);
+});
+
+test('restricted public state cannot be substituted with an authenticated state', async t => {
+  const f = fixture(t); let spawned = false;
+  await assert.rejects(runHostedRestrictedHarness({ origin, state: f.state, protectionState: f.state, directory: f.directory,
+    run: () => { spawned = true; } }));
+  assert.equal(spawned, false);
+});
+
+test('restricted diagnostic refuses injected data and survives malformed child suite shapes', () => {
+  const summary = restrictedBrowserReportDiagnostic({ stats: {}, suites: [null, { file: {}, specs: [null, { tests: null }] }] }, null);
+  assert.equal(summary.reason, 'CHILD_UNCONFIRMED');
+  assert.deepEqual(summary.failedTests, []);
+  assert.deepEqual(safeRestrictedBrowserDiagnostic(summary), summary);
+  assert.equal(safeRestrictedBrowserDiagnostic({ ...summary, raw: 'PRIVATE_FORBIDDEN' }), undefined);
+  assert.equal(safeRestrictedBrowserDiagnostic({ ...summary, failedTests: [{ file: 'PRIVATE', line: 1, status: 'failed' }] }), undefined);
+  let accessed = false;
+  const poisoned = { ...summary };
+  Object.defineProperty(poisoned, 'reason', { enumerable: true, get() { accessed = true; return 'PRIVATE'; } });
+  assert.equal(safeRestrictedBrowserDiagnostic(poisoned), undefined);
+  assert.equal(accessed, false);
+});
+
+test('actual restricted harness preserves typed failures for null and malformed child output', async t => {
+  for (const stdout of [null, 'null', JSON.stringify({ stats: { expected: 1, unexpected: 0, skipped: 0, flaky: 0 }, suites: [null] }),
+    JSON.stringify({ stats: { expected: 1, unexpected: 0, skipped: 0, flaky: 0 }, suites: {} })]) {
+    const f = fixture(t);
+    await assert.rejects(runHostedRestrictedHarness({ origin, state: f.state, protectionState: { cookies: [], origins: [] }, directory: f.directory,
+      run: () => ({ status: null, stdout }) }), error => error.code === 'HOSTED_RESTRICTED_HARNESS_FAILED'
+        && safeHostedBrowserDiagnostic(error).restrictedHarness.reason === 'REPORT_UNREADABLE');
+  }
 });
 
 test('readonly Vercel adapter uses only pinned GET endpoints and rejects a mismatching project before deployment lookup', async t => {

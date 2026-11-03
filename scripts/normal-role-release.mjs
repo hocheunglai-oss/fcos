@@ -12,7 +12,7 @@ import { collectPreviewEmailSignerEvidence, previewEmailSignerEnabled } from './
 import { acquireCompatibilityBrowserIsolation, compatibilityTelemetryScriptExcluded, assertCompatibilityWorkspacePreferences, compatibilityBrowserIsolationVerified } from './lib/compatibility-browser-isolation.mjs';
 import { APPLICATION_NORMAL_UI_CONTRACT, be6BuyerInvoicesDueRead, be6NormalDataLoaded, be6NormalSurfaceUnavailable } from './lib/be6-normal-browser-contract.mjs';
 import { compatibilityNormalOpenSurface, compatibilityNormalSurfaceReason, compatibilityNormalModuleTerminalReason,
-  createCompatibilityNormalResponseObserver, createCompatibilityNormalResponseSettlement } from './runtime-compatibility-normal-role.mjs';
+  createCompatibilityNormalResponseObserver, createCompatibilityNormalResponseSettlement, compatibilityNormalModuleReadiness } from './runtime-compatibility-normal-role.mjs';
 
 // Every pass needs a successful module data response and a rendered business
 // surface. Headings alone, an invented zero, and denied/unavailable data fail.
@@ -206,14 +206,15 @@ export async function verifyNormalRoleRelease({ env = process.env, fetchImpl = g
       ...(env.FCOS_E2E_VERCEL_BYPASS ? { 'x-vercel-protection-bypass': env.FCOS_E2E_VERCEL_BYPASS } : {}) } });
   if (!preferenceResponse.ok || preferenceResponse.redirected) throw new Error('Existing workspace preference read is unavailable.');
   const workspacePreferences = assertCompatibilityWorkspacePreferences(await preferenceResponse.json());
-  let browser, context, isolation, contextClosed = false, blockedMutations = 0, telemetryAbortedRequests = 0;
+  let browser, context, isolation, transport, contextClosed = false, blockedMutations = 0, telemetryAbortedRequests = 0;
   const checks = [];
   try {
     browser = await browserType.launch({ headless: true });
     context = await browser.newContext({ storageState: state, viewport: { width: 1440, height: 1000 }, serviceWorkers: 'block' });
-    await context.route('**/*', createNormalRoleVerificationRoute({ origin: url, protectionBypass: env.FCOS_E2E_VERCEL_BYPASS,
+    transport = createNormalRoleVerificationRoute({ origin: url, protectionBypass: env.FCOS_E2E_VERCEL_BYPASS,
       requestAllowed: normalRoleRequestAllowed, deniedReadsFatal: true, excludeRequest: compatibilityTelemetryScriptExcluded,
-      onExcludedRequest: () => { telemetryAbortedRequests += 1; }, onBlockedMutation: () => { blockedMutations += 1; } }));
+      onExcludedRequest: () => { telemetryAbortedRequests += 1; }, onBlockedMutation: () => { blockedMutations += 1; } });
+    await context.route('**/*', transport);
     isolation = await acquireCompatibilityBrowserIsolation({ context, origin: url, version, harnessSha: env.GITHUB_SHA });
     for (const spec of NORMAL_ROLE_MODULES) {
       await isolation.assertHeld(spec.module, 'before');
@@ -230,9 +231,10 @@ export async function verifyNormalRoleRelease({ env = process.env, fetchImpl = g
         await page.getByRole('heading', { name: spec.title }).first().waitFor({ timeout: 30000 });
         if (spec.module !== 'xero_portal') await compatibilityNormalOpenSurface(spec, page);
         const deadline = Date.now() + 30000;
-        while ((!responses.some(item => item.loaded) || spec.module === 'hedge_desk' && !observed.state.settingsLoaded) && !failures.length && blockedMutations === mutationStart && Date.now() < deadline) await page.waitForTimeout(250);
+        while (!await compatibilityNormalModuleReadiness(spec, page, responses, observed.state, { requireHedgeSettings: true }) && !failures.length && blockedMutations === mutationStart && Date.now() < deadline) await page.waitForTimeout(250);
         const loaded = responses.find(item => item.loaded);
         if (!loaded || spec.module === 'hedge_desk' && !observed.state.settingsLoaded || failures.length || blockedMutations !== mutationStart || /\/login(?:\?|$)/.test(page.url())) continue;
+        if (!await compatibilityNormalModuleReadiness(spec, page, responses, observed.state, { requireHedgeSettings: true })) continue;
         const body = await page.locator('body').innerText();
         if (spec.module !== 'xero_portal' && (/Access denied/i.test(body) || await be6NormalSurfaceUnavailable(page))) continue;
         if (spec.module === 'settings') {
@@ -272,6 +274,9 @@ export async function verifyNormalRoleRelease({ env = process.env, fetchImpl = g
             // Exercise read-only queue scope and confirm workflow state remains
             // rendered after filtering; no Save/Approve/Settle control is used.
             await page.getByRole('button', { name: 'All', exact: true }).click();
+            const workflowDeadline = Date.now() + 30000;
+            while (!await compatibilityNormalModuleReadiness(spec, page, responses, observed.state) && !failures.length && blockedMutations === mutationStart && Date.now() < workflowDeadline) await page.waitForTimeout(250);
+            if (failures.length || blockedMutations !== mutationStart || !await compatibilityNormalModuleReadiness(spec, page, responses, observed.state)) continue;
             if (await compatibilityNormalSurfaceReason(spec, page, loaded, body)) continue;
             if (!observed.state.workflowLoaded || !responses.some(item => item.loaded)) continue;
           } else if (!/Workflow|Next owner/i.test(body) || loaded.rows === 0) continue;
@@ -282,6 +287,7 @@ export async function verifyNormalRoleRelease({ env = process.env, fetchImpl = g
       } catch { /* Keep this module missing; never serialize private page errors. */ }
       finally {
         let closeFailed = false;
+        try { await transport.drainPage(page); } catch { failures.push('DATA_DEADLINE'); }
         try { await page.close(); } catch { closeFailed = true; }
         page.off('response', observed.observe);
         try { await responseSettlement.settle(); } catch { failures.push(observed.state.pending ? 'DATA_DEADLINE' : 'DATA_JSON_FAILURE'); }

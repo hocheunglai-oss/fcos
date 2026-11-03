@@ -5,6 +5,7 @@ import { ReleaseError } from './json-contract.mjs';
 import { safeVercelCommandFailure } from './vercel-command-failure.mjs';
 import { safeVercelSourceApiFailure } from './vercel-source-api.mjs';
 import { normalizeCompatibilityNormalDiagnostic } from '../../runtime-compatibility-normal-role.mjs';
+import { safeRestrictedBrowserDiagnostic } from './restricted-browser-report.mjs';
 
 // These are code-owned labels, never provider values, error messages or paths.
 export const RELEASE_BOUNDARIES = Object.freeze([
@@ -178,7 +179,7 @@ const diagnosticCodes = new Set(`
   SOURCE_API_OPERATION_BINDING SOURCE_API_SUBMISSION_CONTEXT SOURCE_API_SYNCHRONOUS_CONTEXT_REQUIRED
   SOURCE_API_RECOVERY_REQUEST_CHANGED VERCEL_SOURCE_API_OUTCOME_UNKNOWN
   HOSTED_BROWSER_PROFILE_INVALID HOSTED_BROWSER_COMPOSITION_INVALID HOSTED_BROWSER_CONTEXT_INVALID
-  HOSTED_BROWSER_SOURCE_BINDING HOSTED_NORMAL_ROLE_FAILED RUNTIME_LOGIN_RESPONSE_UNOBSERVED
+  HOSTED_BROWSER_SOURCE_BINDING HOSTED_NORMAL_ROLE_FAILED HOSTED_RESTRICTED_HARNESS_FAILED RUNTIME_LOGIN_RESPONSE_UNOBSERVED
   RUNTIME_LOGIN_ISSUER_REFUSED RUNTIME_LOGIN_ISSUER_TRANSPORT RUNTIME_LOGIN_PASSWORD_RESET_REQUIRED
 `.trim().split(/\s+/));
 const diagnosticPhases = new Set([...RELEASE_BOUNDARIES, 'admission', 'identity', 'github.read', 'vercel.preview', 'vercel.read', 'vercel.write', 'vercel.transport', 'vercel.source_api.prepare', 'vercel.source_api.write', 'preview', 'first_runtime.owner_refresh']);
@@ -223,6 +224,9 @@ export function safeHostedBrowserDiagnostic(error) {
     ...(diagnostic.runtimeLoginObservation ? { runtimeLoginObservation: diagnostic.runtimeLoginObservation } : {}),
     ...(diagnostic.issuerSubmit ? { issuerSubmit: diagnostic.issuerSubmit } : {}),
     ...(normalRole ? { normalRole } : {}),
+    ...(error.code === 'HOSTED_RESTRICTED_HARNESS_FAILED' && stage === 'browser.restricted'
+      && safeRestrictedBrowserDiagnostic(error.detail?.restrictedHarness)
+      ? { restrictedHarness: safeRestrictedBrowserDiagnostic(error.detail.restrictedHarness) } : {}),
     ...(error.code === 'RUNTIME_LOGIN_RESPONSE_UNOBSERVED' && stage === 'runtime.login.submit'
       ? { loginOutcome: 'AUTH_CONTEXT_RESPONSE_NOT_OBSERVED' } : {}),
   };
@@ -246,6 +250,9 @@ export function safeHostedBrowserResultFields(result) {
     ...(issuerSubmit ? { issuerSubmit } : {}),
     ...(diagnosticCode === 'HOSTED_NORMAL_ROLE_FAILED' && stage === 'browser.normal'
       ? { normalRole: normalizeCompatibilityNormalDiagnostic(result.normalRole) } : {}),
+    ...(diagnosticCode === 'HOSTED_RESTRICTED_HARNESS_FAILED' && stage === 'browser.restricted'
+      && safeRestrictedBrowserDiagnostic(result.restrictedHarness)
+      ? { restrictedHarness: safeRestrictedBrowserDiagnostic(result.restrictedHarness) } : {}),
     ...(diagnosticCode === 'RUNTIME_LOGIN_RESPONSE_UNOBSERVED' && stage === 'runtime.login.submit'
       && result.loginOutcome === 'AUTH_CONTEXT_RESPONSE_NOT_OBSERVED' ? { loginOutcome: result.loginOutcome } : {}),
   };

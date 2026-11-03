@@ -99,7 +99,8 @@ export function normalizeCompatibilityNormalDiagnostic(input = {}) {
   if (Array.isArray(input.deniedRequests)) diagnostic.deniedRequests = input.deniedRequests.slice(0, 32).filter(row =>
     NORMAL_ROLE_REQUEST_CATEGORIES.includes(row?.category) && ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'OTHER'].includes(row?.method)
     && ['document', 'stylesheet', 'image', 'media', 'font', 'script', 'texttrack', 'xhr', 'fetch', 'eventsource', 'websocket', 'manifest', 'other'].includes(row?.resourceType)
-    && Number.isSafeInteger(row?.count) && row.count > 0 && row.count <= 1000).map(row => ({ category: row.category, method: row.method, resourceType: row.resourceType, count: row.count }));
+    && Number.isSafeInteger(row?.count) && row.count > 0 && row.count <= 1000).map(row => ({ category: row.category, method: row.method, resourceType: row.resourceType, count: row.count,
+      ...(NORMAL_ROLE_TRANSPORT_BLOCKED_REASONS.includes(row.reason) ? { reason: row.reason } : {}) }));
   return diagnostic;
 }
 
@@ -198,15 +199,17 @@ export async function compatibilityNormalReadResponse(spec, response, dataLoaded
 // The runtime and ordering tests share the actual response observer. Every
 // failed relevant response remains sticky even when a later response succeeds.
 export function createCompatibilityNormalResponseObserver(spec, responseSettlement, responses, failures, dataResponses = [], dataLoaded = compatibilityNormalDataLoaded) {
-  const state = { workflowLoaded: false, settingsLoaded: false, responseSeen: false, pending: 0 };
+  const state = { workflowLoaded: false, settingsLoaded: false, dashboardSummaryLoaded: false, dashboardFiltersLoaded: false, responseSeen: false, pending: 0 };
   const observe = response => {
     let pathname;
     try { pathname = new URL(response.url()).pathname; } catch { failures.push('UNAVAILABLE_SURFACE'); return; }
     const workflow = spec.module === 'review' && pathname === '/api/functions/exceptionReviewWorkflowList';
-    if (!workflow && pathname !== `/api/functions/${spec.handler}`) return;
+    const dashboardAux = spec.module === 'dashboard' && isCurrentNormalSpec(spec)
+      && ['/api/functions/dashboardSummary', '/api/functions/dashboardFilterOptions'].includes(pathname);
+    if (!workflow && !dashboardAux && pathname !== `/api/functions/${spec.handler}`) return;
     const hedgeKind = isCurrentNormalSpec(spec) && spec.module === 'hedge_desk' ? be6HedgeResponseKind(response) : null;
     if (hedgeKind === 'invalid') { failures.push('DATA_SHAPE_REJECTED'); return; }
-    const dataResponse = !workflow ? { module: spec.module, handler: spec.handler,
+    const dataResponse = !workflow && !dashboardAux ? { module: spec.module, handler: spec.handler,
       status: typeof response.status === 'function' ? response.status() : 0,
       selector: hedgeKind === 'settings' ? 'HEDGE_SETTINGS' : hedgeKind === 'snapshot' ? 'HEDGE_SNAPSHOT' : 'PRIMARY' } : null;
     if (dataResponse && dataResponses.length < 64) dataResponses.push(dataResponse);
@@ -214,7 +217,15 @@ export function createCompatibilityNormalResponseObserver(spec, responseSettleme
     state.pending += 1;
     responseSettlement.track((async () => {
       try {
-        if (workflow) {
+        if (dashboardAux) {
+          if (!response.ok()) { failures.push('DATA_NON_2XX'); return; }
+          const payload = await response.json(), data = payload?.data ?? payload;
+          const valid = Boolean(!payload?.error && payload?.status !== 'unavailable' && payload?.cancelled !== true
+            && data && typeof data === 'object' && !Array.isArray(data) && !data.error
+            && data.status !== 'unavailable' && data.cancelled !== true);
+          if (!valid) { failures.push('DATA_SHAPE_REJECTED'); return; }
+          state[pathname.endsWith('/dashboardSummary') ? 'dashboardSummaryLoaded' : 'dashboardFiltersLoaded'] = true;
+        } else if (workflow) {
           if (!response.ok()) { failures.push('DATA_NON_2XX'); return; }
           const data = await response.json();
           state.workflowLoaded = Boolean(data && !data.error && data.byStemId !== null
@@ -236,6 +247,22 @@ export function createCompatibilityNormalResponseObserver(spec, responseSettleme
     })());
   };
   return { state, observe };
+}
+
+export function compatibilityNormalReadiness(spec, responses, state, { requireHedgeSettings = isCurrentNormalSpec(spec) } = {}) {
+  return responses.some(item => item.loaded) && state.pending === 0
+    && (spec.module !== 'dashboard' || !isCurrentNormalSpec(spec) || state.dashboardSummaryLoaded === true && state.dashboardFiltersLoaded === true)
+    && (spec.module !== 'hedge_desk' || !requireHedgeSettings || state.settingsLoaded === true)
+    && (spec.module !== 'review' || state.workflowLoaded === true);
+}
+
+export async function compatibilityNormalModuleReadiness(spec, page, responses, state, options) {
+  if (!compatibilityNormalReadiness(spec, responses, state, options)) return false;
+  if (spec.module !== 'review') return true;
+  const marker = page.locator('[data-testid="review-workflow-readiness"]');
+  const count = await marker.count();
+  // Historical single-read candidates predate the complete-batch UI marker.
+  return count === 0 || count === 1 && await marker.getAttribute('aria-busy') === 'false';
 }
 
 // EventEmitter does not await async response callbacks. Seal and drain only
@@ -431,7 +458,7 @@ async function runCompatibilityNormalRole({ env = process.env, fetchImpl = globa
     if (!preferencesResponse.ok || preferencesResponse.redirected) throw new Error('Workspace preference read failed.');
     return assertCompatibilityWorkspacePreferences(await preferencesResponse.json());
   }, 'PREFERENCES_NOT_INITIALIZED');
-  let browser, context, isolation, browserIsolation, contextClosed = false;
+  let browser, context, isolation, transport, browserIsolation, contextClosed = false;
   let blockedMutations = 0, telemetryAbortedRequests = 0;
   let lastBlockedRequest;
   const deniedRequests = [], dataResponses = [];
@@ -440,16 +467,17 @@ async function runCompatibilityNormalRole({ env = process.env, fetchImpl = globa
   try {
     browser = await browserType.launch({ headless: true });
     context = await browser.newContext({ storageState: state, viewport: { width: 1440, height: 1000 }, serviceWorkers: 'block' });
-    await context.route('**/*', createNormalRoleVerificationRoute({ origin: url, protectionBypass: env.FCOS_E2E_VERCEL_BYPASS,
+    transport = createNormalRoleVerificationRoute({ origin: url, protectionBypass: env.FCOS_E2E_VERCEL_BYPASS,
       requestAllowed: ordinaryHosted ? be6CompatibilityNormalRequestAllowed : compatibilityNormalRequestAllowed, deniedReadsFatal: true,
       excludeRequest: compatibilityTelemetryScriptExcluded, onExcludedRequest: () => { telemetryAbortedRequests += 1; },
       onBlockedMutation: (reason, detail) => {
         blockedMutations += 1;
-        const existing = deniedRequests.find(row => row.category === detail.category && row.method === detail.method && row.resourceType === detail.resourceType);
+        const existing = deniedRequests.find(row => row.category === detail.category && row.method === detail.method && row.resourceType === detail.resourceType && row.reason === reason);
         if (existing) existing.count = Math.min(1000, existing.count + 1);
-        else if (deniedRequests.length < 32) deniedRequests.push({ ...detail, count: 1 });
+        else if (deniedRequests.length < 32) deniedRequests.push({ ...detail, reason, count: 1 });
         if (NORMAL_ROLE_TRANSPORT_BLOCKED_REASONS.includes(reason)) lastBlockedRequest = reason;
-      } }));
+      } });
+    await context.route('**/*', transport);
     isolation = await normalRoleDiagnosticStage('BROWSER_ISOLATION', () => acquireCompatibilityBrowserIsolation({ context, origin: url, version, harnessSha: env.GITHUB_SHA }), 'ISOLATION_FAILED');
     for (const spec of moduleSpecs) {
       await normalRoleDiagnosticStage('BROWSER_ISOLATION', () => isolation.assertHeld(spec.module, 'before'), 'ISOLATION_FAILED');
@@ -477,12 +505,13 @@ async function runCompatibilityNormalRole({ env = process.env, fetchImpl = globa
         headingLoaded = true;
         await compatibilityNormalOpenSurface(spec, page);
         const deadline = Date.now() + 30000;
-        while ((!responses.some(item => item.loaded) || isCurrentNormalSpec(spec) && spec.module === 'hedge_desk' && !observed.state.settingsLoaded) && !failures.length && !blockReason() && Date.now() < deadline) await page.waitForTimeout(250);
+        while (!await compatibilityNormalModuleReadiness(spec, page, responses, observed.state) && !failures.length && !blockReason() && Date.now() < deadline) await page.waitForTimeout(250);
         const loaded = responses.find(item => item.loaded);
         if (blockReason()) { failModule(blockReason()); continue; }
         if (failures.length) { failModule(failures[0]); continue; }
         if (isCurrentNormalSpec(spec) && spec.module === 'hedge_desk' && !observed.state.settingsLoaded) { failModule(observed.state.pending ? 'DATA_DEADLINE' : 'DATA_NO_RESPONSE'); continue; }
         if (!loaded) { failModule(!observed.state.responseSeen ? 'DATA_NO_RESPONSE' : observed.state.pending ? 'DATA_DEADLINE' : 'DATA_SHAPE_REJECTED'); continue; }
+        if (!await compatibilityNormalModuleReadiness(spec, page, responses, observed.state)) { failModule(observed.state.pending ? 'DATA_DEADLINE' : spec.module === 'review' ? 'WORKFLOW_MISSING' : 'DATA_NO_RESPONSE'); continue; }
         if (/\/login(?:\?|$)/.test(page.url())) { failModule('LOGIN_REDIRECT'); continue; }
         const body = await page.locator('body').innerText();
         if (/Access denied/i.test(body)) { failModule('ACCESS_MISSING'); continue; }
@@ -494,7 +523,11 @@ async function runCompatibilityNormalRole({ env = process.env, fetchImpl = globa
             // Exercise read-only queue scope and confirm workflow state remains
             // rendered after filtering; no Save/Approve/Settle control is used.
             await page.getByRole('button', { name: 'All', exact: true }).click();
+            const workflowDeadline = Date.now() + 30000;
+            while (!await compatibilityNormalModuleReadiness(spec, page, responses, observed.state) && !failures.length && !blockReason() && Date.now() < workflowDeadline) await page.waitForTimeout(250);
             if (blockReason()) { failModule(blockReason()); continue; }
+            if (failures.length) { failModule(failures[0]); continue; }
+            if (!await compatibilityNormalModuleReadiness(spec, page, responses, observed.state)) { failModule('WORKFLOW_MISSING'); continue; }
             if (isCurrentNormalSpec(spec) ? Boolean(await compatibilityNormalSurfaceReason(spec, page, loaded, body)) : !await page.locator('table tbody tr').count() && !/No .*found|No .*match/i.test(await page.locator('body').innerText())) { failModule('WORKFLOW_MISSING'); continue; }
             if (!observed.state.workflowLoaded || !responses.some(item => item.loaded)) { failModule('WORKFLOW_MISSING'); continue; }
           } else if (!/Workflow|Next owner/i.test(body) || loaded.rows === 0) { failModule('WORKFLOW_MISSING'); continue; }
@@ -505,6 +538,7 @@ async function runCompatibilityNormalRole({ env = process.env, fetchImpl = globa
       } catch (error) { failModule(blockReason() || (error?.message === 'ACCESS_MISSING' ? 'ACCESS_MISSING' : undefined) || (navigationLoaded ? (headingLoaded ? 'UNAVAILABLE_SURFACE' : 'MISSING_HEADING') : 'UNAVAILABLE_SURFACE')); }
       finally {
         let closeFailed = false;
+        try { if (page) await transport.drainPage(page); } catch { failures.push('DATA_DEADLINE'); }
         try { if (page) await page.close(); } catch { closeFailed = true; }
         if (page && responseObserver) page.off('response', responseObserver);
         try { await responseSettlement.settle(); } catch { failures.push(observed.state.pending ? 'DATA_DEADLINE' : 'DATA_JSON_FAILURE'); }

@@ -3,12 +3,77 @@ import assert from 'node:assert/strict';
 import { BE6_COMPATIBILITY_NORMAL_MODULES, COMPATIBILITY_NORMAL_MODULES, be6CompatibilityNormalRequestAllowed,
   compatibilityNormalRequestAllowed, compatibilityNormalDataLoaded, compatibilityNormalReadResponse,
   createCompatibilityNormalResponseObserver, createCompatibilityNormalResponseSettlement, normalizeCompatibilityNormalDiagnostic,
+  compatibilityNormalReadiness, compatibilityNormalModuleReadiness,
 } from '../scripts/runtime-compatibility-normal-role.mjs';
 import { normalRoleRequestDiagnostic } from '../scripts/lib/normal-role-verification-transport.mjs';
 const origin = 'https://fcos-abcdefghi-hocheunglai-6535s-projects.vercel.app';
 const spec = name => BE6_COMPATIBILITY_NORMAL_MODULES.find(row => row.module === name);
 const response = (body, data, status = 200) => ({ request: () => ({ method: () => 'POST', postDataJSON: () => body }),
   url: () => `${origin}/api/functions/hedgeDeskEntity`, status: () => status, ok: () => status === 200, json: async () => data });
+
+test('Review requires the actual workflow response and full UI batch generation before either verdict', async () => {
+  const responses = [], failures = [], settlement = createCompatibilityNormalResponseSettlement();
+  const review = spec('review'), observed = createCompatibilityNormalResponseObserver(review, settlement, responses, failures);
+  observed.observe({ url: () => origin + '/api/functions/salesforceDashboardFiltered', status: () => 200, ok: () => true,
+    json: async () => ({ recentStems: [] }) });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(responses[0].loaded, true);
+  assert.equal(compatibilityNormalReadiness(review, responses, observed.state), false);
+  let finish;
+  observed.observe({ url: () => origin + '/api/functions/exceptionReviewWorkflowList', status: () => 200, ok: () => true,
+    json: () => new Promise(resolve => { finish = resolve; }) });
+  assert.equal(compatibilityNormalReadiness(review, responses, observed.state), false);
+  finish({ byStemId: {}, ownerOptions: [] });
+  await settlement.settle();
+  assert.equal(compatibilityNormalReadiness(review, responses, observed.state), true);
+  let busy = 'true';
+  const page = { locator: () => ({ count: async () => 1, getAttribute: async () => busy }) };
+  assert.equal(await compatibilityNormalModuleReadiness(review, page, responses, observed.state), false);
+  busy = 'false';
+  assert.equal(await compatibilityNormalModuleReadiness(review, page, responses, observed.state), true);
+  observed.state.pending = 1;
+  assert.equal(await compatibilityNormalModuleReadiness(review, page, responses, observed.state), false);
+});
+
+test('new per-request failure reasons remain closed and do not overwrite the preceding reason', () => {
+  const d = normalizeCompatibilityNormalDiagnostic({ deniedRequests: [
+    { category: 'REVIEW_WORKFLOW_READ', method: 'POST', resourceType: 'fetch', count: 1, reason: 'REQUEST_POLICY_DENIED', raw: 'PRIVATE' },
+    { category: 'REVIEW_WORKFLOW_READ', method: 'POST', resourceType: 'fetch', count: 1, reason: 'TRANSPORT_FAILURE' },
+  ] });
+  assert.deepEqual(d.deniedRequests.map(x => x.reason), ['REQUEST_POLICY_DENIED', 'TRANSPORT_FAILURE']);
+  assert.doesNotMatch(JSON.stringify(d), /PRIVATE|raw/);
+});
+
+test('Dashboard does not inspect transient unavailable UI before summary and filter reads settle', async () => {
+  const responses = [], failures = [], settlement = createCompatibilityNormalResponseSettlement();
+  const dashboard = spec('dashboard'), observed = createCompatibilityNormalResponseObserver(dashboard, settlement, responses, failures);
+  const reply = (name, data) => ({ url: () => origin + '/api/functions/' + name, status: () => 200, ok: () => true, json: async () => data });
+  observed.observe(reply('dashboardStemList', { stems: [] }));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(responses[0].loaded, true);
+  assert.equal(compatibilityNormalReadiness(dashboard, responses, observed.state), false);
+  observed.observe(reply('dashboardSummary', { data: { totalStems: 0 } }));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(compatibilityNormalReadiness(dashboard, responses, observed.state), false);
+  observed.observe(reply('dashboardFilterOptions', { data: { companies: [], ports: [] } }));
+  await settlement.settle();
+  assert.equal(compatibilityNormalReadiness(dashboard, responses, observed.state), true);
+  assert.deepEqual(failures, []);
+});
+
+test('Dashboard auxiliary HTTP or payload failures remain fatal after a successful STEM read', async () => {
+  for (const bad of [{ ok: () => false, status: () => 503, json: async () => ({}) },
+    ...[{ error: 'PRIVATE' }, { error: 'PRIVATE', data: {} }, { status: 'unavailable', data: {} }, { cancelled: true, data: {} }]
+      .map(payload => ({ ok: () => true, status: () => 200, json: async () => payload }))]) {
+    const responses = [{ loaded: true, rows: 0 }], failures = [], settlement = createCompatibilityNormalResponseSettlement();
+    const observed = createCompatibilityNormalResponseObserver(spec('dashboard'), settlement, responses, failures);
+    observed.observe({ url: () => origin + '/api/functions/dashboardSummary', ...bad });
+    await settlement.settle();
+    assert.equal(compatibilityNormalReadiness(spec('dashboard'), responses, observed.state), false);
+    assert.equal(failures.length, 1);
+    assert.doesNotMatch(JSON.stringify(failures), /PRIVATE/);
+  }
+});
 const snapshot = { physicals: [{}], swaps: [], mops: [], clearing: [], counterparties: [], invoices: [], capabilities: {} };
 
 test('exact be6 catalogue retains all15 and keeps historical first-rollout paths/data contracts separate', () => {

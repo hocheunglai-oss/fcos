@@ -22,6 +22,7 @@ import { createVercelIntegrationReader } from './vercel-read-auth.mjs';
 import { legacyRuntimeLoginFailureCode } from './legacy-hosted-runtime-login.mjs';
 import { ReleaseError } from './json-contract.mjs';
 import { atReleaseBoundary, boundaryFailure, RUNTIME_LOGIN_ERROR_CODES, safeHostedBrowserDiagnostic, safeRuntimeIssuerSubmit } from './failure.mjs';
+import { restrictedBrowserReportDiagnostic } from './restricted-browser-report.mjs';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const FROZEN = '04ee3425aac7a49089eda781eb3c976aea1f6785';
@@ -448,19 +449,26 @@ export async function loginHostedFcuno({ origin, credentials, mode, protectionSt
   }
 }
 
-export async function runHostedRestrictedHarness({ origin, state, directory, controllerDirectory = ROOT, env = process.env, run = spawnSync }) {
-  const statePath = join(directory, 'restricted-auth.json'), configPath = join(directory, 'restricted.config.mjs');
+export async function runHostedRestrictedHarness({ origin, state, protectionState, directory, controllerDirectory = ROOT, env = process.env, run = spawnSync }) {
+  requireFact(protectionState && Array.isArray(protectionState.cookies) && Array.isArray(protectionState.origins) && protectionState.origins.length === 0);
+  const statePath = join(directory, 'restricted-auth.json'), publicStatePath = join(directory, 'restricted-public-protection.json'), configPath = join(directory, 'restricted.config.mjs');
   writeFileSync(statePath, JSON.stringify(state), { mode: 0o600, flag: 'wx' });
+  writeFileSync(publicStatePath, JSON.stringify(protectionState), { mode: 0o600, flag: 'wx' });
   const configUrl = pathToFileURL(join(controllerDirectory, 'playwright.config.js')).href;
-  writeFileSync(configPath, `import base from ${JSON.stringify(configUrl)}; const desktop=base.projects.find(p=>p.name==='desktop-chrome'); export default {...base,globalSetup:undefined,testDir:${JSON.stringify(join(controllerDirectory, 'e2e'))},testMatch:['**/workspace-smoke.spec.js','**/dashboard.spec.js','**/api-denials.spec.js'],reporter:[['json']],forbidOnly:true,retries:0,webServer:undefined,use:{...base.use,baseURL:${JSON.stringify(origin)},storageState:${JSON.stringify(statePath)},trace:'off',screenshot:'off',video:'off',serviceWorkers:'block'},projects:[{...desktop,dependencies:[],use:{...desktop.use,storageState:${JSON.stringify(statePath)},trace:'off',screenshot:'off',video:'off'}}]};\n`, { mode: 0o600, flag: 'wx' });
+  writeFileSync(configPath, `import base from ${JSON.stringify(configUrl)}; const desktop=base.projects.find(p=>p.name==='desktop-chrome'); export default {...base,globalSetup:undefined,testDir:${JSON.stringify(join(controllerDirectory, 'e2e'))},testMatch:['**/workspace-smoke.spec.js','**/dashboard.spec.js','**/api-denials.spec.js'],reporter:[['json']],forbidOnly:true,retries:0,webServer:undefined,use:{...base.use,baseURL:${JSON.stringify(origin)},storageState:${JSON.stringify(publicStatePath)},trace:'off',screenshot:'off',video:'off',serviceWorkers:'block'},projects:[{...desktop,dependencies:[],use:{...desktop.use,storageState:${JSON.stringify(publicStatePath)},trace:'off',screenshot:'off',video:'off'}}]};\n`, { mode: 0o600, flag: 'wx' });
   const childEnv = { PATH: env.PATH, HOME: env.HOME, CI: 'true', FCOS_REQUIRE_AUTH_E2E: '1', FCOS_E2E_BASE_URL: origin,
     FCOS_E2E_STORAGE_STATE: statePath, ...(env.PLAYWRIGHT_BROWSERS_PATH ? { PLAYWRIGHT_BROWSERS_PATH: env.PLAYWRIGHT_BROWSERS_PATH } : {}) };
   const result = await run(process.execPath, [join(controllerDirectory, 'node_modules/@playwright/test/cli.js'), 'test', '--config', configPath, '--trace=off'],
     { cwd: controllerDirectory, env: childEnv, shell: false, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, timeout: 20 * 60 * 1000, stdio: ['ignore', 'pipe', 'pipe'] });
-  let report; try { report = JSON.parse(result.stdout); } catch { throw new Error('Restricted browser report is unavailable.'); }
-  requireFact(result.status === 0 && report.stats?.expected > 0 && report.stats.unexpected === 0 && report.stats.skipped === 0 && report.stats.flaky === 0);
+  const failReport = report => { throw new ReleaseError('HOSTED_RESTRICTED_HARNESS_FAILED', 'browser.restricted',
+    'Inspect the retained suite and line diagnostics; do not retry the consumed run.',
+    { restrictedHarness: restrictedBrowserReportDiagnostic(report, result.status) }); };
+  let report; try { report = JSON.parse(result.stdout); } catch { failReport(null); }
+  if (!report || typeof report !== 'object' || Array.isArray(report) || !Array.isArray(report.suites)
+    || report.suites.some(suite => !suite || typeof suite !== 'object' || Array.isArray(suite))) failReport(null);
+  if (!(result.status === 0 && report.stats?.expected > 0 && report.stats.unexpected === 0 && report.stats.skipped === 0 && report.stats.flaky === 0)) failReport(report);
   const files = new Set((report.suites || []).map(suite => String(suite.file || suite.title).split('/').at(-1)));
-  requireFact(['workspace-smoke.spec.js', 'dashboard.spec.js', 'api-denials.spec.js'].every(name => files.has(name)));
+  if (!['workspace-smoke.spec.js', 'dashboard.spec.js', 'api-denials.spec.js'].every(name => files.has(name))) failReport(report);
   return { modules: ['dashboard', 'markets', 'api_denials'], actualData: true, unexpectedWrites: 0, testsPassed: report.stats.expected };
 }
 
@@ -615,7 +623,7 @@ export async function runHostedBrowser({ manifest, preview, mode, env = process.
     let result, capturedAt;
     if (mode === 'restricted') {
       boundary = 'browser.restricted';
-      result = await restrictedHarness({ origin: deployment.url, state: authenticated.state, directory, controllerDirectory, env });
+      result = await restrictedHarness({ origin: deployment.url, state: authenticated.state, protectionState, directory, controllerDirectory, env });
       requireFact(result.actualData === true && result.unexpectedWrites === 0
         && canonical([...result.modules].sort()) === canonical(['api_denials', 'dashboard', 'markets']));
       requireFact(Number.isSafeInteger(result.testsPassed) && result.testsPassed > 0);
