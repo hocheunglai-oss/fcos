@@ -22,7 +22,8 @@ function fixture(t,{metadata=true}={}) {
   writeFileSync(join(bin,'npm'),'#!/bin/sh\nprintf "%s\\n" "$*" >> "$FCOS_TEST_MIRROR_LOG"\nexit "${FCOS_TEST_MIRROR_EXIT:-0}"\n',{mode:0o700});
   const run=(updates,extra={})=>{const result=spawnSync('/bin/sh',[HOOK,'origin',REMOTE_URL],{cwd:repo,env:{...env,PATH:bin+':'+env.PATH,FCOS_TEST_MIRROR_LOG:log,...extra},input:updates.map(([local,oldRemote=ZERO,name='new'])=>`refs/heads/${name} ${local} refs/heads/${name} ${oldRemote}`).join('\n')+'\n',encoding:'utf8'});
     return {...result,mirrorCalls:existsSync(log)?readFileSync(log,'utf8').trim().split('\n').length:0};};
-  return {base,repo,remote,env,git,edit,commit,old,main,run};
+  const publish=(sha,name)=>execFileSync('git',['--git-dir',remote,'fetch','--quiet',repo,`${sha}:refs/heads/${name}`],{env,stdio:'pipe'});
+  return {base,repo,remote,bin,env,git,edit,commit,publish,old,main,run};
 }
 test('new child of actually published old branch does not re-mirror historical metadata differences from main',t=>{
   const f=fixture(t);f.git('checkout','-qb','correction');const sha=f.commit('api/correction.js','corrected\n');
@@ -55,6 +56,53 @@ test('new merge checks every parent and catches Salesforce merge resolutions',t=
 });
 test('metadata-free merge of published history plus new API edits avoids mirror',t=>{
   const f=fixture(t);f.git('checkout','-qb','left');f.commit('api/left.js','left\n');f.git('checkout','old');f.commit('api/right.js','right\n');f.git('merge','--no-ff','-m','merge','left');assert.equal(f.run([[f.git('rev-parse','HEAD')]]).mirrorCalls,0);
+});
+test('ours history merge with Salesforce identical to first parent avoids redundant mirror for existing and new refs',t=>{
+  const f=fixture(t);f.git('checkout','-qb','candidate',f.old);f.commit('api/candidate.js','candidate already integrated\n');
+  f.git('checkout','-qb','controller',f.main);f.commit('api/candidate.js','candidate already integrated\n');f.commit('api/controller.js','current controller\n');
+  const parent=f.git('rev-parse','HEAD');f.git('merge','--no-ff','-s','ours','-m','preserve reviewed history','candidate');
+  const sha=f.git('rev-parse','HEAD');assert.equal(f.git('rev-parse',`${sha}:force-app/main/default`),f.git('rev-parse',`${parent}:force-app/main/default`));
+  assert.notEqual(f.git('rev-parse',`${sha}:force-app/main/default`),f.git('rev-parse',`candidate:force-app/main/default`));
+  const existing=f.run([[sha,f.main,'main']]);assert.equal(existing.status,0,existing.stderr);assert.equal(existing.mirrorCalls,0);
+  const fresh=f.run([[sha]]);assert.equal(fresh.status,0,fresh.stderr);assert.equal(fresh.mirrorCalls,0);
+});
+test('a merge matching only its second published parent is metadata-free for a new ref',t=>{
+  const f=fixture(t);f.git('checkout','-qb','side',f.main);f.commit('api/side.js','side\n');
+  f.git('checkout','-qb','left',f.old);f.commit('api/left.js','left\n');f.git('merge','--no-ff','-m','inherit published state','side');
+  const sha=f.git('rev-parse','HEAD');assert.equal(f.git('rev-parse',`${sha}:force-app/main/default`),f.git('rev-parse','side:force-app/main/default'));
+  assert.notEqual(f.git('rev-parse',`${sha}:force-app/main/default`),f.git('rev-parse',`${sha}^1:force-app/main/default`));
+  const r=f.run([[sha]]);assert.equal(r.status,0,r.stderr);assert.equal(r.mirrorCalls,0);
+});
+test('matching a merge parent cannot suppress an actual existing-ref Salesforce net change',t=>{
+  const f=fixture(t);f.git('checkout','-qb','side',f.main);f.commit('api/side.js','side\n');
+  f.git('checkout','-qb','left',f.old);f.commit('api/left.js','left\n');f.git('merge','--no-ff','-m','inherit published state','side');
+  const r=f.run([[f.git('rev-parse','HEAD'),f.old,'old']],{FCOS_TEST_MIRROR_EXIT:'1'});
+  assert.equal(r.status,1);assert.equal(r.mirrorCalls,1);
+});
+test('ours merge cannot hide an introduced side-parent Salesforce edit that its endpoint drops',t=>{
+  const f=fixture(t);f.git('checkout','-qb','side');f.commit('force-app/main/default/classes/Legacy.cls','unpublished side change\n');
+  f.git('checkout','-qb','left',f.old);f.commit('api/left.js','left\n');f.git('merge','--no-ff','-s','ours','-m','drop side metadata','side');
+  const sha=f.git('rev-parse','HEAD');assert.equal(f.git('rev-parse',`${sha}:force-app/main/default`),f.git('rev-parse',`${f.old}:force-app/main/default`));
+  const r=f.run([[sha,f.old,'old']],{FCOS_TEST_MIRROR_EXIT:'1'});assert.equal(r.status,1);assert.equal(r.mirrorCalls,1);
+});
+test('a merge combining two published Salesforce trees into a new state still requires mirror',t=>{
+  const f=fixture(t);f.git('checkout','-qb','left',f.old);const left=f.commit('force-app/main/default/classes/Left.cls','left published\n');f.publish(left,'left');
+  f.git('checkout','-qb','right',f.old);const right=f.commit('force-app/main/default/classes/Right.cls','right published\n');f.publish(right,'right');
+  f.git('checkout','left');f.git('merge','--no-ff','-m','new combined Salesforce state','right');const sha=f.git('rev-parse','HEAD');
+  for(const p of [left,right])assert.notEqual(f.git('rev-parse',`${sha}:force-app/main/default`),f.git('rev-parse',`${p}:force-app/main/default`));
+  const r=f.run([[sha]],{FCOS_TEST_MIRROR_EXIT:'1'});assert.equal(r.status,1);assert.equal(r.mirrorCalls,1);
+});
+test('all parent trees must exist even after an earlier parent matched exactly',t=>{
+  const f=fixture(t);f.git('checkout','-qb','empty-side',f.old);f.git('rm','-rf','force-app');f.commit('api/empty.js','published without metadata\n');
+  f.publish(f.git('rev-parse','HEAD'),'empty-side');f.git('checkout','-qb','left',f.old);f.commit('api/left.js','left\n');
+  f.git('merge','--no-ff','-s','ours','-m','retain first parent tree','empty-side');
+  const r=f.run([[f.git('rev-parse','HEAD')]],{FCOS_TEST_MIRROR_EXIT:'1'});assert.equal(r.status,1);assert.equal(r.mirrorCalls,1);
+});
+test('a non-tree Salesforce entry in another published parent refuses even after the first match',t=>{
+  const f=fixture(t);f.git('checkout','-qb','file-side',f.old);f.git('rm','-rf','force-app/main/default');f.commit('force-app/main/default','published blob, not tree\n');
+  f.publish(f.git('rev-parse','HEAD'),'file-side');f.git('checkout','-qb','left',f.old);f.commit('api/left.js','left\n');
+  f.git('merge','--no-ff','-s','ours','-m','retain first parent tree','file-side');
+  const r=f.run([[f.git('rev-parse','HEAD')]],{FCOS_TEST_MIRROR_EXIT:'1'});assert.equal(r.status,1);assert.equal(r.mirrorCalls,1);
 });
 test('multiple updates are evaluated together; one metadata branch invokes the gate once',t=>{
   const f=fixture(t),api=f.commit('api/new.js','new\n');f.git('checkout','-qb','metadata',f.old);const sf=f.commit('force-app/main/default/classes/New.cls','metadata\n');const r=f.run([[api,ZERO,'api'],[sf,ZERO,'metadata']]);assert.equal(r.status,0,r.stderr);assert.equal(r.mirrorCalls,1);

@@ -84,8 +84,27 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   esac
   introduced_commits="$(git rev-list "$@" 2>/dev/null)" || { salesforce_changed=1; continue; }
   for commit in $introduced_commits; do
-    # --root sees initial additions; -m inspects every merge parent rather
-    # than silently accepting a merge resolution or inherited side change.
+    parents="$(git show -s --format=%P "$commit" 2>/dev/null)" || { salesforce_changed=1; break; }
+    set -- $parents
+    if [ "$#" -gt 1 ]; then
+      # A merge that preserves an entire parent's Salesforce tree introduces
+      # no new Salesforce state. Its introduced side-parent commits are still
+      # independently inspected by this loop; a dropped/reverted edit cannot
+      # disappear behind the merge's unchanged endpoint tree.
+      sf_tree="$(git rev-parse --verify "$commit:force-app/main/default" 2>/dev/null)" || { salesforce_changed=1; break; }
+      if [ "$(git cat-file -t "$sf_tree" 2>/dev/null)" != tree ]; then salesforce_changed=1; break; fi
+      matches_parent=0
+      for parent in "$@"; do
+        parent_sf_tree="$(git rev-parse --verify "$parent:force-app/main/default" 2>/dev/null)" || { salesforce_changed=1; break; }
+        if [ "$(git cat-file -t "$parent_sf_tree" 2>/dev/null)" != tree ]; then salesforce_changed=1; break; fi
+        if [ "$sf_tree" = "$parent_sf_tree" ]; then matches_parent=1; fi
+      done
+      # Validate ALL parents before accepting even an earlier exact match.
+      if [ "$salesforce_changed" -eq 1 ]; then break; fi
+      if [ "$matches_parent" -eq 1 ]; then continue; fi
+    fi
+    # --root sees initial additions; -m still checks merge resolutions whose
+    # complete Salesforce tree differs from every parent.
     changed_paths="$(git diff-tree --root -m --no-commit-id --name-only -r "$commit" -- force-app/main/default/ 2>/dev/null)" || { salesforce_changed=1; break; }
     if [ -n "$changed_paths" ]; then salesforce_changed=1; break; fi
   done
