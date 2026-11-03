@@ -9,7 +9,11 @@ const load=path=>yaml.load(readFileSync(new URL(path,import.meta.url),'utf8'));
 const controller=load('../.github/workflows/hosted-release-controller.yml');
 const main=load('../.github/workflows/hosted-release.yml');
 const bootstrap=load('../.github/qualification/hosted-release-bootstrap.yml');
-const image='ghcr.io/hocheunglai-oss/fcos-release-checks@sha256:1cb176a00c6224f94a668f76de51186e2d0b3cd95d631af4289467451caf40ef';
+// The maintained bootstrap uses the image actually admitted by the N9 caller;
+// the seven historical controller/main jobs retain their independently pinned
+// image. Both must satisfy the identical strict runtime checks below.
+const historicalImage='ghcr.io/hocheunglai-oss/fcos-release-checks@sha256:1cb176a00c6224f94a668f76de51186e2d0b3cd95d631af4289467451caf40ef';
+const bootstrapImage='ghcr.io/hocheunglai-oss/fcos-release-checks@sha256:374ac067450affd652fe11f719c34100a67ebd7770aca03230d2c2b2e1076662';
 const ids=['preview','observe_before','observe_after','browser_before','browser_after','execute'];
 const selected=[...ids.map(id=>[id,controller.jobs[id]]),['main manifest',main.jobs.manifest],['bootstrap manifest',bootstrap.jobs.manifest]];
 const checker=job=>job.steps.find(step=>step.name==='Verify admitted trusted runtime');
@@ -35,9 +39,11 @@ function inspect(overrides={}){
   return {calls,accesses,output,error};
 }
 
-test('only the eight admitted trusted jobs pull the same literal private image with read-only automatic-token credentials',()=>{
+test('only the eight admitted trusted jobs pull their exact immutable image with read-only automatic-token credentials',()=>{
   assert.deepEqual(Object.keys(controller.jobs).filter(id=>controller.jobs[id].container).sort(),[...ids].sort());
   for(const [id,job]of selected){
+    const image=id==='bootstrap manifest'?bootstrapImage:historicalImage;
+    assert.match(image,/^ghcr\.io\/hocheunglai-oss\/fcos-release-checks@sha256:[0-9a-f]{64}$/);
     assert.deepEqual(job.container,{image,credentials:{username:'hocheunglai-oss',password:'${{ secrets.GITHUB_TOKEN }}'},options:'--user 1001:1001'},id);
     assert.equal(job.permissions.packages,'read',id);assert.equal(job.permissions.contents,'read',id);
     assert.equal(job.defaults.run.shell,'bash',id);

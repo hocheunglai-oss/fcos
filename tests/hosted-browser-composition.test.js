@@ -76,10 +76,11 @@ function fixture(t) {
       const handlers=new Map();let location=origin,closed=false,held=false;
       const locator=(name='')=>({first:()=>locator(name),filter:()=>locator(name),locator:s=>locator(s),getByText:s=>locator(String(s)),getByRole:(kind,o)=>locator(kind+':'+o.name),
         waitFor:async()=>{},isVisible:async()=>!name.includes('No position exposure'),getAttribute:async()=>'',click:async()=>{events.push('ui:'+name);},
-        count:async()=>name.includes('No receipts stored')||name.includes('[role="alert"]')||name.includes('[aria-label]')||name.includes('Unable to load')?0:1,innerText:async()=>name.includes('latest MOPS')?'500.00 USD/MT':'Workflow Next owner business row'});
+        // The exact historical be6 UI has no later Review readiness marker.
+        count:async()=>name.includes('review-workflow-readiness')||name.includes('No receipts stored')||name.includes('[role="alert"]')||name.includes('[aria-label]')||name.includes('Unable to load')?0:1,innerText:async()=>name.includes('latest MOPS')?'500.00 USD/MT':'Workflow Next owner business row'});
       const page={url:()=>location,isClosed:()=>closed,context:()=>context,close:async()=>{closed=true;},on:(k,v)=>handlers.set(k,v),off:k=>handlers.delete(k),
         getByRole:(kind,o)=>locator(kind+':'+o.name),getByLabel:name=>locator(name),getByText:name=>locator(String(name)),locator,
-        waitForTimeout:async()=>{await Promise.resolve();},evaluate:async(fn,arg)=>{
+        waitForTimeout:async()=>{await new Promise(resolve=>setImmediate(resolve));},evaluate:async(fn,arg)=>{
           if(typeof arg==='string'){assert.equal(held,true);held=false;return true;}
           if(String(fn).includes('navigator.locks.request')){held=true;return true;}
           if(String(fn).includes('navigator.locks.query'))return held;
@@ -93,6 +94,10 @@ function fixture(t) {
           if(scenario.invalidModule!==spec.module&&spec.module==='markets')data={complete:true,asOfDate:'2026-10-01',latestMopsPublicationDate:'2026-10-01',reportCompleteness:{complete:true},products:['hsfo380','vlsfo','lsmgo'].map(productKey=>({productKey,unit:'USD/MT',latestMops:{value:500,publicationDate:'2026-10-01'}}))};
           if(scenario.invalidModule!==spec.module&&spec.module==='hedge_desk')data={data:{physicals:[{}],swaps:[],mops:[],clearing:[],counterparties:[],invoices:[],capabilities:{}}};
           handlers.get('response')?.({request:()=>({method:()=> 'POST',postDataJSON:()=>({action:'snapshot'})}),url:()=>origin+'/api/functions/'+spec.handler,ok:()=>true,json:async()=>data});
+          if(spec.module==='dashboard')for(const [handler,data]of [['dashboardSummary',{data:{totalStems:0}}],['dashboardFilterOptions',{data:{companies:[],ports:[]}}]]){
+            events.push('aux:'+handler);
+            handlers.get('response')?.({url:()=>origin+'/api/functions/'+handler,ok:()=>true,json:async()=>data});
+          }
           if(spec.module==='hedge_desk')handlers.get('response')?.({request:()=>({method:()=> 'POST',postDataJSON:()=>({action:'list',entity:'AppConfig',sort:'-created_date',limit:1000})}),url:()=>origin+'/api/functions/hedgeDeskEntity',ok:()=>true,json:async()=>({data:[]})});
           if(spec.module==='review')handlers.get('response')?.({url:()=>origin+'/api/functions/exceptionReviewWorkflowList',ok:()=>true,json:async()=>({byStemId:{},ownerOptions:[]})});
           return{};
@@ -115,6 +120,7 @@ test('workflow-shaped env reaches real ordinary compatibility harness, all15 mod
     const bad=structuredClone(result);change(bad);assert.throws(()=>validateHostedBrowserReport({manifest:f.manifest,report:bad,mode:'normal_role',preview:f.preview}));
   }
   assert.equal(result.result.browserIsolation.backgroundSync.modules.length,15);assert.equal(result.result.browserIsolation.backgroundSync.released,true);
+  assert.ok(f.events.includes('aux:dashboardSummary'));assert.ok(f.events.includes('aux:dashboardFilterOptions'));
   assert.ok(f.events.includes('ui:tab:Receipts'));assert.equal(f.events.filter(e=>e==='saved-runtime').length,1);
   assert.equal(f.env.FCOS_COMPATIBILITY_NORMAL_ROLE_ENABLED,undefined);assert.doesNotMatch(JSON.stringify(result),/PRIVATE_|access_token|PASSWORD/);
 });
