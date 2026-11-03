@@ -116,9 +116,9 @@ function readyInterpretation(overrides = {}) {
   };
 }
 
-test('uses GPT-5 mini as the allowed default while keeping the model list server-controlled', () => {
+test('retains the legacy manual model while keeping the provider model list server-controlled', () => {
   assert.equal(DEFAULT_DASHBOARD_AI_MODEL, 'gpt-5-mini-2025-08-07');
-  assert.equal(dashboardAiModel(DEFAULT_DASHBOARD_AI_MODEL).recommended, true);
+  assert.equal(dashboardAiModel(DEFAULT_DASHBOARD_AI_MODEL).label, 'GPT-5 mini');
   assert.equal(isAllowedDashboardAiModel(DEFAULT_DASHBOARD_AI_MODEL), true);
   assert.equal(isAllowedDashboardAiModel('gpt-5-mini; DROP TABLE'), false);
   assert.ok(DASHBOARD_AI_MODELS.every((model) => (
@@ -160,7 +160,7 @@ test('calculates standard API cost from OpenAI token usage by interpretation mod
     reasoningTokens: 40,
     totalTokens: 1100,
     estimatedCostUsd: 0.000289,
-    pricingAsOf: '2026-07-31',
+    pricingAsOf: '2026-09-23',
   });
 });
 
@@ -339,7 +339,7 @@ test('calls Responses API with structured output and sends no Salesforce record 
   assert.equal(requestBody.model, DEFAULT_DASHBOARD_AI_MODEL);
   assert.equal(requestBody.store, false);
   assert.equal(requestBody.service_tier, 'default');
-  assert.deepEqual(requestBody.reasoning, { effort: 'minimal' });
+  assert.deepEqual(requestBody.reasoning, { effort: 'medium' });
   assert.equal(requestBody.text.format.type, 'json_schema');
   assert.equal(requestBody.text.format.strict, true);
   assert.equal(requestBody.safety_identifier, 'safe-user-hash');

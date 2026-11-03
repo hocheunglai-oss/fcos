@@ -1,6 +1,7 @@
 import { createPublicKey, verify as verifySignature } from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 import { serverSupabaseConfig } from './_supabaseConfig.js';
+import { requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
 import {
   CONNECTION_ATTESTATION_POLICY,
   canonicalConnectionAttestation,
@@ -79,6 +80,7 @@ function serviceClient() {
 export default async function handler(req, res) {
   if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed.' });
   try {
+    requireDeploymentMutationAllowed(true);
     const attestation = validatedEnvelope(await requestBody(req));
     const { data, error } = await serviceClient().rpc('save_connection_attestation', { p_attestation: attestation });
     if (error) {
@@ -95,6 +97,7 @@ export default async function handler(req, res) {
     const status = Number(error?.status || error?.statusCode || 500);
     return json(res, status >= 400 && status < 600 ? status : 500, {
       error: status < 500 ? error.message : 'Connection attestation could not be recorded.',
+      code: String(error?.code || 'CONNECTION_ATTESTATION_FAILED').replace(/[^A-Z0-9_]/gi, '_').toUpperCase(),
     });
   }
 }

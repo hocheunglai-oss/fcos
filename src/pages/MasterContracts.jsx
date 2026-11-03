@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useRecordDraft } from '@/hooks/useRecordDraft';
+import RecordSaveStatus from '@/components/common/RecordSaveStatus';
 import {
   AlertTriangle,
   Check,
@@ -66,7 +68,7 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import { MASTER_CONTRACTS_METHODOLOGY } from "@/lib/pageMethodologies";
+import { MASTER_CONTRACTS_METHODOLOGY } from "@/lib/pageMethodologyIndex";
 import {
   MASTER_CONTRACT_BENCHMARKS,
   applyMasterContractPaymentTerms,
@@ -435,7 +437,7 @@ function SupplierChecklist({
   );
 }
 
-function ContractEditor({
+export function ContractEditor({
   open,
   onOpenChange,
   detail,
@@ -449,15 +451,25 @@ function ContractEditor({
   const [contractKey, setContractKey] = useState("");
   const [title, setTitle] = useState("");
   const [snapshot, setSnapshot] = useState(clone(DEFAULT_SNAPSHOT));
+  const recovery = useRecordDraft();
+  const { open: openDraft, update: updateDraft } = recovery;
+  const applyDraft = useCallback((values) => {
+    if (!values) return;
+    setContractKey(values.contractKey); setTitle(values.title); setSnapshot(values.snapshot);
+  }, []);
+  useLayoutEffect(() => {
+    if (open) updateDraft({ contractKey, title, snapshot });
+  }, [open, contractKey, title, snapshot, updateDraft]);
 
   useEffect(() => {
     if (!open) return;
-    setContractKey(existing?.contractKey || "");
-    setTitle(existing?.title || "");
     const next = clone(existing?.snapshot || DEFAULT_SNAPSHOT);
     const withTerms = applyMasterContractPaymentTerms(next, masterContractPaymentTerms(next));
-    setSnapshot(applyMasterContractPortAssignment(withTerms, masterContractPortAssignment(withTerms)));
-  }, [existing, open]);
+    applyDraft(openDraft(`master-contract:${existing?.id || 'new'}`, {
+      contractKey: existing?.contractKey || '', title: existing?.title || '',
+      snapshot: applyMasterContractPortAssignment(withTerms, masterContractPortAssignment(withTerms)),
+    }, existing?.currentRevision));
+  }, [existing, open, openDraft, applyDraft]);
 
   const portAssignment = masterContractPortAssignment(snapshot);
   const portSettings = masterContractPortSettings(snapshot);
@@ -621,6 +633,8 @@ function ContractEditor({
           </DialogDescription>
         </DialogHeader>
         <div className="grid flex-1 gap-5 overflow-y-auto px-6 py-5">
+          <RecordSaveStatus draft={recovery} saving={busy} authority="FCOS" onRecover={() => applyDraft(recovery.recoverUnchanged())} onDiscard={() => applyDraft(recovery.discard())} />
+          <fieldset disabled={busy || Boolean(recovery.recovery)} className="contents">
           <section className="grid gap-3 rounded-xl border p-4">
             <h3 className="font-semibold">Contract and parties</h3>
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -630,7 +644,7 @@ function ContractEditor({
                   {contractKey || "Assigned automatically when saved"}
                 </div>
               </div>
-              <Field label="Title" value={title} onChange={setTitle} />
+              <Field label="Title *" value={title} onChange={setTitle} />
               <SearchableEntitySelect
                 label="Contract owner"
                 value={snapshot.ownerUserId}
@@ -1371,14 +1385,15 @@ function ContractEditor({
               </div>
             ))}
           </section>
+          </fieldset>
         </div>
         <DialogFooter className="shrink-0 border-t bg-background px-6 py-4">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
           <Button
-            disabled={busy || !title}
-            onClick={() => onSave({ contractKey, title, snapshot })}
+            disabled={busy || !title.trim() || Boolean(recovery.recovery)}
+            onClick={() => onSave({ contractKey, title, snapshot, onCommitted: () => recovery.saved({ contractKey, title, snapshot }) })}
           >
             {busy ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -1899,7 +1914,7 @@ export default function MasterContracts() {
     detailRequestGateRef.current.invalidate();
     setSearchParams({ contractId });
   };
-  const save = async ({ contractKey, title, snapshot }) => {
+  const save = async ({ contractKey, title, snapshot, onCommitted }) => {
     const saveContractId = editorNew ? null : detail?.contract.id || null;
     setBusy(true);
     setError("");
@@ -1914,6 +1929,7 @@ export default function MasterContracts() {
         snapshot,
         idempotencyKey: operationId("master-contract-save"),
       });
+      onCommitted?.();
       setEditorOpen(false);
       setMessage(
         "Draft revision saved. Supplier evidence and owner approval are required before Salesforce creation.",

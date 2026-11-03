@@ -1,0 +1,752 @@
+{
+  "schemaVersion": 1,
+  "version": "2.0.287",
+  "commit": "382f0329ebb5c3a28cd20d89c653db86309ef425",
+  "description": "Verified Production source baseline supplied by the release supervisor. Hashes are extracted from this exact Git commit; pending migrations must follow this complete ledger.",
+  "migrations": [
+    {
+      "name": "20260704020000_admin_access_control.sql",
+      "sha256": "20a17dd73cce890b776cb6027e6827fb44659da0357ef1326a6155ac9f58dc60"
+    },
+    {
+      "name": "20260704043000_dynamic_admin_user_types.sql",
+      "sha256": "9749e73687846d78780d116949bc29fb23fd5d213f6aa5862eb84ac02650192c"
+    },
+    {
+      "name": "20260704205416_buyer_invoice_collection_workflow.sql",
+      "sha256": "c7cf9689f33fa53f5d0e3fe352b180a6d5a1bf6a7231caa0921aeec66dbc5031"
+    },
+    {
+      "name": "20260704210757_buyer_invoice_collection_fk_indexes.sql",
+      "sha256": "535ef46d0a3c9c715549de424514cbe10c00d8a891f63c2d46975139e0fcdf19"
+    },
+    {
+      "name": "20260707100000_report_export_archive.sql",
+      "sha256": "83926808a61ef8c42bf66d666aa44de5e6dbdda3191c054a18bac75e8ce4d9aa"
+    },
+    {
+      "name": "20260707125000_report_archive_manage_permission.sql",
+      "sha256": "de8817c2e1a42aafd727db15824ae8d5b4df6bbec0d6884d9cb7d14b610bc5b6"
+    },
+    {
+      "name": "20260707163000_dispute_beta_workflow.sql",
+      "sha256": "c249086db161bbed9ebc5a5078edb3c655f26051885865bf8547007a7057f53b"
+    },
+    {
+      "name": "20260707193234_incoming_payments_module_settings.sql",
+      "sha256": "f957b361604cd2420acc6855970bffc651b182b335780440d2ea9f086be67422"
+    },
+    {
+      "name": "20260708152000_incoming_payment_interest_notifications.sql",
+      "sha256": "e9ff013ed97de3b273eb888462dbd21bff4ace7f4a680af3ba4525a81e361fd8"
+    },
+    {
+      "name": "20260708154454_cashflow_forecast.sql",
+      "sha256": "71e0e3b4a69b3dca55917083873a36d7fbd75d3a8ef8650d55db1cf1cf56e0af"
+    },
+    {
+      "name": "20260708163500_remove_report_builder_data_explorer.sql",
+      "sha256": "6df7d1c576af49edb910c967fd9478d4978f548dbb969577628ede1f3b4827a6"
+    },
+    {
+      "name": "20260709062000_interoffice_user_type.sql",
+      "sha256": "69ee8f446de3580a41203fbc77250794ae4111faa8f5d45b63d47df298eb1f62"
+    },
+    {
+      "name": "20260709111500_dispute_workflow_module_path.sql",
+      "sha256": "563fb1ebeab0ba0a5d39499442654a92b51f511562216e7e632cdea3eb62e8ff"
+    },
+    {
+      "name": "20260709171803_remove_dispute_beta_wording.sql",
+      "sha256": "575db11312e710cbf42d79f116b9b62e77e2ba21d52d4953e6ae79f0563d3f1d"
+    },
+    {
+      "name": "20260709182738_improve_dispute_workflow_collaboration.sql",
+      "sha256": "2c7050c4a3ef093c1a9b54b4561a704296f957d564fae88ffd9d0a1eb25299b2"
+    },
+    {
+      "name": "20260709184457_add_dispute_workflow_fk_indexes.sql",
+      "sha256": "a752a86c017389d14d452a4574cda257379257f4e886d71ea2d9a9bd517e143f"
+    },
+    {
+      "name": "20260710091300_account_id_dispute_parties.sql",
+      "sha256": "dc76d6cefbff1de3325907a97396d4449288ef049f188c4a2a2b01094bdc125d"
+    },
+    {
+      "name": "20260710115129_supabase_owned_dispute_parties.sql",
+      "sha256": "b6712969b47c90e8aa62b87199d91cc101a69716253f14169f506172e58862c1"
+    },
+    {
+      "name": "20260710121549_enforce_supabase_owned_dispute_parties.sql",
+      "sha256": "73c0f9ef726507a18e4ce120459e2b2e9e001f3884ac7e29ed03f58d55effa66"
+    },
+    {
+      "name": "20260710202720_index_dispute_party_foreign_keys.sql",
+      "sha256": "b1aa7cb13cbdcc32593925a7b0a05efd1f03116669ef9b48f35c568bef08e217"
+    },
+    {
+      "name": "20260712120242_operational_workflow_hardening.sql",
+      "sha256": "4cdd600874a06593266b8fe5d131981eaf9a61532a1817a20d7fa93e8e04a33f"
+    },
+    {
+      "name": "20260713024741_secure_auto_rls_trigger.sql",
+      "sha256": "d9450ace6b52dd6b63653809f826d3e3209354fd1fdc7898a7521076e597b50b"
+    },
+    {
+      "name": "20260722032251_buyer_trader_assignments.sql",
+      "sha256": "e69d532c33f22b2d6da72a77396155f349303f9f8ccdae885e04cf2637beba45"
+    },
+    {
+      "name": "20260722053528_account_managers.sql",
+      "sha256": "ff4f624486b38176d757e9dc3da62209f0729971b778ba9d2b98525f46026939"
+    },
+    {
+      "name": "20260722064852_account_manager_group_propagation.sql",
+      "sha256": "736988929dc3cd7ef24ef6ec9a2811aad6a80d71bbdd073191c12494f5d676ca"
+    },
+    {
+      "name": "20260722073320_account_manager_notes.sql",
+      "sha256": "c1ef5673bf57e22e741e455690ca73bdf204d19739fd89e8629d77b678143e40"
+    },
+    {
+      "name": "20260722075428_account_manager_group_scopes.sql",
+      "sha256": "6e5bded144a7cd1f1a067393539679a06b5d96b5ce8f121d515837ebffeee097"
+    },
+    {
+      "name": "20260723125141_buyer_invoice_reminder_rules.sql",
+      "sha256": "761a38131b14523b4e11e1113729cd972dbf11d1833a1918b821077fee7a04c5"
+    },
+    {
+      "name": "20260724075339_paid_supplier_invoice_dispute_automation.sql",
+      "sha256": "0a6b0228b61d28c436f84959d245c7a71eca3a5dbceef897d7ba912b482b64da"
+    },
+    {
+      "name": "20260724121500_harden_supplier_dispute_accounting.sql",
+      "sha256": "7ea1045b25758e7e54c50720e4bdda7012ef48dbe6d79c1d5a9c116baf3c957b"
+    },
+    {
+      "name": "20260730073240_projects_tasks_collaboration.sql",
+      "sha256": "5541b76c3fc0489e13080ec61a2f780a6873dcdc94116633c3ce2f345b170376"
+    },
+    {
+      "name": "20260730113000_universal_app_portal.sql",
+      "sha256": "6db000554b683ff42aba2ab85656ad45c775617bfaaf536fd1e30e10ecef6b66"
+    },
+    {
+      "name": "20260730180403_dashboard_ai_settings.sql",
+      "sha256": "fa787938a6b501fd0449565a0fa0177b8b2e5c130ce1c5a5a83c939a28e9b8d5"
+    },
+    {
+      "name": "20260730190759_dashboard_ai_usage_tracking.sql",
+      "sha256": "823443ca469290640cf8bd7cbcf46718b4d7f40241f5b0c6617dcdea54381d4c"
+    },
+    {
+      "name": "20260731022451_buyer_invoice_email_recipient_persistence.sql",
+      "sha256": "c212c42b3d50300d595284f79df5c0a91770c7be2b0fa7f37ca47cfbadbf8cc1"
+    },
+    {
+      "name": "20260731044413_admin_controlled_fcos_update_emails.sql",
+      "sha256": "2d6d1c9d3094cc3bea64ddbcd2f62f275b9f4cff683b7695e92771d2f2efa5cf"
+    },
+    {
+      "name": "20260731070915_growth_coaching.sql",
+      "sha256": "f7dbad545ea4afdd0e2333f85a68753053dec58e0a2acee8591a5eea1770d26e"
+    },
+    {
+      "name": "20260731082000_growth_coaching_workflow_fixes.sql",
+      "sha256": "57733d93fb28d58e81e722cd2e37a51fef5c5363da619886df20409793934fc7"
+    },
+    {
+      "name": "20260731083127_fcos_update_saved_recipients.sql",
+      "sha256": "90ffac1ffe27a006a2bd904d2cffd9d8e73f82cf25672568bc5923cd1ddeba0d"
+    },
+    {
+      "name": "20260731132551_simplify_fcos_update_email_sending.sql",
+      "sha256": "e1832f728423e4b6bf62e474b736e0242ca695e4ce585dfb7dee706c9e32dc9e"
+    },
+    {
+      "name": "20260731150148_collaboration_growth_workflow_improvements.sql",
+      "sha256": "8b239c806a6df4b2e42f63928c61c5c8dab93a4f4989a4911ff94717a268e9ee"
+    },
+    {
+      "name": "20260731175320_personalized_navigation_payment_collections.sql",
+      "sha256": "ce3ebab5fa715d63756429afed7ed01e79a6006335f1a2f624e330f35b1a2d18"
+    },
+    {
+      "name": "20260801092222_unofficial_compensation_monitoring.sql",
+      "sha256": "effb9047a0ad1db6b25b70de31faf131f3f2dd4f2af044173beb6f3c4e4f7b9a"
+    },
+    {
+      "name": "20260801120853_growth_reporting_lines_batch_save.sql",
+      "sha256": "aea23a36d2b09c8c3f32097cdbc693905091a9a6051e876cbb3bd3a68d21f9f6"
+    },
+    {
+      "name": "20260801131500_growth_reporting_lines_batch_save_hotfix.sql",
+      "sha256": "42feef126a82649ea373dd5c50cb6ef8d8804b648ba825b0f3db03a404428292"
+    },
+    {
+      "name": "20260801140504_general_manager_reporting_root_self_managed_goals.sql",
+      "sha256": "148e3f4eb1f2a91f745ac301db869be72949d2663aeeb4dae797d8a0cbe5baed"
+    },
+    {
+      "name": "20260801150451_general_manager_user_type_transfer.sql",
+      "sha256": "e2348151f9e2c3bf77c2a0ca42cee48d6993e96066bcd817ed76e6acc76fa2d7"
+    },
+    {
+      "name": "20260801191655_native_hedge_desk_graph_mail.sql",
+      "sha256": "2fa842ee1dda97b03c9c5935321b1914963090cd6471b13e95f389ba36a27099"
+    },
+    {
+      "name": "20260802071600_hedge_salesforce_allocations.sql",
+      "sha256": "7ad455f8669b87602c7fb3ec2fbf8c360af72097c47ad5a382a2cf08f9d9697f"
+    },
+    {
+      "name": "20260802083037_hedge_mops_verification_auto_expiry.sql",
+      "sha256": "ac2661890231b1e76d473268b2a6bac1ebb6fafe444318e9639e7ff8130ff8ac"
+    },
+    {
+      "name": "20260802090000_markets_default_access.sql",
+      "sha256": "ea5d2df1c97be8aa0bb0759742d855ed738b8e07d5be9d373d250391008c7a83"
+    },
+    {
+      "name": "20260802103000_hedge_health_import_identity.sql",
+      "sha256": "d1345cd4cad4a2451d7941c437388f10a35bdb38b92365afe511945262fdea90"
+    },
+    {
+      "name": "20260802110000_salesforce_special_terms.sql",
+      "sha256": "f6bdc9c33e0b0395fcb1f5ff1112df6862b725caf47aab9cfc836d96cc9324fe"
+    },
+    {
+      "name": "20260802113000_hedge_monthly_mops_verification.sql",
+      "sha256": "6a6b1b61a643116f2e51608b9e2ac5cc253041b37949440ec4ba99de73801c79"
+    },
+    {
+      "name": "20260802120000_store_manual_mops_verification_text.sql",
+      "sha256": "195c36efa9e3781a3846e766d22e366289d205d01a0fa61d5dbdf61d1ab33e2f"
+    },
+    {
+      "name": "20260802154311_payment_collection_posting_reconciliation.sql",
+      "sha256": "9dd146ab425377e2ab1a7cd62cfc901d4fe42bd9d7216e08d1debcb5128caf68"
+    },
+    {
+      "name": "20260803030109_email_router_module_access.sql",
+      "sha256": "597c0753a6b70de0c7e28ff8b8d4a0b501cc341f87ca1ba7705a67eed204bf2d"
+    },
+    {
+      "name": "20260803041219_email_router_active_user_directory.sql",
+      "sha256": "3ad7d8e41215d30e8c13f8226022be9020299aed4d138d1b9119127d67aff001"
+    },
+    {
+      "name": "20260803090000_native_emailrouter_schema.sql",
+      "sha256": "07203e9bef466e994cdc208d19e5d4fa8687650319bba6d71b9c4b3bf4959f65"
+    },
+    {
+      "name": "20260803110944_email_router_ordered_directory.sql",
+      "sha256": "c2c1eb5c2672829ab83f7201855bfb0f6a267bb0c01a9db6c6ada26895d99285"
+    },
+    {
+      "name": "20260803120000_delete_hedge_invoice_documents.sql",
+      "sha256": "497701706c784601fa95ce1ad85170504f48480efa3d73c31f55607636ac16be"
+    },
+    {
+      "name": "20260803135527_fix_email_router_external_reactivation.sql",
+      "sha256": "b7fd18cab929582c4d54791dcb40956b51fa12ec41301693c6794d556cfba975"
+    },
+    {
+      "name": "20260803162059_allow_emailrouter_routing_directory_events.sql",
+      "sha256": "8d331c4fc0181a2fdc1696aa4d916e6c0ca02d0f2d80d668baed982b28117da3"
+    },
+    {
+      "name": "20260803165805_fix_emailrouter_preset_recipient_validation.sql",
+      "sha256": "2f428ed9d0321a8c849e049e3c61c03d8dc6e7af45bfaa6339dbf2b93793024c"
+    },
+    {
+      "name": "20260803172446_harden_emailrouter_routing_integrity.sql",
+      "sha256": "2ca4df22899cced8d43b954420d335d47f14192c9bd14b8221f7d5f24762c536"
+    },
+    {
+      "name": "20260803182723_simplify_emailrouter_routing_presets.sql",
+      "sha256": "2044fcb4d674161823ff47026ba2d520a6d107f6cfa2e13a02fe2ad67324cdbd"
+    },
+    {
+      "name": "20260803185144_make_emailrouter_routing_labels_case_sensitive.sql",
+      "sha256": "30d3ea9b23343b720023a3385915f48c9dcfed311b47e120fc786491a2110ddc"
+    },
+    {
+      "name": "20260804022141_email_router_inline_images_leave_presets.sql",
+      "sha256": "1ba29e5ee2c282e19c4b2df1fc5a659e235174f4c2e4fcac3fb923f3757179ee"
+    },
+    {
+      "name": "20260804113709_system_error_notifications.sql",
+      "sha256": "d6a1cf9e8a5569e8f4324e0a2700462d1f3bd20c146f9da1cb10c1f905d962b9"
+    },
+    {
+      "name": "20260804145038_fcos_improvements_ticketing.sql",
+      "sha256": "eca260bf8642d54acec47d0440bad1b18dc6964a33122dccff1d41e312f34cb3"
+    },
+    {
+      "name": "20260804181236_settings_workspace_reorganization.sql",
+      "sha256": "13ae5ba5791c71cf318b6398d5ef25e9ae351d4ff982820a356ec97e67f3f978"
+    },
+    {
+      "name": "20260805113522_email_sender_route_batch.sql",
+      "sha256": "f83dca060f6ac06ee97d53cb7325732693ba7fc9094f579a0dbadd0219385133"
+    },
+    {
+      "name": "20260805163332_default_sidebar_icon_caption.sql",
+      "sha256": "b8faacb20c1cd6fdbfdcab29345f66f7d9a00c266ccab1d445a2184e3a052347"
+    },
+    {
+      "name": "20260806090000_financial_report_settings_and_currency_thresholds.sql",
+      "sha256": "748b093243dc2e19a5c132c737a94073262acaad8e19e81f2a4d33a835fc0946"
+    },
+    {
+      "name": "20260806100000_dispute_external_closure_reconciliation.sql",
+      "sha256": "5c8f80049293ccdec1d2f324d058d77ecd83fb9f665095d52de3287c4b93c5b6"
+    },
+    {
+      "name": "20260806122507_broker_settlement_trade_date_basis.sql",
+      "sha256": "1a8d6625f5ac85d75c7dff726fb653771052e7a85735421e10e75880f22980bd"
+    },
+    {
+      "name": "20260807120000_email_router_forward_file_learning.sql",
+      "sha256": "971de998dea3d3b7695caa95e760669c6d54bfb95e11712c3ffb5e04e5692b45"
+    },
+    {
+      "name": "20260807163729_ship_agent_final_charges.sql",
+      "sha256": "3a17e59870b02a6b3f9b03bd88dbdb5c5c84276defcba4bbd1615dfe86a46966"
+    },
+    {
+      "name": "20260808043932_ship_agent_trigger_function_privileges.sql",
+      "sha256": "ed1c4ffc4e67831d2be7c9f6e774ec8ccc22e7c228dd6fd8441565959271c3e1"
+    },
+    {
+      "name": "20260809160614_connection_attestations.sql",
+      "sha256": "baab3d8108bc2f4ed6cdf896fb251c9c7227ad20a178e9ca473a19f69b6a6a42"
+    },
+    {
+      "name": "20260809173753_special_term_clause_bank.sql",
+      "sha256": "1c3e69530f70e8a91154f1a94f0da55fb06afbf6c44b9bd16b94ed7c6b733733"
+    },
+    {
+      "name": "20260812091123_fix_ship_agent_sync_event_key.sql",
+      "sha256": "8d4553c04759ed899c3d02d6ab2e8c33ad40327a8e2fc972ea199ba0d66e5050"
+    },
+    {
+      "name": "20260813150034_special_term_revision_operations.sql",
+      "sha256": "7740bac885873555082f35e1ff04fdd2fd42d2923fea59051606e53ab825aafb"
+    },
+    {
+      "name": "20260814040851_special_term_clause_consolidation_operations.sql",
+      "sha256": "3dc4addb8ff67314c381f1486f6601928a0734e138fd388ae80b05ff9e646243"
+    },
+    {
+      "name": "20260814082441_special_term_safe_deletion.sql",
+      "sha256": "31ba86c5e34c8510522df1187572f7a52c3a83e4810e08ed0e244b09a1ce7b15"
+    },
+    {
+      "name": "20260815150819_special_term_global_publication.sql",
+      "sha256": "c27f41475c69faddf97ca7f97ddfb9b88dc53d5460fb8b1aba98fcac3a770b26"
+    },
+    {
+      "name": "20260815165720_fast_verified_payment_reminders.sql",
+      "sha256": "5fdb8b93abeeb760cc6691c0f1d2e9cd68022439b85e8b1c73d8dc31781f4db7"
+    },
+    {
+      "name": "20260815172712_fast_verified_payment_reminders_advisor_index.sql",
+      "sha256": "136cbb2363bd5a8aa48f40628648913987823a2212b6f7d16dd7dfb288fd6959"
+    },
+    {
+      "name": "20260815222413_special_terms_term_first_operations.sql",
+      "sha256": "640bfe9a1f93561dcd57fe6d265a9d165121704b872e7d7b2d626a261219a71a"
+    },
+    {
+      "name": "20260816071500_special_terms_notification_user_index.sql",
+      "sha256": "26a1a4faa8ef8997799a5b9e49988f874b9f22b1eb01e44c95db073e933318a3"
+    },
+    {
+      "name": "20260818145155_variable_charges_two_stage_cutover.sql",
+      "sha256": "3af656788f015637175129b571f98bbbff4ef7fdfb56a0986e57d1b84fa86c70"
+    },
+    {
+      "name": "20260819092105_account_pic_directories.sql",
+      "sha256": "b1639579c4124b5f86154471f9db68085e6f72d19b04cbd221dc83313109a830"
+    },
+    {
+      "name": "20260819092204_drop_redundant_account_pic_row_index.sql",
+      "sha256": "abce53c169dcfe622666ac683e9e781c539bffa8a26b1aa99bed407e42044ddc"
+    },
+    {
+      "name": "20260819092303_index_account_pic_actor_foreign_keys.sql",
+      "sha256": "56708dca9adc4176437677b2619dc611a8d3c148e5592db906bd5bbf3f7caecd"
+    },
+    {
+      "name": "20260819103109_account_pic_flexible_schema.sql",
+      "sha256": "47deab4c6b4304bad4130cd441475f1b4bdee403b4962c12c5548512e2cdd365"
+    },
+    {
+      "name": "20260819154211_account_pic_row_colors.sql",
+      "sha256": "4ea33487b75cb2bef0c2af6aa40dd5a0ed47f3c62e624016cdb443a83e0582d8"
+    },
+    {
+      "name": "20260819173207_work_notification_snapshot.sql",
+      "sha256": "81e7bdca3be19fe5e851e025b74d13fef869aab8679790257decddad2199a245"
+    },
+    {
+      "name": "20260820020859_credit_statement_conservativeness.sql",
+      "sha256": "2cc5a65105cd435e7b4ca5623f877ff9ea946fbe622c26be1dbe86128c26a121"
+    },
+    {
+      "name": "20260820072654_market_intelligence_delivered_prices.sql",
+      "sha256": "657292893c87e42f7083fb936360e57e8b4548dcbb1c77708552beee54f5bf90"
+    },
+    {
+      "name": "20260820092817_market_intelligence_spread_values.sql",
+      "sha256": "290faf04ea44c7184bab477a54d2e81723aacb56f1e69af431c967bcff955677"
+    },
+    {
+      "name": "20260820093157_market_report_replay_reconciliation.sql",
+      "sha256": "71d0f42a93eacfca459d41c345ac40c38dd0799fd20089622f7371694354d9ab"
+    },
+    {
+      "name": "20260820094201_market_report_drive_hourly_sync.sql",
+      "sha256": "e0bc0d6ede08af3e00243055ced778510a950cd6a2949dfaafead86f85362b43"
+    },
+    {
+      "name": "20260820105504_delivered_price_premium_mops_analytics.sql",
+      "sha256": "96231749f06d7b58eb3c17572042cba51cf1a78eb5ff685899fcf57fbe9a383d"
+    },
+    {
+      "name": "20260820175956_platts_market_intelligence.sql",
+      "sha256": "934abb962a5d07054109700b1e7b3451641b707e361409745a75cb3546d1b383"
+    },
+    {
+      "name": "20260820180210_market_intelligence_alert_fk_indexes.sql",
+      "sha256": "b1407deb7e64ca38751f8d0155bced91f3ff37cc7ff63b909757156234bb8846"
+    },
+    {
+      "name": "20260820181345_correct_20250805_sgo_midpoint.sql",
+      "sha256": "870073c150a9f4b70e5ee3a3eda20fd32d9f15e15937274310b1cec8b72e9c69"
+    },
+    {
+      "name": "20260820192609_reconcile_explicit_zero_market_changes.sql",
+      "sha256": "bf1f00a830450d16b51daf1489c3607878247a89541a77a26e0c6da2a6695ce0"
+    },
+    {
+      "name": "20260820194241_classify_nonpublication_mops_gaps.sql",
+      "sha256": "1381a9fdebfcd00be71c4e3c1d7ce0b688c74905435e1c08f6ea2410e2ba2f68"
+    },
+    {
+      "name": "20260820195434_reconcile_range_midpoint_market_changes.sql",
+      "sha256": "2ce59898aa6b6943c73cb5cec165c5efb13cdbd162a86a3124d02aeda10e8d13"
+    },
+    {
+      "name": "20260820204550_reconcile_printed_zero_market_change.sql",
+      "sha256": "a7bccf3dd9722a954d8c9a90b09ca512e8a5a8637c3bf412d34d3d97fd26f021"
+    },
+    {
+      "name": "20260821034056_daily_brief_navigation_curve_evidence.sql",
+      "sha256": "a28d2181f7668f50bc62326243b76a0dcd12b81bdaeab306ebadee8ab333d1a2"
+    },
+    {
+      "name": "20260821035219_daily_brief_revision_lock_permission.sql",
+      "sha256": "20ac1e56d8426156e5d259d0497586f054aa0d9a275448fd342e23fbbd8e8109"
+    },
+    {
+      "name": "20260821094025_simplify_fcos_improvement_statuses.sql",
+      "sha256": "7b687121b5ceaafbc09b8d83bc9b27ccc3278fe58faf66fcf5908bdef467413a"
+    },
+    {
+      "name": "20260821145209_market_intraday_snapshots.sql",
+      "sha256": "f519a95e702b800dd168d8b983fc88c816684d5f1e24bcd67da412fe4bffa42b"
+    },
+    {
+      "name": "20260822040856_market_report_product_library.sql",
+      "sha256": "ab2de3d2ccb6ccf536a3a840c4b4bf5980f0d1feeffebcf624ecc38d384b9d86"
+    },
+    {
+      "name": "20260822045725_repair_market_report_product_library.sql",
+      "sha256": "f4cc4270dbf007c5a09f48701c48110ce2fdb6f50f3fff5faaa92abe2a1c0846"
+    },
+    {
+      "name": "20260822050715_include_unitless_market_report_series.sql",
+      "sha256": "af766d788c003d38bb386625719097e93f4b00190597134e42e4e841ab3ad748"
+    },
+    {
+      "name": "20260822051349_normalize_market_report_library_units.sql",
+      "sha256": "7367169cf3a99f24ed59ee3485dcffedd202d76c21d0e202f4ada604e383f3c2"
+    },
+    {
+      "name": "20260822053620_materialize_market_report_product_catalogue.sql",
+      "sha256": "033a4122aad5274792012fe76f7a4d7b044deeb95b4705189dee1847b0f53a87"
+    },
+    {
+      "name": "20260822061640_bulk_market_report_library_recording.sql",
+      "sha256": "b204d7089606a60a4c09ddcc03c150d5d02fb596f5d7f39a6edcb7918aa7a76f"
+    },
+    {
+      "name": "20260822063020_scope_market_report_catalogue_from_2025.sql",
+      "sha256": "f16b143d1f132dfd9e07a05101c7811297e1fb28206099f3618b251499729126"
+    },
+    {
+      "name": "20260822173838_macos_workspace_appearance_preferences.sql",
+      "sha256": "3fc039d801bc54dd34fc36d07e3d04f81753f71c4d11ccfa0f20d521d7d366ad"
+    },
+    {
+      "name": "20260823021617_default_workspace_appearance_light.sql",
+      "sha256": "346bf45f217696743ef5b1c389ab97d85f351c19881f135982c5b02df0636aa3"
+    },
+    {
+      "name": "20260824010429_fix_user_deletion_immutable_audit.sql",
+      "sha256": "f86ce376593086002871602f47d7e773d78a099dc0764a27cccde05b69480f15"
+    },
+    {
+      "name": "20260824171836_master_term_contracts.sql",
+      "sha256": "53c6fdd2f340c974efaf15ba2ddaff6b516d1cbb6044db5ceafefb4e716b6211"
+    },
+    {
+      "name": "20260824171924_master_term_contract_fk_indexes.sql",
+      "sha256": "4d9721cce0d9d5862be2f29d1e5e42c41dc333db17b5a5337d89eb5a4903b8f4"
+    },
+    {
+      "name": "20260825033751_master_contract_split_pricing_evidence.sql",
+      "sha256": "2e748600b1e35d01693eb51219b58bb9457f52d39a2b065f6b375f697e0e0961"
+    },
+    {
+      "name": "20260826125205_variable_charge_side_by_side_workflow.sql",
+      "sha256": "ba318f037a035d941661cb72ed31549bc3ded37d917666b4a8aef4e88742b774"
+    },
+    {
+      "name": "20260826125408_variable_charge_side_fk_indexes.sql",
+      "sha256": "647b2b1643a556237ef40c0ade997d32678bbb8d489dd18c0b8e336e9ed508b4"
+    },
+    {
+      "name": "20260827041826_variable_charge_is_variable_source.sql",
+      "sha256": "1a53cccdb0f0badad35afdd1189073cdf007234862c352ffa4c6a2d8a17660c9"
+    },
+    {
+      "name": "20260827072934_add_variable_charge_anchorage_settings.sql",
+      "sha256": "302d516f24f03638d0dace8be9d3ca32c26b834e3d922aa862b5627aac507c2b"
+    },
+    {
+      "name": "20260827145608_xero_contact_sync.sql",
+      "sha256": "e80224fcf23902cf49fc691fd9509c6b7eedba911c34170012557caa18bdccfc"
+    },
+    {
+      "name": "20260827191032_native_xero_portal.sql",
+      "sha256": "dd19e33842d9d59e34e4b2aa180f8a9ec452c2b243aae27166ff1111156b1697"
+    },
+    {
+      "name": "20260829080726_xero_financial_sync.sql",
+      "sha256": "a87bdf6fdc4b23a3d612d37d26580414f4bfcf97412413f1500791a92bfabe30"
+    },
+    {
+      "name": "20260830044825_master_contract_incremental_keys.sql",
+      "sha256": "59f0ac051ad8c1b55d0ac68a516e7248136d282846421adda20e96b1dd148896"
+    },
+    {
+      "name": "20260830172911_fcos_fcuno_identity_federation.sql",
+      "sha256": "d521966e55e4741c38040ced8b21d3b83aa8639a5d8fe7038c3c44d0ddc4a507"
+    },
+    {
+      "name": "20260901181106_special_terms_term_retirement.sql",
+      "sha256": "51affad5cab481c32b3563e4b7cb7f06bc784960c6e8322ed9c4c42e7f27a8c4"
+    },
+    {
+      "name": "20260902035652_variable_charge_pre_invoice_reopen.sql",
+      "sha256": "0b92fc0dc031366cb647e651cf41fc1dd28f5a7a94e8709c24092b1605130032"
+    },
+    {
+      "name": "20260902043000_market_mops_secondary_csv.sql",
+      "sha256": "184990721c1acfceb212c220da286eaf64908895df9a43212b8da31f4cd5d90c"
+    },
+    {
+      "name": "20260902050000_variable_charge_reopen_operation_completion.sql",
+      "sha256": "698b10d208c1a41a64d083050b266f76689b9c1eb582ff15563fe02ccf45de46"
+    },
+    {
+      "name": "20260902060000_cashflow_bank_reconciliation.sql",
+      "sha256": "3f82255083ecd57793bdc6b0ce0f1c2f18bc49a8875e1f5471e7ec9da66ea813"
+    },
+    {
+      "name": "20260902061000_cashflow_bank_pgcrypto_search_path.sql",
+      "sha256": "1dab9b4d124f36abde1e3eaa96dd2dba8452fa876ca80c58c39202667d5ad5eb"
+    },
+    {
+      "name": "20260902062000_remove_legacy_variable_charge_ready_constraint.sql",
+      "sha256": "67a7d1f8ae7443d47cf44d85c8c8d03abd7454f1e93965ab16ceed23b87b9dd4"
+    },
+    {
+      "name": "20260902080713_add_internal_fcbhk_counterparty.sql",
+      "sha256": "55e17b214e85e8220899a7a1a33cfcc8e570d3d17b5275182865d829ebb6e394"
+    },
+    {
+      "name": "20260902093000_physical_hedge_salesforce_costs.sql",
+      "sha256": "c3959f4881d29a0943e7981d95c81235de37a5cf0f650025bfa28f81befc84df"
+    },
+    {
+      "name": "20260902104500_physical_hedge_salesforce_cost_indexes.sql",
+      "sha256": "d177f7e84099eab857cbe4ef139db2c606a54e85c5d7bf4782f89f9a8196159b"
+    },
+    {
+      "name": "20260903104102_variable_charge_post_write_fingerprints.sql",
+      "sha256": "fb32cffc072c3b278a50658d0acd4a31d6156e8477756b1e37475faa7c6ee9da"
+    },
+    {
+      "name": "20260903105435_variable_charge_post_write_recovery.sql",
+      "sha256": "7d4f295f549fc8ce1c2479066e2f5996e31d16df40c0783eb8c2d840aa95d1bc"
+    },
+    {
+      "name": "20260903105644_variable_charge_post_write_recovery_event_fix.sql",
+      "sha256": "793259f241a9adfb801b1c7ace6ca87cd532806c97b4debe3a420dfbb5f633a5"
+    },
+    {
+      "name": "20260903143343_normalize_hedge_salesforce_venue_suppliers.sql",
+      "sha256": "abcf8c66840bf3c176f893b057aed4f86f84c50f623c4608fb1b8f66724dd30d"
+    },
+    {
+      "name": "20260904160812_variable_charge_resolution_optional_reference.sql",
+      "sha256": "183ca7b91f71b3133ea2df8a555d9c9e334bf9ebd1d3dd105efe58c0acf54434"
+    },
+    {
+      "name": "20260905105308_account_insight_report_presets.sql",
+      "sha256": "d6121687a69d47ea9129e32f3ea617ec4d3c3007ea4171cea6c06d165dfe6ddc"
+    },
+    {
+      "name": "20260905111234_account_insight_report_preset_indexes.sql",
+      "sha256": "dcdeb39eeee565e4e97103a04a476e0da777f1a1e51f8649ad97f14894552d93"
+    },
+    {
+      "name": "20260906161240_restrict_browser_role_admin_grants.sql",
+      "sha256": "be5ea0b3972208502d62559b3cc4c4d7ed5420d3e9859740ff9dd18179377eae"
+    },
+    {
+      "name": "20260908074607_fcbs_own_account_settlement.sql",
+      "sha256": "640d58d249fa282a6bd725ab9d7586e210d9859fd5a862592446ccfa661c6bf6"
+    },
+    {
+      "name": "20260916223258_app_workflow_reliability.sql",
+      "sha256": "768f9c56b85a1eebb30dc22e2e9496b59a13fd3d40c8c124d3eea5e86fa0e1c4"
+    },
+    {
+      "name": "20260920105042_market_trader_workspace.sql",
+      "sha256": "d4752e8456fd0f822898a73f03d3a76e8e0c7fa92bc874d6063606a8ca7724ef"
+    },
+    {
+      "name": "20260920154626_dashboard_finance_settings.sql",
+      "sha256": "1a3917397d9b4da506a7f7090b5b18904d4d8895b5c4c1654d80d602f8f5aa74"
+    },
+    {
+      "name": "20260921061845_dashboard_bank_charges.sql",
+      "sha256": "536c311fb69cf070832e807e2309e22845ece0b587794926c5cb3e3650ad36c1"
+    },
+    {
+      "name": "20260922195630_ai_task_model_routing.sql",
+      "sha256": "580bcccd02a8dcf04565168028eef3d67d0595746c0f03542f8c2e5f002c9d5f"
+    },
+    {
+      "name": "20260923182327_xero_contact_identity_decisions.sql",
+      "sha256": "16e68786d7e325367b911821eca6a87838c90deb5e2dd548a3642d8c2e857c5f"
+    },
+    {
+      "name": "20260923210832_xero_financial_selection_scope.sql",
+      "sha256": "7073ac71a9b83d3acc583c57d14618a13e7c13266d8184608ef8fb4528d33aeb"
+    },
+    {
+      "name": "20260923213339_xero_payment_reference_link.sql",
+      "sha256": "b8272d733760e146e9321e4f7766a631c98359124a861cedd2765bdf5adcb6fd"
+    },
+    {
+      "name": "20260923222821_xero_grouped_preservation_link.sql",
+      "sha256": "f2affe8e8a300fb8eaa98f32d4361315e2266fcae031c3a1441e8ed33e248d33"
+    },
+    {
+      "name": "20260927154515_xero_financial_preview_persistence.sql",
+      "sha256": "d50f2b4950ddf1d3f11af40935b00a43c44214a28d46d09a7dcc500931251e5f"
+    },
+    {
+      "name": "20260927175805_xero_issued_supplier_preservation_link.sql",
+      "sha256": "c0389fd7f8dbccb29ddd5803633e447b7249998f1e0ad319b4d11c9f3b26c99b"
+    },
+    {
+      "name": "20260927185526_xero_issued_petroleum_preservation_link.sql",
+      "sha256": "fea7e1413af870e1201cd3f874ffd82521c418c8d83ec7743af4458b91d27461"
+    },
+    {
+      "name": "20260927213024_xero_petroleum_inactive_source_ownership.sql",
+      "sha256": "0ce7ad19cd82c030033104ce5972348d3a60aca26c4271607d4c82b8beb64537"
+    },
+    {
+      "name": "20260927223013_xero_trustee_source_cent_rounding.sql",
+      "sha256": "5e95c2806cc9aee5062f1aa64cf0d5a3ba879d32f9120357fab9bac5e43c352d"
+    },
+    {
+      "name": "20260928005135_xero_group_remittance_bank_evidence.sql",
+      "sha256": "7eebda937d97b5fb0760c9fa23c896003ecc3e8897fcad70a900a6a2f0ec90b5"
+    },
+    {
+      "name": "20260928033217_xero_issued_petroleum_attachment_preservation_v2.sql",
+      "sha256": "9de9e3efcce40172b9745c4c56b4fa51884eddecf4b7fb278993868a0f1aa206"
+    },
+    {
+      "name": "20260928053229_xero_document_field_correction_journal.sql",
+      "sha256": "b70a67341dc60c4fba8b74db61dd6dc1dd2321cd5b161774ce6f47cb19a19385"
+    },
+    {
+      "name": "20260929035058_dashboard_nom_b_policies.sql",
+      "sha256": "738fbdfe638252509b48dde1d01aca2a3c54c432b48607637223abc2534586ad"
+    },
+    {
+      "name": "20260929133157_people_access_groups.sql",
+      "sha256": "5e060fcef25458a913c419a265dc36471ca81abe94bef0954396bd1f9e08c776"
+    },
+    {
+      "name": "20260929141433_people_access_service_grants.sql",
+      "sha256": "dc528d78564ec7a55abb2c27ed14897a1404b88be64bde1d4ba532ffa7dc64ef"
+    },
+    {
+      "name": "20260929170347_xero_shared_control.sql",
+      "sha256": "e01a76c618231d4818d76cc173692001642e843e049cda7788610c1a7535878d"
+    },
+    {
+      "name": "20260929170953_xero_reconciliation_campaign.sql",
+      "sha256": "082f003ee923a22e31c17db166508e07e8f09896b018000732219d12891408b1"
+    },
+    {
+      "name": "20260929192752_xero_preview_checkpoint.sql",
+      "sha256": "f7129c3795bc365f5cce4a05b67ebc676b623465a91fe5664da0177497301926"
+    },
+    {
+      "name": "20260930004000_xero_preview_checkpoint_chunks.sql",
+      "sha256": "99788020af4f03e9fa8b48444c6352f2539511de4ba7fb4501d6214aa0faa1bb"
+    },
+    {
+      "name": "20260930004100_xero_financial_preview_staged.sql",
+      "sha256": "3fba57925fd385b9e687d3429b6be2ba48ad4115b384aff9c72e43a98a53084f"
+    },
+    {
+      "name": "20260930004200_xero_preview_payments_reference.sql",
+      "sha256": "4c7fd4135cc0f285117bc07d85b61dd2342468d52c591b0f006e67d9c20f7e34"
+    },
+    {
+      "name": "20260930004300_xero_preview_finalize_timeout.sql",
+      "sha256": "9752639a340689a46d384cdeeb6009147953fbf788b1393514fb1a511aac68cc"
+    },
+    {
+      "name": "20260930025541_xero_campaign_inventory_write_performance.sql",
+      "sha256": "f8da50d682d23cd1b3c44977a5c43674d6572c89cf76b64e78999c676adc5f56"
+    },
+    {
+      "name": "20260930043106_xero_campaign_approved_credit_retry.sql",
+      "sha256": "2ddd9ac10e4400bdfc957ee3d28e2c1f84de040119f6a1dfb8db5f4cc24a2142"
+    },
+    {
+      "name": "20260930044110_missing_nom_b_workflow.sql",
+      "sha256": "0a82b874b92373096f8504e9e45a9066f7ca266c1b92ca58ad59e2f19b6bae37"
+    },
+    {
+      "name": "20260930080623_xero_document_preview_timeout.sql",
+      "sha256": "56f61cfd12d1c32457cd924412db1c5bc5c780c8f99e7858604ad180a8d3f0f6"
+    }
+  ]
+}

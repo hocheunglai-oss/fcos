@@ -1,234 +1,192 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import { sourceInventory } from './sync-salesforce-shared-repository.mjs';
 import { writeDeveeSourceState } from './salesforce-workflow-state.mjs';
+import { openSalesforcePromotionJournal, salesforcePromotionHash, assertSuccessfulSalesforceReport } from './lib/salesforce-promotion-journal.mjs';
 
-const salesforce = FCOS_CONNECTION_POLICY.providers.find((provider) => provider.id === 'salesforce');
-const MANIFEST_INDEX = process.argv.indexOf('--manifest');
-const MANIFEST = MANIFEST_INDEX >= 0
-  ? process.argv[MANIFEST_INDEX + 1]
-  : (process.env.FCOS_SALESFORCE_MANIFEST || '');
-const CHECK_ONLY = process.argv.includes('--check-only');
-const SCHEMA_CUTOVER = process.argv.includes('--schema-cutover');
-const SCHEMA_BOOTSTRAP_INDEX = process.argv.indexOf('--schema-bootstrap');
-const SCHEMA_BOOTSTRAP = SCHEMA_BOOTSTRAP_INDEX >= 0 ? process.argv[SCHEMA_BOOTSTRAP_INDEX + 1] : '';
-const WAIT_MINUTES = process.env.FCOS_SALESFORCE_WAIT_MINUTES || '60';
+const salesforce = FCOS_CONNECTION_POLICY.providers.find(provider => provider.id === 'salesforce');
 const EXPECTED_ORDER = ['devee', 'qat', 'production'];
 const VARIABLE_CHARGE_DATA_PERMISSION = 'FCOS_Variable_Charges_Integration';
 const VARIABLE_CHARGE_API_PERMISSION = 'FCOS_Variable_Charges_API';
 const MASTER_CONTRACT_API_PERMISSION = 'FCOS_Master_Contracts_API';
 const MASTER_CONTRACT_DATA_PERMISSION = 'FCOS_Master_Contracts_Data';
-const HEDGE_INTEGRATION_PERMISSION = 'FCOS_Hedge_Integration';
 
-if (MANIFEST_INDEX >= 0 && (!MANIFEST || MANIFEST.startsWith('-'))) throw new Error('Provide a manifest path after --manifest.');
-if (SCHEMA_CUTOVER && (!SCHEMA_BOOTSTRAP || SCHEMA_BOOTSTRAP.startsWith('-'))) {
-  throw new Error('A schema cutover requires --schema-bootstrap manifest/<schema>.xml.');
-}
-if (!MANIFEST && !CHECK_ONLY) throw new Error('Salesforce promotion requires an explicit reviewed manifest. Use --manifest manifest/<change>.xml.');
-const sourcePath = MANIFEST ? path.resolve(process.cwd(), MANIFEST) : path.resolve(process.cwd(), 'force-app');
-const relativeSource = path.relative(process.cwd(), sourcePath);
-if (!relativeSource || relativeSource.startsWith('..') || path.isAbsolute(relativeSource) || !existsSync(sourcePath)) {
-  throw new Error(MANIFEST ? 'Salesforce manifest must be an existing file inside this project.' : 'The force-app source directory is missing.');
-}
-const manifestContent = MANIFEST ? readFileSync(sourcePath, 'utf8') : '';
-const manifestHasApex = /<name>Apex(?:Class|Trigger)<\/name>/u.test(manifestContent);
-
-function manifestTestClasses(manifestPath) {
+export function manifestTestClasses(manifestPath) {
   if (!manifestPath) return [];
   const xml = readFileSync(manifestPath, 'utf8');
-  const apexBlocks = [...xml.matchAll(/<types>([\s\S]*?)<name>ApexClass<\/name>[\s\S]*?<\/types>/gu)];
-  return [...new Set(apexBlocks.flatMap(([, block]) => (
-    [...block.matchAll(/<members>([^<]+)<\/members>/gu)].map(([, member]) => member.trim())
-  )).filter((member) => /Test$/u.test(member)))];
+  const blocks = [...xml.matchAll(/<types>([\s\S]*?)<name>ApexClass<\/name>[\s\S]*?<\/types>/gu)];
+  return [...new Set(blocks.flatMap(([, block]) => [...block.matchAll(/<members>([^<]+)<\/members>/gu)].map(([, member]) => member.trim())).filter(member => /Test$/u.test(member)))];
 }
 
-const EXPLICIT_TEST_CLASSES = (process.env.FCOS_SALESFORCE_TESTS || '').split(',').map((value) => value.trim()).filter(Boolean);
-const TEST_CLASSES = EXPLICIT_TEST_CLASSES.length ? EXPLICIT_TEST_CLASSES : manifestTestClasses(MANIFEST ? sourcePath : '');
-const TEST_LEVEL = process.env.FCOS_SALESFORCE_TEST_LEVEL
-  || (TEST_CLASSES.length ? 'RunSpecifiedTests' : manifestHasApex ? 'RunLocalTests' : 'RunRelevantTests');
-if (!['RunLocalTests', 'RunSpecifiedTests', 'RunRelevantTests'].includes(TEST_LEVEL)) {
-  throw new Error('FCOS_SALESFORCE_TEST_LEVEL must be RunLocalTests, RunSpecifiedTests, or RunRelevantTests.');
-}
-if (manifestHasApex && TEST_LEVEL === 'RunSpecifiedTests' && !TEST_CLASSES.length) {
-  throw new Error('An Apex promotion manifest must include at least one *Test Apex class or set FCOS_SALESFORCE_TESTS.');
-}
-
-const authoritativeInventory = sourceInventory();
-const crlfFiles = authoritativeInventory.files.filter((relativePath) => (
-  readFileSync(path.resolve(process.cwd(), salesforce.publication.sourceRoot, relativePath)).includes(Buffer.from('\r\n'))
-));
-if (crlfFiles.length) {
-  throw new Error(`Salesforce source must use LF line endings before deployment and mirror publication (${crlfFiles.length} file(s) use CRLF).`);
-}
-
-function sf(args) {
-  const result = spawnSync('sf', args, { cwd: process.cwd(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-  const parsed = (() => { try { return JSON.parse(result.stdout); } catch { return null; } })();
-  const resultFailures = Array.isArray(parsed?.result?.failures)
-    ? parsed.result.failures.map(({ name, message }) => `${name || 'Salesforce'}: ${message || 'failed'}`).join('; ')
-    : '';
-  if (result.status !== 0 || parsed?.status !== 0) {
-    throw new Error(parsed?.message || resultFailures || result.stderr || result.stdout || 'Salesforce CLI command failed.');
+export function promotionOptions(argv, env, cwd) {
+  const allowedValues = new Set(['--manifest', '--schema-bootstrap']);
+  const allowedFlags = new Set(['--check-only', '--schema-cutover']);
+  const values = {}, flags = new Set();
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (allowedFlags.has(arg) && !flags.has(arg)) flags.add(arg);
+    else if (allowedValues.has(arg) && !values[arg] && argv[i + 1] && !argv[i + 1].startsWith('-')) values[arg] = argv[++i];
+    else throw new Error('Unknown, duplicate or incomplete Salesforce promotion option.');
   }
-  return parsed;
-}
-
-function verify(environment) {
-  const display = sf(['org', 'display', '--target-org', environment.alias, '--json']).result;
-  const organization = sf(['data', 'query', '--target-org', environment.alias, '--query', 'SELECT Id, IsSandbox FROM Organization LIMIT 1', '--json']).result?.records?.[0];
-  const usernameMatches = !environment.username || display?.username === environment.username;
-  if (!usernameMatches || display?.id !== environment.orgId || display?.connectedStatus !== 'Connected' || organization?.Id !== environment.orgId || organization?.IsSandbox !== environment.isSandbox) {
-    const expectedUsername = environment.username ? ` and username ${environment.username}` : '';
-    throw new Error(`${environment.label} Salesforce identity mismatch. Expected ${environment.orgId}${expectedUsername}.`);
-  }
-}
-
-function assignPermission(environment, permissionSetName) {
-  verify(environment);
-  const username = environment.username || sf(['org', 'display', '--target-org', environment.alias, '--json']).result?.username;
-  if (!username) throw new Error(`${environment.label} authenticated username is unavailable.`);
-  const existing = sf([
-    'data', 'query', '--target-org', environment.alias,
-    '--query', `SELECT Id FROM PermissionSetAssignment WHERE Assignee.Username = '${username}' AND PermissionSet.Name = '${permissionSetName}' LIMIT 1`,
-    '--json',
-  ]).result?.records || [];
-  if (existing.length) return;
-  const result = sf([
-    'org', 'assign', 'permset', '--target-org', environment.alias,
-    '--name', permissionSetName, '--json',
-  ]).result;
-  const failures = Array.isArray(result?.failures) ? result.failures : [];
-  if (failures.length) throw new Error(`${environment.label} permission assignment failed safely.`);
-}
-
-for (const environment of salesforce.environments) verify(environment);
-
-if (salesforce.environments.map(({ key }) => key).join(',') !== EXPECTED_ORDER.join(',')) {
-  throw new Error('Salesforce promotion order must be DEVEE, QAT, then Production.');
-}
-
-function validate(environment) {
-  verify(environment);
-  const sourceArgs = MANIFEST ? ['--manifest', relativeSource] : ['--source-dir', relativeSource];
-  const command = ['project', 'deploy', 'validate', '--target-org', environment.alias, ...sourceArgs, '--wait', WAIT_MINUTES, '--json'];
-  command.push('--test-level', TEST_LEVEL);
-  if (TEST_LEVEL === 'RunSpecifiedTests') {
-    for (const testClass of TEST_CLASSES) command.push('--tests', testClass);
-  }
-  const result = sf(command).result;
-  if (result?.status !== 'Succeeded' || !result?.id) throw new Error(`${environment.label} validation did not succeed.`);
-  return { environment, jobId: result.id, status: result.status, components: `${result?.numberComponentsDeployed || 0}/${result?.numberComponentsTotal || 0}`, tests: `${result?.numberTestsCompleted || 0}/${result?.numberTestsTotal || 0}` };
-}
-
-function deploy(validation) {
-  verify(validation.environment);
-  const result = !manifestHasApex && MANIFEST
-    ? sf([
-        'project', 'deploy', 'start', '--target-org', validation.environment.alias,
-        '--manifest', relativeSource, '--test-level', 'RunRelevantTests',
-        '--wait', WAIT_MINUTES, '--json',
-      ]).result
-    : sf([
-        'project', 'deploy', 'quick', '--target-org', validation.environment.alias,
-        '--job-id', validation.jobId, '--wait', WAIT_MINUTES, '--json',
-      ]).result;
-  if (result?.status !== 'Succeeded') throw new Error(`${validation.environment.label} deployment did not succeed; later promotion stages were not started.`);
-  return {
-    environment: validation.environment.label,
-    orgId: validation.environment.orgId,
-    jobId: result?.id || validation.jobId,
-    status: result.status,
-    components: `${result?.numberComponentsDeployed || 0}/${result?.numberComponentsTotal || 0}`,
-    tests: `${result?.numberTestsCompleted || 0}/${result?.numberTestsTotal || 0}`,
-    deploymentMode: !manifestHasApex && MANIFEST ? 'all-or-none-metadata' : 'validated-quick-deploy',
+  const MANIFEST = values['--manifest'] || env.FCOS_SALESFORCE_MANIFEST || '';
+  const checkOnly = flags.has('--check-only');
+  const schemaCutover = flags.has('--schema-cutover');
+  if (!MANIFEST && !checkOnly) throw new Error('Salesforce promotion requires an explicit reviewed manifest.');
+  const localFile = relative => {
+    const absolute = path.resolve(cwd, relative), local = path.relative(cwd, absolute);
+    if (!local || local.startsWith('..') || path.isAbsolute(local) || !existsSync(absolute)) throw new Error('Salesforce manifest must exist inside this project.');
+    return { absolute, relative: local, bytes: readFileSync(absolute) };
   };
+  const manifest = MANIFEST ? localFile(MANIFEST) : null;
+  const bootstrap = values['--schema-bootstrap'] ? localFile(values['--schema-bootstrap']) : null;
+  if (schemaCutover && !bootstrap) throw new Error('A schema cutover requires --schema-bootstrap manifest/<schema>.xml.');
+  const manifestHasApex = /<name>Apex(?:Class|Trigger)<\/name>/u.test(manifest?.bytes.toString() || '');
+  const explicitTests = (env.FCOS_SALESFORCE_TESTS || '').split(',').map(v => v.trim()).filter(Boolean);
+  const tests = explicitTests.length ? explicitTests : manifestTestClasses(manifest?.absolute);
+  const TEST_LEVEL = schemaCutover ? 'RunLocalTests' : env.FCOS_SALESFORCE_TEST_LEVEL || (tests.length ? 'RunSpecifiedTests' : manifestHasApex ? 'RunLocalTests' : 'RunRelevantTests');
+  if (!['RunLocalTests', 'RunSpecifiedTests', 'RunRelevantTests'].includes(TEST_LEVEL)) throw new Error('FCOS_SALESFORCE_TEST_LEVEL is invalid.');
+  if (manifestHasApex && TEST_LEVEL === 'RunSpecifiedTests' && !tests.length) throw new Error('An Apex promotion manifest must include at least one *Test Apex class.');
+  const wait = env.FCOS_SALESFORCE_WAIT_MINUTES || '60';
+  if (!/^\d+$/.test(wait) || Number(wait) < 1 || Number(wait) > 120) throw new Error('Salesforce wait must be 1 to 120 minutes.');
+  return { MANIFEST, manifest, bootstrap, schemaCutover, manifestHasApex, tests, TEST_LEVEL, wait, checkOnly };
 }
 
-function deploySchemaBootstrap(environment) {
-  verify(environment);
-  const bootstrapPath = path.resolve(process.cwd(), SCHEMA_BOOTSTRAP);
-  const relativeBootstrap = path.relative(process.cwd(), bootstrapPath);
-  if (!relativeBootstrap || relativeBootstrap.startsWith('..') || path.isAbsolute(relativeBootstrap) || !existsSync(bootstrapPath)) {
-    throw new Error('The schema-bootstrap manifest must be an existing file inside this project.');
-  }
-  const command = [
-    'project', 'deploy', 'start', '--target-org', environment.alias,
-    '--manifest', relativeBootstrap, '--wait', WAIT_MINUTES, '--json',
-    '--test-level', environment.isSandbox ? 'NoTestRun' : 'RunRelevantTests',
-  ];
-  const result = sf(command).result;
-  if (result?.status !== 'Succeeded' || !result?.id) {
-    throw new Error(`${environment.label} schema-bootstrap deployment did not succeed; later promotion stages were not started.`);
-  }
-  return {
-    environment: environment.label,
-    orgId: environment.orgId,
-    jobId: result.id,
-    status: result.status,
-    components: `${result?.numberComponentsDeployed || 0}/${result?.numberComponentsTotal || 0}`,
-    tests: `${result?.numberTestsCompleted || 0}/${result?.numberTestsTotal || 0}`,
-    deploymentMode: 'all-or-none-schema-bootstrap',
+export async function promoteSalesforce({ argv = process.argv.slice(2), environment = process.env, cwd = process.cwd(),
+  run = spawnSync, policy = salesforce, inventory = () => sourceInventory(path.join(cwd, policy.publication.sourceRoot)),
+  writeSourceState = writeDeveeSourceState, now = () => new Date(), afterStage = () => {} } = {}) {
+  const options = promotionOptions(argv, environment, cwd);
+  const { MANIFEST, manifest, bootstrap, schemaCutover, manifestHasApex, TEST_LEVEL, tests, wait, checkOnly } = options;
+  if (policy.environments.map(e => e.key).join(',') !== EXPECTED_ORDER.join(',')) throw new Error('Salesforce promotion order must be DEVEE, QAT, then Production.');
+  const authoritativeInventory = inventory();
+  for (const relative of authoritativeInventory.files) if (readFileSync(path.join(cwd, policy.publication.sourceRoot, relative)).includes(Buffer.from('\r\n'))) throw new Error('Salesforce source must use LF line endings before deployment and mirror publication.');
+  const binding = { sourceTreeHash: authoritativeInventory.sourceTreeHash,
+    manifestSha256: manifest ? salesforcePromotionHash(manifest.bytes) : null,
+    bootstrapSha256: bootstrap ? salesforcePromotionHash(bootstrap.bytes) : null,
+    configurationSha256: salesforcePromotionHash(policy), schemaCutover, testLevel: TEST_LEVEL, tests, checkOnly };
+  const journal = openSalesforcePromotionJournal({ directory: path.join(cwd, '.fcos-cli/salesforce-promotions'), binding, now });
+  const raw = (program, args) => {
+    const result = run(program, args, { cwd, env: environment, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+    let parsed;
+    try { parsed = JSON.parse(result.stdout); } catch { throw new Error(`${program} returned an invalid response; submitted work must be reconciled before retry.`); }
+    if (result.status !== 0 || program === 'sf' && parsed.status !== 0) throw new Error(`${program} failed safely; promotion stopped at the saved stage.`);
+    return program === 'sf' ? parsed.result : parsed;
   };
-}
-
-const validations = [];
-const deployments = [];
-let sharedPublication = null;
-if (CHECK_ONLY) {
-  for (const environment of salesforce.environments) validations.push(validate(environment));
-} else {
-  const devee = salesforce.environments[0];
-  const deveeValidation = validate(devee);
-  validations.push(deveeValidation);
-  const deveeDeployment = deploy(deveeValidation);
-  deployments.push(deveeDeployment);
-  assignPermission(devee, VARIABLE_CHARGE_DATA_PERMISSION);
-  assignPermission(devee, VARIABLE_CHARGE_API_PERMISSION);
-  assignPermission(devee, MASTER_CONTRACT_API_PERMISSION);
-  assignPermission(devee, MASTER_CONTRACT_DATA_PERMISSION);
-  assignPermission(devee, HEDGE_INTEGRATION_PERMISSION);
-  const inventory = sourceInventory();
-  writeDeveeSourceState({
-    sourceTreeHash: inventory.sourceTreeHash,
-    deploymentJobId: deveeDeployment.jobId,
-    deploymentScope: relativeSource,
-  });
-
-  const publication = spawnSync(process.execPath, ['scripts/sync-salesforce-shared-repository.mjs', '--publish'], {
-    cwd: process.cwd(),
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  if (publication.status !== 0) throw new Error(publication.stderr || publication.stdout || 'Shared Salesforce publication failed.');
-  try {
-    sharedPublication = JSON.parse(publication.stdout);
-  } catch {
-    throw new Error('Shared Salesforce publication returned an invalid response.');
+  const sf = args => raw('sf', args);
+  function verify(environment) {
+    const display = sf(['org', 'display', '--target-org', environment.alias, '--json']);
+    const organization = sf(['data', 'query', '--target-org', environment.alias, '--query', 'SELECT Id, IsSandbox FROM Organization LIMIT 1', '--json'])?.records?.[0];
+    const usernameMatches = !environment.username || display?.username === environment.username;
+    if (!usernameMatches || display?.id !== environment.orgId || display?.connectedStatus !== 'Connected'
+      || organization?.Id !== environment.orgId || organization?.IsSandbox !== environment.isSandbox) throw new Error(`${environment.label} Salesforce identity mismatch.`);
+    return display;
   }
-
-  for (const environment of salesforce.environments.slice(1)) {
-    if (SCHEMA_CUTOVER) {
-      deployments.push(deploySchemaBootstrap(environment));
-      assignPermission(environment, VARIABLE_CHARGE_DATA_PERMISSION);
-      assignPermission(environment, MASTER_CONTRACT_DATA_PERMISSION);
-      assignPermission(environment, HEDGE_INTEGRATION_PERMISSION);
+  function recheckSource() {
+    if (inventory().sourceTreeHash !== binding.sourceTreeHash
+      || (manifest && salesforcePromotionHash(readFileSync(manifest.absolute)) !== binding.manifestSha256)
+      || (bootstrap && salesforcePromotionHash(readFileSync(bootstrap.absolute)) !== binding.bootstrapSha256)
+      || salesforcePromotionHash(policy) !== binding.configurationSha256) throw new Error('Salesforce source or configuration changed during promotion; restart from DEVEE for the new binding.');
+  }
+  function report(environment, jobId, validation = false) {
+    verify(environment);
+    const result = sf(['project', 'deploy', 'report', '--target-org', environment.alias, '--job-id', jobId, '--wait', wait, '--json']);
+    return assertSuccessfulSalesforceReport(result, { validation, jobId, environment });
+  }
+  function job(environment, operation, command, validation = false) {
+    recheckSource(); verify(environment);
+    let state = journal.state.stages[environment.key]?.[operation];
+    if (state?.status === 'submitting' && !state.jobId) throw new Error(`${environment.label} ${operation} has an uncertain submission; reconcile the job ID before resuming. No duplicate was submitted.`);
+    if (state?.jobId) {
+      const verified = report(environment, state.jobId, validation);
+      if (state.status !== 'succeeded') journal.update(environment.key, operation, { ...verified, status: 'succeeded' });
+      return verified;
     }
-    const validation = validate(environment);
-    validations.push(validation);
-    deployments.push(deploy(validation));
-    assignPermission(environment, VARIABLE_CHARGE_API_PERMISSION);
-    assignPermission(environment, MASTER_CONTRACT_API_PERMISSION);
-    assignPermission(environment, MASTER_CONTRACT_DATA_PERMISSION);
-    assignPermission(environment, HEDGE_INTEGRATION_PERMISSION);
+    journal.update(environment.key, operation, { status: 'submitting' });
+    const submitted = sf(command);
+    if (!submitted?.id) throw new Error('Salesforce submission returned no job ID; reconcile before retry.');
+    journal.update(environment.key, operation, { status: 'submitted', jobId: submitted.id });
+    const verified = report(environment, submitted.id, validation);
+    journal.update(environment.key, operation, { ...verified, status: 'succeeded' });
+    return verified;
   }
+  function validate(environment) {
+    const sourceArgs = manifest ? ['--manifest', manifest.relative] : ['--source-dir', 'force-app'];
+    const command = ['project', 'deploy', 'validate', '--target-org', environment.alias, ...sourceArgs, '--test-level', TEST_LEVEL, '--async', '--json'];
+    if (TEST_LEVEL === 'RunSpecifiedTests') for (const test of tests) command.push('--tests', test);
+    return job(environment, 'validation', command, true);
+  }
+  function deploy(environment, validation) {
+    // Always consume the verified validation job; metadata-only changes also resume without revalidation.
+    const deployed = job(environment, 'deployment', ['project', 'deploy', 'quick', '--target-org', environment.alias, '--job-id', validation.jobId, '--async', '--json']);
+    return { ...deployed, deploymentMode: !manifestHasApex && MANIFEST ? 'all-or-none-metadata' : 'validated-quick-deploy' };
+  }
+  function assignPermission(environment, permissionSetName) {
+    recheckSource();
+    const display = verify(environment);
+    const username = environment.username || display.username;
+    if (!username || !/^[A-Za-z0-9@._+\-]+$/.test(username)) throw new Error('Authenticated Salesforce username is invalid.');
+    const args = ['data', 'query', '--target-org', environment.alias, '--query', `SELECT Id FROM PermissionSetAssignment WHERE Assignee.Username = '${username}' AND PermissionSet.Name = '${permissionSetName}' LIMIT 1`, '--json'];
+    if (!sf(args)?.records?.length) {
+      const result = sf(['org', 'assign', 'permset', '--target-org', environment.alias, '--name', permissionSetName, '--json']);
+      if (result?.failures?.length || !sf(args)?.records?.length) throw new Error('Salesforce permission assignment could not be verified.');
+    }
+    journal.update(environment.key, `permission:${permissionSetName}`, { status: 'succeeded', orgId: environment.orgId });
+  }
+  function mirror(mode) {
+    recheckSource();
+    const result = raw(process.execPath, ['scripts/sync-salesforce-shared-repository.mjs', mode]);
+    if (result.repository !== policy.publication.repository || result.account !== policy.publication.requiredAccount
+      || result.sourceTreeHash !== binding.sourceTreeHash || result.sourceEnvironment !== 'devee'
+      || result.pullRequest?.isDraft !== true || typeof result.pullRequest?.url !== 'string') throw new Error('Shared Salesforce mirror must match exact DEVEE source and an open draft PR.');
+    return result;
+  }
+  try {
+    for (const environment of policy.environments) verify(environment);
+    const validations = [], deployments = [];
+    let sharedPublication = null;
+    // Before any resumed downstream mutation, recheck all successful upstream reports.
+    for (const environment of policy.environments) {
+      const stage = journal.state.stages[environment.key];
+      for (const op of ['bootstrap', 'validation', 'deployment']) if (stage?.[op]?.status === 'succeeded') report(environment, stage[op].jobId, op === 'validation');
+    }
+    for (const environment of policy.environments) {
+      recheckSource();
+      if (environment.key !== 'devee' && !checkOnly) {
+        const devee = policy.environments[0];
+        const upstream = journal.state.stages[devee.key]?.deployment;
+        if (upstream?.status !== 'succeeded') throw new Error('Successful DEVEE deployment is required before shared publication.');
+        report(devee, upstream.jobId);
+        if (!journal.state.stages.shared_mirror?.publication) {
+          writeSourceState({ sourceTreeHash: binding.sourceTreeHash, deploymentJobId: upstream.jobId, deploymentScope: manifest.relative });
+          sharedPublication = mirror('--publish');
+          journal.update('shared_mirror', 'publication', { status: 'succeeded', result: sharedPublication });
+        }
+        sharedPublication = mirror('--check');
+        journal.update('shared_mirror', 'verification', { status: 'succeeded', result: sharedPublication });
+      }
+      if (schemaCutover && !checkOnly) {
+        deployments.push({ ...job(environment, 'bootstrap', ['project', 'deploy', 'start', '--target-org', environment.alias, '--manifest', bootstrap.relative,
+          '--test-level', environment.isSandbox ? 'NoTestRun' : 'RunRelevantTests', '--async', '--json']), deploymentMode: 'all-or-none-schema-bootstrap' });
+        assignPermission(environment, VARIABLE_CHARGE_DATA_PERMISSION);
+        assignPermission(environment, MASTER_CONTRACT_DATA_PERMISSION);
+      }
+      const validation = validate(environment);
+      validations.push({ environment: environment.label, ...validation });
+      if (!checkOnly) {
+        const deployed = deploy(environment, validation);
+        deployments.push({ environment: environment.label, ...deployed });
+        for (const permission of [VARIABLE_CHARGE_DATA_PERMISSION, VARIABLE_CHARGE_API_PERMISSION, MASTER_CONTRACT_API_PERMISSION, MASTER_CONTRACT_DATA_PERMISSION]) assignPermission(environment, permission);
+      }
+      await afterStage(environment.key, journal);
+    }
+    if (!checkOnly) sharedPublication = mirror('--check'); // mandatory salesforce:mirror:verify completion
+    return { mode: checkOnly ? 'validate' : schemaCutover ? 'schema-cutover' : 'validate-then-deploy', source: manifest?.relative || 'force-app',
+      sourceTreeHash: binding.sourceTreeHash, journal: journal.file, validations, deployments, sharedPublication };
+  } finally { journal.close(); }
 }
 
-console.log(JSON.stringify({
-  mode: CHECK_ONLY ? 'validate' : SCHEMA_CUTOVER ? 'validate-devee-then-schema-cutover' : 'validate-then-deploy',
-  source: relativeSource,
-  validations: validations.map(({ environment, ...result }) => ({ environment: environment.label, orgId: environment.orgId, ...result })),
-  deployments,
-  sharedPublication,
-}, null, 2));
+if (process.argv[1] && realpathSync(path.resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url))) promoteSalesforce().then(result => {
+  console.log(JSON.stringify(result, null, 2));
+}).catch(error => { console.error(error.message); process.exitCode = 1; });

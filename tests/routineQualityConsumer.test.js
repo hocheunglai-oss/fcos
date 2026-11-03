@@ -10,7 +10,7 @@ import { load } from 'js-yaml';
 
 const require = createRequire(import.meta.url);
 const workflow = load(readFileSync(new URL('../.github/workflows/quality.yml', import.meta.url), 'utf8'));
-const consumer = workflow.jobs['authenticated-browser'].steps[0].with.script;
+const consumer = workflow.jobs['authenticated-browser'].steps.find(step => step.name === 'Require trusted authenticated-candidate evidence artifact').with.script;
 const execute = new (Object.getPrototypeOf(async function () {}).constructor)('github', 'context', 'core', 'require', consumer);
 const digest = data => createHash('sha256').update(data).digest('hex');
 const candidate = 'a'.repeat(40), harness = 'b'.repeat(40), owner = 'hocheunglai-oss', repo = 'fcos', operator = { id: 12, login: owner };
@@ -138,7 +138,10 @@ test('consumer has only provider reads and no checkout, protected environment, i
   const job = workflow.jobs['authenticated-browser'];
   assert.deepEqual(job.permissions, { actions: 'read', contents: 'read' });
   assert.equal(job.environment, undefined);
-  assert.equal(job.steps.length, 1);
+  assert.equal(job.steps.length, 2);
+  assert.equal(job.needs, 'hosted-readiness');
+  assert.match(job.steps[0].run, /READINESS_ACCEPTED/);
+  assert.equal(job.steps[1].if, "${{ vars.FCOS_HOSTED_READINESS_ENABLED != 'true' }}");
   assert.doesNotMatch(JSON.stringify(job), /secrets\.|actions\/checkout|id-token|continue-on-error/);
   assert.doesNotMatch(consumer, /createDeployment|updateEnvironment|rerunWorkflow|workflow_dispatch.*POST/);
   const configuration = JSON.parse(readFileSync(new URL('../vercel.json', import.meta.url), 'utf8'));

@@ -1,5 +1,6 @@
+import { AUTO_AI_MODEL, AI_MODEL_SELECTIONS, isAllowedAiSelection, resolveAiModel, aiRequestOptions } from './_aiModelRouting.js';
 import { createHmac } from 'node:crypto';
-import { DASHBOARD_AI_MODELS, DEFAULT_DASHBOARD_AI_MODEL, dashboardAiUsageFromResponse, isAllowedDashboardAiModel } from './_dashboardAi.js';
+import { dashboardAiUsageFromResponse } from './_dashboardAi.js';
 import { fetchEmailRouterDetail } from './_emailRouterCore.js';
 
 export const EMAIL_ROUTER_CATEGORIES = Object.freeze([
@@ -18,6 +19,13 @@ export const EMAIL_ROUTER_CATEGORIES = Object.freeze([
 ]);
 
 const STOP_WORDS = new Set(['and', 'the', 'for', 'from', 'with', 'this', 'that', 'your', 'our', 'email', 'message', 'reply', 'forward', 'fwd', 're']);
+
+// Leave time to durably record either success or failure before the caller's
+// deadline. The database lease is longer (360s) than this whole job budget.
+const LEARNING_WORK_MS = 50_000;
+const LEARNING_STORAGE_MS = 5_000;
+const LEARNING_MIN_REMAINING_MS = 75_000;
+const LEARNING_DEFAULT_BUDGET_MS = 180_000;
 
 function table(client, name) {
   return client.schema('emailrouter').from(name);
@@ -254,17 +262,20 @@ export async function recordEmailRouterAdvisorRecommendation(client, { mailboxId
 }
 
 async function learningSettings(client) {
-  const { data, error } = await table(client, 'settings').select('key,value').in('key', ['advisor.learning_enabled', 'advisor.model']);
+  const { data, error } = await table(client, 'settings').select('key,value').in('key', ['advisor.learning_enabled', 'advisor.model'])
+    .abortSignal(AbortSignal.timeout(LEARNING_STORAGE_MS));
   if (error) throw learningError('Email Router learning settings are unavailable.', 503, 'EMAIL_ROUTER_LEARNING_SETTINGS_UNAVAILABLE');
   const values = new Map((data || []).map((row) => [row.key, row.value]));
   const requestedModel = values.get('advisor.model')?.modelId;
   return {
     enabled: values.get('advisor.learning_enabled')?.enabled !== false,
-    modelId: isAllowedDashboardAiModel(requestedModel) ? requestedModel : DEFAULT_DASHBOARD_AI_MODEL,
+    modelId: isAllowedAiSelection(requestedModel) ? requestedModel : AUTO_AI_MODEL,
   };
 }
 
-async function classifyMessage(client, action, message, modelId, dependencies) {
+async function classifyMessage(message, modelId, dependencies) {
+  const routing = resolveAiModel({ task: 'email_classification', selection: modelId });
+  modelId = routing.modelId;
   const apiKey = String(dependencies.apiKey || process.env.OPENAI_API_KEY || '').trim();
   if (!apiKey) throw learningError('The protected OpenAI service is not configured.', 503, 'OPENAI_NOT_CONFIGURED');
   const response = await (dependencies.fetchImpl || fetch)('https://api.openai.com/v1/responses', {
@@ -273,8 +284,7 @@ async function classifyMessage(client, action, message, modelId, dependencies) {
     body: JSON.stringify({
       model: modelId,
       store: false,
-      max_output_tokens: 100,
-      ...(modelId.startsWith('gpt-5') ? { reasoning: { effort: 'low' } } : {}),
+      ...aiRequestOptions(routing, 100),
       input: [
         { role: 'system', content: [{ type: 'input_text', text: 'Classify this shared-mailbox message into exactly one allowed routing category. Do not quote or repeat the message.' }] },
         { role: 'user', content: [{ type: 'input_text', text: JSON.stringify({ subject: String(message?.subject || '').slice(0, 500), messageText: cleanMessageText(message), categories: EMAIL_ROUTER_CATEGORIES }) }] },
@@ -289,95 +299,96 @@ async function classifyMessage(client, action, message, modelId, dependencies) {
   let parsed;
   try { parsed = JSON.parse(output); } catch { throw learningError('Email Router learning classification was invalid.', 502, 'EMAIL_ROUTER_LEARNING_CLASSIFICATION_INVALID'); }
   const usage = dashboardAiUsageFromResponse(payload, modelId);
-  await table(client, 'ai_usage_events').insert({
-    message_id: action.message_id,
-    mail_action_id: action.id,
-    actor_user_id: action.requested_by,
-    model_id: modelId,
-    provider_request_id: usage.openAiResponseId,
-    input_tokens: usage.inputTokens,
-    cached_input_tokens: usage.cachedInputTokens,
-    output_tokens: usage.outputTokens,
-    reasoning_tokens: usage.reasoningTokens,
-    total_tokens: usage.totalTokens,
-    cost_usd: usage.estimatedCostUsd,
-    outcome: 'success',
-  });
-  return EMAIL_ROUTER_CATEGORIES.includes(parsed.routingCategory) ? parsed.routingCategory : 'other';
+  return {
+    category: EMAIL_ROUTER_CATEGORIES.includes(parsed.routingCategory) ? parsed.routingCategory : 'other',
+    usage: {
+      model_id: modelId,
+      provider_request_id: usage.openAiResponseId,
+      input_tokens: usage.inputTokens,
+      cached_input_tokens: usage.cachedInputTokens,
+      output_tokens: usage.outputTokens,
+      reasoning_tokens: usage.reasoningTokens,
+      total_tokens: usage.totalTokens,
+      cost_usd: usage.estimatedCostUsd,
+    },
+  };
 }
 
-export async function processEmailRouterLearningJobs({ client, mailbox, limit = 10 }, dependencies = {}) {
+async function learningRpc(client, name, args) {
+  const { data, error } = await client.rpc(name, args).abortSignal(AbortSignal.timeout(LEARNING_STORAGE_MS));
+  if (error) throw learningError('Email Router learning storage is unavailable.', 503, 'EMAIL_ROUTER_LEARNING_STORAGE_UNAVAILABLE');
+  return data;
+}
+
+async function learningResult(client, mailbox, job, modelId, dependencies) {
+  const controller = new AbortController();
+  const timeoutError = learningError('Email Router learning work timed out.', 503, 'EMAIL_ROUTER_LEARNING_TIMEOUT');
+  let timeout;
+  const deadline = new Promise((_, reject) => {
+    timeout = setTimeout(() => { controller.abort(timeoutError); reject(timeoutError); }, LEARNING_WORK_MS);
+  });
+  const fetchImpl = dependencies.fetchImpl || fetch;
+  const boundedDependencies = {
+    ...dependencies,
+    fetchImpl: (url, options = {}) => {
+      controller.signal.throwIfAborted();
+      return fetchImpl(url, { ...options, signal: options.signal
+        ? AbortSignal.any([controller.signal, options.signal]) : controller.signal });
+    },
+  };
+  const work = (async () => {
+    const message = await (dependencies.fetchDetail || fetchEmailRouterDetail)({
+      client, mailbox, messageId: job.mail_actions.messages.provider_message_id, hasAttachmentsHint: false,
+    }, boundedDependencies);
+    controller.signal.throwIfAborted();
+    const features = buildEmailRouterLearningFeatures(message, dependencies.env || process.env);
+    const { category, usage } = await classifyMessage(message, modelId, boundedDependencies);
+    controller.signal.throwIfAborted();
+    return {
+      routing_category: category,
+      sender_fingerprint: features.senderFingerprint,
+      sender_domain_fingerprint: features.senderDomainFingerprint,
+      subject_token_fingerprints: features.subjectTokenFingerprints,
+      attachment_profile: features.attachmentProfile,
+      usage,
+    };
+  })();
+  try { return await Promise.race([work, deadline]); } finally {
+    clearTimeout(timeout);
+    controller.abort();
+  }
+}
+
+export async function processEmailRouterLearningJobs({ client, mailbox, limit = 10, deadlineAt }, dependencies = {}) {
+  const now = dependencies.now || Date.now;
+  const deadline = deadlineAt == null ? now() + LEARNING_DEFAULT_BUDGET_MS : Number(deadlineAt);
+  const summary = { processed: 0, completed: 0, failed: 0, deferred: false, disabled: false };
+  const hasTime = () => Number.isFinite(deadline) && deadline - now() >= LEARNING_MIN_REMAINING_MS;
+  if (!hasTime()) return { ...summary, deferred: true };
   const settings = await learningSettings(client);
-  if (!settings.enabled) return { processed: 0, completed: 0, disabled: true };
-  const { data: jobs, error } = await table(client, 'advisor_learning_jobs')
-    .select('id,mail_action_id,state,attempt_count,mail_actions(id,message_id,requested_by,action_type,state,post_action_mode,post_action_folder_id,learning_recipients_complete,messages(id,provider_message_id,mailbox_id),mail_action_destinations(destination_id,group_id,recipient_kind,position))')
-    .in('state', ['pending', 'failed'])
-    .lte('next_attempt_at', new Date().toISOString())
-    .order('next_attempt_at')
-    .limit(Math.min(25, Math.max(1, Number(limit) || 10)));
-  if (error) throw learningError('Email Router learning jobs are unavailable.', 503, 'EMAIL_ROUTER_LEARNING_STORAGE_UNAVAILABLE');
-  let completed = 0;
-  for (const job of jobs || []) {
-    const action = Array.isArray(job.mail_actions) ? job.mail_actions[0] : job.mail_actions;
-    const messageRow = Array.isArray(action?.messages) ? action.messages[0] : action?.messages;
-    if (!action || !messageRow || action.state !== 'confirmed' || !['redirect', 'forward'].includes(action.action_type)) continue;
-    const { data: claimed } = await table(client, 'advisor_learning_jobs')
-      .update({ state: 'processing', attempt_count: Number(job.attempt_count || 0) + 1, updated_at: new Date().toISOString() })
-      .eq('id', job.id)
-      .in('state', ['pending', 'failed'])
-      .select('id')
-      .maybeSingle();
-    if (!claimed) continue;
+  if (!settings.enabled) return { ...summary, disabled: true };
+  for (let index = 0; index < Math.min(25, Math.max(1, Number(limit) || 10)); index += 1) {
+    if (!hasTime()) { summary.deferred = true; break; }
+    // Claim only the next item: preclaiming a batch makes later items expire
+    // while earlier provider calls are still running.
+    const job = await learningRpc(client, 'claim_emailrouter_learning_job', { p_mailbox_id: mailbox.id });
+    if (!job) break;
+    summary.processed += 1;
+    if (job.exhausted) { summary.failed += 1; continue; }
+    const claim = { p_job_id: job.id, p_attempt_count: job.attempt_count, p_claimed_at: job.updated_at };
     try {
-      const message = await fetchEmailRouterDetail({ client, mailbox, messageId: messageRow.provider_message_id, hasAttachmentsHint: false }, dependencies);
-      const category = await classifyMessage(client, action, message, settings.modelId, dependencies);
-      const features = buildEmailRouterLearningFeatures(message, dependencies.env || process.env);
-      const { data: outcome, error: outcomeError } = await table(client, 'advisor_learning_outcomes').upsert({
-        mail_action_id: action.id,
-        mailbox_id: mailbox.id,
-        routing_category: category,
-        sender_fingerprint: features.senderFingerprint,
-        sender_domain_fingerprint: features.senderDomainFingerprint,
-        subject_token_fingerprints: features.subjectTokenFingerprints,
-        attachment_profile: features.attachmentProfile,
-        action_type: action.action_type,
-        post_action_mode: action.post_action_mode || 'keep_current',
-        post_action_folder_id: action.post_action_folder_id || null,
-        recipients_complete: action.learning_recipients_complete !== false,
-        active: true,
-        disabled_at: null,
-        disabled_by: null,
-        disabled_reason: null,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: 'mail_action_id' }).select('id').single();
-      if (outcomeError) throw outcomeError;
-      await table(client, 'advisor_learning_outcome_destinations').delete().eq('outcome_id', outcome.id);
-      const destinations = (action.mail_action_destinations || []).map((item) => ({
-        outcome_id: outcome.id,
-        destination_id: item.destination_id || null,
-        group_id: item.group_id || null,
-        recipient_kind: item.recipient_kind,
-        position: item.position,
-      }));
-      if (destinations.length) {
-        const { error: destinationError } = await table(client, 'advisor_learning_outcome_destinations').insert(destinations);
-        if (destinationError) throw destinationError;
-      }
-      await Promise.all([
-        table(client, 'advisor_learning_jobs').update({ state: 'completed', completed_at: new Date().toISOString(), failure_code: null, updated_at: new Date().toISOString() }).eq('id', job.id),
-        table(client, 'mail_actions').update({ learning_state: 'completed' }).eq('id', action.id),
-      ]);
-      completed += 1;
+      // Existing (including intentionally forgotten) outcomes are authoritative.
+      // The RPC repairs legacy partial recipients without reclassifying content.
+      const result = job.has_outcome ? null : await learningResult(client, mailbox, job, settings.modelId, dependencies);
+      const completed = await learningRpc(client, 'finalize_emailrouter_learning_job', { ...claim, p_result: result });
+      if (completed) summary.completed += 1;
     } catch (failure) {
       const failureCode = String(failure?.code || 'email_router_learning_failed').toLowerCase().replaceAll(/[^a-z0-9_.-]/g, '_').slice(0, 120);
-      const delayMinutes = Math.min(24 * 60, 2 ** Math.min(10, Number(job.attempt_count || 0) + 1));
-      await Promise.all([
-        table(client, 'advisor_learning_jobs').update({ state: 'failed', failure_code: failureCode, next_attempt_at: new Date(Date.now() + delayMinutes * 60_000).toISOString(), updated_at: new Date().toISOString() }).eq('id', job.id),
-        table(client, 'mail_actions').update({ learning_state: 'failed' }).eq('id', action.id),
-      ]);
+      const failed = await learningRpc(client, 'finalize_emailrouter_learning_job', { ...claim, p_failure_code: failureCode });
+      if (failed) summary.failed += 1;
     }
   }
-  return { processed: (jobs || []).length, completed, disabled: false };
+  return summary;
 }
 
 export async function listEmailRouterLearnedRoutes(client, mailboxId) {
@@ -408,4 +419,4 @@ export async function listEmailRouterLearnedRoutes(client, mailboxId) {
   return [...aggregates.values()].sort((left, right) => right.count - left.count || String(right.latestAt).localeCompare(String(left.latestAt)));
 }
 
-export const EMAIL_ROUTER_ADVISOR_MODELS = DASHBOARD_AI_MODELS;
+export const EMAIL_ROUTER_ADVISOR_MODELS = AI_MODEL_SELECTIONS;

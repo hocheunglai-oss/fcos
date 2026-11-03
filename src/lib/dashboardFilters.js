@@ -48,6 +48,8 @@ export function formatSelectedMonths(selectedMonths) {
 
 export const DASHBOARD_FILTER_STORAGE_KEY = 'fcos:dashboard-filter-v3';
 export const DASHBOARD_SAVED_VIEWS_STORAGE_KEY = 'fcos:dashboard-saved-views-v1';
+export const KOREA_DESK_COUNTRY = 'KOREA';
+export const KOREA_DESK_MODES = ['all', 'include', 'exclude'];
 
 export function normalizeDashboardSavedViews(input) {
   if (!Array.isArray(input)) return [];
@@ -142,6 +144,7 @@ export function normalizeDashboardFilters(input = {}) {
   const months = [...new Set((input.selectedMonths || fallbackPeriod.selectedMonths).map(Number).filter((month) => month >= 1 && month <= 12))].sort((a, b) => a - b);
   const legacyLocationId = String(input.portCountryId ?? '').trim();
   const legacyCountry = legacyLocationId.toLowerCase().startsWith('country:');
+  const koreaDeskMode = KOREA_DESK_MODES.includes(input.koreaDeskMode) ? input.koreaDeskMode : 'all';
   return {
     datePreset,
     selectedYears: years.length ? years : [THIS_YEAR],
@@ -166,10 +169,11 @@ export function normalizeDashboardFilters(input = {}) {
     group: String(input.group ?? '').trim(),
     groupId: String(input.groupId ?? '').trim(),
     groupAccountIds: [...new Set((Array.isArray(input.groupAccountIds) ? input.groupAccountIds : []).map((value) => String(value || '').trim()).filter(Boolean))],
-    port: String(input.port ?? (legacyCountry ? '' : input.portCountry ?? '')).trim(),
-    portId: String(input.portId ?? (legacyCountry ? '' : legacyLocationId)).trim(),
-    country: String(input.country ?? (legacyCountry ? input.portCountry ?? '' : '')).trim(),
-    countryCode: String(input.countryCode ?? (legacyCountry ? legacyLocationId.slice('country:'.length) : '')).trim().toUpperCase(),
+    koreaDeskMode,
+    port: koreaDeskMode === 'all' ? String(input.port ?? (legacyCountry ? '' : input.portCountry ?? '')).trim() : '',
+    portId: koreaDeskMode === 'all' ? String(input.portId ?? (legacyCountry ? '' : legacyLocationId)).trim() : '',
+    country: koreaDeskMode === 'all' ? String(input.country ?? (legacyCountry ? input.portCountry ?? '' : '')).trim() : '',
+    countryCode: koreaDeskMode === 'all' ? String(input.countryCode ?? (legacyCountry ? legacyLocationId.slice('country:'.length) : '')).trim().toUpperCase() : '',
   };
 }
 
@@ -179,14 +183,17 @@ export function dashboardFilterPayload(input = {}) {
     ? filters.groupAccountIds.length ? filters.groupAccountIds : filters.companyId ? [filters.companyId] : []
     : [];
   const legacySupplierIds = filters.counterpartyMode === 'supplier' && filters.companyId ? [filters.companyId] : [];
-  const countryCodes = filters.countryCode ? [filters.countryCode] : [];
+  const countryCodes = filters.koreaDeskMode === 'include'
+    ? [KOREA_DESK_COUNTRY]
+    : filters.countryCode ? [filters.countryCode] : [];
+  const excludedCountryCodes = filters.koreaDeskMode === 'exclude' ? [KOREA_DESK_COUNTRY] : [];
   const portIds = filters.portId ? [filters.portId] : [];
   return {
     dateWindows: buildDashboardDateWindows(filters.selectedYears, filters.selectedMonths),
     disputeOnly: filters.disputeOnly,
     counterpartyMode: filters.counterpartyMode,
     counterparty: filters.counterparty ? { entityType: filters.counterparty.entityType, entityId: filters.counterparty.entityId } : null,
-    filters: { accountIds: legacyAccountIds, supplierIds: legacySupplierIds, portIds, countryCodes },
+    filters: { accountIds: legacyAccountIds, supplierIds: legacySupplierIds, portIds, countryCodes, excludedCountryCodes },
   };
 }
 

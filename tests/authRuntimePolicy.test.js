@@ -24,10 +24,14 @@ test('configured authentication is target locked and permits public keys only', 
     assert.equal(resolveAuthRuntimePolicy({ url, publicKey: 'sb_publishable_fixture', ...overrides }).configured, false);
   }
   for (const role of ['anon', 'service_role', 'authenticated']) {
-    const publicKey = `fixture.${Buffer.from(JSON.stringify({ role })).toString('base64url')}.fixture`;
+    const publicKey = `fixture.${Buffer.from(JSON.stringify({ role, ref: fcosConnectionIdentifier('supabase', 'Project ref') })).toString('base64url')}.fixture`;
     assert.equal(resolveAuthRuntimePolicy({ url, publicKey }).configured, role === 'anon');
   }
   assert.equal(resolveAuthRuntimePolicy({ url, publicKey: 'malformed' }).configured, false);
+  for (const ref of [undefined, 'another-project']) {
+    const publicKey = `fixture.${Buffer.from(JSON.stringify({ role: 'anon', ref })).toString('base64url')}.fixture`;
+    assert.equal(resolveAuthRuntimePolicy({ url, publicKey }).configured, false);
+  }
   assert.equal(resolveAuthRuntimePolicy({ url: 'http://127.0.0.1:54321', publicKey: 'sb_publishable_local', development: true, hostname: 'localhost' }).configured, true);
   assert.equal(resolveAuthRuntimePolicy({ url: 'http://127.0.0.1:54321', publicKey: 'sb_publishable_local', development: false, hostname: 'localhost' }).configured, false);
 });

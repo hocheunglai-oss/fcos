@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 2,
+  "contract": "fcos-hosted-release/v2",
+  "initialMode": "frozen",
+  "activationRequiresHostedQualification": true,
+  "legacyCoordinatorMustBeFenced": true,
+  "authorizationValiditySeconds": 86400,
+  "productionEnvironment": "fcos-production-release",
+  "previewEnvironment": "fcos-hosted-preview",
+  "verificationEnvironment": "fcos-hosted-verification",
+  "normalRoleEnvironment": "fcos-hosted-normal-verification",
+  "restrictedEnvironment": "fcos-hosted-restricted-verification",
+  "resumeEnvironment": "fcos-hosted-production-resume",
+  "notificationReceiptRequiredForActivation": true,
+  "credentialPolicy": {
+    "separatePreviewAndProduction": true,
+    "requireProjectConfinement": true,
+    "rotateOnRun": false,
+    "exportMacSigningKey": false
+  },
+  "notifications": [
+    "approval_actionable",
+    "intervention_required",
+    "rolled_back",
+    "complete"
+  ],
+  "normalRoleModules": 15,
+  "automaticRollback": "compatible_previous_only",
+  "automaticSchemaRollback": false,
+  "requiredProductionStages": [
+    "compatibility",
+    "application"
+  ],
+  "dependencyEnvironment": "fcos-hosted-dependency-verification"
+}

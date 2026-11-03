@@ -82,3 +82,11 @@ objects, source manifests, first-rollout refusals and final2f4 ordering are reta
 base metadata; original object inventory, observation bindings, packed bytes and
 non-checkout members remain identical. The helper authenticates the old v3 manifest
 hash separately and verifies the v4-to-v3 history before consuming current source.
+
+The hosted verification consolidation adds `fixture-manifest-v20.json` and
+`source-bindings-v27.json` for the actual additive normal-role and signer
+source seams. The helper authenticates every retained historical manifest and
+binding first. The 272-object carrier, object hashes, observation bindings,
+non-checkout members and historical fixture files remain byte-for-byte intact.
+These current-source bindings support offline tests only; they do not grant
+provider, signer, credential, hosted qualification or Production authority.

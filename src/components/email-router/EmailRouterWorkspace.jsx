@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import PageHeader from '@/components/common/PageHeader';
 import PageMethodology from '@/components/common/PageMethodology';
-import { EMAIL_ROUTER_METHODOLOGY } from '@/lib/pageMethodologies';
+import { EMAIL_ROUTER_METHODOLOGY } from '@/lib/pageMethodologyIndex';
 import { cn } from '@/lib/utils';
 import { actionLabel, emailRouter, isLikelyUncertain, newOperationId, normaliseActionResult, normaliseDetailResponse, normaliseListResponse } from '@/lib/emailRouter';
 import { supabase } from '@/lib/supabaseClient';

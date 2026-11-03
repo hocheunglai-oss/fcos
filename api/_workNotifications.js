@@ -1,3 +1,4 @@
+import { systemIncidentPresentation } from '../shared/systemIncidentPresentation.js';
 import { validSystemErrorSignature } from './_systemErrorNotifications.js';
 import { emptyCiNotifications, isReadOnlyCiProfile } from './_readOnlyCiAccess.js';
 import { listSpecialTermApprovalQueue, listSpecialTermClauseConsolidations } from './_specialTermClauses.js';
@@ -98,6 +99,9 @@ function marketIntelligenceNotification(row, state = {}) {
 
 function systemErrorNotification(row, state = {}) {
   const occurrenceCount = Math.max(1, Number(row.occurrence_count || 1));
+  // An incident may recur between a recovery read and its state upsert.
+  // Only a state written at or after that occurrence can hide it.
+  const currentStateAt = (value) => value && new Date(value).getTime() >= new Date(row.last_seen_at || row.created_at).getTime() ? value : null;
   const verificationHandlers = new Set([
     'outstandingBuyerInvoicesEmailReport',
     'outstandingBuyerInvoicesEmailCron',
@@ -115,7 +119,7 @@ function systemErrorNotification(row, state = {}) {
     source: 'system_error',
     sourceId: row.id,
     type: 'operational_error',
-    severity: 'critical',
+    ...systemIncidentPresentation(row.handler),
     title: row.title,
     message: `${row.message || 'An unexpected FCOS error was recorded.'}${occurrenceCount > 1 ? ` Repeated ${occurrenceCount.toLocaleString()} times.` : ''}`,
     link: row.link || '/',
@@ -123,11 +127,9 @@ function systemErrorNotification(row, state = {}) {
     diagnosticRef: row.last_request_id || null,
     incidentSignature: row.dedupe_key || null,
     verificationAvailable: verificationHandlers.has(row.handler) && validSystemErrorSignature(row.dedupe_key),
-    outcome: 'Completion not confirmed',
     retryAvailable: Boolean(row.link),
-    actionLabel: row.link ? 'Review affected workspace before retrying' : 'Review error details',
-    readAt: state.read_at || null,
-    handledAt: state.handled_at || null,
+    readAt: currentStateAt(state.read_at),
+    handledAt: currentStateAt(state.handled_at),
     snoozedUntil: state.snoozed_until || null,
     createdAt: row.last_seen_at || row.created_at,
   };

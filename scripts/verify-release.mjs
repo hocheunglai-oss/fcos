@@ -2,6 +2,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertReleaseBrowserEnvironment, verifyReleasePreviewArtifact } from './lib/release-environment.mjs';
+import { assertOriginal54MaterialProof } from './lib/original54-material-proof.mjs';
 import { preparePrivateE2eState, removePrivateE2eState } from './e2e-private-state.mjs';
 
 const checks = [
@@ -23,12 +24,18 @@ export async function verifyRelease({
   verify = verifyReleasePreviewArtifact,
   prepare = preparePrivateE2eState,
   cleanup = removePrivateE2eState,
+  verifyPrivateMaterial = assertOriginal54MaterialProof,
 } = {}) {
   // Run only from reviewed source. This local gate does not create the trusted
-  // workflow's evidence artifact or bypass its protected environment review.
+  // workflow's evidence artifact or replace its protected environment checks.
   const browser = assertReleaseBrowserEnvironment(environment);
   if (checkedOutCommit() !== browser.expectedCommit) throw new Error('Release checkout must match FCOS_E2E_EXPECTED_COMMIT.');
   const candidate = await verify(browser);
+  // Public CI excludes private approved originals. This separate source material
+  // is mandatory here and is never relabelled as hosted-controller evidence.
+  verifyPrivateMaterial({ proofPath: environment.FCOS_ORIGINAL54_PROOF,
+    proofSha256: environment.FCOS_ORIGINAL54_PROOF_SHA256,
+    candidateCommit: browser.expectedCommit });
   const browserEnv = {
     ...environment,
     FCOS_REQUIRE_AUTH_E2E: '1',
@@ -54,6 +61,7 @@ export async function verifyRelease({
     const env = isBrowser ? browserEnv : {
       ...checkEnv,
       ...(label === 'Migration integrity' ? { FCOS_REQUIRE_LIVE_MIGRATION_CHECK: '1' } : {}),
+      ...(label === 'Production build' ? { FCOS_REQUIRE_CLEAN_BUILD: '1' } : {}),
       ...(label === 'Performance budgets' ? { FCOS_REQUIRE_SERVER_BUNDLES: '1' } : {}),
     };
     if (isBrowser) await prepare({ env, dependencies: { allowExisting: false } });

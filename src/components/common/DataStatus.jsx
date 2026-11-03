@@ -25,6 +25,9 @@ export function dataStatusFromMeta(meta, explicitState) {
 }
 
 const STATUS = {
+  missing: { label: 'Not set', icon: CircleCheck, className: 'border-slate-200 bg-slate-50 text-slate-700' },
+  not_loaded: { label: 'Not loaded', icon: Clock3, className: 'border-slate-200 bg-slate-50 text-slate-700' },
+  not_applicable: { label: 'Not applicable', icon: CircleCheck, className: 'border-slate-200 bg-slate-50 text-slate-700' },
   live: {
     label: 'Live',
     icon: CircleCheck,

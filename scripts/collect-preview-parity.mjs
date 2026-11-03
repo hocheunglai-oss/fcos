@@ -83,11 +83,13 @@ export function parseParityEnvironment(source, deployedKeys, { hashOpaqueValues 
 
 // Only use this after the transport has independently established the exact
 // deployment origin. Unknown/expired tokens never trigger login or refresh.
-export async function collectRuntimeObservation({ url, deployment, sourceDigest, token, protectionBypass, fetchImpl = globalThis.fetch, now = Date.now() } = {}) {
+export async function collectRuntimeObservation({ url, deployment, sourceDigest, token, protectionBypass, requestId, fetchImpl = globalThis.fetch, now = Date.now() } = {}) {
   if (!immutable(url) || url !== deployment?.url || !/^[0-9a-f]{64}$/.test(sourceDigest || '') || !token) return null;
+  if (requestId !== undefined && (typeof requestId !== 'string'
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(requestId))) return null;
   try {
     const endpoint = `${url}/api/connection-runtime`;
-    const response = await fetchImpl(endpoint, { method: 'POST', body: JSON.stringify({ action: 'probe' }),
+    const response = await fetchImpl(endpoint, { method: 'POST', body: JSON.stringify({ action: 'probe', ...(requestId !== undefined ? { requestId } : {}) }),
       headers: { 'content-type': 'application/json', authorization: `Bearer ${token}`,
         ...(protectionBypass ? { 'x-vercel-protection-bypass': protectionBypass } : {}) },
       redirect: 'error', signal: AbortSignal.timeout(30000) });
@@ -96,6 +98,9 @@ export async function collectRuntimeObservation({ url, deployment, sourceDigest,
     if (body.schemaVersion !== 1 || body.deploymentId !== deployment.id || body.sha !== deployment.sha || body.sourceDigest !== sourceDigest
       || !Number.isFinite(time) || time > now + 300000 || now - time > PREVIEW_PARITY_POLICY.maxAgeSeconds * 1000
       || time < (typeof deployment.createdAt === 'number' ? deployment.createdAt : Date.parse(deployment.createdAt))) return null;
+    const validUntil = requestId === undefined ? null : Date.parse(body.runtimeValidUntil);
+    if (requestId !== undefined && (typeof body.runtimeValidUntil !== 'string' || !Number.isFinite(validUntil)
+      || validUntil <= now || validUntil <= time || validUntil > time + PREVIEW_PARITY_POLICY.maxAgeSeconds * 1000)) return null;
     const flags = Object.fromEntries(PREVIEW_PARITY_POLICY.runtimeFlags.map(key => [key,
       body.flags?.[key]?.state === 'known' && typeof body.flags[key].value === 'boolean'
         ? { state: 'known', value: body.flags[key].value } : unknown()]));
@@ -105,7 +110,8 @@ export async function collectRuntimeObservation({ url, deployment, sourceDigest,
       if (entry?.state === 'authenticated' && typeof entry.target === 'string' && /^[A-Za-z0-9_@./:-]{1,200}$/.test(entry.target)
         && ['jwt', 'oauth', 'service_role', 'secret_key', 'api_key', 'oidc', 'application'].includes(entry.mode)) auth[provider] = { state: 'authenticated', target: entry.target, mode: entry.mode };
     }
-    return { capturedAt: body.capturedAt, deploymentId: deployment.id, sha: deployment.sha, flags,
+    return { capturedAt: body.capturedAt, ...(requestId !== undefined ? { runtimeValidUntil: new Date(validUntil).toISOString() } : {}),
+      deploymentId: deployment.id, sha: deployment.sha, flags,
       safety: { readOnly: typeof body.safety?.readOnly === 'boolean' ? body.safety.readOnly : null,
         externalActions: Object.fromEntries(PREVIEW_PARITY_POLICY.externalActions.map(key => [key,
           typeof body.safety?.externalActions?.[key] === 'boolean' ? body.safety.externalActions[key] : null])) }, auth };

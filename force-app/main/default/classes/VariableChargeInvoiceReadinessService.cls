@@ -276,7 +276,13 @@ public without sharing class VariableChargeInvoiceReadinessService {
         }
     }
 
+    @TestVisible
     private static String agentCurrencyProblem(Id stemId, Id supplierId) {
+        List<STEM__c> stems = [
+            SELECT Id, Port__r.Name, Port__r.Country__c
+            FROM STEM__c WHERE Id = :stemId LIMIT 1
+        ];
+        if (stems.isEmpty() || !isHongKongPort(stems[0])) return null;
         List<Account> suppliers = [
             SELECT Id, Is_Agent__c, Agency_Fee_Currency__c
             FROM Account WHERE Id = :supplierId LIMIT 1
@@ -713,6 +719,10 @@ public without sharing class VariableChargeInvoiceReadinessService {
         invalidatePairSides(costPairs, true, false);
         invalidatePairSides(buyerPairs, false, true);
         invalidateProductPresenceTransitions(activeCountDelta);
+    }
+
+    public static void invalidateManagedBundlePairs(Set<String> pairs) {
+        invalidatePairSides(pairs, true, true);
     }
 
     public static void invalidateForExtraCostChanges(List<STEM_Extra_Cost__c> newRecords, Map<Id, STEM_Extra_Cost__c> oldMap) {

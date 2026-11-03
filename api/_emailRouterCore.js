@@ -6,6 +6,7 @@ import { recordEmailRouterOperation } from './_requestTelemetry.js';
 import { serverSupabaseConfig } from './_supabaseConfig.js';
 import { enforceFcunoFederatedAccess } from './_fcunoIdentityFederation.js';
 import { requireReadOnlyCiOperation } from './_readOnlyCiAccess.js';
+import { isDeploymentReadOnly } from './_deploymentReadOnly.js';
 
 const GRAPH_ROOT = 'https://graph.microsoft.com/v1.0';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -118,6 +119,7 @@ export async function requireEmailRouterUser(req, dependencies = {}) {
     authUser: auth.user,
     profile: storedProfile,
     accessToken: token,
+    providerAccessToken: req.headers?.['x-fcos-fcuno-provider-token'] || null,
     env: dependencies.env || process.env,
   });
   if (!profile?.active || profile.id !== auth.user.id || !UUID.test(profile.id)) throw routerError('Active FCOS user access required.', 403, 'EMAIL_ROUTER_USER_INACTIVE');
@@ -452,7 +454,7 @@ export async function listEmailRouterMessages({ client, mailbox, folder = 'inbox
   const graphMs = Date.now() - graphStartedAt;
   const messages = Array.isArray(payload.value) ? payload.value : [];
   const metadataStartedAt = Date.now();
-  await syncEmailRouterMetadata({ client, mailbox, folder, messages });
+  if (!isDeploymentReadOnly(dependencies.env || process.env)) await syncEmailRouterMetadata({ client, mailbox, folder, messages });
   const metadataMs = Date.now() - metadataStartedAt;
   const performance = { operation: 'mailbox_list', totalMs: Date.now() - startedAt, graphMs, metadataMs };
   recordEmailRouterOperation({ ...performance, storageMs: metadataMs });
@@ -625,7 +627,7 @@ export async function fetchEmailRouterDetail({ client, mailbox, messageId, hasAt
   }
   const indexed = await indexedPromise;
   const actionHistory = await actionHistoryPromise;
-  if (indexed) {
+  if (indexed && !isDeploymentReadOnly(dependencies.env || process.env)) {
     const attachments = Array.isArray(message?.attachments) ? message.attachments : [];
     const metadataJob = synchronizeEmailRouterAttachmentMetadata(client, indexed, attachments).catch(() => null);
     if (typeof dependencies.defer === 'function') dependencies.defer(metadataJob);

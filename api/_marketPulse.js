@@ -2,7 +2,8 @@ import { calcMopsAverage, hktThisMonth, hktToday, latestMops } from '../src/hedg
 import { getOrLoadRuntimeCache } from './_runtimeCache.js';
 import { loadLatestIntradayPulse } from './_marketIntraday.js';
 import { isCompletedReportPair, readCompletedMarketBrief, validMarketDate } from './_marketReportDates.js';
-import { loadMarketIntelligenceHistory } from './_marketIntelligence.js';
+import { loadMarketIntelligenceHistory, MOPS_SGO_BBL_PER_MT } from './_marketIntelligence.js';
+import { loadMarketSourceHealth } from './_marketSourceHealth.js';
 
 const PRODUCTS = Object.freeze([
   { productKey: 'hsfo380', name: 'HSFO 380 MOPS', code: 'PPXDK00', field: 's380', unit: 'USD/MT', spreads: ['m1M2'] },
@@ -191,7 +192,7 @@ export function buildMarketPulseSnapshot({
 async function loadUncachedMarketPulse(client, asOfDate) {
   const month = asOfDate?.slice(0, 7) || hktThisMonth();
   const boundary = asOfDate || hktToday();
-  const [mopsResult, latestResult, latestBrief, intraday] = await Promise.all([
+  const [mopsResult, latestResult, latestBrief, intraday, sourceHealth] = await Promise.all([
     client.from('hedge_market_prices')
       .select('price_date,s380,s05,sgo,is_estimate,verification_status')
       .gte('price_date', `${month}-01`)
@@ -206,6 +207,7 @@ async function loadUncachedMarketPulse(client, asOfDate) {
       .limit(2),
     readCompletedMarketBrief(client, boundary, { columns: 'report_date,revision,completeness,deterministic_metrics' }),
     asOfDate ? null : loadLatestIntradayPulse(client),
+    loadMarketSourceHealth(client),
   ]);
   const error = mopsResult.error || latestResult.error;
   if (error) throw pulseError(`Market Pulse could not be loaded: ${error.message}`);
@@ -229,7 +231,7 @@ async function loadUncachedMarketPulse(client, asOfDate) {
     basis: 'Licensed delivered assessment; premium uses exact-date MOPS',
     sourceSampleCount: row.latest?.priceDate === deliveredDate && row.latest?.price != null ? 1 : 0,
     sourceCode: row.sourceSymbol, sourcePage: row.latest?.sourcePage || null,
-    premium: { value: row.latest?.priceDate === deliveredDate ? row.deliveredPremium : null, date: deliveredDate },
+    premium: { value: row.latest?.priceDate === deliveredDate ? row.deliveredPremium : null, date: deliveredDate, unit: 'USD/MT', basis: row.productKey === 'lsmgo' ? `Same-date delivered assessment minus gasoil MOPS converted at ${MOPS_SGO_BBL_PER_MT} BBL/MT.` : 'Same-date delivered assessment minus MOPS in USD/MT.' },
   }));
   const result = buildMarketPulseSnapshot({
     currentMonthRows: mopsResult.data || [],
@@ -243,6 +245,7 @@ async function loadUncachedMarketPulse(client, asOfDate) {
     singaporeDelivered,
   });
   result.warnings = [...new Set([...result.warnings, ...history.warnings.map((row) => row.message)])];
+  result.sourceHealth = sourceHealth;
   return result;
 }
 
@@ -251,7 +254,7 @@ export async function loadMarketPulseSnapshot(client, request = {}) {
   if (asOfDate && (!validMarketDate(asOfDate) || asOfDate > hktToday())) throw pulseError('Choose a valid report date on or before today.', 400, 'MARKET_PULSE_DATE_INVALID');
   const cached = await getOrLoadRuntimeCache({
     namespace: 'market-pulse-snapshot',
-    version: '5',
+    version: '6',
     accessScope: 'markets',
     apiVersion: 'supabase-market-intelligence-v1',
     payload: { month: asOfDate?.slice(0, 7) || hktThisMonth(), asOfDate, mode: asOfDate ? 'historical' : 'latest' },

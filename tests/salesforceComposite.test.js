@@ -67,6 +67,24 @@ test('groups at most five independent queries into each Composite request', asyn
   assert.equal(Object.hasOwn(results[0].records[0], 'attributes'), false);
 });
 
+test('an aborted Composite deadline stops pagination and retains an incomplete result', async () => {
+  const controller = new AbortController();
+  let calls = 0;
+  globalThis.fetch = async (_url, options) => {
+    calls += 1;
+    assert.equal(options.signal, controller.signal);
+    const payload = JSON.parse(options.body);
+    controller.abort();
+    return response({ compositeResponse: [{ referenceId: payload.compositeRequest[0].referenceId,
+      httpStatusCode: 200, body: { records: [{ Id: 'first' }], totalSize: 2,
+        nextRecordsUrl: '/services/data/v59.0/query/next-page' } }] });
+  };
+  const [result] = await sfCompositeQueries([{ soql: 'SELECT Id FROM Account', softFail: true }], { signal: controller.signal });
+  assert.equal(calls, 1);
+  assert.equal(result.records.length, 1);
+  assert.ok(result.error);
+});
+
 test('follows Composite query pagination up to the requested limit', async () => {
   let call = 0;
   globalThis.fetch = async (_url, options) => {

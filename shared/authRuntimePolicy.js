@@ -1,16 +1,17 @@
 import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
 
-const EXPECTED_SUPABASE_URL = `https://${fcosConnectionIdentifier('supabase', 'Project ref')}.supabase.co`;
+const EXPECTED_PROJECT_REF = fcosConnectionIdentifier('supabase', 'Project ref');
+const EXPECTED_SUPABASE_URL = `https://${EXPECTED_PROJECT_REF}.supabase.co`;
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
 export const AUTH_CONFIGURATION_ERROR = 'FCOS authentication is not configured correctly. Contact an administrator; local administrator mode is unavailable on this site.';
 
-function isPublicKey(value) {
+function isPublicKey(value, local = false) {
   if (/^sb_publishable_[A-Za-z0-9_-]+$/.test(value)) return true;
   const parts = value.split('.');
   if (parts.length !== 3) return false;
   try {
     const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
-    return payload.role === 'anon';
+    return payload.role === 'anon' && (local || payload.ref === EXPECTED_PROJECT_REF);
   } catch {
     return false;
   }
@@ -32,7 +33,7 @@ export function resolveAuthRuntimePolicy({ url, publicKey, development = false, 
         && parsed.pathname === '/';
     } catch { /* Invalid configuration remains unavailable. */ }
   }
-  const configured = Boolean(approvedUrl && isPublicKey(configuredKey));
+  const configured = Boolean(approvedUrl && isPublicKey(configuredKey, localDevelopment && configuredUrl !== EXPECTED_SUPABASE_URL));
   const localAdminAllowed = localDevelopment && empty;
   return {
     configured,

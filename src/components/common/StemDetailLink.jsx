@@ -1,9 +1,11 @@
 import { cn } from '@/lib/utils';
 
 export default function StemDetailLink({ stemId, onOpen, children, className }) {
-  if (!stemId || typeof onOpen !== 'function') {
+  if (!stemId) {
     return <span className={className} data-technical-identifier>{children || '—'}</span>;
   }
+
+  if (typeof onOpen !== 'function') return <a href={`/stems/${encodeURIComponent(stemId)}`} className={cn('font-medium text-primary hover:underline', className)}>{children || 'Open STEM'}</a>;
 
   const accessibleStemName = typeof children === 'string' && children.trim() ? children.trim() : 'STEM';
 

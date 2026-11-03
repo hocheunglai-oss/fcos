@@ -46,7 +46,7 @@ test('foreground Email Router checks are bounded while full maintenance remains 
   const [handlers, dispatcher, vercel] = await Promise.all([
     read('../api/_emailRouterHandlers.js'),
     read('../api/functions/[name].js'),
-    read('../vercel.json'),
+    read('../vercel.json').then(JSON.parse),
   ]);
   const foreground = handlers.match(/export async function emailRouterBackgroundSyncHandler[\s\S]*?\n}\n/)?.[0] || '';
   assert.match(foreground, /folders: \['inbox'\]/);
@@ -54,8 +54,10 @@ test('foreground Email Router checks are bounded while full maintenance remains 
   assert.doesNotMatch(foreground, /sentitems|archive/);
   assert.match(dispatcher, /for \(const folder of \['inbox', 'sentitems', 'archive'\]\)/);
   assert.match(dispatcher, /maintainEmailRouterSubscriptions/);
-  assert.match(vercel, /"path": "\/api\/functions\/emailRouterMaintenanceCron"/);
-  assert.match(vercel, /"schedule": "\*\/5 \* \* \* \*"/);
+  assert.deepEqual(
+    vercel.crons.find(({ path }) => path === '/api/functions/emailRouterMaintenanceCron'),
+    { path: '/api/functions/emailRouterMaintenanceCron', schedule: '*/5 * * * *' },
+  );
 });
 
 test('quality gate covers browser libraries, server modules, checked JavaScript, and performance budgets', async () => {

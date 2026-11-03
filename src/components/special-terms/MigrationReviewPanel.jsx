@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Loader2, RotateCcw, Sparkles, SplitSquareVertical } from 'lucide-react';
 import { appClient } from '@/api/appClient';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -14,11 +14,13 @@ function operationId() {
   return globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-export default function MigrationReviewPanel({ detail, projection = 'termsText', categoryOptions = [], canApprove, onChanged, onError, draftOnly = false }) {
+export default function MigrationReviewPanel({ detail, projection = 'termsText', categoryOptions = [], canApprove, onChanged, onError, draftOnly = false, onReviewPrepared, onReviewOpenChange }) {
   const [preview, setPreview] = useState(null);
   const [reason, setReason] = useState('');
   const [confirmAction, setConfirmAction] = useState(null);
   const [busy, setBusy] = useState(false);
+  useEffect(() => { onReviewOpenChange?.(Boolean(preview)); }, [preview, onReviewOpenChange]);
+  useEffect(() => () => { onReviewOpenChange?.(false); }, [onReviewOpenChange]);
   const term = detail?.term;
   const projectionDetail = detail?.projections?.[projection] || (projection === 'termsText' ? { key: 'termsText', label: 'Terms Text', status: term?.clauseStructureStatus, style: 'Numbered', originalText: term?.originalTermsText, proposedAssignments: detail?.proposedAssignments || [] } : null);
   const proposed = projectionDetail?.proposedAssignments || [];
@@ -36,6 +38,12 @@ export default function MigrationReviewPanel({ detail, projection = 'termsText',
   };
 
   const saveReview = async () => {
+    if (onReviewPrepared) {
+      onReviewPrepared({ projection, style: preview.style, segments: preview.segments, reason });
+      setPreview(null);
+      setReason('');
+      return;
+    }
     setBusy(true);
     onError?.('');
     const response = await appClient.functions.invoke('specialTermMigrationSave', { termId: term.id, projection, style: preview.style, expectedLastModifiedAt: preview.expectedLastModifiedAt, auditReason: reason, segments: preview.segments.map((segment) => ({ shortName: segment.shortName, category: segment.category, clauseText: segment.clauseText, sourceClauseText: segment.sourceClauseText || segment.clauseText, legacySourceKey: segment.legacySourceKey, draftSource: segment.draftSource, aiModel: segment.aiModel, aiResponseId: segment.aiResponseId, selectedClauseId: segment.selectedClauseId || null, selectedClauseVersionId: segment.selectedClauseVersionId || null })), operationId: operationId() }, { cache: false });
@@ -121,8 +129,8 @@ export default function MigrationReviewPanel({ detail, projection = 'termsText',
               </div>
             </section>
           ))}</div>
-          <div className="space-y-1.5"><Label>Review reason</Label><Textarea value={reason} maxLength={1000} onChange={(event) => setReason(event.target.value)} rows={3} placeholder="Why these clause boundaries and candidate mappings are appropriate" /></div>
-          <DialogFooter><Button variant="outline" onClick={() => setPreview(null)} disabled={busy}>Cancel</Button><Button onClick={saveReview} disabled={busy || reason.trim().length < 3 || (!preview?.segments.length && Boolean(preview?.sourceText?.trim())) || preview?.segments.some((segment) => segment.clauseText.trim().length < 3 || segment.shortName.trim().length < 3)}>{busy ? 'Saving…' : preview?.segments.length ? 'Save review to Salesforce' : 'Confirm empty structure'}</Button></DialogFooter>
+          <div className="space-y-1.5"><Label>Review reason{onReviewPrepared ? ' (optional for draft)' : ' *'}</Label><Textarea value={reason} maxLength={1000} onChange={(event) => setReason(event.target.value)} rows={3} placeholder="Why these clause boundaries and candidate mappings are appropriate" /></div>
+          <DialogFooter><Button variant="outline" onClick={() => setPreview(null)} disabled={busy}>Cancel</Button><Button onClick={saveReview} disabled={busy || (!onReviewPrepared && reason.trim().length < 3) || (!preview?.segments.length && Boolean(preview?.sourceText?.trim())) || preview?.segments.some((segment) => segment.clauseText.trim().length < 3 || segment.shortName.trim().length < 3)}>{busy ? 'Saving…' : onReviewPrepared ? 'Use these clauses' : preview?.segments.length ? 'Save review to Salesforce' : 'Confirm empty structure'}</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 

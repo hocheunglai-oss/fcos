@@ -156,17 +156,39 @@ export function previewEmailSignerEvidenceVerified(evidence, { deployment, sourc
   } catch { throw safeError(); }
 }
 
+// Hosted source verification is an explicit trusted-controller seam. The legacy
+// collector above still requires its original admission when this seam is absent.
+function hostedSignerSourceVerified(source, { origin, deploymentId, sha, sourceDigest }) {
+  return source?.schemaVersion === 2 && source.kind === 'fcos_hosted_preview_email_signer_source'
+    && source.sourceVerified === true && source.origin === origin && source.deploymentId === deploymentId
+    && source.candidateSha === sha && source.sourceDigest === sourceDigest
+    && /^[a-f0-9]{40}$/.test(source.controllerSha || '') && /^[a-f0-9]{64}$/.test(source.manifestHash || '')
+    && exactKeys(source.sourceHashes, SOURCE_PATHS) && SOURCE_PATHS.every(path => /^[a-f0-9]{64}$/.test(source.sourceHashes[path] || ''));
+}
+function hostedSignerEvidenceVerified(evidence, source, now) {
+  if (!exactKeys(evidence, ['schemaVersion', 'kind', 'probe', 'capturedAt', 'deploymentId', 'sha', 'sourceDigest', 'mailboxRegistryId', 'result', 'noAttachmentFetch', 'sourceHashes'])
+    || evidence.schemaVersion !== 1 || evidence.kind !== SIGNER_EVIDENCE_KIND || evidence.probe !== SIGNER_EVIDENCE_PROBE
+    || !exactInstant(evidence.capturedAt) || Date.parse(evidence.capturedAt) > now || now - Date.parse(evidence.capturedAt) > SIGNER_EVIDENCE_MAX_AGE_MS
+    || evidence.deploymentId !== source.deploymentId || evidence.sha !== source.candidateSha || evidence.sourceDigest !== source.sourceDigest
+    || evidence.mailboxRegistryId !== PREVIEW_EMAIL_SIGNER_MAILBOX_REGISTRY_ID || evidence.result !== 'pass' || evidence.noAttachmentFetch !== true
+    || !exactSourceHashes(evidence.sourceHashes, source.sourceHashes)) throw safeError();
+}
+
 export async function collectPreviewEmailSignerEvidence({ origin, deploymentId, sha, sourceDigest, bearerToken,
-  protectionBypass, fetchImpl = globalThis.fetch, cwd = sourceRoot, admission, now = Date.now } = {}) {
+  protectionBypass, fetchImpl = globalThis.fetch, cwd = sourceRoot, admission, now = Date.now, verifyHostedSource } = {}) {
   try {
     const targetOrigin = exactOrigin(origin);
-    if (sha === SUCCESSOR_LIVE_CONTRACT.candidateSha) {
+    if (verifyHostedSource !== undefined && typeof verifyHostedSource !== 'function') throw safeError();
+    const hostedSource = verifyHostedSource ? await verifyHostedSource({ origin: targetOrigin, deploymentId, sha, sourceDigest, now: Number(now()) }) : null;
+    if (hostedSource && !hostedSignerSourceVerified(hostedSource, { origin: targetOrigin, deploymentId, sha, sourceDigest })) throw safeError();
+    if (verifyHostedSource && !hostedSource) throw safeError();
+    if (sha === SUCCESSOR_LIVE_CONTRACT.candidateSha && !hostedSource) {
       successorLiveBinding(admission, { sha, sourceDigest }, Number(now()));
       if (canonicalFcosE2eCandidateUrl(targetOrigin) !== targetOrigin) throw safeError();
     }
     if (typeof deploymentId !== 'string' || !deploymentId || typeof sourceDigest !== 'string' || !/^[0-9a-f]{64}$/.test(sourceDigest)
       || typeof bearerToken !== 'string' || !bearerToken || typeof fetchImpl !== 'function') throw safeError();
-    const sourceHashes = previewEmailSignerSourceProof({ commit: sha, cwd, admission, now: Number(now()) });
+    const sourceHashes = hostedSource?.sourceHashes || previewEmailSignerSourceProof({ commit: sha, cwd, admission, now: Number(now()) });
     const endpoint = `${targetOrigin}/api/functions/emailRouterAttachmentUrl`;
     const response = await fetchImpl(endpoint, { method: 'POST', body: JSON.stringify(PREVIEW_EMAIL_SIGNER_BODY), redirect: 'error', signal: AbortSignal.timeout(20_000),
       headers: { authorization: `Bearer ${bearerToken}`, 'content-type': 'application/json',
@@ -176,7 +198,8 @@ export async function collectPreviewEmailSignerEvidence({ origin, deploymentId, 
     const evidence = { schemaVersion: 1, kind: SIGNER_EVIDENCE_KIND, probe: SIGNER_EVIDENCE_PROBE,
       capturedAt: new Date(Number(now())).toISOString(), deploymentId, sha, sourceDigest,
       mailboxRegistryId: PREVIEW_EMAIL_SIGNER_MAILBOX_REGISTRY_ID, result: 'pass', noAttachmentFetch: true, sourceHashes };
-    previewEmailSignerEvidenceVerified(evidence, { deployment: { id: deploymentId, sha }, sourceDigest, admission, now: Number(now()) });
+    if (hostedSource) hostedSignerEvidenceVerified(evidence, hostedSource, Number(now()));
+    else previewEmailSignerEvidenceVerified(evidence, { deployment: { id: deploymentId, sha }, sourceDigest, admission, now: Number(now()) });
     return evidence;
   } catch { throw safeError(); }
 }

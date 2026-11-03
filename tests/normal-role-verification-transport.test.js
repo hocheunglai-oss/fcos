@@ -55,6 +55,44 @@ test('both protection headers are stripped case-insensitively without modifying 
   assert.equal(incoming['X-Vercel-Set-Bypass-Cookie'], 'true');
 });
 
+test('page cleanup drains admitted reads before close and never forwards a late read or hides a write denial', async () => {
+  const page = {}, blocked = [];
+  const bind = f => { const original = f.route.request; f.route.request = () => ({ ...original(), frame: () => ({ page: () => page }) }); return f; };
+  const transport = createNormalRoleVerificationRoute({ origin, protectionBypass: bypass,
+    requestAllowed: compatibilityNormalRequestAllowed, onBlockedMutation: reason => blocked.push(reason) });
+  const first = bind(fixture()); let finish;
+  first.route.fetch = async () => new Promise(resolve => { finish = () => resolve(first.response); });
+  const delivery = transport(first.route);
+  let drained = false;
+  const drain = transport.drainPage(page).then(() => { drained = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(drained, false);
+  const late = bind(fixture()); await transport(late.route);
+  assert.deepEqual(late.calls.map(x => x.kind), ['abort']);
+  const write = bind(fixture({ url: origin + '/api/functions/financeSettingsSave', body: {} }));
+  await transport(write.route);
+  assert.deepEqual(blocked, ['REQUEST_POLICY_DENIED']);
+  assert.deepEqual(write.calls.map(x => x.kind), ['abort']);
+  finish(); await delivery; await drain;
+  assert.equal(drained, true);
+  assert.deepEqual(first.calls.map(x => x.kind), ['fulfill']);
+});
+
+test('an admitted read failure remains fatal during cleanup and drain has a fixed bound', async () => {
+  const page = {}, blocked = [];
+  const f = fixture(); const original = f.route.request;
+  f.route.request = () => ({ ...original(), frame: () => ({ page: () => page }) });
+  let fail;
+  f.route.fetch = async () => new Promise((_, reject) => { fail = () => reject(new Error('PRIVATE_TRANSPORT')); });
+  const transport = createNormalRoleVerificationRoute({ origin, requestAllowed: compatibilityNormalRequestAllowed,
+    onBlockedMutation: reason => blocked.push(reason) });
+  const delivery = transport(f.route);
+  await assert.rejects(transport.drainPage(page, { timeoutMs: 10 }), /did not settle/);
+  fail(); await delivery;
+  assert.deepEqual(blocked, ['TRANSPORT_FAILURE']);
+  assert.deepEqual(f.calls.map(x => x.kind), ['abort']);
+});
+
 test('Preview uses one no-redirect fetch and fulfills the actual response without protection control headers', async () => {
   const f = fixture({ responseHeaders: { 'X-Vercel-Protection-Bypass': bypass, 'X-Vercel-Set-Bypass-Cookie': 'true',
     'content-type': 'application/json', 'x-business-header': 'preserved' } });
@@ -168,7 +206,9 @@ test('transport denial diagnostics are fixed enums and never include request or 
 test('both verifiers use the shared transport and both reviewed control digests include it', () => {
   for (const file of ['runtime-compatibility-normal-role.mjs', 'normal-role-release.mjs']) {
     const source = readFileSync(new URL(`../scripts/${file}`, import.meta.url), 'utf8');
-    assert.match(source, /context\.route\('\*\*\/\*', createNormalRoleVerificationRoute\(/);
+    assert.match(source, /transport = createNormalRoleVerificationRoute\(/);
+    assert.match(source, /context\.route\('\*\*\/\*', transport\)/);
+    assert.match(source, /transport\.drainPage\(page\)/);
     assert.doesNotMatch(source, /route\.continue|extraHTTPHeaders/);
   }
   for (const file of ['runtime-compatibility-release.mjs', 'release-readiness.mjs']) {
@@ -215,7 +255,16 @@ test('dedicated notifications forwards only literal non-secret selector and boun
     assert.equal(await run(f), 1);
     assert.deepEqual(f.calls.map(row => row.kind), ['abort']);
   }
-  assert.equal(await run(fixture({ url: `${origin}/api/work-notifications`, body, requestHeaders: headers }), normalRoleRequestAllowed), 1);
+  const applicationRead = fixture({ url: `${origin}/api/work-notifications`, body, requestHeaders: headers });
+  assert.equal(await run(applicationRead, normalRoleRequestAllowed), 0);
+  assert.deepEqual(applicationRead.calls.map(row => row.kind), ['fetch', 'fulfill']);
+  for (const changed of [{ body: { ...body, sync: false } }, { body: { ...body, limit: 101 } },
+    { requestHeaders: { ...headers, 'x-fcos-function-name': 'workNotificationsState' } },
+    { url: `${origin}/api/work-notifications?selector=list` }]) {
+    const denied = fixture({ url: `${origin}/api/work-notifications`, body, requestHeaders: headers, ...changed });
+    assert.equal(await run(denied, normalRoleRequestAllowed), 1);
+    assert.deepEqual(denied.calls.map(row => row.kind), ['abort']);
+  }
 });
 
 test('only exact optional script is excluded before fetch; escaped writes remain fatal with fixed categories', async () => {

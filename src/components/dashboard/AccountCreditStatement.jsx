@@ -206,7 +206,7 @@ function StatementCard({ row, currency, onStemClick, selected, onSelect }) {
   return <article className={`rounded-lg border p-4 ${row.hasBuyerInvoice ? 'border-border bg-card' : 'border-red-200 bg-red-50/70'}`}><div className="flex items-start gap-3"><input type="checkbox" className="mt-1 h-4 w-4" aria-label={`Select ${row.stemName} statement evidence`} checked={selected} disabled={!selectable} title={!selectable ? row.expectedBuyerInvoiceAmountBlockingReason || 'Invoice amount unavailable' : undefined} onChange={() => onSelect(row)} /><div className="min-w-0"><button type="button" className="font-semibold text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => onStemClick(row.stemId)}>{row.stemName}</button><div className="mt-1 text-xs text-muted-foreground">{row.accountName || 'Selected Account'} · {displayDate(row.effectiveDate)}</div>{row.hasBuyerInvoice ? <div className="mt-1 text-xs font-medium">Buyer invoice: {row.buyerInvoiceAmountComplete ? money(row.buyerInvoiceAmount, rowCurrency) : 'Amount unavailable'}</div> : <div className="mt-1 text-xs font-semibold text-red-800">Buyer invoice: Not Issued · Conservative expected invoice {row.expectedBuyerInvoiceAmountComplete ? <>{money(row.expectedBuyerInvoiceAmount, rowCurrency)}{expectedInvoiceBasisSuffix(row)}</> : 'amount unavailable'}</div>}</div></div>{row.inCreditProjection === false ? <div className="mt-2 inline-flex rounded-full bg-slate-100 px-2 py-1 text-[10px] font-semibold text-slate-700">Outside current credit lineage window</div> : null}<dl className="mt-3 grid grid-cols-2 gap-3 text-sm"><div><dt className="text-xs text-muted-foreground">Current credit exposure</dt><dd className="font-semibold" title={row.statementExposureComplete ? undefined : row.statementExposureBlockingReason || 'Exposure unavailable'}>{row.statementExposureComplete ? <>{money(row.statementExposureAmount, rowCurrency)}{statementExposureBasisSuffix(row)}</> : <><span>Unavailable</span><span className="mt-1 block text-[11px] font-normal text-amber-700">{row.statementExposureBlockingReason || 'Exposure evidence is incomplete.'}</span></>}</dd></div><div><dt className="text-xs text-muted-foreground">Actual released</dt><dd className="font-semibold">{money(row.actualReleased, rowCurrency)}</dd></div><div className="col-span-2"><dt className="text-xs text-muted-foreground">Quantity exposure range</dt><dd className={`mt-1 ${row.exposureRange?.complete ? 'font-medium' : 'text-amber-700'}`}>{rangeSummary(row, rowCurrency)}</dd></div><div className="col-span-2"><dt className="text-xs text-muted-foreground">Release evidence</dt><dd className="mt-1 space-y-1">{row.actualReleases?.map((release) => <div key={`actual:${release.paymentId}`}><span className="font-medium">{displayDate(release.date)} · Actual payment</span> · {money(release.amount, rowCurrency)}</div>)}{row.forecastEvents?.map((release, index) => <div key={`forecast:${release.paymentId || release.cashflowId || index}`}><span className="font-medium">{displayDate(release.date)} · {release.sourceLabel}</span> · {money(release.amount, rowCurrency)}</div>)}{!row.actualReleases?.length && !row.forecastEvents?.length ? <div className="text-muted-foreground">No payment or reliable forecast evidence.</div> : null}</dd></div></dl></article>;
 }
 
-export default function AccountCreditStatement({ accountId, entityType = 'account', includedGroupAccountIds = null, onGroupScopeChange, onForecastConservativenessChange, hideGroupScopeSelector = false, active, statementSide = 'buyer', availableStatementSides = ['buyer'], onStatementSideChange, onStemClick }) {
+export default function AccountCreditStatement({ accountId, entityType = 'account', includedGroupAccountIds = null, dashboardScope = null, onGroupScopeChange, onForecastConservativenessChange, hideGroupScopeSelector = false, active, statementSide = 'buyer', availableStatementSides = ['buyer'], onStatementSideChange, onStemClick }) {
   const sharedForecastChange = useContext(AccountInsightForecastContext);
   const sharedStatementScopeChange = useContext(AccountInsightStatementScopeContext);
   const notifyForecastChange = onForecastConservativenessChange || sharedForecastChange;
@@ -223,6 +223,9 @@ export default function AccountCreditStatement({ accountId, entityType = 'accoun
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const requestRef = useRef(null);
+  const accountWideScope = dashboardScope?.mode === 'account_wide';
+  const dashboardFilters = dashboardScope?.filters;
+  const dashboardDisputeOnly = dashboardScope?.disputeOnly === true;
 
   const load = useCallback(async ({ cursor = null, history = [], force = false } = {}) => {
     if (!active || !accountId) return;
@@ -234,6 +237,8 @@ export default function AccountCreditStatement({ accountId, entityType = 'accoun
     try {
       const response = await appClient.functions.invoke('dashboardAccountCreditStatement', {
         accountId, entityId: accountId, entityType, includedAccountIds: includedGroupAccountIds, scope, cursor, limit: 50, force, forecastConservativeness,
+        filters: accountWideScope ? {} : dashboardFilters || {},
+        disputeOnly: !accountWideScope && dashboardDisputeOnly,
       }, { cache: true, cacheTtlMs: 60_000, cacheTags: ['dashboard', 'account-credit', `account:${accountId}`], signal: controller.signal, force });
       if (controller.signal.aborted) return;
       if (response.data?.error) throw new Error(response.data.error);
@@ -246,7 +251,7 @@ export default function AccountCreditStatement({ accountId, entityType = 'accoun
     } finally {
       if (requestRef.current === controller) setLoading(false);
     }
-  }, [accountId, active, entityType, forecastConservativeness, includedGroupAccountIds, scope]);
+  }, [accountId, accountWideScope, active, dashboardDisputeOnly, dashboardFilters, entityType, forecastConservativeness, includedGroupAccountIds, scope]);
 
   useEffect(() => { if (active) load(); return () => requestRef.current?.abort(); }, [active, load]);
   useEffect(() => { sharedStatementScopeChange?.(scope); }, [scope, sharedStatementScopeChange]);

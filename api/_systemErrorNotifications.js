@@ -1,6 +1,31 @@
 import { createHash } from 'node:crypto';
 
 const HANDLER_CONTEXT = {
+  missingNomBReminderCron: {
+    title: 'Missing Nom B reminders need attention',
+    message: 'The Nom B reminder check could not be completed. Review System Health for scan, assignment, or delivery failures.',
+    link: '/settings?section=health',
+  },
+  missingNomBUpload: {
+    title: 'Nom B filing needs verification',
+    message: 'The Nom B upload could not be confirmed. Return to Missing Nom B to verify the same filing operation before retrying.',
+    link: '/missing-nom-b',
+  },
+  dashboardSummary: {
+    title: 'Dashboard figures could not be refreshed',
+    message: 'Dashboard figures could not be loaded from Salesforce. Open Dashboard and retry the refresh.',
+    link: '/',
+  },
+  dashboardAnalytics: {
+    title: 'Dashboard analytics could not be refreshed',
+    message: 'Dashboard trends and rankings could not be loaded from Salesforce. Open Dashboard and select Retry analytics.',
+    link: '/',
+  },
+  dashboardStemList: {
+    title: 'Dashboard STEM list could not be refreshed',
+    message: 'The Dashboard STEM list could not be loaded from Salesforce. Open Dashboard and retry the refresh.',
+    link: '/?tab=stems',
+  },
   outstandingBuyerInvoicesEmailReport: {
     title: 'Outstanding buyer invoices report failed',
     message: 'The internal outstanding buyer invoices report could not be completed. The error has been recorded for follow-up.',
@@ -205,7 +230,7 @@ export async function resolveSystemErrorIncident(client, signature, resolvedAt =
   if (!client || !validSystemErrorSignature(dedupeKey)) return { resolved: 0, skipped: true };
   return resolveSystemErrorEvents(
     client,
-    client.from('system_error_events').select('id').eq('dedupe_key', dedupeKey).limit(1),
+    client.from('system_error_events').select('id').eq('dedupe_key', dedupeKey).lte('last_seen_at', resolvedAt.toISOString()).limit(1),
     resolvedAt,
   );
 }

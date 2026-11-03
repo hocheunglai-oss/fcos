@@ -12,8 +12,9 @@ const REQUIRED_CONTROLS = [
   'Apply selected',
   'Check everything',
   'Approve mapping',
-  'Authorise batch',
-  'Run selected',
+  'Review and sync selected',
+  'Confirm and sync',
+  'Resume approved sync',
   'Preview payments',
   'Apply exact payments',
   'OCR image',
@@ -38,7 +39,7 @@ test('Xero Portal manual keeps complete parallel English and Traditional Chinese
     assert.ok(manual.subtitle);
     assert.equal(manual.important.length, 3);
     assert.equal(manual.tasks.length, 4);
-    assert.equal(manual.sections.reduce((sum, section) => sum + section.controls.length, 0), 49);
+    assert.equal(manual.sections.reduce((sum, section) => sum + section.controls.length, 0), 53);
     for (const section of manual.sections) {
       assert.ok(section.title);
       assert.ok(section.purpose);
@@ -59,18 +60,22 @@ test('Xero Portal manual explains every critical write and review control', () =
   for (const label of REQUIRED_CONTROLS) assert.ok(labels.includes(label), `${label} must be documented`);
 
   const xeroWrites = XERO_PORTAL_MANUALS.en.sections.flatMap((section) => section.controls).filter((control) => control[3] === 'xero').map((control) => control[0]);
-  assert.deepEqual(xeroWrites.sort(), ['Apply exact payments', 'Apply selected', 'Create Xero draft bill', 'Run selected', 'Sync'].sort());
+  assert.deepEqual(xeroWrites.sort(), ['Apply exact payments', 'Apply selected', 'Create Xero draft bill', 'Approve and update', 'Approve and create draft', 'Confirm and sync', 'Resume approved sync', 'Sync'].sort());
 });
 
-test('Xero Portal exposes the bilingual manual from both the header and tabs', async () => {
+test('saved-report view retains the complete bilingual manual component without exposing financial actions', async () => {
   const page = await readFile(new URL('../src/pages/XeroPortal.jsx', import.meta.url), 'utf8');
   const manual = await readFile(new URL('../src/components/xero/XeroPortalManual.jsx', import.meta.url), 'utf8');
-  assert.match(page, /setTab\('manual'\)/);
-  assert.match(page, /TabsTrigger value="manual">\{copy\.tabs\.manual\}<\/TabsTrigger>/);
-  assert.match(page, /<XeroPortalManual language=\{language\} onLanguageChange=\{setLanguage\} \/>/);
-  assert.match(manual, /XERO_PORTAL_MANUAL_LANGUAGES\.map/);
+  assert.match(page, /xeroIntegrityReport/);
+  assert.doesNotMatch(page, /xeroFinancialSyncApply|xeroPortalReceiptCreate/);
+  assert.match(manual, /fetch\(new URL\('\.\.\/\.\.\/content\/xero-portal-manual\.json'/);
+  assert.match(manual, /setManual\(data\.en\)/);
+  assert.match(manual, /return \(\) => controller\.abort\(\)/);
+  assert.match(manual, /if \(!controller\.signal\.aborted\) setLoadError\(true\)/);
+  assert.match(manual, /setRetry\(\(value\) => value \+ 1\)/);
   assert.match(manual, /Button-by-button reference/);
-  assert.match(manual, /按鈕逐項參考/);
+  assert.doesNotMatch(manual, /controlledLanguage|XERO_PORTAL_MANUAL_LANGUAGES/);
+  assert.doesNotMatch(page, /<XeroPortalManual/);
   assert.match(manual, /manual\.tasks\.map/);
   assert.match(manual, /<Accordion/);
   assert.match(manual, /<details/);

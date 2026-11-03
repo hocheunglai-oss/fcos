@@ -1,3 +1,4 @@
+import { retainedQualitySteps } from './helpers/retainedQualitySteps.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
@@ -8,13 +9,16 @@ import { releaseHash } from '../scripts/lib/release-readiness.mjs';
 import { collectPreviewParity } from '../scripts/collect-preview-parity.mjs';
 import { normalRoleReadRequest } from '../scripts/lib/normal-role-read-requests.mjs';
 
-test('control installation retains frozen quality history and limits current change to the reviewed artifact consumer', () => {
+test('control installation retains frozen quality history and unchanged legacy checks behind the dormant bridge', () => {
   const current = readFileSync(new URL('../.github/workflows/quality.yml', import.meta.url), 'utf8');
   const source = readFileSync(new URL('./fixtures/release-workflows/quality-72d.yml', import.meta.url), 'utf8');
   assert.equal(releaseHash(source), '92bdff9c8ab1d7c49b2a87b4ab82f2ecb683e927259d3e10fde6e6e1d8d290c5');
-  const block = value => value.slice(value.indexOf('  authenticated-browser:'), value.indexOf('  dependency-review:'));
-  assert.equal(releaseHash(block(current)), 'fbe438b2b5362c068f7db5922ff53a23f8783c2a9a958aa373d1ec4d22058e95');
-  assert.equal(current.replace(block(current), block(source)).replace('python3 -B -m unittest tests.preview_email_coordination_ledger_test tests.release_coordination_ledger_test', 'python3 -m unittest tests.preview_email_coordination_ledger_test'), source);
+  const installed = load(current);
+  const consumer = installed.jobs['authenticated-browser'].steps.find(step => step.name === 'Require trusted authenticated-candidate evidence artifact');
+  assert.equal(releaseHash(consumer.with.script), 'cdd837e4341a2b6890e4ed42fd2a883cd06fa849e8a52cc2af8725d4f73d0e92');
+  assert.equal(consumer.if, "${{ vars.FCOS_HOSTED_READINESS_ENABLED != 'true' }}");
+  const legacyCode = retainedQualitySteps(installed, { fixture72: true });
+  assert.deepEqual(legacyCode, load(source).jobs['code-and-database'].steps);
   assert.match(current, /python3 -B -m unittest tests\.preview_email_coordination_ledger_test tests\.release_coordination_ledger_test/);
   const workflow = load(source), steps = workflow.jobs['code-and-database'].steps;
   const checkout = steps.find(step => step.uses === 'actions/checkout@v4');

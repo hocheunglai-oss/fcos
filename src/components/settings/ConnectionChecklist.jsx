@@ -256,7 +256,7 @@ export default function ConnectionChecklist() {
 
       <div className="mt-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
         <LockKeyhole className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-        <span><span className="font-semibold">Connection order:</span> approved API or connector first, verified CLI second, and Chrome only as the final fallback. Use <span className="font-semibold">{APPROVED_CONNECTION_BROWSER_PROFILE}</span> for FCOS, Salesforce DEVEE, and Salesforce QAT; <span className="font-semibold">{SALESFORCE_BROWSER_PROFILES.production || 'Vincent'}</span> only for Salesforce Production authentication; or <span className="font-semibold">{SHARED_SALESFORCE_BROWSER_PROFILE}</span> only for the shared Salesforce GitHub repository. Then return to <code>{CONNECTION_DOCTOR_COMMAND}</code>.</span>
+        <span><span className="font-semibold">Connection order:</span> verified CLI first, approved API or connector only when the CLI cannot safely complete the operation, and Chrome only as the final fallback. Use <span className="font-semibold">{APPROVED_CONNECTION_BROWSER_PROFILE}</span> for FCOS, Salesforce DEVEE, and Salesforce QAT; <span className="font-semibold">{SALESFORCE_BROWSER_PROFILES.production || 'Vincent'}</span> only for Salesforce Production authentication; or <span className="font-semibold">{SHARED_SALESFORCE_BROWSER_PROFILE}</span> only for the shared Salesforce GitHub repository. Then return to <code>{CONNECTION_DOCTOR_COMMAND}</code>.</span>
       </div>
 
       {error && <div role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}

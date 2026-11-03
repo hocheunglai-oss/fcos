@@ -1,0 +1,27 @@
+{
+  "repository": "hocheunglai-oss/fcos",
+  "repositoryId": "1278654816",
+  "ref": "refs/heads/main",
+  "registrationJob": "release / prepare",
+  "approvalJobPrefix": "release / production / ",
+  "resumeJobPrefix": "release / execute / ",
+  "workflows": [
+    {
+      "callerWorkflowRef": "hocheunglai-oss/fcos/.github/workflows/hosted-release.yml@refs/heads/main",
+      "jobWorkflowRef": "hocheunglai-oss/fcos/.github/workflows/hosted-release-controller.yml@64aa338b04cee7e05bde0ca9bfd10b81ac001a65",
+      "jobWorkflowSha": "64aa338b04cee7e05bde0ca9bfd10b81ac001a65"
+    }
+  ],
+  "qualificationAdmission": {
+    "repository": "hocheunglai-oss/fcos",
+    "repositoryId": "1278654816",
+    "ref": "refs/heads/codex/hosted-qualification-dependency-setup-20261020",
+    "bootstrapSha": "12bee4edb7fc459162efb6a35571731c8fe5beb5",
+    "callerWorkflowRef": "hocheunglai-oss/fcos/.github/workflows/authenticated-release.yml@refs/heads/codex/hosted-qualification-dependency-setup-20261020",
+    "callerWorkflowSha": "12bee4edb7fc459162efb6a35571731c8fe5beb5",
+    "jobWorkflowRef": "hocheunglai-oss/fcos/.github/workflows/hosted-release-controller.yml@64aa338b04cee7e05bde0ca9bfd10b81ac001a65",
+    "jobWorkflowSha": "64aa338b04cee7e05bde0ca9bfd10b81ac001a65",
+    "candidateSha": "2ef733d17dd12314c72971c2220b2b09903a6bf0",
+    "setupSha256": "fea751d39a5c86c411fe69501a156d3f91cf9242209f4c56f07ece8cd8f84eb6"
+  }
+}

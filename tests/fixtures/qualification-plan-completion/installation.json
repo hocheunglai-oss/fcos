@@ -1,0 +1,56 @@
+{
+  "query": "select fcos_release_coordination.install_epoch($1::bigint,$2::jsonb)",
+  "parameters": [
+    1,
+    {
+      "inventoryComplete": true,
+      "inventoryHash": "3527fbf5edc1f5722dea1dbdf01e6be66bb8966e75855b72513f47fd2fa3aaf0",
+      "notificationChallenge": {
+        "challenge": "2619d59f4500f90e9e347e27f599fe49f7b955738c2ff7eab4099a21b8b1fbee",
+        "issuedAt": "2026-10-20T10:42:23.032Z",
+        "repository": "hocheunglai-oss/fcos",
+        "operator": "hocheunglai-oss"
+      },
+      "legacyFence": {
+        "kind": "permanent_legacy_sentinel",
+        "snapshotHash": "8ba496280bba935dc0876a7075cb8b097639a2709f1eeec7fb70ce51db158d7b",
+        "proofHash": "9ccaaa93f5462790abf5985122bbf975afa006b2fa59d632e452f48e547b1c17"
+      },
+      "writers": [
+        {
+          "id": "production",
+          "disabled": true,
+          "proofHash": "b3009ba8e01ddb425f501e784fe0048d45e4a44ba53d9a075c94ff6a98c0204d"
+        },
+        {
+          "id": "reconciliation",
+          "disabled": true,
+          "proofHash": "7a84bddb0ff765b2d2ab437d00a25ac1137f6bacf7cc3b787b1b0434c50ff56d"
+        }
+      ],
+      "uncertainties": [
+        {
+          "operationId": "replacement-template-7dc21331fe45",
+          "evidenceHash": "11bf7691f94955c19ca0c6005d0b560d0c1ebbb74c8ba0f3a8a27ffe43a974c2",
+          "ownerThreadId": "01a0f08b-7fcb-7870-9edc-343e16052b62",
+          "ownerReadbackHash": "c58f78034f7c80992d722846d7641a9a739934e59980f0c25419f6387b97f6c2"
+        },
+        {
+          "operationId": "exact04ee-pr114-permission-corrected-three-successor-b53f1cbd-80ca-4f28-ac48-698a21e35b29",
+          "evidenceHash": "30494f742b78a5bb4ac731622434511318c0f4df64d124bf57ede8e49c91b4cf",
+          "ownerThreadId": "01a0f08b-7fcb-7870-9edc-343e16052b62",
+          "ownerReadbackHash": "b4f5f959260120f8c25e440f9fad39574a1b854e306dcdd8a72b852364c03e92"
+        },
+        {
+          "operationId": "production-execution-environment-d706f8b8-92c2-4f80-b85b-8724ea35e5c0",
+          "evidenceHash": "d1960e1e328298c0df10bb3d7866df24918059536fd3e80076626ac3e2ac201c",
+          "ownerThreadId": "01a0f08b-7fcb-7870-9edc-343e16052b62",
+          "ownerReadbackHash": "af005860a3948d0eed15475807efca34c2c91cc671e10614e8be392878adbf11"
+        }
+      ]
+    }
+  ],
+  "coordinationOnly": true,
+  "providerAuthorityGranted": false,
+  "operatorMustAuthenticateProviderEvidence": true
+}

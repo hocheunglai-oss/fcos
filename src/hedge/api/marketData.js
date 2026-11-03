@@ -206,3 +206,7 @@ export function loadMarketIntradayTimeline(payload = {}, options = {}) {
     ...options,
   });
 }
+
+export function loadMarketBookContext(options = {}) {
+  return requestMarketIntelligence('marketBookContext', {}, { ...options, cache: false });
+}

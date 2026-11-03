@@ -15,6 +15,11 @@
                     </button>
                 </header>
                 <div class="slds-modal__content slds-p-around_medium" id="modal-content-id-1">
+                    <template if:true={formError}>
+                        <div class="slds-notify slds-notify_alert slds-alert_error slds-m-bottom_small" role="alert">
+                            <span>{formError}</span>
+                        </div>
+                    </template>
                     <template for:each={inputs} for:item="input">
                         <template if:false={input.isDisabled}>
                             <template if:true={input.isHidden}>
@@ -36,13 +41,14 @@
                                     <div class={input.rowClass}>
                                         <div class="slds-grid slds-gutters row-content">
                                             <lightning-input class="slds-col slds-size_5-of-12"
-                                                value={input.label} onchange={handleChangeLabel} data-id={input.id}></lightning-input>
+                                                value={input.label} read-only={input.isPaymentLocked} onchange={handleChangeLabel} data-id={input.id}></lightning-input>
                                             <lightning-input class="slds-col slds-size_5-of-12"
-                                                value={input.value} onchange={handleChangeValue} data-id={input.id}></lightning-input>
+                                                value={input.value} read-only={input.isPaymentLocked} onchange={handleChangeValue} data-id={input.id}></lightning-input>
                                             <lightning-icon icon-name="utility:move" size="x-small" draggable="true"
                                                 ondragstart={handleDragStart} ondragover={handleDragOver} ondrop={handleDrop}
                                                 class="drag-handle slds-col slds-size_1-of-12 slds-m-top_large" data-id={input.id}></lightning-icon>
                                             <lightning-button icon-name="utility:close" variant="base"
+                                                disabled={input.isPaymentLocked}
                                                 class="slds-col slds-size_1-of-12 slds-m-top_medium"
                                                 onclick={removeInput} data-id={input.id}></lightning-button>
                                         </div>
@@ -64,8 +70,8 @@
                     </lightning-button-icon>
                 </div>
                 <footer class="slds-modal__footer">
-                    <button class="slds-button slds-button_neutral" onclick={handlePreviewPDF} title="Preview">Preview</button>
-                    <button class="slds-button slds-button_brand" onclick={handleGeneratePDF} title="Generate">Generate</button>
+                    <button class="slds-button slds-button_neutral" onclick={handlePreviewPDF} title="Preview" disabled={isDocumentActionDisabled}>Preview</button>
+                    <button class="slds-button slds-button_brand" onclick={handleGeneratePDF} title="Generate" disabled={isDocumentActionDisabled}>Generate</button>
                 </footer>
             </div>
         </section>

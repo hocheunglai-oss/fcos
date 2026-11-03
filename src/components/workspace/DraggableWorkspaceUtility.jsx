@@ -68,7 +68,8 @@ export default function DraggableWorkspaceUtility({ children, className, onDragS
       left,
       top,
       maxLeft: Math.max(left, parent.clientWidth - host.offsetWidth - rightInset - gutter),
-      maxTop: Math.max(top, parent.clientHeight - host.offsetHeight - bottomInset - gutter),
+      // Reserve the bottom utility row for the notification-history button.
+      maxTop: Math.max(top, parent.clientHeight - host.offsetHeight - bottomInset - gutter - 60),
     };
   }, []);
 

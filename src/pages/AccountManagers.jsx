@@ -45,7 +45,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
 import { accountClKeyLabel, accountSearchDisplayText } from '@/lib/accountDisplay';
-import { ACCOUNT_MANAGERS_METHODOLOGY } from '@/lib/pageMethodologies';
+import { ACCOUNT_MANAGERS_METHODOLOGY } from '@/lib/pageMethodologyIndex';
 import { ACCOUNT_MANAGERS_USER_MANUAL } from '@/lib/pageUserManuals';
 
 const PAGE_SIZE = 100;

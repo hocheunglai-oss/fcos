@@ -54,6 +54,8 @@ jobs:
     name: candidate-tests
     needs: source-verification
     runs-on: ubuntu-latest
+    env:
+      FCOS_MIGRATION_PROJECT_ID: fcos
     timeout-minutes: 60
     permissions:
       contents: read

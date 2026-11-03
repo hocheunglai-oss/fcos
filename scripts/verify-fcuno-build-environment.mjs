@@ -15,8 +15,8 @@ export function assertFcunoBuildEnvironment(env = process.env) {
     VITE_SUPABASE_URL: `https://${fcosConnectionIdentifier('supabase', 'Project ref')}.supabase.co`,
   };
   const invalid = Object.entries(required).filter(([key, value]) => env[key] !== value).map(([key]) => key);
-  if (!resolveAuthRuntimePolicy({ url: env.VITE_SUPABASE_URL, publicKey: env.VITE_SUPABASE_ANON_KEY }).configured) {
-    invalid.push('VITE_SUPABASE_ANON_KEY');
+  if (!resolveAuthRuntimePolicy({ url: env.VITE_SUPABASE_URL, publicKey: env.VITE_SUPABASE_PUBLISHABLE_KEY?.trim() || env.VITE_SUPABASE_ANON_KEY }).configured) {
+    invalid.push('VITE_SUPABASE_PUBLISHABLE_KEY/VITE_SUPABASE_ANON_KEY');
   }
   if (invalid.length) throw new Error(`FCUNO release configuration missing or mismatched: ${invalid.join(', ')}. Build a staged Production candidate with the pinned FCOS settings; do not enable legacy password login or copy Production secrets into Preview.`);
   return { checked: true, authentication: 'fcuno' };

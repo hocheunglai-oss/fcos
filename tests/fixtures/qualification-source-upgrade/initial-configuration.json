@@ -1,0 +1,18 @@
+{
+  "kind": "fcos_qualification_schema_recovery_configuration_verified_v1",
+  "accepted": true,
+  "recoveryId": "qualification-schema-recovery-epoch1-39653018028-v1",
+  "teamId": "team_MbKDazzCrou3eKTuausPv4X2",
+  "projectId": "prj_RSs4qXdrK6MQVOqB0N1FRVMVxDwi",
+  "deploymentId": "dpl_GtN4P2dNEdzKbxWRK62EhiYyW2fK",
+  "coordinatorUrl": "https://vercel-local-file-path-probe-imijcfbr7.vercel.app/coordinate",
+  "serverSourceSha": "0d996205a754320f620342194c31b27b06ab4d0c",
+  "serverSourceManifestSha256": "e002efe339bcdb30f32a55803c1de4ad7cb544263824dc232807e437285bfe5a",
+  "policySha256": "5775ea59999f87e2198c415f1827f5816e458debf4aab69a7c6f9a70af9beb2d",
+  "setupSha256": "fea751d39a5c86c411fe69501a156d3f91cf9242209f4c56f07ece8cd8f84eb6",
+  "publicCoordinatorUrlMatches": true,
+  "credentialsPreserved": true,
+  "defaultProductionPreserved": true,
+  "readbackEvidenceSha256": "3b816808ea6d7253d4d3f1b068fb7590183e25543471ee826d4bcb25dadc42a7",
+  "reviewedAt": "2026-10-21T20:32:17.249001+00:00"
+}

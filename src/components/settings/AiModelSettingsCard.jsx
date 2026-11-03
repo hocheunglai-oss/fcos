@@ -68,12 +68,15 @@ export default function AiModelSettingsCard({
   updatedAt = null,
   privacyNote = '',
   permissionNote = '',
+  automaticRouting = null,
 }) {
   const dirty = Boolean(selectedModelId && selectedModelId !== savedModelId);
   const selectedModel = models.find((model) => model.id === selectedModelId);
-  const totals = Object.values(usageByModel).reduce((sum, row) => ({
-    requests: sum.requests + Number(row?.requests || 0),
-    cost: sum.cost + Number(row?.estimatedCostUsd || 0),
+  const automaticSelected = selectedModel?.automatic === true || selectedModelId === 'auto';
+  const usageModels = models.filter((model) => model.automatic !== true && model.id !== 'auto');
+  const totals = usageModels.reduce((sum, model) => ({
+    requests: sum.requests + Number(usageByModel[model.id]?.requests || 0),
+    cost: sum.cost + Number(usageByModel[model.id]?.estimatedCostUsd || 0),
   }), { requests: 0, cost: 0 });
 
   return (
@@ -111,12 +114,16 @@ export default function AiModelSettingsCard({
                 <SelectContent>
                   {models.map((model) => (
                     <SelectItem key={model.id} value={model.id}>
-                      {model.label}{model.recommended ? ' · Recommended' : ''}{model.costTier ? ` · ${model.costTier}` : ''}
+                      {model.label}
+                      {model.automatic ? ' · Recommended' : ' · Manual override'}
+                      {!model.automatic && model.costTier ? ` · ${model.costTier}` : ''}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              <p className="min-h-5 text-xs text-muted-foreground">{selectedModel?.description || 'Select the model used for this FCOS AI purpose.'}</p>
+              <p className="min-h-5 text-xs text-muted-foreground">
+                {selectedModel?.description}
+              </p>
             </div>
             <div className="flex flex-wrap gap-2 lg:max-w-[240px]">
               <StatusPill label={apiConfigured ? 'API configured' : 'API unavailable'} available={apiConfigured} />
@@ -130,26 +137,39 @@ export default function AiModelSettingsCard({
             {canManage && (
               <Button type="button" onClick={onSave} disabled={!dirty || saving || !storageAvailable} className="gap-2">
                 {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                {saving ? 'Saving' : 'Save model'}
+                {saving ? 'Saving' : 'Save selection'}
               </Button>
             )}
           </div>
+
+          {automaticSelected && (
+            <div className="border-b border-border bg-primary/[0.03] px-4 py-3">
+              <h3 className="text-xs font-semibold">Automatic routing by task</h3>
+              <p className="mt-1 max-w-4xl text-xs leading-5 text-muted-foreground">
+                {automaticRouting?.summary}
+              </p>
+              <ul className="mt-3 divide-y divide-border text-xs">
+                {(automaticRouting?.routes || []).map((route, index) => (
+                  <li key={index} className="flex flex-col gap-1 py-2 sm:flex-row sm:justify-between">
+                    <span>{route.label}</span>
+                    <span className="font-medium">{route.modelLabel} · {route.reasoningEffort || 'default'} reasoning</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           <div className="overflow-x-auto">
             <table className="w-full min-w-[900px] text-left text-xs">
               <thead className="bg-muted/40 text-muted-foreground">
                 <tr>
-                  <th className="px-4 py-2 font-semibold">Model</th>
-                  <th className="px-3 py-2 text-right font-semibold">Requests</th>
-                  <th className="px-3 py-2 text-right font-semibold">Input</th>
-                  <th className="px-3 py-2 text-right font-semibold">Cached input</th>
-                  <th className="px-3 py-2 text-right font-semibold">Output</th>
-                  <th className="px-3 py-2 text-right font-semibold">Estimated USD</th>
-                  <th className="px-4 py-2 font-semibold">Last used</th>
+                  {['Model', 'Requests', 'Input', 'Cached input', 'Output', 'Estimated USD', 'Last used'].map((label, index) => (
+                    <th key={label} className={`px-3 py-2 font-semibold ${index > 0 && index < 6 ? 'text-right' : ''}`}>{label}</th>
+                  ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {models.map((model) => {
+                {usageModels.map((model) => {
                   const usage = usageByModel[model.id] || {};
                   const selected = model.id === selectedModelId;
                   return (
@@ -157,7 +177,7 @@ export default function AiModelSettingsCard({
                       <td className="px-4 py-2.5">
                         <div className="flex items-center gap-2">
                           <span className="font-medium text-foreground">{model.label}</span>
-                          {selected && <Badge variant="outline" className="border-primary/30 bg-primary/10 text-primary">Selected</Badge>}
+                          {selected && <Badge variant="outline" className="border-primary/30 bg-primary/10 text-primary">Manual override</Badge>}
                         </div>
                         {model.pricing && (
                           <p className="mt-0.5 text-[11px] text-muted-foreground">
@@ -165,10 +185,9 @@ export default function AiModelSettingsCard({
                           </p>
                         )}
                       </td>
-                      <td className="px-3 py-2.5 text-right tabular-nums">{integer(usage.requests)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums">{integer(usage.inputTokens)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums">{integer(usage.cachedInputTokens)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums">{integer(usage.outputTokens)}</td>
+                      {['requests', 'inputTokens', 'cachedInputTokens', 'outputTokens'].map((key) => (
+                        <td key={key} className="px-3 py-2.5 text-right tabular-nums">{integer(usage[key])}</td>
+                      ))}
                       <td className="px-3 py-2.5 text-right">
                         <div className="font-medium tabular-nums text-foreground">{usd(usage.estimatedCostUsd)}</div>
                         {periodLabel && <div className="text-[11px] tabular-nums text-muted-foreground">{periodLabel}: {usd(usage.periodCostUsd)}</div>}
@@ -177,7 +196,7 @@ export default function AiModelSettingsCard({
                     </tr>
                   );
                 })}
-                {!models.length && <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">No models are available for this AI purpose.</td></tr>}
+                {!usageModels.length && <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">No model usage is available for this AI purpose.</td></tr>}
               </tbody>
             </table>
           </div>

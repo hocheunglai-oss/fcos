@@ -1,0 +1,119 @@
+{
+  "kind": "public_hash_only_dependency_context_fixture_v1",
+  "candidate": {
+    "sha": "160edcccc3347596ac18bb5c9dcb34ecc26df02b",
+    "sourceProfile": "compat_source_diagnostics_20261023",
+    "sourceSha256": "9f8b01198784d1e222f96f726207ef9c980f9ab5d2536e7a156ca97b2f307912",
+    "lockSha256": "9b3d6eb4824ea8688022b9ba249041e25c44b8cebc5443d59c55d8a2da5da378",
+    "configurationSha256": "331e9f360dd8fa0f9e1e2cafb8f0d5f50ecf26e2ac76323972e9bb7ff742a866",
+    "salesforceSourceSha256": "4c2594c9986269e492487448d402334f43db35b06cb9c409377e728482739c64",
+    "sourceInputsSha256": "a6bc646c45bdc92232cebb0f85fbb6a5104222aaf0493fba8ec03ebf79c73c0c",
+    "branch": "codex/hosted-release-consolidation-20261017"
+  },
+  "dependencies": {
+    "nom_b": {
+      "artifactsSha256": "b154540dd4096d952467e3112b05156796fd58e9fa86ee0c3c180064c6b4e854",
+      "handoffSha256": "61f666f39df06b8282e485eb1009204141fa5acc790e1aab682a17a04df15106",
+      "recipeSha256": "cd972c2a679d6bf9fe48a551d28fa0cfc0e801591d718867def265c0b9bc13f8"
+    },
+    "preservation": {
+      "envelopeSha256": "fa8ce6afdf169c19ffd1789b565153ac5f6c85f0577517e7ca8d8087f5461ed9",
+      "membershipSha256": "eba1d15b059d53a25dd8c46cf39a4fdae84b8a52853d5fcaa3f68a779a60e481",
+      "rowCount": 9769,
+      "snapshotSha256": "fe79c00851723466f8b30f44a2dfe4e5c82feb1b9273045ddbc6dffe8b3653c1",
+      "tableCount": 6
+    },
+    "schemaVersion": 1
+  },
+  "seed": {
+    "credentialSha256": "da1d36cf372fdf322bb07a3cb854467999c8e01312bf58fbc74bd096a5bf1c16",
+    "envelopeSha256": "83629b8fed0e3d1f9264a98e547782ef138bc92336685e92c8ab54c51566fb37",
+    "files": [
+      {
+        "bytes": 1579,
+        "path": "handoff.json",
+        "sha256": "61f666f39df06b8282e485eb1009204141fa5acc790e1aab682a17a04df15106"
+      },
+      {
+        "bytes": 1026211,
+        "path": "artifacts.json",
+        "sha256": "b154540dd4096d952467e3112b05156796fd58e9fa86ee0c3c180064c6b4e854"
+      },
+      {
+        "bytes": 9790,
+        "path": "recipe.json",
+        "sha256": "cd972c2a679d6bf9fe48a551d28fa0cfc0e801591d718867def265c0b9bc13f8"
+      },
+      {
+        "bytes": 113940,
+        "path": "membership.encrypted.json",
+        "sha256": "fa8ce6afdf169c19ffd1789b565153ac5f6c85f0577517e7ca8d8087f5461ed9"
+      },
+      {
+        "bytes": 18636,
+        "path": "legacy-harness/guards.mjs.txt",
+        "sha256": "67bea4a6dca2a39a325e06fa9c5ba90566a5092f84af8ae2b7451fe5f64b66e9"
+      },
+      {
+        "bytes": 15369,
+        "path": "legacy-harness/run.mjs.txt",
+        "sha256": "77df2040f26f7434aa0e0266bfedc6da11aabba8154d4ec86f6103e50289033f"
+      },
+      {
+        "bytes": 5131,
+        "path": "legacy-harness/desktop-check.mjs.txt",
+        "sha256": "88615a8314389cccb9af01ee2da2e5d60c0c1e1fd37a6a67b4d9f176c1f32316"
+      },
+      {
+        "bytes": 19416,
+        "path": "legacy-harness/safety.test.mjs.txt",
+        "sha256": "40b2b2052f32a419c895d05ec5b1c767daafcb59ce67cf8c6d1749c645dd8115"
+      },
+      {
+        "bytes": 10326,
+        "path": "legacy-harness/lease.py.txt",
+        "sha256": "197cbec9f9d694600efa2db21697f075bb8635550c1532afdfbca5146d8bc51f"
+      },
+      {
+        "bytes": 5940,
+        "path": "legacy-harness/lease_test.py.txt",
+        "sha256": "6712eef3a92d5e449652cade2944399c5d46f204250d4ce1509c4e20dee81397"
+      },
+      {
+        "bytes": 1121,
+        "path": "retained/scope.json",
+        "sha256": "f498d06ae769d8f6eef52d4610e02cc710556c53fda67f1dff21c20ae436cbb2"
+      },
+      {
+        "bytes": 6100,
+        "path": "retained/cleanup.json",
+        "sha256": "d34a30eaf169295d83f4b4441fa2015511d1c49b2ffe6b98285b8a62a617bb9b"
+      }
+    ],
+    "recipientPublicKeySha256": "188c6fc418109fef400b5c123bf2f23cc56ab423129980fefc683dde8a348f7a"
+  },
+  "handoff": {
+    "artifacts": {
+      "acceptance": "17cdc815469f1c3a759f0d03bc1630b3e79b3484d0e9c9c534bcdd1aa45c5583",
+      "admission": "0a70da816e032ae81d5ab9ebebf80ab16122f160556e45e5c7b8150690e73139",
+      "cleanup": "d34a30eaf169295d83f4b4441fa2015511d1c49b2ffe6b98285b8a62a617bb9b",
+      "dependencies": "62f01830c7c9ce1e7ba4d0b9842499bf8901a8b383bc7bcbe13549c335ff7b0c",
+      "desktopEvidence": "df3ed460e0aa134c46f42b04d6496104dcaa43c07d80477b0bd86e6e11f29aa8",
+      "liveEvidence": "384b0b6f8a756e7b5c99385f4e9476a333798afe827adf2aea7fa7359120c42a",
+      "reuseDecision": "23df799f79ac849bbeeefd9b6becb3c0cca9de610eea99fc88310445131dc70d",
+      "scope": "f498d06ae769d8f6eef52d4610e02cc710556c53fda67f1dff21c20ae436cbb2"
+    },
+    "candidateSha": "2ef733d17dd12314c72971c2220b2b09903a6bf0",
+    "kind": "fcos_reviewed_nom_b_legacy_import",
+    "measurementRecipeSha256": "cd972c2a679d6bf9fe48a551d28fa0cfc0e801591d718867def265c0b9bc13f8",
+    "originalCandidateSha": "04ee3425aac7a49089eda781eb3c976aea1f6785",
+    "relevantInputs": {
+      "environmentSha256": "e767b5ce51ed27ed73e1bc44557c93dece6baa9b717c6bcd2571aba760f4f44e",
+      "fixtureSha256": "21e5997397e78a40fe2cc7662b37953e11374b788dac19e610435924e1ce0d0e",
+      "harnessSha256": "57b4e0d9c04ba44b07a6c5a53e5fe553eaf4ecd6c0a2ded27c10791252fe0c9f",
+      "salesforceSourceSha256": "96f3404b95bed493bb6b61b669bae660a994fba681e6190b6b3742828c954e55",
+      "sourceSha256": "ccb81ab87a4de74f84264484c285320582341e1403775c5569611336fdb1d3dd"
+    },
+    "candidateSalesforceSourceSha256": "4c2594c9986269e492487448d402334f43db35b06cb9c409377e728482739c64"
+  }
+}

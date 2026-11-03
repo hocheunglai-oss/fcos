@@ -1,0 +1,28 @@
+{
+  "kind": "final_application_supplier_source_bindings_v1",
+  "schemaVersion": 1,
+  "historicalManifestSha256": "d8a99d562481840cd96bc67950be7074ec1d518be4648436ff35e2c076d22227",
+  "baseController": "e60d6f0e858f862bca3bcf3b67d4aa0c8fbefae1",
+  "acceptedApplication": "806f14eb4f0d7fc26647e25124d5f736b30d3bbe",
+  "originalBindings": {
+    "api/_runtimeCache.js": "4acde7e0513f87e81523a52650ff06fc3b7895153b6001532b7b0a67ed3fd4b0",
+    "api/_supabaseConfig.js": "4313704adf8c6a6c891c7226775fbfdbe439de8a615d490b900da379b562187f",
+    "config/fcosConnections.js": "e826d82510a8aeabfa285a66e8d1c546265347536c6f17a7b861cff8c5da0c15",
+    "package-lock.json": "0f35c1e123ab566f5d065d187bc0b8a7d1e05f7968ec31a03cd67ac0070aa0ef",
+    "package.json": "ec6f54ad36bdfdbf4e895d6572782d87fcd21fb7325f36b82b673789d401f17f"
+  },
+  "sourceOverrides": {
+    "api/_runtimeCache.js": "0a798121eb697e6fb9ba3628863e04093a97ef19acbf700d6b854ad6be3698cd",
+    "api/_supabaseConfig.js": "070f4e7a31d2e899e7bfa5fc6a50980c96f0e53a11c91649330dafc4022bca05",
+    "config/fcosConnections.js": "36132abd2ae8d82ac19f434b495b39f26e3bab99f0e364b0d4d70eb88b0f923d",
+    "package-lock.json": "4771e077366d389088d5a6e9f159c603982574588ee1f5f3867c443581d33df2",
+    "package.json": "152fabf262682aaebfd345da42f2798ff2177b55fd1de851b62022e1682ce1f3"
+  },
+  "sevenRawFixtureRecordsUnchanged": true,
+  "algorithmBodiesUnchanged": true,
+  "generatorExecuted": false,
+  "privateFixtureRead": false,
+  "currentBusinessCase": false,
+  "financialAuthorityGranted": false,
+  "meaning": "Explicit source-only final application composition retains current canonical provider/Supabase target guards and cache plus composed dependencies. All seven raw records, original manifest/generator and every other historical source binding remain mandatory. No original proof or business case is relabeled."
+}

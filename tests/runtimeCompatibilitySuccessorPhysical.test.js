@@ -12,7 +12,7 @@ import { SOURCE_ROOT, cleanGitEnvironment } from './helpers/runtimeCompatibility
 // Actual repository source bytes are bound before import. All11 physical cases
 // create real disposable synthetic Git repositories; none is a live candidate.
 const helperPath = join(SOURCE_ROOT, 'scripts/lib/build-provenance.mjs');
-assert.equal(createHash('sha256').update(fs.readFileSync(helperPath)).digest('hex'), 'e09e63875b79f7324e27424119d47612606a7a985bcf9056b3fa3a307320bd16');
+assert.equal(createHash('sha256').update(fs.readFileSync(helperPath)).digest('hex'), '96ec0600534ad64a81a617960cb7a712aea9355c801c12b07232881e184b69b8');
 const { collectBuildProvenance } = await import(pathToFileURL(helperPath));
 const temporary = fs.mkdtempSync(join(tmpdir(), 'fcos-404bc-physical-negative-'));
 const gitEnv = cleanGitEnvironment();

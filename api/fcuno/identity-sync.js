@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { processFcunoIdentitySync } from '../_fcunoIdentityFederation.js';
+import { requireDeploymentMutationAllowed } from '../_deploymentReadOnly.js';
 import { serverSupabaseConfig } from '../_supabaseConfig.js';
 import { logRequestTelemetry, recordRequestFailure, requestIdFrom, runWithRequestTelemetry, telemetryResponseHeaders } from '../_requestTelemetry.js';
 
@@ -37,6 +38,7 @@ export default async function handler(req, res) {
   return runWithRequestTelemetry({ handler: 'fcunoIdentitySync', requestId }, async () => {
     try {
       if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'Method not allowed.' });
+      requireDeploymentMutationAllowed(true);
       await discardRawBody(req);
       return json(res, 202, await processFcunoIdentitySync({ headers: req.headers, client: serviceClient() }));
     } catch (error) {

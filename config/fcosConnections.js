@@ -1,6 +1,17 @@
+const runtimeConnections = [
+    { id: 'supabase', provider: 'Supabase', target: { providerId: 'supabase', identifierLabel: 'Project ref' }, environmentKeys: ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_SECRET_KEY', 'VITE_SUPABASE_URL', 'VITE_SUPABASE_ANON_KEY'], apiOrigins: [] },
+    { id: 'salesforce', provider: 'Salesforce', target: { providerId: 'salesforce', environmentKey: 'production' }, environmentKeys: ['SALESFORCE_INSTANCE_URL', 'SALESFORCE_JWT_CLIENT_ID', 'SALESFORCE_JWT_USERNAME', 'SALESFORCE_JWT_PRIVATE_KEY', 'SALESFORCE_CLIENT_ID', 'SALESFORCE_CLIENT_SECRET', 'SALESFORCE_REFRESH_TOKEN', 'SALESFORCE_ACCESS_TOKEN'], apiOrigins: [] },
+    { id: 'xero', provider: 'Xero', target: { configuredIdentityKeys: ['XERO_TENANT_ID', 'XERO_TENANT_NAME'], storedIdentitySource: 'Approved durable Xero connection' }, environmentKeys: ['XERO_TENANT_ID', 'XERO_TENANT_NAME', 'XERO_CLIENT_ID', 'XERO_CLIENT_SECRET', 'XERO_REFRESH_TOKEN'], apiOrigins: ['https://api.xero.com', 'https://identity.xero.com'] },
+    { id: 'drive', provider: 'Google Drive market reports', target: { integrationKey: 'googleDriveMarketReports' }, environmentKeys: ['GOOGLE_DRIVE_CLIENT_ID', 'GOOGLE_DRIVE_CLIENT_SECRET', 'GOOGLE_DRIVE_MARKET_REFRESH_TOKEN'], apiOrigins: ['https://www.googleapis.com', 'https://oauth2.googleapis.com'] },
+    { id: 'identity', provider: 'FCUNO identity federation', target: { integrationKey: 'fcunoIdentityFederation' }, environmentKeys: ['FCUNO_IDENTITY_ISSUER', 'FCUNO_IDENTITY_SYNC_AUDIENCE', 'FCUNO_IDENTITY_JWKS_URI', 'FCUNO_IDENTITY_JWT_ALGORITHMS'], apiOrigins: ['https://fcuno.com'] },
+    { id: 'microsoft', provider: 'Microsoft Graph mail', target: { configuredIdentityKeys: ['FCOS_MICROSOFT_TENANT_ID', 'FCOS_MICROSOFT_CLIENT_ID'], storedIdentitySource: 'Approved durable Graph mailbox configuration' }, environmentKeys: ['FCOS_MICROSOFT_TENANT_ID', 'FCOS_MICROSOFT_CLIENT_ID'], apiOrigins: ['https://graph.microsoft.com', 'https://login.microsoftonline.com'] },
+    { id: 'microsoft-growth', provider: 'Microsoft Graph growth mailbox', target: { configuredIdentityKeys: ['MICROSOFT_TENANT_ID', 'MICROSOFT_CLIENT_ID'] }, environmentKeys: ['MICROSOFT_TENANT_ID', 'MICROSOFT_CLIENT_ID', 'MICROSOFT_CLIENT_SECRET'], apiOrigins: ['https://graph.microsoft.com', 'https://login.microsoftonline.com'] },
+    { id: 'openai', provider: 'OpenAI', target: { configuredIdentityKeys: [], identityVerification: 'Independent provider account and project verification required' }, environmentKeys: ['OPENAI_API_KEY'], apiOrigins: ['https://api.openai.com'] },
+  ];
+
 const connectionPolicy = {
   schemaVersion: 1,
-  policyVersion: 11,
+  policyVersion: 12,
   profile: 'fcos-production',
   browserProfile: 'Otto',
   localStateDirectory: '.fcos-cli',
@@ -19,19 +30,19 @@ const connectionPolicy = {
   },
   sequence: [
     {
-      id: 'api_first',
-      label: 'Use the approved API or connector',
-      detail: 'Prefer a purpose-built API or connector after verifying its exact account, organization, project, repository, environment, scope, and target permissions.',
+      id: 'cli_first',
+      label: 'Use the verified CLI first',
+      detail: 'Use the repo-pinned CLI after its version, identity, target pin, and required permissions pass.',
     },
     {
-      id: 'cli_fallback',
-      label: 'Fall back to the verified CLI',
-      detail: 'When no approved API or connector can complete the operation, use the repo-pinned CLI only after its version, identity, target pin, and required permissions pass.',
+      id: 'api_fallback',
+      label: 'Use the approved API or connector when needed',
+      detail: 'When the verified CLI is unavailable, lacks the required capability, or cannot verify the exact target, use a purpose-built API or connector with the same checks.',
     },
     {
       id: 'browser_fallback',
       label: 'Use Chrome only as the final fallback',
-      detail: 'Chrome remains locked unless both the approved API/connector and verified CLI cannot complete the operation. Use only the environment-pinned profile, then return to API or CLI verification.',
+      detail: 'Chrome remains locked unless both the verified CLI and approved API/connector cannot complete the operation. Use only the environment-pinned profile, then return to CLI or API verification.',
     },
   ],
   integrations: {
@@ -135,6 +146,7 @@ const connectionPolicy = {
       identifiers: [
         { label: 'Project name', value: 'FCOS' },
         { label: 'Project ref', value: 'pjforfvchygdyqfcgpmw' },
+        { label: 'Session pooler host', value: 'aws-0-ap-southeast-1.pooler.supabase.com' },
       ],
       cliVersion: { exact: '2.113.0' },
       requiredPermissions: ['project.read', 'project.link'],
@@ -165,6 +177,8 @@ const connectionPolicy = {
         { label: 'Devee Org ID', value: '00D1m0000008kioEAA' },
         { label: 'Devee alias', value: 'fcos-devee' },
         { label: 'Devee username', value: 'vincent@cosulich.com.hk.devee' },
+        { label: 'Hosted DEVEE read-only username', value: 'fcos.hosted.reader.00d1m0000008kioeaa@cosulich.com.hk.devee' },
+        { label: 'Hosted DEVEE read-only licence name', value: 'Salesforce Integration' },
         { label: 'QAT Org ID', value: '00D1s0000008lFEEAY' },
         { label: 'QAT alias', value: 'fcos-qat' },
         { label: 'QAT username', value: 'vincent@cosulich.com.hk.qat' },
@@ -236,10 +250,10 @@ export function validateFcosConnectionPolicy(value = connectionPolicy) {
   requirePositiveInteger(value.policyVersion, 'policyVersion');
   requireString(value.profile, 'profile');
   requireString(value.browserProfile, 'browserProfile');
-  const expectedSequence = ['api_first', 'cli_fallback', 'browser_fallback'];
+  const expectedSequence = ['cli_first', 'api_fallback', 'browser_fallback'];
   if (!Array.isArray(value.sequence)
       || value.sequence.map(({ id }) => id).join(',') !== expectedSequence.join(',')) {
-    throw new Error('Connection policy order must remain API/connector, CLI, then Chrome.');
+    throw new Error('Connection policy order must remain CLI, API/connector, then Chrome.');
   }
   for (const [index, step] of value.sequence.entries()) {
     requireString(step.label, `sequence.${index}.label`);
@@ -424,3 +438,39 @@ export const FCOS_RELEASE_APPROVAL_POLICY = /* @__PURE__ */ Object.freeze({
   requiredChecks: /* @__PURE__ */ Object.freeze(['code-and-database', 'dependency-review', 'authenticated-browser']),
   statusCheckAppId: 15368,
 });
+
+// This inventory reports only presence of known keys. It never attests authentication,
+// deployed configuration, an account ID derived from a secret, or write authority.
+export function validateFcosRuntimeConnectionCatalogue(value = runtimeConnections) {
+  if (!Array.isArray(value) || value.length !== 8) throw new Error('Runtime connection catalogue must retain all configured integrations.');
+  if (value.map(({ id }) => id).join(',') !== 'supabase,salesforce,xero,drive,identity,microsoft,microsoft-growth,openai') throw new Error('Runtime connection catalogue identifiers are invalid.');
+  for (const runtime of value) {
+    requireString(runtime.provider, `runtime.${runtime.id}.provider`);
+    if (!runtime.target || typeof runtime.target !== 'object') throw new Error('Runtime connection target is required.');
+    if (!Array.isArray(runtime.environmentKeys) || runtime.environmentKeys.some((key) => !/^[A-Z][A-Z0-9_]+$/.test(key))) throw new Error('Runtime environment key names are invalid.');
+    if (!Array.isArray(runtime.apiOrigins) || runtime.apiOrigins.some((origin) => { try { return new URL(origin).origin !== origin || !origin.startsWith('https://'); } catch { return true; } })) throw new Error('Runtime API origins must use exact HTTPS origins.');
+  }
+  return true;
+}
+
+export function fcosRuntimeConnectionCatalogue(environment = {}) {
+  validateFcosRuntimeConnectionCatalogue();
+  return runtimeConnections.map((entry) => {
+    const { target } = entry;
+    let identityPins;
+    if (target.providerId === 'salesforce') {
+      const org = fcosSalesforceEnvironment(target.environmentKey);
+      identityPins = { orgId: org.orgId, username: org.username, instanceUrl: org.instanceUrl, isSandbox: org.isSandbox };
+    } else if (target.providerId) identityPins = { projectRef: fcosConnectionIdentifier(target.providerId, target.identifierLabel) };
+    else if (target.integrationKey === 'googleDriveMarketReports') {
+      const drive = FCOS_CONNECTION_POLICY.integrations.googleDriveMarketReports;
+      identityPins = { accountEmail: drive.accountEmail, rootFolderId: drive.rootFolderId, browserProfile: drive.browserProfile };
+    } else if (target.integrationKey === 'fcunoIdentityFederation') {
+      const federation = FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation;
+      identityPins = { issuer: federation.issuer, audience: federation.syncAudience, jwksEndpoint: federation.syncJwksEndpoint };
+    } else identityPins = { status: 'requires_independent_verification', configuredIdentityKeys: [...(target.configuredIdentityKeys || [])] };
+    return { id: entry.id, provider: entry.provider, connectionKind: 'application_runtime', identityPins,
+      configuredEnv: Object.fromEntries(entry.environmentKeys.map((key) => [key, typeof environment[key] === 'string' && Boolean(environment[key].trim())])),
+      apiOrigins: [...entry.apiOrigins], authenticationStatus: 'unknown', writePermission: 'unknown', humanAuthorization: 'not_granted' };
+  });
+}

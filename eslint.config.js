@@ -8,7 +8,7 @@ export default [
   {
     // Salesforce LWC decorators are compiled and validated by the Salesforce
     // deployment compiler; the FCOS web ESLint parser does not understand them.
-    ignores: ["force-app/**", ".fcos-cli/**"],
+    ignores: ["force-app/**", ".fcos-cli/**", "output/**", "outputs/**", "reports/**", "tmp/**"],
   },
   {
     files: [
@@ -37,6 +37,9 @@ export default [
       "unused-imports": pluginUnusedImports,
     },
     rules: {
+      // React's flat preset replaces the core preset's rules above. Keep the
+      // undefined-name check explicit so runtime render crashes fail lint.
+      "no-undef": "error",
       "no-unused-vars": "off",
       "react/jsx-uses-vars": "error",
       "react/jsx-uses-react": "error",
@@ -93,4 +96,10 @@ export default [
       }],
     },
   },
+  {
+    // Preserve the exact historical suite bytes; the current successor remains linted.
+    files: ["tests/xeroSupplierFinancialBucketDatabase.historical-test.js"],
+    rules: { "unused-imports/no-unused-imports": "off" },
+  },
+  { files: ["api/connection-runtime.js", "api/_connectionRuntime.js"], languageOptions: { parserOptions: { ecmaVersion: 2025 } } },
 ];

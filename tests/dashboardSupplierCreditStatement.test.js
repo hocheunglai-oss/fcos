@@ -10,11 +10,21 @@ import {
   resolveSupplierInvoiceIdentity,
   supplierOpenUninvoicedRows,
 } from '../api/_dashboardSupplierCreditStatement.js';
+import { dashboardSupplierCreditStatementServiceInternals } from '../api/_dashboardSupplierCreditStatementService.js';
 
 const accountId = '001000000000001AAA';
 const groupMemberId = '001000000000002AAA';
 const otherSupplierId = '001000000000003AAA';
 const stemId = 'a01000000000001AAA';
+const { childStemConditions, normalizeFilters, stemMatchesStatementScope } = dashboardSupplierCreditStatementServiceInternals;
+
+test('supplier scopes exclude Korea while retaining missing-country STEMs', () => {
+  const filters = normalizeFilters({ excludedCountryCodes: ['korea'] });
+  assert.deepEqual(filters.excludedCountryCodes, ['KOREA']);
+  assert.match(childStemConditions(filters, [])[0], /Port__r\.Country__c = null/);
+  assert.equal(stemMatchesStatementScope({ Port__r: { Country__c: 'KOREA' } }, filters, [], false), false);
+  assert.equal(stemMatchesStatementScope({ Port__c: null }, filters, [], false), true);
+});
 
 test('supplier statement defaults to open scope', () => {
   assert.equal(normalizeSupplierCreditScope(), 'open');

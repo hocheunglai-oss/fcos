@@ -14,6 +14,22 @@ test.describe('deployed read-only CI API boundary', () => {
   test.skip(!hasAuth, 'The governed renewable CI identity is required.');
   test.use({ storageState: authState });
 
+  test('finance settings reject requests without an application bearer token', async ({ request }) => {
+    const origin = canonicalFcosE2eCandidateUrl(process.env.FCOS_E2E_BASE_URL);
+    // The request context retains deployment-protection cookies from storage
+    // state, but browser local storage is not an HTTP Authorization header.
+    // These direct requests therefore exercise the anonymous FCOS boundary.
+    for (const [name, data] of [
+      ['financeSettingsGet', {}],
+      ['financeSettingsSave', { annualInterestRatePct: 5, expectedRevision: 1 }],
+    ]) {
+      const response = await request.post(`${origin}/api/functions/${name}`, { data, maxRedirects: 0 });
+      expect(response.status(), `${name} must reject an anonymous request`).toBe(401);
+      const body = await response.json();
+      expect(body.code).toBe('FCOS_REQUEST_REJECTED');
+    }
+  });
+
   test('direct and mixed-action requests are denied before business validation', async ({ page }) => {
     test.setTimeout(120_000);
     const origin = canonicalFcosE2eCandidateUrl(process.env.FCOS_E2E_BASE_URL);

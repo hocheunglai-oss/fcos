@@ -1,7 +1,8 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { accessSync, constants, cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { accessSync, chmodSync, constants, cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { collectBuildProvenance, deploymentSourceFilter, writeBuildReceipts } from '../scripts/lib/build-provenance.mjs';
@@ -39,6 +40,14 @@ function fixture(t) {
   git('add', '.');
   git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'fixture');
   return { cwd, git, collect: options => collectBuildProvenance({ cwd, env: {}, ...options }) };
+}
+
+function detachFixtureGit(cwd) {
+  // Remove the discoverable directory entry atomically. Keep the metadata in an
+  // owned sibling until suite cleanup, outside the archive's discovery ancestry.
+  const removedMetadata = mkdtempSync(join(fixtureRoot, 'removed-child-git-'));
+  renameSync(join(cwd, '.git'), join(removedMetadata, '.git'));
+  assert.equal(existsSync(join(cwd, '.git')), false);
 }
 
 test('clean release receipt binds source content and validates supplied commit identity', t => {
@@ -87,22 +96,17 @@ test('deleted, staged, renamed files and executable mode affect provenance', t =
 });
 
 test('source archives report unknown Git state and cannot produce release receipts', t => {
-  const f = fixture(t); rmSync(join(f.cwd, '.git'), { recursive: true });
-  // Bound discovery at the archive root instead of relying on the suite-wide
-  // parent ceiling, whose Git discovery behavior differs between runners.
-  const inheritedCeiling = process.env.GIT_CEILING_DIRECTORIES;
-  process.env.GIT_CEILING_DIRECTORIES = f.cwd;
-  try {
-    assert.throws(() => f.git('rev-parse', 'HEAD'));
-    const receipt = f.collect({ env: { VERCEL_GIT_COMMIT_SHA: 'a'.repeat(40) } });
-    assert.equal(receipt.commitVerified, false); assert.equal(receipt.gitDirty, null);
-    assert.equal(receipt.releaseEligible, false);
-    assert.throws(() => f.collect({ requireClean: true }), /clean Git checkout/);
-    assert.throws(() => f.collect({ env: { VERCEL_GIT_COMMIT_SHA: 'a'.repeat(40), FCOS_BUILD_COMMIT_SHA: 'b'.repeat(40) } }), /disagree/);
-  } finally {
-    if (inheritedCeiling === undefined) delete process.env.GIT_CEILING_DIRECTORIES;
-    else process.env.GIT_CEILING_DIRECTORIES = inheritedCeiling;
-  }
+  const f = fixture(t); detachFixtureGit(f.cwd);
+  // Git ignores a ceiling equal to its starting directory. Keep the physical
+  // parent ceiling so an unrelated repository above the fixture cannot leak in.
+  assert.equal(process.env.GIT_CEILING_DIRECTORIES, fixtureRoot);
+  assert.equal(existsSync(join(f.cwd, '.git')), false);
+  assert.throws(() => f.git('rev-parse', 'HEAD'));
+  const receipt = f.collect({ env: { VERCEL_GIT_COMMIT_SHA: 'a'.repeat(40) } });
+  assert.equal(receipt.commitVerified, false); assert.equal(receipt.gitDirty, null);
+  assert.equal(receipt.releaseEligible, false);
+  assert.throws(() => f.collect({ requireClean: true }), /clean Git checkout/);
+  assert.throws(() => f.collect({ env: { VERCEL_GIT_COMMIT_SHA: 'a'.repeat(40), FCOS_BUILD_COMMIT_SHA: 'b'.repeat(40) } }), /disagree/);
 });
 
 test('archive fixtures cannot discover an ancestor checkout', t => {
@@ -120,11 +124,7 @@ test('archive fixtures cannot discover an ancestor checkout', t => {
     rmSync(join(fixtureRoot, 'ancestor.txt'), { force: true });
   });
   const f = fixture(t);
-  // Move generated metadata outside the archive's discovery ancestry atomically.
-  // Recursive deletion must not leave a discoverable child repository behind.
-  const removedMetadata = mkdtempSync(join(fixtureRoot, 'removed-child-git-'));
-  renameSync(join(f.cwd, '.git'), join(removedMetadata, '.git'));
-  assert.equal(existsSync(join(f.cwd, '.git')), false);
+  detachFixtureGit(f.cwd);
   const metadataPresence = () => ({
     ancestorGit: existsSync(join(fixtureRoot, '.git')), ancestorConfig: existsSync(join(fixtureRoot, '.git', 'config')),
     childGit: existsSync(join(f.cwd, '.git')), childConfig: existsSync(join(f.cwd, '.git', 'config')),
@@ -192,7 +192,7 @@ test('archive fixtures cannot discover an ancestor checkout', t => {
 });
 
 test('trusted archive attestation requires exact digest and full supplied SHA', t => {
-  const f = fixture(t); const clean = f.collect(); rmSync(join(f.cwd, '.git'), { recursive: true });
+  const f = fixture(t); const clean = f.collect(); detachFixtureGit(f.cwd);
   const env = { VERCEL: '1', VERCEL_GIT_COMMIT_SHA: clean.commit, FCOS_EXPECTED_SOURCE_SHA256: clean.sourceDigest };
   const receipt = f.collect({ env });
   assert.equal(receipt.sourceAttested, true); assert.equal(receipt.releaseEligible, true);
@@ -240,6 +240,43 @@ test('Vercel archive and clean Git source share a digest after default and custo
   f.git('update-index', '--assume-unchanged', 'tests/fixture.js');
   writeFileSync(join(f.cwd, 'tests/fixture.js'), 'hidden excluded-file change');
   assert.throws(() => f.collect({ requireClean: true }), /source content differs from HEAD/);
+});
+
+test('archive attestation failure reports bounded public hashes and executable counts while still refusing changed source', t => {
+  const f = fixture(t), hash = value => createHash('sha256').update(value).digest('hex');
+  mkdirSync(join(f.cwd, '.githooks'));
+  const hook = join(f.cwd, '.githooks/pre-push');
+  writeFileSync(hook, '#!/bin/sh\nexit 0\n'); chmodSync(hook, 0o755);
+  writeFileSync(join(f.cwd, 'vercel.json'), '{"version":2}\n');
+  writeFileSync(join(f.cwd, 'package.json'), '{"name":"PUBLIC_CONTENT_MUST_BE_HASHED_ONLY"}\n');
+  f.git('add', '.'); f.git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'diagnostic source');
+  const original = f.collect({ requireClean: true });
+  detachFixtureGit(f.cwd);
+  chmodSync(hook, 0o644);
+  writeFileSync(join(f.cwd, 'vercel.json'), '{"version":2,"name":"changed"}\n');
+  writeFileSync(join(f.cwd, '.env.local'), 'PASSWORD=PRIVATE_MUST_NOT_APPEAR');
+  let failure;
+  try { f.collect({ env: { VERCEL: '1', FCOS_BUILD_COMMIT_SHA: original.commit, FCOS_EXPECTED_SOURCE_SHA256: original.sourceDigest } }); }
+  catch (error) { failure = error; }
+  assert.ok(failure instanceof Error); assert.match(failure.message, /source digest does not match/);
+  const metadata = JSON.parse(failure.message.split(' Source attestation diagnostics: ')[1]);
+  assert.equal(metadata.expectedSha256, original.sourceDigest);
+  assert.equal(metadata.actualSha256, f.collect().sourceDigest);
+  assert.equal(metadata.sourceFileCount, original.sourceFileCount); assert.equal(metadata.executableFileCount, 0);
+  assert.deepEqual(metadata.inputs.find(input => input.path === '.githooks/pre-push'), {
+    path: '.githooks/pre-push', executable: false, bytes: readFileSync(hook).length, sha256: hash(readFileSync(hook)),
+  });
+  assert.equal(metadata.inputs.find(input => input.path === 'vercel.json').sha256, hash(readFileSync(join(f.cwd, 'vercel.json'))));
+  assert.ok(metadata.inputs.length <= 8);
+  assert.doesNotMatch(failure.message, /PRIVATE_MUST_NOT_APPEAR|PUBLIC_CONTENT_MUST_BE_HASHED_ONLY|\.env/);
+});
+
+test('malformed expected attestation values never escape through failure diagnostics', t => {
+  const f = fixture(t); let failure;
+  try { f.collect({ env: { FCOS_EXPECTED_SOURCE_SHA256: 'PRIVATE_EXPECTATION_MUST_NOT_APPEAR' } }); }
+  catch (error) { failure = error; }
+  assert.ok(failure instanceof Error); assert.doesNotMatch(failure.message, /private_expectation_must_not_appear/i);
+  assert.equal(JSON.parse(failure.message.split(' Source attestation diagnostics: ')[1]).expectedSha256, 'invalid');
 });
 
 test('upload negation rules retain included files and Git-ignored deployable input cannot escape provenance', t => {

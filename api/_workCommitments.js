@@ -368,6 +368,8 @@ export async function workCommitmentsList(_body = {}, accessContext) {
             ? `Assigned to you · ${item.status}`
             : `Owned by you · ${item.assignee_name ? `Assigned to ${item.assignee_name}` : "Unassigned"}`,
           status: item.status,
+          owner: item.assignee_name || item.owner_name || null,
+          blocker: item.status === "Blocked" ? "Open the work item to review its dependency or blocker." : null,
           priority: item.priority,
           dueAt: item.due_date,
           urgency:
@@ -516,6 +518,8 @@ export async function workCommitmentsList(_body = {}, accessContext) {
           title: collectionTitle(item),
           subtitle: detail.join(' · '),
           status: item.status,
+          owner: item.owner_name || null,
+          blocker: PAYMENT_COLLECTION_RECONCILIATION_ISSUES.has(item.reconciliation_state) ? detail[1] : null,
           dueAt: collectionDueAt(item),
           urgency: collectionUrgency(item),
           link: `/payment-collections?tab=collections&collectionStemId=${encodeURIComponent(item.stem_id)}`,

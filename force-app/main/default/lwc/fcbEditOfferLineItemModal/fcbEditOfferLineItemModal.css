@@ -1,0 +1,21 @@
+.hidden {
+    display: none;
+}
+
+.slds-modal__container {
+    width: 75%;
+    max-width: 80rem;
+}
+
+.hidden-btn {
+    display: none;
+}
+
+.pricing-section {
+    background: #adadad59;
+    border-radius: 3px;
+}
+
+.classLabel {
+    color: #3e3e3c !important;
+}

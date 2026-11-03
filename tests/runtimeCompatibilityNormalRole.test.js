@@ -335,7 +335,7 @@ test('module response diagnostics distinguish HTTP, JSON, shape, absent and pend
   }
   const source = readFileSync(new URL('../scripts/runtime-compatibility-normal-role.mjs', import.meta.url), 'utf8');
   assert.ok(source.lastIndexOf('if (blockedMutations) throw') > source.indexOf('await context?.close()'), 'late mutation denial after cleanup stays fatal');
-  assert.match(source, /checks.length !== COMPATIBILITY_NORMAL_MODULES.length/);
+  assert.match(source, /checks.length !== moduleSpecs.length/);
 });
 
 

@@ -1,3 +1,4 @@
+import { operationalHome } from '@/lib/operationalHome';
 import { useEffect, useRef, useState } from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
 import { Boxes, Loader2, LockKeyhole, TriangleAlert } from 'lucide-react';
@@ -93,7 +94,8 @@ export default function Login() {
     const stateReturnTo = from
       ? `${from.pathname || '/'}${from.search || ''}${from.hash || ''}`
       : null;
-    const returnTo = safeLocalReturnTo(stateReturnTo) || federatedReturnTo || '/';
+    const requestedReturnTo = safeLocalReturnTo(stateReturnTo) || federatedReturnTo;
+    const returnTo = requestedReturnTo && requestedReturnTo !== '/' ? requestedReturnTo : operationalHome();
     return <Navigate to={returnTo} replace />;
   }
 
@@ -158,9 +160,9 @@ export default function Login() {
           </div>
         )}
 
-        {!supabaseReady && (
+        {!supabaseReady && authMode !== 'local' && (
           <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800">
-            Supabase is not configured yet. The app is currently running in local administrator mode.
+            FCOS sign-in is unavailable. Contact an administrator to restore authentication configuration.
           </div>
         )}
 
@@ -168,7 +170,7 @@ export default function Login() {
 
         {authMode === 'local' ? (
           <Navigate to="/" replace />
-        ) : (
+        ) : supabaseReady ? (
           <>
             {fcunoOidcEnabled && (
               <button
@@ -220,7 +222,7 @@ export default function Login() {
               <p className="mt-3 text-xs text-muted-foreground">FCOS password sign-in is available only to explicitly configured pilot or break-glass accounts.</p>
             )}
           </>
-        )}
+        ) : null}
       </div>
     </div>
   );

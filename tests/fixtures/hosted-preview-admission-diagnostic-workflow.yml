@@ -1,0 +1,89 @@
+# Prepared replacement ONLY for the protected diagnostic branch's registered path.
+# Root binds the actual published caller SHA and implementation SHA before dispatch.
+name: FCOS Preview admission diagnostic
+on:
+  workflow_dispatch:
+    inputs:
+      diagnostic_source_sha:
+        description: Full SHA of the reviewed diagnostic implementation.
+        required: true
+        type: string
+      manifest:
+        description: Exact original 6a3/2ef/setup98d public manifest JSON.
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  preview-admission-diagnostic:
+    name: preview-admission-diagnostic
+    runs-on: ubuntu-24.04
+    environment: fcos-hosted-preview
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Require exact source input and protected diagnostic branch
+        env:
+          DIAGNOSTIC_SOURCE_SHA: ${{ inputs.diagnostic_source_sha }}
+          ACTUAL_REF_PROTECTED: ${{ github.ref_protected }}
+        run: |
+          test "$GITHUB_REF" = 'refs/heads/codex/preview-admission-diagnostic-20261022'
+          test "$ACTUAL_REF_PROTECTED" = true
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          [[ "$DIAGNOSTIC_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ inputs.diagnostic_source_sha }}
+          path: diagnostic
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - name: Install locked trusted dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: diagnostic
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: 6a3fbd8fd05a76c052e7e380d618aedf43e5b72e
+          path: controller
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: 2ef733d17dd12314c72971c2220b2b09903a6bf0
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - run: npm install --global vercel@54.20.1
+      - name: Collect admission-only diagnostic
+        id: diagnostic
+        run: node diagnostic/scripts/hosted-preview-admission-diagnostic.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+          FCOS_DIAGNOSTIC_SOURCE_SHA: ${{ inputs.diagnostic_source_sha }}
+          FCOS_RELEASE_MANIFEST: ${{ inputs.manifest }}
+          FCOS_ADMITTED_RELEASE_SETUP: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP }}
+          FCOS_ADMITTED_RELEASE_SETUP_SHA256: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP_SHA256 }}
+          FCOS_CONTROLLER_DIRECTORY: controller
+          FCOS_CANDIDATE_DIRECTORY: candidate
+          FCOS_HOSTED_ENVIRONMENT: fcos-hosted-preview
+          FCOS_HOSTED_CREDENTIAL_CLASS: preview
+          FCOS_HOSTED_VERCEL_TOKEN: ${{ secrets.FCOS_HOSTED_VERCEL_TOKEN }}
+          FCOS_HOSTED_VERCEL_TOKEN_ID: ${{ vars.FCOS_HOSTED_VERCEL_TOKEN_ID }}
+          FCOS_RELEASE_OUTPUT: ${{ runner.temp }}/preview-admission-diagnostic.json
+      - name: Retain successful admission result
+        if: ${{ success() && steps.diagnostic.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: preview-admission-diagnostic-${{ github.run_id }}
+          path: ${{ runner.temp }}/preview-admission-diagnostic.json
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: false

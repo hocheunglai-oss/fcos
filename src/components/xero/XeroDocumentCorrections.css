@@ -1,0 +1,85 @@
+.finance-correction-dialog {
+  width: min(96vw, 80rem);
+  max-width: min(96vw, 80rem);
+  max-height: 88vh;
+  overflow-y: auto;
+}
+
+.finance-correction-busy > button {
+  display: none;
+}
+
+.finance-correction-table-frame {
+  min-width: 0;
+  container-type: inline-size;
+}
+
+.finance-correction-table {
+  table-layout: fixed;
+  min-width: 0;
+}
+
+.finance-correction-table th {
+  white-space: normal;
+}
+
+.finance-correction-table td {
+  overflow-wrap: anywhere;
+  vertical-align: top;
+}
+
+.finance-correction-table col:nth-child(1) { width: 5%; }
+.finance-correction-table col:nth-child(2) { width: 23%; }
+.finance-correction-table col:nth-child(3) { width: 17%; }
+.finance-correction-table col:nth-child(4) { width: 30%; }
+.finance-correction-table col:nth-child(5) { width: 25%; }
+
+@container (max-width: 849px) {
+  .finance-correction-table,
+  .finance-correction-table tbody {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .finance-correction-table colgroup {
+    display: none;
+  }
+
+  .finance-correction-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .finance-correction-table tbody tr {
+    display: grid;
+    grid-template-columns: 2rem minmax(0, 1fr);
+    padding: 0.5rem 0;
+  }
+
+  .finance-correction-table tbody td {
+    display: block;
+    min-width: 0;
+    padding: 0.3rem 0.5rem;
+  }
+
+  .finance-correction-table tbody td:first-child {
+    grid-column: 1;
+    grid-row: 1 / span 4;
+  }
+
+  .finance-correction-table tbody td:not(:first-child) {
+    grid-column: 2;
+  }
+
+  .finance-correction-table tbody td[data-label]::before {
+    content: attr(data-label) ': ';
+    display: block;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: hsl(var(--muted-foreground));
+  }
+}

@@ -1,0 +1,133 @@
+{
+  "operation": {
+    "actor": {
+      "ref": "refs/heads/codex/hosted-qualification-6a3fbd8f-20261022",
+      "sha": "300a46365fbb8b159100b6bdd66523d757cfa4ec",
+      "kind": "github",
+      "actor": "hocheunglai-oss",
+      "runId": "39811703824",
+      "actorId": "265701760",
+      "subject": "repo:hocheunglai-oss/fcos:environment:fcos-hosted-preview",
+      "runAttempt": "1",
+      "environment": "fcos-hosted-preview",
+      "workflowRef": "hocheunglai-oss/fcos/.github/workflows/authenticated-release.yml@refs/heads/codex/hosted-qualification-6a3fbd8f-20261022",
+      "workflowSha": "300a46365fbb8b159100b6bdd66523d757cfa4ec",
+      "repositoryId": "1278654816",
+      "jobWorkflowRef": "hocheunglai-oss/fcos/.github/workflows/hosted-release-controller.yml@6a3fbd8fd05a76c052e7e380d618aedf43e5b72e",
+      "jobWorkflowSha": "6a3fbd8fd05a76c052e7e380d618aedf43e5b72e",
+      "qualificationOnly": true,
+      "qualificationAdmission": {
+        "ref": "refs/heads/codex/hosted-qualification-6a3fbd8f-20261022",
+        "repository": "hocheunglai-oss/fcos",
+        "setupSha256": "98d8a3dc58a0a274b0579128c36a9d224b18b1e93a03e27b61c3b451d73c5782",
+        "bootstrapSha": "300a46365fbb8b159100b6bdd66523d757cfa4ec",
+        "candidateSha": "2ef733d17dd12314c72971c2220b2b09903a6bf0",
+        "repositoryId": "1278654816",
+        "jobWorkflowRef": "hocheunglai-oss/fcos/.github/workflows/hosted-release-controller.yml@6a3fbd8fd05a76c052e7e380d618aedf43e5b72e",
+        "jobWorkflowSha": "6a3fbd8fd05a76c052e7e380d618aedf43e5b72e",
+        "callerWorkflowRef": "hocheunglai-oss/fcos/.github/workflows/authenticated-release.yml@refs/heads/codex/hosted-qualification-6a3fbd8f-20261022",
+        "callerWorkflowSha": "300a46365fbb8b159100b6bdd66523d757cfa4ec"
+      },
+      "legacyContainmentBoundary": {
+        "setupSha256": "98d8a3dc58a0a274b0579128c36a9d224b18b1e93a03e27b61c3b451d73c5782",
+        "validatedBy": "trusted_coordinator",
+        "manifestHash": "62389788e43dd99e081989f974f7df51e0967120e9aff30b9e72c3ffa1a29583",
+        "policySha256": "8b0b1b5cf351921429e22ab1fc87e7cea374b42d498b015c04bd3b73f5aa7191",
+        "controllerSha": "6a3fbd8fd05a76c052e7e380d618aedf43e5b72e"
+      }
+    },
+    "epoch": 1,
+    "phase": "preview.create",
+    "created_at": "2026-10-22T16:14:19.630157+00:00",
+    "release_id": "fcos-qualification-6a3fbd8f-2ef733d1-source-20261022",
+    "operation_id": "fcos-qualification-6a3fbd8f-2ef733d1-source-20261022-preview-create",
+    "request_hash": "7be15bf07ccfccbb2532c0e439fe296591a78f1d64ca689ab09a14bbc569d466",
+    "manifest_hash": "62389788e43dd99e081989f974f7df51e0967120e9aff30b9e72c3ffa1a29583"
+  },
+  "events": [
+    {
+      "actor": {
+        "ref": "refs/heads/codex/hosted-qualification-6a3fbd8f-20261022",
+        "sha": "300a46365fbb8b159100b6bdd66523d757cfa4ec",
+        "kind": "github",
+        "actor": "hocheunglai-oss",
+        "runId": "39811703824",
+        "actorId": "265701760",
+        "subject": "repo:hocheunglai-oss/fcos:environment:fcos-hosted-preview",
+        "runAttempt": "1",
+        "environment": "fcos-hosted-preview",
+        "workflowRef": "hocheunglai-oss/fcos/.github/workflows/authenticated-release.yml@refs/heads/codex/hosted-qualification-6a3fbd8f-20261022",
+        "workflowSha": "300a46365fbb8b159100b6bdd66523d757cfa4ec",
+        "repositoryId": "1278654816",
+        "jobWorkflowRef": "hocheunglai-oss/fcos/.github/workflows/hosted-release-controller.yml@6a3fbd8fd05a76c052e7e380d618aedf43e5b72e",
+        "jobWorkflowSha": "6a3fbd8fd05a76c052e7e380d618aedf43e5b72e",
+        "qualificationOnly": true,
+        "qualificationAdmission": {
+          "ref": "refs/heads/codex/hosted-qualification-6a3fbd8f-20261022",
+          "repository": "hocheunglai-oss/fcos",
+          "setupSha256": "98d8a3dc58a0a274b0579128c36a9d224b18b1e93a03e27b61c3b451d73c5782",
+          "bootstrapSha": "300a46365fbb8b159100b6bdd66523d757cfa4ec",
+          "candidateSha": "2ef733d17dd12314c72971c2220b2b09903a6bf0",
+          "repositoryId": "1278654816",
+          "jobWorkflowRef": "hocheunglai-oss/fcos/.github/workflows/hosted-release-controller.yml@6a3fbd8fd05a76c052e7e380d618aedf43e5b72e",
+          "jobWorkflowSha": "6a3fbd8fd05a76c052e7e380d618aedf43e5b72e",
+          "callerWorkflowRef": "hocheunglai-oss/fcos/.github/workflows/authenticated-release.yml@refs/heads/codex/hosted-qualification-6a3fbd8f-20261022",
+          "callerWorkflowSha": "300a46365fbb8b159100b6bdd66523d757cfa4ec"
+        },
+        "legacyContainmentBoundary": {
+          "setupSha256": "98d8a3dc58a0a274b0579128c36a9d224b18b1e93a03e27b61c3b451d73c5782",
+          "validatedBy": "trusted_coordinator",
+          "manifestHash": "62389788e43dd99e081989f974f7df51e0967120e9aff30b9e72c3ffa1a29583",
+          "policySha256": "8b0b1b5cf351921429e22ab1fc87e7cea374b42d498b015c04bd3b73f5aa7191",
+          "controllerSha": "6a3fbd8fd05a76c052e7e380d618aedf43e5b72e"
+        }
+      },
+      "state": "intent",
+      "event_id": 1,
+      "evidence": {},
+      "created_at": "2026-10-22T16:14:19.632773+00:00",
+      "operation_id": "fcos-qualification-6a3fbd8f-2ef733d1-source-20261022-preview-create",
+      "evidence_hash": "7be15bf07ccfccbb2532c0e439fe296591a78f1d64ca689ab09a14bbc569d466"
+    },
+    {
+      "actor": {
+        "ref": "refs/heads/codex/hosted-qualification-6a3fbd8f-20261022",
+        "sha": "300a46365fbb8b159100b6bdd66523d757cfa4ec",
+        "kind": "github",
+        "actor": "hocheunglai-oss",
+        "runId": "39811703824",
+        "actorId": "265701760",
+        "subject": "repo:hocheunglai-oss/fcos:environment:fcos-hosted-preview",
+        "runAttempt": "1",
+        "environment": "fcos-hosted-preview",
+        "workflowRef": "hocheunglai-oss/fcos/.github/workflows/authenticated-release.yml@refs/heads/codex/hosted-qualification-6a3fbd8f-20261022",
+        "workflowSha": "300a46365fbb8b159100b6bdd66523d757cfa4ec",
+        "repositoryId": "1278654816",
+        "jobWorkflowRef": "hocheunglai-oss/fcos/.github/workflows/hosted-release-controller.yml@6a3fbd8fd05a76c052e7e380d618aedf43e5b72e",
+        "jobWorkflowSha": "6a3fbd8fd05a76c052e7e380d618aedf43e5b72e",
+        "qualificationOnly": true,
+        "qualificationAdmission": {
+          "ref": "refs/heads/codex/hosted-qualification-6a3fbd8f-20261022",
+          "repository": "hocheunglai-oss/fcos",
+          "setupSha256": "98d8a3dc58a0a274b0579128c36a9d224b18b1e93a03e27b61c3b451d73c5782",
+          "bootstrapSha": "300a46365fbb8b159100b6bdd66523d757cfa4ec",
+          "candidateSha": "2ef733d17dd12314c72971c2220b2b09903a6bf0",
+          "repositoryId": "1278654816",
+          "jobWorkflowRef": "hocheunglai-oss/fcos/.github/workflows/hosted-release-controller.yml@6a3fbd8fd05a76c052e7e380d618aedf43e5b72e",
+          "jobWorkflowSha": "6a3fbd8fd05a76c052e7e380d618aedf43e5b72e",
+          "callerWorkflowRef": "hocheunglai-oss/fcos/.github/workflows/authenticated-release.yml@refs/heads/codex/hosted-qualification-6a3fbd8f-20261022",
+          "callerWorkflowSha": "300a46365fbb8b159100b6bdd66523d757cfa4ec"
+        }
+      },
+      "state": "uncertain",
+      "event_id": 2,
+      "evidence": {
+        "reason": "PROVIDER_RESPONSE_LOST",
+        "outcome": "unknown"
+      },
+      "created_at": "2026-10-22T16:14:20.824033+00:00",
+      "operation_id": "fcos-qualification-6a3fbd8f-2ef733d1-source-20261022-preview-create",
+      "evidence_hash": "0b27de1a6e3b7b404d2daba7897b11d0c5c159b9f0d7ecea53d19218bbf05a8b"
+    }
+  ]
+}
