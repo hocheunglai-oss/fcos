@@ -23,6 +23,7 @@ approvals_reviewer = "auto_review"
 default_tools_approval_mode = "writes"
 
 [apps."asdk_app_69d3e5ee6a708191baa733f7b8931995"]
+default_tools_approval_mode = "writes"
 approvals_reviewer = "user"
 
 [apps."asdk_app_69d3e5ee6a708191baa733f7b8931995".tools."supabase.execute_sql"]
@@ -32,6 +33,7 @@ approval_mode = "prompt"
 approval_mode = "prompt"
 
 [apps."connector_690a90ec05c881918afb6a55dc9bbaa1"]
+default_tools_approval_mode = "writes"
 approvals_reviewer = "auto_review"
 
 [apps."connector_690a90ec05c881918afb6a55dc9bbaa1".tools."vercel.deploy_to_vercel"]
