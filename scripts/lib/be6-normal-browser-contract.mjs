@@ -4,8 +4,9 @@ export const BE6_NORMAL_BROWSER_SHA = 'be6daf6162480ca77ec8d4f04fe5aaa5b228a22c'
 export const BE6_NORMAL_BROWSER_CONTRACT = 'be6_normal_read_v1';
 // The admitted application harness shares these UI contracts, but never joins
 // the immutable be6 compatibility profile or its candidate/source admission.
+export const REVIEW_REPAIR_NORMAL_BROWSER_CONTRACT = 'review_repaired_normal_read_v1';
 export const APPLICATION_NORMAL_UI_CONTRACT = 'application_v2_current_read_v1';
-export const isCurrentNormalSpec = spec => [BE6_NORMAL_BROWSER_CONTRACT, APPLICATION_NORMAL_UI_CONTRACT].includes(spec?.sourceContract);
+export const isCurrentNormalSpec = spec => [BE6_NORMAL_BROWSER_CONTRACT, REVIEW_REPAIR_NORMAL_BROWSER_CONTRACT, APPLICATION_NORMAL_UI_CONTRACT].includes(spec?.sourceContract);
 export const BE6_EMAIL_ROUTER_FAILURE_CODES = Object.freeze([
   'EMAIL_ROUTER_STORAGE_NOT_CONFIGURED', 'EMAIL_ROUTER_USER_INACTIVE', 'EMAIL_ROUTER_SIGN_IN_REQUIRED',
   'EMAIL_ROUTER_SESSION_INVALID', 'EMAIL_ROUTER_MAILBOX_UNRESOLVED', 'EMAIL_ROUTER_CONNECTION_UNAVAILABLE',

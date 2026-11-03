@@ -261,9 +261,86 @@ export const COMPATIBILITY_RUNTIME_ORDINARY_ADMISSION_CORRECTION = Object.freeze
   "salesforceMetadataChanged": false,
   "cronSchedulesChanged": false
 });
+// Exact read-batch/render successor. Historical source profiles remain immutable.
+export const COMPATIBILITY_REVIEW_REPAIR_CORRECTION = Object.freeze({
+  "baseSha": "be6daf6162480ca77ec8d4f04fe5aaa5b228a22c",
+  "candidateSha": "75e7c09c637868efb90f5b5c5d8ada40a6ae03c6",
+  "sourceProfile": "compat_review_browser_repair_20261103",
+  "kind": "explicit_review_read_batch_and_render_repair",
+  "uiCorrectnessChanged": true,
+  "applicationFeatureScopeAdded": false,
+  "probeProtocol": "xero_metered_v1",
+  "files": [
+    {
+      "path": ".codex/README.md",
+      "sha256": "c419b279e0b9111019012dc3eb89e512631e9d30d2175cc8cca39982df9143cf",
+      "gitBlob": "734c1bc76fed3b1159af987757eb00a34adec300"
+    },
+    {
+      "path": ".codex/config.toml",
+      "sha256": "dbb025f5ff350045d5537402861a95e756b6b6234f83a4b0d83353a59c0fcb26",
+      "gitBlob": "5ff9fd7186d3b481cb3383f519485f3d4fc1d778"
+    },
+    {
+      "path": ".codex/control-policy.json",
+      "sha256": "5471c8173549b06852d25b2e3d7dfb07acfcfbbff1f7fe99ef1072f31734165c",
+      "gitBlob": "bed1894d005db96d82e8775e63a7fd6323eb0665"
+    },
+    {
+      "path": ".codex/control-validation.mjs",
+      "sha256": "47e10bbc5a471a91e26c0347363c35ce78af6f83388c659c2e2f63f484fc23b4",
+      "gitBlob": "bcd354e06f3397b7d83dcf6ed13f6900ff567ccb"
+    },
+    {
+      "path": "AGENTS.md",
+      "sha256": "77c7d597c5d3e0016765cb3e2c7c44fce67b5d3960a977be16f42c4b76eacc33",
+      "gitBlob": "65a18dc181f5c90fd1bc5dcd3133dd2ed559c94f"
+    },
+    {
+      "path": "eslint.config.js",
+      "sha256": "b1824b0eb7207f52692bf297356fdb19000aa8151d02fc033d89462fd19ad860",
+      "gitBlob": "979aa0e30c5f49b1f20ade0a825c9b8a87a8c169"
+    },
+    {
+      "path": "src/components/payments/VariableCharges.jsx",
+      "sha256": "9f85acdd6add353031ddc0aaa5c88b063f21ca337b5c3058a900eb8be7a0fa2a",
+      "gitBlob": "2d20b6162eab82743c258a5bfac304a1f2a23a12"
+    },
+    {
+      "path": "src/lib/exceptionReviewWorkflow.js",
+      "sha256": "0e1c689adc90cc018be660df9ce4882ca77231305e5c9533c45351dfc746a7d8",
+      "gitBlob": "de454868f65ff16e55a1dc262dfd2f9ccd3bf908"
+    },
+    {
+      "path": "src/pages/ReviewQueue.jsx",
+      "sha256": "ccc169248905bc3a418e02919e0db2878b5416c45e9078a896456c89febb8f79",
+      "gitBlob": "6190dc089370908c1c67af2855f5017e06dd49ac"
+    },
+    {
+      "path": "tests/exceptionReviewWorkflow.test.js",
+      "sha256": "c9345665eda469a01e30ae9889d732d884bfb83691accc5a6d26cb5ae0329dae",
+      "gitBlob": "60388dfca73bec815d20342b54b981c94b8e34ca"
+    },
+    {
+      "path": "tests/exceptionReviewWorkflowComponent.test.js",
+      "sha256": "1e201e70d5cd672fe572be6f9edbbcb92bef37aeb5e7a69c1e294721e011ff05",
+      "gitBlob": "05fda65fdbf00d3febb4b628f74045d9aa99ec61"
+    },
+    {
+      "path": "tests/frontendUndefinedIdentifiers.test.js",
+      "sha256": "d4d3c71101a052913c52024c557d7da2dfb1d1e5d9c5146b042b01caa25356d7",
+      "gitBlob": "0ac10d71d0fc9f9686eea3c0021731e2baa58395"
+    }
+  ],
+  "existingUi": false,
+  "handoffs": [],
+  "salesforceMetadataChanged": false,
+  "cronSchedulesChanged": false
+});
+
 export function isFirstRuntimeCandidateSha(value) {
   return value === COMPATIBILITY_CORRECTION.baseSha || value === COMPATIBILITY_CORRECTION.candidateSha
-    || value === COMPATIBILITY_CONFIGURATION_CORRECTION.candidateSha || value === COMPATIBILITY_DIAGNOSTIC_CORRECTION.candidateSha || value === COMPATIBILITY_VERIFICATION_CORRECTION.candidateSha || value === COMPATIBILITY_MEASUREMENT_CORRECTION.candidateSha || value === COMPATIBILITY_RUNTIME_METERING_CORRECTION.candidateSha || value === COMPATIBILITY_RUNTIME_DEPENDENCY_CORRECTION.candidateSha || value === COMPATIBILITY_RUNTIME_ORDINARY_ADMISSION_CORRECTION.candidateSha;
+    || value === COMPATIBILITY_CONFIGURATION_CORRECTION.candidateSha || value === COMPATIBILITY_DIAGNOSTIC_CORRECTION.candidateSha || value === COMPATIBILITY_VERIFICATION_CORRECTION.candidateSha || value === COMPATIBILITY_MEASUREMENT_CORRECTION.candidateSha || value === COMPATIBILITY_RUNTIME_METERING_CORRECTION.candidateSha || value === COMPATIBILITY_RUNTIME_DEPENDENCY_CORRECTION.candidateSha || value === COMPATIBILITY_RUNTIME_ORDINARY_ADMISSION_CORRECTION.candidateSha || value === COMPATIBILITY_REVIEW_REPAIR_CORRECTION.candidateSha;
 }
 export function firstRuntimeCandidateProfile(value) {
   return value === COMPATIBILITY_CORRECTION.baseSha ? 'frozen_04ee'
@@ -274,12 +351,13 @@ export function firstRuntimeCandidateProfile(value) {
             : value === COMPATIBILITY_MEASUREMENT_CORRECTION.candidateSha ? COMPATIBILITY_MEASUREMENT_CORRECTION.sourceProfile
               : value === COMPATIBILITY_RUNTIME_METERING_CORRECTION.candidateSha ? COMPATIBILITY_RUNTIME_METERING_CORRECTION.sourceProfile
                 : value === COMPATIBILITY_RUNTIME_DEPENDENCY_CORRECTION.candidateSha ? COMPATIBILITY_RUNTIME_DEPENDENCY_CORRECTION.sourceProfile
-                  : value === COMPATIBILITY_RUNTIME_ORDINARY_ADMISSION_CORRECTION.candidateSha ? COMPATIBILITY_RUNTIME_ORDINARY_ADMISSION_CORRECTION.sourceProfile : null;
+                  : value === COMPATIBILITY_RUNTIME_ORDINARY_ADMISSION_CORRECTION.candidateSha ? COMPATIBILITY_RUNTIME_ORDINARY_ADMISSION_CORRECTION.sourceProfile
+                    : value === COMPATIBILITY_REVIEW_REPAIR_CORRECTION.candidateSha ? COMPATIBILITY_REVIEW_REPAIR_CORRECTION.sourceProfile : null;
 }
 // Old immutable compatibility source cannot acquire a new endpoint protocol by
 // adding a manifest marker. Other application source may explicitly opt in.
 export function runtimeProbeProtocolMatches(candidate, protocol) {
-  const pin = [COMPATIBILITY_RUNTIME_METERING_CORRECTION, COMPATIBILITY_RUNTIME_DEPENDENCY_CORRECTION, COMPATIBILITY_RUNTIME_ORDINARY_ADMISSION_CORRECTION]
+  const pin = [COMPATIBILITY_RUNTIME_METERING_CORRECTION, COMPATIBILITY_RUNTIME_DEPENDENCY_CORRECTION, COMPATIBILITY_RUNTIME_ORDINARY_ADMISSION_CORRECTION, COMPATIBILITY_REVIEW_REPAIR_CORRECTION]
     .find(value => candidate?.sha === value.candidateSha || candidate?.sourceProfile === value.sourceProfile);
   if (pin)
     return candidate.sha === pin.candidateSha && candidate.sourceProfile === pin.sourceProfile && protocol === pin.probeProtocol;

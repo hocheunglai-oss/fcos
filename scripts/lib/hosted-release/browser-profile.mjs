@@ -1,4 +1,4 @@
-import { ORDINARY_ADMISSION_DEPENDENCY_CONTEXT } from '../../../config/hostedDependencyContext.js';
+import { ORDINARY_ADMISSION_DEPENDENCY_CONTEXT, REVIEW_REPAIR_DEPENDENCY_CONTEXT } from '../../../config/hostedDependencyContext.js';
 import { fcosConnectionIdentifier } from '../../../config/fcosConnections.js';
 import { isFirstRuntimeCandidateSha } from '../../../config/hostedCompatibilityCorrection.js';
 import { canonical, digest, ReleaseError } from './json-contract.mjs';
@@ -7,14 +7,18 @@ export const ORDINARY_BROWSER_CANDIDATE = ORDINARY_ADMISSION_DEPENDENCY_CONTEXT.
 export const FROZEN_BROWSER_CANDIDATE = '04ee3425aac7a49089eda781eb3c976aea1f6785';
 const refuse = code => { throw new ReleaseError(code, 'browser.profile', 'Correct the exact admitted browser profile before any Preview or probe.'); };
 
+export const REVIEW_REPAIR_BROWSER_CANDIDATE = REVIEW_REPAIR_DEPENDENCY_CONTEXT.candidate;
+export function hostedOrdinaryBrowserCandidate(candidate) {
+  const pin = [ORDINARY_BROWSER_CANDIDATE, REVIEW_REPAIR_BROWSER_CANDIDATE].find(value => candidate?.sha === value.sha || candidate?.sourceProfile === value.sourceProfile);
+  if (pin && canonical(candidate) !== canonical(pin)) refuse('HOSTED_BROWSER_PROFILE_INVALID');
+  return pin;
+}
+
 // Pure composition check. Neither a caller-provided flag nor a SHA prefix can
 // enroll another candidate into the legacy catalogue.
 export function hostedBrowserProfile(manifest) {
   const candidate = manifest?.candidate;
-  if (candidate?.sha === ORDINARY_BROWSER_CANDIDATE.sha || candidate?.sourceProfile === ORDINARY_BROWSER_CANDIDATE.sourceProfile) {
-    if (canonical(candidate) !== canonical(ORDINARY_BROWSER_CANDIDATE)) refuse('HOSTED_BROWSER_PROFILE_INVALID');
-    return 'ordinary_compatibility';
-  }
+  if (hostedOrdinaryBrowserCandidate(candidate)) return 'ordinary_compatibility';
   if (candidate?.sha === FROZEN_BROWSER_CANDIDATE && [undefined, 'frozen_04ee'].includes(candidate.sourceProfile)) return 'frozen_compatibility';
   if (candidate?.sourceProfile === 'application_v2' && /^[a-f0-9]{40}$/.test(candidate.sha)
       && !isFirstRuntimeCandidateSha(candidate.sha)) return 'application';
@@ -31,12 +35,13 @@ export function assertHostedOrdinaryBrowserContext({ manifest, env }) {
 
 export function assertHostedOrdinaryBrowserSource({ manifest, source, env }) {
   assertHostedOrdinaryBrowserContext({ manifest, env });
+  const candidate = hostedOrdinaryBrowserCandidate(manifest.candidate);
   const fields = { candidateSha: 'sha', sourceProfile: 'sourceProfile', sourceDigest: 'sourceSha256',
     lockSha256: 'lockSha256', configurationSha256: 'configurationSha256', sourceInputsSha256: 'sourceInputsSha256',
     salesforceSourceSha256: 'salesforceSourceSha256', branch: 'branch' };
   if (source?.sourceVerified !== true || source.observationSourcesVerified !== true
       || source.controllerSha !== manifest.controller.sha || source.manifestHash !== digest(manifest)
-      || Object.entries(fields).some(([key, candidateKey]) => source[key] !== ORDINARY_BROWSER_CANDIDATE[candidateKey]))
+      || Object.entries(fields).some(([key, candidateKey]) => source[key] !== candidate[candidateKey]))
     refuse('HOSTED_BROWSER_SOURCE_BINDING');
   return source;
 }

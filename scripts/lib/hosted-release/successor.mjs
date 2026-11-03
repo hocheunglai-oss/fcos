@@ -1,4 +1,4 @@
-import { COMPATIBILITY_CONFIGURATION_CORRECTION, COMPATIBILITY_DIAGNOSTIC_CORRECTION, COMPATIBILITY_RUNTIME_DEPENDENCY_CORRECTION, COMPATIBILITY_RUNTIME_ORDINARY_ADMISSION_CORRECTION } from '../../../config/hostedCompatibilityCorrection.js';
+import { COMPATIBILITY_CONFIGURATION_CORRECTION, COMPATIBILITY_DIAGNOSTIC_CORRECTION, COMPATIBILITY_RUNTIME_DEPENDENCY_CORRECTION, COMPATIBILITY_RUNTIME_ORDINARY_ADMISSION_CORRECTION, COMPATIBILITY_REVIEW_REPAIR_CORRECTION } from '../../../config/hostedCompatibilityCorrection.js';
 import { canonical, digest, fail, FROZEN_COMPATIBILITY_SHA, validateManifest } from './contract.mjs';
 import { hostedProof } from './observations.mjs';
 
@@ -47,6 +47,14 @@ export const RUNTIME_ORDINARY_CURRENT_SCHEMA_SUCCESSOR_PRODUCTION = Object.freez
   schemaSha256: '4b7028ff29ede16c9ba5c125abe2757112e0b7b25339845e22ce4550cde58b6e',
 });
 
+// Source admission only; no completed registration or live Production is inferred.
+export const REVIEW_REPAIR_CURRENT_SCHEMA_SUCCESSOR_PRODUCTION = Object.freeze({
+  ...RUNTIME_ORDINARY_CURRENT_SCHEMA_SUCCESSOR_PRODUCTION,
+  candidateSha: COMPATIBILITY_REVIEW_REPAIR_CORRECTION.candidateSha,
+  sourceProfile: COMPATIBILITY_REVIEW_REPAIR_CORRECTION.sourceProfile,
+  sourceSha256: '295133b49b5b3a73b6f5248bcecfd79a25d24b8da93bf6c45f93e56a52b17733',
+});
+
 function configurationSuccessorAccepted({ manifest, prior, registered, actual, observation, reference, now, pin }) {
   try { validateManifest(registered); validateManifest(manifest); } catch { return false; }
   // The next manifest's previousProduction comes from its fresh authenticated
@@ -84,7 +92,7 @@ export async function collectCompatibilitySuccessor({ manifest, coordinator, env
   const original = registered?.candidate?.sha === FROZEN_COMPATIBILITY_SHA
     && actual?.sha === FROZEN_COMPATIBILITY_SHA && manifest.previousProduction.sha === FROZEN_COMPATIBILITY_SHA;
   const pin = [CONFIGURATION_SUCCESSOR_PRODUCTION, DIAGNOSTIC_SUCCESSOR_PRODUCTION, RUNTIME_DEPENDENCY_SUCCESSOR_PRODUCTION,
-    RUNTIME_ORDINARY_ADMISSION_SUCCESSOR_PRODUCTION, RUNTIME_ORDINARY_CURRENT_SCHEMA_SUCCESSOR_PRODUCTION]
+    RUNTIME_ORDINARY_ADMISSION_SUCCESSOR_PRODUCTION, RUNTIME_ORDINARY_CURRENT_SCHEMA_SUCCESSOR_PRODUCTION, REVIEW_REPAIR_CURRENT_SCHEMA_SUCCESSOR_PRODUCTION]
     .find(value => registered?.candidate?.sha === value.candidateSha
       && registered?.migration?.expectedSchemaSha256 === value.schemaSha256);
   const configurationSuccessor = pin && actual

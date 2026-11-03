@@ -16,8 +16,8 @@ import { SUCCESSOR_LIVE_CONTRACT, collectSuccessorLiveOperationAdmission, succes
 import { successorLiveNormalCoverageVerified } from './lib/runtime-compatibility-successor-adapter.mjs';
 import { githubReleaseReads, RELEASE_REPOSITORY } from './lib/release-evidence.mjs';
 import { collectPreviewEmailSignerEvidence, previewEmailSignerEnabled } from './lib/preview-email-signer.mjs';
-import { assertHostedOrdinaryBrowserSource, assertHostedOrdinaryBrowserContext } from './lib/hosted-release/browser-profile.mjs';
-import { BE6_NORMAL_BROWSER_SHA, BE6_NORMAL_BROWSER_CONTRACT, isCurrentNormalSpec, BE6_EMAIL_ROUTER_FAILURE_CODES,
+import { REVIEW_REPAIR_BROWSER_CANDIDATE, assertHostedOrdinaryBrowserSource, assertHostedOrdinaryBrowserContext } from './lib/hosted-release/browser-profile.mjs';
+import { BE6_NORMAL_BROWSER_SHA, BE6_NORMAL_BROWSER_CONTRACT, REVIEW_REPAIR_NORMAL_BROWSER_CONTRACT, isCurrentNormalSpec, BE6_EMAIL_ROUTER_FAILURE_CODES,
   be6EmailRouterFailureCode, be6BuyerInvoicesDueRead, be6HedgeResponseKind, be6NormalDataLoaded,
   be6NormalOpenSurface, be6NormalSurfaceReason, be6NormalSurfaceUnavailable } from './lib/be6-normal-browser-contract.mjs';
 
@@ -51,7 +51,12 @@ export const BE6_COMPATIBILITY_NORMAL_MODULES = Object.freeze(COMPATIBILITY_NORM
   ...(spec.module === 'buyer_invoices' ? { handler: 'salesforceBuyerInvoicesDue', fields: ['rows'] } : {}),
   ...(spec.module === 'incoming_payments' ? { title: /^Incoming Payments$/i } : {}),
 })));
-const diagnosticModuleSpecs = [...COMPATIBILITY_NORMAL_MODULES, ...BE6_COMPATIBILITY_NORMAL_MODULES];
+export const REVIEW_REPAIR_COMPATIBILITY_NORMAL_MODULES = Object.freeze(BE6_COMPATIBILITY_NORMAL_MODULES.map(spec => Object.freeze({ ...spec, sourceContract: REVIEW_REPAIR_NORMAL_BROWSER_CONTRACT })));
+export function hostedCompatibilityNormalModules(candidate) {
+  return candidate?.sha === REVIEW_REPAIR_BROWSER_CANDIDATE.sha ? REVIEW_REPAIR_COMPATIBILITY_NORMAL_MODULES
+    : candidate?.sha === BE6_NORMAL_BROWSER_SHA ? BE6_COMPATIBILITY_NORMAL_MODULES : COMPATIBILITY_NORMAL_MODULES;
+}
+const diagnosticModuleSpecs = [...COMPATIBILITY_NORMAL_MODULES, ...BE6_COMPATIBILITY_NORMAL_MODULES, ...REVIEW_REPAIR_COMPATIBILITY_NORMAL_MODULES];
 
 const normalRoleDiagnosticStages = new Set([
   'CONFIGURATION', 'SOURCE_SCOPE', 'OBSERVATION_SOURCES', 'CANDIDATE_URL', 'CANDIDATE_RESOLUTION',
@@ -262,6 +267,7 @@ export async function compatibilityNormalModuleReadiness(spec, page, responses, 
   const marker = page.locator('[data-testid="review-workflow-readiness"]');
   const count = await marker.count();
   // Historical single-read candidates predate the complete-batch UI marker.
+  if (spec.sourceContract === REVIEW_REPAIR_NORMAL_BROWSER_CONTRACT) return count === 1 && await marker.getAttribute('aria-busy') === 'false';
   return count === 0 || count === 1 && await marker.getAttribute('aria-busy') === 'false';
 }
 
@@ -396,7 +402,7 @@ async function runCompatibilityNormalRole({ env = process.env, fetchImpl = globa
   browserType = chromium, admitHostedSource, signerEnabled, collectSigner = collectPreviewEmailSignerEvidence,
   writeEvidence = evidence => writeFileSync(join(env.RUNNER_TEMP, 'fcos-normal-role-evidence.json'), `${JSON.stringify(evidence)}\n`, { mode: 0o600, flag: 'wx' }),
 } = {}, ordinaryHosted) {
-  const moduleSpecs = ordinaryHosted?.manifest?.candidate?.sha === BE6_NORMAL_BROWSER_SHA ? BE6_COMPATIBILITY_NORMAL_MODULES : COMPATIBILITY_NORMAL_MODULES;
+  const moduleSpecs = hostedCompatibilityNormalModules(ordinaryHosted?.manifest?.candidate);
   const root = fileURLToPath(new URL('..', import.meta.url)), successor = env.FCOS_E2E_EXPECTED_COMMIT === SUCCESSOR_LIVE_CONTRACT.candidateSha;
   if (ordinaryHosted) assertHostedOrdinaryBrowserSource({ manifest: ordinaryHosted.manifest, source: ordinaryHosted.source, env });
   if (env.FCOS_COMPATIBILITY_NORMAL_ROLE_ENABLED !== 'true' || env.GITHUB_ACTIONS !== 'true' || env.GITHUB_REF_PROTECTED !== 'true' || env.GITHUB_REPOSITORY !== fcosConnectionIdentifier('github', 'Repository') || (!ordinaryHosted && ![FIRST_RUNTIME_ROLLOUT.candidateSha, SUCCESSOR_LIVE_CONTRACT.candidateSha].includes(env.FCOS_E2E_EXPECTED_COMMIT)) || !/^[0-9a-f]{40}$/.test(env.GITHUB_SHA || '')) throw compatibilityNormalDiagnosticError('CONFIGURATION', 'CONFIGURATION_INVALID');

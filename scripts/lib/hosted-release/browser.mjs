@@ -12,7 +12,7 @@ import { candidateAuthenticationState } from '../../e2e-private-state.mjs';
 import { prepareCandidateProtection } from '../../e2e-protection-state.mjs';
 import { collectRuntimeObservation } from '../../collect-preview-parity.mjs';
 import { assertNormalRoleIdentity, NORMAL_ROLE_MODULES, verifyNormalRoleRelease } from '../../normal-role-release.mjs';
-import { COMPATIBILITY_NORMAL_MODULES, BE6_COMPATIBILITY_NORMAL_MODULES, verifyRuntimeCompatibilityNormalRole, verifyHostedOrdinaryCompatibilityNormalRole,
+import { COMPATIBILITY_NORMAL_MODULES, hostedCompatibilityNormalModules, verifyRuntimeCompatibilityNormalRole, verifyHostedOrdinaryCompatibilityNormalRole,
   normalizeCompatibilityNormalDiagnostic } from '../../runtime-compatibility-normal-role.mjs';
 import { hostedBrowserProfile, hostedBrowserHarnessEnvironment, assertHostedOrdinaryBrowserSource, assertHostedBrowserJobContext,
   hostedBrowserHarnessActivation } from './browser-profile.mjs';
@@ -43,7 +43,7 @@ const fresh = (value, now) => Number.isFinite(Date.parse(value)) && Date.parse(v
 
 export function assertHostedBrowserComposition(manifest) {
   const profile = hostedBrowserProfile(manifest), compatibility = profile !== 'application';
-  const modules = profile === 'ordinary_compatibility' ? BE6_COMPATIBILITY_NORMAL_MODULES
+  const modules = profile === 'ordinary_compatibility' ? hostedCompatibilityNormalModules(manifest.candidate)
     : compatibility ? COMPATIBILITY_NORMAL_MODULES : NORMAL_ROLE_MODULES;
   const harness = profile === 'ordinary_compatibility' ? verifyHostedOrdinaryCompatibilityNormalRole
     : compatibility ? verifyRuntimeCompatibilityNormalRole : verifyNormalRoleRelease;

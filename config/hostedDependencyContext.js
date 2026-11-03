@@ -114,9 +114,24 @@ export const ORDINARY_ADMISSION_DEPENDENCY_CONTEXT = freeze({
   "handoffSha256": "0e5c9447a34c13f2c5d746f36ce2077f8eefa7778e0601095ff4bd9dc3885e3d"
 });
 
+// UI read-batch/render repair retains only the exact sealed dependency lineage.
+export const REVIEW_REPAIR_DEPENDENCY_CONTEXT = freeze({
+  ...ORDINARY_ADMISSION_DEPENDENCY_CONTEXT,
+  candidate: {
+  "sha": "75e7c09c637868efb90f5b5c5d8ada40a6ae03c6",
+  "sourceProfile": "compat_review_browser_repair_20261103",
+  "sourceSha256": "295133b49b5b3a73b6f5248bcecfd79a25d24b8da93bf6c45f93e56a52b17733",
+  "lockSha256": "9b3d6eb4824ea8688022b9ba249041e25c44b8cebc5443d59c55d8a2da5da378",
+  "configurationSha256": "bf439f6d998faa78601f2f9ddbd36e7542c9e87df4ca10a39a3a583de08d9690",
+  "salesforceSourceSha256": "4c2594c9986269e492487448d402334f43db35b06cb9c409377e728482739c64",
+  "sourceInputsSha256": "c3536ec164d4988843d239725334d6d222403dc07381b858f2d0a1ef8cc1ee44",
+  "branch": "codex/n9-compat-review-source-20261103"
+}
+});
+
 export function dependencyContextCandidate(manifest, { seed, handoff } = {}) {
   const candidate = manifest?.candidate;
-  const pin = [DIAGNOSTIC_DEPENDENCY_CONTEXT, VERIFICATION_DEPENDENCY_CONTEXT, MEASUREMENT_DEPENDENCY_CONTEXT, RUNTIME_METERING_DEPENDENCY_CONTEXT, RUNTIME_DEPENDENCY_CONTEXT, ORDINARY_ADMISSION_DEPENDENCY_CONTEXT].find(value =>
+  const pin = [DIAGNOSTIC_DEPENDENCY_CONTEXT, VERIFICATION_DEPENDENCY_CONTEXT, MEASUREMENT_DEPENDENCY_CONTEXT, RUNTIME_METERING_DEPENDENCY_CONTEXT, RUNTIME_DEPENDENCY_CONTEXT, ORDINARY_ADMISSION_DEPENDENCY_CONTEXT, REVIEW_REPAIR_DEPENDENCY_CONTEXT].find(value =>
     candidate?.sha === value.candidate.sha || candidate?.sourceProfile === value.candidate.sourceProfile);
   if (!pin) return candidate?.sha;
   const need = value => { if (!value) throw Object.assign(new Error('DEPENDENCY_CONTEXT_REQUIRED'), { code: 'DEPENDENCY_CONTEXT_REQUIRED' }); };
