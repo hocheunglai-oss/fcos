@@ -2,6 +2,7 @@ import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import { poolChartErrors } from './config/build/pool-chart-errors.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -15,6 +16,7 @@ export default defineConfig({
   },
   plugins: [
     react(),
+    poolChartErrors(),
   ],
   build: {
     manifest: true,
