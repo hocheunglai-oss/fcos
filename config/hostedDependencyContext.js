@@ -129,9 +129,24 @@ export const REVIEW_REPAIR_DEPENDENCY_CONTEXT = freeze({
 }
 });
 
+// Exact build/control child retains only the original immutable sealed AAD.
+export const BUILD_CONTROLS_REPAIR_DEPENDENCY_CONTEXT = freeze({
+  ...REVIEW_REPAIR_DEPENDENCY_CONTEXT,
+  candidate: {
+  "sha": "45767ebadb4a3e92179738cdbce87c6a80b81afd",
+  "sourceProfile": "compat_build_controls_repair_20261105",
+  "sourceSha256": "0306759783e0de8c734cad8afc4d4d22cc97f29b682a747f172cdafbe2174581",
+  "lockSha256": "9b3d6eb4824ea8688022b9ba249041e25c44b8cebc5443d59c55d8a2da5da378",
+  "configurationSha256": "9b5b64f01a25a9214d4d7b40b3193fc2c0eaa5ae57e9cff4f9dbd1eb880b67c9",
+  "salesforceSourceSha256": "4c2594c9986269e492487448d402334f43db35b06cb9c409377e728482739c64",
+  "sourceInputsSha256": "f922284db7be37b328578c56fea8d6dd9f6298f7530d435904ffce9483265d37",
+  "branch": "codex/pr122-compat-failure-repair-20261105"
+}
+});
+
 export function dependencyContextCandidate(manifest, { seed, handoff } = {}) {
   const candidate = manifest?.candidate;
-  const pin = [DIAGNOSTIC_DEPENDENCY_CONTEXT, VERIFICATION_DEPENDENCY_CONTEXT, MEASUREMENT_DEPENDENCY_CONTEXT, RUNTIME_METERING_DEPENDENCY_CONTEXT, RUNTIME_DEPENDENCY_CONTEXT, ORDINARY_ADMISSION_DEPENDENCY_CONTEXT, REVIEW_REPAIR_DEPENDENCY_CONTEXT].find(value =>
+  const pin = [DIAGNOSTIC_DEPENDENCY_CONTEXT, VERIFICATION_DEPENDENCY_CONTEXT, MEASUREMENT_DEPENDENCY_CONTEXT, RUNTIME_METERING_DEPENDENCY_CONTEXT, RUNTIME_DEPENDENCY_CONTEXT, ORDINARY_ADMISSION_DEPENDENCY_CONTEXT, REVIEW_REPAIR_DEPENDENCY_CONTEXT, BUILD_CONTROLS_REPAIR_DEPENDENCY_CONTEXT].find(value =>
     candidate?.sha === value.candidate.sha || candidate?.sourceProfile === value.candidate.sourceProfile);
   if (!pin) return candidate?.sha;
   const need = value => { if (!value) throw Object.assign(new Error('DEPENDENCY_CONTEXT_REQUIRED'), { code: 'DEPENDENCY_CONTEXT_REQUIRED' }); };

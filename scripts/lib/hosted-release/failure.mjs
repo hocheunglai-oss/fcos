@@ -6,6 +6,7 @@ import { safeVercelCommandFailure } from './vercel-command-failure.mjs';
 import { safeVercelSourceApiFailure } from './vercel-source-api.mjs';
 import { normalizeCompatibilityNormalDiagnostic } from '../../runtime-compatibility-normal-role.mjs';
 import { safeRestrictedBrowserDiagnostic } from './restricted-browser-report.mjs';
+import { safeCurrentJobIdentity } from './current-job-identity.mjs';
 
 // These are code-owned labels, never provider values, error messages or paths.
 export const RELEASE_BOUNDARIES = Object.freeze([
@@ -128,7 +129,7 @@ const diagnosticCodes = new Set(`
   CONFIGURATION_SELECTION_SYSTEM_ENV_REQUIRED CONFIGURATION_SELECTION_ENV_INCOMPLETE
   CONFIGURATION_SELECTION_ENV_OVERRIDE CONFIGURATION_SELECTION_ROOT_CHANGED
   CONFIGURATION_SELECTION_SOURCE_BUILD_UNPROVEN CONTROLLER_BINDING CONTROLLER_CHECKOUT_CHANGED
-  CREDENTIAL_CLASS_MISMATCH DEPLOYMENT_LIST_INVALID DEPLOYMENT_OPERATION
+  CREDENTIAL_CLASS_MISMATCH CURRENT_HOSTED_JOB_IDENTITY DEPLOYMENT_LIST_INVALID DEPLOYMENT_OPERATION
   DEPLOYMENT_READBACK_INCOMPLETE DEPLOYMENT_READBACK_MISMATCH DEPLOYMENT_REFERENCE
   DEPLOYMENT_RESPONSE_UNRESOLVED DEPLOYMENT_TARGET DIAGNOSTIC_CALLER_CONTEXT
   DIAGNOSTIC_CALLER_IDENTITY DIAGNOSTIC_CHECKOUT_CHANGED DIAGNOSTIC_READ_FORBIDDEN
@@ -196,11 +197,14 @@ export function safeDiagnosticFailure(error) {
     ? safeRuntimeLoginObservation(error.detail?.runtimeLoginObservation) : undefined;
   const issuerSubmit = known && stage?.startsWith('runtime.login.')
     ? safeRuntimeIssuerSubmit(error.detail?.issuerSubmit) : undefined;
+  const currentJobIdentity = error instanceof ReleaseError && error.code === 'CURRENT_HOSTED_JOB_IDENTITY'
+    && stage === 'session.github' ? safeCurrentJobIdentity(error.detail?.currentJobIdentity) : undefined;
   return { status: 'intervention_required', code: known ? error.code : 'DIAGNOSTIC_FAILURE_UNCLASSIFIED',
     phase: known && diagnosticPhases.has(error.phase) ? error.phase : boundary || 'diagnostic',
     recovery: 'Inspect this admission diagnostic. It authorizes no deployment or release retry.',
     ...(boundary ? { boundary } : {}), ...(known && commandFailure ? { commandFailure } : {}), ...(known && sourceApiFailure ? { sourceApiFailure } : {}), ...(known && runtimeMismatch ? {runtimeMismatch} : {}), ...(known && runtimeLogin ? { runtimeLogin } : {}),
-    ...(runtimeLoginObservation ? { runtimeLoginObservation } : {}), ...(issuerSubmit ? { issuerSubmit } : {}) };
+    ...(runtimeLoginObservation ? { runtimeLoginObservation } : {}), ...(issuerSubmit ? { issuerSubmit } : {}),
+    ...(currentJobIdentity ? { currentJobIdentity } : {}) };
 }
 
 const isKnownDiagnosticCode = code => typeof code === 'string' && (diagnosticCodes.has(code)

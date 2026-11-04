@@ -45,7 +45,8 @@
         "compat_runtime_metering_20261024",
         "compat_runtime_dependency_20261024",
         "compat_runtime_ordinary_admission_20261025",
-        "compat_review_browser_repair_20261103"
+        "compat_review_browser_repair_20261103",
+        "compat_build_controls_repair_20261105"
       ]
     },
     {
@@ -81,7 +82,8 @@
         "compat_runtime_metering_20261024",
         "compat_runtime_dependency_20261024",
         "compat_runtime_ordinary_admission_20261025",
-        "compat_review_browser_repair_20261103"
+        "compat_review_browser_repair_20261103",
+        "compat_build_controls_repair_20261105"
       ]
     },
     {
@@ -118,7 +120,8 @@
         "compat_runtime_metering_20261024",
         "compat_runtime_dependency_20261024",
         "compat_runtime_ordinary_admission_20261025",
-        "compat_review_browser_repair_20261103"
+        "compat_review_browser_repair_20261103",
+        "compat_build_controls_repair_20261105"
       ],
       "profileCommands": {
         "controller_v2": [
@@ -206,7 +209,8 @@
         "compat_runtime_metering_20261024",
         "compat_runtime_dependency_20261024",
         "compat_runtime_ordinary_admission_20261025",
-        "compat_review_browser_repair_20261103"
+        "compat_review_browser_repair_20261103",
+        "compat_build_controls_repair_20261105"
       ]
     },
     {
@@ -253,7 +257,8 @@
         "compat_runtime_metering_20261024",
         "compat_runtime_dependency_20261024",
         "compat_runtime_ordinary_admission_20261025",
-        "compat_review_browser_repair_20261103"
+        "compat_review_browser_repair_20261103",
+        "compat_build_controls_repair_20261105"
       ]
     },
     {
@@ -289,7 +294,8 @@
         "compat_runtime_metering_20261024",
         "compat_runtime_dependency_20261024",
         "compat_runtime_ordinary_admission_20261025",
-        "compat_review_browser_repair_20261103"
+        "compat_review_browser_repair_20261103",
+        "compat_build_controls_repair_20261105"
       ]
     },
     {
@@ -347,7 +353,8 @@
         "compat_runtime_metering_20261024",
         "compat_runtime_dependency_20261024",
         "compat_runtime_ordinary_admission_20261025",
-        "compat_review_browser_repair_20261103"
+        "compat_review_browser_repair_20261103",
+        "compat_build_controls_repair_20261105"
       ],
       "profileCommands": {
         "controller_v2": [
@@ -405,7 +412,8 @@
         "compat_runtime_metering_20261024",
         "compat_runtime_dependency_20261024",
         "compat_runtime_ordinary_admission_20261025",
-        "compat_review_browser_repair_20261103"
+        "compat_review_browser_repair_20261103",
+        "compat_build_controls_repair_20261105"
       ],
       "artifactInputs": [
         "dist"
@@ -473,7 +481,8 @@
         "compat_runtime_metering_20261024",
         "compat_runtime_dependency_20261024",
         "compat_runtime_ordinary_admission_20261025",
-        "compat_review_browser_repair_20261103"
+        "compat_review_browser_repair_20261103",
+        "compat_build_controls_repair_20261105"
       ]
     },
     {
@@ -511,7 +520,8 @@
         "compat_runtime_metering_20261024",
         "compat_runtime_dependency_20261024",
         "compat_runtime_ordinary_admission_20261025",
-        "compat_review_browser_repair_20261103"
+        "compat_review_browser_repair_20261103",
+        "compat_build_controls_repair_20261105"
       ]
     },
     {
@@ -576,7 +586,8 @@
         "compat_runtime_metering_20261024",
         "compat_runtime_dependency_20261024",
         "compat_runtime_ordinary_admission_20261025",
-        "compat_review_browser_repair_20261103"
+        "compat_review_browser_repair_20261103",
+        "compat_build_controls_repair_20261105"
       ]
     },
     {
@@ -614,7 +625,8 @@
         "compat_runtime_metering_20261024",
         "compat_runtime_dependency_20261024",
         "compat_runtime_ordinary_admission_20261025",
-        "compat_review_browser_repair_20261103"
+        "compat_review_browser_repair_20261103",
+        "compat_build_controls_repair_20261105"
       ]
     },
     {
@@ -654,7 +666,8 @@
         "compat_runtime_metering_20261024",
         "compat_runtime_dependency_20261024",
         "compat_runtime_ordinary_admission_20261025",
-        "compat_review_browser_repair_20261103"
+        "compat_review_browser_repair_20261103",
+        "compat_build_controls_repair_20261105"
       ],
       "profileCommands": {
         "compat_verification_harness_20261024": [
@@ -768,6 +781,22 @@
               "FCOS_MIGRATION_PARENT_PROOF_FILE": "/controller/output/disposable-migration-server.json"
             }
           }
+        ],
+        "compat_build_controls_repair_20261105": [
+          {
+            "program": "node",
+            "args": [
+              "scripts/verify-migrations.mjs"
+            ],
+            "env": {
+              "FCOS_MIGRATION_DATABASE_URL": "postgresql://postgres:postgres@127.0.0.1:54322/postgres",
+              "FCOS_MIGRATION_DISPOSABLE_CLUSTER": "1",
+              "FCOS_MIGRATION_DOCKER_CONTAINER": "supabase_db_fcos",
+              "FCOS_REQUIRE_LIVE_MIGRATION_CHECK": "1",
+              "FCOS_MIGRATION_PROJECT_ID": "fcos",
+              "FCOS_MIGRATION_PARENT_PROOF_FILE": "/controller/output/disposable-migration-server.json"
+            }
+          }
         ]
       }
     },
@@ -817,7 +846,8 @@
         "compat_runtime_metering_20261024",
         "compat_runtime_dependency_20261024",
         "compat_runtime_ordinary_admission_20261025",
-        "compat_review_browser_repair_20261103"
+        "compat_review_browser_repair_20261103",
+        "compat_build_controls_repair_20261105"
       ]
     },
     {
@@ -857,7 +887,8 @@
         "compat_runtime_metering_20261024",
         "compat_runtime_dependency_20261024",
         "compat_runtime_ordinary_admission_20261025",
-        "compat_review_browser_repair_20261103"
+        "compat_review_browser_repair_20261103",
+        "compat_build_controls_repair_20261105"
       ]
     },
     {
@@ -900,7 +931,8 @@
         "compat_runtime_metering_20261024",
         "compat_runtime_dependency_20261024",
         "compat_runtime_ordinary_admission_20261025",
-        "compat_review_browser_repair_20261103"
+        "compat_review_browser_repair_20261103",
+        "compat_build_controls_repair_20261105"
       ]
     },
     {
@@ -941,7 +973,8 @@
         "compat_runtime_metering_20261024",
         "compat_runtime_dependency_20261024",
         "compat_runtime_ordinary_admission_20261025",
-        "compat_review_browser_repair_20261103"
+        "compat_review_browser_repair_20261103",
+        "compat_build_controls_repair_20261105"
       ]
     },
     {
@@ -982,7 +1015,8 @@
         "compat_runtime_metering_20261024",
         "compat_runtime_dependency_20261024",
         "compat_runtime_ordinary_admission_20261025",
-        "compat_review_browser_repair_20261103"
+        "compat_review_browser_repair_20261103",
+        "compat_build_controls_repair_20261105"
       ]
     },
     {
@@ -1022,7 +1056,8 @@
         "compat_runtime_metering_20261024",
         "compat_runtime_dependency_20261024",
         "compat_runtime_ordinary_admission_20261025",
-        "compat_review_browser_repair_20261103"
+        "compat_review_browser_repair_20261103",
+        "compat_build_controls_repair_20261105"
       ]
     },
     {
@@ -1062,7 +1097,8 @@
         "compat_runtime_metering_20261024",
         "compat_runtime_dependency_20261024",
         "compat_runtime_ordinary_admission_20261025",
-        "compat_review_browser_repair_20261103"
+        "compat_review_browser_repair_20261103",
+        "compat_build_controls_repair_20261105"
       ]
     },
     {
@@ -1102,7 +1138,8 @@
         "compat_runtime_metering_20261024",
         "compat_runtime_dependency_20261024",
         "compat_runtime_ordinary_admission_20261025",
-        "compat_review_browser_repair_20261103"
+        "compat_review_browser_repair_20261103",
+        "compat_build_controls_repair_20261105"
       ]
     },
     {
@@ -1142,7 +1179,8 @@
         "compat_runtime_metering_20261024",
         "compat_runtime_dependency_20261024",
         "compat_runtime_ordinary_admission_20261025",
-        "compat_review_browser_repair_20261103"
+        "compat_review_browser_repair_20261103",
+        "compat_build_controls_repair_20261105"
       ]
     },
     {
@@ -1182,7 +1220,8 @@
         "compat_runtime_metering_20261024",
         "compat_runtime_dependency_20261024",
         "compat_runtime_ordinary_admission_20261025",
-        "compat_review_browser_repair_20261103"
+        "compat_review_browser_repair_20261103",
+        "compat_build_controls_repair_20261105"
       ]
     },
     {
@@ -1222,7 +1261,8 @@
         "compat_runtime_metering_20261024",
         "compat_runtime_dependency_20261024",
         "compat_runtime_ordinary_admission_20261025",
-        "compat_review_browser_repair_20261103"
+        "compat_review_browser_repair_20261103",
+        "compat_build_controls_repair_20261105"
       ]
     },
     {
@@ -1250,7 +1290,8 @@
         "compat_runtime_metering_20261024",
         "compat_runtime_dependency_20261024",
         "compat_runtime_ordinary_admission_20261025",
-        "compat_review_browser_repair_20261103"
+        "compat_review_browser_repair_20261103",
+        "compat_build_controls_repair_20261105"
       ]
     },
     {
@@ -1278,7 +1319,8 @@
         "compat_runtime_metering_20261024",
         "compat_runtime_dependency_20261024",
         "compat_runtime_ordinary_admission_20261025",
-        "compat_review_browser_repair_20261103"
+        "compat_review_browser_repair_20261103",
+        "compat_build_controls_repair_20261105"
       ]
     },
     {
@@ -1319,7 +1361,8 @@
         "compat_runtime_metering_20261024",
         "compat_runtime_dependency_20261024",
         "compat_runtime_ordinary_admission_20261025",
-        "compat_review_browser_repair_20261103"
+        "compat_review_browser_repair_20261103",
+        "compat_build_controls_repair_20261105"
       ],
       "artifactInputs": [
         "dist",
@@ -1366,7 +1409,8 @@
         "compat_runtime_metering_20261024",
         "compat_runtime_dependency_20261024",
         "compat_runtime_ordinary_admission_20261025",
-        "compat_review_browser_repair_20261103"
+        "compat_review_browser_repair_20261103",
+        "compat_build_controls_repair_20261105"
       ],
       "artifactInputs": [
         "dist",
@@ -1406,7 +1450,8 @@
         "compat_runtime_metering_20261024",
         "compat_runtime_dependency_20261024",
         "compat_runtime_ordinary_admission_20261025",
-        "compat_review_browser_repair_20261103"
+        "compat_review_browser_repair_20261103",
+        "compat_build_controls_repair_20261105"
       ]
     },
     {
@@ -1454,7 +1499,8 @@
         "compat_runtime_metering_20261024",
         "compat_runtime_dependency_20261024",
         "compat_runtime_ordinary_admission_20261025",
-        "compat_review_browser_repair_20261103"
+        "compat_review_browser_repair_20261103",
+        "compat_build_controls_repair_20261105"
       ]
     },
     {
@@ -1547,7 +1593,8 @@
         "compat_runtime_metering_20261024",
         "compat_runtime_dependency_20261024",
         "compat_runtime_ordinary_admission_20261025",
-        "compat_review_browser_repair_20261103"
+        "compat_review_browser_repair_20261103",
+        "compat_build_controls_repair_20261105"
       ]
     }
   ],
@@ -1613,6 +1660,12 @@
       "candidateSha": "75e7c09c637868efb90f5b5c5d8ada40a6ae03c6",
       "purpose": "Complete original accepted business release scope.",
       "description": "Exact be6 read-batch/render successor; all31 original checks and commands remain mandatory.",
+      "probeProtocol": "xero_metered_v1"
+    },
+    "compat_build_controls_repair_20261105": {
+      "candidateSha": "45767ebadb4a3e92179738cdbce87c6a80b81afd",
+      "purpose": "Verify the exact build/control compatibility successor.",
+      "description": "Exact75 build/control successor; all31 original checks and commands remain mandatory.",
       "probeProtocol": "xero_metered_v1"
     }
   }

@@ -1,3 +1,4 @@
+import { safeNormalBrowserModuleDiagnostic, createNormalBrowserModuleDiagnostic, normalBrowserErrorKind } from './lib/normal-browser-diagnostic.mjs';
 import { writeFileSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,7 +17,7 @@ import { SUCCESSOR_LIVE_CONTRACT, collectSuccessorLiveOperationAdmission, succes
 import { successorLiveNormalCoverageVerified } from './lib/runtime-compatibility-successor-adapter.mjs';
 import { githubReleaseReads, RELEASE_REPOSITORY } from './lib/release-evidence.mjs';
 import { collectPreviewEmailSignerEvidence, previewEmailSignerEnabled } from './lib/preview-email-signer.mjs';
-import { REVIEW_REPAIR_BROWSER_CANDIDATE, assertHostedOrdinaryBrowserSource, assertHostedOrdinaryBrowserContext } from './lib/hosted-release/browser-profile.mjs';
+import { REVIEW_REPAIR_BROWSER_CANDIDATE, BUILD_CONTROLS_REPAIR_BROWSER_CANDIDATE, assertHostedOrdinaryBrowserSource, assertHostedOrdinaryBrowserContext } from './lib/hosted-release/browser-profile.mjs';
 import { BE6_NORMAL_BROWSER_SHA, BE6_NORMAL_BROWSER_CONTRACT, REVIEW_REPAIR_NORMAL_BROWSER_CONTRACT, isCurrentNormalSpec, BE6_EMAIL_ROUTER_FAILURE_CODES,
   be6EmailRouterFailureCode, be6BuyerInvoicesDueRead, be6HedgeResponseKind, be6NormalDataLoaded,
   be6NormalOpenSurface, be6NormalSurfaceReason, be6NormalSurfaceUnavailable } from './lib/be6-normal-browser-contract.mjs';
@@ -52,8 +53,12 @@ export const BE6_COMPATIBILITY_NORMAL_MODULES = Object.freeze(COMPATIBILITY_NORM
   ...(spec.module === 'incoming_payments' ? { title: /^Incoming Payments$/i } : {}),
 })));
 export const REVIEW_REPAIR_COMPATIBILITY_NORMAL_MODULES = Object.freeze(BE6_COMPATIBILITY_NORMAL_MODULES.map(spec => Object.freeze({ ...spec, sourceContract: REVIEW_REPAIR_NORMAL_BROWSER_CONTRACT })));
+// Build/control-only source retains the exact reviewed15 UI schema; candidate/source
+// receipts remain distinct and pass the strict hosted profile guard first.
+export const BUILD_CONTROLS_REPAIR_COMPATIBILITY_NORMAL_MODULES = Object.freeze(REVIEW_REPAIR_COMPATIBILITY_NORMAL_MODULES.map(spec => Object.freeze({ ...spec })));
 export function hostedCompatibilityNormalModules(candidate) {
-  return candidate?.sha === REVIEW_REPAIR_BROWSER_CANDIDATE.sha ? REVIEW_REPAIR_COMPATIBILITY_NORMAL_MODULES
+  return candidate?.sha === BUILD_CONTROLS_REPAIR_BROWSER_CANDIDATE.sha ? BUILD_CONTROLS_REPAIR_COMPATIBILITY_NORMAL_MODULES
+    : candidate?.sha === REVIEW_REPAIR_BROWSER_CANDIDATE.sha ? REVIEW_REPAIR_COMPATIBILITY_NORMAL_MODULES
     : candidate?.sha === BE6_NORMAL_BROWSER_SHA ? BE6_COMPATIBILITY_NORMAL_MODULES : COMPATIBILITY_NORMAL_MODULES;
 }
 const diagnosticModuleSpecs = [...COMPATIBILITY_NORMAL_MODULES, ...BE6_COMPATIBILITY_NORMAL_MODULES, ...REVIEW_REPAIR_COMPATIBILITY_NORMAL_MODULES];
@@ -72,13 +77,15 @@ const normalRoleDiagnosticReasons = new Set([
   'EVIDENCE_WRITE_FAILED', 'PREFERENCES_NOT_INITIALIZED', 'ISOLATION_FAILED', 'PASS', 'NOT_REACHED',
 ]);
 
-function normalRoleDiagnosticModules(moduleReasons, modules) {
+function normalRoleDiagnosticModules(moduleReasons, modules, moduleDiagnostics) {
   return COMPATIBILITY_NORMAL_MODULES.map(spec => {
     const savedRow = modules?.find(row => row?.module === spec.module && diagnosticModuleSpecs.some(known => known.module === row.module && known.handler === row.handler));
     const saved = savedRow?.reason;
     const reason = moduleReasons instanceof Map ? moduleReasons.get(spec.module) : undefined;
+    const surface = safeNormalBrowserModuleDiagnostic(moduleDiagnostics instanceof Map ? moduleDiagnostics.get(spec.module) : savedRow?.surface);
     return { module: spec.module, handler: savedRow?.handler || spec.handler,
-      reason: normalRoleDiagnosticReasons.has(reason) ? reason : normalRoleDiagnosticReasons.has(saved) ? saved : 'NOT_REACHED' };
+      reason: normalRoleDiagnosticReasons.has(reason) ? reason : normalRoleDiagnosticReasons.has(saved) ? saved : 'NOT_REACHED',
+      ...(surface ? { surface } : {}) };
   });
 }
 
@@ -93,7 +100,7 @@ export function normalizeCompatibilityNormalDiagnostic(input = {}) {
     diagnostic.handler = spec.handler;
   }
   if (Number.isInteger(input.status) && input.status >= 100 && input.status <= 599) diagnostic.status = input.status;
-  if (input.moduleReasons instanceof Map || Array.isArray(input.modules)) diagnostic.modules = normalRoleDiagnosticModules(input.moduleReasons, input.modules);
+  if (input.moduleReasons instanceof Map || Array.isArray(input.modules)) diagnostic.modules = normalRoleDiagnosticModules(input.moduleReasons, input.modules, input.moduleDiagnostics);
   if (Array.isArray(input.dataResponses)) diagnostic.dataResponses = input.dataResponses.slice(0, 64).filter(row =>
     diagnosticModuleSpecs.some(spec => spec.module === row?.module && spec.handler === row?.handler)
     && Number.isInteger(row.status) && row.status >= 100 && row.status <= 599
@@ -326,9 +333,9 @@ export async function compatibilityNormalOpenSurface(spec, page) {
   }
 }
 
-async function compatibilityNormalSurfaceReasonOnce(spec, page, loaded, body) {
+async function compatibilityNormalSurfaceReasonOnce(spec, page, loaded, body, observe) {
   if (isCurrentNormalSpec(spec)) {
-    const result = await be6NormalSurfaceReason(spec, page, loaded);
+    const result = await be6NormalSurfaceReason(spec, page, loaded, observe);
     if (result !== undefined) return result;
   }
   if (spec.module === 'settings') return await page.getByLabel('Annual financing rate (%)', { exact: true }).isVisible() ? null : 'SETTINGS_FIELD_MISSING';
@@ -358,13 +365,16 @@ async function compatibilityNormalSurfaceReasonOnce(spec, page, loaded, body) {
 
 // A successful network response precedes React's paint. Wait a short bounded
 // interval for its actual visible business surface, retaining the fixed failure.
-export async function compatibilityNormalSurfaceReason(spec, page, loaded, body, { timeoutMs = 5000 } = {}) {
+export async function compatibilityNormalSurfaceReason(spec, page, loaded, body, { timeoutMs = 5000, observe } = {}) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 5000) throw new Error('UNAVAILABLE_SURFACE');
-  const deadline = Date.now() + timeoutMs;
-  let reason;
+  const started = Date.now(), deadline = started + timeoutMs;
+  let reason, observation;
   do {
-    reason = await compatibilityNormalSurfaceReasonOnce(spec, page, loaded, body);
-    if (!reason || Date.now() >= deadline) return reason;
+    reason = await compatibilityNormalSurfaceReasonOnce(spec, page, loaded, body, value => { observation = value; });
+    if (!reason || Date.now() >= deadline) {
+      if (reason) observe?.({ origin: 'SURFACE_REJECTED', ...observation, waitElapsedMs: Date.now() - started });
+      return reason;
+    }
     await page.waitForTimeout(Math.min(50, Math.max(1, deadline - Date.now())));
   } while (true);
 }
@@ -469,7 +479,7 @@ async function runCompatibilityNormalRole({ env = process.env, fetchImpl = globa
   let lastBlockedRequest;
   const deniedRequests = [], dataResponses = [];
   const checks = [];
-  const moduleReasons = new Map();
+  const moduleReasons = new Map(), moduleDiagnostics = new Map();
   try {
     browser = await browserType.launch({ headless: true });
     context = await browser.newContext({ storageState: state, viewport: { width: 1440, height: 1000 }, serviceWorkers: 'block' });
@@ -499,7 +509,15 @@ async function runCompatibilityNormalRole({ env = process.env, fetchImpl = globa
       const observed = createCompatibilityNormalResponseObserver(spec, responseSettlement, responses, failures, dataResponses);
       const mutationStart = blockedMutations;
       const blockReason = () => blockedMutations !== mutationStart ? 'BLOCKED_REQUEST' : null;
-      const failModule = reason => { if (!moduleReason) moduleReason = reason; };
+      let step = 'NAVIGATION', surfaceObservation;
+      const diagnostic = createNormalBrowserModuleDiagnostic(() => ({
+        primaryLoaded: responses.some(item => item.loaded), primaryRows: responses.find(item => item.loaded)?.rows,
+        pendingResponses: observed.state.pending, dashboardSummaryLoaded: observed.state.dashboardSummaryLoaded,
+        dashboardFiltersLoaded: observed.state.dashboardFiltersLoaded,
+      }));
+      const failModule = (reason, detail = {}) => {
+        if (!moduleReason) { moduleReason = reason; diagnostic.fail({ origin: reason === 'UNAVAILABLE_SURFACE' && failures.includes('UNAVAILABLE_SURFACE') ? 'RESPONSE_URL_INVALID' : 'DATA_CHECK_FAILED', step, reason, ...detail }); }
+      };
       try {
         page = await context.newPage();
         page.on('pageerror', () => failures.push('PAGE_ERROR'));
@@ -507,9 +525,12 @@ async function runCompatibilityNormalRole({ env = process.env, fetchImpl = globa
         page.on('response', responseObserver);
         await page.goto(`${url}${spec.path}`, { waitUntil: 'domcontentloaded', timeout: 45000 });
         navigationLoaded = true;
+        step = 'HEADING';
         await page.getByRole('heading', { name: spec.title }).first().waitFor({ timeout: 30000 });
         headingLoaded = true;
+        step = 'OPEN_SURFACE';
         await compatibilityNormalOpenSurface(spec, page);
+        step = 'READINESS';
         const deadline = Date.now() + 30000;
         while (!await compatibilityNormalModuleReadiness(spec, page, responses, observed.state) && !failures.length && !blockReason() && Date.now() < deadline) await page.waitForTimeout(250);
         const loaded = responses.find(item => item.loaded);
@@ -521,9 +542,12 @@ async function runCompatibilityNormalRole({ env = process.env, fetchImpl = globa
         if (/\/login(?:\?|$)/.test(page.url())) { failModule('LOGIN_REDIRECT'); continue; }
         const body = await page.locator('body').innerText();
         if (/Access denied/i.test(body)) { failModule('ACCESS_MISSING'); continue; }
-        if (isCurrentNormalSpec(spec) ? await be6NormalSurfaceUnavailable(page) : /Something went wrong|temporarily unavailable|could not (?:load|read|verify)|Unavailable/i.test(body)) { failModule('UNAVAILABLE_SURFACE'); continue; }
-        const surfaceReason = await compatibilityNormalSurfaceReason(spec, page, loaded, body);
-        if (surfaceReason) { failModule(surfaceReason); continue; }
+        step = 'UNAVAILABLE_CHECK';
+        if (isCurrentNormalSpec(spec) ? await be6NormalSurfaceUnavailable(page, value => { surfaceObservation = value; }) : /Something went wrong|temporarily unavailable|could not (?:load|read|verify)|Unavailable/i.test(body)) { failModule('UNAVAILABLE_SURFACE', surfaceObservation || { origin: 'LEGACY_FAILURE_NOTICE' }); continue; }
+        step = 'SURFACE_CHECK';
+        const surfaceReason = await compatibilityNormalSurfaceReason(spec, page, loaded, body, { observe: value => { surfaceObservation = value; } });
+        if (surfaceReason) { failModule(surfaceReason, surfaceObservation); continue; }
+        step = 'WORKFLOW';
         if (spec.workflow) {
           if (spec.module === 'review') {
             // Exercise read-only queue scope and confirm workflow state remains
@@ -541,25 +565,29 @@ async function runCompatibilityNormalRole({ env = process.env, fetchImpl = globa
         checks.push({ module: spec.module, role: identity.role, result: 'pass', kind: spec.workflow ? 'workflow_read' : 'read',
           evidenceId: `compatibility-normal-role:${env.GITHUB_RUN_ID}:${spec.module}` });
         checkAdded = true;
-      } catch (error) { failModule(blockReason() || (error?.message === 'ACCESS_MISSING' ? 'ACCESS_MISSING' : undefined) || (navigationLoaded ? (headingLoaded ? 'UNAVAILABLE_SURFACE' : 'MISSING_HEADING') : 'UNAVAILABLE_SURFACE')); }
+      } catch (error) { failModule(blockReason() || (error?.message === 'ACCESS_MISSING' ? 'ACCESS_MISSING' : undefined) || (navigationLoaded ? (headingLoaded ? 'UNAVAILABLE_SURFACE' : 'MISSING_HEADING') : 'UNAVAILABLE_SURFACE'), { origin: 'BROWSER_ACTION_ERROR', errorKind: normalBrowserErrorKind(error) }); }
       finally {
         let closeFailed = false;
         try { if (page) await transport.drainPage(page); } catch { failures.push('DATA_DEADLINE'); }
-        try { if (page) await page.close(); } catch { closeFailed = true; }
+        try { if (page) await page.close(); } catch (error) { closeFailed = true; diagnostic.close(error); }
         if (page && responseObserver) page.off('response', responseObserver);
         try { await responseSettlement.settle(); } catch { failures.push(observed.state.pending ? 'DATA_DEADLINE' : 'DATA_JSON_FAILURE'); }
         moduleReason = compatibilityNormalModuleTerminalReason({ reason: moduleReason, failures, blocked: Boolean(blockReason()), closeFailed,
           workflowRequired: spec.module === 'review', workflowLoaded: observed.state.workflowLoaded });
+        if (moduleReason) {
+          diagnostic.fail({ origin: failures.includes('UNAVAILABLE_SURFACE') ? 'RESPONSE_URL_INVALID' : 'DATA_CHECK_FAILED', step: 'CLEANUP', reason: moduleReason });
+          moduleDiagnostics.set(spec.module, diagnostic.snapshot());
+        }
         if (checkAdded && moduleReason) checks.pop();
         await normalRoleDiagnosticStage('BROWSER_ISOLATION', () => isolation.assertHeld(spec.module, 'after'), 'ISOLATION_FAILED');
         moduleReasons.set(spec.module, moduleReason || 'PASS');
       }
     }
     await normalRoleDiagnosticStage('BROWSER_ISOLATION', () => isolation.assertHeld(undefined, 'final'), 'ISOLATION_FAILED');
-    if (blockedMutations) throw compatibilityNormalDiagnosticError('MODULES', 'BLOCKED_REQUEST', { moduleReasons, modules: moduleSpecs.map(spec => ({module: spec.module, handler: spec.handler, reason: moduleReasons.get(spec.module)})), blockedRequest: lastBlockedRequest, deniedRequests, dataResponses });
+    if (blockedMutations) throw compatibilityNormalDiagnosticError('MODULES', 'BLOCKED_REQUEST', { moduleReasons, modules: moduleSpecs.map(spec => ({module: spec.module, handler: spec.handler, reason: moduleReasons.get(spec.module), surface: moduleDiagnostics.get(spec.module)})), blockedRequest: lastBlockedRequest, deniedRequests, dataResponses });
   } catch (error) {
     if (error?.normalRoleDiagnostic) throw error;
-    throw compatibilityNormalDiagnosticError('BROWSER_SETUP', 'BROWSER_UNAVAILABLE', { moduleReasons, modules: moduleSpecs.map(spec => ({module: spec.module, handler: spec.handler, reason: moduleReasons.get(spec.module)})), dataResponses });
+    throw compatibilityNormalDiagnosticError('BROWSER_SETUP', 'BROWSER_UNAVAILABLE', { moduleReasons, modules: moduleSpecs.map(spec => ({module: spec.module, handler: spec.handler, reason: moduleReasons.get(spec.module), surface: moduleDiagnostics.get(spec.module)})), dataResponses });
   } finally {
     let cleanupError;
     try { if (isolation) await normalRoleDiagnosticStage('BROWSER_ISOLATION', () => isolation.release(), 'ISOLATION_FAILED'); } catch (error) { cleanupError = error; }
@@ -567,7 +595,7 @@ async function runCompatibilityNormalRole({ env = process.env, fetchImpl = globa
     try { await browser?.close(); } catch { cleanupError ||= compatibilityNormalDiagnosticError('BROWSER_SETUP', 'BROWSER_UNAVAILABLE'); }
     if (cleanupError) throw cleanupError;
   }
-  if (blockedMutations) throw compatibilityNormalDiagnosticError('MODULES', 'BLOCKED_REQUEST', { moduleReasons, modules: moduleSpecs.map(spec => ({module: spec.module, handler: spec.handler, reason: moduleReasons.get(spec.module)})), blockedRequest: lastBlockedRequest, deniedRequests, dataResponses });
+  if (blockedMutations) throw compatibilityNormalDiagnosticError('MODULES', 'BLOCKED_REQUEST', { moduleReasons, modules: moduleSpecs.map(spec => ({module: spec.module, handler: spec.handler, reason: moduleReasons.get(spec.module), surface: moduleDiagnostics.get(spec.module)})), blockedRequest: lastBlockedRequest, deniedRequests, dataResponses });
   browserIsolation = isolation.evidence({ workspacePreferences, telemetryAbortedRequests, blockedRequests: blockedMutations, contextClosed });
   if (!compatibilityBrowserIsolationVerified(browserIsolation, { candidateUrl: url, sha: verified.commit, deploymentId: version.deploymentId,
     sourceDigest: version.provenance.sourceDigest, harnessSha: env.GITHUB_SHA }, moduleSpecs.map(spec => spec.module))) {
@@ -577,13 +605,13 @@ async function runCompatibilityNormalRole({ env = process.env, fetchImpl = globa
     sourceDigest: version.provenance.sourceDigest, harnessSha: env.GITHUB_SHA, capturedAt: new Date().toISOString(), checks, browserIsolation,
     ...(successor ? { lockHash: hostedSource?.lockSha256 || admission.candidate.lockHash, configurationRevision: hostedSource?.configurationSha256 || admission.context.configurationRevision } : {}),
     ...(emailSigner ? { emailSigner } : {}) };
-  if (!compatibilityNormalCoverageVerified({ checks }) || checks.length !== moduleSpecs.length) throw compatibilityNormalDiagnosticError('COVERAGE', 'COVERAGE_INCOMPLETE', { moduleReasons, modules: moduleSpecs.map(spec => ({module: spec.module, handler: spec.handler, reason: moduleReasons.get(spec.module)})), dataResponses });
+  if (!compatibilityNormalCoverageVerified({ checks }) || checks.length !== moduleSpecs.length) throw compatibilityNormalDiagnosticError('COVERAGE', 'COVERAGE_INCOMPLETE', { moduleReasons, modules: moduleSpecs.map(spec => ({module: spec.module, handler: spec.handler, reason: moduleReasons.get(spec.module), surface: moduleDiagnostics.get(spec.module)})), dataResponses });
   if (successor && !hostedSource) {
     successorLiveSelection(admission);
     if (!successorLiveNormalCoverageVerified({ admission, normal: { ...evidence, kind: 'normal_role', sha: verified.commit },
-      candidate: { id: version.deploymentId, url, createdAt: version.builtAt } })) throw compatibilityNormalDiagnosticError('COVERAGE', 'COVERAGE_INCOMPLETE', { moduleReasons, modules: moduleSpecs.map(spec => ({module: spec.module, handler: spec.handler, reason: moduleReasons.get(spec.module)})), dataResponses });
+      candidate: { id: version.deploymentId, url, createdAt: version.builtAt } })) throw compatibilityNormalDiagnosticError('COVERAGE', 'COVERAGE_INCOMPLETE', { moduleReasons, modules: moduleSpecs.map(spec => ({module: spec.module, handler: spec.handler, reason: moduleReasons.get(spec.module), surface: moduleDiagnostics.get(spec.module)})), dataResponses });
   }
-  if (!env.RUNNER_TEMP) throw compatibilityNormalDiagnosticError('EVIDENCE', 'EVIDENCE_WRITE_FAILED', { moduleReasons, modules: moduleSpecs.map(spec => ({module: spec.module, handler: spec.handler, reason: moduleReasons.get(spec.module)})), dataResponses });
+  if (!env.RUNNER_TEMP) throw compatibilityNormalDiagnosticError('EVIDENCE', 'EVIDENCE_WRITE_FAILED', { moduleReasons, modules: moduleSpecs.map(spec => ({module: spec.module, handler: spec.handler, reason: moduleReasons.get(spec.module), surface: moduleDiagnostics.get(spec.module)})), dataResponses });
   await normalRoleDiagnosticStage('EVIDENCE', () => writeEvidence(evidence), 'EVIDENCE_WRITE_FAILED');
   return evidence;
 }

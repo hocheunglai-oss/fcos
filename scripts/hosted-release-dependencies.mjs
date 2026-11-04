@@ -3,6 +3,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { collectFinancialPreservation, dependencyHash, importAcceptedNomB } from './lib/hosted-release/dependencies.mjs';
 import { loadDependencySetup, measureHostedNomBInputs } from './lib/hosted-release/dependency-publisher.mjs';
+import { safeDiagnosticFailure } from './lib/hosted-release/failure.mjs';
 
 const permittedCredentials = new Set(['GITHUB_TOKEN','FCOS_HOSTED_GITHUB_READ_TOKEN','FCOS_HOSTED_SALESFORCE_READ_TOKEN','FCOS_HOSTED_SALESFORCE_CLIENT_SECRET']);
 function requireProducerEnvironment(env) {
@@ -13,6 +14,12 @@ function requireProducerEnvironment(env) {
 }
 const waiting = (checkId, missing) => ({ status: 'waiting_dependency', checkId, missing });
 const safeError = checkId => ({ status: 'failed', checkId, code: `${checkId.toUpperCase()}_DEPENDENCY_REVALIDATION_REQUIRED` });
+
+export function hostedDependencyEntrypointFailure(error) {
+  const diagnostic = safeDiagnosticFailure(error);
+  return { status: 'failed', code: /^[A-Z_]+$/.test(error?.code || '') ? error.code : 'DEPENDENCY_ENTRYPOINT_FAILED',
+    ...(diagnostic.currentJobIdentity ? { currentJobIdentity: diagnostic.currentJobIdentity } : {}) };
+}
 
 /** Raw producer only: trusted controller files perform bounded reads, candidate
  * files are data, and this process has no coordinator/OIDC/provider-write authority.
@@ -65,5 +72,5 @@ if (process.argv[1] && realpathSync(resolve(process.argv[1])) === realpathSync(f
     writeFileSync(file, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
     console.log(JSON.stringify({ status: report.status, missing: report.checks.filter(row => row.status === 'waiting_dependency').flatMap(row => row.missing) }));
     // Partial successful raw evidence is independently published; readiness remains closed.
-  }).catch(error => { console.error(JSON.stringify({ status: 'failed', code: /^[A-Z_]+$/.test(error.code || '') ? error.code : 'DEPENDENCY_ENTRYPOINT_FAILED' })); process.exitCode = 1; });
+  }).catch(error => { console.error(JSON.stringify(hostedDependencyEntrypointFailure(error))); process.exitCode = 1; });
 }

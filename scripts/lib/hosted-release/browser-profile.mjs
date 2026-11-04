@@ -1,4 +1,4 @@
-import { ORDINARY_ADMISSION_DEPENDENCY_CONTEXT, REVIEW_REPAIR_DEPENDENCY_CONTEXT } from '../../../config/hostedDependencyContext.js';
+import { ORDINARY_ADMISSION_DEPENDENCY_CONTEXT, REVIEW_REPAIR_DEPENDENCY_CONTEXT, BUILD_CONTROLS_REPAIR_DEPENDENCY_CONTEXT } from '../../../config/hostedDependencyContext.js';
 import { fcosConnectionIdentifier } from '../../../config/fcosConnections.js';
 import { isFirstRuntimeCandidateSha } from '../../../config/hostedCompatibilityCorrection.js';
 import { canonical, digest, ReleaseError } from './json-contract.mjs';
@@ -8,8 +8,9 @@ export const FROZEN_BROWSER_CANDIDATE = '04ee3425aac7a49089eda781eb3c976aea1f678
 const refuse = code => { throw new ReleaseError(code, 'browser.profile', 'Correct the exact admitted browser profile before any Preview or probe.'); };
 
 export const REVIEW_REPAIR_BROWSER_CANDIDATE = REVIEW_REPAIR_DEPENDENCY_CONTEXT.candidate;
+export const BUILD_CONTROLS_REPAIR_BROWSER_CANDIDATE = BUILD_CONTROLS_REPAIR_DEPENDENCY_CONTEXT.candidate;
 export function hostedOrdinaryBrowserCandidate(candidate) {
-  const pin = [ORDINARY_BROWSER_CANDIDATE, REVIEW_REPAIR_BROWSER_CANDIDATE].find(value => candidate?.sha === value.sha || candidate?.sourceProfile === value.sourceProfile);
+  const pin = [ORDINARY_BROWSER_CANDIDATE, REVIEW_REPAIR_BROWSER_CANDIDATE, BUILD_CONTROLS_REPAIR_BROWSER_CANDIDATE].find(value => candidate?.sha === value.sha || candidate?.sourceProfile === value.sourceProfile);
   if (pin && canonical(candidate) !== canonical(pin)) refuse('HOSTED_BROWSER_PROFILE_INVALID');
   return pin;
 }

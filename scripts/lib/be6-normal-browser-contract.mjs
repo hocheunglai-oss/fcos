@@ -71,21 +71,45 @@ export async function be6NormalOpenSurface(spec, page) {
 
 // Visible request failures remain fatal. Plain business-cell placeholders and
 // accurate read-only notices are not an assertion that a successful read failed.
-export async function be6NormalSurfaceUnavailable(page) {
+export async function be6NormalSurfaceUnavailable(page, observe) {
   // DashboardSettings.ErrorBlock uses this exact source-owned combination;
   // text-destructive alone also styles legitimate negative business amounts.
-  if (await page.locator('[role="alert"]:visible, [class~="border-destructive/20"][class~="bg-destructive/10"]:visible').count()) return true;
+  const errors = await page.locator('[role="alert"]:visible, [class~="border-destructive/20"][class~="bg-destructive/10"]:visible').count();
+  if (errors) {
+    const detail = { origin: 'VISIBLE_ERROR', matchedErrorCount: errors };
+    if (observe) {
+      // The existing combined fatal predicate has already matched. Additional
+      // scalar observations cannot clear it, even if their own reads fail.
+      const counts = await Promise.allSettled([
+        Promise.resolve().then(() => page.locator('[role="alert"]:visible').count()),
+        Promise.resolve().then(() => page.locator('[class~="border-destructive/20"][class~="bg-destructive/10"]:visible').count()),
+      ]);
+      if (counts[0].status === 'fulfilled') detail.visibleAlertCount = counts[0].value;
+      if (counts[1].status === 'fulfilled') detail.requestErrorBlockCount = counts[1].value;
+    }
+    observe?.(detail); return true;
+  }
   const fixed = page.getByText(/^(?:Something went wrong|Unable to load (?:incoming payments|buyer invoices)|Access denied)$/i);
-  for (let index = 0; index < await fixed.count(); index += 1) if (await fixed.nth(index).isVisible()) return true;
-  return Boolean(await page.locator('[aria-label]:visible').filter({ hasText: /(?:Data|Salesforce) · Unavailable/ }).count());
+  for (let index = 0; index < await fixed.count(); index += 1) if (await fixed.nth(index).isVisible()) { observe?.({ origin: 'FIXED_FAILURE_NOTICE' }); return true; }
+  const unavailable = await page.locator('[aria-label]:visible').filter({ hasText: /(?:Data|Salesforce) · Unavailable/ }).count();
+  if (unavailable) observe?.({ origin: 'DATA_UNAVAILABLE_BADGE', matchedErrorCount: unavailable });
+  return Boolean(unavailable);
 }
 
-export async function be6NormalSurfaceReason(spec, page, loaded) {
+export async function be6NormalSurfaceReason(spec, page, loaded, observe) {
   if (spec.module === 'dashboard') {
     const panel = page.getByRole('tabpanel', { name: 'STEMs', exact: true });
-    if (!await panel.isVisible()) return 'UNAVAILABLE_SURFACE';
-    if (loaded.rows === 0) return await panel.getByText('No STEMs match these filters. Reset a filter or select a wider period.', { exact: true }).first().isVisible() ? null : 'EMPTY_STATE_MISSING';
-    return await panel.locator('table tbody tr[data-stem-group]:visible').count() ? null : 'MISSING_ROWS';
+    if (!await panel.isVisible()) { observe?.({ origin: 'DASHBOARD_PANEL_HIDDEN', panelVisible: false }); return 'UNAVAILABLE_SURFACE'; }
+    if (loaded.rows === 0) {
+      // Responsive mobile/desktop copies share this exact message. The first
+      // DOM copy can be hidden while the real desktop empty state is visible.
+      const emptyStateVisible = await panel.getByText('No STEMs match these filters. Reset a filter or select a wider period.', { exact: true }).filter({ visible: true }).first().isVisible();
+      if (!emptyStateVisible) observe?.({ origin: 'DASHBOARD_EMPTY_STATE_MISSING', panelVisible: true, emptyStateVisible });
+      return emptyStateVisible ? null : 'EMPTY_STATE_MISSING';
+    }
+    const rows = await panel.locator('table tbody tr[data-stem-group]:visible').count();
+    if (!rows) observe?.({ origin: 'DASHBOARD_ROWS_MISSING', panelVisible: true, matchedRows: rows });
+    return rows ? null : 'MISSING_ROWS';
   }
   if (spec.module === 'markets') {
     const board = page.getByRole('region', { name: 'Market price board', exact: true });

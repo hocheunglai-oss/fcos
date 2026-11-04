@@ -338,9 +338,51 @@ export const COMPATIBILITY_REVIEW_REPAIR_CORRECTION = Object.freeze({
   "cronSchedulesChanged": false
 });
 
+// Exact build/control successor; all historical source profiles remain immutable.
+export const COMPATIBILITY_BUILD_CONTROLS_REPAIR_CORRECTION = Object.freeze({
+  "baseSha": "75e7c09c637868efb90f5b5c5d8ada40a6ae03c6",
+  "candidateSha": "45767ebadb4a3e92179738cdbce87c6a80b81afd",
+  "sourceProfile": "compat_build_controls_repair_20261105",
+  "kind": "explicit_build_controls_and_error_literal_pooling_repair",
+  "uiCorrectnessChanged": false,
+  "applicationFeatureScopeAdded": false,
+  "probeProtocol": "xero_metered_v1",
+  "files": [
+    {
+      "path": "config/build/pool-chart-errors.mjs",
+      "sha256": "4d7f7123c7f43d6ea6204541872f0b6d76f0e4e2e61e00dafd486ee1ad4fcf7f",
+      "gitBlob": "0103ad3ddb48cf2fc15eec79aae282744b6a1fed"
+    },
+    {
+      "path": "package.json",
+      "sha256": "3054da97613b81884cad689576c784888d299249bec248551a4a0a49e7e18c88",
+      "gitBlob": "85ebe2c0df7b1739b87896062eccde52bb068620"
+    },
+    {
+      "path": "scripts/fcos-project-doctor.mjs",
+      "sha256": "d3a8258641ed51ce816910ab004736567d4f79b3e04501b7c497d9a6a79c719a",
+      "gitBlob": "65b32460045c60cbad5c3204da00de7288990957"
+    },
+    {
+      "path": "tests/chartErrorPooling.test.js",
+      "sha256": "6ec9ee6e181d6f77a17b928c60617a9ece240cb65c68fd22fd78249ba1d0c2ad",
+      "gitBlob": "64e193c50e56ffd5280781052b230004ad085c23"
+    },
+    {
+      "path": "vite.config.js",
+      "sha256": "57bb6eb00b1e417b2382df1d3490cb2ea95c6cbece1e11751a162363bd4ce646",
+      "gitBlob": "5e99704bec7050ee31dd5e22683875db3e4f1fbe"
+    }
+  ],
+  "existingUi": false,
+  "handoffs": [],
+  "salesforceMetadataChanged": false,
+  "cronSchedulesChanged": false
+});
+
 export function isFirstRuntimeCandidateSha(value) {
   return value === COMPATIBILITY_CORRECTION.baseSha || value === COMPATIBILITY_CORRECTION.candidateSha
-    || value === COMPATIBILITY_CONFIGURATION_CORRECTION.candidateSha || value === COMPATIBILITY_DIAGNOSTIC_CORRECTION.candidateSha || value === COMPATIBILITY_VERIFICATION_CORRECTION.candidateSha || value === COMPATIBILITY_MEASUREMENT_CORRECTION.candidateSha || value === COMPATIBILITY_RUNTIME_METERING_CORRECTION.candidateSha || value === COMPATIBILITY_RUNTIME_DEPENDENCY_CORRECTION.candidateSha || value === COMPATIBILITY_RUNTIME_ORDINARY_ADMISSION_CORRECTION.candidateSha || value === COMPATIBILITY_REVIEW_REPAIR_CORRECTION.candidateSha;
+    || value === COMPATIBILITY_CONFIGURATION_CORRECTION.candidateSha || value === COMPATIBILITY_DIAGNOSTIC_CORRECTION.candidateSha || value === COMPATIBILITY_VERIFICATION_CORRECTION.candidateSha || value === COMPATIBILITY_MEASUREMENT_CORRECTION.candidateSha || value === COMPATIBILITY_RUNTIME_METERING_CORRECTION.candidateSha || value === COMPATIBILITY_RUNTIME_DEPENDENCY_CORRECTION.candidateSha || value === COMPATIBILITY_RUNTIME_ORDINARY_ADMISSION_CORRECTION.candidateSha || value === COMPATIBILITY_REVIEW_REPAIR_CORRECTION.candidateSha || value === COMPATIBILITY_BUILD_CONTROLS_REPAIR_CORRECTION.candidateSha;
 }
 export function firstRuntimeCandidateProfile(value) {
   return value === COMPATIBILITY_CORRECTION.baseSha ? 'frozen_04ee'
@@ -352,12 +394,13 @@ export function firstRuntimeCandidateProfile(value) {
               : value === COMPATIBILITY_RUNTIME_METERING_CORRECTION.candidateSha ? COMPATIBILITY_RUNTIME_METERING_CORRECTION.sourceProfile
                 : value === COMPATIBILITY_RUNTIME_DEPENDENCY_CORRECTION.candidateSha ? COMPATIBILITY_RUNTIME_DEPENDENCY_CORRECTION.sourceProfile
                   : value === COMPATIBILITY_RUNTIME_ORDINARY_ADMISSION_CORRECTION.candidateSha ? COMPATIBILITY_RUNTIME_ORDINARY_ADMISSION_CORRECTION.sourceProfile
-                    : value === COMPATIBILITY_REVIEW_REPAIR_CORRECTION.candidateSha ? COMPATIBILITY_REVIEW_REPAIR_CORRECTION.sourceProfile : null;
+                    : value === COMPATIBILITY_REVIEW_REPAIR_CORRECTION.candidateSha ? COMPATIBILITY_REVIEW_REPAIR_CORRECTION.sourceProfile
+                      : value === COMPATIBILITY_BUILD_CONTROLS_REPAIR_CORRECTION.candidateSha ? COMPATIBILITY_BUILD_CONTROLS_REPAIR_CORRECTION.sourceProfile : null;
 }
 // Old immutable compatibility source cannot acquire a new endpoint protocol by
 // adding a manifest marker. Other application source may explicitly opt in.
 export function runtimeProbeProtocolMatches(candidate, protocol) {
-  const pin = [COMPATIBILITY_RUNTIME_METERING_CORRECTION, COMPATIBILITY_RUNTIME_DEPENDENCY_CORRECTION, COMPATIBILITY_RUNTIME_ORDINARY_ADMISSION_CORRECTION, COMPATIBILITY_REVIEW_REPAIR_CORRECTION]
+  const pin = [COMPATIBILITY_RUNTIME_METERING_CORRECTION, COMPATIBILITY_RUNTIME_DEPENDENCY_CORRECTION, COMPATIBILITY_RUNTIME_ORDINARY_ADMISSION_CORRECTION, COMPATIBILITY_REVIEW_REPAIR_CORRECTION, COMPATIBILITY_BUILD_CONTROLS_REPAIR_CORRECTION]
     .find(value => candidate?.sha === value.candidateSha || candidate?.sourceProfile === value.sourceProfile);
   if (pin)
     return candidate.sha === pin.candidateSha && candidate.sourceProfile === pin.sourceProfile && protocol === pin.probeProtocol;

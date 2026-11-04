@@ -3,6 +3,18 @@ import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { fail, sha, CONTROLLER_WORKFLOW, releaseTargets } from './contract.mjs';
 
 const issuer = 'https://token.actions.githubusercontent.com';
+// Only the explicitly signal-bound caller uses this additional promise fence.
+// Native fetch also receives the signal, so body consumption is cancelled too.
+export function awaitGitHubRead(task, signal) {
+  if (!signal) return task;
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal.reason || new Error('GITHUB_READ_ABORTED'));
+    const clear = () => signal.removeEventListener('abort', abort);
+    signal.addEventListener('abort', abort, { once: true });
+    Promise.resolve(task).then(value => { clear(); signal.aborted ? abort() : resolve(value); }, error => { clear(); reject(error); });
+    if (signal.aborted) { clear(); abort(); }
+  });
+}
 export async function requestGitHubIdentity({ env = process.env, fetchImpl = fetch, audience = 'fcos-release-coordinator' } = {}) {
   let url;
   try { url = new URL(env.ACTIONS_ID_TOKEN_REQUEST_URL); } catch { fail('HOSTED_IDENTITY_REQUIRED'); }
@@ -42,11 +54,13 @@ export async function validateHostedIdentity(token, { controllerSha, repositoryI
 export function githubClient({ token, fetchImpl = fetch, repositoryId } = {}) {
   if (!token) fail('GITHUB_METADATA_CREDENTIAL_MISSING');
   const repository = releaseTargets().repository;
-  async function read(path, { bytes = false, timeoutMs = 30000 } = {}) {
+  async function read(path, { bytes = false, timeoutMs = 30000, signal } = {}) {
     if (!path.startsWith(`/repos/${repository}/`) && path !== `/repos/${repository}`) fail('GITHUB_TARGET_MISMATCH');
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30000) fail('GITHUB_READ_TIMEOUT_INVALID');
+    const requestSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
+    if (signal?.aborted) fail('GITHUB_READ_UNAVAILABLE', 'github.read');
     let response;
-    try { response = await fetchImpl(`https://api.github.com${path}`, { headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28' }, redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) }); }
+    try { response = await awaitGitHubRead(fetchImpl(`https://api.github.com${path}`, { headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28' }, redirect: 'manual', signal: requestSignal }), signal ? requestSignal : undefined); }
     catch { fail('GITHUB_READ_UNAVAILABLE', 'github.read', 'Retry this target-locked read; no provider write was attempted.'); }
     if (bytes && response.status === 302) {
       let location;
@@ -54,11 +68,12 @@ export function githubClient({ token, fetchImpl = fetch, repositoryId } = {}) {
       if (location.protocol !== 'https:' || location.username || location.password || location.port
         || !['.blob.core.windows.net', '.actions.githubusercontent.com'].some(suffix => location.hostname.endsWith(suffix))) fail('ARTIFACT_REDIRECT_INVALID');
       // GitHub's signed download URL receives no repository bearer credential.
-      try { response = await fetchImpl(location, { redirect: 'error', signal: AbortSignal.timeout(30000) }); }
+      if (signal && requestSignal.aborted) fail('GITHUB_READ_UNAVAILABLE', 'github.read');
+      try { response = await awaitGitHubRead(fetchImpl(location, { redirect: 'error', signal: signal ? requestSignal : AbortSignal.timeout(30000) }), signal ? requestSignal : undefined); }
       catch { fail('ARTIFACT_DOWNLOAD_UNAVAILABLE'); }
     }
     if (!response.ok || !bytes && response.redirected) fail(`GITHUB_READ_HTTP_${response.status}`, 'github.read');
-    let data; try { data = bytes ? Buffer.from(await response.arrayBuffer()) : await response.json(); }
+    let data; try { data = bytes ? Buffer.from(await awaitGitHubRead(response.arrayBuffer(), signal ? requestSignal : undefined)) : await awaitGitHubRead(response.json(), signal ? requestSignal : undefined); }
     catch { fail('GITHUB_RESPONSE_INVALID', 'github.read'); }
     if (bytes && data.length > 32 * 1024 * 1024) fail('ARTIFACT_TOO_LARGE');
     return data;
