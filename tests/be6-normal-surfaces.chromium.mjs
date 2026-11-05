@@ -142,6 +142,26 @@ test('real be6 Dashboard table validates selected STEM rows despite truthful una
   assert.equal(await reason('dashboard',page,1,100),hidden?'UNAVAILABLE_SURFACE':null);
  });
 });
+
+test('Dashboard selected-state read skips a redundant obstructed click while inactive selection and surface failures stay strict',async()=>{
+ await fixture({kind:'dashboard'},async page=>{
+  const tab=page.getByRole('tab',{name:'STEMs',exact:true});
+  assert.equal(await tab.getAttribute('aria-selected'),'false');
+  await compatibilityNormalOpenSurface(spec('dashboard'),page);
+  assert.equal(await tab.getAttribute('aria-selected'),'true','an inactive view still needs its normal click');
+  await page.evaluate(()=>{const cover=document.createElement('div');cover.id='local-dashboard-click-obstruction';Object.assign(cover.style,{position:'fixed',inset:'0',zIndex:'999999'});document.body.appendChild(cover);});
+  await assert.rejects(tab.click({timeout:200}),error=>error.name==='TimeoutError','the old unconditional click really cannot reach the active tab');
+  await compatibilityNormalOpenSurface(spec('dashboard'),page);
+  assert.equal(await reason('dashboard',page,1,0),null,'the actual visible business rows remain required');
+  assert.equal(await be6NormalSurfaceUnavailable(page),false);
+  await page.getByRole('tabpanel',{name:'STEMs',exact:true}).evaluate(node=>{node.style.display='none';});
+  await compatibilityNormalOpenSurface(spec('dashboard'),page);
+  assert.equal(await reason('dashboard',page,1,0),'UNAVAILABLE_SURFACE','selected state cannot substitute for a visible panel');
+  await page.evaluate(()=>document.getElementById('local-dashboard-click-obstruction').remove());
+  await tab.evaluate(node=>node.remove());page.setDefaultTimeout(200);
+  await assert.rejects(compatibilityNormalOpenSurface(spec('dashboard'),page),error=>error.name==='TimeoutError','a missing tab remains a failure');
+ });
+});
 test('real negative-value styling and read-only notices pass while visible semantic load errors fail',async()=>{
  for(const hiddenFailure of [false,true])await fixture({kind:'dashboard',failure:true,hiddenFailure},async page=>{
   await page.getByRole('heading',{name:'Dashboard',exact:true}).waitFor();await compatibilityNormalOpenSurface(spec('dashboard'),page);

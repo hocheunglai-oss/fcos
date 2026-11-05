@@ -324,7 +324,12 @@ export async function compatibilityNormalOpenSurface(spec, page) {
     await be6NormalOpenSurface(spec, page);
     if (spec.module === 'markets') return;
   }
-  if (spec.module === 'dashboard') await page.getByRole('tab', { name: 'STEMs', exact: true }).click();
+  if (spec.module === 'dashboard') {
+    const tab = page.getByRole('tab', { name: 'STEMs', exact: true });
+    // Current Dashboard routes already select STEMs. Surface/data checks below
+    // remain mandatory; selecting the active view needs no pointer action.
+    if (!isCurrentNormalSpec(spec) || await tab.getAttribute('aria-selected') !== 'true') await tab.click();
+  }
   else if (spec.module === 'xero_portal') await page.getByRole('tab', { name: 'Receipts', exact: true }).click();
   else if (spec.module === 'markets') {
     const tools = page.getByRole('button', { name: 'Market tools', exact: true });

@@ -5,6 +5,8 @@ import { join, resolve } from 'node:path';
 import { fcosSalesforceEnvironment } from '../../../config/fcosConnections.js';
 import { dependencyHash, importAcceptedNomB, loadNomBLegacyAssumptions, measureDependencyFiles, salesforceDependencySourceVerified } from './dependencies.mjs';
 import {openPreservationMembership} from './preservation-preflight.mjs';
+import {safeNomBMeasurementDiagnostic} from './nom-b-diagnostic.mjs';
+import {compareNomBPrincipalSchema, validateNomBPrincipalSchemaContract} from './nom-b-principal-schema.mjs';
 
 const keys = ['sourceSha256','harnessSha256','salesforceSourceSha256','fixtureSha256','environmentSha256'];
 const canonical = value => Array.isArray(value) ? `[${value.map(canonical).join(',')}]` : value && typeof value === 'object'
@@ -182,11 +184,21 @@ export async function measureHostedNomBInputs({ manifest, handoff, readArtifact,
   if (!renewable && !legacyBearer) return { status: 'waiting_dependency', missing: ['admitted_dedicated_devee_client_credentials_reader_setup'] };
   if (renewable && !env.FCOS_HOSTED_SALESFORCE_CLIENT_SECRET || legacyBearer && !env.FCOS_HOSTED_SALESFORCE_READ_TOKEN)
     return { status: 'waiting_dependency', missing: ['dedicated_devee_client_secret_input'] };
+  let diagnosticStage = 'RECIPE', diagnosticReadIndex, diagnosticObject;
   try {
     const devee = validateRecipe(recipe, handoff);
+    diagnosticStage = 'LEGACY_ARTIFACTS';
     const legacy = await loadNomBLegacyAssumptions({ handoff, readArtifact }), checks = validateLegacyRecipe(recipe, handoff, legacy);
+    diagnosticStage = 'SOURCE_BINDING';
     need(hash(recipeSha256) && handoff.measurementRecipeSha256 === recipeSha256 && salesforceDependencySourceVerified(manifest, handoff));
+    diagnosticStage = 'READER_SETUP';
     const reader = renewable ? createSalesforceRecipeReader({ manifest, recipe, recipeBytes, recipeSha256, env, fetchImpl, now }) : null;
+    const principalContract = manifest.dependencies?.nom_b?.principalContext;
+    if (principalContract) {
+      need(reader && renewable, 'NOM_B_PRINCIPAL_IDENTITY_REQUIRED');
+      validateNomBPrincipalSchemaContract(principalContract, { readerBinding: renewable, originalRecipeSha256: recipeSha256 });
+    }
+    const rawSchemas = [];
     const get = async path => {
       need(path.startsWith('/services/')); const url = `${devee.instanceUrl}${path}`;
       const response = await fetchImpl(url, { method: 'GET', redirect: 'error', headers: { authorization: `Bearer ${env.FCOS_HOSTED_SALESFORCE_READ_TOKEN}`, accept: 'application/json' }, signal: AbortSignal.timeout(20000) });
@@ -202,6 +214,7 @@ export async function measureHostedNomBInputs({ manifest, handoff, readArtifact,
       } else bytes = Buffer.from(await response.arrayBuffer());
       need(bytes.length <= 4 * 1024 * 1024); return JSON.parse(bytes.toString());
     };
+    diagnosticStage = 'READER_ADMISSION';
     if (reader) await reader.admit();
     else {
       const info = await get('/services/oauth2/userinfo');
@@ -216,26 +229,46 @@ export async function measureHostedNomBInputs({ manifest, handoff, readArtifact,
     const roots = { candidate: candidateDirectory, controller: controllerDirectory, setup: setupDirectory }, observed = [];
     for (const observation of recipe.observations) {
       const files = [];
+      diagnosticStage = 'FILES'; diagnosticReadIndex = undefined; diagnosticObject = undefined;
       for (const file of observation.files) {
         need(roots[file.root]); const measured = measureDependencyFiles({ directory: resolve(roots[file.root]), paths: [file.path] }).rows[0];
         need(measured.sha256 === file.sha256); files.push({ root: file.root, ...measured });
       }
       const reads = [];
       for (const read of observation.reads) {
-        const value = reader ? await reader.readRecipe(readIndex++) : await get(salesforceRecipePath(read, recipe.apiVersion));
+        diagnosticStage = 'METADATA_READ'; diagnosticReadIndex = readIndex; diagnosticObject = read.object;
+        const rawValue = reader ? await reader.readRecipe(readIndex) : await get(salesforceRecipePath(read, recipe.apiVersion));
+        readIndex++;
+        diagnosticStage = 'METADATA_VALIDATION';
+        let value = rawValue;
+        if (principalContract && read.kind === 'describe') {
+          const compared = compareNomBPrincipalSchema({ contract: principalContract, readerBinding: renewable,
+            originalRecipeSha256: recipeSha256, originalDescriptor: legacy.schema[read.object], currentDescriptor: rawValue });
+          // This labelled comparison view alone enters the unchanged historical
+          // equality/fingerprint checks. The actual parsed response stays intact.
+          value = compared.legacyComparableDescriptor;
+          rawSchemas.push({ readIndex: diagnosticReadIndex, object: read.object, descriptor: compared.currentDescriptor,
+            currentDescriptorSha256: compared.currentDescriptorSha256, comparisonSha256: compared.comparisonSha256 });
+          need(Buffer.byteLength(canonical(rawSchemas)) <= 4 * 1024 * 1024, 'NOM_B_SCHEMA_DATA_LIMIT');
+        }
         if (read.kind === 'query') need(value.done === true && !value.nextRecordsUrl && Array.isArray(value.records)
           && value.records.length < read.limit && value.totalSize === value.records.length);
         checks.get(read)(value);
         reads.push({ recipe: read, sha256: dependencyHash(value) });
       }
+      diagnosticStage = 'OBSERVATION_FINGERPRINT';
       const sha256 = dependencyHash({ files, reads }); need(sha256 === observation.expectedSha256); observed.push({ input: observation.input, sha256 });
     }
+    diagnosticStage = 'RECEIPT'; diagnosticReadIndex = undefined; diagnosticObject = undefined;
     const receipt = { schemaVersion: 1, kind: 'fcos_nom_b_readonly_measurements', recipeSha256, capturedAt: new Date(now()).toISOString(),
       candidateSalesforceSourceSha256: handoff.candidateSalesforceSourceSha256, legacyInputsSha256: dependencyHash(legacy.inputs),
       identitySha256: dependencyHash({ orgId: devee.orgId, username: devee.username, userId: recipe.userId, profileId: recipe.profileId, isSandbox: true }), observations: observed };
     if (reader) receipt.authentication = { kind: renewable.kind, credentialBindingSha256: dependencyHash(renewable), permissionObservation: await reader.admit() };
+    if (principalContract) receipt.principalSchema = { schemaVersion: 1, kind: 'fcos_nom_b_fixed_reader_schema_observations_v1',
+      contractSha256: dependencyHash(principalContract), readerBindingSha256: dependencyHash(renewable), rawSchemas };
     return { readOnly: true, capturedAt: receipt.capturedAt, inputs: { ...handoff.relevantInputs }, receipt };
-  } catch { const error = new Error('NOM_B_READONLY_REVALIDATION_REQUIRED'); error.code = error.message; throw error; }
+  } catch (cause) { const error = new Error('NOM_B_READONLY_REVALIDATION_REQUIRED'); error.code = error.message;
+    error.nomBMeasurementDiagnostic = safeNomBMeasurementDiagnostic({ stage: diagnosticStage, cause: cause?.code, readIndex: diagnosticReadIndex, object: diagnosticObject }); throw error; }
 }
 
 export function validateNomBMeasurementReceipt({ receipt, recipe, recipeSha256, handoff, manifest, legacy, job }) {
@@ -255,6 +288,27 @@ export function validateNomBMeasurementReceipt({ receipt, recipe, recipeSha256, 
     && within(receipt.capturedAt, job.started_at, job.completed_at) && Array.isArray(receipt.observations)
     && canonical(receipt.observations) === canonical(recipe.observations.map(row => ({ input: row.input, sha256: row.expectedSha256 })))
     && receipt.identitySha256 === dependencyHash({ orgId: recipe.orgId, username: recipe.username, userId: recipe.userId, profileId: recipe.profileId, isSandbox: true }));
+  const principalContract = manifest.dependencies?.nom_b?.principalContext;
+  if (principalContract) {
+    const binding = manifest.verification?.salesforceReadCredential;
+    validateNomBPrincipalSchemaContract(principalContract, { readerBinding: binding, originalRecipeSha256: recipeSha256 });
+    const observation = receipt.principalSchema;
+    need(exact(observation, ['schemaVersion','kind','contractSha256','readerBindingSha256','rawSchemas'])
+      && observation.schemaVersion === 1 && observation.kind === 'fcos_nom_b_fixed_reader_schema_observations_v1'
+      && observation.contractSha256 === dependencyHash(principalContract) && observation.readerBindingSha256 === dependencyHash(binding)
+      && Array.isArray(observation.rawSchemas) && observation.rawSchemas.length === 3
+      && Buffer.byteLength(canonical(observation.rawSchemas)) <= 4 * 1024 * 1024);
+    const descriptors = recipe.observations.flatMap(row => row.reads).map((read, readIndex) => ({ read, readIndex })).filter(row => row.read.kind === 'describe');
+    need(descriptors.length === 3);
+    for (const [index, { read, readIndex }] of descriptors.entries()) {
+      const row = observation.rawSchemas[index];
+      need(exact(row, ['readIndex','object','descriptor','currentDescriptorSha256','comparisonSha256'])
+        && row.readIndex === readIndex && row.object === read.object);
+      const compared = compareNomBPrincipalSchema({ contract: principalContract, readerBinding: binding,
+        originalRecipeSha256: recipeSha256, originalDescriptor: legacy.schema[read.object], currentDescriptor: row.descriptor });
+      need(row.currentDescriptorSha256 === compared.currentDescriptorSha256 && row.comparisonSha256 === compared.comparisonSha256);
+    }
+  } else need(!Object.hasOwn(receipt, 'principalSchema'));
   return { readOnly: true, capturedAt: receipt.capturedAt, inputs: { ...handoff.relevantInputs } };
 }
 

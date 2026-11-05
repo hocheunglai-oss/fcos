@@ -273,11 +273,12 @@ jobs:
           FCOS_HOSTED_SCHEMA_DATABASE_URL: ${{ secrets.FCOS_HOSTED_SCHEMA_DATABASE_URL }}
           FCOS_HOSTED_FCUNO_READ_TOKEN: ${{ secrets.FCOS_HOSTED_FCUNO_READ_TOKEN }}
   preview:
-    if: ${{ needs.prepare.outputs.terminal != 'true' }}
+    if: ${{ always() && !cancelled() && needs.prepare.result == 'success' && needs.reconcile.result == 'success' && needs.prepare.outputs.terminal == 'false' && (needs.prepare.outputs.dependencies_required == 'false' || (needs.prepare.outputs.dependencies_required == 'true' && needs.dependencies_before.result == 'success' && needs.dependencies_before.outputs.dependency_status == 'passed')) }}
     name: preview
     needs:
       - prepare
       - reconcile
+      - dependencies_before
     runs-on: ubuntu-24.04
     container:
       image: ghcr.io/hocheunglai-oss/fcos-release-checks@sha256:1cb176a00c6224f94a668f76de51186e2d0b3cd95d631af4289467451caf40ef
@@ -483,6 +484,8 @@ jobs:
       contents: read
       actions: read
     timeout-minutes: 15
+    outputs:
+      dependency_status: ${{ steps.run.outputs.dependency_status }}
     env:
       FCOS_ADMITTED_RELEASE_SETUP: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP }}
       FCOS_ADMITTED_RELEASE_SETUP_SHA256: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP_SHA256 }}
@@ -533,6 +536,7 @@ jobs:
           FCOS_HOSTED_DEPENDENCY_SETUP_DIRECTORY: dependency-setup
           FCOS_HOSTED_DEPENDENCY_SETUP_OPENED_DIRECTORY: dependency-setup-opened
       - name: Run admitted checks
+        id: run
         run: node controller/scripts/hosted-release-dependencies.mjs
         env:
           GITHUB_TOKEN: ${{ github.token }}

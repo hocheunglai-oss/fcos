@@ -1,9 +1,10 @@
-import { readFileSync, realpathSync, writeFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, readFileSync, realpathSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { collectFinancialPreservation, dependencyHash, importAcceptedNomB } from './lib/hosted-release/dependencies.mjs';
 import { loadDependencySetup, measureHostedNomBInputs } from './lib/hosted-release/dependency-publisher.mjs';
 import { safeDiagnosticFailure } from './lib/hosted-release/failure.mjs';
+import { safeNomBMeasurementDiagnostic } from './lib/hosted-release/nom-b-diagnostic.mjs';
 
 const permittedCredentials = new Set(['GITHUB_TOKEN','FCOS_HOSTED_GITHUB_READ_TOKEN','FCOS_HOSTED_SALESFORCE_READ_TOKEN','FCOS_HOSTED_SALESFORCE_CLIENT_SECRET']);
 function requireProducerEnvironment(env) {
@@ -14,6 +15,18 @@ function requireProducerEnvironment(env) {
 }
 const waiting = (checkId, missing) => ({ status: 'waiting_dependency', checkId, missing });
 const safeError = checkId => ({ status: 'failed', checkId, code: `${checkId.toUpperCase()}_DEPENDENCY_REVALIDATION_REQUIRED` });
+
+// A successful raw-producer process can retain a partial failure. Downstream
+// resource admission must use the validated report outcome, not its exit code.
+export function dependencyWorkflowStatus(report) {
+  const rows = report?.checks;
+  if (!Array.isArray(rows) || rows.length !== 2 || new Set(rows.map(row => row?.checkId)).size !== 2
+    || !['nom_b', 'preservation'].every(id => rows.some(row => row?.checkId === id))
+    || rows.some(row => !['passed', 'failed', 'waiting_dependency'].includes(row?.status))) return 'failed';
+  const status = rows.some(row => row.status === 'failed') ? 'failed'
+    : rows.some(row => row.status === 'waiting_dependency') ? 'waiting_dependency' : 'passed';
+  return report.status === status ? status : 'failed';
+}
 
 export function hostedDependencyEntrypointFailure(error) {
   const diagnostic = safeDiagnosticFailure(error);
@@ -53,7 +66,8 @@ export async function hostedDependencies({ env = process.env, sessionFactory, re
         nomBMeasurement = measured.receipt;
         checks.push(await importAcceptedNomB({ manifest, ...setup.nomB, measureInputs: async () => measured, now }));
       }
-    } catch { checks.push(safeError('nom_b')); }
+    } catch (error) { checks.push({ ...safeError('nom_b'), ...(error?.nomBMeasurementDiagnostic
+      ? { diagnostic: safeNomBMeasurementDiagnostic(error.nomBMeasurementDiagnostic) } : {}) }); }
   }
   if (setup.preservationMissing) checks.push(waiting('preservation', setup.preservationMissing));
   else {
@@ -70,6 +84,7 @@ if (process.argv[1] && realpathSync(resolve(process.argv[1])) === realpathSync(f
   hostedDependencies().then(report => {
     const file = resolve(process.env.FCOS_RELEASE_OUTPUT || 'dependencies.json'); mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
+    if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `dependency_status=${dependencyWorkflowStatus(report)}\n`);
     console.log(JSON.stringify({ status: report.status, missing: report.checks.filter(row => row.status === 'waiting_dependency').flatMap(row => row.missing) }));
     // Partial successful raw evidence is independently published; readiness remains closed.
   }).catch(error => { console.error(JSON.stringify(hostedDependencyEntrypointFailure(error))); process.exitCode = 1; });

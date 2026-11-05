@@ -12,6 +12,7 @@ import { nomBFixture } from './fixtures/hosted-nom-b.mjs';
 import { collectFinancialPreservation, dependencyHash } from '../scripts/lib/hosted-release/dependencies.mjs';
 import {sealPreservationMembership} from '../scripts/lib/hosted-release/preservation-preflight.mjs';
 import { hostedDependencies } from '../scripts/hosted-release-dependencies.mjs';
+import { NOM_B_PRINCIPAL_SCHEMA_KIND } from '../scripts/lib/hosted-release/nom-b-principal-schema.mjs';
 import { loadDependencySetup, measureHostedNomBInputs, NOM_B_LEGACY_HISTORY, publishDependencies, validateNomBMeasurementReceipt } from '../scripts/lib/hosted-release/dependency-publisher.mjs';
 
 const H = 'a'.repeat(64), S = 'b'.repeat(40), now = Date.parse('2026-10-17T03:00:00Z');
@@ -68,6 +69,23 @@ test('GET-only recipe measures actual files, org/user/profile and bounded metada
   assert.ok(f.calls.every(call => call.options.method === 'GET' && call.url.startsWith(`${f.recipe.origin}/services/`) && call.options.redirect === 'error'));
   assert.deepEqual(validateNomBMeasurementReceipt({ ...f, receipt: measured.receipt, job: { started_at: new Date(now - 1000).toISOString(), completed_at: new Date(now + 1000).toISOString() } }).inputs, measured.inputs);
   assert.ok(!JSON.stringify(measured).includes('private-read-token')); assert.ok(!JSON.stringify(measured).includes('reviewed body'));
+});
+
+test('Nom B failed metadata retains the exact bounded boundary and stops later reads', async t => {
+  const f = await recipeFixture(t), original = f.fetchImpl;
+  f.fetchImpl = async (url, options) => {
+    const response = await original(url, options);
+    if (!decodeURIComponent(url).includes(' FROM ApexClass ')) return response;
+    const body = await response.json(); body.records[0].Body = 'private-source-change';
+    return new Response(JSON.stringify(body), { status: 200 });
+  };
+  await assert.rejects(measureHostedNomBInputs(f), error => {
+    assert.equal(error.code, 'NOM_B_READONLY_REVALIDATION_REQUIRED');
+    assert.deepEqual(error.nomBMeasurementDiagnostic, { stage: 'METADATA_VALIDATION', cause: 'DEPENDENCY_SETUP_INVALID', readIndex: 0, object: 'ApexClass' });
+    assert.doesNotMatch(JSON.stringify(error.nomBMeasurementDiagnostic), /private-source-change/);
+    return true;
+  });
+  assert.equal(f.calls.length, 4, 'identity and the first failing metadata read only; no later recipe request');
 });
 test('NomB recipe missing credential waits; malicious queries, identity/metadata/file drift cannot yield fingerprints', async t => {
   assert.equal((await measureHostedNomBInputs({ ...await recipeFixture(t), env: {} })).status, 'waiting_dependency');
@@ -172,6 +190,25 @@ test('actual producer entrypoint collects preservation with no OIDC, retains pen
   await assert.rejects(hostedDependencies({ ...f, env: { ...f.env, ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'forbidden' } }), { code: 'DEPENDENCY_PRODUCER_CREDENTIAL_FORBIDDEN' });
   rmSync(f.file); assert.equal((await hostedDependencies(f)).status, 'waiting_dependency');
 });
+test('producer carries only the bounded Nom B failure into its retained artifact', async t => {
+  const f = preservationSetup(t), directory = temporary(t);
+  const recipeBytes = Buffer.from(JSON.stringify({ originalAcceptanceSha256: NOM_B_LEGACY_HISTORY.acceptance }));
+  const handoffBytes = Buffer.from(JSON.stringify({ artifacts: { ...NOM_B_LEGACY_HISTORY }, measurementRecipeSha256: dependencyHash(recipeBytes) }));
+  const artifactBytes = Buffer.from(JSON.stringify({ schemaVersion: 1, kind: 'fcos_immutable_dependency_artifacts', artifacts: {} }));
+  for (const [name, bytes] of [['handoff', handoffBytes], ['recipe', recipeBytes], ['artifacts', artifactBytes]]) writeFileSync(join(directory, name), bytes);
+  f.manifest.dependencies.nom_b = { handoffSha256: dependencyHash(handoffBytes), recipeSha256: dependencyHash(recipeBytes), artifactsSha256: dependencyHash(artifactBytes) };
+  Object.assign(f.env, { FCOS_RELEASE_MANIFEST: JSON.stringify(f.manifest), FCOS_HOSTED_NOM_B_HANDOFF_FILE: join(directory, 'handoff'),
+    FCOS_HOSTED_NOM_B_ARTIFACTS_FILE: join(directory, 'artifacts'), FCOS_HOSTED_NOM_B_RECIPE_FILE: join(directory, 'recipe') });
+  const report = await hostedDependencies({ ...f, measure: async () => {
+    const error = new Error('private-token-and-provider-body');
+    error.nomBMeasurementDiagnostic = { stage: 'METADATA_READ', cause: 'SALESFORCE_READ_UNAVAILABLE', readIndex: 5, object: 'Nomination__c', secret: 'private-token' };
+    throw error;
+  } });
+  assert.equal(report.status, 'failed');
+  assert.deepEqual(report.checks[0], { status: 'failed', checkId: 'nom_b', code: 'NOM_B_DEPENDENCY_REVALIDATION_REQUIRED',
+    diagnostic: { stage: 'METADATA_READ', cause: 'SALESFORCE_READ_UNAVAILABLE', readIndex: 5, object: 'Nomination__c' } });
+  assert.doesNotMatch(JSON.stringify(report), /private-token|provider-body|secret/);
+});
 test('manifest pins cannot self-authorize substituted historical acceptance or modified setup bytes', t => {
   const f = preservationSetup(t); writeFileSync(f.file, '{}'); assert.throws(() => loadDependencySetup(f));
   const directory = temporary(t), handoff = { artifacts: { ...NOM_B_LEGACY_HISTORY, acceptance: H }, measurementRecipeSha256: H };
@@ -214,10 +251,11 @@ test('historical timestamp permission is exact NomB deterministic and cannot wai
 
 test('actual CLI process writes waiting report and calls no-OIDC hosted entrypoint without executing candidate code', t => {
   const directory = temporary(t), sourceRoot = fileURLToPath(new URL('../', import.meta.url));
-  for (const relative of ['scripts/hosted-release-dependencies.mjs','scripts/lib/hosted-release/dependencies.mjs','scripts/lib/hosted-release/observer-target.mjs','scripts/lib/hosted-release/preservation-preflight.mjs','scripts/lib/hosted-release/dependency-publisher.mjs','scripts/lib/hosted-release/salesforce-read-auth.mjs','config/fcosConnections.js','config/hostedDependencyContext.js','config/hostedReleaseQualification.js','config/runtime-compatibility-successor-live.json']) {
+  for (const relative of ['scripts/hosted-release-dependencies.mjs','scripts/lib/hosted-release/dependencies.mjs','scripts/lib/hosted-release/observer-target.mjs','scripts/lib/hosted-release/preservation-preflight.mjs','scripts/lib/hosted-release/dependency-publisher.mjs','scripts/lib/hosted-release/salesforce-read-auth.mjs','scripts/lib/hosted-release/nom-b-diagnostic.mjs','scripts/lib/hosted-release/nom-b-principal-schema.mjs','config/fcosConnections.js','config/hostedDependencyContext.js','config/hostedReleaseQualification.js','config/runtime-compatibility-successor-live.json']) {
     const destination = join(directory, relative); mkdirSync(dirname(destination), { recursive: true }); copyFileSync(join(sourceRoot, relative), destination);
   }
   symlinkSync(join(sourceRoot,'scripts/lib/hosted-release/contract.mjs'),join(directory,'scripts/lib/hosted-release/contract.mjs'));
+  symlinkSync(join(sourceRoot,'scripts/lib/hosted-release/failure.mjs'),join(directory,'scripts/lib/hosted-release/failure.mjs'));
   writeFileSync(join(directory,'package.json'), JSON.stringify({ type: 'module' })); symlinkSync(join(sourceRoot,'node_modules'),join(directory,'node_modules'));
   writeFileSync(join(directory,'scripts/lib/hosted-release/session.mjs'), `import {writeFileSync} from 'node:fs'; export const readManifest=JSON.parse; export async function hostedSession(options){writeFileSync(process.env.FCOS_TEST_SESSION_FILE,JSON.stringify({requireOidc:options.requireOidc,jobName:options.jobName}));return{admission:{}};}`);
   mkdirSync(join(directory,'candidate')); const canary=join(directory,'executed');
@@ -255,6 +293,64 @@ test('incomplete or former privileged reader setup waits and does not exchange a
   const result=await measureHostedNomBInputs({...f,env:auth.env,fetchImpl:auth.fetchImpl,recipeBytes:auth.recipeBytes});
   assert.deepEqual(result,{status:'waiting_dependency',missing:['admitted_business_data_read_only_devee_client_credentials_reader_setup']});
   assert.equal(auth.calls.length,0);
+});
+
+async function principalFixture(t) {
+  const schemaDescriptors = Object.fromEntries(['Nomination__c','STEM__c','ContentVersion'].map(name => [name, {
+    name, createable: true, updateable: true, deletable: name !== 'ContentVersion', undeletable: name !== 'ContentVersion',
+    fields: [{ name: 'Id', type: 'id', createable: false, updateable: false }, { name: 'Name', type: 'string', length: 80, createable: true, updateable: true }],
+    childRelationships: [], recordTypeInfos: [{ name: 'Master', available: true }],
+  }]));
+  const f = await recipeFixture(t, { schemaDescriptors }), auth = salesforceReaderFixture({ recipe: f.recipe, manifest: f.manifest });
+  const keys = ['orgId','username','userId','profileId','instanceUrl','isSandbox','apiVersion'];
+  f.manifest.dependencies.nom_b.principalContext = { schemaVersion: 1, kind: NOM_B_PRINCIPAL_SCHEMA_KIND,
+    readerIdentity: Object.fromEntries(keys.map(key => [key, auth.binding[key]])), originalRecipeSha256: f.recipeSha256, permissionRecipeSha256: auth.binding.permissionRecipeSha256 };
+  const refreshSetup = () => {
+    auth.setup.dependencies = f.manifest.dependencies; f.manifest.setupSha256 = dependencyHash(auth.setup);
+    auth.env.FCOS_ADMITTED_RELEASE_SETUP = JSON.stringify(auth.setup); auth.env.FCOS_ADMITTED_RELEASE_SETUP_SHA256 = dependencyHash(auth.setup);
+  };
+  refreshSetup();
+  for (const schema of Object.values(f.schemas)) {
+    for (const key of ['createable','updateable','deletable','undeletable']) schema[key] = false;
+    schema.fields[1].updateable = false;
+  }
+  const fetched = [], legacyFetch = f.fetchImpl;
+  const fetchImpl = async (url, options) => {
+    fetched.push({ url, method: options.method });
+    return options.method === 'POST' || url.endsWith('/userinfo') || url.includes('Organization%20LIMIT') || url.includes('/sobjects/User/')
+      || url.includes('/sobjects/Profile/') || url.includes('/sobjects/UserLicense/') || auth.permissionIntrospection.paths.some(path => url === `${auth.binding.instanceUrl}${path}`)
+      ? auth.fetchImpl(url, options) : legacyFetch(url, options);
+  };
+  return { f, auth, fetched, refreshSetup, measure: () => measureHostedNomBInputs({ ...f, env: auth.env, fetchImpl, now: auth.now, recipeBytes: auth.recipeBytes }) };
+}
+
+test('explicit principal contract preserves actual read-only schemas and historical comparison without additional requests', async t => {
+  const { f, auth, fetched, measure } = await principalFixture(t), measured = await measure();
+  assert.equal(fetched.length, 30); assert.equal(fetched.filter(row => row.method === 'POST').length, 1);
+  assert.deepEqual(measured.inputs, f.handoff.relevantInputs);
+  assert.equal(measured.receipt.principalSchema.rawSchemas.length, 3);
+  for (const row of measured.receipt.principalSchema.rawSchemas) {
+    assert.equal(row.descriptor.createable, false); assert.equal(row.descriptor.fields[1].updateable, false);
+    assert.equal(f.legacy.schema[row.object].createable, true, 'retained admin history stays untouched');
+  }
+  const job = { started_at: new Date(auth.now() - 1000).toISOString(), completed_at: new Date(auth.now() + 1000).toISOString() };
+  validateNomBMeasurementReceipt({ ...f, receipt: measured.receipt, job });
+  for (const mutate of [r => { delete r.principalSchema; }, r => { r.principalSchema.rawSchemas.reverse(); },
+    r => { r.principalSchema.rawSchemas[0].descriptor.fields[1].length = 81; }, r => { r.principalSchema.rawSchemas[0].descriptor.createable = true; },
+    r => { r.principalSchema.readerBindingSha256 = 'f'.repeat(64); }, r => { r.principalSchema.rawSchemas[0].comparisonSha256 = 'f'.repeat(64); },
+    r => { delete r.authentication.permissionObservation; }]) {
+    const changed = structuredClone(measured.receipt); mutate(changed); assert.throws(() => validateNomBMeasurementReceipt({ ...f, receipt: changed, job }));
+  }
+});
+
+test('principal comparison is never an implicit opt-in or a bypass for schema drift', async t => {
+  const missing = await principalFixture(t); delete missing.f.manifest.dependencies.nom_b.principalContext; missing.refreshSetup();
+  await assert.rejects(missing.measure(), { code: 'NOM_B_READONLY_REVALIDATION_REQUIRED' });
+  const changed = await principalFixture(t); changed.f.schemas.Nomination__c.fields[1].length = 81;
+  await assert.rejects(changed.measure(), error => error.nomBMeasurementDiagnostic.cause === 'NOM_B_SCHEMA_STRUCTURE_CHANGED'
+    && error.nomBMeasurementDiagnostic.stage === 'METADATA_VALIDATION' && error.nomBMeasurementDiagnostic.object === 'Nomination__c');
+  const wrong = await principalFixture(t); wrong.f.manifest.dependencies.nom_b.principalContext.permissionRecipeSha256 = 'f'.repeat(64); wrong.refreshSetup();
+  await assert.rejects(wrong.measure(), { code: 'NOM_B_READONLY_REVALIDATION_REQUIRED' }); assert.equal(wrong.fetched.length, 0);
 });
 test('dedicated reader cannot replace original fixture or weaken permission-sensitive frozen describes',async t=>{
   for(const mutate of [f=>{f.responses.User[0].ProfileId='00e000000000001AAA';},f=>{f.schemas.Nomination__c.createable=false;}]){
