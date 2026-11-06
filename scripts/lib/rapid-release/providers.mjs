@@ -5,6 +5,14 @@ import { nativeCompatibilityReader } from './compatibility.mjs';
 import { DeploymentJournal } from './journal.mjs';
 import { assertAuthorization, digest, requireCondition, targets } from './contract.mjs';
 
+export const nativeWorkflowPath = run => String(run?.path || '').split('@')[0];
+export function assertNativeQualityProducer(run, jobs, manifest) {
+  requireCondition(run.head_sha === manifest.controllerSha && run.event === 'workflow_dispatch' && run.status === 'completed'
+    && nativeWorkflowPath(run) === '.github/workflows/fcos-rapid-release.yml' && run.actor?.login === targets().account
+    && new RegExp(`^FCOS rapid (qualify|release|resume) ${digest(manifest)} ${manifest.candidate.sha}$`).test(run.display_title || '')
+    && jobs.jobs?.some(job => job.name === 'quality' && job.conclusion === 'success'), 'PRIOR_NATIVE_QUALITY_REQUIRED');
+}
+
 export function githubClient({ token, candidateSha, requiredContexts = [], fetchImpl = fetch, actions = process.env.GITHUB_ACTIONS === 'true' } = {}) {
   requireCondition(typeof token === 'string' && token.length > 10 && !/\s/.test(token), 'GITHUB_CREDENTIAL_REQUIRED');
   async function request(path, body) {
@@ -38,7 +46,7 @@ export async function verifyExecution({ github, manifest, env = process.env, pha
   const { user, repo } = await github.identity();
   const run = await github.read(`/repos/${targets().repository}/actions/runs/${env.GITHUB_RUN_ID}`);
   requireCondition(run.head_sha === manifest.controllerSha && run.repository?.full_name === targets().repository
-    && run.event === 'workflow_dispatch' && run.path === '.github/workflows/fcos-rapid-release.yml'
+    && run.event === 'workflow_dispatch' && nativeWorkflowPath(run) === '.github/workflows/fcos-rapid-release.yml'
     && run.status === 'in_progress' && run.head_branch === repo.default_branch && run.actor?.login === targets().account
     && Number.isSafeInteger(run.run_attempt) && run.run_attempt >= 1
     && new RegExp(`^FCOS rapid (release|resume) ${digest(manifest)} ${manifest.candidate.sha}$`).test(run.display_title || ''), 'WORKFLOW_IDENTITY_MISMATCH');
@@ -56,7 +64,7 @@ export async function verifyExecution({ github, manifest, env = process.env, pha
   const setupRun = await github.read(`/repos/${targets().repository}/actions/runs/${p.nativeReview?.runId}`);
   const setupJobs = await github.read(`/repos/${targets().repository}/actions/runs/${setupRun.id}/jobs?per_page=100`);
   const setupReviews = await github.read(`/repos/${targets().repository}/actions/runs/${setupRun.id}/approvals`);
-  requireCondition(setupRun.head_sha === manifest.controllerSha && setupRun.path === '.github/workflows/fcos-rapid-handover.yml'
+  requireCondition(setupRun.head_sha === manifest.controllerSha && nativeWorkflowPath(setupRun) === '.github/workflows/fcos-rapid-handover.yml'
     && setupRun.event === 'workflow_dispatch' && setupRun.actor?.login === targets().account && setupRun.conclusion === 'success'
     && setupRun.run_attempt === 1 && setupRun.display_title === `FCOS rapid handover ${p.planHash} ${p.candidateSha}`
     && setupJobs.jobs?.some(job => job.id === p.nativeReview.jobId && job.name === 'handover-apply' && job.conclusion === 'success')

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { artifactDigest, assertBuildArtifact, credentialFreeBuildEnvironment } from '../scripts/lib/rapid-release/build.mjs';
 import { createManifest, digest, targets } from '../scripts/lib/rapid-release/contract.mjs';
-import { githubClient, verifyExecution, nativeApproval } from '../scripts/lib/rapid-release/providers.mjs';
+import { githubClient, verifyExecution, nativeApproval, assertNativeQualityProducer } from '../scripts/lib/rapid-release/providers.mjs';
 const h = 'b'.repeat(64), sha = 'a'.repeat(40);
 function manifest() { return createManifest({candidate:{sha,sourceDigest:h,lockDigest:h},controllerSha:'c'.repeat(40),
  previous:{deploymentId:'dpl_old',sha:'d'.repeat(40),schemaDigest:h,configurationDigest:h},paths:['src/components/dashboard/Table.jsx'],
@@ -75,4 +75,12 @@ test('valid durable native approval survives a job interruption without refreshi
  f.gh.pages=async()=>[{creator:{id:1},payload:{...content,recordHash:digest(content)}}];f.run.run_attempt=2;
  const actual=await nativeApproval({github:f.gh,manifest:f.m,staged:{id:'dpl_new'},env:f.env});
  assert.equal(actual.approvedAt,approvedAt);assert.deepEqual(actual,saved);
+});
+test('successful quality survives downstream failure or cancellation; failed quality is never reused',()=>{
+ const f=nativeFixture();f.run.status='completed';f.run.path += '@main';
+ for(const conclusion of ['success','failure','cancelled','timed_out']) {
+  f.run.conclusion=conclusion;
+  assertNativeQualityProducer(f.run,{jobs:[{name:'quality',conclusion:'success'}]},f.m);
+ }
+ assert.throws(()=>assertNativeQualityProducer(f.run,{jobs:[{name:'quality',conclusion:'failure'}]},f.m),/PRIOR_NATIVE_QUALITY_REQUIRED/);
 });
