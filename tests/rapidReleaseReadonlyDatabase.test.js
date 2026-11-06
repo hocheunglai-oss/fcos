@@ -36,10 +36,11 @@ test('dedicated role grants only coordinator metadata reads and keeps financial 
 });
 test('actual native role and TLS socket qualify; JSON and writable-role drift never do',async t=>{
  const native=await setup(t),host=id('supabase','Database session host');
+ let failQualification=false;
  await native.exec(`set session authorization ${id('supabase','Database release read-only role')}`);
  class Client extends EventEmitter {
   constructor(config){super();this.config=config;const stream=new TLSSocket();stream.authorized=true;stream.servername=host;this.connection={stream};}
-  async connect(){} async query(sql,params){return native.query(sql,params);} async end(){this._ending=true;this.connection.stream.destroy();this.emit('end');}
+  async connect(){} async query(sql,params){if(failQualification&&sql.includes('r.rolname'))this.emit('error',Error('synthetic-private-value'));return native.query(sql,params);} async end(){this._ending=true;this.connection.stream.destroy();this.emit('end');}
  }
  const opened=await openPinnedReadonlyDatabase({url,caFile:'/dummy/public-ca',deps:{Client,readFile:()=>Buffer.from(PUBLIC_CA)}});
  assert.equal(isNativeReadonlyConnection(opened.connection),true);
@@ -49,6 +50,8 @@ test('actual native role and TLS socket qualify; JSON and writable-role drift ne
  assert.throws(()=>assertReadonlyDatabaseIdentity(row,{...opened.connection}),/IDENTITY_REQUIRED/);
  assert.throws(()=>assertReadonlyDatabaseIdentity(row,opened.connection,{readOnly:false}),/IDENTITY_REQUIRED/);
  await opened.db.query('ROLLBACK');await opened.db.end();assert.equal(isNativeReadonlyConnection(opened.connection),false);
+ failQualification=true;
+ await assert.rejects(openPinnedReadonlyDatabase({url,caFile:'/dummy/public-ca',deps:{Client,readFile:()=>Buffer.from(PUBLIC_CA)}}),error=>error.message==='PINNED_READONLY_DATABASE_CONNECTION_REFUSED');
 });
 test('wrong project, pooling mode and arbitrary SCRAM input refuse before any provider or credential use',async()=>{
  for(const changed of [url.replace(':5432',':6543'),url.replace('pjforfvchygdyqfcgpmw','differentproject'),`${url}?sslmode=require`])await assert.rejects(openPinnedReadonlyDatabase({url:changed,caFile:'/missing'}),/URL_REQUIRED/);

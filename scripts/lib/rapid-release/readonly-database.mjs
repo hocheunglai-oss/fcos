@@ -65,13 +65,14 @@ export async function openPinnedReadonlyDatabase({url,caFile,deps={}}) {
   const Client=deps.Client || (await import('pg')).Client;
   const db=new Client({host,port:5432,user:decodeURIComponent(parsed.username),database:'postgres',password:password.toString(),
     ssl:{ca,rejectUnauthorized:true,servername:host},connectionTimeoutMillis:10000,query_timeout:10000,application_name:'fcos-rapid-readonly'});
-  let connection;
-  const invalidate=()=>{if(connection)proof.get(connection).active=false;};db.on?.('error',invalidate);db.on?.('end',invalidate);
+  let connection,nativeFailed=false;
+  const invalidate=()=>{nativeFailed=true;if(connection)proof.get(connection).active=false;};db.on?.('error',invalidate);db.on?.('end',invalidate);
   try {
     await db.connect();check(nativeTls(db,host),'PINNED_READONLY_DATABASE_TLS_REQUIRED');
     await db.query('BEGIN READ ONLY');
     const rows=(await db.query(READONLY_DATABASE_IDENTITY_SQL)).rows,row=rows?.length===1?rows[0]:null;
     assertProfile(row);
+    check(!nativeFailed && nativeTls(db,host),'PINNED_READONLY_DATABASE_TLS_REQUIRED');
     connection=Object.freeze({host,port:5432,user:decodeURIComponent(parsed.username),database:'postgres',ssl:Object.freeze({ca,rejectUnauthorized:true})});
     proof.set(connection,{active:true,db,stream:db.connection.stream});assertReadonlyDatabaseIdentity(row,connection);
     await db.query('ROLLBACK');return {db,connection};
