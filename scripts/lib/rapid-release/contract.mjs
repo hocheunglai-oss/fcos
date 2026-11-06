@@ -79,7 +79,7 @@ export function publicBuildEnvironment(values) {
   requireCondition(values.VITE_SUPABASE_URL === `https://${targets().supabaseProject}.supabase.co`
     && Boolean(values.VITE_SUPABASE_PUBLISHABLE_KEY || values.VITE_SUPABASE_ANON_KEY), 'PUBLIC_BUILD_TARGET_MISMATCH');
   if (values.VITE_SUPABASE_PUBLISHABLE_KEY !== undefined) requireCondition(/^sb_publishable_[A-Za-z0-9_-]{20,}$/.test(values.VITE_SUPABASE_PUBLISHABLE_KEY), 'PUBLIC_SUPABASE_KEY_REQUIRED');
-  if (values.VITE_SUPABASE_ANON_KEY !== undefined) {
+  if (values.VITE_SUPABASE_ANON_KEY !== undefined && !/^sb_publishable_[A-Za-z0-9_-]{20,}$/.test(values.VITE_SUPABASE_ANON_KEY)) {
     let payload;
     try {
       requireCondition(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(values.VITE_SUPABASE_ANON_KEY), 'PUBLIC_SUPABASE_KEY_REQUIRED');
@@ -88,7 +88,7 @@ export function publicBuildEnvironment(values) {
     requireCondition(payload?.role === 'anon' && payload.ref === targets().supabaseProject && payload.iss === 'supabase'
       && Number.isSafeInteger(payload.exp) && payload.exp * 1000 > Date.now(), 'PUBLIC_SUPABASE_KEY_REQUIRED');
   }
-  return Object.freeze({ ...values });
+  return Object.freeze({ ...values, VITE_SUPABASE_ANON_KEY: values.VITE_SUPABASE_ANON_KEY || values.VITE_SUPABASE_PUBLISHABLE_KEY });
 }
 export function createManifest({ candidate, controllerSha, previous, paths, publicEnvironment, releaseId, prerequisites = null, now = new Date().toISOString() }) {
   requireCondition(isSha(controllerSha) && isSha(candidate?.sha) && isDigest(candidate.sourceDigest) && isDigest(candidate.lockDigest), 'MANIFEST_SOURCE_INVALID');
