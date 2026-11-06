@@ -60,7 +60,7 @@ function browserFixture({ badIdentity = false, badRead = false, badDenial = fals
     const emit = response => { for (const waiter of responseWaiters.splice(0)) { if (waiter.predicate(response)) waiter.resolve(response); else responseWaiters.push(waiter); } };
     const auth = () => email === ci.email ? { user: { email, user_type: 'viewer', active: true, read_only_ci: true },
       moduleAccess: { dashboard: true, markets: true, settings: false }, capabilities: { write: false } } : {
-      user: { email, user_type: badIdentity ? 'administrator' : role, active: true, read_only_ci: false },
+      user: { id: '11111111-1111-4111-8111-111111111111', email, user_type: badIdentity ? 'administrator' : role, active: true, read_only_ci: false },
       moduleAccess: { ...Object.fromEntries(APP_MODULES.map(({ id }) => [id, true])), markets: !missingModule }, capabilities: { write: false },
     };
     const apiResponse = (url, body, status = 200, request = requestOf(url, 'POST')) => ({ url: () => url, status: () => status,
@@ -301,4 +301,17 @@ test('reviewed registry has genuine response contracts and deterministic bounded
   assert.deepEqual(moduleReadBody('pnl', m), { dateWindows: [{ startDate: '2026-10-07', endDate: '2026-11-06' }], limit: 1 });
   assert.deepEqual(moduleReadBody('incoming_payments', m), { dateFrom: '2026-11-06', dateTo: '2026-11-06', limit: 100 });
   assert.deepEqual(moduleReadBody('hedge_desk', m), { action: 'snapshot' });
+});
+
+test('candidate-declared module paths must match source-reviewed desktop routes before any credentialed browser', async () => {
+  const candidate = manifest({ normalRole: true, modules: ['settings'] });
+  candidate.moduleInventory = APP_MODULES.map(({ id, path }) => ({ id, path }));
+  const fixture = browserFixture();
+  await runStagedSmoke({ manifest: candidate, staged, env, fetchImpl: publicFetch(), browserFactory: fixture.browserFactory });
+  let calls = 0; const noCall = async () => { calls++; throw Error('must not start'); };
+  for (const inventory of [candidate.moduleInventory.map(entry => entry.id === 'settings' ? { ...entry, path: '/new-settings' } : entry),
+    candidate.moduleInventory.filter(entry => entry.id !== 'settings'), [...candidate.moduleInventory, candidate.moduleInventory[0]]]) {
+    await assert.rejects(runStagedSmoke({ manifest: { ...candidate, moduleInventory: inventory }, staged, env, fetchImpl: noCall, browserFactory: noCall }), { code: 'SMOKE_MODULE_PATH_BINDING_MISMATCH' });
+  }
+  assert.equal(calls, 0);
 });

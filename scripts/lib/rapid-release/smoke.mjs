@@ -135,7 +135,8 @@ function credentialsFor(env, normal) {
 function assertIdentity(auth, credentials, normal, modules) {
   const user = auth?.user;
   requireFact(user?.active === true && String(user.email || '').toLowerCase() === credentials.email && user.user_type === credentials.role, 'SMOKE_AUTHORIZATION_IDENTITY_MISMATCH');
-  if (normal) requireFact(user.read_only_ci === false && modules.every(module => auth.moduleAccess?.[module] === true), 'NORMAL_ROLE_MODULE_COVERAGE_MISSING');
+  if (normal) requireFact(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(user.id || '')
+    && user.read_only_ci === false && modules.every(module => auth.moduleAccess?.[module] === true), 'NORMAL_ROLE_MODULE_COVERAGE_MISSING');
   else {
     const allowed = Object.entries(auth.moduleAccess || {}).filter(([, value]) => value === true).map(([module]) => module).sort();
     requireFact(user.read_only_ci === true && JSON.stringify(allowed) === JSON.stringify([...FCOS_READ_ONLY_CI.modules].sort())
@@ -357,6 +358,17 @@ export async function runStagedSmoke({ manifest, staged, env = process.env, fetc
   const normalModules = unique([...baselineModules, ...selected, ...expanded]);
   const missingModules = normalModules.filter(module => !Object.hasOwn(moduleReaders, module));
   if (missingModules.length) throw Object.assign(fail('MODULE_SAFE_READER_COVERAGE_MISSING'), { missingModules });
+  if (manifest.moduleInventory !== undefined) {
+    requireFact(Array.isArray(manifest.moduleInventory), 'SMOKE_MODULE_PATH_BINDING_MISMATCH');
+    const entries = manifest.moduleInventory;
+    requireFact(new Set(entries.map(entry => entry?.id)).size === entries.length, 'SMOKE_MODULE_PATH_BINDING_MISMATCH');
+    for (const module of normalModules) {
+      const reviewed = module === 'settings' ? ['/settings', '/settings?section=finance']
+        : [moduleReaders[module].route || MODULE_SURFACES[module]?.route];
+      requireFact(entries.some(entry => entry?.id === module && reviewed.includes(entry.path)), 'SMOKE_MODULE_PATH_BINDING_MISMATCH');
+    }
+  }
+
   requireFact([...selected, ...expanded].every(module => baselineModules.includes(module)) || manifest.selection?.normalRole === true, 'NORMAL_ROLE_COVERAGE_MISSING');
   const ci = credentialsFor(env, false);
   const normal = manifest.selection?.normalRole === true ? credentialsFor(env, true) : null;
