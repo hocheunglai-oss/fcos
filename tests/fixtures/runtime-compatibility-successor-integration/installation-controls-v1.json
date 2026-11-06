@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Historical offline tests only; original controls do not attest the current installation or grant provider authority",
+  "retainedCommit": "5d00d3983f6b8aa0beade88e98faf24ae90dc8e4",
+  "pack": {
+    "path": "installation-controls-v1.pack",
+    "count": 8,
+    "byteLength": 18744,
+    "sha256": "0ec3ae9fa1a643f76d00fc5f35c27919ed08bdbb6e375e45fe9b378f09cabe53"
+  },
+  "sources": [
+    {
+      "path": ".codex/README.md",
+      "byteLength": 3585,
+      "sha256": "837a875c100ae962b0c897ec66c81abe4003a41dd65008eb0acd1bcbc8adf680",
+      "currentSha256": "c419b279e0b9111019012dc3eb89e512631e9d30d2175cc8cca39982df9143cf",
+      "oid": "ab902718c1819822c5480e2f9c01d4a74a65f20f",
+      "type": "blob"
+    },
+    {
+      "path": ".codex/config.toml",
+      "byteLength": 3617,
+      "sha256": "dbb025f5ff350045d5537402861a95e756b6b6234f83a4b0d83353a59c0fcb26",
+      "currentSha256": "e16d0613301971e71a997fe71162c5d147a64e6e16f81e6e4cd96ead4461e099",
+      "oid": "5ff9fd7186d3b481cb3383f519485f3d4fc1d778",
+      "type": "blob"
+    },
+    {
+      "path": ".codex/control-policy.json",
+      "byteLength": 369,
+      "sha256": "dafddf956556e9a4a215555767dcb128f5dd914c1adc5229b69d995cdeb5df6c",
+      "currentSha256": "72a5991a2132a840c694b4ea38680dc6e927c285c706c48dc2dbf201ff767e5f",
+      "oid": "abca12518fc87c599ba8c02e47011816933ad861",
+      "type": "blob"
+    },
+    {
+      "path": ".codex/control-validation.mjs",
+      "byteLength": 2123,
+      "sha256": "10ee550f146920a7d6fcb4353c20f023d20136b8ce031830c6af82b6b99ff814",
+      "currentSha256": "47e10bbc5a471a91e26c0347363c35ce78af6f83388c659c2e2f63f484fc23b4",
+      "oid": "49bc7f45c16ed19290306f39951e7c8bb0933670",
+      "type": "blob"
+    },
+    {
+      "path": ".github/workflows/quality.yml",
+      "byteLength": 16008,
+      "sha256": "7f5e381a0a989f55a2c558180e3e2a399ecad7a84a77ac49d39f0c98823c67b1",
+      "currentSha256": "38d54a2ddac4b6ca9200c74b714d3ddf7684e62d92bbd4fea4ee17d8a1d715c7",
+      "oid": "3ac7f27f6494fcb3b19075d661c5388b81ddc843",
+      "type": "blob"
+    },
+    {
+      "path": "AGENTS.md",
+      "byteLength": 19716,
+      "sha256": "29de24a37631b44d909f03f989102c40a6ba4f6bcc0dd8a4abc7873d3c005d78",
+      "currentSha256": "0d2a015377a3fee11f72fa435de7665f4848bfa4d3fd5f6bf2e01b08c0d201ff",
+      "oid": "029003084002e7fd3f02f6ca887a7c034cff9312",
+      "type": "blob"
+    },
+    {
+      "path": "package.json",
+      "byteLength": 6067,
+      "sha256": "6d3aac5ae6e7285c46d0b5afaf6d3d3857787a1186909bf746687a78ee2e60f4",
+      "currentSha256": "77e97affaf09095383649b32e700b27ad0cd9d3e708538528afbe2beacc5595d",
+      "oid": "aa1c5ce06dd6b1199e290882f3da87d3ab21d6dd",
+      "type": "blob"
+    },
+    {
+      "path": "vercel.json",
+      "byteLength": 1719,
+      "sha256": "535150ca7b88c2fab4f9094ee7b0cd764711195a5d1682d7448a59b07594d68d",
+      "currentSha256": "274970eed8dfdd00c9890be08219a23e5461600ef3ca06fb005148bdf22e3a70",
+      "oid": "ada7a6ef732f8bfb21efc83754f264555bc04c6f",
+      "type": "blob"
+    }
+  ]
+}

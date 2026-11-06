@@ -122,6 +122,25 @@
       "measuredTimeSavedMs": null,
       "measuredCallsSaved": null,
       "prevention": "Expired-history, bot-copy, latest-receipt, unknown-write and disabled-guard regression cases"
+    },
+    {
+      "id": "offline-private-archive-contract",
+      "cause": "The offline historical wrapper denied reviewed local archive creation and extraction while preserving provider refusal.",
+      "correction": "Derive the complete bounded zip create and unzip list/extract contract from the unchanged archive validator; allow only exact private fixture paths and expected JSON member.",
+      "verification": {
+        "command": "node --import tests/helpers/runtimeCompatibilityHistoricalNoProviders.mjs --test-reporter=tap --test-name-pattern=\"real GitHub seconds timestamps\" tests/runtimeCompatibilitySuccessorLive.historical.mjs (exact retained offline harness)",
+        "passed": 1,
+        "total": 1,
+        "durationMs": 13259.879042,
+        "localGitCalls": 2132,
+        "providerTransportAttempts": 0,
+        "nativeProviderWrites": 0,
+        "regressionDigest": "f8685acb77e78ded62e6e06aae036ee34f6d66af5203cb03714ecae3cca832f4",
+        "fullSuiteVerified": false
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Source-derived local archive regression plus unchanged actual case13; no executable automatic repair recipe."
     }
   ]
 }

@@ -82,3 +82,20 @@ objects, source manifests, first-rollout refusals and final2f4 ordering are reta
 base metadata; original object inventory, observation bindings, packed bytes and
 non-checkout members remain identical. The helper authenticates the old v3 manifest
 hash separately and verifies the v4-to-v3 history before consuming current source.
+
+## Retained controls during rapid-controller installation
+
+`installation-controls-v1.json` and its eight-blob pack retain the exact control
+bytes from verified main `5d00d3983f6b8aa0beade88e98faf24ae90dc8e4`. The helper
+accepts this exception only for eight named installation/control paths and only
+when their current bytes match the separately pinned reviewed installation
+hashes. Any other current drift fails. All application/harness implementation
+source remains bound to the actual checkout; original manifests, source bindings,
+272-object carrier, control supplement and production validators are unchanged.
+
+The old live-admission cases execute unchanged in a disposable harness containing
+those exact historical controls and locked dependencies. Its original executing
+source guard still rejects a changed controller; the current installation is not
+represented as the historical controller or granted historical authority. Child
+failure and missing/skipped checks fail the wrapper. These are offline fixtures,
+not a native setup, real login, provider acceptance or Production qualification.
