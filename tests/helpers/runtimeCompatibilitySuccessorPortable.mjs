@@ -39,11 +39,32 @@ assert.deepEqual(installationControls.sources.map(row => row.path), [
   '.github/workflows/quality.yml', 'AGENTS.md', 'package.json', 'vercel.json',
 ]);
 assert.equal(installationControls.pack.count, 8);
-let retainedControls;
-function retainedControlBodies() {
-  if (retainedControls) return retainedControls;
-  const pack = regularFile(FIXTURE_ROOT, installationControls.pack.path);
-  assert.equal(pack.length, installationControls.pack.byteLength); assert.equal(hash(pack), installationControls.pack.sha256);
+// Append-only adaptation of the one already-bound config path changed by the
+// reviewed staging repair. This cannot substitute for current runtime checks.
+export const installationV2ManifestBytes = regularFile(FIXTURE_ROOT, 'installation-controls-v2.json');
+export function validateInstallationControlsV2(bytes, packBytes) {
+  assert.equal(hash(bytes), 'b36acc281436bc2d46c66d5c6f14a587c22525f41e4cc8af4243aa69757d13b2', 'Installation v2 supplement differs.');
+  const value = JSON.parse(bytes);
+  assert.equal(value.schemaVersion, 2);
+  assert.equal(value.previousSupplementSha256, hash(installationManifestBytes));
+  assert.equal(value.retainedCommit, installationControls.retainedCommit);
+  assert.equal(value.reviewedCurrentCommit, 'f72f619d80a91cc4de9020e9eaec7d1624aa66e9');
+  assert.equal(value.sourceBindingsSha256, BINDINGS_HASH);
+  assert.deepEqual(value.sources.map(row => row.path), ['config/fcosConnections.js']);
+  assert.equal(value.pack.path, 'installation-controls-v2.pack');
+  assert.equal(value.pack.count, 1);
+  assert.equal(packBytes.length, value.pack.byteLength, 'Installation v2 pack length differs.');
+  assert.equal(hash(packBytes), value.pack.sha256, 'Installation v2 pack differs.');
+  value.sources.forEach(Object.freeze); Object.freeze(value.sources); Object.freeze(value.pack);
+  return Object.freeze(value);
+}
+export const installationControlsV2 = validateInstallationControlsV2(installationV2ManifestBytes,
+  regularFile(FIXTURE_ROOT, 'installation-controls-v2.pack'));
+const retainedControls = new Map();
+function retainedControlBodies(controls = installationControls) {
+  if (retainedControls.has(controls)) return retainedControls.get(controls);
+  const pack = regularFile(FIXTURE_ROOT, controls.pack.path);
+  assert.equal(pack.length, controls.pack.byteLength); assert.equal(hash(pack), controls.pack.sha256);
   const temporary = fs.mkdtempSync(join(tmpdir(), 'fcos-legacy-installation-controls-'));
   const git = (args, input) => execFileSync('git', ['--no-replace-objects', ...args], { cwd: temporary, input,
     env: cleanGitEnvironment(), maxBuffer: 2 * 1024 * 1024, stdio: ['pipe','pipe','pipe'] });
@@ -51,10 +72,10 @@ function retainedControlBodies() {
     git(['-c', 'init.templateDir=', 'init', '--bare', '--quiet']);
     git(['index-pack', '--stdin'], pack);
     const objects = git(['cat-file','--batch-all-objects','--batch-check=%(objectname)']).toString().trim().split('\n').sort();
-    assert.deepEqual(objects, installationControls.sources.map(row => row.oid).sort(), 'Exact retained control objects required.');
-    const batch = git(['cat-file','--batch'], Buffer.from(installationControls.sources.map(row => row.oid).join('\n') + '\n'));
+    assert.deepEqual(objects, controls.sources.map(row => row.oid).sort(), 'Exact retained control objects required.');
+    const batch = git(['cat-file','--batch'], Buffer.from(controls.sources.map(row => row.oid).join('\n') + '\n'));
     let offset = 0; const result = new Map();
-    for (const row of installationControls.sources) {
+    for (const row of controls.sources) {
       const end = batch.indexOf(10, offset); assert.ok(end > offset);
       assert.equal(row.type, 'blob'); assert.equal(batch.subarray(offset,end).toString(), `${row.oid} blob ${row.byteLength}`);
       const body = batch.subarray(end + 1, end + 1 + row.byteLength);
@@ -62,14 +83,19 @@ function retainedControlBodies() {
       assert.equal(createHash('sha1').update(`blob ${body.length}\0`).update(body).digest('hex'), row.oid);
       result.set(row.path, Buffer.from(body)); offset = end + 1 + row.byteLength; assert.equal(batch[offset++],10);
     }
-    assert.equal(offset,batch.length); retainedControls = result; return result;
+    assert.equal(offset,batch.length); retainedControls.set(controls,result); return result;
   } finally { fs.rmSync(temporary, { recursive:true, force:true }); }
 }
 export function installationControlSource(path, current) {
-  const entry = installationControls.sources.find(row => row.path === path);
+  const controls = installationControlsV2.sources.some(row => row.path === path) ? installationControlsV2 : installationControls;
+  const entry = controls.sources.find(row => row.path === path);
   if (!entry || hash(current) === entry.sha256) { assertBoundSource(path,current); return current; }
   assert.equal(hash(current),entry.currentSha256, `Unreviewed current installation control: ${path}`);
-  const retained = retainedControlBodies().get(path); assertBoundSource(path,retained);
+  if (controls === installationControlsV2) {
+    assert.equal(current.length,entry.currentByteLength, `Current installation length differs: ${path}`);
+    assert.equal(createHash('sha1').update(`blob ${current.length}\0`).update(current).digest('hex'),entry.currentOid);
+  }
+  const retained = retainedControlBodies(controls).get(path); assertBoundSource(path,retained);
   return Buffer.from(retained);
 }
 function boundSourceFile(path) { return installationControlSource(path,regularFile(SOURCE_ROOT,path)); }
@@ -235,8 +261,8 @@ export const manifest = validatePublicManifest(manifestBytes);
 export const pack = regularFile(FIXTURE_ROOT, 'objects-v2.pack');
 assert.equal(pack.length, 552150); assert.equal(hash(pack), PACK_HASH);
 // Run before any test body or module evaluation. All source is the actual
-// repository source, with only the exact reviewed retained control supplement.
-// No historical application/module source copies replace current implementation.
+// repository source, with only the exact reviewed retained control supplements.
+// They are offline fixture inputs, never authority for the executing harness.
 validateSourceBindings();
 export function copyBoundSource(targetRoot, path, targetPath = path) {
   const bytes = boundSourceFile(path); assertBoundSource(path, bytes);

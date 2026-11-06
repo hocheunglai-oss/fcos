@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 2,
+  "purpose": "Historical offline tests only; retained config does not attest the current installation or grant provider authority",
+  "previousSupplementSha256": "264a4d0e71fbee494b1e610fa2517a443c9f073501efd23fa848d8305e0c5030",
+  "retainedCommit": "5d00d3983f6b8aa0beade88e98faf24ae90dc8e4",
+  "reviewedCurrentCommit": "f72f619d80a91cc4de9020e9eaec7d1624aa66e9",
+  "reviewedCurrentCommitMeaning": "Byte provenance only; exact current and retained hashes are enforced independently of checkout history",
+  "sourceBindingsSha256": "75207edeeba173c6bee65c72a74ced848da8c8c13d8b476ffda7d8074621fceb",
+  "pack": {
+    "path": "installation-controls-v2.pack",
+    "count": 1,
+    "byteLength": 6221,
+    "sha256": "7655c0476badf7938032201ce6f3e0647d524cc741cea78adb5d6e7b093eb815"
+  },
+  "sources": [
+    {
+      "path": "config/fcosConnections.js",
+      "byteLength": 25771,
+      "sha256": "dc3afb39699837151f16243f592a84c3dd293670a5174a11d2dac7144e3eede9",
+      "currentByteLength": 26039,
+      "currentSha256": "5ecb6242bc502d7c85316c862494ca2ed1e9d9aa5515fbfce89ae7f2ecb8271f",
+      "currentOid": "216ceac4bbd61305da79c9b8cf18b4599c721f42",
+      "oid": "5020325a7d7891b80c2dbd6b32377fcf002a94fa",
+      "type": "blob"
+    }
+  ]
+}
