@@ -44,9 +44,10 @@ function managedRole(facts) {
   return facts?.login_role === LOGIN_ROLE && facts.can_login === true
     && ['is_superuser', 'inherits', 'creates_roles', 'creates_databases', 'replicates', 'bypasses_rls'].every(key => facts[key] === false)
     && Array.isArray(facts.memberships) && facts.memberships.length === 1
-    && facts.memberships[0].role === 'postgres' && facts.memberships[0].grantor === 'supabase_admin'
+    && facts.memberships[0]?.role === 'postgres' && facts.memberships[0].grantor === 'supabase_admin'
     && facts.memberships[0].set === true && facts.memberships[0].inherit === false && facts.memberships[0].admin === false;
 }
+export { managedRole as isManagedDatabaseRole };
 
 function nativeTls(db, host) {
   const stream = db?.connection?.stream;
