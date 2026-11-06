@@ -43,6 +43,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
+          ref: ${{ fromJSON(inputs.plan_json).controllerSha }}
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
@@ -66,7 +67,7 @@ jobs:
           import {handoverDigest} from './scripts/lib/rapid-release/handover.mjs';
           import {requireCondition} from './scripts/lib/rapid-release/contract.mjs';
           const plan=JSON.parse(process.env.PLAN_JSON);
-          requireCondition(handoverDigest(plan)===process.env.PLAN_HASH && plan.candidateSha===process.env.CANDIDATE_SHA && plan.controllerSha===process.env.GITHUB_SHA,'HANDOVER_SOURCE_BINDING');
+          requireCondition(handoverDigest(plan)===process.env.PLAN_HASH && plan.candidateSha===process.env.CANDIDATE_SHA,'HANDOVER_SOURCE_BINDING');
           fs.writeFileSync('handover-plan.json',JSON.stringify(plan));
           NODE
           node scripts/rapid-release-artifact.mjs artifact

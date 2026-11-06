@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { artifactDigest, assertBuildArtifact, credentialFreeBuildEnvironment } from '../scripts/lib/rapid-release/build.mjs';
 import { createManifest, digest, targets } from '../scripts/lib/rapid-release/contract.mjs';
-import { githubClient, verifyExecution, nativeApproval, vercelProvider, assertNativeQualityProducer } from '../scripts/lib/rapid-release/providers.mjs';
+import { githubClient, verifyExecution, nativeApproval, vercelProvider, assertNativeQualityProducer, assertFrozenWorkflow } from '../scripts/lib/rapid-release/providers.mjs';
 const h = 'b'.repeat(64), sha = 'a'.repeat(40);
 function manifest() { return createManifest({candidate:{sha,sourceDigest:h,lockDigest:h},controllerSha:'c'.repeat(40),
  previous:{deploymentId:'dpl_old',sha:'d'.repeat(40),schemaDigest:h,configurationDigest:h},paths:['src/components/dashboard/Table.jsx'],
@@ -33,17 +33,19 @@ test('self-contained prebuilt references are bound; traversal/external reference
 });
 function nativeFixture() {
  const m=manifest(),p=targets(),review={state:'approved',user:{login:p.account},environments:[{id:9,name:'fcos-production-release'}]};
- const setup={kind:'fcos_rapid_release_handover',controllerSha:m.controllerSha,candidateSha:sha,repository:p.repository,projectId:p.projectId,teamId:p.teamId,
+ const plan={controllerSha:m.controllerSha,candidateSha:sha,handoverId:'native-fixture'};
+ const setup={plan,attestationContract:'fcos-owner-recorded-handover/v1',qualificationPublisher:{account:p.account,method:'protected_controller_api'},handoverId:'native-fixture',databaseReceiptId:1,qualificationDigest:h,kind:'fcos_rapid_release_handover',controllerSha:m.controllerSha,candidateSha:sha,repository:p.repository,projectId:p.projectId,teamId:p.teamId,
  unresolvedProductionOperations:0,oldWritersRetired:true,hostedQualificationPassed:true,eventSubscribersReviewed:true,inventoryDigest:h,nativeCoordinatorReadbackDigest:h,
- finalApprovalEnvironment:'fcos-production-release',planHash:h,nativeReview:{runId:77,jobId:78,reviewDigest:digest(review)}};
- const run={id:88,head_sha:m.controllerSha,repository:{full_name:p.repository},event:'workflow_dispatch',path:'.github/workflows/fcos-rapid-release.yml',status:'in_progress',head_branch:'main',actor:{login:p.account},run_attempt:1,display_title:`FCOS rapid release ${digest(m)} ${sha}`,created_at:new Date().toISOString()};
+ finalApprovalEnvironment:'fcos-production-release',planHash:digest(plan),nativeReview:{runId:77,jobId:78,reviewDigest:digest(review),planHash:digest(plan),reviewer:p.account,reviewerId:7,state:'approved',environment:'fcos-production-release',environmentId:9,protectionDigest:h,dispatcherSha:m.controllerSha,workflowPath:'.github/workflows/fcos-rapid-handover.yml',workflowBlobSha:'e'.repeat(40),observedAt:new Date().toISOString()}};
+ const run={id:88,head_sha:m.controllerSha,repository:{full_name:p.repository},event:'workflow_dispatch',path:'.github/workflows/fcos-rapid-release.yml',status:'in_progress',head_branch:'main',actor:{login:p.account,id:7},run_attempt:1,display_title:`FCOS rapid release ${digest(m)} ${sha}`,created_at:new Date().toISOString()};
  const environment={id:9,name:'fcos-production-release',can_admins_bypass:false,protection_rules:[{type:'required_reviewers',reviewers:[{reviewer:{login:p.account}}]}]};
  const gh={pages:async()=>[],identity:async()=>({user:{login:'github-actions[bot]',id:1},repo:{default_branch:'main'}}),read:async path=>{
+  if(path.includes('/contents/.github/workflows/'))return{type:'file',sha:'e'.repeat(40)};
   if(path.endsWith('/FCOS_RAPID_RELEASE_ENABLED'))return{value:'true'};
   if(path.endsWith('/FCOS_RAPID_RELEASE_HANDOVER_ID'))return{value:'100'};
-  if(path.endsWith('/deployments/100'))return{creator:{login:'github-actions[bot]'},payload:setup};
+  if(path.endsWith('/deployments/100'))return{id:100,creator:{login:p.account},payload:setup};
   if(path.endsWith('/runs/88'))return run;
-  if(path.endsWith('/runs/77'))return{id:77,head_sha:m.controllerSha,path:'.github/workflows/fcos-rapid-handover.yml',event:'workflow_dispatch',actor:{login:p.account},conclusion:'success',run_attempt:1,display_title:`FCOS rapid handover ${h} ${sha}`};
+  if(path.endsWith('/runs/77'))return{id:77,head_sha:m.controllerSha,path:'.github/workflows/fcos-rapid-handover.yml',event:'workflow_dispatch',actor:{login:p.account},conclusion:'success',run_attempt:1,display_title:`FCOS rapid handover ${setup.planHash} ${sha}`};
   if(path.includes('/runs/77/jobs'))return{jobs:[{id:78,name:'handover-apply',conclusion:'success'}]};
   if(path.includes('/runs/88/jobs'))return{jobs:[{name:'go-live',status:'in_progress',started_at:new Date().toISOString()}]};
   if(path.endsWith('/approvals'))return[review];
@@ -52,10 +54,10 @@ function nativeFixture() {
  }};
  return{m,gh,run,setup,env:{GITHUB_ACTIONS:'true',GITHUB_RUN_ID:'88',GITHUB_REPOSITORY:p.repository,GITHUB_SHA:m.controllerSha}};
 }
-test('native admission requires real matching successful setup run and exact current manifest',async()=>{
+test('native admission requires durable owner-recorded qualification and exact current manifest',async()=>{
  const f=nativeFixture();await verifyExecution({github:f.gh,manifest:f.m,env:f.env,phase:'stage'});
- f.setup.nativeReview.reviewDigest='0'.repeat(64);
- await assert.rejects(verifyExecution({github:f.gh,manifest:f.m,env:f.env,phase:'stage'}),/NATIVE_HANDOVER_QUALIFICATION_REQUIRED/);
+ f.setup.nativeReview.reviewer='unapproved-publisher';
+ await assert.rejects(verifyExecution({github:f.gh,manifest:f.m,env:f.env,phase:'stage'}),/PERMANENT_HANDOVER_ATTESTATION_REQUIRED/);
 });
 test('rerun cannot renew old review and elapsed approval window is preserved',async()=>{
  const f=nativeFixture();f.run.run_attempt=2;
@@ -76,13 +78,14 @@ test('valid durable native approval survives a job interruption without refreshi
  const actual=await nativeApproval({github:f.gh,manifest:f.m,staged:{id:'dpl_new'},env:f.env});
  assert.equal(actual.approvedAt,approvedAt);assert.deepEqual(actual,saved);
 });
-test('successful quality survives downstream failure or cancellation; failed quality is never reused',()=>{
+test('successful quality survives downstream failure or cancellation; failed quality is never reused',async()=>{
  const f=nativeFixture();f.run.status='completed';f.run.path += '@main';
+ const proof=await assertFrozenWorkflow({github:f.gh,controllerSha:f.m.controllerSha,dispatcherSha:f.run.head_sha});
  for(const conclusion of ['success','failure','cancelled','timed_out']) {
   f.run.conclusion=conclusion;
-  assertNativeQualityProducer(f.run,{jobs:[{name:'quality',conclusion:'success'}]},f.m);
+  assertNativeQualityProducer(f.run,{jobs:[{name:'quality',conclusion:'success'}]},f.m,proof);
  }
- assert.throws(()=>assertNativeQualityProducer(f.run,{jobs:[{name:'quality',conclusion:'failure'}]},f.m),/PRIOR_NATIVE_QUALITY_REQUIRED/);
+ assert.throws(()=>assertNativeQualityProducer(f.run,{jobs:[{name:'quality',conclusion:'failure'}]},f.m,proof),/PRIOR_NATIVE_QUALITY_REQUIRED/);
 });
 
 test('Vercel target pins default only for absent or empty overrides; explicit mismatches fail closed',async()=>{
@@ -112,5 +115,20 @@ test('stage uses existing governed secret slots without moving private values or
 
 test('activation of a newer controller immediately fences the previous controller source', async()=>{
  const f=nativeFixture(); f.setup.controllerSha='e'.repeat(40);
- await assert.rejects(verifyExecution({github:f.gh,manifest:f.m,env:f.env,phase:'stage'}),/QUALIFIED_HANDOVER_REQUIRED/);
+ await assert.rejects(verifyExecution({github:f.gh,manifest:f.m,env:f.env,phase:'stage'}),/PERMANENT_HANDOVER_ATTESTATION_REQUIRED/);
+});
+
+test('expired setup Actions history is unnecessary; a bot copy cannot replace the owner receipt',async()=>{
+ const f=nativeFixture(),original=f.gh.read;let historicalReads=0;
+ f.gh.read=async path=>{if(/\/runs\/77(?:\/|$)/.test(path)){historicalReads++;throw Error('historical run expired');}return original(path);};
+ await verifyExecution({github:f.gh,manifest:f.m,env:f.env,phase:'stage'});assert.equal(historicalReads,0);
+ f.gh.read=async path=>path.endsWith('/deployments/100')?{id:100,creator:{login:'github-actions[bot]'},payload:f.setup}:original(path);
+ await assert.rejects(verifyExecution({github:f.gh,manifest:f.m,env:f.env,phase:'stage'}),/PERMANENT_HANDOVER_ATTESTATION_REQUIRED/);
+});
+
+test('ordinary dispatcher source changes reuse frozen controller only with identical admitted workflow bytes',async()=>{
+ const f=nativeFixture();f.run.head_sha='f'.repeat(40);f.env.GITHUB_SHA=f.run.head_sha;
+ await verifyExecution({github:f.gh,manifest:f.m,env:f.env,phase:'stage'});
+ const original=f.gh.read;f.gh.read=async path=>path.includes('/contents/')&&path.endsWith('f'.repeat(40))?{type:'file',sha:'9'.repeat(40)}:original(path);
+ await assert.rejects(verifyExecution({github:f.gh,manifest:f.m,env:f.env,phase:'stage'}),/DISPATCHER_WORKFLOW_CHANGED/);
 });
