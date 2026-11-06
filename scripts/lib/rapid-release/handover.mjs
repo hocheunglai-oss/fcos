@@ -13,6 +13,40 @@ export const OLD_RELEASE_WORKFLOWS = Object.freeze(['production-release.yml','ro
 const controlColumns = ['bootstrap_id','epoch','mode','operation_id','plan_completion_id','recovery_id','singleton','source_upgrade_id'];
 const guardSql = readFileSync(new URL('../../rapid-release/handover-guard.sql', import.meta.url), 'utf8');
 
+
+// Human-observed native configuration, explicitly reviewed as part of the exact
+// protected handover plan. This is never labelled as API-verified app inventory.
+export function validateAdministratorApplicationInventory(report, { now = Date.now() } = {}) {
+  const pins = handoverPins(), exact = (value, keys) => value && typeof value === 'object' && !Array.isArray(value)
+    && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
+  check(exact(report, ['schemaVersion','mode','account','repository','collectedAt','scope','source','evidenceDigest','entries'])
+    && report.schemaVersion === 1 && report.mode === 'administrator-reviewed-native' && report.account === pins.account
+    && report.repository === pins.repository && report.scope === 'all_repository_installations'
+    && report.source === 'github_repository_settings_and_configure_pages' && digest(report.evidenceDigest), 'HANDOVER_COMPLETE_ADMIN_APP_REPORT_REQUIRED');
+  const collected = Date.parse(report.collectedAt);
+  check(Number.isFinite(now) && Number.isFinite(collected) && new Date(collected).toISOString() === report.collectedAt
+    && now >= collected && now - collected <= 86400000, 'HANDOVER_ADMIN_APP_REPORT_EXPIRED');
+  check(Array.isArray(report.entries) && report.entries.length > 0 && report.entries.length <= 1000, 'HANDOVER_COMPLETE_ADMIN_APP_REPORT_REQUIRED');
+  const seen = new Set(), label = value => typeof value === 'string' && /^[a-z][a-z0-9_]{0,80}$/.test(value);
+  const entries = report.entries.map(entry => {
+    check(exact(entry, ['installationId','appId','name','events','permissions','repositoryScope','configurationState','disposition','evidenceDigest'])
+      && Number.isSafeInteger(entry.installationId) && entry.installationId > 0 && !seen.has(entry.installationId)
+      && Number.isSafeInteger(entry.appId) && entry.appId > 0 && typeof entry.name === 'string' && /^[A-Za-z0-9][A-Za-z0-9 ._()-]{0,99}$/.test(entry.name || '')
+      && ['current','suspended'].includes(entry.configurationState) && ['read-only','reviewed-nonconflicting','retired'].includes(entry.disposition)
+      && digest(entry.evidenceDigest), 'HANDOVER_ADMIN_APP_CONFIGURATION_UNVERIFIED');
+    check(entry.disposition === 'retired' ? entry.configurationState === 'suspended' : entry.configurationState === 'current', 'HANDOVER_ADMIN_APP_CONFIGURATION_UNVERIFIED');
+    seen.add(entry.installationId);
+    check(Array.isArray(entry.events) && entry.events.every(label) && new Set(entry.events).size === entry.events.length
+      && entry.permissions && Object.getPrototypeOf(entry.permissions) === Object.prototype && Object.keys(entry.permissions).length > 0
+      && Object.entries(entry.permissions).every(([name,value]) => label(name) && ['read','write'].includes(value))
+      && exact(entry.repositoryScope, ['selection','repository']) && ['all','selected'].includes(entry.repositoryScope.selection)
+      && entry.repositoryScope.repository === pins.repository, 'HANDOVER_ADMIN_APP_CONFIGURATION_UNVERIFIED');
+    check(entry.disposition !== 'read-only' || Object.values(entry.permissions).every(value => value === 'read'), 'HANDOVER_ADMIN_APP_DISPOSITION_CONFLICT');
+    return { ...entry, events: [...entry.events].sort(), permissions: Object.fromEntries(Object.entries(entry.permissions).sort()), repositoryScope: { ...entry.repositoryScope } };
+  }).sort((a,b) => a.installationId - b.installationId);
+  return { ...report, entries };
+}
+
 export function assertHandoverConnection(connection) {
   const pins = handoverPins();
   check(connection?.host === `db.${pins.projectRef}.supabase.co` && connection.port === 5432 && connection.user === 'postgres'
@@ -58,20 +92,25 @@ async function externalAudit({ github, vercel }) {
   check(typeof github.eventSubscribers === 'function', 'HANDOVER_DEPLOYMENT_SUBSCRIBER_INVENTORY_REQUIRED');
   const subscribers = await github.eventSubscribers();
   check(Array.isArray(subscribers?.inventory) && digest(subscribers.evidenceDigest), 'HANDOVER_DEPLOYMENT_SUBSCRIBER_INVENTORY_REQUIRED');
-  return { variables, workflows, subscribersDigest: handoverDigest(subscribers), productionId: production.id, retired: Object.values(variables).every(value => value !== 'true')
+  return { variables, workflows, subscribersDigest: handoverDigest(subscribers),
+    ...(subscribers.applicationInventory ? { applicationInventoryReportDigest: subscribers.applicationInventory.reportDigest } : {}), productionId: production.id, retired: Object.values(variables).every(value => value !== 'true')
     && Object.values(workflows).every(row => row.state === 'absent' || row.state.startsWith('disabled')), noRunning: Object.values(workflows).every(row => row.running.length === 0) };
 }
 export async function auditHandover({ db, connection, github, vercel }) {
   assertHandoverConnection(connection);
   return { database: await transaction(db, true, () => snapshot(db)), providers: await externalAudit({ github, vercel }) };
 }
-export function createHandoverPlan({ audit, controllerSha, candidateSha, buildId, artifactDigest, handoverId }) {
+export function createHandoverPlan({ audit, controllerSha, candidateSha, buildId, artifactDigest, handoverId, applicationInventoryReport, now = Date.now() }) {
   check(sha(controllerSha) && sha(candidateSha) && digest(buildId) && digest(artifactDigest) && /^[a-z0-9-]{8,96}$/.test(handoverId), 'HANDOVER_PLAN_INVALID');
+  const report = applicationInventoryReport ? validateAdministratorApplicationInventory(applicationInventoryReport, { now }) : null;
+  check(!audit.providers.applicationInventoryReportDigest || report && handoverDigest(report) === audit.providers.applicationInventoryReportDigest, 'HANDOVER_ADMIN_APP_REPORT_BINDING_REQUIRED');
+  check(!report || handoverDigest(report) === audit.providers.applicationInventoryReportDigest, 'HANDOVER_ADMIN_APP_REPORT_BINDING_REQUIRED');
   const c = audit.database.control;
   check(c.mode === 'qualification' && c.singleton === true && Number.isSafeInteger(Number(c.epoch)) && Number(c.epoch) > 0
     && controlColumns.filter(key => key.endsWith('_id')).every(key => c[key] === null) && !audit.database.unresolvedProduction.length && audit.providers.noRunning, 'HANDOVER_QUIESCENT_QUALIFICATION_REQUIRED');
   return { schemaVersion: 1, kind: 'fcos_rapid_handover_plan', handoverId, controllerSha, candidateSha, buildId, artifactDigest,
     pins: handoverPins(), controlPreimage: c, historyDigest: audit.database.historyDigest, oldInventoryDigest: handoverDigest(audit.providers),
+    ...(report ? { applicationInventoryReport: report } : {}),
     previousProductionId: audit.providers.productionId, subscribersDigest: audit.providers.subscribersDigest, guardSqlDigest: handoverDigest(guardSql), financialAuthority: false };
 }
 async function nativeReview(github, plan, phase) {
@@ -108,7 +147,10 @@ export async function applyHandover({ phase, plan, db, connection, github, verce
     && sha(plan.controllerSha) && sha(plan.candidateSha) && digest(plan.buildId) && digest(plan.artifactDigest)
     && plan.controlPreimage?.mode === 'qualification' && controlColumns.filter(key => key.endsWith('_id')).every(key => plan.controlPreimage[key] === null)
     && canonical(plan.pins) === canonical(handoverPins()) && plan.financialAuthority === false && plan.guardSqlDigest === handoverDigest(guardSql), 'HANDOVER_PLAN_TARGET_MISMATCH');
+  if (plan.applicationInventoryReport) validateAdministratorApplicationInventory(plan.applicationInventoryReport);
   const planHash = handoverDigest(plan), review = await nativeReview(github, plan, phase), external = await externalAudit({ github, vercel });
+  check(!external.applicationInventoryReportDigest || plan.applicationInventoryReport
+    && handoverDigest(validateAdministratorApplicationInventory(plan.applicationInventoryReport)) === external.applicationInventoryReportDigest, 'HANDOVER_ADMIN_APP_REPORT_BINDING_REQUIRED');
   check(external.noRunning && external.productionId === plan.previousProductionId, 'HANDOVER_OLD_WRITER_RUNNING_OR_PRODUCTION_MOVED');
   let qualification = null;
   if (phase === 'finalize') {

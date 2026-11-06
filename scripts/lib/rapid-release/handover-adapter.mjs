@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { handoverDigest, handoverPins, OLD_RELEASE_VARIABLES, OLD_RELEASE_WORKFLOWS } from './handover.mjs';
+import { handoverDigest, handoverPins, validateAdministratorApplicationInventory, OLD_RELEASE_VARIABLES, OLD_RELEASE_WORKFLOWS } from './handover.mjs';
 import { digest, requireCondition, validateManifest } from './contract.mjs';
 import { githubClient, vercelProvider } from './providers.mjs';
 import { DeploymentJournal } from './journal.mjs';
@@ -8,12 +8,29 @@ import { stageRelease } from './engine.mjs';
 import { runStagedSmoke } from './smoke.mjs';
 import { qualifyDownloadedArtifact } from '../../rapid-release-artifact.mjs';
 
-export async function createHandoverAdapter({ plan, env = process.env } = {}) {
+
+export async function collectReviewedEventSubscribers({ pages, applicationInventoryReport, now = Date.now() }) {
+  const pins = handoverPins(), base = `/repos/${pins.repository}`;
+  const report = validateAdministratorApplicationInventory(applicationInventoryReport, { now });
+  const [workflows, hooks] = await Promise.all([pages(`${base}/actions/workflows`), pages(`${base}/hooks`)]);
+  const inventory = [
+    ...workflows.map(item => ({ kind: 'workflow', path: item.path, id: item.id })),
+    ...hooks.map(item => ({ kind: 'hook', id: item.id, active: item.active, events: item.events?.slice().sort(), host: new URL(item.config.url).hostname })),
+    ...report.entries.map(item => ({ kind: 'installation', ...item })),
+  ].sort((a,b) => String(a.kind + (a.id || a.installationId)).localeCompare(String(b.kind + (b.id || b.installationId))));
+  return { inventory, evidenceDigest: handoverDigest(inventory), applicationInventory: {
+    mode: report.mode, reportDigest: handoverDigest(report), collectedAt: report.collectedAt, evidenceDigest: report.evidenceDigest,
+    provenance: 'administrator-observed-native-settings', apiVerified: false } };
+}
+
+export async function createHandoverAdapter({ plan, env = process.env, applicationInventoryReport } = {}) {
   const pins = handoverPins(), token = env.FCOS_RAPID_HANDOVER_GITHUB_TOKEN;
   const base = `/repos/${pins.repository}`;
+  const appReport = validateAdministratorApplicationInventory(plan?.applicationInventoryReport || applicationInventoryReport
+    || (env.FCOS_HANDOVER_APP_INVENTORY_REPORT ? JSON.parse(readFileSync(resolve(env.FCOS_HANDOVER_APP_INVENTORY_REPORT), 'utf8')) : null));
   requireCondition(token && env.GITHUB_REPOSITORY === pins.repository, 'HANDOVER_GITHUB_CREDENTIAL_REQUIRED');
   async function request(path, method = 'GET', body) {
-    requireCondition(path === '/user' || path === '/user/installations' || /^\/user\/installations\/[1-9][0-9]*\/repositories(?:\?|$)/.test(path) || path.startsWith(`${base}/`) || path === base, 'HANDOVER_GITHUB_TARGET_MISMATCH');
+    requireCondition(path === '/user' || path.startsWith(`${base}/`) || path === base, 'HANDOVER_GITHUB_TARGET_MISMATCH');
     const response = await fetch(`https://api.github.com${path}`, { method, redirect: 'error',
       headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'content-type': 'application/json', 'X-GitHub-Api-Version': '2022-11-28' },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(20000) });
@@ -25,7 +42,7 @@ export async function createHandoverAdapter({ plan, env = process.env } = {}) {
     const all = [];
     for (let page = 1; page <= 100; page++) {
       const response = await request(`${path}${path.includes('?') ? '&' : '?'}per_page=100&page=${page}`);
-      const rows = Array.isArray(response) ? response : response.workflow_runs || response.workflows || response.installations || response.repositories;
+      const rows = Array.isArray(response) ? response : response.workflow_runs || response.workflows;
       requireCondition(Array.isArray(rows), 'HANDOVER_NATIVE_PAGE_INVALID'); all.push(...rows);
       if (rows.length < 100) return all;
     }
@@ -53,28 +70,13 @@ export async function createHandoverAdapter({ plan, env = process.env } = {}) {
     },
     async verifyNativePlan({ plan: p, planHash, run, job }) {
       const repository = await request(base);
+      requireCondition(p.applicationInventoryReport && handoverDigest(validateAdministratorApplicationInventory(p.applicationInventoryReport)) === handoverDigest(appReport), 'HANDOVER_ADMIN_APP_REPORT_BINDING_REQUIRED');
       requireCondition(run.head_branch === repository.default_branch && run.run_attempt === 1 && job.name === 'handover-apply'
         && run.display_title === `FCOS rapid handover ${planHash} ${p.candidateSha}` && env.GITHUB_SHA === p.controllerSha
         && digest(manifest) === env.FCOS_HANDOVER_MANIFEST_HASH && manifest.controllerSha === p.controllerSha
         && manifest.candidate.sha === p.candidateSha && manifest.build.buildId === p.buildId, 'HANDOVER_EXACT_NATIVE_PLAN_REQUIRED');
     },
-    async eventSubscribers() {
-      const workflows = await pages(`${base}/actions/workflows`), hooks = await pages(`${base}/hooks`);
-      // Admin scope is required: absence of hook/application visibility is a dependency, not empty inventory.
-      const visibleInstallations = await pages('/user/installations');
-      const installations = [];
-      for (const item of visibleInstallations) {
-        if (item.account?.login !== pins.account) continue;
-        const repositories = await pages(`/user/installations/${item.id}/repositories`);
-        if (repositories.some(repository => repository.full_name === pins.repository)) installations.push(item);
-      }
-      const inventory = [
-        ...workflows.map(item => ({ kind: 'workflow', path: item.path, id: item.id })),
-        ...hooks.map(item => ({ kind: 'hook', id: item.id, active: item.active, events: item.events?.slice().sort(), host: new URL(item.config.url).hostname })),
-        ...installations.map(item => ({ kind: 'installation', id: item.id, appId: item.app_id, events: item.events?.slice().sort(), permissions: item.permissions })),
-      ].sort((a, b) => String(a.kind + a.id).localeCompare(String(b.kind + b.id)));
-      return { inventory, evidenceDigest: handoverDigest(inventory) };
-    },
+    eventSubscribers: () => collectReviewedEventSubscribers({ pages, applicationInventoryReport: appReport }),
     qualification: async () => { requireCondition(stagedQualification, 'HANDOVER_QUALIFICATION_NOT_RUN'); return stagedQualification; },
     async findDeployment({ planHash, kind }) {
       const records = await pages(`${base}/deployments?environment=fcos-rapid-handover`);
