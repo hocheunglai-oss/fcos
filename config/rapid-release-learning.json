@@ -141,6 +141,34 @@
       "measuredTimeSavedMs": null,
       "measuredCallsSaved": null,
       "prevention": "Source-derived local archive regression plus unchanged actual case13; no executable automatic repair recipe."
+    },
+    {
+      "id": "staged-durable-oauth-refresh",
+      "cause": "Staging request restrictions did not guard Salesforce and Google refresh-token grants.",
+      "correction": "Reject both durable refresh grants inside the provider helpers before their first provider call.",
+      "verification": {
+        "command": "node --test tests/stagedCredentialRefresh.test.js",
+        "passed": 2,
+        "providerCalls": 0,
+        "regressionDigest": "4eec77e8f6b049769684155b8a41ac64f5385b18fa0262751559620818fd8a40"
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Focused zero-call regression for each provider; nonrotating Salesforce JWT authentication stays separately governed."
+    },
+    {
+      "id": "handover-precredential-source-admission",
+      "cause": "Initial handover workflow selected the credentialed controller checkout directly from plan input.",
+      "correction": "Verify installed protected-main ancestry, exact plan hash, native source quality and both frozen workflow blobs before checkout.",
+      "verification": {
+        "command": "node --test tests/rapidReleaseHandoverWorkflow.test.js tests/rapidReleaseWorkflow.test.js",
+        "passed": 4,
+        "providerCalls": 0,
+        "regressionDigest": "8450dac13d2c558fbda3e6030134d86695dae0b82e82e0385b71f18a512ca687"
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Changed workflow, failed quality and divergent source cannot emit an admitted checkout SHA."
     }
   ]
 }
