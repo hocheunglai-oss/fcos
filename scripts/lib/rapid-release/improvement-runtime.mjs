@@ -48,7 +48,10 @@ export async function releaseObstacleInputs({ manifest, controllerDirectory }) {
     && manifest.targets.projectId === fcosConnectionIdentifier('vercel', 'Project ID')
     && manifest.targets.teamId === fcosConnectionIdentifier('vercel', 'Team ID')
     && manifest.targets.origin === new URL(FCOS_CONNECTION_POLICY.attestation.endpoint).origin, 'IMPROVEMENT_TARGET_MISMATCH');
-  return { source: digest(manifest), controller: digest(code), environment: digest({ targets: manifest.targets, publicConfiguration: manifest.build?.publicEnvironment || {} }),
+  // Release IDs/timestamps are execution identity, not source preconditions. Native
+  // readback below still binds each original operation to its complete manifest.
+  return { source: digest({ candidate: manifest.candidate, paths: manifest.paths, selection: manifest.selection,
+    prerequisites: manifest.prerequisites || null }), controller: digest(code), environment: digest({ targets: manifest.targets, publicConfiguration: manifest.build?.publicEnvironment || {} }),
     tools: digest({ node: process.version,
       cliPins: FCOS_CONNECTION_POLICY.providers.map(provider => ({ provider: provider.id, version: provider.cliVersion })) }) };
 }
