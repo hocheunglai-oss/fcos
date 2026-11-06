@@ -227,10 +227,10 @@ test('owner-attested failed dispatch is labelled separately, linked to original 
 test('real PostgreSQL control lock serializes handover preparation against a new successor claim', {skip:!existsSync('/opt/homebrew/bin/initdb')}, async()=>{
   const {Client}=createRequire(import.meta.url)('pg');
   const out=join(process.cwd(),'outputs');mkdirSync(out,{recursive:true});const root=mkdtempSync(join(out,'p-')),data=join(root,'d'),socket=join(out,'s');mkdirSync(socket,{mode:0o700});
-  const port=55449;let started=false,a,b,f;
+  const port=55449,pgEnvironment={...process.env,LC_ALL:'C',LANG:'C'};let started=false,a,b,f;
   try{
-    execFileSync('/opt/homebrew/bin/initdb',['-D',data,'--no-locale','-A','trust','-U','postgres'],{stdio:'pipe'});
-    execFileSync('/opt/homebrew/bin/pg_ctl',['-D',data,'-l',join(root,'server.log'),'-o',`-c listen_addresses='' -c unix_socket_directories=${socket} -p ${port}`,'-w','start'],{stdio:'pipe'});started=true;
+    execFileSync('/opt/homebrew/bin/initdb',['-D',data,'--no-locale','-A','trust','-U','postgres'],{stdio:'pipe',env:pgEnvironment});
+    execFileSync('/opt/homebrew/bin/pg_ctl',['-D',data,'-l',join(root,'server.log'),'-o',`-c listen_addresses='' -c unix_socket_directories=${socket} -p ${port}`,'-w','start'],{stdio:'pipe',env:pgEnvironment});started=true;
     a=new Client({host:socket,port,user:'postgres',database:'postgres'});b=new Client({host:socket,port,user:'postgres',database:'postgres'});await a.connect();await b.connect();
     f=await successorFixture({pg:{exec:async sql=>[await a.query(sql)],query:(...args)=>a.query(...args),close:async()=>{}}});
     await b.query('create table fcos_release_coordination.rapid_handover_receipts(receipt_id bigint,handover_id text,phase text)');
@@ -257,8 +257,20 @@ test('real PostgreSQL control lock serializes handover preparation against a new
     const abortContext=ownerAbort(f,nextContext);const races=await Promise.allSettled([abortBootstrapSuccessor(abortContext),submitBootstrapSuccessor({...second,successorPlan:next})]);
     assert.ok(races.some(r=>r.status==='fulfilled'));assert.ok(f.creates<=2,'Abort vs intent cannot create twice');
     const phase=JSON.parse(f.commits.get(f.head).message).phase;if(phase==='aborted')assert.equal(f.creates,1,'Abort winner forbids the original provider POST');
-    assert.match(execFileSync('/opt/homebrew/bin/postgres',['--version'],{encoding:'utf8'}),/17\./);
-  }catch(error){if(!started&&existsSync(join(root,'server.log')))throw new Error(readFileSync(join(root,'server.log'),'utf8'));throw error;}finally{if(f)await f.close();await a?.end();await b?.end();if(started)execFileSync('/opt/homebrew/bin/pg_ctl',['-D',data,'-m','immediate','-w','stop'],{stdio:'pipe'});rmSync(root,{recursive:true,force:true});rmSync(socket,{recursive:true,force:true});}
+    assert.match(execFileSync('/opt/homebrew/bin/postgres',['--version'],{encoding:'utf8',env:pgEnvironment}),/17\./);
+  }catch(error){if(!started&&existsSync(join(root,'server.log')))throw new Error(readFileSync(join(root,'server.log'),'utf8'));throw error;}finally{
+    try{if(f)await f.close();}finally{
+      await Promise.allSettled([a?.end(),b?.end()]);
+      // pg_ctl can lose its acknowledgement after the server starts. Check only
+      // this freshly created cluster, and never remove a potentially live one.
+      if(started||existsSync(join(data,'postmaster.pid'))){let running;
+        try{execFileSync('/opt/homebrew/bin/pg_ctl',['-D',data,'status'],{stdio:'pipe',env:pgEnvironment});running=true;}
+        catch(error){if(error.status!==3)throw error;running=false;}
+        if(running)execFileSync('/opt/homebrew/bin/pg_ctl',['-D',data,'-m','immediate','-w','stop'],{stdio:'pipe',env:pgEnvironment});
+      }
+      rmSync(root,{recursive:true,force:true});rmSync(socket,{recursive:true,force:true});
+    }
+  }
 });
 
 
