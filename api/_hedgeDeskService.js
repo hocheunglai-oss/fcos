@@ -1,6 +1,8 @@
 import { isAllowedAiSelection } from './_aiModelRouting.js';
 import { createHash } from 'node:crypto';
 import { isReadOnlyCiProfile, requireReadOnlyCiOperation } from './_readOnlyCiAccess.js';
+import { isDeploymentReadOnly, requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
+import { isReadOnlyHedgeDeskAction } from './_deploymentReadActions.js';
 import { richTextPlainLength, sanitizeRichText } from './_richText.js';
 import {
   calcSwapFees,
@@ -671,7 +673,9 @@ async function loadMopsMonthVerifications(client, mops) {
 }
 
 export async function loadHedgeDeskSnapshot({ client, capabilities }) {
-  const expiryAutomation = await reconcilePaperHedgeExpiry(client);
+  const expiryAutomation = isDeploymentReadOnly()
+    ? { status: 'not_run', reason: 'deployment_read_only', readOnly: true }
+    : await reconcilePaperHedgeExpiry(client);
   const entries = await Promise.all(SNAPSHOT_ENTITIES.map(async ([key, entity, limit]) => [
     key,
     await listRows(client, entity, configFor(entity), { limit }),
@@ -692,6 +696,9 @@ export async function loadHedgeDeskSnapshot({ client, capabilities }) {
 }
 
 export async function handleHedgeDeskEntity(body, profile, { client, capabilities }) {
+  const readAction = isReadOnlyHedgeDeskAction(body);
+  requireReadOnlyCiOperation(profile, 'hedgeDeskEntity', body, { mutation: !readAction });
+  requireDeploymentMutationAllowed(!readAction);
   const action = String(body?.action || 'list');
   if (action === 'snapshot') return loadHedgeDeskSnapshot({ client, capabilities });
   if (action === 'brokerSettlementUpdate') return saveBrokerSettlement(client, profile, capabilities, body);
@@ -819,9 +826,11 @@ export async function handleHedgeMarkets(body, profile, { client, capabilities }
   requireReadOnlyCiOperation(profile, 'hedgeMarkets', body);
   const action = String(body?.action || 'snapshot');
   if (action === 'snapshot') {
-    const expiryAutomation = isReadOnlyCiProfile(profile)
-      ? { status: 'not_run', reason: 'read_only_identity' }
-      : await reconcilePaperHedgeExpiry(client);
+    const expiryAutomation = isDeploymentReadOnly()
+      ? { status: 'not_run', reason: 'deployment_read_only', readOnly: true }
+      : isReadOnlyCiProfile(profile)
+        ? { status: 'not_run', reason: 'read_only_identity' }
+        : await reconcilePaperHedgeExpiry(client);
     const [mops, settingsResult, marketIntelligence] = await Promise.all([
       listRows(client, 'MopsPrice', configFor('MopsPrice'), { limit: 2000 }),
       client.from('hedge_settings').select('id,key,value,revision,created_date,updated_date').in('key', ['general', 'fwd_spreads']),
