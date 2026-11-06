@@ -108,7 +108,7 @@ jobs:
           node --input-type=module -e 'import fs from "node:fs";fs.writeFileSync(process.env.FCOS_HANDOVER_DATABASE_CA,process.env.HANDOVER_CA,{mode:0o600})'
           node scripts/rapid-release-handover.mjs perform --plan handover-plan.json --adapter scripts/lib/rapid-release/handover-adapter.mjs
         env:
-          FCOS_RAPID_HANDOVER_GITHUB_TOKEN: ${{ secrets.FCOS_RAPID_HANDOVER_GITHUB_TOKEN }}
+          FCOS_RAPID_HANDOVER_GITHUB_TOKEN: ${{ secrets.FCOS_RAPID_HANDOVER_GITHUB_TOKEN || secrets.FCOS_RELEASE_GH_TOKEN }}
           FCOS_HANDOVER_DATABASE_URL: ${{ secrets.FCOS_RAPID_HANDOVER_DATABASE_URL }}
           FCOS_RAPID_SUPABASE_ACCESS_TOKEN: ${{ secrets.FCOS_RAPID_SUPABASE_ACCESS_TOKEN }}
           FCOS_HANDOVER_DATABASE_CA: ${{ runner.temp }}/rapid-database-ca.pem
