@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
-import { auditHandover, applyHandover, performHandover, createHandoverPlan, handoverDigest, handoverPins, OLD_RELEASE_WORKFLOWS, assertHandoverConnection, assertHandoverActivation } from '../scripts/lib/rapid-release/handover.mjs';
+import { auditHandover, applyHandover, performHandover, createHandoverPlan, handoverDigest, handoverPins, OLD_RELEASE_WORKFLOWS, assertHandoverConnection, assertHandoverDatabaseIdentity, assertHandoverActivation } from '../scripts/lib/rapid-release/handover.mjs';
 import { verifyNativeHandoverDatabase } from '../scripts/lib/rapid-release/compatibility.mjs';
+import { dummyDelegation } from './helpers/rapidDatabaseDelegationFixture.mjs';
 
 const { PGlite } = createRequire(import.meta.url)('@electric-sql/pglite');
 const pins = handoverPins();
@@ -81,6 +82,24 @@ test('read-only audit pins target and preserves actual non-Production unknowns',
     f.subscriberAvailable = false;
     await assert.rejects(auditHandover(f), /SUBSCRIBER_SCOPE_MISSING/);
   } finally { await f.db.close(); }
+});
+
+test('handover admits only factory-proven native delegation and preserves real CLI session identity', async () => {
+  const f = await fixture();
+  let delegated;
+  try {
+    delegated = await (await dummyDelegation(f.db)).open();
+    const input = { ...f, ...delegated };
+    const audit = await auditHandover(input);
+    assert.equal(audit.database.preservedOtherUnknowns.count, 1);
+    await applyHandover({ ...input, plan: f.plan, phase: 'prepare' });
+    const row = (await delegated.db.query("select session_user,current_user,current_database() as database,current_setting('transaction_read_only') as read_only")).rows[0];
+    assert.equal(row.session_user, 'cli_login_postgres');
+    assert.equal(row.current_user, 'postgres');
+    assert.equal(assertHandoverDatabaseIdentity(row, delegated.connection, { readOnly: false }), row);
+    assert.throws(() => assertHandoverConnection({ ...delegated.connection }), /PINNED_TLS/);
+    assert.throws(() => assertHandoverDatabaseIdentity(row, f.connection, { readOnly: false }), /DATABASE_IDENTITY_MISMATCH/);
+  } finally { if (delegated) await delegated.db.end(); await f.db.close(); }
 });
 
 test('provider admission requires the current finalized private receipt, unchanged freeze and guard, and no unknown writes',async()=>{

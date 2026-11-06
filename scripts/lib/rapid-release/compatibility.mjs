@@ -1,11 +1,19 @@
 import { readFileSync } from 'node:fs';
-import { assertHandoverConnection, handoverDigest } from './handover.mjs';
-import { digest, requireCondition } from './contract.mjs';
+import { fileURLToPath } from 'node:url';
+import { assertHandoverConnection, assertHandoverDatabaseIdentity, handoverDigest } from './handover.mjs';
+import { digest, git, isSha, requireCondition } from './contract.mjs';
+import { openPinnedDatabase } from './database-connection.mjs';
 
 // Catalog state only: no application, financial or credential rows leave PostgreSQL.
 export const SCHEMA_FINGERPRINT_SQL = `select encode(sha256(convert_to(jsonb_build_object(
  'schemas',(select coalesce(jsonb_agg(to_jsonb(n) order by n.nspname),'[]') from pg_namespace n where n.nspname in ('public','auth','storage')),
- 'roles',(select coalesce(jsonb_agg(to_jsonb(r) order by r.rolname),'[]') from pg_roles r),
+ 'roles',(select coalesce(jsonb_agg(case when r.rolname='cli_login_postgres' and r.rolcanlogin
+  and not (r.rolsuper or r.rolinherit or r.rolcreaterole or r.rolcreatedb or r.rolreplication or r.rolbypassrls)
+  and (select count(*) from pg_auth_members m where m.member=r.oid)=1
+  and exists(select 1 from pg_auth_members m join pg_roles p on p.oid=m.roleid join pg_roles g on g.oid=m.grantor
+   where m.member=r.oid and p.rolname='postgres' and g.rolname='supabase_admin'
+   and m.set_option and not m.inherit_option and not m.admin_option)
+  then to_jsonb(r)-'rolvaliduntil' else to_jsonb(r) end order by r.rolname),'[]') from pg_roles r),
  'memberships',(select coalesce(jsonb_agg(to_jsonb(m) order by m.roleid,m.member),'[]') from pg_auth_members m),
  'types',(select coalesce(jsonb_agg(to_jsonb(t) order by n.nspname,t.typname),'[]') from pg_type t join pg_namespace n on n.oid=t.typnamespace where n.nspname in ('public','auth','storage')),
  'enums',(select coalesce(jsonb_agg(to_jsonb(e) order by e.enumtypid,e.enumsortorder),'[]') from pg_enum e join pg_type t on t.oid=e.enumtypid join pg_namespace n on n.oid=t.typnamespace where n.nspname in ('public','auth','storage')),
@@ -18,24 +26,48 @@ export const SCHEMA_FINGERPRINT_SQL = `select encode(sha256(convert_to(jsonb_bui
  'constraints',(select coalesce(jsonb_agg(jsonb_build_array(n.nspname,c.relname,pg_get_constraintdef(k.oid)) order by n.nspname,c.relname,k.conname),'[]') from pg_constraint k join pg_class c on c.oid=k.conrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname in ('public','auth','storage')),
  'triggers',(select coalesce(jsonb_agg(pg_get_triggerdef(t.oid) order by t.oid),'[]') from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname in ('public','auth','storage') and not t.tgisinternal)
  )::text,'UTF8')),'hex') as digest`;
-export async function withPinnedReadOnlyDatabase({ env = process.env, createClient }, callback) {
-  requireCondition(env.FCOS_RAPID_DATABASE_URL && env.FCOS_RAPID_DATABASE_CA, 'NATIVE_COMPATIBILITY_CONNECTION_REQUIRED');
-  const url = new URL(env.FCOS_RAPID_DATABASE_URL);
-  requireCondition(url.protocol === 'postgresql:' && !url.search && !url.hash, 'NATIVE_COMPATIBILITY_CONNECTION_INVALID');
-  const connection = { host:url.hostname, port:Number(url.port || 5432), user:decodeURIComponent(url.username), database:url.pathname.slice(1),
-    password:decodeURIComponent(url.password), ssl:{rejectUnauthorized:true,ca:readFileSync(env.FCOS_RAPID_DATABASE_CA,'utf8')} };
-  assertHandoverConnection(connection);
-  const Client = createClient || (await import('pg')).Client, db = new Client(connection);
-  await db.connect();
+export async function withPinnedReadOnlyDatabase({ env = process.env, createClient, openDatabase, createIntentStore, github }, callback) {
+  let db, connection;
+  if (openDatabase) {
+    requireCondition(typeof openDatabase === 'function', 'NATIVE_COMPATIBILITY_CONNECTION_REQUIRED');
+    ({ db, connection } = await openDatabase());
+  } else if (env.FCOS_RAPID_SUPABASE_ACCESS_TOKEN) {
+    requireCondition(!env.FCOS_RAPID_DATABASE_URL, 'NATIVE_COMPATIBILITY_CREDENTIAL_AMBIGUOUS');
+    requireCondition(env.FCOS_RAPID_DATABASE_CA, 'NATIVE_COMPATIBILITY_CONNECTION_REQUIRED');
+    const directory = fileURLToPath(new URL('../../../', import.meta.url));
+    const source = { sha: git(directory, ['rev-parse', 'HEAD']) };
+    requireCondition(isSha(source.sha), 'NATIVE_COMPATIBILITY_CONTROLLER_SOURCE_REQUIRED');
+    const credential = { kind: 'supabase_management', token: env.FCOS_RAPID_SUPABASE_ACCESS_TOKEN };
+    const create = createIntentStore || (await import('./database-intent.mjs')).createDatabaseCredentialIntentStore;
+    const intentStore = await create({ credential, directory, source, purpose: 'rapid_compatibility_read_only', github });
+    ({ db, connection } = await openPinnedDatabase({ credential, caFile: env.FCOS_RAPID_DATABASE_CA, intentStore,
+      deps: createClient ? { Client: createClient } : {} }));
+  } else {
+    requireCondition(env.FCOS_RAPID_DATABASE_URL && env.FCOS_RAPID_DATABASE_CA, 'NATIVE_COMPATIBILITY_CONNECTION_REQUIRED');
+    const url = new URL(env.FCOS_RAPID_DATABASE_URL);
+    requireCondition(url.protocol === 'postgresql:' && !url.search && !url.hash, 'NATIVE_COMPATIBILITY_CONNECTION_INVALID');
+    connection = { host:url.hostname, port:Number(url.port || 5432), user:decodeURIComponent(url.username), database:url.pathname.slice(1),
+      password:decodeURIComponent(url.password), ssl:{rejectUnauthorized:true,ca:readFileSync(env.FCOS_RAPID_DATABASE_CA,'utf8')} };
+    assertHandoverConnection(connection);
+    const Client = createClient || (await import('pg')).Client;
+    db = new Client(connection);
+    await db.connect();
+  }
+  let transaction = false;
   try {
+    assertHandoverConnection(connection);
     await db.query('begin isolation level repeatable read read only');
+    transaction = true;
     const identity=(await db.query("select session_user,current_user,current_database() as database,current_setting('transaction_read_only') as read_only")).rows[0];
-    requireCondition(identity.session_user==='postgres' && identity.current_user==='postgres' && identity.database==='postgres' && identity.read_only==='on', 'NATIVE_COMPATIBILITY_DATABASE_IDENTITY_MISMATCH');
-    const result=await callback(db);await db.query('commit');return result;
+    assertHandoverDatabaseIdentity(identity, connection, { readOnly: true, context: 'compatibility' });
+    const result=await callback(db);await db.query('commit');transaction=false;return result;
+  } catch (error) {
+    if (transaction) { try { await db.query('rollback'); } catch { /* Preserve original failure. */ } }
+    throw error;
   } finally {await db.end();}
 }
-export function nativeCompatibilityReader({ provider, env = process.env, createClient } = {}) {
-  return async ({ manifest, previous = manifest.previous }) => withPinnedReadOnlyDatabase({env,createClient},async db=>{
+export function nativeCompatibilityReader({ provider, env = process.env, createClient, openDatabase, createIntentStore, github } = {}) {
+  return async ({ manifest, previous = manifest.previous }) => withPinnedReadOnlyDatabase({env,createClient,openDatabase,createIntentStore,github},async db=>{
     const schemaDigest=(await db.query(SCHEMA_FINGERPRINT_SQL)).rows[0]?.digest;
     requireCondition(/^[a-f0-9]{64}$/.test(schemaDigest || ''),'NATIVE_SCHEMA_FINGERPRINT_REQUIRED');
     const configuration=await provider.nativeConfiguration(), current=await provider.currentProduction();
@@ -58,6 +90,6 @@ export async function verifyNativeHandoverDatabase(db, handover) {
   'CURRENT_PERMANENT_HANDOVER_RECEIPT_REQUIRED');
   return {databaseReceiptId:Number(latest.receipt_id),evidenceDigest:handover.nativeCoordinatorReadbackDigest,observedAt:new Date().toISOString()};
 }
-export async function assertNativeHandoverState({handover,env=process.env,createClient}) {
-  return withPinnedReadOnlyDatabase({env,createClient},db=>verifyNativeHandoverDatabase(db,handover));
+export async function assertNativeHandoverState({handover,env=process.env,createClient,openDatabase,createIntentStore,github}) {
+  return withPinnedReadOnlyDatabase({env,createClient,openDatabase,createIntentStore,github},db=>verifyNativeHandoverDatabase(db,handover));
 }

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fcosConnectionIdentifier } from '../../../config/fcosConnections.js';
+import { assertPinnedDatabaseIdentity, isNativeDelegatedConnection } from './database-connection.mjs';
 
 const canonical = value => JSON.stringify(value, (_, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort()) : item);
 export const handoverDigest = value => createHash('sha256').update(typeof value === 'string' ? value : canonical(value)).digest('hex');
@@ -48,6 +49,7 @@ export function validateAdministratorApplicationInventory(report, { now = Date.n
 }
 
 export function assertHandoverConnection(connection) {
+  if (isNativeDelegatedConnection(connection)) return;
   const direct = connection?.host === fcosConnectionIdentifier('supabase', 'Database direct host') && connection.user === 'postgres';
   const session = connection?.host === fcosConnectionIdentifier('supabase', 'Database session host')
     && connection.user === fcosConnectionIdentifier('supabase', 'Database session user');
@@ -56,11 +58,21 @@ export function assertHandoverConnection(connection) {
   check((direct || session) && connection.port === 5432
     && connection.database === 'postgres' && connection.ssl?.rejectUnauthorized === true, 'HANDOVER_PINNED_TLS_POSTGRES_REQUIRED');
 }
-async function transaction(db, readOnly, callback) {
+export function assertHandoverDatabaseIdentity(identity, connection, { readOnly = true, context = 'handover' } = {}) {
+  assertHandoverConnection(connection);
+  if (isNativeDelegatedConnection(connection)) return assertPinnedDatabaseIdentity(identity, connection, { readOnly });
+  const codes = { handover: 'HANDOVER_DATABASE_IDENTITY_MISMATCH', bootstrap: 'BOOTSTRAP_DATABASE_IDENTITY_MISMATCH',
+    compatibility: 'NATIVE_COMPATIBILITY_DATABASE_IDENTITY_MISMATCH' };
+  check(typeof readOnly === 'boolean' && Object.hasOwn(codes, context)
+    && identity?.session_user === 'postgres' && identity.current_user === 'postgres' && identity.database === 'postgres'
+    && identity.read_only === (readOnly ? 'on' : 'off'), codes[context] || 'HANDOVER_DATABASE_IDENTITY_MISMATCH');
+  return identity;
+}
+async function transaction(db, connection, readOnly, callback) {
+  assertHandoverConnection(connection);
   await db.query(`begin isolation level ${readOnly ? 'repeatable read read only' : 'read committed read write'}`);
   try { const identity = (await db.query('select session_user, current_user, current_database() as database, current_setting(\'transaction_read_only\') as read_only')).rows[0];
-    check(identity?.session_user === 'postgres' && identity.current_user === 'postgres' && identity.database === 'postgres'
-      && identity.read_only === (readOnly ? 'on' : 'off'), 'HANDOVER_DATABASE_IDENTITY_MISMATCH');
+    assertHandoverDatabaseIdentity(identity, connection, { readOnly });
     const result = await callback(); await db.query('commit'); return result;
   } catch (error) { await db.query('rollback'); throw error; }
 }
@@ -153,7 +165,7 @@ async function externalAudit({ github, vercel }) {
 }
 export async function auditHandover({ db, connection, github, vercel }) {
   assertHandoverConnection(connection);
-  return { database: await transaction(db, true, () => snapshot(db)), providers: await externalAudit({ github, vercel }) };
+  return { database: await transaction(db, connection, true, () => snapshot(db)), providers: await externalAudit({ github, vercel }) };
 }
 export function createHandoverPlan({ audit, controllerSha, candidateSha, buildId, artifactDigest, handoverId, applicationInventoryReport, now = Date.now() }) {
   check(sha(controllerSha) && sha(candidateSha) && digest(buildId) && digest(artifactDigest) && /^[a-z0-9-]{8,96}$/.test(handoverId), 'HANDOVER_PLAN_INVALID');
@@ -236,7 +248,7 @@ export async function applyHandover({ phase, plan, db, connection, github, verce
       && staged.meta?.githubCommitSha === plan.candidateSha && staged.meta?.fcosRapidBuildId === plan.buildId
       && staged.meta?.fcosRapidArtifactDigest === plan.artifactDigest && staged.meta?.fcosHandoverPlanHash === planHash, 'HANDOVER_REAL_STAGED_QUALIFICATION_REQUIRED');
   }
-  const result = await transaction(db, false, async () => {
+  const result = await transaction(db, connection, false, async () => {
     let state = await snapshot(db, true);
     check(!state.unresolvedProduction.length && state.historyDigest === plan.historyDigest, 'HANDOVER_NATIVE_HISTORY_OR_PRODUCTION_UNCERTAINTY_CHANGED');
     assertParentState(state, external, plan);

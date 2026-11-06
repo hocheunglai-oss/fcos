@@ -8,6 +8,7 @@ import { targets, digest } from '../scripts/lib/rapid-release/contract.mjs';
 import { BOOTSTRAP_BRANCH, BOOTSTRAP_ENVIRONMENT, BootstrapJournal, auditBootstrap, bootstrapRequest,
   claimBootstrap, createBootstrapPlan, readBootstrapDatabase, runBootstrap } from '../scripts/lib/rapid-release/bootstrap.mjs';
 import { bootstrapMain } from '../scripts/rapid-release-bootstrap.mjs';
+import { dummyDelegation } from './helpers/rapidDatabaseDelegationFixture.mjs';
 
 const { PGlite } = createRequire(import.meta.url)('@electric-sql/pglite');
 const pins = targets(), accountId = 7;
@@ -93,6 +94,22 @@ async function fixture() {
   f.close = async () => { await pg.close(); rmSync(directory, { recursive: true, force: true }); };
   return f;
 }
+
+test('bootstrap native delegation retains session identity and rejects copied proof before claim', async () => {
+  const f = await fixture();
+  let delegated;
+  try {
+    delegated = await (await dummyDelegation(f.pg)).open();
+    const input = { ...f.input, ...delegated };
+    assert.equal((await readBootstrapDatabase(input)).control.mode, 'qualification');
+    await assert.rejects(claimBootstrap({ ...input, connection: { ...delegated.connection } }), /PINNED_TLS/);
+    const claimed = await claimBootstrap(input);
+    assert.equal(claimed.state.control.mode, 'frozen');
+    const row = (await delegated.db.query('select session_user,current_user')).rows[0];
+    assert.equal(row.session_user, 'cli_login_postgres');
+    assert.equal(row.current_user, 'postgres');
+  } finally { if (delegated) await delegated.db.end(); await f.close(); }
+});
 
 test('one-time bootstrap freezes only old release control and verifies real Git Preview proof', async () => {
   const f = await fixture(); try {

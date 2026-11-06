@@ -3,7 +3,7 @@ import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { canonical, digest, isSha, isDigest, requireCondition as check, sourceSnapshot, targets } from './contract.mjs';
 import { assertPublicPayload } from './journal.mjs';
-import { assertHandoverConnection } from './handover.mjs';
+import { assertHandoverConnection, assertHandoverDatabaseIdentity } from './handover.mjs';
 import { fcosConnectionIdentifier } from '../../../config/fcosConnections.js';
 
 export const BOOTSTRAP_BRANCH = 'codex/rapid-controller-install-20261106';
@@ -59,8 +59,7 @@ async function transaction(db, connection, write, work) {
   await db.query(`begin isolation level ${write ? 'read committed read write' : 'repeatable read read only'}`);
   try {
     const row = (await db.query("select session_user,current_user,current_database() as database,current_setting('transaction_read_only') as read_only")).rows[0];
-    check(row?.session_user === 'postgres' && row.current_user === 'postgres' && row.database === 'postgres'
-      && row.read_only === (write ? 'off' : 'on'), 'BOOTSTRAP_DATABASE_IDENTITY_MISMATCH');
+    assertHandoverDatabaseIdentity(row, connection, { readOnly: !write, context: 'bootstrap' });
     const result = await work(); await db.query('commit'); return result;
   } catch (error) { await db.query('rollback'); throw error; }
 }
