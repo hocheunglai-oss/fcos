@@ -117,6 +117,8 @@ test('reviewed manifest binds actual baseline inventory, delta component/depende
 test('prepare then apply consumes exact saved Production validation without another submission', async () => {
   const f = fixture();
   try {
+    await assert.rejects(f.run('apply', { authorization: f.authorization }), /successful prepare checkpoint/);
+    assert.equal(f.calls.length, 0);
     const prepared = await f.run('prepare');
     assert.equal(prepared.productionValidation, 'Succeeded');
     assert.equal(f.calls.filter(call => call[0] === 'validate').length, 3);

@@ -215,6 +215,10 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
   authorization = null, now = () => new Date(), assertUnchanged, replaceValidation = [], reconcile = {} }) {
   if (!['prepare', 'apply'].includes(mode)) throw new Error('Choose prepare or apply.');
   if (journal.state.fingerprint !== plan.fingerprint || !same(journal.state.binding, plan.binding)) throw new Error('Reviewed workflow fingerprint changed; prepare a new release from DEVEE.');
+  const preparation = journal.state.stages.production?.preparation;
+  if (mode === 'apply' && (preparation?.fingerprint !== plan.fingerprint || !['ready', 'awaiting-authorized-bootstrap'].includes(preparation?.status))) {
+    throw new Error('Apply requires a successful prepare checkpoint for this exact unchanged reviewed fingerprint.');
+  }
   if (typeof ownership?.assert !== 'function' || typeof externalJournal?.checkpoint !== 'function') throw new Error('Salesforce writes require external release ownership and a durable checkpoint adapter; a local lock is not global serialization.');
   const timestamp = () => now().toISOString();
   const persist = async (stage, operation, record) => {
