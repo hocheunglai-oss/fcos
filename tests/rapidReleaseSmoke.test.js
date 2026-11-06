@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier } from '../config/fcosConnections.js';
+import { APP_MODULES } from '../src/lib/authModules.js';
+import { MODULE_READERS, MODULE_SURFACES, moduleReadBody, moduleReaderPayloadVerified } from '../scripts/lib/rapid-release/normal-role-readers.mjs';
 import { FCOS_READ_ONLY_CI as ci } from '../config/fcosCiIdentity.js';
 import { runStagedSmoke, observeLive, stagedBrowserRequestAllowed } from '../scripts/lib/rapid-release/smoke.mjs';
 
@@ -29,9 +31,24 @@ function publicFetch({ mismatch = false, calls = [] } = {}) {
   };
 }
 
+const readPayloads = {
+  dashboard: { complete: true, financials: [] },
+  markets: { complete: true, reportCompleteness: { complete: true }, asOfDate: '2026-11-06', products: ['hsfo380', 'vlsfo', 'lsmgo'].map(productKey => ({ productKey, latestMops: { value: 1 } })) },
+  review: { recentStems: [] }, disputes: { rows: [] },
+  buyer_invoices: { rows: [], today: '2026-11-06', dueThrough: '2026-12-06', daysAhead: 30 },
+  unofficial_compensation: { accounts: [] }, incoming_payments: { rows: [], schemaWarnings: [] }, cashflow_forecast: { rows: [] },
+  pnl: { rows: [{ id: 'fixture-stem' }], totals: { count: 1 } }, brokers: { rows: [] },
+  buyers_administrator: { accounts: [], users: [] }, master_contracts: { contracts: [] }, special_terms: { terms: [] },
+  hedge_desk: { ...Object.fromEntries(['physicals', 'swaps', 'mops', 'clearing', 'counterparties', 'invoices', 'auditLogs'].map(key => [key, []])), capabilities: {}, expiryAutomation: { status: 'not_run', reason: 'deployment_read_only', readOnly: true } },
+  email_router: { mailbox: { id: 'fixture-mailbox' }, destinations: [], groups: [] },
+  settings: { settings: { revision: 1, annualInterestRatePct: 3, bankChargesUsd: { UBS: 1, DBS: 2 } } },
+  admin: { users: [{ id: 'fixture-user' }], modules: [{ id: 'dashboard' }], userTypes: [{ id: 'general_manager' }], typePermissions: {} },
+  xero_portal: { xero: { configured: true, connected: true }, externalActions: { xero: { enabled: false } } },
+};
+
 // Fixtures replace browser/provider transports. They simulate the app-owned
 // bootstrap response and actual response events; they never establish live proof.
-function browserFixture({ badIdentity = false, badRead = false, badDenial = false, unexpected = false, missingModule = false, background = false, badPayload = false } = {}) {
+function browserFixture({ badIdentity = false, badRead = false, badDenial = false, unexpected = false, missingModule = false, background = false, badPayload = false, badDesktop = false, deniedModule = null, role = 'manager' } = {}) {
   const observations = { launches: [], reads: [], contextsClosed: 0, browsersClosed: 0, nativeAborts: 0 };
   const browserFactory = async options => {
     observations.launches.push(options);
@@ -43,8 +60,8 @@ function browserFixture({ badIdentity = false, badRead = false, badDenial = fals
     const emit = response => { for (const waiter of responseWaiters.splice(0)) { if (waiter.predicate(response)) waiter.resolve(response); else responseWaiters.push(waiter); } };
     const auth = () => email === ci.email ? { user: { email, user_type: 'viewer', active: true, read_only_ci: true },
       moduleAccess: { dashboard: true, markets: true, settings: false }, capabilities: { write: false } } : {
-      user: { email, user_type: badIdentity ? 'administrator' : 'manager', active: true, read_only_ci: false },
-      moduleAccess: { dashboard: true, markets: !missingModule, settings: true }, capabilities: { write: false },
+      user: { email, user_type: badIdentity ? 'administrator' : role, active: true, read_only_ci: false },
+      moduleAccess: { ...Object.fromEntries(APP_MODULES.map(({ id }) => [id, true])), markets: !missingModule }, capabilities: { write: false },
     };
     const apiResponse = (url, body, status = 200, request = requestOf(url, 'POST')) => ({ url: () => url, status: () => status,
       request: () => request, json: async () => body, finished: async () => null, dispose: async () => {} });
@@ -58,7 +75,8 @@ function browserFixture({ badIdentity = false, badRead = false, badDenial = fals
           const url = overrides.url || request.url();
           observations.reads.push({ url, method: overrides.method || request.method(), body: overrides.postData });
           if (url.endsWith('/authContext')) return apiResponse(url, auth(), 200, request);
-          if (url.endsWith('/financeSettingsGet')) return apiResponse(url, { settings: { revision: 1, annualInterestRatePct: 3, bankChargesUsd: { UBS: 1, DBS: 2 } } });
+          const module = Object.keys(MODULE_READERS).find(key => url.endsWith(MODULE_READERS[key].path));
+          if (module) return apiResponse(url, badPayload ? {} : readPayloads[module], module === deniedModule ? 403 : 200);
           return apiResponse(url, { code: 'FCOS_DEPLOYMENT_READ_ONLY' }, badDenial ? 200 : 403);
         },
       };
@@ -69,6 +87,7 @@ function browserFixture({ badIdentity = false, badRead = false, badDenial = fals
       waitFor: async () => {},
       fill: async value => { if (name === 'Username') email = value; if (name === 'Password') password = value; },
       click: async () => {
+        if (name === 'Run') { emit(apiResponse(`${origin}/api/functions/stemPnl`, readPayloads.pnl)); return; }
         if (name === 'Continue with FCUNO') { changeLocation(`${issuer}/admin`); return; }
         assert.equal(name, 'Login');
         assert.ok(password.startsWith('PRIVATE_'));
@@ -81,6 +100,9 @@ function browserFixture({ badIdentity = false, badRead = false, badDenial = fals
     const page = {
       url: () => location,
       on: () => {},
+      waitForLoadState: async () => {}, waitForFunction: async () => {},
+      locator: selector => ({ count: async () => badDesktop ? 0 : 1, first() { return this; }, waitFor: async () => { if (badDesktop) throw Error('MISSING_DESKTOP_SURFACE'); }, innerText: async () => badDesktop ? 'Something went wrong' : 'Verified fixture business surface' }),
+      getByText: () => ({ first() { return this; }, waitFor: async () => { if (badDesktop) throw Error('MISSING_DESKTOP_SURFACE'); } }),
       getByRole: (role, options) => locator(role, options.name),
       getByLabel: name => locator('label', name),
       waitForURL: predicate => new Promise(resolve => { if (location !== 'about:blank' && predicate(new URL(location))) resolve(); else urlWaiters.push({ predicate, resolve }); }),
@@ -133,8 +155,9 @@ test('normal-role proof requires a fresh real identity response and selected aut
   assert.equal(proof.normalRoleEvidence.excludedBackgroundSync, 1);
   assert.ok(proof.normalRoleEvidence.excludedFeatures.includes('automatic_mailbox_sync'));
   assert.deepEqual(proof.normalRoleEvidence.modules, ['dashboard', 'markets', 'settings']);
-  assert.deepEqual(proof.normalRoleEvidence.reads.find(read => read.module === 'settings'), { module: 'settings', path: '/api/functions/financeSettingsGet', status: 200, authenticated: true, dataVerified: true, surface: 'authenticated_read_api' });
+  assert.deepEqual(proof.normalRoleEvidence.reads.find(read => read.module === 'settings'), { module: 'settings', path: '/api/functions/financeSettingsGet', status: 200, authenticated: true, dataVerified: true, surface: 'authenticated_read_api', coverage: 'finance_configuration_read' });
   assert.equal(proof.normalRoleEvidence.denialReceipts[0].code, 'FCOS_DEPLOYMENT_READ_ONLY');
+  assert.equal(proof.normalRoleEvidence.desktopChecks[0].module, 'settings');
   assert.equal(fixture.observations.launches.length, 2);
   assert.equal(fixture.observations.contextsClosed, 2);
   assert.deepEqual(proof.restrictedEvidence.modules, ['dashboard', 'markets']);
@@ -217,4 +240,65 @@ test('trusted smoke uses opaque private state and every-hop interception without
   assert.match(source, /Fetch\.requestPaused/);
   assert.match(source, /routeWebSocket/);
   assert.doesNotMatch(source, /localStorage|sessionStorage|access_token|\.tracing|\.screenshot|recordVideo|console\./);
+});
+
+test('all maintained modules require actual read contracts and affected desktop surfaces with approved GM identity', async () => {
+  const modules = APP_MODULES.map(({ id }) => id), fixture = browserFixture({ role: 'general_manager' });
+  const proof = await runStagedSmoke({ manifest: manifest({ normalRole: true, modules }), staged,
+    env: { ...env, FCOS_HOSTED_NORMAL_EXPECTED_ROLE: 'general_manager' }, fetchImpl: publicFetch(), browserFactory: fixture.browserFactory });
+  assert.deepEqual(proof.normalRoleEvidence.requiredModules, [...modules].sort());
+  assert.deepEqual(proof.normalRoleEvidence.modules, [...modules].sort());
+  assert.equal(proof.normalRoleEvidence.desktopChecks.length, modules.length - 2);
+  for (const { module, businessSurface, rendered } of proof.normalRoleEvidence.desktopChecks) {
+    assert.ok(MODULE_SURFACES[module]); assert.equal(businessSurface, true); assert.equal(rendered, true);
+  }
+  const hedge = fixture.observations.reads.find(read => read.url.endsWith('/hedgeDeskEntity'));
+  assert.deepEqual(JSON.parse(hedge.body), { action: 'snapshot' });
+  const pnl = fixture.observations.reads.find(read => read.url.endsWith('/stemPnl'));
+  assert.equal(JSON.parse(pnl.body).limit, 1);
+  assert.equal(proof.normalRoleEvidence.reads.find(read => read.module === 'hedge_desk').coverage, 'book_snapshot_read');
+  assert.equal(JSON.stringify(proof).includes('fixture-stem'), false);
+});
+
+test('denied module reads, heading-only pages, unsafe snapshots and partial data never prove coverage', async () => {
+  for (const options of [{ badDesktop: true }, { deniedModule: 'settings' }]) {
+    const fixture = browserFixture(options);
+    await assert.rejects(runStagedSmoke({ manifest: manifest({ normalRole: true, modules: ['settings'] }), staged, env, fetchImpl: publicFetch(), browserFactory: fixture.browserFactory }));
+    assert.equal(fixture.observations.contextsClosed, fixture.observations.launches.length);
+  }
+  const hedge = structuredClone(readPayloads.hedge_desk); delete hedge.expiryAutomation;
+  assert.equal(moduleReaderPayloadVerified('hedge_desk', hedge), false);
+  assert.equal(moduleReaderPayloadVerified('incoming_payments', { rows: [], schemaWarnings: ['not queryable'] }), false);
+  assert.equal(moduleReaderPayloadVerified('pnl', { rows: [], totals: { count: 1 } }), false);
+  let calls = 0; const noCall = async () => { calls++; };
+  await assert.rejects(runStagedSmoke({ manifest: manifest({ normalRole: true, modules: ['admin'] }), staged, env, fetchImpl: noCall, browserFactory: noCall }), { code: 'NORMAL_ROLE_ADMIN_REQUIRES_APPROVED_GM' });
+  await assert.rejects(runStagedSmoke({ manifest: manifest({ normalRole: true, modules: ['future_module'] }), staged, env, fetchImpl: noCall, browserFactory: noCall }), error => error.code === 'MODULE_SAFE_READER_COVERAGE_MISSING' && error.missingModules.includes('future_module'));
+  assert.equal(calls, 0);
+});
+
+test('normal-only snapshot and saved Xero reads keep all mutation selectors and direct provider routes denied', () => {
+  const normal = { origin, credentials: { email: env.FCOS_RAPID_NORMAL_EMAIL, password: 'fixture' }, normal: true };
+  assert.equal(stagedBrowserRequestAllowed(request(`${origin}/api/functions/hedgeDeskEntity`, 'POST', { action: 'snapshot' }), normal), true);
+  assert.equal(stagedBrowserRequestAllowed(request(`${origin}/api/functions/hedgeDeskEntity`, 'POST', { action: 'snapshot' }), { ...normal, normal: false }), false);
+  for (const body of [{ action: 'list', entity: 'PhysicalTrade' }, { action: 'snapshot', force: false }, { action: 'snapshot', entity: 'Invoice' }, { action: 'save' }])
+    assert.equal(stagedBrowserRequestAllowed(request(`${origin}/api/functions/hedgeDeskEntity`, 'POST', body), normal), false);
+  assert.equal(stagedBrowserRequestAllowed(request(`${origin}/api/functions/xeroPortalStatus`, 'POST', { forceRefresh: false }), normal), true);
+  assert.equal(stagedBrowserRequestAllowed(request(`${origin}/api/functions/xeroPortalStatus`, 'POST', { forceRefresh: true }), normal), false);
+  for (const handler of ['xeroPortalContactLifecyclePreview', 'xeroPortalReceiptSync', 'paymentCollectionsReconcile', 'workspacePreferencesSave'])
+    assert.equal(stagedBrowserRequestAllowed(request(`${origin}/api/functions/${handler}`, 'POST'), normal), false);
+  for (const url of [`${supabase}/rest/v1/rpc/unreviewed_read`, `${supabase}/storage/v1/object/sign/private`, 'https://api.xero.com/api.xro/2.0/Invoices'])
+    assert.equal(stagedBrowserRequestAllowed(request(url, 'POST'), normal), false);
+});
+
+test('reviewed registry has genuine response contracts and deterministic bounded read bodies for every maintained ID', () => {
+  assert.deepEqual(Object.keys(MODULE_READERS).sort(), APP_MODULES.map(({ id }) => id).sort());
+  for (const module of Object.keys(MODULE_READERS)) {
+    assert.equal(moduleReaderPayloadVerified(module, readPayloads[module]), true, module);
+    for (const data of [{}, { error: 'denied' }, { status: 'unavailable' }, { complete: false }, null])
+      assert.equal(moduleReaderPayloadVerified(module, data), false, `${module}: invalid response`);
+  }
+  const m = { createdAt: '2026-11-06T00:00:00.000Z' };
+  assert.deepEqual(moduleReadBody('pnl', m), { dateWindows: [{ startDate: '2026-10-07', endDate: '2026-11-06' }], limit: 1 });
+  assert.deepEqual(moduleReadBody('incoming_payments', m), { dateFrom: '2026-11-06', dateTo: '2026-11-06', limit: 100 });
+  assert.deepEqual(moduleReadBody('hedge_desk', m), { action: 'snapshot' });
 });
