@@ -3,6 +3,8 @@ import { fileURLToPath } from 'node:url';
 import { assertHandoverConnection, assertHandoverDatabaseIdentity, handoverDigest } from './handover.mjs';
 import { digest, git, isSha, requireCondition } from './contract.mjs';
 import { openPinnedDatabase } from './database-connection.mjs';
+import { openPinnedReadonlyDatabase } from './readonly-database.mjs';
+import { fcosConnectionIdentifier } from '../../../config/fcosConnections.js';
 
 // Catalog state only: no application, financial or credential rows leave PostgreSQL.
 export const SCHEMA_FINGERPRINT_SQL = `select encode(sha256(convert_to(jsonb_build_object(
@@ -46,12 +48,17 @@ export async function withPinnedReadOnlyDatabase({ env = process.env, createClie
     requireCondition(env.FCOS_RAPID_DATABASE_URL && env.FCOS_RAPID_DATABASE_CA, 'NATIVE_COMPATIBILITY_CONNECTION_REQUIRED');
     const url = new URL(env.FCOS_RAPID_DATABASE_URL);
     requireCondition(url.protocol === 'postgresql:' && !url.search && !url.hash, 'NATIVE_COMPATIBILITY_CONNECTION_INVALID');
+    if (decodeURIComponent(url.username) === fcosConnectionIdentifier('supabase','Database release read-only user')) {
+      ({db,connection}=await openPinnedReadonlyDatabase({url:env.FCOS_RAPID_DATABASE_URL,caFile:env.FCOS_RAPID_DATABASE_CA,
+        deps:createClient?{Client:createClient}:undefined}));
+    } else {
     connection = { host:url.hostname, port:Number(url.port || 5432), user:decodeURIComponent(url.username), database:url.pathname.slice(1),
       password:decodeURIComponent(url.password), ssl:{rejectUnauthorized:true,ca:readFileSync(env.FCOS_RAPID_DATABASE_CA,'utf8')} };
     assertHandoverConnection(connection);
     const Client = createClient || (await import('pg')).Client;
     db = new Client(connection);
     await db.connect();
+    }
   }
   let transaction = false;
   try {

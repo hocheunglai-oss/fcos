@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { TLSSocket } from 'node:tls';
+import { randomBytes, pbkdf2Sync, createHmac, createHash } from 'node:crypto';
 import { fcosConnectionIdentifier as identifier } from '../../../config/fcosConnections.js';
 import { digest, requireCondition as check } from './contract.mjs';
 
@@ -75,8 +76,19 @@ export async function openPinnedReadonlyDatabase({url,caFile,deps={}}) {
 }
 
 /** Private SCRAM verifier transport only; never print or retain the returned SQL. */
+export function createReadonlyRoleVerifier(password) {
+  check(Buffer.isBuffer(password) && password.length>=32 && password.length<=128 && password.every(byte=>byte>=33 && byte<=126),'READONLY_ROLE_PASSWORD_REQUIRED');
+  const salt=randomBytes(16),salted=pbkdf2Sync(password,salt,4096,32,'sha256');
+  const client=createHmac('sha256',salted).update('Client Key').digest();
+  const stored=createHash('sha256').update(client).digest(),server=createHmac('sha256',salted).update('Server Key').digest();
+  try {return `SCRAM-SHA-256$4096:${salt.toString('base64')}$${stored.toString('base64')}:${server.toString('base64')}`;}
+  finally {salted.fill(0);client.fill(0);stored.fill(0);server.fill(0);}
+}
 export function readonlyRoleProvisioningSql(scram) {
   check(/^SCRAM-SHA-256\$4096:[A-Za-z0-9+/]+={0,2}\$[A-Za-z0-9+/]+={0,2}:[A-Za-z0-9+/]+={0,2}$/.test(scram || ''),'READONLY_ROLE_SCRAM_REQUIRED');
+  const fields=scram.split(/[$:]/);
+  check([fields[2],fields[3],fields[4]].every((value,index)=>Buffer.from(value,'base64').length===(index?32:16)
+    && Buffer.from(value,'base64').toString('base64')===value),'READONLY_ROLE_SCRAM_REQUIRED');
   const name=role();check(/^[a-z_]{8,63}$/.test(name),'READONLY_ROLE_NAME_INVALID');
   return `begin;
 do $$ begin
@@ -89,11 +101,10 @@ create role ${name} login nosuperuser noinherit nocreatedb nocreaterole noreplic
 alter role ${name} set default_transaction_read_only=on;
 grant connect on database postgres to ${name};
 grant usage on schema fcos_release_coordination to ${name};
-grant select on fcos_release_coordination.control, fcos_release_coordination.rapid_bootstrap_receipts to ${name};
+grant select on fcos_release_coordination.control to ${name};
 grant select(operation_id,phase) on fcos_release_coordination.operations to ${name};
 grant select(operation_id,event_id,state) on fcos_release_coordination.operation_events to ${name};
 create policy rapid_readonly_control on fcos_release_coordination.control for select to ${name} using(true);
-create policy rapid_readonly_bootstrap on fcos_release_coordination.rapid_bootstrap_receipts for select to ${name} using(true);
 create policy rapid_readonly_operations on fcos_release_coordination.operations for select to ${name} using(true);
 create policy rapid_readonly_events on fcos_release_coordination.operation_events for select to ${name} using(true);
 commit;`;

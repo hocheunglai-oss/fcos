@@ -4,9 +4,9 @@ import {EventEmitter} from 'node:events';
 import {TLSSocket} from 'node:tls';
 import {PGlite} from '@electric-sql/pglite';
 import {fcosConnectionIdentifier as id} from '../config/fcosConnections.js';
-import {openPinnedReadonlyDatabase,isNativeReadonlyConnection,assertReadonlyDatabaseIdentity,readonlyRoleProvisioningSql,installReadonlyHandoverPolicy} from '../scripts/lib/rapid-release/readonly-database.mjs';
+import {openPinnedReadonlyDatabase,isNativeReadonlyConnection,assertReadonlyDatabaseIdentity,readonlyRoleProvisioningSql,createReadonlyRoleVerifier,installReadonlyHandoverPolicy} from '../scripts/lib/rapid-release/readonly-database.mjs';
 import {PUBLIC_CA} from './helpers/rapidDatabaseDelegationFixture.mjs';
-const verifier='SCRAM-SHA-256$4096:c2FsdA==$c3RvcmVk:a2V5';
+const verifier=createReadonlyRoleVerifier(Buffer.from('synthetic-fixture-password-0123456789'));
 const url=`postgresql://${id('supabase','Database release read-only user')}:${'x'.repeat(48)}@${id('supabase','Database session host')}:5432/postgres`;
 async function setup(t) {
  const db=new PGlite();t.after(()=>db.close());
