@@ -2,6 +2,9 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fcosConnectionIdentifier } from '../../../config/fcosConnections.js';
 import { assertPinnedDatabaseIdentity, isNativeDelegatedConnection } from './database-connection.mjs';
+import { assertNativeBootstrapAdmission, verifyLockedBootstrap } from './bootstrap-admission.mjs';
+import { digest as releaseDigest } from './contract.mjs';
+import { isNativeReadonlyConnection, assertReadonlyDatabaseIdentity, installReadonlyHandoverPolicy } from './readonly-database.mjs';
 
 const canonical = value => JSON.stringify(value, (_, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort()) : item);
 export const handoverDigest = value => createHash('sha256').update(typeof value === 'string' ? value : canonical(value)).digest('hex');
@@ -49,6 +52,7 @@ export function validateAdministratorApplicationInventory(report, { now = Date.n
 }
 
 export function assertHandoverConnection(connection) {
+  if (isNativeReadonlyConnection(connection)) return;
   if (isNativeDelegatedConnection(connection)) return;
   const direct = connection?.host === fcosConnectionIdentifier('supabase', 'Database direct host') && connection.user === 'postgres';
   const session = connection?.host === fcosConnectionIdentifier('supabase', 'Database session host')
@@ -60,6 +64,7 @@ export function assertHandoverConnection(connection) {
 }
 export function assertHandoverDatabaseIdentity(identity, connection, { readOnly = true, context = 'handover' } = {}) {
   assertHandoverConnection(connection);
+  if (isNativeReadonlyConnection(connection)) return assertReadonlyDatabaseIdentity(identity, connection, { readOnly });
   if (isNativeDelegatedConnection(connection)) return assertPinnedDatabaseIdentity(identity, connection, { readOnly });
   const codes = { handover: 'HANDOVER_DATABASE_IDENTITY_MISMATCH', bootstrap: 'BOOTSTRAP_DATABASE_IDENTITY_MISMATCH',
     compatibility: 'NATIVE_COMPATIBILITY_DATABASE_IDENTITY_MISMATCH' };
@@ -75,6 +80,11 @@ async function transaction(db, connection, readOnly, callback) {
     assertHandoverDatabaseIdentity(identity, connection, { readOnly });
     const result = await callback(); await db.query('commit'); return result;
   } catch (error) { await db.query('rollback'); throw error; }
+}
+/** Run actual pg reads with the same pinned native/session identity checks as handover. */
+export function withHandoverReadOnlyTransaction({ db, connection }, work) {
+  check(typeof work === 'function', 'HANDOVER_NATIVE_DATABASE_READER_REQUIRED');
+  return transaction(db, connection, true, () => work(db));
 }
 async function snapshot(db, locked = false) {
   if (locked) await db.query('lock table fcos_release_coordination.control in share row exclusive mode');
@@ -167,21 +177,37 @@ export async function auditHandover({ db, connection, github, vercel }) {
   assertHandoverConnection(connection);
   return { database: await transaction(db, connection, true, () => snapshot(db)), providers: await externalAudit({ github, vercel }) };
 }
-export function createHandoverPlan({ audit, controllerSha, candidateSha, buildId, artifactDigest, handoverId, applicationInventoryReport, now = Date.now() }) {
+export function createHandoverPlan({ audit, controllerSha, candidateSha, buildId, artifactDigest, handoverId, applicationInventoryReport, bootstrapAdmission, bootstrapPlan, now = Date.now() }) {
   check(sha(controllerSha) && sha(candidateSha) && digest(buildId) && digest(artifactDigest) && /^[a-z0-9-]{8,96}$/.test(handoverId), 'HANDOVER_PLAN_INVALID');
   const report = applicationInventoryReport ? validateAdministratorApplicationInventory(applicationInventoryReport, { now }) : null;
   check(!audit.providers.applicationInventoryReportDigest || report && handoverDigest(report) === audit.providers.applicationInventoryReportDigest, 'HANDOVER_ADMIN_APP_REPORT_BINDING_REQUIRED');
   check(!report || handoverDigest(report) === audit.providers.applicationInventoryReportDigest, 'HANDOVER_ADMIN_APP_REPORT_BINDING_REQUIRED');
   check(audit.providers.rapidJournal?.unresolvedProduction === 0, 'HANDOVER_RAPID_OPERATION_UNRESOLVED');
   const supersedes = assertParentState(audit.database, audit.providers);
+  let bootstrap;
+  if (bootstrapAdmission || bootstrapPlan) {
+    check(!supersedes, 'HANDOVER_BOOTSTRAP_INITIAL_ONLY');
+    const reference = assertNativeBootstrapAdmission(bootstrapAdmission, { controllerSha, now });
+    check(bootstrapPlan?.controllerSha === controllerSha && releaseDigest(bootstrapPlan) === reference.bootstrap.planHash
+      && canonical(audit.database.control) === canonical(bootstrapAdmission.controlPreimage), 'HANDOVER_BOOTSTRAP_PREIMAGE_MISMATCH');
+    bootstrap = { plan: bootstrapPlan, reference };
+  }
   check(!(audit.database.receipts || []).some(row => row.handover_id === handoverId), 'HANDOVER_ID_ALREADY_USED');
   const c = audit.database.control;
-  check(c.mode === (supersedes ? 'frozen' : 'qualification') && (!supersedes || controllerSha !== supersedes.controllerSha) && c.singleton === true && Number.isSafeInteger(Number(c.epoch)) && Number(c.epoch) > 0
+  check(c.mode === (supersedes || bootstrap ? 'frozen' : 'qualification') && (!supersedes || controllerSha !== supersedes.controllerSha) && c.singleton === true && Number.isSafeInteger(Number(c.epoch)) && Number(c.epoch) > 0
     && controlColumns.filter(key => key.endsWith('_id')).every(key => c[key] === null) && !audit.database.unresolvedProduction.length && audit.providers.noRunning, 'HANDOVER_QUIESCENT_QUALIFICATION_REQUIRED');
   return { schemaVersion: 1, kind: 'fcos_rapid_handover_plan', handoverId, controllerSha, candidateSha, buildId, artifactDigest,
-    pins: handoverPins(), ...(supersedes ? { supersedes } : {}), rapidJournal: audit.providers.rapidJournal, controlPreimage: c, historyDigest: audit.database.historyDigest, oldInventoryDigest: handoverDigest(audit.providers),
+    pins: handoverPins(), ...(supersedes ? { supersedes } : {}), ...(bootstrap ? { bootstrap } : {}), rapidJournal: audit.providers.rapidJournal, controlPreimage: c, historyDigest: audit.database.historyDigest, oldInventoryDigest: handoverDigest(audit.providers),
     ...(report ? { applicationInventoryReport: report } : {}),
     previousProductionId: audit.providers.productionId, subscribersDigest: audit.providers.subscribersDigest, guardSqlDigest: handoverDigest(guardSql), financialAuthority: false };
+}
+async function freshBootstrapAdmission(github, plan) {
+  if (!plan.bootstrap) return;
+  check(!plan.supersedes && typeof github.bootstrapAdmission === 'function', 'HANDOVER_BOOTSTRAP_NATIVE_ADMISSION_REQUIRED');
+  const admission = await github.bootstrapAdmission({ plan });
+  assertNativeBootstrapAdmission(admission, { controllerSha: plan.controllerSha, reference: plan.bootstrap.reference });
+  check(canonical(admission.controlPreimage) === canonical(plan.controlPreimage), 'HANDOVER_BOOTSTRAP_PREIMAGE_MISMATCH');
+  return admission;
 }
 async function nativeReview(github, plan, phase) {
   const pins = handoverPins(), planHash = handoverDigest(plan);
@@ -215,7 +241,8 @@ async function nativeReview(github, plan, phase) {
  * github: identity,get (404=>null),pages (all native array pages),execution,verifyNativePlan,
  * qualification (fetch/verify exact approved setup artifact),createDeployment,findDeployment;
  * vercel: project,currentProduction,deployment. No adapter may accept raw receipt booleans as authority.
- * Initial prepare freezes only the RELEASE singleton; initial abort restores its preimage.
+ * Initial prepare freezes only the RELEASE singleton; abort restores its preimage.
+ * A native bootstrap preimage is already permanently frozen and never unfrozen on abort.
  * Successors leave that permanent fence unchanged and append independently reviewed receipts.
  * Unknown old records are hashed/preserved, never marked resolved. Lost GH acknowledgement is reconciled
  * by findDeployment(planHash); an existing final DB receipt never permits a second blind GH submission.
@@ -224,9 +251,10 @@ export async function applyHandover({ phase, plan, db, connection, github, verce
   assertHandoverConnection(connection);
   check(['prepare','abort','finalize'].includes(phase) && plan?.schemaVersion === 1 && plan.kind === 'fcos_rapid_handover_plan'
     && sha(plan.controllerSha) && sha(plan.candidateSha) && digest(plan.buildId) && digest(plan.artifactDigest)
-    && plan.controlPreimage?.mode === (plan.supersedes ? 'frozen' : 'qualification') && controlColumns.filter(key => key.endsWith('_id')).every(key => plan.controlPreimage[key] === null)
+    && !(plan.supersedes && plan.bootstrap) && plan.controlPreimage?.mode === (plan.supersedes || plan.bootstrap ? 'frozen' : 'qualification') && controlColumns.filter(key => key.endsWith('_id')).every(key => plan.controlPreimage[key] === null)
     && canonical(plan.pins) === canonical(handoverPins()) && plan.financialAuthority === false && plan.guardSqlDigest === handoverDigest(guardSql), 'HANDOVER_PLAN_TARGET_MISMATCH');
   if (plan.applicationInventoryReport) validateAdministratorApplicationInventory(plan.applicationInventoryReport);
+  const bootstrapAdmission = await freshBootstrapAdmission(github, plan);
   const planHash = handoverDigest(plan), review = await nativeReview(github, plan, phase), external = await externalAudit({ github, vercel });
   check(!external.applicationInventoryReportDigest || plan.applicationInventoryReport
     && handoverDigest(validateAdministratorApplicationInventory(plan.applicationInventoryReport)) === external.applicationInventoryReportDigest, 'HANDOVER_ADMIN_APP_REPORT_BINDING_REQUIRED');
@@ -250,6 +278,10 @@ export async function applyHandover({ phase, plan, db, connection, github, verce
   }
   const result = await transaction(db, connection, false, async () => {
     let state = await snapshot(db, true);
+    if (plan.bootstrap) {
+      assertNativeBootstrapAdmission(bootstrapAdmission, { controllerSha: plan.controllerSha, reference: plan.bootstrap.reference });
+      await verifyLockedBootstrap({ db, bootstrapPlan: plan.bootstrap.plan, controllerSha: plan.controllerSha, reference: plan.bootstrap.reference });
+    }
     check(!state.unresolvedProduction.length && state.historyDigest === plan.historyDigest, 'HANDOVER_NATIVE_HISTORY_OR_PRODUCTION_UNCERTAINTY_CHANGED');
     assertParentState(state, external, plan);
     const own = state.receipts.filter(row => row.handover_id === plan.handoverId);
@@ -263,21 +295,21 @@ export async function applyHandover({ phase, plan, db, connection, github, verce
       check(!finalized && (plan.supersedes || !state.receipts.some(row => row.phase === 'finalized'))
         && canonical(state.control) === canonical(plan.controlPreimage), 'HANDOVER_PREIMAGE_CHANGED');
       check(handoverDigest(external) === plan.oldInventoryDigest, 'HANDOVER_OLD_INVENTORY_CHANGED');
-      if (!state.guard) { await db.query(guardSql); state = await snapshot(db, true); }
+      if (!state.guard) { await db.query(guardSql); await installReadonlyHandoverPolicy(db); state = await snapshot(db, true); }
       check(state.guard?.triggers === 2, 'HANDOVER_GUARD_NOT_INSTALLED');
     } else check(prepared && !own.some(row => row.phase === 'aborted') && state.control.mode === 'frozen'
       && canonical({ ...state.control, mode: plan.controlPreimage.mode }) === canonical(plan.controlPreimage)
       && state.guard?.triggers === 2 && state.guard.digest === prepared.evidence.guardDigest, 'HANDOVER_PREPARATION_OR_GUARD_CHANGED');
     if (finalized) { check(phase === 'finalize', 'HANDOVER_FINALIZED_PERMANENT'); return { resumedFinal: true, evidence: finalized.evidence, receiptId: Number(finalized.receipt_id) }; }
     const evidence = { review, controllerSha: plan.controllerSha, candidateSha: plan.candidateSha, buildId: plan.buildId, artifactDigest: plan.artifactDigest, supersedes: plan.supersedes || null, historyDigest: state.historyDigest, otherUnknowns: state.preservedOtherUnknowns,
-      controlPreimage: plan.controlPreimage, guardDigest: state.guard.digest, externalDigest: handoverDigest(external), qualificationDigest: qualification ? handoverDigest(qualification) : null };
+      controlPreimage: plan.controlPreimage, ...(plan.bootstrap ? { bootstrap: plan.bootstrap.reference } : {}), guardDigest: state.guard.digest, externalDigest: handoverDigest(external), qualificationDigest: qualification ? handoverDigest(qualification) : null };
     const inserted = await db.query('insert into fcos_release_coordination.rapid_handover_receipts(handover_id,phase,plan_hash,evidence) values($1,$2,$3,$4::jsonb) returning receipt_id', [plan.handoverId, phase === 'prepare' ? 'prepared' : phase === 'abort' ? 'aborted' : 'finalized', planHash, JSON.stringify(evidence)]);
-    if (phase !== 'finalize' && !plan.supersedes) await db.query('update fcos_release_coordination.control set mode=$1 where singleton', [phase === 'prepare' ? 'frozen' : plan.controlPreimage.mode]);
+    if (phase !== 'finalize' && !plan.supersedes && !plan.bootstrap) await db.query('update fcos_release_coordination.control set mode=$1 where singleton', [phase === 'prepare' ? 'frozen' : plan.controlPreimage.mode]);
     const postimage = (await snapshot(db, true)).control;
     check(canonical(postimage) === canonical({ ...plan.controlPreimage, mode: phase === 'abort' ? plan.controlPreimage.mode : 'frozen' }), 'HANDOVER_NATIVE_POSTIMAGE_FAILED');
     return { resumedFinal: false, evidence, receiptId: Number(inserted.rows[0].receipt_id) };
   });
-  if (phase !== 'finalize') return { phase, planHash, state: phase === 'prepare' ? 'frozen-reversible' : 'restored', nativeReview: review };
+  if (phase !== 'finalize') return { phase, planHash, state: plan.bootstrap ? 'frozen' : phase === 'prepare' ? 'frozen-reversible' : 'restored', nativeReview: review };
   const existing = await github.findDeployment({ planHash, kind: 'fcos_rapid_release_handover' });
   if (existing) {
     check(existing.creator?.login === handoverPins().account
@@ -315,6 +347,7 @@ export async function performHandover({ plan, github, coordinator, qualifyStage,
   const planHash = handoverDigest(plan);
   const ownershipVerifier = async ({ phase }) => {
     check(phase === 'stage', 'HANDOVER_SETUP_CANNOT_PROMOTE_OR_ROLLBACK');
+    await freshBootstrapAdmission(github, plan);
     const review = await nativeReview(github, plan, 'qualify');
     const fresh = await auditHandover(input), own = fresh.database.receipts.find(row => row.handover_id === plan.handoverId && row.phase === 'prepared' && row.plan_hash === planHash);
     check(own && !fresh.database.receipts.some(row => row.handover_id === plan.handoverId && ['aborted','finalized'].includes(row.phase))

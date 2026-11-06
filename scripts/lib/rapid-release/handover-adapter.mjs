@@ -1,7 +1,8 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { handoverDigest, handoverPins, auditHandover, assertHandoverActivation, validateAdministratorApplicationInventory, OLD_RELEASE_VARIABLES, OLD_RELEASE_WORKFLOWS } from './handover.mjs';
-import { digest, requireCondition, validateManifest } from './contract.mjs';
+import { handoverDigest, handoverPins, auditHandover, assertHandoverActivation, validateAdministratorApplicationInventory, withHandoverReadOnlyTransaction, OLD_RELEASE_VARIABLES, OLD_RELEASE_WORKFLOWS } from './handover.mjs';
+import { digest, requireCondition, validateManifest, targets } from './contract.mjs';
+import { verifyBootstrapAdmission } from './bootstrap-admission.mjs';
 import { githubClient, vercelProvider, assertFrozenWorkflow, assertNativeQualityProducer } from './providers.mjs';
 import { DeploymentJournal, validateChain, pendingOperations } from './journal.mjs';
 import { stageRelease } from './engine.mjs';
@@ -60,7 +61,39 @@ export async function readActiveHandover({ get }) {
     databaseReceiptId: p.databaseReceiptId, nativeCoordinatorReadbackDigest: p.nativeCoordinatorReadbackDigest };
 }
 
-export async function createHandoverAdapter({ plan, db, connection, env = process.env, applicationInventoryReport } = {}) {
+/** Download the exact native artifact, dropping credentials at GitHub's signed storage redirect. */
+export async function readHandoverArtifactArchive({ path, token, fetchImpl = fetch }) {
+  const base = `/repos/${handoverPins().repository}/actions/artifacts/`;
+  requireCondition(typeof token === 'string' && token.length > 0 && typeof path === 'string'
+    && path.startsWith(base) && /^[1-9][0-9]*\/zip$/.test(path.slice(base.length)), 'HANDOVER_ARTIFACT_TARGET_MISMATCH');
+  const options = { redirect: 'manual', signal: AbortSignal.timeout(20000) };
+  try {
+    let response = await fetchImpl(`https://api.github.com${path}`, { ...options, headers: {
+      authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' } });
+    if (response.status === 302) {
+      const url = new URL(response.headers.get('location'));
+      requireCondition(url.protocol === 'https:' && !url.username && !url.password && !url.port && !url.hash
+        && (/^productionresultssa[a-z0-9]+\.blob\.core\.windows\.net$/.test(url.hostname)
+          || /^[a-z0-9-]+\.actions\.githubusercontent\.com$/.test(url.hostname)), 'HANDOVER_ARTIFACT_REDIRECT_REFUSED');
+      response = await fetchImpl(url.href, { ...options, redirect: 'error' });
+    }
+    requireCondition(response.status === 200 && !response.redirected && response.body
+      && (!response.headers.has('content-length') || /^\d+$/.test(response.headers.get('content-length'))
+        && Number(response.headers.get('content-length')) <= 2097152), 'HANDOVER_ARTIFACT_DOWNLOAD_REFUSED');
+    const chunks = []; let size = 0;
+    for await (const chunk of response.body) {
+      size += chunk.length; requireCondition(size <= 2097152, 'HANDOVER_ARTIFACT_DOWNLOAD_REFUSED'); chunks.push(Buffer.from(chunk));
+    }
+    requireCondition(size > 0, 'HANDOVER_ARTIFACT_DOWNLOAD_REFUSED'); return Buffer.concat(chunks, size);
+  } catch { throw Error('HANDOVER_ARTIFACT_DOWNLOAD_REFUSED'); }
+}
+
+/** bootstrapContext={bootstrapPlan,authenticationRunId} is input, never authority.
+ * Every admission re-reads native providers/artifact and the real read-only pg transaction.
+ * A persisted handover plan's bootstrap reference overrides only the input context.
+ */
+export async function createHandoverAdapter({ plan, db, connection, env = process.env, applicationInventoryReport, bootstrapContext,
+  fetchImpl = fetch, providerFactory = vercelProvider } = {}) {
   const pins = handoverPins(), token = env.FCOS_RAPID_HANDOVER_GITHUB_TOKEN;
   const base = `/repos/${pins.repository}`;
   const appReport = validateAdministratorApplicationInventory(plan?.applicationInventoryReport || applicationInventoryReport
@@ -68,7 +101,7 @@ export async function createHandoverAdapter({ plan, db, connection, env = proces
   requireCondition(token && env.GITHUB_REPOSITORY === pins.repository, 'HANDOVER_GITHUB_CREDENTIAL_REQUIRED');
   async function request(path, method = 'GET', body) {
     requireCondition(path === '/user' || path === '/users/github-actions%5Bbot%5D' || path.startsWith(`${base}/`) || path === base, 'HANDOVER_GITHUB_TARGET_MISMATCH');
-    const response = await fetch(`https://api.github.com${path}`, { method, redirect: 'error',
+    const response = await fetchImpl(`https://api.github.com${path}`, { method, redirect: 'error',
       headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'content-type': 'application/json', 'X-GitHub-Api-Version': '2022-11-28' },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(20000) });
     if (method === 'GET' && response.status === 404 && /\/actions\/(variables|workflows)\//.test(path)) return null;
@@ -87,7 +120,7 @@ export async function createHandoverAdapter({ plan, db, connection, env = proces
   };
   const manifestPath = resolve(env.FCOS_HANDOVER_ARTIFACT_DIRECTORY || 'artifact', 'manifest.json');
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')); validateManifest(manifest);
-  const client = githubClient({ token, candidateSha: manifest.candidate.sha, actions: false });
+  const client = githubClient({ token, candidateSha: manifest.candidate.sha, actions: false, fetchImpl });
   const operator = await request('/user');
   requireCondition(operator.login === pins.account, 'HANDOVER_GITHUB_IDENTITY_MISMATCH');
   const bot = await request('/users/github-actions%5Bbot%5D');
@@ -95,6 +128,19 @@ export async function createHandoverAdapter({ plan, db, connection, env = proces
   let stagedQualification;
   const github = {
     get: path => request(path), pages,
+    archive: path => readHandoverArtifactArchive({ path, token, fetchImpl }),
+    async bootstrapAdmission({ plan: p } = {}) {
+      const context = p?.bootstrap || plan?.bootstrap;
+      const bootstrapPlan = context?.plan || bootstrapContext?.bootstrapPlan
+        || (env.FCOS_HANDOVER_BOOTSTRAP_PLAN ? JSON.parse(readFileSync(resolve(env.FCOS_HANDOVER_BOOTSTRAP_PLAN), 'utf8')) : null);
+      const authenticationRunId = context?.reference?.authentication?.runId || bootstrapContext?.authenticationRunId
+        || Number(env.FCOS_HANDOVER_BOOTSTRAP_AUTH_RUN_ID);
+      requireCondition(bootstrapPlan && Number.isSafeInteger(authenticationRunId) && authenticationRunId > 0
+        && typeof provider.previewDeployment === 'function', 'HANDOVER_BOOTSTRAP_NATIVE_CONTEXT_REQUIRED');
+      return verifyBootstrapAdmission({ bootstrapPlan, controllerSha: p?.controllerSha || plan?.controllerSha || bootstrapPlan.controllerSha,
+        authenticationRunId, github, vercel: { ...nativeVercel, deployment: id => provider.previewDeployment(id) },
+        readDatabase: work => withHandoverReadOnlyTransaction({ db, connection }, work) });
+    },
     async identity() {
       const repository = await request(base);
       requireCondition(repository.full_name === pins.repository && repository.permissions?.admin === true, 'HANDOVER_ADMIN_TARGET_REQUIRED');
@@ -126,10 +172,11 @@ export async function createHandoverAdapter({ plan, db, connection, env = proces
     },
     createDeployment: body => request(`${base}/deployments`, 'POST', body),
   };
-  const provider = vercelProvider({ manifest, github: client, env, outputDirectory: resolve(env.FCOS_HANDOVER_ARTIFACT_DIRECTORY || 'artifact', 'candidate') });
+  const provider = providerFactory({ manifest, github: client, env, outputDirectory: resolve(env.FCOS_HANDOVER_ARTIFACT_DIRECTORY || 'artifact', 'candidate') });
   // Read-only native methods exposed to the handover audit. No setup callback can promote a domain.
   const nativeVercel = {
-    project: () => provider.project(), currentProduction: () => provider.currentProduction(),
+    project: () => provider.project(), currentProduction: async () => ({ id: (await provider.currentProduction()).id,
+      alias: new URL(targets().origin).hostname, projectId: pins.projectId, teamId: pins.teamId }),
     deployment: id => provider.rawDeployment(id),
   };
   return { github, vercel: nativeVercel,
@@ -141,7 +188,7 @@ export async function createHandoverAdapter({ plan, db, connection, env = proces
       const buildJobs = await request(`${base}/actions/runs/${buildRun.id}/jobs?per_page=100`);
       const workflowProof = await assertFrozenWorkflow({ github: client, controllerSha: p.controllerSha, dispatcherSha: buildRun.head_sha });
       assertNativeQualityProducer(buildRun, buildJobs, manifest, workflowProof);
-      const stagedProvider = vercelProvider({ manifest, github: client, env, outputDirectory: resolve(directory, 'candidate'),
+      const stagedProvider = providerFactory({ manifest, github: client, env, outputDirectory: resolve(directory, 'candidate'),
         ownershipVerifier, handoverPlanHash: planHash });
       const journal = new DeploymentJournal({ github: client, releaseId: manifest.releaseId, manifestHash: digest(manifest), actorIds: [operator.id] });
       await stageRelease({ manifest, journal, provider: stagedProvider, build, smoke: values => runStagedSmoke({ ...values, env }) });
