@@ -39,11 +39,42 @@ jobs:
     permissions:
       contents: read
       actions: read
+      checks: read
       deployments: write
     steps:
+      - name: Admit the qualified installed controller before checkout
+        id: admit-controller
+        uses: actions/github-script@v7
+        env:
+          PLAN_JSON: ${{ inputs.plan_json }}
+          PLAN_HASH: ${{ inputs.plan_hash }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        with:
+          script: |
+            const {createHash}=require('node:crypto');
+            const canonical=value=>JSON.stringify(value,(_,item)=>item&&typeof item==='object'&&!Array.isArray(item)?Object.fromEntries(Object.entries(item).sort()):item);
+            const plan=JSON.parse(process.env.PLAN_JSON),sha=plan.controllerSha;
+            const check=value=>{if(!value)throw Error('QUALIFIED_INSTALLED_HANDOVER_CONTROLLER_REQUIRED');};
+            check(/^[a-f0-9]{40}$/.test(sha||'')&&plan.candidateSha===process.env.CANDIDATE_SHA
+              &&createHash('sha256').update(canonical(plan)).digest('hex')===process.env.PLAN_HASH);
+            const {owner,repo}=context.repo;
+            check(owner==='hocheunglai-oss'&&repo==='fcos'&&context.actor===owner);
+            const {data:repository}=await github.rest.repos.get({owner,repo});
+            const {data:branch}=await github.rest.repos.getBranch({owner,repo,branch:repository.default_branch});
+            check(branch.protected===true&&branch.commit.sha===context.sha);
+            const {data:comparison}=await github.rest.repos.compareCommits({owner,repo,base:sha,head:context.sha});
+            check(['identical','ahead'].includes(comparison.status));
+            for(const path of ['.github/workflows/fcos-rapid-handover.yml','.github/workflows/fcos-rapid-release.yml']){
+              const [{data:frozen},{data:current}]=await Promise.all([sha,context.sha].map(ref=>github.rest.repos.getContent({owner,repo,path,ref})));
+              check(frozen.type==='file'&&current.type==='file'&&frozen.sha===current.sha);
+            }
+            const {data:checks}=await github.rest.checks.listForRef({owner,repo,ref:sha,check_name:'code-and-database',filter:'latest',per_page:100});
+            const quality=checks.check_runs.filter(row=>row.head_sha===sha&&row.name==='code-and-database'&&row.app?.id===15368).sort((a,b)=>b.id-a.id)[0];
+            check(checks.total_count<=100&&quality?.status==='completed'&&quality.conclusion==='success');
+            core.setOutput('controller_sha',sha);
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: ${{ fromJSON(inputs.plan_json).controllerSha }}
+          ref: ${{ steps.admit-controller.outputs.controller_sha }}
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
