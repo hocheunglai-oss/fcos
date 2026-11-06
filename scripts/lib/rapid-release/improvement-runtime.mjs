@@ -10,6 +10,10 @@ const canonical = value => JSON.stringify(value, (_, item) => item && typeof ite
 const digest = value => createHash('sha256').update(Buffer.isBuffer(value) || typeof value === 'string' ? value : canonical(value)).digest('hex');
 const need = (value, code) => { if (!value) throw Object.assign(new Error(code), { code }); };
 const ownedCodes = Object.freeze({
+  QUALITY_DEPENDENCIES_FAILED: 'build_failure', QUALITY_CONTROLS_FAILED: 'test_failure', QUALITY_LINT_FAILED: 'test_failure',
+  QUALITY_TYPECHECK_FAILED: 'test_failure', QUALITY_TESTS_FAILED: 'test_failure', QUALITY_BUILD_FAILED: 'build_failure',
+  QUALITY_PERFORMANCE_FAILED: 'test_failure', QUALITY_MIGRATION_INTEGRITY_FAILED: 'test_failure',
+  QUALITY_COMPATIBILITY_FAILED: 'test_failure', QUALITY_GRAPH_ONLY_FAILED: 'test_failure', QUALITY_FCUNO_CONTRACT_FAILED: 'test_failure',
   SOURCE_BYTES_CHANGED: 'source_mismatch', SOURCE_NOT_CLEAN: 'source_mismatch', MANIFEST_CHANGED: 'source_mismatch',
   SOURCE_SHA_INVALID: 'source_mismatch', BUILD_RECEIPT_MISMATCH: 'stale_evidence', STAGED_BUILD_NOT_READY: 'stale_evidence',
   SMOKE_RUNTIME_IDENTITY_MISMATCH: 'stale_evidence', STAGED_SMOKE_INCOMPLETE: 'test_failure', QUALITY_CHECK_FAILED: 'test_failure',

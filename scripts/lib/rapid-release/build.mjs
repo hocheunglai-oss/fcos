@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, resolve, relative, isAbsolute } from 'node:path';
-import { canonical, changedPaths, digest, git, publicBuildEnvironment, requireCondition, sourceSnapshot, targets, validateManifest } from './contract.mjs';
+import { canonical, changedPaths, digest, git, publicBuildEnvironment, PUBLIC_BUILD_KEYS, requireCondition, sourceSnapshot, targets, validateManifest } from './contract.mjs';
 
 const MODULE_TESTS = Object.freeze({ dashboard: /^(?:dashboard|missingNomB)/i, markets: /^(?:market|hedgeMarket)/i,
   buyer_invoices: /^buyerInvoice/i, xero_portal: /^xero/i, email_router: /^email/i, settings: /^(?:settings|auth|capability|user|permission)/i });
@@ -67,9 +67,11 @@ export function qualityAndBuild({ manifest, candidateDirectory, controllerDirect
     && buildEnv.HOME.startsWith(env.RUNNER_TEMP || '/tmp/'), 'ISOLATED_BUILD_HOME_REQUIRED');
   mkdirSync(buildEnv.HOME, { recursive: true, mode: 0o700 });
   const checks = [], started = Date.now();
+  const testEnv = Object.fromEntries(Object.entries(buildEnv).filter(([key]) => !PUBLIC_BUILD_KEYS.includes(key)));
   const command = (label, executable, args, directory = candidateDirectory) => {
     const begin = Date.now();
-    try { run(executable, args, { cwd: directory, env: buildEnv, stdio: 'pipe', timeout: 900000, maxBuffer: 8 * 1024 * 1024 }); }
+    try { run(executable, args, { cwd: directory, env: ['build', 'fcuno_contract'].includes(label) ? buildEnv : testEnv,
+      stdio: 'pipe', timeout: 900000, maxBuffer: 8 * 1024 * 1024 }); }
     catch { throw Object.assign(new Error(`QUALITY_${label.toUpperCase()}_FAILED`), { code: `QUALITY_${label.toUpperCase()}_FAILED` }); }
     checks.push({ label, elapsedMs: Date.now() - begin, passed: true });
   };

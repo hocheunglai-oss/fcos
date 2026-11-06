@@ -123,6 +123,9 @@ export async function rapidReleaseMain(argv, env = process.env) {
       phase: result.operationId?.endsWith('-stage') ? 'stage' : runtime.phase,
       error: { code: result.code }, elapsedMs: Date.now() - started,
       registry: read(join(runtime.controllerDirectory, 'config/rapid-release-learning.json')) });
+    if (['quality', 'stage'].includes(runtime.phase) && Date.now() - started > 900000 && runtime.manifest)
+      result.performanceReview = await handleReleaseObstacle({ ...runtime, error: { code: 'PHASE_PERFORMANCE_BUDGET_EXCEEDED' },
+        elapsedMs: Date.now() - started, registry: read(join(runtime.controllerDirectory, 'config/rapid-release-learning.json')) });
     return result;
   } catch (error) {
     if (runtime.manifest) {
