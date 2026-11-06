@@ -7,8 +7,8 @@ import test from 'node:test';
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import { createSalesforceWorkflowState, updateSalesforceEnvironmentState, SALESFORCE_RELEASE_MODE } from '../scripts/salesforce-workflow-state.mjs';
 import { openSalesforcePromotionJournal, salesforcePromotionHash as hash } from '../scripts/lib/salesforce-promotion-journal.mjs';
-import { REVIEWED_SALESFORCE_MODE, createReviewedSalesforcePlan, inventoryFromFiles, runReviewedSalesforceRelease, assertReviewedJobReport, assertProductionAuthorization } from '../scripts/lib/salesforce-reviewed-release.mjs';
-import { baselineGitInventory, reviewedSalesforceOptions } from '../scripts/deploy-salesforce-reviewed-manifest.mjs';
+import { INVENTORY_BASELINE_MODE, REVIEWED_SALESFORCE_MODE, createReviewedSalesforcePlan, inventoryFromFiles, reviewedCheckpointInventory, runReviewedSalesforceRelease, assertReviewedJobReport, assertProductionAuthorization } from '../scripts/lib/salesforce-reviewed-release.mjs';
+import { assertReviewedInputsUnchanged, baselineGitInventory, loadReviewedSalesforcePlan, reviewedSalesforceOptions } from '../scripts/deploy-salesforce-reviewed-manifest.mjs';
 import { reviewedDeveePublicationProof } from '../scripts/sync-salesforce-reviewed-repository.mjs';
 
 const policy = FCOS_CONNECTION_POLICY.providers.find(({ id }) => id === 'salesforce');
@@ -20,7 +20,7 @@ const packageXml = ids => Buffer.from(`<?xml version="1.0"?><Package xmlns="http
 }).join('')}<version>65.0</version></Package>`);
 const files = { 'classes/Example.cls': Buffer.from('class Example {}\n'), 'classes/Example.cls-meta.xml': Buffer.from('<ApexClass/>\n') };
 
-function fixture({ bootstrap = false, level = 'RunLocalTests' } = {}) {
+function fixture({ bootstrap = false, level = 'RunLocalTests', inventoryBaseline = false } = {}) {
   const baselineInventory = inventoryFromFiles(files);
   const finalFiles = { ...files, 'classes/Example.cls': Buffer.from('class Example { String value; }\n') };
   const componentIds = ['ApexClass:Example'];
@@ -60,20 +60,28 @@ function fixture({ bootstrap = false, level = 'RunLocalTests' } = {}) {
     permissionSets: bootstrap ? ['Reviewed'] : [],
     ...(bootstrap ? { bootstrap: { manifestPath: 'manifest/bootstrap.xml', sha256: hash(bootstrapBytes), components: bootstrapIds, permissionSets: ['Reviewed'] } } : {}),
   };
+  if (inventoryBaseline) { review.baselineMode = INVENTORY_BASELINE_MODE; delete review.baselineWorkflowPath; baselineWorkflow = null; }
   const inputs = { review, manifestBytes, bootstrapBytes, baselineWorkflow, baselineInventory, finalInventory, policy };
   const plan = createReviewedSalesforcePlan(inputs);
   const directory = mkdtempSync(path.join(tmpdir(), 'fcos-reviewed-sf-'));
   let journal = openSalesforcePromotionJournal({ directory, binding: plan.binding, now });
   const calls = [], assignments = new Set(), checkpoints = [];
+  const orgInventories = new Map(policy.environments.map(environment => [environment.key, structuredClone(baselineInventory)]));
   let sequence = 100;
   const provider = {
     async verifyInventory(environment, expected) { calls.push(['inventory', environment.key, expected.expectedInventoryHash]);
-      return { orgId: environment.orgId, sourceTreeHash: expected.expectedSourceTreeHash, inventoryHash: expected.expectedInventoryHash, verifiedAt: fixedNow.toISOString(), evidenceSha256: 'a'.repeat(64) }; },
+      const actual = orgInventories.get(environment.key);
+      return { orgId: environment.orgId, sourceTreeHash: actual.sourceTreeHash || null, inventoryHash: actual.inventoryHash, verifiedAt: fixedNow.toISOString(), evidenceSha256: 'a'.repeat(64),
+        verificationMethod: 'metadata-api-owned-tree-inventory', scope: 'force-app/main/default', observedInventory: structuredClone(actual.files),
+        identity: { alias: environment.alias, orgId: environment.orgId, isSandbox: environment.isSandbox, username: environment.username || 'production@example.invalid', connectedStatus: 'Connected' } }; },
     async verifyIdentity(environment) { calls.push(['identity', environment.key]); },
     async report(environment, id) { calls.push(['report', environment.key, id]); return reports.get(id); },
     async validate(environment) { const id = jobId(++sequence); calls.push(['validate', environment.key, id]); reports.set(id, makeReport(id, true)); return { id }; },
-    async deploy(environment, validationId) { const id = jobId(++sequence); calls.push(['deploy', environment.key, validationId, id]); reports.set(id, makeReport(id, false)); return { id }; },
-    async bootstrap(environment) { const id = jobId(++sequence); calls.push(['bootstrap', environment.key, id]); reports.set(id, makeReport(id, false, { zero: environment.isSandbox })); return { id }; },
+    async deploy(environment, validationId) { const id = jobId(++sequence); calls.push(['deploy', environment.key, validationId, id]); reports.set(id, makeReport(id, false)); orgInventories.set(environment.key, structuredClone(finalInventory)); return { id }; },
+    async bootstrap(environment) { const id = jobId(++sequence); calls.push(['bootstrap', environment.key, id]);
+      const report = makeReport(id, false, { zero: true });
+      report.details.componentSuccesses = bootstrapIds.map(id => { const [componentType, fullName] = id.split(':'); return { componentType, fullName, success: true }; });
+      reports.set(id, report); orgInventories.set(environment.key, reviewedCheckpointInventory(plan, { bootstrap: { status: 'Succeeded' } })); return { id }; },
     async permissionAssigned(environment, name) { calls.push(['permission-read', environment.key, name]); return assignments.has(`${environment.key}:${name}`); },
     async assignPermission(environment, name) { calls.push(['permission-write', environment.key, name]); assignments.add(`${environment.key}:${name}`); },
     async mirror(action, { deveeDeployment }) {
@@ -87,7 +95,7 @@ function fixture({ bootstrap = false, level = 'RunLocalTests' } = {}) {
   const externalJournal = { async checkpoint(event) { checkpoints.push(structuredClone(event)); } };
   const authorization = { productionMutation: true, fingerprint: plan.fingerprint, manifestSha256: plan.binding.manifestSha256,
     sourceTreeHash: plan.binding.sourceTreeHash, orgIds: plan.binding.orgIds, authorizedBy: 'user', evidence: 'exact release approval', expiresAt: '2026-11-07T00:00:00.000Z' };
-  return { plan, inputs, provider, reports, calls, assignments, checkpoints, ownership, externalJournal, authorization, directory,
+  return { plan, inputs, provider, reports, calls, assignments, checkpoints, orgInventories, ownership, externalJournal, authorization, directory,
     get journal() { return journal; }, makeReport,
     reopen() { journal.close(); journal = openSalesforcePromotionJournal({ directory, binding: plan.binding, now }); },
     run(mode, extra = {}) { return runReviewedSalesforceRelease({ plan, mode, policy, journal, provider, ownership, externalJournal,
@@ -137,6 +145,85 @@ test('prepare then apply consumes exact saved Production validation without anot
   } finally { f.cleanup(); }
 });
 
+test('first inventory-baseline release prepares without any historical full-suite jobs', async () => {
+  const f = fixture({ inventoryBaseline: true });
+  try {
+    for (let id = 1; id <= 6; id++) f.reports.delete(jobId(id));
+    assert.equal(f.plan.binding.baselineMode, INVENTORY_BASELINE_MODE);
+    assert.equal(f.plan.binding.baselineJobs, null);
+    assert.equal((await f.run('prepare')).productionValidation, 'Succeeded');
+    const firstSubmission = f.calls.findIndex(call => call[0] === 'validate');
+    assert.deepEqual(f.calls.slice(0, firstSubmission).filter(call => call[0] === 'inventory').slice(0, 3).map(call => call[1]), ['devee', 'qat', 'production']);
+    assert.equal(f.calls.filter(call => call[0] === 'report' && Number(call[2].slice(3, 15)) <= 6).length, 0);
+    assert.equal(f.calls.filter(call => call[0] === 'validate').length, 3);
+    assert.deepEqual(f.calls.filter(call => call[0] === 'deploy').map(call => call[1]), ['devee', 'qat']);
+    const proof = await reviewedDeveePublicationProof({ plan: f.plan, state: f.journal.state, policy, provider: f.provider, assertUnchanged: async () => {}, now });
+    assert.equal(proof.proofKind, 'verified-native-inventory-plus-covered-manifest');
+    assert.equal(proof.baselineMode, INVENTORY_BASELINE_MODE);
+    assert.equal(f.calls.filter(call => call[0] === 'report' && Number(call[2].slice(3, 15)) <= 6).length, 0);
+  } finally { f.cleanup(); }
+});
+
+test('all-org inventory preflight rejects stale, wrong-org, mismatched or hash-only evidence before any write', async () => {
+  const f = fixture({ inventoryBaseline: true });
+  try {
+    const original = f.provider.verifyInventory;
+    for (const corrupt of [
+      receipt => { receipt.verifiedAt = '2026-11-01T00:00:00.000Z'; },
+      receipt => { receipt.inventoryHash = 'e'.repeat(64); },
+      receipt => { receipt.identity.orgId = 'wrong-org'; },
+      receipt => { receipt.observedInventory = {}; },
+      receipt => { delete receipt.observedInventory; receipt.nativeVerified = true; },
+      receipt => { receipt.verificationMethod = 'caller-json-assertion'; },
+    ]) {
+      f.provider.verifyInventory = async (environment, expected) => {
+        const receipt = await original(environment, expected);
+        if (environment.key === 'production') corrupt(receipt);
+        return receipt;
+      };
+      await assert.rejects(f.run('prepare'), /inventory|native/i);
+      assert.equal(f.calls.filter(call => ['validate', 'deploy', 'bootstrap', 'permission-write'].includes(call[0])).length, 0);
+    }
+  } finally { f.cleanup(); }
+});
+
+test('inventory-baseline resume verifies final upstream trees and untouched Production without resubmission', async () => {
+  const f = fixture({ inventoryBaseline: true });
+  try {
+    await f.run('prepare');
+    const originalTime = f.journal.state.stages.devee.deployment.completedAt;
+    f.reopen(); f.calls.length = 0;
+    assert.equal((await f.run('apply', { authorization: f.authorization })).mode, 'applied');
+    const inventories = f.calls.filter(call => call[0] === 'inventory').slice(0, 3);
+    assert.deepEqual(inventories.map(call => [call[1], call[2]]), [
+      ['devee', f.plan.finalInventory.inventoryHash], ['qat', f.plan.finalInventory.inventoryHash], ['production', f.plan.baselineInventory.inventoryHash],
+    ]);
+    assert.equal(f.calls.filter(call => call[0] === 'validate').length, 0);
+    assert.deepEqual(f.calls.filter(call => call[0] === 'deploy').map(call => call[1]), ['production']);
+    assert.equal(f.calls.filter(call => call[0] === 'report' && Number(call[2].slice(3, 15)) <= 6).length, 0);
+    assert.equal(f.journal.state.stages.devee.deployment.completedAt, originalTime);
+  } finally { f.cleanup(); }
+});
+
+test('inventory baseline resumes the actual intermediate bootstrap tree without another bootstrap', async () => {
+  const f = fixture({ inventoryBaseline: true, bootstrap: true });
+  try {
+    const original = f.provider.report;
+    let interrupted = false;
+    f.provider.report = async (environment, id) => {
+      if (environment.key === 'devee' && f.reports.get(id)?.checkOnly && Number(id.slice(3, 15)) > 100 && !interrupted) { interrupted = true; throw new Error('validation poll interrupted'); }
+      return original(environment, id);
+    };
+    await assert.rejects(f.run('prepare'), /validation poll interrupted/);
+    const intermediate = reviewedCheckpointInventory(f.plan, f.journal.state.stages.devee);
+    f.reopen(); f.calls.length = 0;
+    await f.run('prepare');
+    assert.equal(f.calls.find(call => call[0] === 'inventory' && call[1] === 'devee')[2], intermediate.inventoryHash);
+    assert.equal(f.calls.filter(call => call[0] === 'bootstrap' && call[1] === 'devee').length, 0);
+    assert.equal(f.calls.filter(call => call[0] === 'validate' && call[1] === 'devee').length, 0);
+  } finally { f.cleanup(); }
+});
+
 test('authorization and external ownership fail closed before Production writes', async () => {
   const f = fixture();
   try {
@@ -165,6 +252,10 @@ test('schema prepare stops before Production bootstrap and exact apply authorize
     const permission = f.journal.state.stages.production['permission:Reviewed'];
     assert.equal(permission.prestate, false);
     assert.equal(permission.addedByRelease, true);
+    assert.equal(f.journal.state.stages.production.bootstrap.tests, '0/0');
+    assert.equal(f.journal.state.stages.production.bootstrap.apexTestProof, false);
+    assert.equal(f.journal.state.stages.production.validation.apexTestProof, true);
+    assert.equal(f.journal.state.stages.production.validation.testPlan.level, 'RunLocalTests');
   } finally { f.cleanup(); }
 });
 
@@ -303,6 +394,7 @@ test('reports require actual positive requested tests, all-or-none success and v
     assert.throws(() => assertReviewedJobReport({ ...f.makeReport(id, true), details: { componentSuccesses: [] } },
       { environment, jobId: id, validation: true, testPlan: f.plan.binding.testPlan, expectedComponents: f.plan.manifest }), /manifest component coverage/);
     assert.throws(() => assertProductionAuthorization({ ...f.authorization, expiresAt: '2026-11-05T00:00:00.000Z' }, f.plan, fixedNow), /unexpired/);
+    assert.throws(() => assertReviewedJobReport(f.makeReport(id, false), { environment, jobId: id, testPlan: { level: 'NoTestRun', tests: [], minimumTests: 1 } }), /confined/);
   } finally { f.cleanup(); }
 });
 
@@ -356,4 +448,23 @@ test('baseline inventory uses two bulk Git reads and preserves binary bytes', ()
     assert.deepEqual(inventory, inventoryFromFiles({ 'staticresources/Test.resource': bytes }));
     assert.equal(readFileSync(path.join(directory, 'force-app/main/default/staticresources/Test.resource')).equals(bytes), true);
   } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('inventory baseline loads from the exact Git tree without a deployment-proof file', () => {
+  const f = fixture({ inventoryBaseline: true }), directory = mkdtempSync(path.join(tmpdir(), 'fcos-native-baseline-'));
+  const run = args => { const result = spawnSync('git', args, { cwd: directory, encoding: 'utf8' }); assert.equal(result.status, 0, result.stderr); return result.stdout.trim(); };
+  try {
+    run(['init', '--quiet']);
+    mkdirSync(path.join(directory, 'force-app/main/default/classes'), { recursive: true });
+    for (const [name, bytes] of Object.entries(files)) writeFileSync(path.join(directory, 'force-app/main/default', name), bytes);
+    run(['add', '.']); run(['-c', 'user.name=Offline Test', '-c', 'user.email=offline@example.invalid', 'commit', '-qm', 'baseline']);
+    const review = { ...f.inputs.review, baselineCommit: run(['rev-parse', 'HEAD']) };
+    writeFileSync(path.join(directory, 'force-app/main/default/classes/Example.cls'), 'class Example { String value; }\n');
+    writeFileSync(path.join(directory, 'package.xml'), f.inputs.manifestBytes);
+    writeFileSync(path.join(directory, 'review.json'), JSON.stringify(review));
+    const loaded = loadReviewedSalesforcePlan({ cwd: directory, manifestPath: 'package.xml', reviewPath: 'review.json', policy });
+    assert.equal(loaded.binding.baselineMode, INVENTORY_BASELINE_MODE);
+    assert.equal(loaded.baselineWorkflowAbsolute, null);
+    assertReviewedInputsUnchanged(loaded, { cwd: directory, policy });
+  } finally { f.cleanup(); rmSync(directory, { recursive: true, force: true }); }
 });
