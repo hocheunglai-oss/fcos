@@ -29,7 +29,7 @@ function response(url, data, status = 200) {
 
 function fixture(options = {}) {
   let clock = NOW;
-  const calls = { fetch: [], queries: [], clients: [], begin: [], complete: [], uncertain: [] };
+  const calls = { fetch: [], queries: [], clients: [], begin: [], received: [], complete: [], uncertain: [] };
   const intentId = `fixture_intent_${++sequence}`;
   const store = {
     async begin(request) {
@@ -38,6 +38,7 @@ function fixture(options = {}) {
         preflight: { projectRef: PROJECT, observedAtMs: clock, role: role() }, ...options.intent };
     },
     async complete(receipt) { calls.complete.push(receipt); if (options.completeError) throw new Error(PASSWORD); },
+    async received(receipt) {calls.received.push(receipt);},
     async uncertain(receipt) { calls.uncertain.push(receipt); },
   };
   class Client extends EventEmitter {
@@ -53,7 +54,7 @@ function fixture(options = {}) {
       if (options.fakeStream) stream.destroy();
       calls.clients.push(this);
     }
-    async connect() { if (options.connectError) throw options.connectError; }
+    async connect() { if (options.connectError) throw options.connectError;if(options.connectHook)await options.connectHook(); }
     async query(sql) {
       calls.queries.push(sql);
       if (options.queryImpl) return options.queryImpl(sql);
@@ -147,7 +148,7 @@ test('fresh existing platform-managed membership is mandatory before issuance', 
 
 test('unknown issuance acknowledgement stays pending and does not retry', async () => {
   for (const options of [{ postError: new Error(TOKEN + PASSWORD) }, { postStatus: 500 },
-    { completeError: true }, { issuance: { role: 'cli_login_other', password: PASSWORD, ttl_seconds: 300 } },
+    { issuance: { role: 'cli_login_other', password: PASSWORD, ttl_seconds: 300 } },
     { issuance: { role: 'cli_login_postgres', password: PASSWORD, ttl_seconds: 0 } },
     { issuance: { role: 'cli_login_postgres', password: PASSWORD, ttl_seconds: '300' } },
     { issuance: { role: 'cli_login_postgres', password: PASSWORD, ttl_seconds: 3601 } },
@@ -162,6 +163,17 @@ test('unknown issuance acknowledgement stays pending and does not retry', async 
     await assert.rejects(openPinnedDatabase(f.args), /DURABLE_DATABASE_CREDENTIAL_INTENT_REFUSED/);
     assert.equal(f.calls.fetch.filter(call => call.init.method === 'POST').length, 1);
   }
+});
+
+test('issuer acknowledgement retains ownership until the native connection qualifies',async()=>{
+ let release,entered;const waiting=new Promise(resolve=>entered=resolve),gate=new Promise(resolve=>release=resolve);
+ const f=fixture({connectHook:async()=>{entered();await gate;}}),pending=openPinnedDatabase(f.args);
+ await waiting;assert.equal(f.calls.received.length,1);assert.equal(f.calls.complete.length,0);
+ release();const opened=await pending;assert.equal(f.calls.complete.length,1);await opened.db.end();
+ const failed=fixture({completeError:true});
+ await assert.rejects(openPinnedDatabase(failed.args),DatabaseCredentialOutcomeUnknown);
+ assert.equal(failed.calls.fetch.filter(call=>call.init.method==='POST').length,1);
+ assert.equal(failed.calls.uncertain.length,1);assert.equal(failed.calls.clients[0]._ending,true);
 });
 
 test('TLS authorization requires the actual native TLS socket before any SQL', async () => {

@@ -81,6 +81,12 @@ test('owner CAS chain closes only after bound native receipt and contains no pri
  for(const file of readdirSync(output))assert.equal(readFileSync(join(output,file),'utf8').includes(SECRET),false);
  assert.equal(JSON.stringify(f.writes).includes(SECRET),false);
 });
+test('recording the issuer acknowledgement never unlocks a still-authenticating session',async t=>{
+ const f=fixture(t),store=await f.store(),intent=await store.begin(f.request),receipt=f.receipt(intent);
+ await store.received(receipt);assert.equal(f.state().phase,'pending');assert.equal(f.deployments.length,2);
+ const concurrent=await f.store();await assert.rejects(concurrent.begin(f.request),/ORIGINAL_OPERATION_UNCERTAIN/);
+ await store.complete(receipt);assert.equal(f.state().phase,'received');assert.equal(f.deployments.length,2);
+});
 
 test('two concurrent owner factories yield at most one fresh claim and one credential POST',async t=>{
  const f=fixture(t);f.armRace();const stores=await Promise.all([f.store(),f.store()]);

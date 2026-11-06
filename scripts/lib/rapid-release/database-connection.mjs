@@ -165,7 +165,7 @@ export async function openPinnedDatabase({ credential, caFile, intentStore, deps
       && managedRole(intent.preflight.role), 'EXISTING_MANAGED_DATABASE_ROLE_REQUIRED');
     attemptedIntents.add(intent.intentId);
     const issuedAt = now();
-    let issuance;
+    let issuance, issuanceReceipt;
     const uncertain = async () => {
       const receipt = Object.freeze({ intentId: intent.intentId, requestDigest, outcome: 'unknown', projectRef, code: 'SUPABASE_LOGIN_ROLE_OUTCOME_UNKNOWN' });
       try { await intentStore.uncertain(receipt); } catch { /* The durable original intent remains pending. */ }
@@ -183,11 +183,13 @@ export async function openPinnedDatabase({ credential, caFile, intentStore, deps
         || !Number.isSafeInteger(issuance.ttl_seconds) || issuance.ttl_seconds < 1 || issuance.ttl_seconds > MAX_TTL_SECONDS) return await uncertain();
       password = Buffer.from(issuance.password, 'utf8');
       delete issuance.password;
-      const receipt = Object.freeze({ intentId: intent.intentId, requestDigest, outcome: 'received', issuer: ISSUER,
+      issuanceReceipt = Object.freeze({ intentId: intent.intentId, requestDigest, outcome: 'received', issuer: ISSUER,
         projectRef, role: LOGIN_ROLE, ttlSeconds: issuance.ttl_seconds, issuedAtMs: issuedAt,
         expiresAtMs: issuedAt + issuance.ttl_seconds * 1000 });
-      check(now() < receipt.expiresAtMs, 'SUPABASE_LOGIN_ROLE_EXPIRED');
-      await intentStore.complete(receipt);
+      check(now() < issuanceReceipt.expiresAtMs, 'SUPABASE_LOGIN_ROLE_EXPIRED');
+      // Record issuer acknowledgement while retaining the exclusive claim.
+      // Another rotation must not race this connection's authentication.
+      if (typeof intentStore.received === 'function') await intentStore.received(issuanceReceipt);
     } catch (error) {
       if (error instanceof DatabaseCredentialOutcomeUnknown) throw error;
       return await uncertain();
@@ -224,6 +226,8 @@ export async function openPinnedDatabase({ credential, caFile, intentStore, deps
     check(now() < expiresAt && !nativeFailed, 'PINNED_DELEGATED_DATABASE_EXPIRY_MISMATCH');
     await db.query('ROLLBACK');
     transaction = false;
+    try { await intentStore.complete(issuanceReceipt); } catch { return await uncertain(); }
+    check(now() < expiresAt && !nativeFailed, 'PINNED_DELEGATED_DATABASE_EXPIRY_MISMATCH');
     connection = Object.freeze({ host, port: 5432, user: `${LOGIN_ROLE}.${projectRef}`, database: 'postgres',
       ssl: Object.freeze({ ca, rejectUnauthorized: true }), authentication: Object.freeze({
         kind: 'supabase_management_delegated', issuer: ISSUER, projectRef, organizationId: project.organization_id,

@@ -132,6 +132,13 @@ export async function createDatabaseCredentialIntentStore({credential,directory,
   const moveRef=async(sha,previous)=>{try{if(previous)await github.patch(refPath,{sha,force:false});
     else await github.write(`${base}/git/refs`,{ref:REF,sha});}catch{/* Never retry a ref write. */}
     const actual=await head();check(actual?.sha===sha,'DATABASE_AUTH_CLAIM_ACK_UNKNOWN');return actual;};
+  const received=async receipt=>{
+    check(current?.claim && receiptValid(receipt,current.claim),'DATABASE_AUTH_RECEIPT_REFUSED');
+    const owned=await head();check(owned?.sha===current.claimCommitSha && same(owned.state,current.claim),'DATABASE_AUTH_ORIGINAL_OPERATION_UNCERTAIN');
+    if(current.receivedDeployment){check(same(current.receivedDeployment.payload.receipt,receipt),'DATABASE_AUTH_RECEIPT_REFUSED');return current.receivedDeployment;}
+    current.receivedDeployment=await publish({...binding(current),event:'received',claimCommitSha:current.claimCommitSha,claimDigest:current.claimDigest,receipt,observedAt:new Date(now()).toISOString()});
+    return current.receivedDeployment;
+  };
   return {
     async begin(request){check(!current && requestValid(request),'DATABASE_AUTH_REQUEST_REFUSED');current={preparing:true};
       const previous=await head();check(previous?.state.phase!=='pending','DATABASE_AUTH_ORIGINAL_OPERATION_UNCERTAIN');
@@ -155,9 +162,11 @@ export async function createDatabaseCredentialIntentStore({credential,directory,
       current.intentDeployment=await publish({...binding(claim),event:'intent',claimCommitSha,claimDigest:current.claimDigest,claim,preflight,observedAt:new Date(now()).toISOString()});
       return {state:'fresh',...binding(claim),preflight};
     },
+    received,
     async complete(receipt){check(current?.claim && receiptValid(receipt,current.claim),'DATABASE_AUTH_RECEIPT_REFUSED');
       const owned=await head();check(owned?.sha===current.claimCommitSha && same(owned.state,current.claim),'DATABASE_AUTH_ORIGINAL_OPERATION_UNCERTAIN');
-      const row=await publish({...binding(current),event:'received',claimCommitSha:current.claimCommitSha,claimDigest:current.claimDigest,receipt,observedAt:new Date(now()).toISOString()});
+      const row=current.receivedDeployment || await received(receipt);
+      check(same(row.payload.receipt,receipt),'DATABASE_AUTH_RECEIPT_REFUSED');
       const state={schemaVersion:1,kind:STATE_KIND,phase:'received',pending:current.claim,claimCommitSha:current.claimCommitSha,
         receipt,receivedDeploymentId:row.id,recordDigest:digest(row.payload)};
       const sha=await createCommit(state,current.claimCommitSha);await moveRef(sha,owned);
