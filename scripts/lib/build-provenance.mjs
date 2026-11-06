@@ -6,7 +6,7 @@ import ignore from 'ignore';
 
 // The generated receipt cannot contribute to its own digest. Release-history
 // source remains included: changing the human-readable release is a source change.
-export const GENERATED_PROVENANCE_FILES = new Set(['public/app-version.json']);
+export const GENERATED_PROVENANCE_FILES = new Set(['public/app-version.json', 'api/_runtime-build-receipt.json']);
 // Vercel CLI source-upload defaults. Keep in sync with the pinned CLI when it
 // changes: https://vercel.com/docs/builds/build-features#ignored-files-and-folders
 const VERCEL_DEFAULT_IGNORES = ['.hg', '.git', '.gitmodules', '.svn', '.cache', '.next', '.now', '.vercel',

@@ -2,11 +2,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { createMissingNomBGateway, resolveMissingNomBOwner, isNomBDocument, qualifiesMissingNomBInvoice, isMissingNomBInvoiceCandidate, isCancelledStem,
-  missingNomBList, validateNomBUpload, missingNomBUpload, missingNomBEmail, runMissingNomBReminders, missingNomBStatus } from '../api/_missingNomB.js';
-import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
+  missingNomBList, validateNomBUpload, missingNomBUpload, missingNomBEmail, runMissingNomBReminders as runReminderWorker, missingNomBStatus } from '../api/_missingNomB.js';
+import { fcosSalesforceEnvironment, FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
+import { runWithDeploymentRequestSafety } from '../api/_deploymentReadOnly.js';
 import { resolveNomBTrader, NOM_B_FROM } from '../api/_dashboardNomBPolicy.js';
 import { NOM_B_MAX_BYTES } from '../shared/missingNomB.js';
 const org = fcosSalesforceEnvironment('production').orgId;
+// Direct worker fixtures model the canonical cron request, including its request scope.
+// Unscoped hosted background work remains read-only in the application.
+const runMissingNomBReminders = options => runWithDeploymentRequestSafety(
+  { headers: { host: new URL(FCOS_CONNECTION_POLICY.attestation.endpoint).hostname } },
+  () => runReminderWorker(options), options.env);
 const stemId = 'a00000000000001AAA';
 const nominationId = 'a01000000000001AAA';
 const invoiceId = 'a02000000000001AAA';

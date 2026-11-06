@@ -19,7 +19,7 @@ export function assertHandoverConnection(connection) {
     && connection.database === 'postgres' && connection.ssl?.rejectUnauthorized === true, 'HANDOVER_PINNED_TLS_POSTGRES_REQUIRED');
 }
 async function transaction(db, readOnly, callback) {
-  await db.query(`begin isolation level repeatable read ${readOnly ? 'read only' : 'read write'}`);
+  await db.query(`begin isolation level ${readOnly ? 'repeatable read read only' : 'read committed read write'}`);
   try { const identity = (await db.query('select session_user, current_user, current_database() as database, current_setting(\'transaction_read_only\') as read_only')).rows[0];
     check(identity?.session_user === 'postgres' && identity.current_user === 'postgres' && identity.database === 'postgres'
       && identity.read_only === (readOnly ? 'on' : 'off'), 'HANDOVER_DATABASE_IDENTITY_MISMATCH');
@@ -155,7 +155,14 @@ export async function applyHandover({ phase, plan, db, connection, github, verce
   });
   if (phase !== 'finalize') return { phase, planHash, state: phase === 'prepare' ? 'frozen-reversible' : 'restored', nativeReview: review };
   const existing = await github.findDeployment({ planHash, kind: 'fcos_rapid_release_handover' });
-  if (existing) return { phase, planHash, deploymentId: existing.id, reused: true };
+  if (existing) {
+    check([handoverPins().account, 'github-actions[bot]'].includes(existing.creator?.login)
+      && existing.payload?.kind === 'fcos_rapid_release_handover' && existing.payload.planHash === planHash
+      && existing.payload.controllerSha === plan.controllerSha && existing.payload.candidateSha === plan.candidateSha
+      && existing.payload.buildId === plan.buildId && existing.payload.artifactDigest === plan.artifactDigest,
+    'HANDOVER_EXISTING_RECEIPT_BINDING_INVALID');
+    return { phase, planHash, deploymentId: existing.id, reused: true };
+  }
   check(!result.resumedFinal, 'HANDOVER_GITHUB_OUTCOME_RECONCILIATION_REQUIRED');
   const payload = { kind: 'fcos_rapid_release_handover', controllerSha: plan.controllerSha, candidateSha: plan.candidateSha,
     repository: plan.pins.repository, projectId: plan.pins.projectId, teamId: plan.pins.teamId, planHash,
@@ -181,7 +188,8 @@ export async function performHandover({ plan, github, coordinator, qualifyStage,
     check(phase === 'stage', 'HANDOVER_SETUP_CANNOT_PROMOTE_OR_ROLLBACK');
     const review = await nativeReview(github, plan, 'qualify');
     const fresh = await auditHandover(input), own = fresh.database.receipts.find(row => row.handover_id === plan.handoverId && row.phase === 'prepared' && row.plan_hash === planHash);
-    check(own && fresh.database.control.mode === 'frozen' && fresh.database.guard?.digest === own.evidence.guardDigest
+    check(own && !fresh.database.receipts.some(row => row.handover_id === plan.handoverId && ['aborted','finalized'].includes(row.phase))
+      && fresh.database.control.mode === 'frozen' && fresh.database.guard?.digest === own.evidence.guardDigest
       && !fresh.database.unresolvedProduction.length && fresh.database.historyDigest === plan.historyDigest
       && fresh.providers.noRunning && fresh.providers.productionId === plan.previousProductionId, 'HANDOVER_FRESH_FROZEN_OWNERSHIP_REQUIRED');
     return review;

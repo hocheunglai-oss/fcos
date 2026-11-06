@@ -1,0 +1,51 @@
+# FCOS rapid release
+
+The ordinary path has three jobs: **quality → stage-and-smoke → go-live**. The last job uses the existing protected `fcos-production-release` environment as its single exact decision. A successful build or staging run is never Production authorization.
+
+## Source and build
+
+Start a clean isolated worktree from the freshly read live Vercel deployment commit, not the unfinished main checkout. Copy the current controls with the canonical `.codex/setup.mjs`. Preserve pending features, dirty Apex and untracked migrations. The manifest pins application source/lock hashes and an independently pinned trusted controller commit. Controller changes require their own hosted qualification and handover; ordinary releases keep that controller stable.
+
+Prepare a non-secret baseline JSON containing `deploymentId`, `sha`, `configurationDigest`, and `schemaDigest`, collected by the trusted native compatibility reader. Supply only approved public build settings. Run:
+
+```sh
+npm run release -- prepare --candidate /absolute/clean/candidate --controller /absolute/clean/controller --baseline /private/baseline.json --public-environment /private/public-build.json --output /private/manifest.json
+```
+
+Dispatch `fcos-rapid-release.yml` with that exact manifest and candidate SHA. `qualify` runs only credential-free quality/build. The default-branch controller selects checks from the actual Production-to-candidate Git difference and verifies that selection. Shared, authentication, financial, schema and unknown changes broaden coverage. Build credentials never reach candidate scripts. The pinned Vercel adapter generates Build Output API v3 once, inventories its bytes, and retains an immutable build ID separately from Vercel's observed deployment ID.
+
+The stage job uploads the exact verified prebuilt output with Production runtime configuration and `--skip-domain`. It checks both static and server build identities, login, restricted access, affected desktop modules, and normal-role regression where required. Request-scoped restrictions are established before authentication/dispatch, including direct Supabase fetches, RPC/storage, exports, cron, notifications, background mail and credential refresh. Narrow authentication evidence is permitted through the existing governed harness. Missing coverage fails the stage.
+
+The go-live job reads native approval, checks the live baseline again, promotes that same deployment ID and observes it for five minutes. Preparation targets 15 minutes; provider queue, approval wait, repair time, promotion and observation are measured separately. This target is a measurement goal, not a timeout that bypasses checks.
+
+## Conditional prerequisites
+
+Frontend-only releases make **zero Salesforce or mirror calls** and do not apply database migrations or verify Xero. Merely editing documentation/controller scripts cannot invalidate successful Salesforce source-tree jobs.
+
+Salesforce uses `salesforce:deploy:all -- prepare|apply --manifest manifest/change.xml --review <review.json> --adapter <trusted-adapter.mjs>`. `prepare` verifies DEVEE, the complete DEVEE mirror and QAT, then stops before Production mutations. `apply` requires the same successful prepare checkpoint and exact unexpired authorization. Incremental proof covers the previous complete-tree baseline, changed components, dependencies, test plan and resulting tree. It is distinct from complete-tree deployment proof. Unknown/deleted/uncovered metadata requires explicit complete-tree qualification. The strict mirror, stop/refresh helpers, original eligible job IDs and all-or-none deployments remain mandatory. Never merge the shared draft PR automatically.
+
+A reviewed schema bootstrap precedes schema-dependent validation. Production bootstrap/permissions require the exact final authorization. Preserve backward compatibility and successful prerequisite state if later smoke fails; resume the unfinished check without reapplying completed prerequisites. Destructive schema rollback is prohibited.
+
+For orchestration within one go-live decision, pin a prerequisite descriptor (`adapter`, `adapterDigest`, reviewed `plan`) in the release manifest. Only a **qualified source-owned adapter in `config/rapid-release-adapters.json`** may execute it. This registry initially has no adapters: no particular financial/schema cutover is implicitly authorized or qualified by installing this controller. The loader verifies exact controller bytes, approval, durable per-operation intents, readback, backward compatibility and Salesforce order/mirror proof. Changes requiring an adapter stay pending until that change's adapter and plan are reviewed and qualified. Existing Salesforce commands remain available with their mandatory ownership, private journal, inventory and authorization adapters.
+
+## Recovery and improvement
+
+The runner invokes the existing supervising agent's event-driven improvement protocol on failures and uncertain outcomes. `handleReleaseObstacle` captures sanitized code-owned signatures once, preserves checkpoints, checks matching recipes once, and returns a typed supervisor work request for unfamiliar failures. Provider text never becomes executable instructions. Diagnosis normally targets 2–5 minutes; two unsuccessful attempts change strategy. Source repairs use another worktree and receive new source checks/authorization. Active controller execution is never hot-patched.
+
+Only proof-backed, exact-precondition recipes execute. Original-operation reconciliation checks native operation/build/source/artifact identity and records the original result; it cannot resubmit a write. A still-unknown result stays pending. Failing recipes are disabled. `recordVerifiedLearning` records reproducible outcomes and regression evidence into the tracked registry from a separate worktree. Informational observations may document actual improvements; they grant no execution authority.
+
+GitHub Deployment **objects** retain append-only intent/result payloads and hash-linked recovery history. Deployment statuses and seven-day build artifacts are display/transfer conveniences, not essential history. Financial evidence stays private. The shared Production concurrency group queues work without cancelling active writes. Native ownership and historical Salesforce/financial locks remain in force. Lost acknowledgements permit original-operation readback only. A rollback requires fresh native compatibility evidence, the recorded previous READY application, and this release still being current. Absent proof, preserve the usable checkpoint and report the dependency.
+
+At phase/release completion report: **obstacle → correction → verification → measured time/calls saved → recurrence prevention**. Use “not measured” where no comparable before/after measurement exists. Report repair time explicitly. Notify sooner only for a meaningful dependency, exact approval or rollback.
+
+## One-time handover and activation
+
+Installing these files does not activate a writer. The reviewed handover inventories actual workflows, controller pins, repository variables, Vercel auto-assignment, Deployment subscribers and original coordinator operations. It requires a current native database readback and no unresolved Production submissions. Other unknown outcomes and historical fences remain untouched.
+
+`fcos-rapid-handover.yml` runs the trusted setup adapter behind the existing protected environment. It reversibly freezes the old release control, stages and tests the qualified artifact without a live alias, retires overlapping entrypoints, rereads them, and finalizes a permanent old-writer guard and append-only handover receipt. Activation occurs only after successful native setup. Failure leaves a documented reversible checkpoint; unknown provider submissions are reconciled before any retry. The runner checks the native receipt/run/review before every provider mutation. A new controller hash requires a separately qualified successor handover, never an invented approval flag.
+
+Historical hosted release/bootstrap/cutover documents and canonical `.fcos-cli/release-state.json` remain recovery references for their original owners. They do not activate the rapid route. Do not delete old journals, lift old fences, resolve unknowns by assumption or operate two writers.
+
+## Qualification
+
+`npm run release:qualify` covers frontend-only selection, staging identity/isolation, exact artifact promotion, lost acknowledgements, interruptions, stale/expired validations, concurrent operations, recipe mismatch/failure, resumed prerequisite smoke, exact approval and compatible rollback. The complete product suite and required compatibility/migration/performance checks also apply to the final source. Local fixtures are not hosted evidence: record actual setup qualification, browser coverage and provider identities before activation.

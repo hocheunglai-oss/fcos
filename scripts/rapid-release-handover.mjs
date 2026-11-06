@@ -32,7 +32,11 @@ export async function handoverMain(argv, env = process.env) {
     const adapter = await module.createHandoverAdapter({ plan, db, connection });
     const input = { plan, db, connection, github: adapter.github, vercel: adapter.vercel };
     if (command === 'audit') return auditHandover(input);
-    if (command === 'perform') return performHandover({ ...input, coordinator: { db, connection }, qualifyStage: adapter.qualifyStage, retireOldWriters: adapter.retireOldWriters });
+    if (command === 'perform') {
+      const result = await performHandover({ ...input, coordinator: { db, connection }, qualifyStage: adapter.qualifyStage, retireOldWriters: adapter.retireOldWriters });
+      if (typeof adapter.activate !== 'function') throw Error('HANDOVER_ACTIVATION_ADAPTER_REQUIRED');
+      await adapter.activate(result); return result;
+    }
     return applyHandover({ ...input, phase: command });
   } finally { await db.end(); }
 }

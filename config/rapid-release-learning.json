@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Only reproduced, verified, version-bound operational repairs belong here. No credentials, business records, commands from provider logs, or grants of authority.",
+  "recipes": [],
+  "observations": [
+    {
+      "id": "canonical-cron-fixture-scope",
+      "cause": "Direct reminder fixtures omitted the request scope now required on hosted workers.",
+      "correction": "Model canonical cron request in fixtures; retain fail-closed unscoped worker.",
+      "verification": {
+        "command": "node --test tests/missingNomBBackend.test.js tests/rapidReleaseCore.test.js tests/rapidReleaseLearning.test.js",
+        "passed": 71,
+        "elapsedMs": 155.793,
+        "providerCalls": 0,
+        "regressionDigest": "a2911e7c1ac9584d7150a79261acb715e4a9235e0fc7d07ba9d890bcb4bc29d4"
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Request-scope regression fixtures"
+    },
+    {
+      "id": "prebuilt-standalone-references",
+      "cause": "Pinned Vercel adapter default output references source files outside uploaded output.",
+      "correction": "Build standalone and reject external or traversal filePathMap references before credentials.",
+      "verification": {
+        "command": "npm run release:qualify",
+        "passed": 49,
+        "elapsedMs": 2439.688,
+        "providerCalls": 0,
+        "regressionDigest": "a2911e7c1ac9584d7150a79261acb715e4a9235e0fc7d07ba9d890bcb4bc29d4"
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Artifact confinement regression test"
+    },
+    {
+      "id": "resume-post-prerequisite-smoke",
+      "cause": "A failed post-prerequisite smoke could be skipped when prerequisite success was reused.",
+      "correction": "Persist prerequisite and affected smoke checkpoints independently.",
+      "verification": {
+        "command": "node --test tests/rapidReleaseCore.test.js",
+        "passed": 17,
+        "providerCalls": 0,
+        "regressionDigest": "a2911e7c1ac9584d7150a79261acb715e4a9235e0fc7d07ba9d890bcb4bc29d4"
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Resume test checks exactly one prerequisite write and one promotion"
+    }
+  ]
+}

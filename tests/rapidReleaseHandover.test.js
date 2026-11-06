@@ -38,7 +38,7 @@ async function fixture() {
     },
     qualification: async () => ({ runId: 100, planHash: handoverDigest(plan), controllerSha: plan.controllerSha, candidateSha: plan.candidateSha,
       buildId: plan.buildId, artifactDigest: plan.artifactDigest, deploymentId: 'dpl_qualified', browser: { passed: true, login: true, restrictedAccess: true, normalRole: true, businessWrites: 0, deploymentId: 'dpl_qualified', buildId: plan.buildId } }),
-    createDeployment: async request => { creates++; deployment = { id: 200, payload: request.payload }; return deployment; },
+    createDeployment: async request => { creates++; deployment = { id: 200, creator: { login: pins.account }, payload: request.payload }; return deployment; },
     findDeployment: async () => deployment,
   };
   const vercel = { project: async () => ({ id: pins.projectId, accountId: pins.teamId, autoAssignCustomDomains: false }),

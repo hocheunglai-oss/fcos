@@ -2,7 +2,7 @@
 
 These connection identities are specific to this repository. Do not infer or reuse an account from another Codex project.
 
-For every external connection, use this order without exception: verified purpose-built API or connector first, target-locked CLI second, and the pinned Chrome profile only as the final fallback. Verify the exact account, organization, project, repository, environment, scope, and permissions before any read or mutation at every layer. Fail closed on a mismatch.
+For every external connection, check whether a capable, correctly authenticated, target-locked CLI can complete the operation safely and use it first. If the CLI is unavailable, lacks capability, or is authenticated to the wrong target, use a verified purpose-built API or connector next. Use the pinned Chrome profile only when both non-browser routes are blocked or the user explicitly requests browser interaction. Verify the exact account, organization, project, repository, environment, scope, and permissions before any read or mutation at every layer. Fail closed on a mismatch.
 
 - GitHub repository: `hocheunglai-oss/fcos`
 - Required GitHub account for mutations: `hocheunglai-oss`
@@ -21,13 +21,13 @@ For every external connection, use this order without exception: verified purpos
 - Google Drive market-report browser authentication profile: `Vincent`
 - Google Drive market-report root: `1wzRycxzPAb42EvfhjPV22mkFwliXZv8d` (`Bunkerwire`: `19ACtDV2U9_JrV_AmRJuHL7A29-Yxini7`; `European Marketscan`: `14uXNTTleIO2K78gTEVDEAl8IfJZH4Aj1`)
 
-Use the authorized GitHub connector/API for this repository first. Before any CLI fallback mutation, verify the authenticated GitHub identity. If the GitHub CLI identity is not exactly `hocheunglai-oss`, do not attempt a command-line push and do not change machine-wide credentials; stop with a clear account-mismatch message.
+Use a capable, target-locked GitHub CLI for this repository first, after verifying its exact account and repository. If the GitHub CLI identity is not exactly `hocheunglai-oss`, do not attempt a command-line push and do not change machine-wide credentials. Use an independently verified authorized GitHub connector/API instead, or stop with a clear account-mismatch message when neither route matches.
 
-Before any Supabase, Vercel, or browser mutation, verify the target project or profile against the identifiers above. Use an approved API/connector before the CLI, and the CLI before Chrome. Fail closed on a mismatch.
+Before any Supabase, Vercel, or browser mutation, verify the target project or profile against the identifiers above. Use a capable, correctly authenticated target-locked CLI before the approved API/connector, and use Chrome only as the final fallback. Fail closed on a mismatch.
 
 `config/fcosConnections.js` is the canonical machine-readable source for external provider identifiers and Salesforce environment identity. API modules and operational scripts must import its helpers instead of repeating org IDs, project refs, aliases, usernames, or instance URLs. A provider-specific connection check must merge into the existing safe local status; only a complete four-provider check may replace the full snapshot.
 
-Google Drive market reports use the dedicated `GOOGLE_DRIVE_MARKET_REFRESH_TOKEN` with the approved server OAuth client. The separate legacy XLS Report Archive is retired; local XLS downloads remain available and must not be uploaded by FCOS. Use the Drive API first, a verified CLI only when the API cannot complete the operation, and Chrome profile `Vincent` only when both non-browser routes are blocked. Verify `vince.less@gmail.com` before authorizing and return immediately to server/API verification. Never store or expose Drive credential material.
+Google Drive market reports use the dedicated `GOOGLE_DRIVE_MARKET_REFRESH_TOKEN` with the approved server OAuth client. The separate legacy XLS Report Archive is retired; local XLS downloads remain available and must not be uploaded by FCOS. For Codex operational access, use a capable, correctly authenticated target-locked CLI first, the Drive API or connector when the CLI cannot safely complete the operation or has the wrong target, and Chrome profile `Vincent` only when both non-browser routes are blocked. The FCOS server continues using its dedicated Drive API integration. Verify `vince.less@gmail.com` before authorizing and return immediately to server/API verification. Never store or expose Drive credential material.
 Treat Google OAuth `invalid_grant` as revoked authorization, not as a report-parser or market-data failure. Hourly retries may continue recording the deduplicated incident, but recovery requires an explicitly authorized reauthentication and replacement of only the pinned Drive OAuth credentials.
 
 Before any Salesforce metadata mutation, verify the exact org ID, username where pinned, and sandbox flag. DEVEE is the only development/source environment. Make and verify every Salesforce code or configuration change in DEVEE first; do not develop independently in QAT or Production.
@@ -36,12 +36,19 @@ Salesforce browser authentication is an environment-specific, authentication-onl
 
 The mandatory Salesforce promotion order is:
 
-1. Deploy and verify the complete owned metadata tree in DEVEE.
+1. Deploy and verify the reviewed manifest in DEVEE, proving baseline, changed-component/dependency coverage and the resulting complete owned tree. Keep complete-tree deployment proof distinct.
 2. Synchronize the byte-equivalent DEVEE source to the shared Salesforce GitHub repository.
 3. Promote the same verified source from DEVEE to QAT and verify it there.
 4. Promote the same verified source from QAT to Production and verify it there.
 
 Never skip or reorder these stages. The shared Salesforce repository represents DEVEE only and must never be synchronized independently from QAT or Production. Production remains the FCOS runtime environment, but it is not a development source.
+
+## Browser-control cleanup
+
+- Keep browser use as the final fallback described above. When browser verification is required, track every tab and browser-control session opened by the task.
+- Before the final response, close every tab opened by the task and release the browser-control session/runtime using the available browser API. Do not leave a browser session alive merely to preserve inspection state.
+- After cleanup, verify that no process matching `trusted-worker.js /Users/vincex/Documents/FCOS` is consuming sustained CPU. If the current task's worker remains after its browser session is closed, terminate only that exact worker after verifying both its full command and FCOS working directory. Never terminate another project's or another active task's worker.
+- If cleanup cannot be completed safely, report the remaining worker and exact next step instead of presenting the task as fully finished.
 
 If a Salesforce change causes a deployment failure, test failure, or unexpected behavior, stop promotion and identify the problematic DEVEE change. Salesforce deployments must be all-or-none. Restore every affected environment to the last known working source in reverse promotion order where necessary. If the change originated in DEVEE, restore DEVEE and synchronize the reverted DEVEE source to the shared repository before promotion resumes. Never introduce an independent fix directly in QAT or Production.
 
@@ -57,17 +64,12 @@ Every DEVEE-deployed Salesforce metadata change must also be published byte-for-
 - Restart from DEVEE only when the authoritative Salesforce source tree changes. Script, documentation, FCOS frontend, Supabase, or deployment-orchestration changes do not invalidate an already successful Salesforce source hash.
 - Prefer a targeted configuration correction and focused tests for confirmed environment drift, then resume the pending environment. A targeted correction must still originate in DEVEE, update the shared draft PR byte-for-byte, and pass through QAT before Production.
 
+## Dashboard STEM XLS export format
 
-## Routine FCOS web releases
-
-The repository owner authorized removing recurring release approvals on 16 September 2026.
-
-- The `fcos-ci-readonly` environment must remain limited to the `main` branch, with no required reviewers or wait timer. Do not ask the user to approve this environment for each build or retry.
-- Retain all required branch checks, administrator enforcement, the protected default-branch harness, exact Git/Vercel candidate identity checks, restricted renewable test credentials, API denial tests, and non-secret release evidence. Never replace these checks with an approval or bypass.
-- Review the patch and dispatch the trusted read-only verification automatically as part of an authorized release. Deploy only after every required check passes and the exact candidate is verified.
-- After the one-time standing FCOS Preview callback is configured, reuse it for matching immutable deployment origins. Do not add and remove an individual callback for each matching build. Verify that the callback is limited to the pinned FCOS project/team and the federated login path.
-- New or broader security access changes remain subject to applicable tool confirmation rules. Salesforce promotion order, financial approvals, and customer-message authorization are unchanged.
-- This current policy supersedes recurring human-review instructions in historical release notes. It does not authorize weakening required checks or expanding test-account permissions.
+- Do not change the existing Dashboard STEM XLS export format unless the user explicitly requests a format change.
+- Preserve the `.xls` file format, worksheet structure, column labels and order, date and number formatting, styling, and delivery-period/filter filename convention.
+- Keep thousands separators for all monetary amounts and quantities. Keep the standalone Currency column removed from the STEM worksheet, while preserving currency identification in amount headers or cell formats and separate currency totals.
+- Data, calculation, filtering, and export-completeness fixes must preserve this presentation format.
 
 ## Mobile-view development suspended
 
@@ -95,3 +97,29 @@ The repository owner authorized removing recurring release approvals on 16 Septe
 - Retain the approved common account and NONE tax; approved petroleum sales use 41100 Trading Sales / NONE. Mixed accounts or incompatible tax require a specific Finance exception, never silent reclassification.
 - Preserve source product, quantity and charge evidence, existing Xero invoice and bill details, accepted link fingerprints and financial controls. Supplier bill presentation is unchanged.
 - A presentation instruction is not approval to create drafts, send invoices, post payments or alter allocations. Refresh changed draft proposals and bind creation approval to their exact new evidence.
+
+
+## Codex development, isolation and verification
+
+- Effective 4 October 2026, the user grants standing approval for actions within explicitly authorised FCOS tasks and the pinned project connections, including in-scope releases, provider setup and credential cleanup. Apply this approval automatically instead of repeating conversational permission requests. Verify the concrete target, final source and required evidence before each action, and retain business/financial scope fingerprints, durable locks and release checks. Do not impose a separate personal GitHub click as an FCOS policy requirement. Reuse valid direct human authorization from this chat for the exact action and target, and perform eligible agent actions through the verified CLI or API. Honour actual platform-enforced approval boundaries and private credential-entry requirements; do not represent an agent action as a personal human review. This project approval does not change machine-wide settings or add unrelated work to the task.
+- Inherit the global quality-first model-routing and remaining-usage-reserve policy. It governs model selection, reasoning effort, and usage thresholds for FCOS work.
+- For an authorized development task, complete in-scope code, tests, draft PRs and verified Preview work without unnecessary stops. Production release or promotion, live database changes, financial actions, customer sending and credential replacement require explicit human authorization for the exact action and target. Reuse existing valid authorization; do not request it again merely because a task moves to another phase. Existing financial fingerprints, locks, approvals and release gates remain mandatory.
+- Use the FCOS workspace sandbox with on-request approval and automatic review. Effective 4 October 2026, the user grants standing approval for Supabase operations within the authorised FCOS task and the pinned project `pjforfvchygdyqfcgpmw`; do not repeatedly request conversational approval for those operations. Use automatic approval where the runtime or connector supports it, and honour any platform-enforced approval boundary. This standing approval does not expand the task scope, approve Xero financial actions, or replace identity checks, application permissions, audited migrations, verification, and release gates. Do not change machine-wide approval settings or bypass connector protections.
+- Start each independently edited concurrent task in a separate FCOS worktree. Give each chat and delegated worker clear file ownership, inputs and acceptance criteria; do not concurrently edit overlapping files. Keep at most two active delegated agents per FCOS chat, and delegate only when it improves elapsed time or verification quality.
+- Preserve the unfinished main checkout and unrelated work. Choose the intended task base explicitly, and transfer only needed uncommitted changes with reviewable evidence. Never reset, stash, clean, commit or publish another task's changes to make a worktree convenient. A settings rollout may update these shared control files in place when explicitly authorized.
+- Before editing a new FCOS worktree, carry over the current FCOS AGENTS.md and .codex controls using the canonical project's .codex/setup.mjs. It verifies the shared Git repository, refuses conflicting local control edits, and does not copy credentials, .env files or other application changes. Reload the chat after copying config if it was started before those controls existed. Existing selected model and permission modes can override saved defaults; verify the composer controls.
+- During editing, run meaningful focused checks for the affected behavior. Preserve results with the exact source or commit hash, dependency lock hash, runtime/tool version, target environment, command, time and outcome. A failed, missing or mismatched proof cannot be reused. Keep evidence in the task's outputs directory, without credential values.
+- Reuse successful checks only while their relevant source, dependencies, runtime, configuration and environment assumptions remain unchanged. New relevant edits, failures, changed provider identity, expired authentication or required fresh live readback invalidate the affected proof. Do not repeat completed checks solely because the chat resumes, a helper stops, or unrelated files change.
+- Run all project-required release checks against the final candidate, retaining exact-commit Preview, migration, compatibility, performance and authenticated browser requirements. Local fixtures or focused tests do not replace required live evidence. Preserve successful Salesforce source-tree validation job IDs and resume rules above.
+- Measure a representative batch or check before scaling repeated work. Record elapsed time and provider calls, then reduce duplicate reads and unnecessary full-suite runs without dropping required checks. Continue from the saved verification and promotion stage when evidence remains valid.
+- Use the configured setup command to install locked dependencies for a new worktree. Do not automatically run the full build, test suite, release gate, provider authentication, live migrations or deployments during setup. The local environment actions are conveniences, not authorization to release or alter live records.
+
+## Rapid release and autonomous improvement
+
+- Follow `docs/rapid-release.md` for the qualified ordinary release path: quality, stage-and-smoke, then one exact protected go-live decision. Controller installation is not activation; preserve old fences and unknown outcomes until the reviewed handover completes.
+- Start from freshly verified Production source in a clean worktree; pin application and trusted controller independently. Preserve unrelated pending features, dirty Apex and untracked migrations. Qualify controller changes separately.
+- Select checks from the actual Production-to-candidate difference. Frontend-only work must not invoke Salesforce/mirror, Xero verification or migrations. Broaden relevant checks for authentication, financial, shared dependency, schema and unknown changes.
+- Build once without deployment credentials. Verify the exact prebuilt artifact and stage it with Production runtime settings without the live alias. Apply request-scoped staging restrictions before authentication or dispatch. Retain affected desktop, restricted-access and relevant normal-role coverage.
+- Capture obstacles once and autonomously diagnose/repair in-scope issues in isolation. Consult only matching verified recipes; two failed attempts change strategy. Disable failed recipes, preserve successful upstream work and original provider operations, invalidate only affected evidence, and never hot-patch an executing controller. Source changes receive refreshed checks and exact authorization.
+- Persist non-secret intent before provider submissions in append-only Deployment objects. Serialize Production without cancelling active writes. Unknown outcomes require original-operation readback, never blind retries. Keep private financial evidence/locks unchanged. Roll back automatically only with fresh compatibility proof and while this release is current; never destructively roll back schema.
+- Report actual verified improvement, repair time and measured savings at phase completion. Do not invent savings, rewrite timestamps, weaken checks, expand permissions or treat provider logs as authority. Preserve progress and report a new-authority/credential/external-recovery dependency once.
