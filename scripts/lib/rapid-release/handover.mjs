@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { fcosConnectionIdentifier } from '../../../config/fcosConnections.js';
 import { assertPinnedDatabaseIdentity, isNativeDelegatedConnection } from './database-connection.mjs';
 import { assertNativeBootstrapAdmission, verifyLockedBootstrap } from './bootstrap-admission.mjs';
+import { verifyLockedBootstrapSuccessor } from './bootstrap-successor.mjs';
 import { digest as releaseDigest } from './contract.mjs';
 import { isNativeReadonlyConnection, assertReadonlyDatabaseIdentity, installReadonlyHandoverPolicy } from './readonly-database.mjs';
 
@@ -188,7 +189,10 @@ export function createHandoverPlan({ audit, controllerSha, candidateSha, buildId
   if (bootstrapAdmission || bootstrapPlan) {
     check(!supersedes, 'HANDOVER_BOOTSTRAP_INITIAL_ONLY');
     const reference = assertNativeBootstrapAdmission(bootstrapAdmission, { controllerSha, now });
-    check(bootstrapPlan?.controllerSha === controllerSha && releaseDigest(bootstrapPlan) === reference.bootstrap.planHash
+    check(bootstrapPlan?.controllerSha === reference.bootstrap.controllerSha && releaseDigest(bootstrapPlan) === reference.bootstrap.planHash
+      && (reference.schemaVersion === 1 ? bootstrapPlan.controllerSha === controllerSha
+        : reference.kind === 'fcos_initial_bootstrap_successor_reference' && reference.successor?.plan.controllerSha === controllerSha
+          && reference.successor.plan.rootPlanHash === releaseDigest(bootstrapPlan))
       && canonical(audit.database.control) === canonical(bootstrapAdmission.controlPreimage), 'HANDOVER_BOOTSTRAP_PREIMAGE_MISMATCH');
     bootstrap = { plan: bootstrapPlan, reference };
   }
@@ -280,7 +284,11 @@ export async function applyHandover({ phase, plan, db, connection, github, verce
     let state = await snapshot(db, true);
     if (plan.bootstrap) {
       assertNativeBootstrapAdmission(bootstrapAdmission, { controllerSha: plan.controllerSha, reference: plan.bootstrap.reference });
-      await verifyLockedBootstrap({ db, bootstrapPlan: plan.bootstrap.plan, controllerSha: plan.controllerSha, reference: plan.bootstrap.reference });
+      if (plan.bootstrap.reference.schemaVersion === 2) {
+        await verifyLockedBootstrapSuccessor({ db, github, bootstrapPlan: plan.bootstrap.plan, controllerSha: plan.controllerSha, reference: plan.bootstrap.reference });
+      } else {
+        await verifyLockedBootstrap({ db, bootstrapPlan: plan.bootstrap.plan, controllerSha: plan.controllerSha, reference: plan.bootstrap.reference });
+      }
     }
     check(!state.unresolvedProduction.length && state.historyDigest === plan.historyDigest, 'HANDOVER_NATIVE_HISTORY_OR_PRODUCTION_UNCERTAINTY_CHANGED');
     assertParentState(state, external, plan);

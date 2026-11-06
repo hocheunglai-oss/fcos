@@ -72,13 +72,13 @@ export async function verifyLockedBootstrap({ db, bootstrapPlan: plan, controlle
   if (reference) check(same(reference.bootstrap,bootstrap), 'BOOTSTRAP_ADMISSION_REFERENCE_MISMATCH');
   return { controlPreimage:controlRows[0].control,bootstrap,nativeStateDigest:digest({ control:controlRows[0].control,receipts,guardFingerprint,history }) };
 }
-function nativeFile(row) {
+export function bootstrapNativeFile(row) {
   check(row?.type === 'file' && row.encoding === 'base64' && isSha(row.sha), 'BOOTSTRAP_ADMISSION_NATIVE_SOURCE_REQUIRED');
   const body = Buffer.from(row.content,'base64');
   check(body.length <= 262144 && createHash('sha1').update(`blob ${body.length}\0`).update(body).digest('hex') === row.sha, 'BOOTSTRAP_ADMISSION_NATIVE_SOURCE_REQUIRED');
   return body;
 }
-async function browserProof({ github, read, repo, plan, preview, authenticationRunId }) {
+export async function verifyBootstrapBrowserProof({ github, read, repo, plan, preview, authenticationRunId }) {
   const base = `/repos/${targets().repository}`;
   check(positive(authenticationRunId) && typeof github.archive === 'function', 'BOOTSTRAP_AUTHENTICATED_PRODUCER_REQUIRED');
   const run = await read(`${base}/actions/runs/${authenticationRunId}`);
@@ -86,7 +86,7 @@ async function browserProof({ github, read, repo, plan, preview, authenticationR
   check(run.id === Number(authenticationRunId) && run.repository?.id === repo.id && run.head_repository?.id === repo.id && run.head_branch === repo.default_branch
     && run.event === 'workflow_dispatch' && run.status === 'completed' && run.conclusion === 'success' && isSha(run.head_sha)
     && String(run.path).split('@')[0] === workflowPath && branch.protected === true && branch.name === repo.default_branch
-    && digest(nativeFile(await read(`${base}/contents/${workflowPath}?ref=${run.head_sha}`))) === digest(workflow), 'BOOTSTRAP_AUTHENTICATED_PRODUCER_REQUIRED');
+    && digest(bootstrapNativeFile(await read(`${base}/contents/${workflowPath}?ref=${run.head_sha}`))) === digest(workflow), 'BOOTSTRAP_AUTHENTICATED_PRODUCER_REQUIRED');
   const environment = await read(`${base}/environments/fcos-ci-readonly`), reviews = await read(`${base}/actions/runs/${run.id}/approvals`);
   assertVerificationEnvironmentReview({ environment,approvals:reviews,run,kind:'restricted_browser' });
   const review = reviews.find(row => row.environments?.some(item => item.id === environment.id && item.name === environment.name));
@@ -112,7 +112,7 @@ async function browserProof({ github, read, repo, plan, preview, authenticationR
  * Native adapters: read/get JSON, pages complete arrays, archive raw artifact bytes.
  * Browser authority is independently obtained here, never added to bootstrap phases.
  */
-export async function verifyBootstrapAdmission({ bootstrapPlan:plan,controllerSha,github,vercel,authenticationRunId,readDatabase }) {
+async function rootProof({ bootstrapPlan:plan,controllerSha,github,vercel,readDatabase }) {
   check(typeof readDatabase === 'function', 'BOOTSTRAP_ADMISSION_NATIVE_DATABASE_READER_REQUIRED');
   const read = (github.read || github.get)?.bind(github), base = `/repos/${targets().repository}`;
   check(typeof read === 'function', 'BOOTSTRAP_ADMISSION_NATIVE_GITHUB_REQUIRED');
@@ -125,7 +125,7 @@ export async function verifyBootstrapAdmission({ bootstrapPlan:plan,controllerSh
   const initial = await databaseRead();
   const repo = await read(base);
   check(repo.id === 1278654816 && repo.full_name === targets().repository && repo.owner?.login === targets().account && positive(repo.owner.id)
-    && digest(nativeFile(await read(`${base}/contents/scripts/rapid-release/bootstrap-guard.sql?ref=${controllerSha}`))) === plan.guardSqlDigest, 'BOOTSTRAP_ADMISSION_NATIVE_SOURCE_REQUIRED');
+    && digest(bootstrapNativeFile(await read(`${base}/contents/scripts/rapid-release/bootstrap-guard.sql?ref=${controllerSha}`))) === plan.guardSqlDigest, 'BOOTSTRAP_ADMISSION_NATIVE_SOURCE_REQUIRED');
   const quality = plan.quality, checkRun = await read(`${base}/check-runs/${quality?.checkRunId}`);
   const qualityRun = await read(`${base}/actions/runs/${quality?.runId}`), qualityJob = await read(`${base}/actions/jobs/${quality?.jobId}`);
   check(checkRun.id===quality.checkRunId && checkRun.app?.id===15368 && checkRun.head_sha===controllerSha && checkRun.status==='completed' && checkRun.conclusion==='success'
@@ -163,15 +163,40 @@ export async function verifyBootstrapAdmission({ bootstrapPlan:plan,controllerSh
   check(deployment.id === b.githubPreviewDeploymentId && deployment.sha === controllerSha && deployment.environment === 'Preview' && deployment.creator?.login === 'vercel[bot]'
     && status?.state === 'success' && status.environment_url === `https://${preview.url}`
     && !statuses.some(row => row.id > status.id && row.creator?.login === 'vercel[bot]' && ['error','failure'].includes(row.state)), 'BOOTSTRAP_ADMISSION_GENUINE_PREVIEW_REQUIRED');
-  const authentication = await browserProof({ github,read,repo,plan,preview,authenticationRunId });
+  return {initial,repo,preview,production,databaseRead,read};
+}
+async function finishRoot(proof,vercel) {
+  const {initial,production,databaseRead}=proof;
   const finalProduction=await vercel.currentProduction();
   check(finalProduction.id===production.id && finalProduction.alias===production.alias && finalProduction.projectId===production.projectId
     && finalProduction.teamId===production.teamId,'BOOTSTRAP_ADMISSION_PREVIEW_OR_ALIAS_CHANGED');
   const final = await databaseRead();
   check(final.nativeStateDigest === initial.nativeStateDigest, 'BOOTSTRAP_ADMISSION_DATABASE_CHANGED');
+  return final;
+}
+/** Retained native root/fence proof ONLY. It grants no application/browser admission. */
+export async function verifyBootstrapRootProof(input) {
+  const proof=await rootProof(input),final=await finishRoot(proof,input.vercel);
+  return {...final,repo:proof.repo,preview:proof.preview};
+}
+export async function verifyBootstrapAdmission(input) {
+  const {bootstrapPlan:plan,controllerSha,github,vercel,authenticationRunId}=input;
+  const proof=await rootProof(input);
+  const authentication=await verifyBootstrapBrowserProof({github,read:proof.read,repo:proof.repo,plan,preview:proof.preview,authenticationRunId});
+  const final=await finishRoot(proof,vercel);
   const reference = frozen({schemaVersion:1,kind:'fcos_initial_bootstrap_reference',bootstrap:final.bootstrap,authentication});
   const verifiedAt=Date.now(), admission = frozen({controlPreimage:final.controlPreimage,reference,verifiedAt});
   admissions.set(admission,{referenceDigest:digest(reference),controllerSha,verifiedAt}); return admission;
+}
+/** Distinct initial successor authority. The old bootstrap reference is never relabelled. */
+export async function verifyBootstrapSuccessorAdmission(input) {
+  check(!input.controllerSha || input.controllerSha === input.successorPlan?.controllerSha, 'BOOTSTRAP_ADMISSION_SOURCE_MISMATCH');
+  const {verifyBootstrapSuccessor}=await import('./bootstrap-successor.mjs');
+  const result=await verifyBootstrapSuccessor(input);
+  const reference=frozen({schemaVersion:2,kind:'fcos_initial_bootstrap_successor_reference',bootstrap:result.root.bootstrap,
+    successor:result.successor,authentication:result.authentication});
+  const verifiedAt=Date.now(),admission=frozen({controlPreimage:result.root.controlPreimage,reference,verifiedAt});
+  admissions.set(admission,{referenceDigest:digest(reference),controllerSha:input.successorPlan.controllerSha,verifiedAt});return admission;
 }
 export function assertNativeBootstrapAdmission(admission,{controllerSha,reference,now=Date.now()}={}) {
   const native = admissions.get(admission);
