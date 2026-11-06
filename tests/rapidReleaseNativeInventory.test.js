@@ -62,7 +62,7 @@ test('missing or unverified reports fail before provider calls; app-visible APIs
 });
 
 const audit = inventory => ({ database: { control: { singleton: true, epoch: 1, mode: 'qualification', operation_id: null, bootstrap_id: null, recovery_id: null, plan_completion_id: null, source_upgrade_id: null }, unresolvedProduction: [], historyDigest: 'c'.repeat(64) },
-  providers: { noRunning: true, productionId: 'dpl_old', subscribersDigest: 'd'.repeat(64), applicationInventoryReportDigest: handoverDigest(validateAdministratorApplicationInventory(inventory, { now })) } });
+  providers: { rapidJournal: { digest: 'e'.repeat(64), unresolvedProduction: 0 }, noRunning: true, productionId: 'dpl_old', subscribersDigest: 'd'.repeat(64), applicationInventoryReportDigest: handoverDigest(validateAdministratorApplicationInventory(inventory, { now })) } });
 const planOptions = inventory => ({ audit: audit(inventory), controllerSha: 'a'.repeat(40), candidateSha: 'b'.repeat(40), buildId: 'c'.repeat(64), artifactDigest: 'd'.repeat(64), handoverId: 'native-report-fixture', applicationInventoryReport: inventory, now });
 
 test('the normalized report is frozen into exact plan identity and must match the audited inventory', () => {
@@ -86,4 +86,43 @@ test('an admin inventory report cannot replace the existing protected native own
   await assert.rejects(applyHandover({ phase: 'prepare', plan, connection: { host: `db.${pins.projectRef}.supabase.co`, port: 5432, user: 'postgres', database: 'postgres', ssl: { rejectUnauthorized: true } }, github,
     vercel: {}, db: { query: async () => { writes++; throw Error('must not write'); } } }), { code: 'HANDOVER_PROTECTED_NATIVE_REVIEW_REQUIRED' });
   assert.equal(writes, 0);
+});
+
+test('handover audits pending rapid chains, preserves staged decisions, and ignores only its exact qualification', async () => {
+  const { collectRapidJournalState } = await import('../scripts/lib/rapid-release/handover-adapter.mjs');
+  const { digest } = await import('../scripts/lib/rapid-release/contract.mjs');
+  const manifest = { releaseId: 'setup-qualification', controllerSha: 'a'.repeat(40) };
+  function chain(releaseId, manifestHash, events) {
+    let previousHash = null;
+    return events.map(([event,data], sequence) => {
+      const content = { schemaVersion: 1, kind: 'fcos_rapid_release_event', releaseId, manifestHash, event, data, sequence, previousHash };
+      const payload = { ...content, recordHash: digest(content) }; previousHash = payload.recordHash;
+      return { creator: { id: 1 }, payload };
+    });
+  }
+  const waiting = chain('older-app-waiting', 'a'.repeat(64), [['stage.intent',{operationId:'original'}], ['stage.result',{operationId:'original',deploymentId:'dpl_waiting'}]]);
+  const own = chain(manifest.releaseId, digest(manifest), [['stage.intent',{operationId:'own-stage'}]]);
+  let records = [...waiting,...own];
+  const input = { manifest, actorIds: [1], pages: async () => records };
+  const first = await collectRapidJournalState(input); assert.equal(first.unresolvedProduction, 0);
+  assert.deepEqual(records.slice(0,2), waiting); // no fabricated release.complete or provider result.
+  records = [...records,...chain('other-release', 'b'.repeat(64), [['promote.intent',{operationId:'uncertain'}]])];
+  const pending = await collectRapidJournalState(input); assert.equal(pending.unresolvedProduction, 1); assert.notEqual(pending.digest, first.digest);
+  records = chain(manifest.releaseId, 'c'.repeat(64), [['stage.intent',{operationId:'different-manifest'}]]);
+  assert.equal((await collectRapidJournalState(input)).unresolvedProduction, 1);
+  records[0].creator.id = 2;
+  await assert.rejects(collectRapidJournalState(input), /ACTOR_OR_RECORD_INVALID/);
+});
+
+test('native active handover requires complete pinned receipt and unambiguous activation variables', async () => {
+  const { readActiveHandover } = await import('../scripts/lib/rapid-release/handover-adapter.mjs');
+  let enabled = 'true', pointer = '200';
+  const record = { id: 200, creator: { login: pins.account }, payload: { kind:'fcos_rapid_release_handover', repository:pins.repository,
+    projectId:pins.projectId,teamId:pins.teamId,handoverId:'native-fixture',planHash:'a'.repeat(64),controllerSha:'b'.repeat(40),databaseReceiptId:2,nativeCoordinatorReadbackDigest:'c'.repeat(64) } };
+  const get = async path => path.includes('/deployments/') ? record : path.endsWith('_ENABLED') ? enabled === null ? null : {value:enabled} : pointer === null ? null : {value:pointer};
+  assert.equal((await readActiveHandover({get})).databaseReceiptId, 2);
+  record.payload.projectId = 'wrong'; await assert.rejects(readActiveHandover({get}), /ACTIVE_RECEIPT_INVALID/); record.payload.projectId = pins.projectId;
+  enabled = 'false'; await assert.rejects(readActiveHandover({get}), /ACTIVE_POINTER_UNCERTAIN/);
+  pointer = null; assert.equal(await readActiveHandover({get}), null);
+  enabled = 'true'; await assert.rejects(readActiveHandover({get}), /ACTIVE_POINTER_UNCERTAIN/);
 });

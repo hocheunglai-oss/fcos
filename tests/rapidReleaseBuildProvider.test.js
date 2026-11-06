@@ -109,3 +109,8 @@ test('stage uses existing governed secret slots without moving private values or
  const live=workflow.slice(workflow.indexOf('  go-live:'));assert.ok(live.includes('secrets.FCOS_HOSTED_NORMAL_EMAIL'));
  assert.doesNotMatch(live,/secrets\.FCOS_HOSTED_RUNTIME_EMAIL/);
 });
+
+test('activation of a newer controller immediately fences the previous controller source', async()=>{
+ const f=nativeFixture(); f.setup.controllerSha='e'.repeat(40);
+ await assert.rejects(verifyExecution({github:f.gh,manifest:f.m,env:f.env,phase:'stage'}),/QUALIFIED_HANDOVER_REQUIRED/);
+});
