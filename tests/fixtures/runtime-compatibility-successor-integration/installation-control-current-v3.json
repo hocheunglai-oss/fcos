@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 3,
+  "previousSupplementSha256": "b36acc281436bc2d46c66d5c6f14a587c22525f41e4cc8af4243aa69757d13b2",
+  "reviewedCurrentCommit": "5553b36d3e6478c669fe4b1377415f2223c638f0",
+  "path": "config/fcosConnections.js",
+  "currentSha256": "9e4d0771ea6ebb4c6b1f8b7def46c77024c76e8e306cc9cf5547f6e40356b8a2",
+  "currentByteLength": 26228,
+  "currentOid": "4966dbf701cf0a3e18461d9973f17f1dd68833f2",
+  "retainedSource": "installation-controls-v2.json",
+  "reason": "Canonical dedicated FCOS release metadata reader identity; retained historical configuration and all original source bindings remain unchanged."
+}

@@ -60,6 +60,15 @@ export function validateInstallationControlsV2(bytes, packBytes) {
 }
 export const installationControlsV2 = validateInstallationControlsV2(installationV2ManifestBytes,
   regularFile(FIXTURE_ROOT, 'installation-controls-v2.pack'));
+// Current-only pin extension. Historical v1/v2 bytes and packed objects are
+// unchanged; the dedicated reader identity cannot replace a retained input.
+const installationV3Bytes = regularFile(FIXTURE_ROOT, 'installation-control-current-v3.json');
+assert.equal(hash(installationV3Bytes), '8be9fc10bf3c5826d03c69471888d65c6a4f1bd9a64705a56bec5e4b45e79788');
+const installationV3 = Object.freeze(JSON.parse(installationV3Bytes));
+assert.equal(installationV3.schemaVersion, 3);
+assert.equal(installationV3.previousSupplementSha256, hash(installationV2ManifestBytes));
+assert.equal(installationV3.path, 'config/fcosConnections.js');
+assert.equal(installationV3.retainedSource, 'installation-controls-v2.json');
 const retainedControls = new Map();
 function retainedControlBodies(controls = installationControls) {
   if (retainedControls.has(controls)) return retainedControls.get(controls);
@@ -90,10 +99,12 @@ export function installationControlSource(path, current) {
   const controls = installationControlsV2.sources.some(row => row.path === path) ? installationControlsV2 : installationControls;
   const entry = controls.sources.find(row => row.path === path);
   if (!entry || hash(current) === entry.sha256) { assertBoundSource(path,current); return current; }
-  assert.equal(hash(current),entry.currentSha256, `Unreviewed current installation control: ${path}`);
+  const currentPin = controls === installationControlsV2 && path === installationV3.path && hash(current) === installationV3.currentSha256
+    ? installationV3 : entry;
+  assert.equal(hash(current),currentPin.currentSha256, `Unreviewed current installation control: ${path}`);
   if (controls === installationControlsV2) {
-    assert.equal(current.length,entry.currentByteLength, `Current installation length differs: ${path}`);
-    assert.equal(createHash('sha1').update(`blob ${current.length}\0`).update(current).digest('hex'),entry.currentOid);
+    assert.equal(current.length,currentPin.currentByteLength, `Current installation length differs: ${path}`);
+    assert.equal(createHash('sha1').update(`blob ${current.length}\0`).update(current).digest('hex'),currentPin.currentOid);
   }
   const retained = retainedControlBodies(controls).get(path); assertBoundSource(path,retained);
   return Buffer.from(retained);
