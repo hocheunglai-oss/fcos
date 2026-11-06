@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import { openSalesforcePromotionJournal, salesforcePromotionHash } from './lib/salesforce-promotion-journal.mjs';
-import { createReviewedSalesforcePlan, inventoryFromFiles, readReviewedInventory, runReviewedSalesforceRelease, safeProjectFile } from './lib/salesforce-reviewed-release.mjs';
+import { INVENTORY_BASELINE_MODE, createReviewedSalesforcePlan, inventoryFromFiles, readReviewedInventory, runReviewedSalesforceRelease, safeProjectFile } from './lib/salesforce-reviewed-release.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const POLICY = FCOS_CONNECTION_POLICY.providers.find(({ id }) => id === 'salesforce');
@@ -63,22 +63,22 @@ export function baselineGitInventory(cwd, commit, run = localCommand) {
 export function loadReviewedSalesforcePlan({ cwd = ROOT, manifestPath, reviewPath, policy = POLICY }) {
   const reviewAbsolute = safeProjectFile(cwd, reviewPath), manifestAbsolute = safeProjectFile(cwd, manifestPath);
   const review = JSON.parse(readFileSync(reviewAbsolute, 'utf8'));
-  const baselineWorkflowAbsolute = safeProjectFile(cwd, review.baselineWorkflowPath);
-  const baselineWorkflow = JSON.parse(readFileSync(baselineWorkflowAbsolute, 'utf8'));
+  const baselineWorkflowAbsolute = review.baselineMode === INVENTORY_BASELINE_MODE ? null : safeProjectFile(cwd, review.baselineWorkflowPath);
+  const baselineWorkflow = baselineWorkflowAbsolute ? JSON.parse(readFileSync(baselineWorkflowAbsolute, 'utf8')) : null;
   const sourceRoot = path.join(cwd, policy.publication.sourceRoot);
   const bootstrapAbsolute = review.bootstrap ? safeProjectFile(cwd, review.bootstrap.manifestPath) : null;
   const inputs = { review, manifestBytes: readFileSync(manifestAbsolute), bootstrapBytes: bootstrapAbsolute ? readFileSync(bootstrapAbsolute) : null,
     baselineWorkflow, baselineInventory: baselineGitInventory(cwd, review.baselineCommit), finalInventory: readReviewedInventory(sourceRoot), policy };
   const plan = createReviewedSalesforcePlan(inputs);
   return { ...plan, manifestPath, reviewPath, manifestAbsolute, reviewAbsolute, baselineWorkflowAbsolute, bootstrapAbsolute,
-    inputDigests: { review: salesforcePromotionHash(readFileSync(reviewAbsolute)), baseline: salesforcePromotionHash(readFileSync(baselineWorkflowAbsolute)) } };
+    inputDigests: { review: salesforcePromotionHash(readFileSync(reviewAbsolute)), baseline: baselineWorkflowAbsolute ? salesforcePromotionHash(readFileSync(baselineWorkflowAbsolute)) : null } };
 }
 
 export function assertReviewedInputsUnchanged(plan, { cwd = ROOT, policy = POLICY } = {}) {
   if (readReviewedInventory(path.join(cwd, policy.publication.sourceRoot)).sourceTreeHash !== plan.binding.sourceTreeHash
     || salesforcePromotionHash(readFileSync(plan.manifestAbsolute)) !== plan.binding.manifestSha256
     || salesforcePromotionHash(readFileSync(plan.reviewAbsolute)) !== plan.inputDigests.review
-    || salesforcePromotionHash(readFileSync(plan.baselineWorkflowAbsolute)) !== plan.inputDigests.baseline
+    || (plan.baselineWorkflowAbsolute && salesforcePromotionHash(readFileSync(plan.baselineWorkflowAbsolute)) !== plan.inputDigests.baseline)
     || (plan.bootstrapAbsolute && salesforcePromotionHash(readFileSync(plan.bootstrapAbsolute)) !== plan.binding.bootstrapSha256)
     || salesforcePromotionHash(policy) !== plan.binding.configurationSha256) throw new Error('Salesforce source, manifest, review, baseline, or connection policy changed; restart prepare from DEVEE.');
 }
