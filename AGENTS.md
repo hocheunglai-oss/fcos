@@ -36,7 +36,7 @@ Salesforce browser authentication is an environment-specific, authentication-onl
 
 The mandatory Salesforce promotion order is:
 
-1. Deploy and verify the complete owned metadata tree in DEVEE.
+1. Deploy and verify the reviewed manifest in DEVEE, proving baseline, changed-component/dependency coverage and the resulting complete owned tree. Keep complete-tree deployment proof distinct.
 2. Synchronize the byte-equivalent DEVEE source to the shared Salesforce GitHub repository.
 3. Promote the same verified source from DEVEE to QAT and verify it there.
 4. Promote the same verified source from QAT to Production and verify it there.
@@ -113,3 +113,13 @@ Every DEVEE-deployed Salesforce metadata change must also be published byte-for-
 - Run all project-required release checks against the final candidate, retaining exact-commit Preview, migration, compatibility, performance and authenticated browser requirements. Local fixtures or focused tests do not replace required live evidence. Preserve successful Salesforce source-tree validation job IDs and resume rules above.
 - Measure a representative batch or check before scaling repeated work. Record elapsed time and provider calls, then reduce duplicate reads and unnecessary full-suite runs without dropping required checks. Continue from the saved verification and promotion stage when evidence remains valid.
 - Use the configured setup command to install locked dependencies for a new worktree. Do not automatically run the full build, test suite, release gate, provider authentication, live migrations or deployments during setup. The local environment actions are conveniences, not authorization to release or alter live records.
+
+## Rapid release and autonomous improvement
+
+- Follow `docs/rapid-release.md` for the qualified ordinary release path: quality, stage-and-smoke, then one exact protected go-live decision. Controller installation is not activation; preserve old fences and unknown outcomes until the reviewed handover completes.
+- Start from freshly verified Production source in a clean worktree; pin application and trusted controller independently. Preserve unrelated pending features, dirty Apex and untracked migrations. Qualify controller changes separately.
+- Select checks from the actual Production-to-candidate difference. Frontend-only work must not invoke Salesforce/mirror, Xero verification or migrations. Broaden relevant checks for authentication, financial, shared dependency, schema and unknown changes.
+- Build once without deployment credentials. Verify the exact prebuilt artifact and stage it with Production runtime settings without the live alias. Apply request-scoped staging restrictions before authentication or dispatch. Retain affected desktop, restricted-access and relevant normal-role coverage.
+- Capture obstacles once and autonomously diagnose/repair in-scope issues in isolation. Consult only matching verified recipes; two failed attempts change strategy. Disable failed recipes, preserve successful upstream work and original provider operations, invalidate only affected evidence, and never hot-patch an executing controller. Source changes receive refreshed checks and exact authorization.
+- Persist non-secret intent before provider submissions in append-only Deployment objects. Serialize Production without cancelling active writes. Unknown outcomes require original-operation readback, never blind retries. Keep private financial evidence/locks unchanged. Roll back automatically only with fresh compatibility proof and while this release is current; never destructively roll back schema.
+- Report actual verified improvement, repair time and measured savings at phase completion. Do not invent savings, rewrite timestamps, weaken checks, expand permissions or treat provider logs as authority. Preserve progress and report a new-authority/credential/external-recovery dependency once.
