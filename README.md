@@ -226,10 +226,4 @@ For a temporary test only, `SALESFORCE_ACCESS_TOKEN` can be used, but it will ex
 
 Ordinary releases use **Quality → stage and smoke → one go-live decision, promotion and verification**. The trusted controller builds once without deployment credentials, tests the staged Production-configured artifact without its live domain, then promotes the same Vercel deployment and observes it for five minutes. Checks follow the actual Production-to-candidate difference; frontend-only changes do not deploy Salesforce, publish its mirror, verify Xero or run migrations. Recovery preserves completed work and reads back original uncertain operations. See [the rapid release procedure](docs/rapid-release.md) for preparation, autonomous repair, qualification and one-time activation.
 
-Salesforce changes retain **DEVEE → verified complete DEVEE mirror → QAT → Production**. Use `npm run salesforce:deploy:all -- prepare --manifest manifest/<change>.xml --review <review.json> --adapter <trusted-adapter.mjs>`, then `apply` with exact authorization. Reviewed incremental evidence must establish the baseline, changed components, dependencies and resulting tree; a tree hash alone is insufficient. The separate `salesforce:complete:deploy` route retains complete-tree proof and `salesforce:validate:all` remains explicit broad validation. Never develop independently in QAT or Production or merge the shared draft PR automatically.
-
-Production deploys are handled by Vercel:
-
-```bash
-pnpm dlx vercel@latest --prod
-```
+Salesforce changes retain **DEVEE → verified complete DEVEE mirror → QAT → Production**. Run Salesforce commands from the selected authoritative application source checkout, which owns the reviewed metadata and baseline evidence. Use `npm run salesforce:deploy:all -- prepare --manifest manifest/<change>.xml --review <review.json> --adapter <trusted-adapter.mjs>`, then `apply` with exact authorization. Reviewed incremental evidence must establish the baseline, changed components, dependencies and resulting tree; a tree hash alone is insufficient. The separate `salesforce:complete:deploy` route retains complete-tree proof and `salesforce:validate:all` remains explicit broad validation. Never develop independently in QAT or Production or merge the shared draft PR automatically.
