@@ -1,7 +1,7 @@
 import { canonical, digest, requireCondition, targets } from './contract.mjs';
 
 export const EVENT_TYPES = Object.freeze(['release.prepared', 'quality.passed', 'build.passed', 'stage.intent', 'stage.result',
-  'smoke.passed', 'approval.accepted', 'prerequisites.passed', 'prerequisites.smoke_passed', 'promote.intent', 'promote.result', 'live.passed',
+  'smoke.passed', 'stage.pre_bootstrap_passed', 'approval.accepted', 'prerequisites.intent', 'prerequisites.result', 'prerequisites.passed', 'prerequisites.smoke_passed', 'promote.intent', 'promote.result', 'live.passed',
   'rollback.intent', 'rollback.result', 'release.complete', 'obstacle.detected', 'repair.attempted', 'repair.verified',
   'repair.disabled', 'release.waiting', 'salesforce.checkpoint', 'handover.completed']);
 const forbiddenKeys = /(?:password|token|secret|cookie|authorizationheader|databaseurl|financialrecords|customeremail)/i;
@@ -34,7 +34,7 @@ export function validateChain(records, manifestHash, releaseId) {
 export class DeploymentJournal {
   constructor({ github, releaseId, manifestHash, actorIds }) { Object.assign(this, { github, releaseId, manifestHash, actorIds }); }
   async read() {
-    const records = await this.github.pages(`/repos/${targets().repository}/deployments?environment=fcos-release-journal-v1&per_page=100`);
+    const records = await this.github.pages(`/repos/${targets().repository}/deployments?environment=fcos-release-journal-v1&sha=${this.github.candidateSha}&per_page=100`);
     const own = records.filter(record => record.payload?.releaseId === this.releaseId);
     for (const record of own) requireCondition(this.actorIds.includes(record.creator?.id), 'JOURNAL_ACTOR_MISMATCH');
     return validateChain(own, this.manifestHash, this.releaseId);

@@ -44,7 +44,15 @@ export function assertSmokeProof(proof, manifest, staged) {
     && manifest.selection.modules.every(module => proof.modules?.includes(module))
     && (!manifest.selection.normalRole || proof.normalRole === true), 'STAGED_SMOKE_INCOMPLETE');
 }
-export async function stageRelease({ manifest, journal, provider, build, smoke }) {
+export function assertPreBootstrapProof(proof, manifest, staged) {
+  requireCondition((manifest.selection.salesforce || manifest.selection.database) && manifest.prerequisites?.plan?.deferSchemaDependentSmoke === true
+    && proof?.passed === true && proof.mode === 'pre_bootstrap' && proof.manifestHash === digest(manifest)
+    && proof.deploymentId === staged.id && proof.buildId === manifest.build.buildId && proof.isolationVerified === true
+    && proof.businessWrites === 0 && proof.bootstrapFingerprint === manifest.prerequisites.plan.bootstrapFingerprint
+    && /^[a-f0-9]{64}$/.test(proof.bootstrapFingerprint || '') && proof.deferredChecks?.length > 0
+    && proof.deferredChecks.every(module => manifest.selection.modules.includes(module)), 'PREBOOTSTRAP_STAGE_PROOF_REQUIRED');
+}
+export async function stageRelease({ manifest, journal, provider, build, smoke, beforeBootstrap }) {
   validateManifest(manifest); assertBuildReceipt(build, manifest);
   await provider.assertOwnership({ phase: 'stage', manifest, manifestHash: digest(manifest) });
   let records = await journal.read();
@@ -59,19 +67,30 @@ export async function stageRelease({ manifest, journal, provider, build, smoke }
   requireCondition(ready.id === staged.id && ready.state === 'READY' && ready.buildId === build.buildId
     && ready.artifactDigest === build.artifactDigest && ready.sha === manifest.candidate.sha && ready.target === 'production', 'STAGED_BUILD_NOT_READY');
   records = await journal.read();
-  const existing = events(records).find(event => event.event === 'smoke.passed' && event.data.deploymentId === ready.id);
+  const deferred = (manifest.selection.salesforce || manifest.selection.database) && manifest.prerequisites?.plan?.deferSchemaDependentSmoke === true;
+  const acceptanceEvent = deferred ? 'stage.pre_bootstrap_passed' : 'smoke.passed';
+  const existing = events(records).find(event => event.event === acceptanceEvent && event.data.deploymentId === ready.id);
   if (!existing) {
-    const proof = await smoke({ manifest, staged: ready });
-    assertSmokeProof(proof, manifest, ready);
-    await journal.append('smoke.passed', proof);
+    if (deferred) {
+      requireCondition(typeof beforeBootstrap === 'function', 'QUALIFIED_PREBOOTSTRAP_VERIFIER_REQUIRED');
+      const proof = await beforeBootstrap({ manifest, staged: ready });
+      assertPreBootstrapProof(proof, manifest, ready);
+      await journal.append(acceptanceEvent, proof);
+    } else {
+      const proof = await smoke({ manifest, staged: ready }); assertSmokeProof(proof, manifest, ready);
+      await journal.append(acceptanceEvent, proof);
+    }
   }
-  return { state: 'ready_for_decision', manifestHash: digest(manifest), staged: ready,
+  return { state: deferred ? 'awaiting_authorized_bootstrap' : 'ready_for_decision', deferredChecks: deferred ? manifest.selection.modules : [], manifestHash: digest(manifest), staged: ready,
     conditionalPrerequisites: manifest.selection.salesforce || manifest.selection.database };
 }
 export async function promoteRelease({ manifest, journal, provider, approval, prerequisites, smoke, observe }) {
   validateManifest(manifest);
   const records = await journal.read(), all = events(records), stagedReference = phaseResult(records, 'stage')?.result;
-  requireCondition(stagedReference && all.some(event => event.event === 'smoke.passed' && event.data.deploymentId === stagedReference.id), 'STAGED_ACCEPTANCE_REQUIRED');
+  const preBootstrap = all.find(event => event.event === 'stage.pre_bootstrap_passed' && event.data.deploymentId === stagedReference?.id)?.data;
+  const fullStage = all.some(event => event.event === 'smoke.passed' && event.data.deploymentId === stagedReference?.id);
+  requireCondition(stagedReference && (fullStage || preBootstrap), 'STAGED_ACCEPTANCE_REQUIRED');
+  if (!fullStage) assertPreBootstrapProof(preBootstrap, manifest, stagedReference);
   const staged = await provider.ready(stagedReference.id);
   requireCondition(staged.id === stagedReference.id && staged.state === 'READY' && staged.buildId === manifest.build.buildId
     && staged.sha === manifest.candidate.sha, 'STAGED_ACCEPTANCE_CHANGED');
@@ -80,11 +99,20 @@ export async function promoteRelease({ manifest, journal, provider, approval, pr
   if (all.some(event => event.event === 'release.complete')) return { state: 'complete', deploymentId: staged.id, reused: true };
   if (!all.some(event => event.event === 'approval.accepted')) await journal.append('approval.accepted', approval);
   if (manifest.selection.salesforce || manifest.selection.database) {
+    await journal.assertNoUnresolvedOtherRelease();
+    await provider.assertOwnership({ phase: 'prerequisites', manifest, manifestHash: digest(manifest) });
     requireCondition(typeof prerequisites === 'function', 'APPROVED_PREREQUISITES_REQUIRED');
-    let prerequisite = all.find(event => event.event === 'prerequisites.passed')?.data;
+    let prerequisite = all.find(event => event.event === 'prerequisites.passed')?.data || phaseResult(records, 'prerequisites')?.result;
     if (!prerequisite) {
+      const operationId = `${manifest.releaseId}-prerequisites`, request = { planDigest: digest(manifest.prerequisites), candidateSha: manifest.candidate.sha };
+      const intent = all.find(event => event.event === 'prerequisites.intent')?.data;
+      if (intent) requireCondition(intent.operationId === operationId && intent.requestHash === digest(request), 'PREREQUISITE_INTENT_CHANGED');
+      else await journal.append('prerequisites.intent', { operationId, requestHash: digest(request), request });
+      // Reentry resumes the qualified adapter's own per-operation journal/readback;
+      // it must never resubmit an uncertain provider operation.
       const result = await prerequisites({ manifest, approval });
       requireCondition(result?.passed === true && result.manifestHash === digest(manifest) && result.backwardCompatible === true, 'PREREQUISITE_VERIFICATION_REQUIRED');
+      await journal.append('prerequisites.result', { operationId, outcome: 'applied', result });
       await journal.append('prerequisites.passed', result);
       prerequisite = result;
     }

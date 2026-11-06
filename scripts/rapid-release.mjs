@@ -8,8 +8,9 @@ import { DeploymentJournal, pendingOperations } from './lib/rapid-release/journa
 import { improvementSummary } from './lib/rapid-release/learning.mjs';
 import { handleReleaseObstacle } from './lib/rapid-release/improvement-runtime.mjs';
 import { stageRelease, promoteRelease, phaseResult } from './lib/rapid-release/engine.mjs';
-import { githubClient, nativeApproval, verifyExecution, vercelProvider, assertNativeQualityProducer } from './lib/rapid-release/providers.mjs';
-import { runPrerequisites } from './lib/rapid-release/prerequisites.mjs';
+import { githubClient, nativeApproval, verifyExecution, vercelProvider, assertNativeQualityProducer, assertFrozenWorkflow } from './lib/rapid-release/providers.mjs';
+import { runPrerequisites, verifyBeforeBootstrap, qualifiedAdapter } from './lib/rapid-release/prerequisites.mjs';
+import { readCandidateModuleInventory } from './lib/rapid-release/modules.mjs';
 import { nativeCompatibilityReader } from './lib/rapid-release/compatibility.mjs';
 
 const read = path => JSON.parse(readFileSync(resolve(path), 'utf8'));
@@ -49,10 +50,10 @@ async function rapidReleaseCommand(argv, env, runtime) {
   }
   if (command === 'prepare') {
     requireCondition(opts.candidate && opts.baseline && opts['public-environment'] && opts.output, 'PREPARE_ARGUMENTS_REQUIRED');
-    const candidate = resolve(opts.candidate), baseline = read(opts.baseline);
-    const manifest = createManifest({ candidate: sourceSnapshot(candidate), controllerSha: git(controller, ['rev-parse', 'HEAD']), previous: baseline,
-      paths: changedPaths(candidate, baseline.sha), publicEnvironment: read(opts['public-environment']), prerequisites: opts.prerequisites ? read(opts.prerequisites) : null,
-      releaseId: `rapid-${sourceSnapshot(candidate).sha.slice(0,12)}-${Date.now().toString(36)}` });
+    const candidate = resolve(opts.candidate), baseline = read(opts.baseline), snapshot = sourceSnapshot(candidate);
+    const manifest = createManifest({ candidate: snapshot, controllerSha: git(controller, ['rev-parse', 'HEAD']), previous: baseline,
+      paths: changedPaths(candidate, baseline.sha), moduleInventory: readCandidateModuleInventory(candidate), publicEnvironment: read(opts['public-environment']), prerequisites: opts.prerequisites ? read(opts.prerequisites) : null,
+      releaseId: `rapid-${snapshot.sha.slice(0,12)}-${Date.now().toString(36)}` });
     write(opts.output, manifest); return { state: 'prepared', releaseId: manifest.releaseId, selection: manifest.selection, manifestHash: digest(manifest) };
   }
   if (command === 'handover-audit') {
@@ -68,6 +69,7 @@ async function rapidReleaseCommand(argv, env, runtime) {
   requireCondition(opts.manifest, 'MANIFEST_PATH_REQUIRED'); const manifest = read(opts.manifest); validateManifest(manifest);
   runtime.manifest = manifest;
   if (command === 'quality') {
+    if (manifest.selection.salesforce || manifest.selection.database) await qualifiedAdapter({ manifest, controllerDirectory: controller });
     requireCondition(opts.candidate && opts.output, 'QUALITY_ARGUMENTS_REQUIRED');
     const result = qualityAndBuild({ manifest, controllerDirectory: controller, candidateDirectory: resolve(opts.candidate), env });
     write(opts.output, result); return result;
@@ -77,7 +79,8 @@ async function rapidReleaseCommand(argv, env, runtime) {
     requireCondition(opts.build && opts['artifact-directory'] && opts.output && /^[1-9][0-9]*$/.test(env.FCOS_RAPID_BUILD_RUN_ID || ''), 'PRIOR_QUALITY_ARTIFACT_REQUIRED');
     const run = await github.read(`/repos/${targets().repository}/actions/runs/${env.FCOS_RAPID_BUILD_RUN_ID}`);
     const jobs = await github.read(`/repos/${targets().repository}/actions/runs/${run.id}/jobs?filter=all&per_page=100`);
-    assertNativeQualityProducer(run, jobs, manifest);
+    const workflowProof = await assertFrozenWorkflow({ github, controllerSha: manifest.controllerSha, dispatcherSha: run.head_sha });
+    assertNativeQualityProducer(run, jobs, manifest, workflowProof);
     const build = read(opts.build); assertBuildArtifact(resolve(opts['artifact-directory']), build, manifest);
     const destination = resolve('candidate/.vercel'); mkdirSync(destination, { recursive: true });
     cpSync(join(resolve(opts['artifact-directory']), '.vercel/output'), join(destination, 'output'), { recursive: true, errorOnExist: true, force: false });
@@ -108,14 +111,16 @@ async function rapidReleaseCommand(argv, env, runtime) {
   requireCondition(compatibility.currentDeploymentId === manifest.previous.deploymentId || staged?.id === compatibility.currentDeploymentId,
     'PRODUCTION_BASELINE_CHANGED');
   requireCondition(compatibility.configurationDigest === manifest.previous.configurationDigest
-    && (records.some(record => record.payload.event === 'prerequisites.passed') || compatibility.schemaDigest === manifest.previous.schemaDigest), 'BASELINE_NATIVE_FINGERPRINT_CHANGED');
+    && (records.some(record => ['prerequisites.intent','prerequisites.passed'].includes(record.payload.event)) || compatibility.schemaDigest === manifest.previous.schemaDigest), 'BASELINE_NATIVE_FINGERPRINT_CHANGED');
   let result;
   if (command === 'stage' || command === 'resume' && !staged) {
     requireCondition(opts.build && opts['artifact-directory'], 'STAGE_ARTIFACT_REQUIRED');
     const build = read(opts.build); assertBuildArtifact(resolve(opts['artifact-directory']), build, manifest);
     const jobs = await github.read(`/repos/${targets().repository}/actions/runs/${env.GITHUB_RUN_ID}/jobs?filter=all&per_page=100`);
     requireCondition(jobs.jobs?.some(job => job.name === 'quality' && job.conclusion === 'success'), 'NATIVE_QUALITY_JOB_REQUIRED');
-    result = await stageRelease({ manifest, journal, provider, build, smoke });
+    if (manifest.selection.salesforce || manifest.selection.database) await qualifiedAdapter({ manifest, controllerDirectory: controller });
+    result = await stageRelease({ manifest, journal, provider, build, smoke,
+      beforeBootstrap: values => verifyBeforeBootstrap({ ...values, controllerDirectory: controller, env }) });
   } else {
     requireCondition(staged, 'STAGED_DEPLOYMENT_REQUIRED');
     const approval = await nativeApproval({ github, manifest, staged, env });

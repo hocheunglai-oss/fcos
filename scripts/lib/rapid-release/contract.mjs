@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { DEFAULT_MODULE_INVENTORY, normalizeModuleInventory } from './modules.mjs';
 import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier } from '../../../config/fcosConnections.js';
 
 export const canonical = value => JSON.stringify(value, (_, item) => item && typeof item === 'object' && !Array.isArray(item)
@@ -45,17 +46,22 @@ export function changedPaths(directory, baselineSha) {
   return git(directory, ['diff', '--name-only', '-z', baselineSha, 'HEAD']).split('\0').filter(path => path && !generated.has(path));
 }
 const modulePaths = {
-  dashboard: ['src/components/dashboard/', 'src/lib/dashboard'], markets: ['src/components/markets/', 'src/hedge/views/Market'],
-  buyer_invoices: ['src/components/invoices/'], xero_portal: ['src/components/xero/', 'src/pages/XeroPortal'],
-  email_router: ['src/components/email/'], settings: ['src/pages/Settings'],
+  dashboard: ['src/components/dashboard/', 'src/lib/dashboard', 'src/pages/Dashboard'], markets: ['src/components/markets/', 'src/hedge/views/Market', 'src/pages/Markets'],
+  buyer_invoices: ['src/components/invoices/', 'src/pages/PaymentCollections'], xero_portal: ['src/components/xero/', 'src/pages/XeroPortal'],
+  email_router: ['src/components/email/', 'src/pages/EmailRouter'], settings: ['src/pages/Settings'],
+  admin: ['src/pages/AdminControl', 'src/pages/SettingsWorkspace'], review: ['src/pages/ReviewQueue', 'src/components/review/'],
+  disputes: ['src/pages/DisputeWorkflow', 'src/components/disputes/'], unofficial_compensation: ['src/pages/UnofficialCompensation'],
+  incoming_payments: ['src/pages/PaymentCollections'], cashflow_forecast: ['src/pages/CashflowForecast'], pnl: ['src/pages/StemPnlReport'],
+  brokers: ['src/pages/BrokerWorkspace'], buyers_administrator: ['src/pages/AccountManagers'], master_contracts: ['src/pages/MasterContracts'],
+  special_terms: ['src/pages/SpecialTerms', 'src/pages/SpecialTermEditor'], hedge_desk: ['src/pages/HedgeDesk', 'src/hedge/'],
 };
-export function selectChecks(paths) {
+export function selectChecks(paths, moduleInventory = DEFAULT_MODULE_INVENTORY) {
   const modules = new Set(), reasons = new Set(); let broad = false;
   for (const path of paths) {
-    if (/^(?:force-app\/|manifest\/)/.test(path)) { reasons.add('salesforce'); continue; }
+    if (/^(?:force-app\/|manifest\/)/.test(path)) { reasons.add('salesforce'); broad = true; continue; }
     if (/^supabase\/migrations\//.test(path)) { reasons.add('database'); broad = true; continue; }
     if (/^(?:docs\/|README\.md$|AGENTS\.md$)/.test(path)) continue;
-    if (/^(?:api\/|shared\/|config\/|\.github\/|\.codex\/|scripts\/|package(?:-lock)?\.json$|.*config\.[^/]+$|src\/lib\/|src\/api\/|src\/App\.)/.test(path)) { broad = true; reasons.add('shared_or_security'); }
+    if (/^(?:api\/|shared\/|config\/|\.github\/|\.codex\/|scripts\/|package(?:-lock)?\.json$|.*config\.[^/]+$|src\/lib\/|src\/api\/|src\/App\.|src\/pages\/(?:AdminControl|SettingsWorkspace))/.test(path)) { broad = true; reasons.add('shared_or_security'); }
     else {
       const matching = Object.entries(modulePaths).filter(([, prefixes]) => prefixes.some(prefix => path.startsWith(prefix)));
       if (!matching.length && !path.startsWith('tests/') && !path.startsWith('e2e/')) { broad = true; reasons.add('unclassified'); }
@@ -64,11 +70,12 @@ export function selectChecks(paths) {
   }
   // All test/harness edits are broad: an edited test is not evidence for skipping a product regression.
   if (paths.some(path => /^(?:tests|e2e)\//.test(path))) { broad = true; reasons.add('test_contract'); }
+  if (broad) normalizeModuleInventory(moduleInventory).forEach(module => modules.add(module.id));
   return { broad, modules: [...modules].sort(), reasons: [...reasons].sort(),
     salesforce: reasons.has('salesforce'), database: reasons.has('database'),
     checks: ['controls', 'lint', 'typecheck', broad ? 'product_tests' : 'affected_tests', 'migration_integrity', 'compatibility', 'graph_only',
       ...(broad ? ['fcuno_contract'] : []), 'build', 'performance', 'authenticated_smoke', 'restricted_access'],
-    normalRole: broad };
+    normalRole: broad || [...modules].some(module => !['dashboard','markets'].includes(module)) };
 }
 export const PUBLIC_BUILD_KEYS = Object.freeze(['VITE_FCOS_ENABLE_FCUNO_OIDC', 'FCOS_ENABLE_FCUNO_FEDERATION', 'FCUNO_IDENTITY_ISSUER',
   'VITE_SUPABASE_URL', 'VITE_SUPABASE_ANON_KEY', 'VITE_SUPABASE_PUBLISHABLE_KEY']);
@@ -90,12 +97,12 @@ export function publicBuildEnvironment(values) {
   }
   return Object.freeze({ ...values, VITE_SUPABASE_ANON_KEY: values.VITE_SUPABASE_ANON_KEY || values.VITE_SUPABASE_PUBLISHABLE_KEY });
 }
-export function createManifest({ candidate, controllerSha, previous, paths, publicEnvironment, releaseId, prerequisites = null, now = new Date().toISOString() }) {
+export function createManifest({ candidate, controllerSha, previous, paths, publicEnvironment, releaseId, prerequisites = null, moduleInventory = DEFAULT_MODULE_INVENTORY, now = new Date().toISOString() }) {
   requireCondition(isSha(controllerSha) && isSha(candidate?.sha) && isDigest(candidate.sourceDigest) && isDigest(candidate.lockDigest), 'MANIFEST_SOURCE_INVALID');
   requireCondition(/^dpl_[A-Za-z0-9]+$/.test(previous?.deploymentId || '') && isSha(previous.sha)
     && isDigest(previous.configurationDigest) && isDigest(previous.schemaDigest), 'BASELINE_EVIDENCE_REQUIRED');
   requireCondition(/^[a-z0-9][a-z0-9-]{7,95}$/.test(releaseId || ''), 'RELEASE_ID_INVALID');
-  const buildEnvironment = publicBuildEnvironment(publicEnvironment), selection = selectChecks(paths);
+  const buildEnvironment = publicBuildEnvironment(publicEnvironment), modules = normalizeModuleInventory(moduleInventory), selection = selectChecks(paths, modules);
   if (prerequisites !== null) requireCondition((selection.salesforce || selection.database)
     && /^[a-z][a-z0-9-]{3,64}$/.test(prerequisites.adapter || '') && isDigest(prerequisites.adapterDigest)
     && prerequisites.plan && Object.getPrototypeOf(prerequisites.plan) === Object.prototype, 'PREREQUISITE_DESCRIPTOR_INVALID');
@@ -103,13 +110,13 @@ export function createManifest({ candidate, controllerSha, previous, paths, publ
     node: process.version, publicEnvironment: buildEnvironment });
   return { schemaVersion: 1, contract: 'fcos-rapid-release/v1', releaseId, createdAt: now, targets: targets(),
     candidate: { sha: candidate.sha, sourceDigest: candidate.sourceDigest, lockDigest: candidate.lockDigest }, controllerSha,
-    previous, paths, selection, prerequisites, build: { buildId, node: process.version, publicEnvironment: buildEnvironment },
+    previous, paths, moduleInventory: modules, selection, prerequisites, build: { buildId, node: process.version, publicEnvironment: buildEnvironment },
     authorization: { actions: ['prerequisites', 'promote', 'verify', 'compatible_rollback'], lifetimeSeconds: 86400, financialAuthority: false } };
 }
 export function validateManifest(manifest) {
   requireCondition(manifest?.contract === 'fcos-rapid-release/v1' && manifest.schemaVersion === 1 && canonical(manifest.targets) === canonical(targets()), 'MANIFEST_TARGET_INVALID');
   const recreated = createManifest({ candidate: manifest.candidate, controllerSha: manifest.controllerSha, previous: manifest.previous,
-    paths: manifest.paths, publicEnvironment: manifest.build?.publicEnvironment, releaseId: manifest.releaseId, prerequisites: manifest.prerequisites, now: manifest.createdAt });
+    paths: manifest.paths, publicEnvironment: manifest.build?.publicEnvironment, releaseId: manifest.releaseId, prerequisites: manifest.prerequisites, moduleInventory: manifest.moduleInventory, now: manifest.createdAt });
   requireCondition(canonical(recreated) === canonical(manifest), 'MANIFEST_CHANGED');
   return digest(manifest);
 }

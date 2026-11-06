@@ -176,15 +176,23 @@ async function nativeReview(github, plan, phase) {
   const environment = await github.get(`/repos/${pins.repository}/environments/fcos-production-release`);
   const reviews = await github.get(`/repos/${pins.repository}/actions/runs/${execution.runId}/approvals`);
   const matching = reviews.filter(review => review.state === 'approved' && review.user?.login === pins.account && review.environments?.some(item => item.id === environment.id));
-  check(run.head_sha === plan.controllerSha && run.event === 'workflow_dispatch' && run.status === 'in_progress' && run.actor?.login === pins.account
+  check(sha(run.head_sha) && run.event === 'workflow_dispatch' && run.status === 'in_progress' && run.actor?.login === pins.account
     && run.repository?.full_name === pins.repository && String(run.path || '').split('@')[0] === '.github/workflows/fcos-rapid-handover.yml'
-    && job.run_id === execution.runId && job.name === 'handover-apply' && job.status === 'in_progress' && matching.length === 1 && environment.can_admins_bypass === false
+    && job.run_id === execution.runId && job.name === 'handover-apply' && job.status === 'in_progress' && matching.length === 1 && Number.isSafeInteger(matching[0]?.user?.id) && environment.can_admins_bypass === false
     && environment.protection_rules?.some(rule => rule.type === 'required_reviewers' && rule.reviewers.some(item => item.reviewer?.login === pins.account)), 'HANDOVER_PROTECTED_NATIVE_REVIEW_REQUIRED');
+  const workflowPath = '.github/workflows/fcos-rapid-handover.yml';
+  const file = ref => github.get(`/repos/${pins.repository}/contents/${workflowPath}?ref=${ref}`);
+  const [frozen,current] = run.head_sha === plan.controllerSha ? await file(plan.controllerSha).then(value => [value,value]) : await Promise.all([file(plan.controllerSha),file(run.head_sha)]);
+  check(frozen?.type === 'file' && current?.type === 'file' && sha(frozen.sha) && frozen.sha === current.sha, 'HANDOVER_FROZEN_WORKFLOW_CHANGED');
   // This trusted adapter verifies exact plan/candidate binding from the native setup job inputs/artifact;
   // it must fetch provider state, never accept an uploaded JSON boolean as approval.
   check(typeof github.verifyNativePlan === 'function', 'HANDOVER_NATIVE_PLAN_BINDING_REQUIRED');
   await github.verifyNativePlan({ plan, planHash, phase, run, job, review: matching[0] });
-  return { runId: run.id, jobId: job.id, reviewId: matching[0].id || null, reviewDigest: handoverDigest(matching[0]), planHash };
+  return { runId: run.id, jobId: job.id, reviewId: matching[0].id || null, reviewDigest: handoverDigest(matching[0]), planHash,
+    reviewer: matching[0].user.login, reviewerId: matching[0].user.id, state: matching[0].state,
+    environment: environment.name || 'fcos-production-release', environmentId: environment.id,
+    protectionDigest: handoverDigest({ id:environment.id, rules:environment.protection_rules, canAdminsBypass:environment.can_admins_bypass }),
+    dispatcherSha: run.head_sha, workflowPath, workflowBlobSha: frozen.sha, observedAt: new Date().toISOString() };
 }
 /**
  * Dedicated pg Client (never pooled transactions), direct pinned postgres/TLS connection;
@@ -256,8 +264,9 @@ export async function applyHandover({ phase, plan, db, connection, github, verce
   if (phase !== 'finalize') return { phase, planHash, state: phase === 'prepare' ? 'frozen-reversible' : 'restored', nativeReview: review };
   const existing = await github.findDeployment({ planHash, kind: 'fcos_rapid_release_handover' });
   if (existing) {
-    check([handoverPins().account, 'github-actions[bot]'].includes(existing.creator?.login)
+    check(existing.creator?.login === handoverPins().account
       && existing.payload?.kind === 'fcos_rapid_release_handover' && existing.payload.planHash === planHash
+      && canonical(existing.payload.plan) === canonical(plan)
       && existing.payload.controllerSha === plan.controllerSha && existing.payload.candidateSha === plan.candidateSha
       && existing.payload.buildId === plan.buildId && existing.payload.artifactDigest === plan.artifactDigest
       && existing.payload.handoverId === plan.handoverId && existing.payload.databaseReceiptId === result.receiptId
@@ -267,7 +276,8 @@ export async function applyHandover({ phase, plan, db, connection, github, verce
     return { phase, planHash, deploymentId: existing.id, reused: true };
   }
   check(!result.resumedFinal, 'HANDOVER_GITHUB_OUTCOME_RECONCILIATION_REQUIRED');
-  const payload = { kind: 'fcos_rapid_release_handover', handoverId: plan.handoverId, databaseReceiptId: result.receiptId, supersedes: plan.supersedes || null, controllerSha: plan.controllerSha, candidateSha: plan.candidateSha,
+  const payload = { kind: 'fcos_rapid_release_handover', attestationContract: 'fcos-owner-recorded-handover/v1',
+    qualificationPublisher: { account: plan.pins.account, method: 'protected_controller_api' }, plan, handoverId: plan.handoverId, databaseReceiptId: result.receiptId, supersedes: plan.supersedes || null, controllerSha: plan.controllerSha, candidateSha: plan.candidateSha,
     repository: plan.pins.repository, projectId: plan.pins.projectId, teamId: plan.pins.teamId, planHash,
     unresolvedProductionOperations: 0, oldWritersRetired: true, hostedQualificationPassed: true, eventSubscribersReviewed: true,
     inventoryDigest: result.evidence.externalDigest, nativeCoordinatorReadbackDigest: handoverDigest(result.evidence),
@@ -277,7 +287,7 @@ export async function applyHandover({ phase, plan, db, connection, github, verce
   // No implicit retry: the committed DB finalized receipt becomes the durable uncertain outcome marker.
   const created = await github.createDeployment({ ref: plan.controllerSha, auto_merge: false, required_contexts: [], environment: 'fcos-rapid-handover', production_environment: false, transient_environment: false, payload });
   const observed = await github.findDeployment({ planHash, kind: payload.kind });
-  check(observed?.id === created?.id && canonical(observed.payload) === canonical(payload), 'HANDOVER_GITHUB_OUTCOME_RECONCILIATION_REQUIRED');
+  check(observed?.id === created?.id && observed.creator?.login === plan.pins.account && canonical(observed.payload) === canonical(payload), 'HANDOVER_GITHUB_OUTCOME_RECONCILIATION_REQUIRED');
   return { phase, planHash, deploymentId: observed.id };
 }
 

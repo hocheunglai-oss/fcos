@@ -3,6 +3,8 @@ import { lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from '
 import { join, resolve, relative, isAbsolute } from 'node:path';
 import { canonical, changedPaths, digest, git, publicBuildEnvironment, PUBLIC_BUILD_KEYS, requireCondition, sourceSnapshot, targets, validateManifest } from './contract.mjs';
 
+import { readCandidateModuleInventory } from './modules.mjs';
+
 const MODULE_TESTS = Object.freeze({ dashboard: /^(?:dashboard|missingNomB)/i, markets: /^(?:market|hedgeMarket)/i,
   buyer_invoices: /^buyerInvoice/i, xero_portal: /^xero/i, email_router: /^email/i, settings: /^(?:settings|auth|capability|user|permission)/i });
 export function selectedProductTests(files, selection) {
@@ -59,6 +61,7 @@ export function qualityAndBuild({ manifest, candidateDirectory, controllerDirect
   const before = sourceSnapshot(candidateDirectory);
   requireCondition(before.sha === manifest.candidate.sha && before.sourceDigest === manifest.candidate.sourceDigest
     && before.lockDigest === manifest.candidate.lockDigest, 'CANDIDATE_BINDING_CHANGED');
+  requireCondition(canonical(readCandidateModuleInventory(candidateDirectory)) === canonical(manifest.moduleInventory), 'CANDIDATE_MODULE_INVENTORY_CHANGED');
   requireCondition(canonical(changedPaths(candidateDirectory, manifest.previous.sha)) === canonical(manifest.paths), 'CHANGED_PATH_SELECTION_MISMATCH');
   requireCondition(git(controllerDirectory, ['rev-parse', 'HEAD']) === manifest.controllerSha
     && !git(controllerDirectory, ['status', '--porcelain', '--untracked-files=no']), 'CONTROLLER_SOURCE_CHANGED');

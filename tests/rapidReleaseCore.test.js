@@ -88,14 +88,14 @@ test('failed post-prerequisite smoke resumes that check without replaying succes
     publicEnvironment: f.manifest.build.publicEnvironment, releaseId: f.manifest.releaseId });
   f.approval.manifestHash = digest(f.manifest);
   const passedSmoke = f.smoke;
-  f.smoke = async () => ({ ...await passedSmoke(), normalRole: true });
+  f.smoke = async () => ({ ...await passedSmoke(), modules: f.manifest.selection.modules, normalRole: true });
   await stageRelease(f);
   let applied = 0;
   f.prerequisites = async () => { applied++; return { passed: true, manifestHash: digest(f.manifest), backwardCompatible: true }; };
   f.smoke = async () => { throw Error('SCHEMA_SMOKE_UNAVAILABLE'); };
   await assert.rejects(promoteRelease(f), /SCHEMA_SMOKE_UNAVAILABLE/);
   assert.equal(applied, 1); assert.equal(f.calls.includes('promote'), false);
-  f.smoke = async () => ({ ...await passedSmoke(), normalRole: true });
+  f.smoke = async () => ({ ...await passedSmoke(), modules: f.manifest.selection.modules, normalRole: true });
   assert.equal((await promoteRelease(f)).state, 'complete');
   assert.equal(applied, 1); assert.equal(f.calls.filter(call => call === 'promote').length, 1);
 });
@@ -126,4 +126,23 @@ test('journal creates persistent object payloads with no auto-merge; statuses ne
   await journal.append('release.prepared', {}); assert.equal(writes[0].body.auto_merge, false);
   assert.equal(writes[0].body.transient_environment, false); assert.equal(writes[0].body.payload.previousHash, null);
   assert.equal(writes[0].path.endsWith('/deployments'), true);
+});
+
+test('reviewed schema bootstrap can precede dependent smoke, with one decision and no promotion until full checks pass', async () => {
+  const f = fixture();
+  f.manifest = createManifest({ candidate: f.manifest.candidate, controllerSha: f.manifest.controllerSha, previous: f.manifest.previous,
+    paths: ['supabase/migrations/20990101000000_fixture.sql'], publicEnvironment: f.manifest.build.publicEnvironment, releaseId: f.manifest.releaseId,
+    prerequisites: { adapter: 'schema-fixture', adapterDigest: h, plan: { deferSchemaDependentSmoke: true, bootstrapFingerprint: h } } });
+  f.approval.manifestHash = digest(f.manifest); let applied = 0, fullChecks = 0;
+  f.beforeBootstrap = async () => ({ passed: true, mode: 'pre_bootstrap', manifestHash: digest(f.manifest), deploymentId: f.staged.id,
+    buildId: f.build.buildId, isolationVerified: true, businessWrites: 0, bootstrapFingerprint: h, deferredChecks: f.manifest.selection.modules });
+  f.smoke = async () => { fullChecks++; throw Error('SCHEMA_DEPENDENT_CHECK_FAILED'); };
+  assert.equal((await stageRelease(f)).state, 'awaiting_authorized_bootstrap'); assert.equal(fullChecks, 0);
+  assert.equal(f.journal.records.some(row => row.payload.event === 'smoke.passed'), false);
+  f.prerequisites = async () => { applied++; return { passed: true, manifestHash: digest(f.manifest), backwardCompatible: true }; };
+  await assert.rejects(promoteRelease(f), /SCHEMA_DEPENDENT_CHECK_FAILED/);
+  assert.equal(applied, 1); assert.equal(f.calls.includes('promote'), false);
+  f.smoke = async () => ({ passed: true, deploymentId: f.staged.id, buildId: f.build.buildId, login: true, restrictedAccess: true,
+    businessWrites: 0, normalRole: true, modules: f.manifest.selection.modules });
+  assert.equal((await promoteRelease(f)).state, 'complete'); assert.equal(applied, 1);
 });

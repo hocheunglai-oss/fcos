@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { handoverDigest, handoverPins, auditHandover, assertHandoverActivation, validateAdministratorApplicationInventory, OLD_RELEASE_VARIABLES, OLD_RELEASE_WORKFLOWS } from './handover.mjs';
 import { digest, requireCondition, validateManifest } from './contract.mjs';
-import { githubClient, vercelProvider, nativeWorkflowPath } from './providers.mjs';
+import { githubClient, vercelProvider, assertFrozenWorkflow, assertNativeQualityProducer } from './providers.mjs';
 import { DeploymentJournal, validateChain, pendingOperations } from './journal.mjs';
 import { stageRelease } from './engine.mjs';
 import { runStagedSmoke } from './smoke.mjs';
@@ -51,7 +51,7 @@ export async function readActiveHandover({ get }) {
   if (!pointer && enabled?.value !== 'true') return null;
   requireCondition(enabled?.value === 'true' && /^[1-9][0-9]*$/.test(pointer?.value || ''), 'HANDOVER_ACTIVE_POINTER_UNCERTAIN');
   const record = await get(`${base}/deployments/${pointer.value}`), p = record?.payload;
-  requireCondition(record?.id === Number(pointer.value) && [pins.account,'github-actions[bot]'].includes(record?.creator?.login)
+  requireCondition(record?.id === Number(pointer.value) && record?.creator?.login === pins.account
     && p?.kind === 'fcos_rapid_release_handover' && p.repository === pins.repository && p.projectId === pins.projectId && p.teamId === pins.teamId
     && /^[a-z0-9-]{8,96}$/.test(p.handoverId || '') && /^[a-f0-9]{64}$/.test(p.planHash || '')
     && /^[a-f0-9]{40}$/.test(p.controllerSha || '') && Number.isSafeInteger(p.databaseReceiptId) && p.databaseReceiptId > 0
@@ -111,7 +111,7 @@ export async function createHandoverAdapter({ plan, db, connection, env = proces
       const repository = await request(base);
       requireCondition(p.applicationInventoryReport && handoverDigest(validateAdministratorApplicationInventory(p.applicationInventoryReport)) === handoverDigest(appReport), 'HANDOVER_ADMIN_APP_REPORT_BINDING_REQUIRED');
       requireCondition(run.head_branch === repository.default_branch && run.run_attempt === 1 && job.name === 'handover-apply'
-        && run.display_title === `FCOS rapid handover ${planHash} ${p.candidateSha}` && env.GITHUB_SHA === p.controllerSha
+        && run.display_title === `FCOS rapid handover ${planHash} ${p.candidateSha}` && env.GITHUB_SHA === run.head_sha
         && digest(manifest) === env.FCOS_HANDOVER_MANIFEST_HASH && manifest.controllerSha === p.controllerSha
         && manifest.candidate.sha === p.candidateSha && manifest.build.buildId === p.buildId, 'HANDOVER_EXACT_NATIVE_PLAN_REQUIRED');
     },
@@ -139,9 +139,8 @@ export async function createHandoverAdapter({ plan, db, connection, env = proces
       requireCondition(build.artifactDigest === p.artifactDigest && build.buildId === p.buildId, 'HANDOVER_QUALIFIED_ARTIFACT_MISMATCH');
       const buildRun = await request(`${base}/actions/runs/${env.FCOS_HANDOVER_BUILD_RUN_ID}`);
       const buildJobs = await request(`${base}/actions/runs/${buildRun.id}/jobs?per_page=100`);
-      requireCondition(buildRun.conclusion === 'success' && buildRun.head_sha === p.controllerSha && buildRun.run_attempt === 1
-        && nativeWorkflowPath(buildRun) === '.github/workflows/fcos-rapid-release.yml'
-        && buildJobs.jobs?.some(job => job.name === 'quality' && job.conclusion === 'success'), 'HANDOVER_NATIVE_BUILD_QUALIFICATION_REQUIRED');
+      const workflowProof = await assertFrozenWorkflow({ github: client, controllerSha: p.controllerSha, dispatcherSha: buildRun.head_sha });
+      assertNativeQualityProducer(buildRun, buildJobs, manifest, workflowProof);
       const stagedProvider = vercelProvider({ manifest, github: client, env, outputDirectory: resolve(directory, 'candidate'),
         ownershipVerifier, handoverPlanHash: planHash });
       const journal = new DeploymentJournal({ github: client, releaseId: manifest.releaseId, manifestHash: digest(manifest), actorIds: [operator.id] });

@@ -3,6 +3,7 @@ import test from 'node:test';
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import { auditHandover, applyHandover, performHandover, createHandoverPlan, handoverDigest, handoverPins, OLD_RELEASE_WORKFLOWS, assertHandoverConnection, assertHandoverActivation } from '../scripts/lib/rapid-release/handover.mjs';
+import { verifyNativeHandoverDatabase } from '../scripts/lib/rapid-release/compatibility.mjs';
 
 const { PGlite } = createRequire(import.meta.url)('@electric-sql/pglite');
 const pins = handoverPins();
@@ -30,9 +31,10 @@ async function fixture() {
     eventSubscribers: async () => { if (!subscriberAvailable) throw Error('APP_SUBSCRIBER_SCOPE_MISSING'); return { inventory: [{ kind: 'workflow', path: 'workflow_dispatch-only' }], evidenceDigest: 'a'.repeat(64) }; },
     pages: async () => [], rapidJournalAudit: async () => ({ digest: 'e'.repeat(64), unresolvedProduction: rapidPending }), activeHandover: async () => active,
     get: async path => {
+      if (path.includes('/contents/')) return { type:'file', sha:'f'.repeat(40) };
       if (path.includes('/actions/variables/')) return { value: retired ? 'false' : 'true' };
       if (path.includes('/actions/workflows/')) return { id: OLD_RELEASE_WORKFLOWS.indexOf(path.split('/').at(-1)) + 1, state: retired ? 'disabled_manually' : 'active' };
-      if (path.endsWith('/approvals')) return approved ? [{ id: 90, state: 'approved', user: { login: pins.account }, environments: [{ id: 1 }] }] : [];
+      if (path.endsWith('/approvals')) return approved ? [{ id: 90, state: 'approved', user: { login: pins.account, id: 7 }, environments: [{ id: 1 }] }] : [];
       if (path.includes('/environments/')) return { id: 1, can_admins_bypass: false, protection_rules: [{ type: 'required_reviewers', reviewers: [{ reviewer: { login: pins.account } }] }] };
       if (path.includes('/actions/jobs/')) return { id: 101, run_id: 100, status: 'in_progress', name: 'handover-apply' };
       return { id: 100, head_sha: plan?.controllerSha || 'a'.repeat(40), event: 'workflow_dispatch', status: 'in_progress', actor: { login: pins.account }, repository: { full_name: pins.repository }, path: '.github/workflows/fcos-rapid-handover.yml' };
@@ -73,6 +75,23 @@ test('read-only audit pins target and preserves actual non-Production unknowns',
     f.subscriberAvailable = false;
     await assert.rejects(auditHandover(f), /SUBSCRIBER_SCOPE_MISSING/);
   } finally { await f.db.close(); }
+});
+
+test('provider admission requires the current finalized private receipt, unchanged freeze and guard, and no unknown writes',async()=>{
+ const f=await fixture();try{
+  await f.apply('prepare');const finalized=await f.apply('finalize');
+  const handover=(await f.github.findDeployment({planHash:handoverDigest(f.plan)})).payload;
+  assert.equal((await verifyNativeHandoverDatabase(f.db,handover)).databaseReceiptId,handover.databaseReceiptId);
+  await assert.rejects(verifyNativeHandoverDatabase(f.db,{...handover,databaseReceiptId:handover.databaseReceiptId+1}),/CURRENT_PERMANENT_HANDOVER_RECEIPT_REQUIRED/);
+  await assert.rejects(verifyNativeHandoverDatabase(f.db,{...handover,nativeReview:{...handover.nativeReview,reviewer:'other'}}),/CURRENT_PERMANENT_HANDOVER_RECEIPT_REQUIRED/);
+  await f.db.exec("insert into fcos_release_coordination.operations values('lost-production-ack','production.promote')");
+  await assert.rejects(verifyNativeHandoverDatabase(f.db,handover),/CURRENT_PERMANENT_HANDOVER_RECEIPT_REQUIRED/);
+  await f.db.exec("insert into fcos_release_coordination.operation_events values(999,'lost-production-ack','complete')");
+  await verifyNativeHandoverDatabase(f.db,handover);
+  await f.db.exec('alter table fcos_release_coordination.control disable trigger rapid_handover_control_no_truncate');
+  await assert.rejects(verifyNativeHandoverDatabase(f.db,handover),/CURRENT_PERMANENT_HANDOVER_RECEIPT_REQUIRED/);
+  assert.ok(finalized.deploymentId);
+ }finally{await f.db.close();}
 });
 
 test('preparation is reversible and does not unfence legacy history or financial locks', async () => {
