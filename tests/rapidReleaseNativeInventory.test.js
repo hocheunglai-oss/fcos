@@ -61,9 +61,9 @@ test('missing or unverified reports fail before provider calls; app-visible APIs
   assert.match(source, /HANDOVER_ADMIN_APP_REPORT_BINDING_REQUIRED/);
 });
 
-const audit = inventory => ({ database: { control: { singleton: true, epoch: 1, mode: 'qualification', operation_id: null, bootstrap_id: null, recovery_id: null, plan_completion_id: null, source_upgrade_id: null }, unresolvedProduction: [], historyDigest: 'c'.repeat(64) },
-  providers: { rapidJournal: { digest: 'e'.repeat(64), unresolvedProduction: 0 }, noRunning: true, productionId: 'dpl_old', subscribersDigest: 'd'.repeat(64), applicationInventoryReportDigest: handoverDigest(validateAdministratorApplicationInventory(inventory, { now })) } });
-const planOptions = inventory => ({ audit: audit(inventory), controllerSha: 'a'.repeat(40), candidateSha: 'b'.repeat(40), buildId: 'c'.repeat(64), artifactDigest: 'd'.repeat(64), handoverId: 'native-report-fixture', applicationInventoryReport: inventory, now });
+const audit = (inventory, at = now) => ({ database: { control: { singleton: true, epoch: 1, mode: 'qualification', operation_id: null, bootstrap_id: null, recovery_id: null, plan_completion_id: null, source_upgrade_id: null }, unresolvedProduction: [], historyDigest: 'c'.repeat(64) },
+  providers: { rapidJournal: { digest: 'e'.repeat(64), unresolvedProduction: 0 }, noRunning: true, productionId: 'dpl_old', subscribersDigest: 'd'.repeat(64), applicationInventoryReportDigest: handoverDigest(validateAdministratorApplicationInventory(inventory, { now: at })) } });
+const planOptions = (inventory, at = now) => ({ audit: audit(inventory, at), controllerSha: 'a'.repeat(40), candidateSha: 'b'.repeat(40), buildId: 'c'.repeat(64), artifactDigest: 'd'.repeat(64), handoverId: 'native-report-fixture', applicationInventoryReport: inventory, now: at });
 
 test('the normalized report is frozen into exact plan identity and must match the audited inventory', () => {
   const options = planOptions(report()), plan = createHandoverPlan(options);
@@ -76,7 +76,7 @@ test('the normalized report is frozen into exact plan identity and must match th
 
 test('an admin inventory report cannot replace the existing protected native owner approval', async () => {
   const current = report(); current.collectedAt = new Date().toISOString();
-  const plan = createHandoverPlan({ ...planOptions(current), now: Date.now() });
+  const plan = createHandoverPlan(planOptions(current, Date.now()));
   let writes = 0;
   const github = { execution: async () => ({ runId: 1, jobId: 2 }), get: async path => {
     if (path.endsWith('/approvals')) return [];
