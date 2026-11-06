@@ -69,14 +69,18 @@ export function assertPinnedDatabaseIdentity(identity, connection, { readOnly = 
 }
 
 export class DatabaseCredentialOutcomeUnknown extends Error {
-  constructor(intentId, requestDigest) {
+  constructor(intentId, requestDigest, diagnostics) {
     super('SUPABASE_LOGIN_ROLE_OUTCOME_UNKNOWN');
     this.name = 'DatabaseCredentialOutcomeUnknown';
     this.code = 'SUPABASE_LOGIN_ROLE_OUTCOME_UNKNOWN';
     this.uncertain = true;
     this.intentId = intentId;
     this.requestDigest = requestDigest;
+    if (diagnostics) this.diagnostics = diagnostics;
   }
+}
+export class DatabaseCredentialRejected extends Error {
+  constructor(httpStatus) { super('SUPABASE_LOGIN_ROLE_REJECTED'); this.code='SUPABASE_LOGIN_ROLE_REJECTED'; this.httpStatus=httpStatus; }
 }
 
 async function responseJson(response, url) {
@@ -166,17 +170,29 @@ export async function openPinnedDatabase({ credential, caFile, intentStore, deps
     attemptedIntents.add(intent.intentId);
     const issuedAt = now();
     let issuance, issuanceReceipt;
+    const diagnostics={httpStatus:null,responseSchema:'unobserved'};
     const uncertain = async () => {
-      const receipt = Object.freeze({ intentId: intent.intentId, requestDigest, outcome: 'unknown', projectRef, code: 'SUPABASE_LOGIN_ROLE_OUTCOME_UNKNOWN' });
+      const receipt = Object.freeze({ intentId: intent.intentId, requestDigest, outcome: 'unknown', projectRef, code: 'SUPABASE_LOGIN_ROLE_OUTCOME_UNKNOWN', diagnostics:Object.freeze({...diagnostics}) });
       try { await intentStore.uncertain(receipt); } catch { /* The durable original intent remains pending. */ }
-      throw new DatabaseCredentialOutcomeUnknown(intent.intentId, requestDigest);
+      throw new DatabaseCredentialOutcomeUnknown(intent.intentId, requestDigest,receipt.diagnostics);
     };
     try {
       response = await fetchImpl(url, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(15000), headers: {
         Authorization: `Bearer ${token.toString('utf8')}`, Accept: 'application/json', 'Content-Type': 'application/json',
       }, body: JSON.stringify(request.body) });
+      diagnostics.httpStatus=Number.isInteger(response.status)&&response.status>=100&&response.status<=599?response.status:null;
+      if(response.url!==url || response.redirected!==false) {diagnostics.responseSchema='issuer_mismatch';return await uncertain();}
+      if([401,403].includes(response.status) && typeof intentStore.rejected==='function') {
+        try {await response.body?.cancel();} catch { /* No response body is needed or retained. */ }
+        await intentStore.rejected(Object.freeze({intentId:intent.intentId,requestDigest,outcome:'rejected',issuer:ISSUER,projectRef,httpStatus:response.status,observedAtMs:now()}));
+        throw new DatabaseCredentialRejected(response.status);
+      }
       if (response.status !== 201) return await uncertain();
+      diagnostics.responseSchema='invalid_json';
       issuance = await responseJson(response, url);
+      diagnostics.responseSchema=!issuance || typeof issuance!=='object' || Array.isArray(issuance) || Object.keys(issuance).sort().join(',')!=='password,role,ttl_seconds'?'unexpected_keys'
+        :issuance.role!==LOGIN_ROLE?'role_mismatch':typeof issuance.password!=='string'||!issuance.password.length||Buffer.byteLength(issuance.password)>4096||/[\0\r\n]/.test(issuance.password)?'password_invalid'
+          :!Number.isSafeInteger(issuance.ttl_seconds)||issuance.ttl_seconds<1||issuance.ttl_seconds>MAX_TTL_SECONDS?'ttl_invalid':'valid';
       if (!issuance || Object.keys(issuance).sort().join(',') !== 'password,role,ttl_seconds'
         || issuance.role !== LOGIN_ROLE || typeof issuance.password !== 'string' || !issuance.password.length
         || Buffer.byteLength(issuance.password) > 4096 || /[\0\r\n]/.test(issuance.password)
@@ -191,7 +207,7 @@ export async function openPinnedDatabase({ credential, caFile, intentStore, deps
       // Another rotation must not race this connection's authentication.
       if (typeof intentStore.received === 'function') await intentStore.received(issuanceReceipt);
     } catch (error) {
-      if (error instanceof DatabaseCredentialOutcomeUnknown) throw error;
+      if (error instanceof DatabaseCredentialOutcomeUnknown || error instanceof DatabaseCredentialRejected) throw error;
       return await uncertain();
     }
     token.fill(0);
@@ -240,7 +256,7 @@ export async function openPinnedDatabase({ credential, caFile, intentStore, deps
   } catch (error) {
     if (transaction) { try { await db.query('ROLLBACK'); } catch { /* No retry. */ } }
     if (db) { try { await db.end(); } catch { /* No raw provider error escapes. */ } }
-    if (error instanceof DatabaseCredentialOutcomeUnknown) throw error;
+    if (error instanceof DatabaseCredentialOutcomeUnknown || error instanceof DatabaseCredentialRejected) throw error;
     const code = OWNED_CODES.has(error?.code) ? error.code : 'PINNED_DATABASE_CONNECTION_FAILED';
     throw fail(code);
   } finally {

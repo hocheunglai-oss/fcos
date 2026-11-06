@@ -5,7 +5,7 @@ import { TLSSocket } from 'node:tls';
 import { createRequire } from 'node:module';
 import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
 import { openPinnedDatabase, isNativeDelegatedConnection, assertPinnedDatabaseIdentity,
-  DatabaseCredentialOutcomeUnknown, DELEGATED_DATABASE_IDENTITY_SQL } from '../scripts/lib/rapid-release/database-connection.mjs';
+  DatabaseCredentialOutcomeUnknown, DatabaseCredentialRejected, DELEGATED_DATABASE_IDENTITY_SQL } from '../scripts/lib/rapid-release/database-connection.mjs';
 
 const CA = "-----BEGIN CERTIFICATE-----\nMIIDxDCCAqygAwIBAgIUbLxMod62P2ktCiAkxnKJwtE9VPYwDQYJKoZIhvcNAQEL\nBQAwazELMAkGA1UEBhMCVVMxEDAOBgNVBAgMB0RlbHdhcmUxEzARBgNVBAcMCk5l\ndyBDYXN0bGUxFTATBgNVBAoMDFN1cGFiYXNlIEluYzEeMBwGA1UEAwwVU3VwYWJh\nc2UgUm9vdCAyMDIxIENBMB4XDTIxMDQyODEwNTY1M1oXDTMxMDQyNjEwNTY1M1ow\nazELMAkGA1UEBhMCVVMxEDAOBgNVBAgMB0RlbHdhcmUxEzARBgNVBAcMCk5ldyBD\nYXN0bGUxFTATBgNVBAoMDFN1cGFiYXNlIEluYzEeMBwGA1UEAwwVU3VwYWJhc2Ug\nUm9vdCAyMDIxIENBMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqQXW\nQyHOB+qR2GJobCq/CBmQ40G0oDmCC3mzVnn8sv4XNeWtE5XcEL0uVih7Jo4Dkx1Q\nDmGHBH1zDfgs2qXiLb6xpw/CKQPypZW1JssOTMIfQppNQ87K75Ya0p25Y3ePS2t2\nGtvHxNjUV6kjOZjEn2yWEcBdpOVCUYBVFBNMB4YBHkNRDa/+S4uywAoaTWnCJLUi\ncvTlHmMw6xSQQn1UfRQHk50DMCEJ7Cy1RxrZJrkXXRP3LqQL2ijJ6F4yMfh+Gyb4\nO4XajoVj/+R4GwywKYrrS8PrSNtwxr5StlQO8zIQUSMiq26wM8mgELFlS/32Uclt\nNaQ1xBRizkzpZct9DwIDAQABo2AwXjALBgNVHQ8EBAMCAQYwHQYDVR0OBBYEFKjX\nuXY32CztkhImng4yJNUtaUYsMB8GA1UdIwQYMBaAFKjXuXY32CztkhImng4yJNUt\naUYsMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQELBQADggEBAB8spzNn+4VU\ntVxbdMaX+39Z50sc7uATmus16jmmHjhIHz+l/9GlJ5KqAMOx26mPZgfzG7oneL2b\nVW+WgYUkTT3XEPFWnTp2RJwQao8/tYPXWEJDc0WVQHrpmnWOFKU/d3MqBgBm5y+6\njB81TU/RG2rVerPDWP+1MMcNNy0491CTL5XQZ7JfDJJ9CCmXSdtTl4uUQnSuv/Qx\nCea13BX2ZgJc7Au30vihLhub52De4P/4gonKsNHYdbWjg7OWKwNv/zitGDVDB9Y2\nCMTyZKG3XEu5Ghl1LEnI3QmEKsqaCLv12BnVjbkSeZsMnevJPs1Ye6TjjJwdik5P\no/bKiIz+Fq8=\n-----END CERTIFICATE-----\n";
 const TOKEN = 'DUMMY_ONLY_management_token_not_a_credential';
@@ -29,7 +29,7 @@ function response(url, data, status = 200) {
 
 function fixture(options = {}) {
   let clock = NOW;
-  const calls = { fetch: [], queries: [], clients: [], begin: [], received: [], complete: [], uncertain: [] };
+  const calls = { fetch: [], queries: [], clients: [], begin: [], received: [], complete: [], uncertain: [], rejected: [] };
   const intentId = `fixture_intent_${++sequence}`;
   const store = {
     async begin(request) {
@@ -40,6 +40,7 @@ function fixture(options = {}) {
     async complete(receipt) { calls.complete.push(receipt); if (options.completeError) throw new Error(PASSWORD); },
     async received(receipt) {calls.received.push(receipt);},
     async uncertain(receipt) { calls.uncertain.push(receipt); },
+    async rejected(receipt) { calls.rejected.push(receipt);if(options.rejectedError)throw Error(TOKEN+PASSWORD); },
   };
   class Client extends EventEmitter {
     constructor(config) {
@@ -163,6 +164,22 @@ test('unknown issuance acknowledgement stays pending and does not retry', async 
     await assert.rejects(openPinnedDatabase(f.args), /DURABLE_DATABASE_CREDENTIAL_INTENT_REFUSED/);
     assert.equal(f.calls.fetch.filter(call => call.init.method === 'POST').length, 1);
   }
+});
+
+test('only exact native issuer 401 and 403 produce sanitized rejected receipts; ambiguous closure remains unknown',async()=>{
+ for(const postStatus of [401,403]){const f=fixture({postStatus});
+  await assert.rejects(openPinnedDatabase(f.args),error=>error instanceof DatabaseCredentialRejected&&error.httpStatus===postStatus);
+  assert.equal(f.calls.rejected.length,1);assert.equal(f.calls.rejected[0].outcome,'rejected');assert.equal(f.calls.uncertain.length,0);assert.equal(f.calls.clients.length,0);assert.equal(JSON.stringify(f.calls.rejected).includes(PASSWORD),false);}
+ const f=fixture({postStatus:403,rejectedError:true});await assert.rejects(openPinnedDatabase(f.args),DatabaseCredentialOutcomeUnknown);assert.equal(f.calls.uncertain[0].diagnostics.httpStatus,403);
+ const wrong=fixture({postStatus:403,postUrl:'https://other.invalid/login-role'});await assert.rejects(openPinnedDatabase(wrong.args),DatabaseCredentialOutcomeUnknown);assert.equal(wrong.calls.rejected.length,0);
+});
+
+test('future unknown outcomes retain only HTTP status and fixed schema categories, never provider text or field values',async()=>{
+ for(const [options,expected]of [[{postStatus:400},'unobserved'],[{issuance:{role:'unique_'+PASSWORD,password:PASSWORD,ttl_seconds:300}},'role_mismatch'],
+  [{issuance:{role:'cli_login_postgres',password:PASSWORD,ttl_seconds:3601}},'ttl_invalid'],[{issuance:{[PASSWORD]:TOKEN}},'unexpected_keys']]){
+  const f=fixture(options);await assert.rejects(openPinnedDatabase(f.args),error=>error instanceof DatabaseCredentialOutcomeUnknown&&error.diagnostics.responseSchema===expected);
+  assert.deepEqual(Object.keys(f.calls.uncertain[0].diagnostics).sort(),['httpStatus','responseSchema']);assert.equal(JSON.stringify(f.calls.uncertain).includes(TOKEN),false);assert.equal(JSON.stringify(f.calls.uncertain).includes(PASSWORD),false);assert.equal(f.calls.rejected.length,0);
+ }
 });
 
 test('issuer acknowledgement retains ownership until the native connection qualifies',async()=>{
