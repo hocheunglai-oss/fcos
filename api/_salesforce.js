@@ -177,9 +177,14 @@ async function jwtBearerAccessToken() {
   return cachedToken;
 }
 
+function readOnlySalesforceAccessToken() {
+  return isDeploymentReadOnly() && hasNonBlankEnv('FCOS_READ_ONLY_SALESFORCE_ACCESS_TOKEN')
+    ? process.env.FCOS_READ_ONLY_SALESFORCE_ACCESS_TOKEN : null;
+}
+
 export function salesforceAuthMode() {
   if (hasJwtBearerConfig()) return 'jwt';
-  if (isDeploymentReadOnly() && process.env.SALESFORCE_ACCESS_TOKEN) return 'access_token';
+  if (readOnlySalesforceAccessToken() || isDeploymentReadOnly() && process.env.SALESFORCE_ACCESS_TOKEN) return 'access_token';
   if (hasRefreshTokenConfig()) return 'refresh_token';
   if (process.env.SALESFORCE_ACCESS_TOKEN) return 'access_token';
   if (hasAnyJwtBearerEnv() || hasAnyRefreshTokenEnv()) return 'misconfigured';
@@ -190,7 +195,7 @@ export function salesforceConfiguredAuthModes() {
   return [
     ...(hasJwtBearerConfig() ? ['jwt'] : []),
     ...(hasRefreshTokenConfig() ? ['refresh_token'] : []),
-    ...(hasNonBlankEnv('SALESFORCE_ACCESS_TOKEN') ? ['access_token'] : []),
+    ...(readOnlySalesforceAccessToken() || hasNonBlankEnv('SALESFORCE_ACCESS_TOKEN') ? ['access_token'] : []),
   ];
 }
 
@@ -198,6 +203,12 @@ export async function getAccessToken({ forceRefresh = false } = {}) {
   if (hasJwtBearerConfig()) {
     if (!forceRefresh && cachedToken && Date.now() < cachedTokenExpiresAt) return cachedToken;
     return sharedTokenRefresh(jwtBearerAccessToken);
+  }
+
+  const readOnlyToken = readOnlySalesforceAccessToken();
+  if (readOnlyToken) {
+    requireDeploymentMutationAllowed(forceRefresh);
+    return readOnlyToken;
   }
 
   if (isDeploymentReadOnly() && hasRefreshTokenConfig()) {
