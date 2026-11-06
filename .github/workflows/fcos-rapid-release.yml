@@ -17,6 +17,10 @@ on:
         description: Frozen non-secret manifest for a previously prepared/resumed release
         required: true
         type: string
+      resume_build_run_id:
+        description: For resume, successful original quality producer retaining the exact prebuilt artifact
+        required: false
+        type: string
       manifest_hash:
         description: SHA256 of the canonical frozen manifest bound to native review
         required: true
@@ -37,6 +41,7 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
+      actions: read
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -44,6 +49,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        if: inputs.mode != 'resume'
         with:
           path: candidate
           ref: ${{ inputs.candidate_sha }}
@@ -64,6 +70,7 @@ jobs:
           FCOS_RAPID_MANIFEST: ${{ inputs.manifest_json }}
           EXPECTED_CANDIDATE: ${{ inputs.candidate_sha }}
           EXPECTED_MANIFEST_HASH: ${{ inputs.manifest_hash }}
+          FCOS_RAPID_MODE: ${{ inputs.mode }}
           FCOS_RAPID_BUILD_HOME: ${{ runner.temp }}/rapid-build-home
         run: |
           node --input-type=module <<'NODE'
@@ -73,7 +80,22 @@ jobs:
           requireCondition(m.candidate.sha===process.env.EXPECTED_CANDIDATE && m.controllerSha===process.env.GITHUB_SHA && digest(m)===process.env.EXPECTED_MANIFEST_HASH,'WORKFLOW_SOURCE_BINDING');
           fs.writeFileSync('manifest.json',JSON.stringify(m));
           NODE
-          node controller/scripts/rapid-release.mjs quality --manifest manifest.json --candidate candidate --controller controller --output build.json
+          if [ "$FCOS_RAPID_MODE" != resume ]; then
+            node controller/scripts/rapid-release.mjs quality --manifest manifest.json --candidate candidate --controller controller --output build.json
+          fi
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        if: inputs.mode == 'resume'
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.resume_build_run_id }}
+          name: rapid-build-${{ inputs.resume_build_run_id }}
+          path: resume-artifact
+      - name: Reuse successful original quality and exact artifact without rebuilding
+        if: inputs.mode == 'resume'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_RAPID_BUILD_RUN_ID: ${{ inputs.resume_build_run_id }}
+        run: node controller/scripts/rapid-release.mjs reuse-quality --manifest resume-artifact/manifest.json --build resume-artifact/build.json --artifact-directory resume-artifact/candidate --controller controller --output build.json
       - name: Retain bounded artifact and receipt; never upload browser state or environment files
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
