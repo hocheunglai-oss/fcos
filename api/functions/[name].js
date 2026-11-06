@@ -1,3 +1,5 @@
+import { deploymentSafeSupabaseFetch } from '../_deploymentReadOnlyFetch.js';
+import { withDeploymentRequestSafety } from '../_deploymentReadOnly.js';
 import { loadEffectiveGroupAccess, readAllAccessRows, serializeGroupUser, accessOperationError } from '../_accessGroups.js';
 import { AUTO_AI_MODEL, AI_MODEL_SELECTIONS, AI_ROUTING_VERSION, isAllowedAiSelection, automaticRoutingFor, resolveAiModel } from '../_aiModelRouting.js';
 import { createStemWorkspaceActivity } from '../_stemWorkspaceActivity.js';
@@ -227,7 +229,7 @@ import { createFinanceSettingsHandlers, loadFinanceSettings } from '../_dashboar
 import { createDashboardFinanceLoader, financeToday, summarizeDashboardFinance, validateFinanceSnapshot } from '../_dashboardFinance.js';
 import { secondaryMopsFailureMessage } from '../_marketSourceHealth.js';
 import { ciModuleAccess, isReadOnlyCiProfile, isReadOnlyMarketAction, requireReadOnlyCiOperation } from '../_readOnlyCiAccess.js';
-import { requireDeploymentMutationAllowed } from '../_deploymentReadOnly.js';
+import { isDeploymentReadOnly, requireDeploymentMutationAllowed } from '../_deploymentReadOnly.js';
 import { analyzeMarketReportLibrary, loadMarketReportCatalogue } from '../_marketReportAnalysis.js';
 import {
   applyMasterContractPrice as applyMasterContractPriceService,
@@ -393,6 +395,7 @@ const ADMIN_APP_MODULES = [
 let portalOutboxScheduledAt = 0;
 
 function schedulePortalOutboxRetry(client) {
+  if (isDeploymentReadOnly()) return;
   const now = Date.now();
   if (now - portalOutboxScheduledAt < 60_000) return;
   portalOutboxScheduledAt = now;
@@ -739,7 +742,7 @@ function supabaseAdminClient() {
     const trackedFetch = async (...args) => {
       const startedAt = Date.now();
       try {
-        const response = await fetch(...args);
+        const response = await deploymentSafeSupabaseFetch(...args);
         recordSupabaseRequest({
           durationMs: Date.now() - startedAt,
           ok: response.ok,
@@ -19385,7 +19388,7 @@ if (handlersWithoutAccessPolicy.length) {
   throw new Error(`FCOS handler access policy is missing for: ${handlersWithoutAccessPolicy.join(', ')}`);
 }
 
-export default async function handler(req, res) {
+async function handler(req, res) {
   const url = new URL(req.url, 'http://localhost');
   const name = url.pathname.split('/').pop();
   const requestId = requestIdFrom(req);
@@ -19403,6 +19406,16 @@ export default async function handler(req, res) {
         if (handlerPolicy && typeof res?.setHeader === 'function') {
           res.setHeader('X-FCOS-Handler-Mutation', handlerPolicy.mutation ? '1' : '0');
           res.setHeader('X-FCOS-External-Action', handlerPolicy.externalAction ? '1' : '0');
+        }
+        // Fixed mutation/external-action routes, including cron, are rejected
+        // before authentication can bind or provision an identity. The mixed
+        // Markets endpoint is classified from its bounded JSON body first.
+        let classifiedBody;
+        if (name === 'hedgeMarkets' && isDeploymentReadOnly()) {
+          classifiedBody = await readBody(req);
+          requireDeploymentMutationAllowed(!isReadOnlyMarketAction(classifiedBody));
+        } else {
+          requireDeploymentMutationAllowed(handlerPolicy?.mutation || handlerPolicy?.externalAction);
         }
         if (name === 'salesforceDocumentDownload') {
           const accessContext = await requireHandlerAccess(name, req);
@@ -19424,7 +19437,7 @@ export default async function handler(req, res) {
         if (!fn) return sendJson(res, { error: `Unknown function: ${name}` }, 404);
         const accessContext = await requireHandlerAccess(name, req);
         metricContext = accessContext;
-        const body = await readBody(req);
+        const body = classifiedBody ?? await readBody(req);
         requireReadOnlyCiOperation(accessContext?.profile, name, body);
         requireDeploymentMutationAllowed(handlerPolicy?.mutation && (name !== 'hedgeMarkets' || !isReadOnlyMarketAction(body)));
         const contract = validateFunctionRequest(name, body);
@@ -19457,7 +19470,7 @@ export default async function handler(req, res) {
         return sendJson(res, publicApiErrorPayload(error, status, requestId), status);
       } finally {
         logRequestTelemetry(res.statusCode || 500);
-        if (process.env.VERCEL_ENV === 'production' && metricContext?.profile?.read_only_ci !== true
+        if (!isDeploymentReadOnly() && process.env.VERCEL_ENV === 'production' && !isReadOnlyCiProfile(metricContext?.profile)
           && metricContext?.profile?.id && handlerPolicyFor(HANDLER_POLICY_REGISTRY, name)?.mutation) {
           waitUntil(recordWorkflowMetric(safeSupabaseAdminClient(), { handler: name, status: res.statusCode || 500,
             data: metricResult, durationMs: Date.now() - metricStartedAt }).catch(() => {}));
@@ -19466,3 +19479,5 @@ export default async function handler(req, res) {
     },
   );
 }
+
+export default withDeploymentRequestSafety(handler);

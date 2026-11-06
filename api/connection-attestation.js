@@ -1,3 +1,5 @@
+import { deploymentSafeSupabaseFetch } from './_deploymentReadOnlyFetch.js';
+import { withDeploymentRequestSafety } from './_deploymentReadOnly.js';
 import { createPublicKey, verify as verifySignature } from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 import { serverSupabaseConfig } from './_supabaseConfig.js';
@@ -73,11 +75,11 @@ function serviceClient() {
   const config = serverSupabaseConfig();
   if (!config.configured) throw Object.assign(new Error('Connection attestation storage is unavailable.'), { status: 503 });
   return createClient(config.url, config.key, {
-    auth: { persistSession: false, autoRefreshToken: false },
+    global: { fetch: deploymentSafeSupabaseFetch }, auth: { persistSession: false, autoRefreshToken: false },
   });
 }
 
-export default async function handler(req, res) {
+async function handler(req, res) {
   if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed.' });
   try {
     requireDeploymentMutationAllowed(true);
@@ -103,3 +105,5 @@ export default async function handler(req, res) {
 }
 
 export { validatedEnvelope };
+
+export default withDeploymentRequestSafety(handler);

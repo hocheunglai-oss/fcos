@@ -1,5 +1,6 @@
+import { deploymentSafeSupabaseFetch } from './_deploymentReadOnlyFetch.js';
 import { loadEffectiveGroupAccess } from './_accessGroups.js';
-import { requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
+import { requireDeploymentMutationAllowed, withDeploymentRequestSafety } from './_deploymentReadOnly.js';
 import { createClient } from '@supabase/supabase-js';
 import { serverSupabaseConfig } from './_supabaseConfig.js';
 import { enforceFcunoFederatedAccess } from './_fcunoIdentityFederation.js';
@@ -31,7 +32,7 @@ function serviceClient() {
   const trackedFetch = async (input, init) => {
     const startedAt = Date.now();
     try {
-      const response = await fetch(input, init);
+      const response = await deploymentSafeSupabaseFetch(input, init);
       recordSupabaseRequest({ durationMs: Date.now() - startedAt, ok: response.ok });
       return response;
     } catch (error) {
@@ -148,7 +149,7 @@ function sendJson(res, payload, status = 200) {
  * }} options
  */
 export function authenticatedFunction({ handlerName, moduleId = null, mutation = false, execute }) {
-  return async function handler(req, res) {
+  return withDeploymentRequestSafety(async function handler(req, res) {
     const requestId = requestIdFrom(req);
     const resolvedHandlerName = typeof handlerName === 'function' ? handlerName(req) : handlerName;
     return runWithRequestTelemetry({ handler: resolvedHandlerName, requestId }, async () => {
@@ -193,5 +194,5 @@ export function authenticatedFunction({ handlerName, moduleId = null, mutation =
         logRequestTelemetry(res.statusCode || 500);
       }
     });
-  };
+  });
 }
