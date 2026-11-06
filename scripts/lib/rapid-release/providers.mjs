@@ -99,7 +99,8 @@ export function vercelProvider({ manifest, github, env = process.env, execute = 
   let admitted = null;
   const assertAdmitted = phase => requireCondition(admitted?.phase === phase && admitted.manifestHash === digest(manifest)
     && Date.now() - admitted.observedAt < 30000, 'FRESH_PROVIDER_WRITE_ADMISSION_REQUIRED');
-  requireCondition(env.VERCEL_TOKEN && env.VERCEL_ORG_ID === pins.teamId && env.VERCEL_PROJECT_ID === pins.projectId, 'VERCEL_TARGET_CREDENTIAL_REQUIRED');
+  requireCondition(env.VERCEL_TOKEN && [undefined, '', pins.teamId].includes(env.VERCEL_ORG_ID)
+    && [undefined, '', pins.projectId].includes(env.VERCEL_PROJECT_ID), 'VERCEL_TARGET_CREDENTIAL_REQUIRED');
   const run = args => execute('vercel', [...args, '--scope', pins.team, '--no-color'], {
     env: { PATH: env.PATH, HOME: env.HOME, CI: '1', VERCEL_TOKEN: env.VERCEL_TOKEN, VERCEL_ORG_ID: pins.teamId, VERCEL_PROJECT_ID: pins.projectId },
     encoding: 'utf8', timeout: 120000, maxBuffer: 4 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'],
