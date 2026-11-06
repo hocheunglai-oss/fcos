@@ -21,6 +21,7 @@ async function setup(t) {
  alter table fcos_release_coordination.operation_events enable row level security;
  alter table fcos_release_coordination.rapid_bootstrap_receipts enable row level security;
  create table public.business_finance(id int,amount numeric);
+ create schema inaccessible_extension;create table inaccessible_extension.diagnostics(id int);grant select on inaccessible_extension.diagnostics to public;
  insert into fcos_release_coordination.operations values('old-operation','production.stage','{"private":true}');`);
  await db.exec(readonlyRoleProvisioningSql(verifier));
  return db;
@@ -32,7 +33,7 @@ test('dedicated role grants only coordinator metadata reads and keeps financial 
  await db.exec(`set session authorization ${id('supabase','Database release read-only role')}`);
  assert.equal((await db.query('select operation_id,phase from fcos_release_coordination.operations')).rows.length,1);
  assert.equal((await db.query('select * from fcos_release_coordination.rapid_handover_receipts')).rows.length,0);
- for(const sql of ['select financial_evidence from fcos_release_coordination.operations','update fcos_release_coordination.control set mode=\'qualification\'','insert into public.business_finance values(1,100)','select * from public.business_finance'])await assert.rejects(db.query(sql),/permission denied/);
+ for(const sql of ['select financial_evidence from fcos_release_coordination.operations','update fcos_release_coordination.control set mode=\'qualification\'','insert into public.business_finance values(1,100)','select * from public.business_finance','select * from inaccessible_extension.diagnostics'])await assert.rejects(db.query(sql),/permission denied/);
 });
 test('actual native role and TLS socket qualify; JSON and writable-role drift never do',async t=>{
  const native=await setup(t),host=id('supabase','Database session host');
@@ -59,6 +60,7 @@ test('wrong project, pooling mode and arbitrary SCRAM input refuse before any pr
 });
 test('inherited PUBLIC financial SELECT and sequence mutation privileges invalidate the reader profile',async t=>{
  for(const sql of ['grant select on public.business_finance to public',
+  'grant create on database postgres to public',
   'grant select(financial_evidence) on fcos_release_coordination.operations to public',
   "create schema pgbusiness;grant usage on schema pgbusiness to public;create function pgbusiness.unsafe_finance() returns int language sql security definer as 'select 1';",
   'create sequence public.synthetic_business_sequence;grant usage on sequence public.synthetic_business_sequence to public']){

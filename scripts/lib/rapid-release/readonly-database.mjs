@@ -11,23 +11,24 @@ export const READONLY_DATABASE_IDENTITY_SQL=`select session_user,current_user,cu
  current_setting('transaction_read_only') as read_only,r.rolname,r.rolcanlogin,r.rolsuper,r.rolinherit,
  r.rolcreaterole,r.rolcreatedb,r.rolreplication,r.rolbypassrls,
  (select count(*)::int from pg_auth_members where member=r.oid) as memberships,
+ has_database_privilege(r.oid,current_database(),'CREATE') as creates_schemas,
  (select count(*)::int from pg_class c join pg_namespace n on n.oid=c.relnamespace
   where n.nspname !~ '^pg_' and n.nspname<>'information_schema' and c.relkind in ('r','p','v','m','f')
-  and (has_table_privilege(r.oid,c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+  and has_schema_privilege(r.oid,n.oid,'USAGE') and (has_table_privilege(r.oid,c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
    or has_any_column_privilege(r.oid,c.oid,'INSERT,UPDATE,REFERENCES'))) as business_writers,
  (select count(*)::int from pg_class c join pg_namespace n on n.oid=c.relnamespace
   where n.nspname in ('public','auth','storage') and c.relkind in ('r','p','v','m','f')
-  and (has_table_privilege(r.oid,c.oid,'SELECT') or has_any_column_privilege(r.oid,c.oid,'SELECT'))) as business_readers,
+  and has_schema_privilege(r.oid,n.oid,'USAGE') and (has_table_privilege(r.oid,c.oid,'SELECT') or has_any_column_privilege(r.oid,c.oid,'SELECT'))) as business_readers,
  (select count(*)::int from pg_attribute a join pg_class c on c.oid=a.attrelid join pg_namespace n on n.oid=c.relnamespace
   where n.nspname !~ '^pg_' and n.nspname<>'information_schema' and c.relkind in ('r','p','v','m','f') and a.attnum>0 and not a.attisdropped
-  and has_column_privilege(r.oid,c.oid,a.attnum,'SELECT') and not(n.nspname='fcos_release_coordination' and (
+  and has_schema_privilege(r.oid,n.oid,'USAGE') and has_column_privilege(r.oid,c.oid,a.attnum,'SELECT') and not(n.nspname='fcos_release_coordination' and (
     c.relname='control' and a.attname in ('singleton','mode','epoch','operation_id','bootstrap_id','recovery_id','source_upgrade_id','plan_completion_id')
     or c.relname='rapid_handover_receipts' and a.attname in ('receipt_id','handover_id','phase','plan_hash','evidence','recorded_at')
     or c.relname='operations' and a.attname in ('operation_id','phase')
     or c.relname='operation_events' and a.attname in ('operation_id','event_id','state')))) as unauthorized_reads,
  (select count(*)::int from pg_class c join pg_namespace n on n.oid=c.relnamespace
   where n.nspname !~ '^pg_' and n.nspname<>'information_schema' and c.relkind='S'
-  and case when c.relkind='S' then has_sequence_privilege(r.oid,c.oid,'USAGE,UPDATE') else false end) as sequence_writers,
+  and has_schema_privilege(r.oid,n.oid,'USAGE') and case when c.relkind='S' then has_sequence_privilege(r.oid,c.oid,'USAGE,UPDATE') else false end) as sequence_writers,
  (select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace
   where n.nspname !~ '^pg_' and n.nspname<>'information_schema' and p.prosecdef
   and has_schema_privilege(r.oid,n.oid,'USAGE') and has_function_privilege(r.oid,p.oid,'EXECUTE')) as privileged_routines,
@@ -46,7 +47,7 @@ export function assertReadonlyDatabaseIdentity(row,connection,{readOnly=true}={}
   return row;
 }
 function assertProfile(row) {
-  check(row?.rolname===role() && row.rolcanlogin===true && Number(row.memberships)===0
+  check(row?.rolname===role() && row.rolcanlogin===true && Number(row.memberships)===0 && row.creates_schemas===false
     && row.business_writers===0 && row.privileged_routines===0 && row.business_creators===0
     && row.business_readers===0 && row.sequence_writers===0 && row.unauthorized_reads===0
     && ['rolsuper','rolinherit','rolcreaterole','rolcreatedb','rolreplication','rolbypassrls'].every(key=>row[key]===false)
