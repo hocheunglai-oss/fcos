@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { nativeCompatibilityReader } from './compatibility.mjs';
+import { DeploymentJournal } from './journal.mjs';
 import { assertAuthorization, digest, requireCondition, targets } from './contract.mjs';
 
 export function githubClient({ token, candidateSha, requiredContexts = [], fetchImpl = fetch, actions = process.env.GITHUB_ACTIONS === 'true' } = {}) {
@@ -39,7 +40,8 @@ export async function verifyExecution({ github, manifest, env = process.env, pha
   requireCondition(run.head_sha === manifest.controllerSha && run.repository?.full_name === targets().repository
     && run.event === 'workflow_dispatch' && run.path === '.github/workflows/fcos-rapid-release.yml'
     && run.status === 'in_progress' && run.head_branch === repo.default_branch && run.actor?.login === targets().account
-    && run.run_attempt === 1 && new RegExp(`^FCOS rapid (release|resume) ${digest(manifest)} ${manifest.candidate.sha}$`).test(run.display_title || ''), 'WORKFLOW_IDENTITY_MISMATCH');
+    && Number.isSafeInteger(run.run_attempt) && run.run_attempt >= 1
+    && new RegExp(`^FCOS rapid (release|resume) ${digest(manifest)} ${manifest.candidate.sha}$`).test(run.display_title || ''), 'WORKFLOW_IDENTITY_MISMATCH');
   const enabled = await github.read(`/repos/${targets().repository}/actions/variables/FCOS_RAPID_RELEASE_ENABLED`);
   requireCondition(enabled.value === 'true', 'RAPID_RELEASE_NOT_ACTIVATED');
   const setup = await github.read(`/repos/${targets().repository}/actions/variables/FCOS_RAPID_RELEASE_HANDOVER_ID`);
@@ -70,10 +72,15 @@ export async function nativeApproval({ github, manifest, staged, env = process.e
   const reviews = await github.read(`/repos/${targets().repository}/actions/runs/${env.GITHUB_RUN_ID}/approvals`);
   const matches = reviews.filter(review => review.state === 'approved' && review.user?.login === targets().account
     && review.environments?.some(item => item.id === environment.id && item.name === environment.name));
-  requireCondition(matches.length === 1, 'NATIVE_PRODUCTION_REVIEW_REQUIRED');
+  requireCondition(matches.length >= 1, 'NATIVE_PRODUCTION_REVIEW_REQUIRED');
   const jobs = await github.read(`/repos/${targets().repository}/actions/runs/${env.GITHUB_RUN_ID}/jobs?per_page=100`);
   const job = jobs.jobs?.find(item => item.name === 'go-live' && item.status === 'in_progress');
   requireCondition(job?.started_at, 'APPROVED_EXECUTION_JOB_REQUIRED');
+  const identity = await github.identity();
+  const journal = new DeploymentJournal({ github, actorIds: [identity.user.id, run.actor.id], releaseId: manifest.releaseId, manifestHash: digest(manifest) });
+  const saved = (await journal.read()).find(record => record.payload.event === 'approval.accepted')?.payload.data;
+  if (saved?.runId === run.id) return assertAuthorization(saved, manifest, staged);
+  requireCondition(run.run_attempt === 1, 'FRESH_NATIVE_APPROVAL_REQUIRED');
   const receipt = { manifestHash: digest(manifest), candidateSha: manifest.candidate.sha, buildId: manifest.build.buildId,
     deploymentId: staged.id, previousDeploymentId: manifest.previous.deploymentId, environment: environment.name,
     reviewer: targets().account, nativeReviewVerified: true, runId: Number(env.GITHUB_RUN_ID), approvedAt: run.created_at };

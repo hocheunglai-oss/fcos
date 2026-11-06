@@ -34,7 +34,7 @@ export function assertBuildArtifact(directory, receipt, manifest) {
   const root = join(directory, '.vercel/output');
   const inventory = artifactInventory(root), files = new Set(inventory.map(entry => entry.path));
   requireCondition(digest(inventory) === receipt.artifactDigest, 'ARTIFACT_DIGEST_CHANGED');
-  for (const entry of inventory.filter(item => item.path.endsWith('/.vc-config.json'))) {
+  for (const entry of inventory.filter(item => item.path === '.vc-config.json' || item.path.endsWith('/.vc-config.json'))) {
     const configuration = JSON.parse(readFileSync(join(root, entry.path), 'utf8'));
     for (const reference of Object.values(configuration.filePathMap || {})) {
       requireCondition(typeof reference === 'string' && !isAbsolute(reference) && !reference.includes('\\')
@@ -98,6 +98,8 @@ export function qualityAndBuild({ manifest, candidateDirectory, controllerDirect
   const receipt = { schemaVersion: 1, buildId: manifest.build.buildId, candidateSha: manifest.candidate.sha,
     controllerSha: manifest.controllerSha, sourceDigest: manifest.candidate.sourceDigest, lockDigest: manifest.candidate.lockDigest,
     artifactDigest: artifactDigest(join(vercel, 'output')), qualityPassed: true, performancePassed: true,
-    node: process.version, checks, elapsedMs: Date.now() - started, providerCalls: 0 };
+    node: process.version, checks, elapsedMs: Date.now() - started,
+    providerCalls: null, providerWrites: 0, knownPublicGitHubReads: manifest.selection.broad ? 4 : 0,
+    dependencyToolNetworkCalls: 'not_metered' };
   assertBuildArtifact(candidateDirectory, receipt, manifest); return receipt;
 }

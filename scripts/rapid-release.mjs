@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { fileURLToPath } from 'node:url';
 import { resolve, join } from 'node:path';
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, cpSync } from 'node:fs';
 import { createManifest, changedPaths, digest, git, requireCondition, sourceSnapshot, targets, validateManifest } from './lib/rapid-release/contract.mjs';
 import { assertBuildArtifact, qualityAndBuild } from './lib/rapid-release/build.mjs';
 import { DeploymentJournal, pendingOperations } from './lib/rapid-release/journal.mjs';
@@ -73,6 +73,20 @@ async function rapidReleaseCommand(argv, env, runtime) {
     write(opts.output, result); return result;
   }
   const { github, journal } = await context(manifest, env);
+  if (command === 'reuse-quality') {
+    requireCondition(opts.build && opts['artifact-directory'] && opts.output && /^[1-9][0-9]*$/.test(env.FCOS_RAPID_BUILD_RUN_ID || ''), 'PRIOR_QUALITY_ARTIFACT_REQUIRED');
+    const run = await github.read(`/repos/${targets().repository}/actions/runs/${env.FCOS_RAPID_BUILD_RUN_ID}`);
+    const jobs = await github.read(`/repos/${targets().repository}/actions/runs/${run.id}/jobs?filter=all&per_page=100`);
+    requireCondition(run.head_sha === manifest.controllerSha && run.event === 'workflow_dispatch' && run.conclusion === 'success'
+      && run.path === '.github/workflows/fcos-rapid-release.yml' && run.actor?.login === targets().account
+      && new RegExp(`^FCOS rapid (qualify|release|resume) ${digest(manifest)} ${manifest.candidate.sha}$`).test(run.display_title || '')
+      && jobs.jobs?.some(job => job.name === 'quality' && job.conclusion === 'success'), 'PRIOR_NATIVE_QUALITY_REQUIRED');
+    const build = read(opts.build); assertBuildArtifact(resolve(opts['artifact-directory']), build, manifest);
+    const destination = resolve('candidate/.vercel'); mkdirSync(destination, { recursive: true });
+    cpSync(join(resolve(opts['artifact-directory']), '.vercel/output'), join(destination, 'output'), { recursive: true, errorOnExist: true, force: false });
+    write('manifest.json', manifest); write(opts.output, build);
+    return { state: 'quality_reused', originalRunId: run.id, buildId: build.buildId, artifactDigest: build.artifactDigest, providerWrites: 0 };
+  }
   runtime.journal = journal;
   if (command === 'status') {
     const records = await journal.read(); return { releaseId: manifest.releaseId, events: records.length,
@@ -102,7 +116,7 @@ async function rapidReleaseCommand(argv, env, runtime) {
   if (command === 'stage' || command === 'resume' && !staged) {
     requireCondition(opts.build && opts['artifact-directory'], 'STAGE_ARTIFACT_REQUIRED');
     const build = read(opts.build); assertBuildArtifact(resolve(opts['artifact-directory']), build, manifest);
-    const jobs = await github.read(`/repos/${targets().repository}/actions/runs/${env.GITHUB_RUN_ID}/jobs?per_page=100`);
+    const jobs = await github.read(`/repos/${targets().repository}/actions/runs/${env.GITHUB_RUN_ID}/jobs?filter=all&per_page=100`);
     requireCondition(jobs.jobs?.some(job => job.name === 'quality' && job.conclusion === 'success'), 'NATIVE_QUALITY_JOB_REQUIRED');
     result = await stageRelease({ manifest, journal, provider, build, smoke });
   } else {

@@ -38,7 +38,7 @@ function nativeFixture() {
  finalApprovalEnvironment:'fcos-production-release',planHash:h,nativeReview:{runId:77,jobId:78,reviewDigest:digest(review)}};
  const run={id:88,head_sha:m.controllerSha,repository:{full_name:p.repository},event:'workflow_dispatch',path:'.github/workflows/fcos-rapid-release.yml',status:'in_progress',head_branch:'main',actor:{login:p.account},run_attempt:1,display_title:`FCOS rapid release ${digest(m)} ${sha}`,created_at:new Date().toISOString()};
  const environment={id:9,name:'fcos-production-release',can_admins_bypass:false,protection_rules:[{type:'required_reviewers',reviewers:[{reviewer:{login:p.account}}]}]};
- const gh={identity:async()=>({user:{login:'github-actions[bot]',id:1},repo:{default_branch:'main'}}),read:async path=>{
+ const gh={pages:async()=>[],identity:async()=>({user:{login:'github-actions[bot]',id:1},repo:{default_branch:'main'}}),read:async path=>{
   if(path.endsWith('/FCOS_RAPID_RELEASE_ENABLED'))return{value:'true'};
   if(path.endsWith('/FCOS_RAPID_RELEASE_HANDOVER_ID'))return{value:'100'};
   if(path.endsWith('/deployments/100'))return{creator:{login:'github-actions[bot]'},payload:setup};
@@ -59,11 +59,20 @@ test('native admission requires real matching successful setup run and exact cur
 });
 test('rerun cannot renew old review and elapsed approval window is preserved',async()=>{
  const f=nativeFixture();f.run.run_attempt=2;
- await assert.rejects(verifyExecution({github:f.gh,manifest:f.m,env:f.env}),/WORKFLOW_IDENTITY_MISMATCH/);
+ await assert.rejects(nativeApproval({github:f.gh,manifest:f.m,staged:{id:'dpl_new'},env:f.env}),/FRESH_NATIVE_APPROVAL_REQUIRED/);
  f.run.run_attempt=1;f.run.created_at=new Date(Date.now()-25*60*60*1000).toISOString();
  await assert.rejects(nativeApproval({github:f.gh,manifest:f.m,staged:{id:'dpl_new'},env:f.env}),/EXACT_PRODUCTION_AUTHORIZATION_REQUIRED/);
 });
 test('installation journal identity does not require code push permission',async()=>{
  const p=targets(),gh=githubClient({token:'fake-test-token-123',actions:true,fetchImpl:async url=>({ok:true,redirected:false,json:async()=>url.endsWith('/users/github-actions%5Bbot%5D')?{login:'github-actions[bot]'}:{full_name:p.repository,archived:false,permissions:{pull:true,push:false}}})});
  assert.equal((await gh.identity()).user.login,'github-actions[bot]');
+});
+test('valid durable native approval survives a job interruption without refreshing its age',async()=>{
+ const f=nativeFixture(),approvedAt=new Date(Date.now()-7200000).toISOString();
+ const saved={manifestHash:digest(f.m),candidateSha:f.m.candidate.sha,buildId:f.m.build.buildId,deploymentId:'dpl_new',previousDeploymentId:'dpl_old',
+  environment:'fcos-production-release',reviewer:targets().account,nativeReviewVerified:true,runId:88,approvedAt};
+ const content={schemaVersion:1,kind:'fcos_rapid_release_event',releaseId:f.m.releaseId,manifestHash:digest(f.m),sequence:0,previousHash:null,event:'approval.accepted',data:saved};
+ f.gh.pages=async()=>[{creator:{id:1},payload:{...content,recordHash:digest(content)}}];f.run.run_attempt=2;
+ const actual=await nativeApproval({github:f.gh,manifest:f.m,staged:{id:'dpl_new'},env:f.env});
+ assert.equal(actual.approvedAt,approvedAt);assert.deepEqual(actual,saved);
 });
