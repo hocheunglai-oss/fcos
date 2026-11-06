@@ -8,7 +8,7 @@ import { DeploymentJournal, pendingOperations } from './lib/rapid-release/journa
 import { improvementSummary } from './lib/rapid-release/learning.mjs';
 import { handleReleaseObstacle } from './lib/rapid-release/improvement-runtime.mjs';
 import { stageRelease, promoteRelease, phaseResult } from './lib/rapid-release/engine.mjs';
-import { githubClient, nativeApproval, verifyExecution, vercelProvider } from './lib/rapid-release/providers.mjs';
+import { githubClient, nativeApproval, verifyExecution, vercelProvider, assertNativeQualityProducer } from './lib/rapid-release/providers.mjs';
 import { runPrerequisites } from './lib/rapid-release/prerequisites.mjs';
 import { nativeCompatibilityReader } from './lib/rapid-release/compatibility.mjs';
 
@@ -77,10 +77,7 @@ async function rapidReleaseCommand(argv, env, runtime) {
     requireCondition(opts.build && opts['artifact-directory'] && opts.output && /^[1-9][0-9]*$/.test(env.FCOS_RAPID_BUILD_RUN_ID || ''), 'PRIOR_QUALITY_ARTIFACT_REQUIRED');
     const run = await github.read(`/repos/${targets().repository}/actions/runs/${env.FCOS_RAPID_BUILD_RUN_ID}`);
     const jobs = await github.read(`/repos/${targets().repository}/actions/runs/${run.id}/jobs?filter=all&per_page=100`);
-    requireCondition(run.head_sha === manifest.controllerSha && run.event === 'workflow_dispatch' && run.conclusion === 'success'
-      && run.path === '.github/workflows/fcos-rapid-release.yml' && run.actor?.login === targets().account
-      && new RegExp(`^FCOS rapid (qualify|release|resume) ${digest(manifest)} ${manifest.candidate.sha}$`).test(run.display_title || '')
-      && jobs.jobs?.some(job => job.name === 'quality' && job.conclusion === 'success'), 'PRIOR_NATIVE_QUALITY_REQUIRED');
+    assertNativeQualityProducer(run, jobs, manifest);
     const build = read(opts.build); assertBuildArtifact(resolve(opts['artifact-directory']), build, manifest);
     const destination = resolve('candidate/.vercel'); mkdirSync(destination, { recursive: true });
     cpSync(join(resolve(opts['artifact-directory']), '.vercel/output'), join(destination, 'output'), { recursive: true, errorOnExist: true, force: false });
