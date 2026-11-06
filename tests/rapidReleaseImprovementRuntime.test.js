@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier } from '../config/fcosConnections.js';
-import { handleReleaseObstacle, recordVerifiedLearning } from '../scripts/lib/rapid-release/improvement-runtime.mjs';
+import { handleReleaseObstacle, recordVerifiedLearning, releaseObstacleInputs } from '../scripts/lib/rapid-release/improvement-runtime.mjs';
 const hash = value => createHash('sha256').update(value).digest('hex');
 const canonical = value => JSON.stringify(value, (_, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
 const digest = value => hash(canonical(value));
@@ -17,6 +17,14 @@ const journal = () => { const records = []; return { records, read: async () => 
 const recipe = (incident, patch = {}) => ({ schemaVersion: 1, id: 'reconcile-original-fixture', status: 'verified', kind: incident.kind, action: 'reconcile_original_operation', preconditions: incident.inputs, proof: { reproduced: true, regressionPassed: true, sourceDigest: incident.inputs.source, checkDigest: 'c'.repeat(64) }, ...patch });
 async function fixture(run) { const directory = await mkdtemp(join(tmpdir(), 'fcos-improvement-test-')); try { await run({ directory, outputFile: join(directory, 'incident.json') }); } finally { await rm(directory, { recursive: true, force: true }); } }
 const call = options => handleReleaseObstacle({ manifest, controllerDirectory, registry, phase: 'stage', ...options });
+
+test('learning preconditions follow source rather than a new execution ID or timestamp', async () => {
+  const first = await releaseObstacleInputs({ manifest, controllerDirectory });
+  const repeated = await releaseObstacleInputs({ manifest: { ...manifest, releaseId: 'release-fixture-next', createdAt: new Date().toISOString() }, controllerDirectory });
+  assert.deepEqual(first, repeated);
+  const changed = await releaseObstacleInputs({ manifest: { ...manifest, candidate: { sha: 'b'.repeat(40) } }, controllerDirectory });
+  assert.notEqual(first.source, changed.source);
+});
 
 test('unknown failures are captured once with no raw provider message, stack, credential or unowned code', async () => fixture(async ({ outputFile }) => {
   const error = { code: 'MALICIOUS_SECRET_CODE', message: 'Bearer PRIVATE_TOKEN password=PRIVATE_PASSWORD', stack: 'PRIVATE_STACK' };
