@@ -122,6 +122,26 @@
       "measuredTimeSavedMs": null,
       "measuredCallsSaved": null,
       "prevention": "Expired-history, bot-copy, latest-receipt, unknown-write and disabled-guard regression cases"
+    },
+    {
+      "id": "hosted-worker-database-fixture-scope",
+      "cause": "The real disposable-database fixture invoked a Production worker without canonical request scope, so the new safety guard correctly disabled it before checkpointing.",
+      "correction": "Invoke the unchanged worker through its canonical request-safety boundary in the disposable integration fixture.",
+      "verification": {
+        "command": "node --test tests/missingNomBMigration.test.js",
+        "testDigest": "5d48165ba0282511ffaa206d9d9b75de00a4dfa53d4a31fe0bc728ca8052d0b2",
+        "requestSafetyDigest": "ef93ab5329a5691eb48166e94669cbb2453bfd369252a6a87b6c2f3974cba28c",
+        "workerDigest": "78d73c4375ee4d5eed1c0b3309fbf5dd2c24609a3f8a08fce8de2995ab3e407a",
+        "passed": 12,
+        "skipped": 0,
+        "elapsedMs": 859,
+        "postgres": "postgres (PostgreSQL) 17.11 (Homebrew)",
+        "liveProviderCalls": 0
+      },
+      "diagnosisElapsedMs": null,
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "The existing required GitHub disposable-database check now exercises the real canonical worker boundary; production guards remain unchanged."
     }
   ]
 }

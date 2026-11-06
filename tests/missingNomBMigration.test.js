@@ -4,6 +4,8 @@ import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { runMissingNomBReminders } from '../api/_missingNomB.js';
+import { runWithDeploymentRequestSafety } from '../api/_deploymentReadOnly.js';
+import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 const source = await readFile(new URL('../supabase/migrations/20260930044110_missing_nom_b_workflow.sql',import.meta.url),'utf8');
 const databaseUrl = process.env.FCOS_MISSING_NOM_B_TEST_DATABASE_URL;
 
@@ -138,8 +140,11 @@ test('disposable Postgres verifies claims, rollback, RLS, expiry and concurrent 
    await db.query('set role service_role');
    let result;
    try {
-    result=await runMissingNomBReminders({client,env:{VERCEL_ENV:'production',FCOS_ENABLE_MISSING_NOM_B_REMINDERS:'true'},resolveSender:async()=>({emailAddress:'sender@example.invalid'}),
-     gateway:{verify:async()=>precisionOrg,invoiceSelect:async()=>'Id',query:async(q)=>{queries.push(q);return [];}},sendMail:async()=>assert.fail('Empty scan must not send')});
+    // The hosted worker is invoked through its canonical request boundary. An
+    // unscoped production helper deliberately has no mutation authority.
+    const env={VERCEL_ENV:'production',FCOS_ENABLE_MISSING_NOM_B_REMINDERS:'true'};
+    result=await runWithDeploymentRequestSafety({headers:{host:new URL(FCOS_CONNECTION_POLICY.attestation.endpoint).hostname}},()=>runMissingNomBReminders({client,env,resolveSender:async()=>({emailAddress:'sender@example.invalid'}),
+     gateway:{verify:async()=>precisionOrg,invoiceSelect:async()=>'Id',query:async(q)=>{queries.push(q);return [];}},sendMail:async()=>assert.fail('Empty scan must not send')}),env);
    } finally {await db.query('reset role');}
    assert.equal(result.scanned,0);assert.equal(result.sent,0);assert.equal(checkpoints[0].p_cursor_at,original.scan_until);
    assert.ok(queries[0].includes('CreatedDate >= 2026-09-30T06:30:51.024Z'));assert.ok(queries[0].includes('SystemModstamp <= 2026-09-30T06:30:51.023Z'));
