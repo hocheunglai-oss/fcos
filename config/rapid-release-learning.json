@@ -191,6 +191,61 @@
       "measuredTimeSavedMs": null,
       "measuredCallsSaved": null,
       "prevention": "Run the cheap fixture preflight before publishing another controller; all historical manifests, source bindings and original complete case body remain unchanged."
+    },
+    {
+      "id": "bootstrap-public-federation-preflight",
+      "cause": "A new controller Preview branch lacked the three canonical public FCUNO federation build settings. The original build terminated before browser verification.",
+      "correction": "Verify source-derived branch-only plain Preview values before one separately journaled replacement of the known terminal failed build. Preserve both deployment identities and the original frozen controller.",
+      "preconditions": {
+        "controllerSha": "9022a87ff7830caaf82426441c72d49f26bee018",
+        "vercelCli": "54.20.1",
+        "scope": "Initial controller Preview setup only"
+      },
+      "verification": {
+        "publicConfigurationReceiptDeploymentId": 7610508525,
+        "replacementPermitDeploymentId": 7610516063,
+        "failedDeploymentId": "dpl_G5ePLcCGwhkdbJJ12sURecpvHMzo",
+        "replacementDeploymentId": "dpl_5x9fCidbBJwtyMR1ZoVk46dhK1NH",
+        "genuinePreviewSuccessStatusId": 21613743672,
+        "bootstrapQualificationReceiptId": 4,
+        "publicConfigTestsPassed": 7,
+        "replacementTestsPassed": 5,
+        "replacementSubmissionMs": 130710,
+        "postgresQueries": 242,
+        "hostedAuthenticationVerified": false
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Exact public configuration preflight; no private Production configuration copying, discarded failures, or blind provider retries."
+    },
+    {
+      "id": "github-variable-page-limit-before-lease",
+      "cause": "GitHub variable inventory returned only30 of32 rows even with per_page=100. An initial-only completeness check correctly stopped but ran after expensive native bootstrap readback.",
+      "correction": "Read complete30-item pages with stable total, unique names and exact full count; perform that preflight before opening the five-minute database lease. Keep original setup and uncertainty fences.",
+      "preconditions": {
+        "controllerSha": "9022a87ff7830caaf82426441c72d49f26bee018",
+        "scope": "Initial metadata-reader setup; GitHub repository and environment variable inventories"
+      },
+      "verification": {
+        "paginationTestsPassed": 5,
+        "credentialConfigurationTestsPassed": 8,
+        "inventoryRows": 32,
+        "correctedInventoryGitHubReads": 2,
+        "correctedInventoryPostgresQueries": 0,
+        "failedAttemptMs": 111620,
+        "failedAttemptPostgresQueries": 124,
+        "qualifiedReaderDeploymentId": 7610909400,
+        "successfulProvisionMs": 186507,
+        "successfulProvisionPostgresQueries": 254,
+        "credentialConfigurationReceiptDeploymentId": 7611117164,
+        "credentialSlotsAcknowledged": 12,
+        "publicVariablesVerified": 4,
+        "opaqueCredentialValuesIndependentlyVerified": false,
+        "normalRoleBrowserSmokeStillRequired": true
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Pagination regressions cover truncated, duplicate, changing-total and activation-present inventories; configuration metadata preflights precede private reads and writes."
     }
   ]
 }
