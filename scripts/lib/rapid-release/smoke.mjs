@@ -8,20 +8,13 @@ import { canonicalFcosE2eCandidateUrl } from '../../verify-e2e-candidate.mjs';
 import { candidateAuthenticationState, writePrivateE2eState, removePrivateE2eState } from '../../e2e-private-state.mjs';
 import { candidateProtectionState } from '../../e2e-protection-state.mjs';
 import { CI_DENIAL_PROBES } from '../../e2e-api-denials.mjs';
+import { MODULE_READERS as moduleReaders, MODULE_SURFACES, NORMAL_NAVIGATION_READS, moduleReadBody, moduleReaderPayloadVerified as modulePayloadVerified } from './normal-role-readers.mjs';
 
 const issuer = new URL(FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation.issuer).origin;
 const canonicalOrigin = new URL(FCOS_CONNECTION_POLICY.attestation.endpoint).origin;
 const supabaseOrigin = `https://${fcosConnectionIdentifier('supabase', 'Project ref')}.supabase.co`;
 const baselineModules = ['dashboard', 'markets'];
-const moduleReaders = Object.freeze({
-  dashboard: { path: '/api/functions/dashboardSummary', body: {}, route: '/', heading: 'Dashboard' },
-  markets: { path: '/api/functions/marketPulseSnapshot', body: {}, route: '/markets', heading: 'Markets' },
-  buyer_invoices: { path: '/api/functions/salesforceBuyerInvoicesDue', body: { daysAhead: 30 } },
-  settings: { path: '/api/functions/financeSettingsGet', body: {} },
-  email_router: { path: '/api/functions/emailRouterSettings', body: {} },
-  xero_portal: { path: '/api/functions/xeroPortalStatus', body: {} },
-});
-const normalReadHandlers = new Set([...READ_ONLY_CI_HANDLERS, ...Object.values(moduleReaders).map(reader => reader.path.split('/').pop())]);
+const normalReadHandlers = new Set([...READ_ONLY_CI_HANDLERS, ...NORMAL_NAVIGATION_READS, ...Object.values(moduleReaders).map(reader => reader.path.split('/').pop())]);
 const readHandlers = new Set(READ_ONLY_CI_HANDLERS);
 const unsafeControl = /(?:create|update|delete|save|submit|approve|apply|sync|send|upload|execute|cancel|promote|write|mutation|refresh|reconcil|retry|resume|recover|finaliz|publish|process|rebuild|repair|reset|import|dispatch|trigger|invalidate|persist|rotate|provision)/i;
 const exactKeys = (value, keys) => value && typeof value === 'object' && !Array.isArray(value)
@@ -70,25 +63,6 @@ function safeBody(value, depth = 0) {
     && !unsafeControl.test(key.replace(/[^a-z0-9]/gi, '')) && safeBody(item, depth + 1));
 }
 function bodyOf(request) { try { return JSON.parse(request.postData() || '{}'); } catch { return null; } }
-function modulePayloadVerified(module, data) {
-  if (!data || typeof data !== 'object' || data.error || data.cancelled || data.status === 'unavailable') return false;
-  if (module === 'dashboard') return data.complete === true && Array.isArray(data.financials);
-  if (module === 'markets') return data.complete === true && data.reportCompleteness?.complete === true
-    && /^\d{4}-\d{2}-\d{2}$/.test(data.asOfDate || '') && Array.isArray(data.products) && data.products.length === 3
-    && ['hsfo380', 'vlsfo', 'lsmgo'].every(key => data.products.some(product => product.productKey === key
-      && typeof product.latestMops?.value === 'number' && Number.isFinite(product.latestMops.value)));
-  if (module === 'buyer_invoices') return Array.isArray(data.rows) && /^\d{4}-\d{2}-\d{2}$/.test(data.today || '')
-    && /^\d{4}-\d{2}-\d{2}$/.test(data.dueThrough || '') && Number.isFinite(data.daysAhead);
-  if (module === 'settings') return Number.isSafeInteger(data.settings?.revision) && data.settings.revision > 0
-    && Number.isFinite(data.settings.annualInterestRatePct) && ['UBS', 'DBS'].every(bank => Number.isFinite(data.settings.bankChargesUsd?.[bank]));
-  if (module === 'email_router') return typeof data.mailbox?.id === 'string' && Array.isArray(data.destinations) && Array.isArray(data.groups);
-  if (module === 'xero_portal') return typeof data.xero?.configured === 'boolean' && typeof data.xero.connected === 'boolean'
-    && !data.xero.refreshError && Object.keys(data.externalActions || {}).length > 0
-    && Object.values(data.externalActions).every(gate => gate.enabled === false);
-  return false;
-}
-
-
 // Protected harness policy is independent of candidate dispatch metadata. The
 // two issuer auth routes are the pinned FCUNO source's existing login contract.
 export function stagedBrowserRequestAllowed(request, { origin, credentials, normal = false }) {
@@ -99,6 +73,8 @@ export function stagedBrowserRequestAllowed(request, { origin, credentials, norm
     if (url.origin === origin) {
       if (url.pathname.startsWith('/api/functions/')) {
         const name = url.pathname.split('/').pop(), body = bodyOf(request);
+        if (name === 'hedgeDeskEntity') return normal && method === 'POST' && !url.search && exactKeys(body, ['action']) && body.action === 'snapshot';
+        if (normal && name === 'xeroPortalStatus' && exactKeys(body, ['forceRefresh'])) return method === 'POST' && !url.search && body.forceRefresh === false;
         return method === 'POST' && !url.search && safeBody(body)
           && ((normal ? normalReadHandlers : readHandlers).has(name) || name === 'hedgeMarkets' && isReadOnlyMarketAction(body));
       }
@@ -111,6 +87,7 @@ export function stagedBrowserRequestAllowed(request, { origin, credentials, norm
       }
       if (url.pathname.startsWith('/api/')) return method === 'GET' && url.pathname === '/api/release-identity' && !url.search;
       const loginQuery = url.pathname === '/login' && url.search === '?federated=1';
+      if (normal && type === 'document' && Object.values(MODULE_SURFACES).some(surface => `${url.pathname}${url.search}` === surface.route)) return method === 'GET';
       return method === 'GET' && (!url.search || loginQuery) && (type === 'document' && ['/', '/login', '/markets', '/settings', '/email-router'].includes(url.pathname)
         || staticResource && /^\/(?:assets\/|favicon\.|manifest\.)/.test(url.pathname)
         || ['/app-version.json', '/manifest.json'].includes(url.pathname));
@@ -230,9 +207,42 @@ async function denialProbes(route, origin) {
   return receipts;
 }
 
+async function verifyModuleDesktop({ page, origin, module }) {
+  const spec = MODULE_SURFACES[module];
+  requireFact(spec, 'MODULE_DESKTOP_COVERAGE_MISSING');
+  await page.goto(`${origin}${spec.route}`, { waitUntil: 'domcontentloaded', timeout: 45000 });
+  requireFact(page.url() === `${origin}${spec.route}`, 'SMOKE_CANDIDATE_NAVIGATION_CHANGED');
+  await page.getByRole('heading', { name: spec.heading }).first().waitFor({ state: 'visible', timeout: 30000 });
+  if (spec.readControl) {
+    const [response] = await Promise.all([
+      page.waitForResponse(value => value.url() === `${origin}${moduleReaders[module].path}` && value.request().method() === 'POST', { timeout: 45000 }),
+      page.getByRole('button', { name: spec.readControl, exact: true }).click(),
+    ]);
+    requireFact(response.status() === 200 && await response.finished() === null
+      && modulePayloadVerified(module, await response.json()), 'SMOKE_MODULE_READ_FAILED');
+  }
+  await page.waitForLoadState('networkidle', { timeout: 30000 });
+  await page.waitForFunction(() => !/\b(?:loading|fetching|preparing)\b/i.test(document.body.innerText), undefined, { timeout: 30000 });
+  if (module === 'settings') await page.getByLabel(/Annual interest rate/i).waitFor({ state: 'visible', timeout: 30000 });
+  else if (module === 'xero_portal') await page.locator('dl dd').first().waitFor({ state: 'visible', timeout: 30000 });
+  else {
+    const surface = page.locator('table, [role="table"], [role="grid"]');
+    // No heading-only success: require an actual table/grid or an explicit
+    // business empty state. A loading/default uninitialized panel is not proof.
+    if (!await surface.count()) {
+      await page.getByText(/No (?:records|rows|items|invoices|payments|receipts|messages|contracts|terms|trades|positions|data|STEMs|matching|Accounts|Dispute Workflow|forecast rows)(?:\b)/i).first()
+        .waitFor({ state: 'visible', timeout: 30000 });
+    } else await surface.first().waitFor({ state: 'visible', timeout: 30000 });
+  }
+  const body = await page.locator('body').innerText();
+  requireFact(!/Access denied|Something went wrong|temporarily unavailable|could not (?:load|read|verify)|No validator data loaded|Loading Hedge Desk/i.test(body), 'SMOKE_MODULE_DESKTOP_INCOMPLETE');
+  return { module, route: spec.route, rendered: true, dataSource: moduleReaders[module].path, businessSurface: true,
+    ...(spec.readControl ? { readControl: spec.readControl } : {}) };
+}
+
 async function browserRun({ origin, manifest, credentials, normal, modules, env, browserFactory }) {
   let browser, context, privateEnv, cleanupFailed = false;
-  let denialReceipts = [], extraReads = [], authProbed = false, probeError, rejectProbe;
+  let denialReceipts = [], extraReads = [], desktopChecks = [], authProbed = false, probeError, rejectProbe;
   const probeFailure = new Promise((_, reject) => { rejectProbe = reject; });
   probeFailure.catch(() => {});
   try {
@@ -271,9 +281,9 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
           } finally { await denial?.dispose(); }
           for (const module of modules.filter(value => !baselineModules.includes(value))) {
             const reader = moduleReaders[module];
-            const result = await routeRead(route, origin, reader.path, reader.body);
+            const result = await routeRead(route, origin, reader.path, moduleReadBody(module, manifest));
             requireFact(modulePayloadVerified(module, result.response), 'SMOKE_MODULE_PAYLOAD_INCOMPLETE');
-            extraReads.push({ module, ...result.receipt, dataVerified: true, surface: 'authenticated_read_api' });
+            extraReads.push({ module, ...result.receipt, dataVerified: true, surface: 'authenticated_read_api', coverage: reader.coverage });
           }
         }
         await route.fulfill({ response: actual });
@@ -317,6 +327,9 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
       requireFact(new URL(page.url()).origin === origin, 'SMOKE_CANDIDATE_NAVIGATION_CHANGED');
       reads.push({ module, path: reader.path, status: 200, authenticated: true, dataVerified: true, surface: 'browser' });
     }
+    if (normal) for (const module of modules.filter(value => !baselineModules.includes(value))) {
+      desktopChecks.push(await verifyModuleDesktop({ page, origin, module }));
+    }
     if (!normal) {
       for (const route of ['/settings', '/email-router']) {
         await page.goto(`${origin}${route}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
@@ -325,7 +338,7 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
       requireFact(denialReceipts.length === CI_DENIAL_PROBES.length, 'SMOKE_RESTRICTED_ACCESS_NOT_PROVEN');
     }
     gate.assertHealthy();
-    return { role: credentials.role, modules: unique(reads.map(read => read.module)), reads, denialReceipts,
+    return { role: credentials.role, requiredModules: unique(modules), modules: unique(reads.map(read => read.module)), reads, desktopChecks, denialReceipts,
       ...gate.summary(), candidateSha: manifest.candidate.sha };
   } catch (error) {
     throw fail(probeError?.code || (/^(?:SMOKE_|NORMAL_ROLE_)[A-Z0-9_]+$/.test(error?.code || '') ? error.code : 'SMOKE_BROWSER_VERIFICATION_FAILED'));
@@ -342,10 +355,12 @@ export async function runStagedSmoke({ manifest, staged, env = process.env, fetc
   const selected = unique(manifest.selection?.modules || []);
   const expanded = String(env.FCOS_RAPID_NORMAL_REQUIRED_MODULES || '').split(',').map(value => value.trim()).filter(Boolean);
   const normalModules = unique([...baselineModules, ...selected, ...expanded]);
-  requireFact(normalModules.every(module => Object.hasOwn(moduleReaders, module)), 'MODULE_SAFE_READER_COVERAGE_MISSING');
+  const missingModules = normalModules.filter(module => !Object.hasOwn(moduleReaders, module));
+  if (missingModules.length) throw Object.assign(fail('MODULE_SAFE_READER_COVERAGE_MISSING'), { missingModules });
   requireFact([...selected, ...expanded].every(module => baselineModules.includes(module)) || manifest.selection?.normalRole === true, 'NORMAL_ROLE_COVERAGE_MISSING');
   const ci = credentialsFor(env, false);
   const normal = manifest.selection?.normalRole === true ? credentialsFor(env, true) : null;
+  requireFact(!normalModules.includes('admin') || normal?.role === 'general_manager', 'NORMAL_ROLE_ADMIN_REQUIRES_APPROVED_GM');
   requireFact(!env.FCOS_E2E_VERCEL_BYPASS || /^[a-zA-Z0-9]{32}$/.test(env.FCOS_E2E_VERCEL_BYPASS), 'SMOKE_PROTECTION_CREDENTIAL_INVALID');
   await verifyIdentity(origin, manifest, fetchImpl, env.FCOS_E2E_VERCEL_BYPASS);
   const launch = browserFactory || (async options => (await import('@playwright/test')).chromium.launch(options));
