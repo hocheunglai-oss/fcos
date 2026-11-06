@@ -2,7 +2,7 @@ import { createSign } from 'node:crypto';
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
 import { parseSalesforceCurrencyEvidence, salesforceUserInfoEnvelope } from './_salesforceCurrency.js';
 import { salesforceReadRetryDelay } from './_salesforceReadRetry.js';
-import { requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
+import { isDeploymentReadOnly, requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
 import { requireExternalActionGate } from './_externalActionGates.js';
 import {
   markRuntimeCacheUnsafe,
@@ -182,6 +182,7 @@ async function jwtBearerAccessToken() {
 
 export function salesforceAuthMode() {
   if (hasJwtBearerConfig()) return 'jwt';
+  if (isDeploymentReadOnly() && process.env.SALESFORCE_ACCESS_TOKEN) return 'access_token';
   if (hasRefreshTokenConfig()) return 'refresh_token';
   if (process.env.SALESFORCE_ACCESS_TOKEN) return 'access_token';
   if (hasAnyJwtBearerEnv() || hasAnyRefreshTokenEnv()) return 'misconfigured';
@@ -200,6 +201,12 @@ export async function getAccessToken({ forceRefresh = false } = {}) {
   if (hasJwtBearerConfig()) {
     if (!forceRefresh && cachedToken && Date.now() < cachedTokenExpiresAt) return cachedToken;
     return sharedTokenRefresh(jwtBearerAccessToken);
+  }
+
+  if (isDeploymentReadOnly() && hasRefreshTokenConfig()) {
+    // Keep rotating grants blocked; staged reads may use an existing static credential.
+    requireDeploymentMutationAllowed(forceRefresh || !process.env.SALESFORCE_ACCESS_TOKEN);
+    return process.env.SALESFORCE_ACCESS_TOKEN;
   }
 
   if (hasRefreshTokenConfig()) {
