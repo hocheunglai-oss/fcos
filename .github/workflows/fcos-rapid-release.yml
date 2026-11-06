@@ -1,0 +1,202 @@
+name: FCOS rapid release
+run-name: FCOS rapid ${{ inputs.mode }} ${{ inputs.manifest_hash }} ${{ inputs.candidate_sha }}
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Exact reviewed application commit, independent of controller source
+        required: true
+        type: string
+      mode:
+        description: Qualification builds are credential-free and cannot release Production
+        required: true
+        default: qualify
+        type: choice
+        options: [qualify, release, resume]
+      manifest_json:
+        description: Frozen non-secret manifest for a previously prepared/resumed release
+        required: true
+        type: string
+      manifest_hash:
+        description: SHA256 of the canonical frozen manifest bound to native review
+        required: true
+        type: string
+
+permissions:
+  contents: read
+concurrency:
+  group: fcos-production-release
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  quality:
+    name: quality
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          path: controller
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          path: candidate
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+          cache: npm
+          cache-dependency-path: controller/package-lock.json
+      - name: Install trusted tools without deployment credentials
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Install pinned Vercel CLI
+        run: npm install --global vercel@54.20.1 --ignore-scripts --no-audit --no-fund
+      - name: Validate frozen manifest and execute isolated quality/build
+        env:
+          FCOS_RAPID_MANIFEST: ${{ inputs.manifest_json }}
+          EXPECTED_CANDIDATE: ${{ inputs.candidate_sha }}
+          EXPECTED_MANIFEST_HASH: ${{ inputs.manifest_hash }}
+          FCOS_RAPID_BUILD_HOME: ${{ runner.temp }}/rapid-build-home
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import {validateManifest, requireCondition, digest} from './controller/scripts/lib/rapid-release/contract.mjs';
+          const m=JSON.parse(process.env.FCOS_RAPID_MANIFEST);validateManifest(m);
+          requireCondition(m.candidate.sha===process.env.EXPECTED_CANDIDATE && m.controllerSha===process.env.GITHUB_SHA && digest(m)===process.env.EXPECTED_MANIFEST_HASH,'WORKFLOW_SOURCE_BINDING');
+          fs.writeFileSync('manifest.json',JSON.stringify(m));
+          NODE
+          node controller/scripts/rapid-release.mjs quality --manifest manifest.json --candidate candidate --controller controller --output build.json
+      - name: Retain bounded artifact and receipt; never upload browser state or environment files
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rapid-build-${{ github.run_id }}
+          include-hidden-files: true
+          path: |
+            manifest.json
+            build.json
+            candidate/.vercel/output/
+          retention-days: 7
+          if-no-files-found: error
+          overwrite: false
+  stage-and-smoke:
+    name: stage-and-smoke
+    needs: quality
+    if: inputs.mode != 'qualify' && vars.FCOS_RAPID_RELEASE_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: fcos-hosted-preview
+    permissions:
+      contents: read
+      actions: read
+      deployments: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          path: controller
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - run: npm install --global vercel@54.20.1 --ignore-scripts --no-audit --no-fund
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: rapid-build-${{ github.run_id }}
+          path: artifact
+      - name: Validate staged artifact before providing deployment credentials
+        run: node controller/scripts/rapid-release-artifact.mjs artifact
+      - name: Install governed browser
+        run: npx --no-install playwright install --with-deps chromium
+        working-directory: controller
+      - name: Prepare pinned database TLS certificate
+        env:
+          FCOS_CA: ${{ secrets.FCOS_RAPID_DATABASE_CA }}
+        run: node --input-type=module -e 'import fs from "node:fs";fs.writeFileSync(process.env.RUNNER_TEMP+"/rapid-database-ca.pem",process.env.FCOS_CA,{mode:0o600})'
+      - name: Stage immutable build and verify actual read-only browser coverage
+        run: node controller/scripts/rapid-release.mjs stage --manifest artifact/manifest.json --build artifact/build.json --artifact-directory artifact/candidate --output stage-result.json
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          VERCEL_TOKEN: ${{ secrets.FCOS_RAPID_VERCEL_STAGE_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.FCOS_VERCEL_TEAM_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.FCOS_VERCEL_PROJECT_ID }}
+          FCOS_RAPID_DATABASE_URL: ${{ secrets.FCOS_RAPID_READONLY_DATABASE_URL }}
+          FCOS_RAPID_DATABASE_CA: ${{ runner.temp }}/rapid-database-ca.pem
+          FCOS_E2E_VERCEL_BYPASS: ${{ secrets.FCOS_E2E_VERCEL_BYPASS }}
+          FCOS_AUTH_E2E_ENABLED: 'true'
+          FCOS_E2E_EMAIL: ${{ secrets.FCOS_HOSTED_RESTRICTED_EMAIL }}
+          FCOS_E2E_PASSWORD: ${{ secrets.FCOS_HOSTED_RESTRICTED_PASSWORD }}
+          FCOS_RAPID_NORMAL_EMAIL: ${{ secrets.FCOS_HOSTED_NORMAL_EMAIL }}
+          FCOS_RAPID_NORMAL_PASSWORD: ${{ secrets.FCOS_HOSTED_NORMAL_PASSWORD }}
+          FCOS_NORMAL_ROLE_APPROVED_EMAIL: ${{ vars.FCOS_NORMAL_ROLE_APPROVED_EMAIL }}
+          FCOS_HOSTED_NORMAL_EXPECTED_ROLE: ${{ vars.FCOS_HOSTED_NORMAL_EXPECTED_ROLE }}
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rapid-stage-summary-${{ github.run_id }}
+          path: stage-result.json
+          if-no-files-found: ignore
+  go-live:
+    name: go-live
+    needs: stage-and-smoke
+    if: inputs.mode != 'qualify' && vars.FCOS_RAPID_RELEASE_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment:
+      name: fcos-production-release
+    permissions:
+      contents: read
+      actions: read
+      deployments: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm install --global vercel@54.20.1 --ignore-scripts --no-audit --no-fund
+      - name: Install governed browser for conditional prerequisite smoke
+        run: npx --no-install playwright install --with-deps chromium
+      - name: Reuse frozen release manifest
+        env:
+          FCOS_RAPID_MANIFEST: ${{ inputs.manifest_json }}
+        run: node --input-type=module -e 'import fs from "node:fs"; fs.writeFileSync("manifest.json",process.env.FCOS_RAPID_MANIFEST)'
+      - name: Prepare pinned database TLS certificate
+        env:
+          FCOS_CA: ${{ secrets.FCOS_RAPID_DATABASE_CA }}
+        run: node --input-type=module -e 'import fs from "node:fs";fs.writeFileSync(process.env.RUNNER_TEMP+"/rapid-database-ca.pem",process.env.FCOS_CA,{mode:0o600})'
+      - name: Verify native approval, promote same deployment and observe live behavior
+        run: node scripts/rapid-release.mjs promote --manifest manifest.json --output release-result.json
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          VERCEL_TOKEN: ${{ secrets.FCOS_RELEASE_VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.FCOS_VERCEL_TEAM_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.FCOS_VERCEL_PROJECT_ID }}
+          FCOS_RAPID_DATABASE_URL: ${{ secrets.FCOS_RAPID_READONLY_DATABASE_URL }}
+          FCOS_RAPID_DATABASE_CA: ${{ runner.temp }}/rapid-database-ca.pem
+          FCOS_AUTH_E2E_ENABLED: 'true'
+          FCOS_E2E_VERCEL_BYPASS: ${{ secrets.FCOS_E2E_VERCEL_BYPASS }}
+          FCOS_E2E_EMAIL: ${{ secrets.FCOS_HOSTED_RESTRICTED_EMAIL }}
+          FCOS_E2E_PASSWORD: ${{ secrets.FCOS_HOSTED_RESTRICTED_PASSWORD }}
+          FCOS_RAPID_NORMAL_EMAIL: ${{ secrets.FCOS_HOSTED_NORMAL_EMAIL }}
+          FCOS_RAPID_NORMAL_PASSWORD: ${{ secrets.FCOS_HOSTED_NORMAL_PASSWORD }}
+          FCOS_NORMAL_ROLE_APPROVED_EMAIL: ${{ vars.FCOS_NORMAL_ROLE_APPROVED_EMAIL }}
+          FCOS_HOSTED_NORMAL_EXPECTED_ROLE: ${{ vars.FCOS_HOSTED_NORMAL_EXPECTED_ROLE }}
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rapid-live-summary-${{ github.run_id }}
+          path: release-result.json
+          if-no-files-found: ignore

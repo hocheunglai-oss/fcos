@@ -46,7 +46,13 @@
     "connections:auth": "node scripts/fcos-connections.mjs auth",
     "connections:keychain": "node scripts/fcos-connections.mjs keychain",
     "connections:cli": "node scripts/fcos-connections.mjs run",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "release": "node scripts/rapid-release.mjs",
+    "release:repair": "node scripts/rapid-release.mjs repair",
+    "release:qualify": "node --test tests/rapidRelease*.test.js",
+    "release:handover": "node scripts/rapid-release-handover.mjs",
+    "verify:controls": "node scripts/fcos-project-doctor.mjs --controls",
+    "release:readiness": "node scripts/fcos-project-doctor.mjs --release-readiness"
   },
   "dependencies": {
     "@fontsource-variable/ibm-plex-sans": "5.3.0",
