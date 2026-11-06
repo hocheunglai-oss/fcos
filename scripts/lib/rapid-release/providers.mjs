@@ -163,6 +163,22 @@ export function vercelProvider({ manifest, github, env = process.env, execute = 
         environment: rows.filter(row => row.target?.includes('production')).map(row => ({ id: row.id, key: row.key,
           updatedAt: row.updatedAt, type: row.type, target: row.target.slice().sort() })).sort((a,b) => a.id.localeCompare(b.id)) };
     },
+    async previewConfiguration(branch) {
+      requireCondition(typeof branch === 'string' && /^codex\/[A-Za-z0-9][A-Za-z0-9._/-]{0,190}$/.test(branch)
+        && !branch.includes('..') && branch.split('/').every(part => part && !part.startsWith('.')
+          && !part.endsWith('.') && !part.endsWith('.lock')), 'PREVIEW_CONFIGURATION_BRANCH_REQUIRED');
+      const project = await identity();
+      const rows = get(`/v10/projects/${pins.projectId}/env?decrypt=false`).envs;
+      requireCondition(Array.isArray(rows), 'NATIVE_CONFIGURATION_READBACK_REQUIRED');
+      const publicKeys = new Set(['VITE_FCOS_ENABLE_FCUNO_OIDC', 'FCOS_ENABLE_FCUNO_FEDERATION', 'FCUNO_IDENTITY_ISSUER', 'FCOS_ENABLE_READ_ONLY_CI']);
+      return { project: { id: project.id, accountId: project.accountId, autoAssignCustomDomains: project.autoAssignCustomDomains,
+        nodeVersion: project.nodeVersion, framework: project.framework, rootDirectory: project.rootDirectory,
+        buildCommand: project.buildCommand, installCommand: project.installCommand, outputDirectory: project.outputDirectory },
+      rows: rows.filter(row => row.target?.includes('preview') && (!row.gitBranch || row.gitBranch === branch))
+        .map(row => ({ id: row.id, key: row.key, updatedAt: row.updatedAt, type: row.type, target: row.target.slice().sort(),
+          ...(row.gitBranch ? { gitBranch: row.gitBranch } : {}),
+          ...(row.type === 'plain' && publicKeys.has(row.key) ? { value: row.value } : {}) })) };
+    },
     async rawDeployment(id) {
       inspect(id);
       const deployment = get(`/v13/deployments/${id}`);

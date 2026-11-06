@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 4,
+  "previousSupplementSha256": "8be9fc10bf3c5826d03c69471888d65c6a4f1bd9a64705a56bec5e4b45e79788",
+  "reviewedCurrentCommit": "031aeea1344ec77a8d1f21d7726facbb4e6f6835",
+  "path": "AGENTS.md",
+  "currentSha256": "cad73c53dc89d11916e352436159de52f3fe67ccb26e25772cbd766ead9320a3",
+  "currentByteLength": 21722,
+  "currentOid": "d2085004b46f8967b8140da4b78825c5fdf8641e",
+  "retainedSource": "installation-controls-v1.json",
+  "reason": "Reviewed rapid-release and autonomous-improvement task policy; original retained installation controls and historical source bindings remain unchanged."
+}
