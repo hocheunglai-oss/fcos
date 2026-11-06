@@ -64,9 +64,9 @@ export async function createBootstrapNative({ plan, cwd, privateInput }) {
     try { return execFileSync(binary,args,{env,input:body,encoding:'utf8',stdio:['pipe','pipe','pipe'],timeout:60000,maxBuffer:8*1024*1024}).trim(); }
     catch { throw Error('BOOTSTRAP_NATIVE_TRANSPORT_UNCERTAIN'); }
   };
-  const ghRequest = (path, body) => {
+  const ghRequest = (path, body, method) => {
     githubBootstrapPath(path);
-    const args=['api',path,'--method',body === undefined ? 'GET':'POST','-H','X-GitHub-Api-Version: 2022-11-28'];
+    const args=['api',path,'--method',method || (body === undefined ? 'GET':'POST'),'-H','X-GitHub-Api-Version: 2022-11-28'];
     if(body !== undefined) args.push('--input','-');
     return JSON.parse(execute(GITHUB,args,ghEnv,body === undefined ? undefined:JSON.stringify(body)));
   };
@@ -74,6 +74,7 @@ export async function createBootstrapNative({ plan, cwd, privateInput }) {
   const github = {
     read:path=>Promise.resolve(ghRequest(path)),
     write:(path,body)=>Promise.resolve(ghRequest(path,body)),
+    patch:(path,body)=>Promise.resolve(ghRequest(path,body,'PATCH')),
     async pages(path) {
       const all=[];
       for(let page=1;page<=100;page++) {

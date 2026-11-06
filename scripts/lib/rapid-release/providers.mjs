@@ -25,15 +25,16 @@ export function assertNativeQualityProducer(run, jobs, manifest, workflowProof) 
 
 export function githubClient({ token, candidateSha, requiredContexts = [], fetchImpl = fetch, actions = process.env.GITHUB_ACTIONS === 'true' } = {}) {
   requireCondition(typeof token === 'string' && token.length > 10 && !/\s/.test(token), 'GITHUB_CREDENTIAL_REQUIRED');
-  async function request(path, body) {
+  async function request(path, body, method) {
     requireCondition(path.startsWith(`/repos/${targets().repository}/`) || path === `/repos/${targets().repository}` || path === '/user'
       || path === '/users/github-actions%5Bbot%5D', 'GITHUB_TARGET_MISMATCH');
-    const response = await fetchImpl(`https://api.github.com${path}`, { method: body ? 'POST' : 'GET', redirect: 'error',
+    const response = await fetchImpl(`https://api.github.com${path}`, { method: method || (body ? 'POST' : 'GET'), redirect: 'error',
       headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'content-type': 'application/json', 'X-GitHub-Api-Version': '2022-11-28' },
       ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(20000) });
     requireCondition(response.ok && !response.redirected, 'GITHUB_REQUEST_REFUSED'); return response.json();
   }
   return { candidateSha, requiredContexts, read: path => request(path), write: (path, body) => request(path, body),
+    patch: (path, body) => request(path, body, 'PATCH'),
     async identity() {
       const [user, repo] = await Promise.all([request(actions ? '/users/github-actions%5Bbot%5D' : '/user'), request(`/repos/${targets().repository}`)]);
       requireCondition(repo.full_name === targets().repository && !repo.archived && (actions || repo.permissions?.push === true)
@@ -145,6 +146,13 @@ export function vercelProvider({ manifest, github, env = process.env, execute = 
   }
   const provider = {
     async project() { return identity(); },
+    async previewDeployment(id) {
+      requireCondition(/^dpl_[A-Za-z0-9]+$/.test(id || ''), 'DEPLOYMENT_ID_INVALID');
+      const deployment = get(`/v13/deployments/${id}`);
+      requireCondition(deployment.id === id && deployment.projectId === pins.projectId && deployment.ownerId === pins.teamId
+        && deployment.target === null, 'BOOTSTRAP_PREVIEW_TARGET_MISMATCH');
+      return deployment;
+    },
     async nativeConfiguration() {
       const project = await identity();
       const rows = get(`/v10/projects/${pins.projectId}/env?decrypt=false`).envs;
