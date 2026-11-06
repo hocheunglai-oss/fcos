@@ -1,3 +1,6 @@
+import { deploymentSafeSupabaseFetch } from '../_deploymentReadOnlyFetch.js';
+import { isDeploymentReadOnly, requireDeploymentMutationAllowed, withDeploymentRequestSafety } from '../_deploymentReadOnly.js';
+import { isReadOnlyHedgeDeskAction } from '../_deploymentReadActions.js';
 import { chunkIds, cleanRecord, getApiVersion, getInstanceUrl, salesforceAuthMode, salesforceConfiguredAuthModes, sendJson, sfCompositeQueries, sfDownload, sfQuery, sfRequest } from '../_salesforce.js';
 import { assertStemReadRequest } from '../../shared/salesforceReadRequest.js';
 import { authorizeSalesforceDocument, headerBearerToken } from '../_salesforceDocumentAccess.js';
@@ -213,7 +216,7 @@ import {
   saveMarketIntelligenceAlertRules,
 } from '../_marketIntelligenceTrading.js';
 import { loadMarketPulseSnapshot } from '../_marketPulse.js';
-import { ciModuleAccess, isReadOnlyCiProfile, requireReadOnlyCiOperation } from '../_readOnlyCiAccess.js';
+import { ciModuleAccess, isReadOnlyCiProfile, isReadOnlyMarketAction, requireReadOnlyCiOperation } from '../_readOnlyCiAccess.js';
 import { analyzeMarketReportLibrary, loadMarketReportCatalogue } from '../_marketReportAnalysis.js';
 import {
   applyMasterContractPrice as applyMasterContractPriceService,
@@ -378,6 +381,7 @@ const ADMIN_APP_MODULES = [
 let portalOutboxScheduledAt = 0;
 
 function schedulePortalOutboxRetry(client) {
+  if (isDeploymentReadOnly()) return;
   const now = Date.now();
   if (now - portalOutboxScheduledAt < 60_000) return;
   portalOutboxScheduledAt = now;
@@ -733,7 +737,7 @@ function supabaseAdminClient() {
     const trackedFetch = async (...args) => {
       const startedAt = Date.now();
       try {
-        const response = await fetch(...args);
+        const response = await deploymentSafeSupabaseFetch(...args);
         recordSupabaseRequest({
           durationMs: Date.now() - startedAt,
           ok: response.ok,
@@ -1775,7 +1779,7 @@ async function requireInterofficeStemAccess(stemId, accessContext) {
   if (!rows.length) throw appError('This STEM is not available for Interoffice users.', 403);
 }
 
-async function requireHandlerAccess(name, req) {
+async function requireHandlerAccess(name, req, classifiedBody = null) {
   const policy = handlerPolicyFor(HANDLER_POLICY_REGISTRY, name);
   if (!policy) {
     throw appError('This FCOS operation has no access policy and is unavailable.', 500, 'HANDLER_ACCESS_POLICY_MISSING');
@@ -1783,6 +1787,8 @@ async function requireHandlerAccess(name, req) {
   if (policy.authentication === 'cron') return null;
   const context = await requireActiveUser(req);
   requireReadOnlyCiOperation(context.profile, name, {}, { mutation: policy.mutation && name !== 'hedgeMarkets' });
+  const pureHedgeRead = name === 'hedgeDeskEntity' && !isReadOnlyCiProfile(context.profile) && isReadOnlyHedgeDeskAction(classifiedBody);
+  requireDeploymentMutationAllowed(policy.mutation && name !== 'hedgeMarkets' && !pureHedgeRead);
   const allowed = await userHasAnyModuleAccess(context.client, context.profile, policy.modules);
   if (!allowed) throw appError('You do not have access to this module.', 403);
   if (policy.capability) {
@@ -10642,7 +10648,7 @@ async function cashflowCachedHolidays(countryCode, year, warnings = []) {
       const holidays = await fetchNagerHolidays(countryCode, year);
       const expiresAt = new Date();
       expiresAt.setUTCDate(expiresAt.getUTCDate() + 30);
-      await client.from('cashflow_holiday_cache').upsert(
+      if (!isDeploymentReadOnly()) await client.from('cashflow_holiday_cache').upsert(
         {
           country_code: countryCode,
           calendar_year: year,
@@ -16516,7 +16522,7 @@ async function disputeBetaList(body = {}, req, accessContext = null) {
   ]);
   let reconciled = false;
   const reconciliationErrors = new Map();
-  for (const stem of rows) {
+  for (const stem of isDeploymentReadOnly() ? [] : rows) {
     const workflow = workflowMap[stem.Id];
     if (workflow?.case?.approvalStatus !== 'Approved' || workflow.case.workflowStatus === 'Closed' || !workflow.actions.some((action) => action.actionType === 'resolve_supplier_dispute') || !stem._Supplier_Settlement_Schema?.valid) continue;
     try {
@@ -19476,7 +19482,7 @@ if (handlersWithoutAccessPolicy.length) {
   throw new Error(`FCOS handler access policy is missing for: ${handlersWithoutAccessPolicy.join(', ')}`);
 }
 
-export default async function handler(req, res) {
+async function handler(req, res) {
   const url = new URL(req.url, 'http://localhost');
   const name = url.pathname.split('/').pop();
   const requestId = requestIdFrom(req);
@@ -19491,6 +19497,16 @@ export default async function handler(req, res) {
         if (handlerPolicy && typeof res?.setHeader === 'function') {
           res.setHeader('X-FCOS-Handler-Mutation', handlerPolicy.mutation ? '1' : '0');
           res.setHeader('X-FCOS-External-Action', handlerPolicy.externalAction ? '1' : '0');
+        }
+        // Reject fixed writes before authentication can provision or bind a user.
+        // Mixed endpoints receive only code-owned, bounded read exceptions.
+        let classifiedBody;
+        if (['hedgeMarkets', 'hedgeDeskEntity'].includes(name) && isDeploymentReadOnly()) {
+          classifiedBody = await readBody(req);
+          requireDeploymentMutationAllowed(name === 'hedgeDeskEntity'
+            ? !isReadOnlyHedgeDeskAction(classifiedBody) : !isReadOnlyMarketAction(classifiedBody));
+        } else {
+          requireDeploymentMutationAllowed(handlerPolicy?.mutation || handlerPolicy?.externalAction);
         }
         if (name === 'salesforceDocumentDownload') {
           const accessContext = await requireHandlerAccess(name, req);
@@ -19510,9 +19526,12 @@ export default async function handler(req, res) {
         }
         const fn = handlers[name];
         if (!fn) return sendJson(res, { error: `Unknown function: ${name}` }, 404);
-        const accessContext = await requireHandlerAccess(name, req);
-        const body = await readBody(req);
+        const accessContext = await requireHandlerAccess(name, req, classifiedBody);
+        const body = classifiedBody ?? await readBody(req);
         requireReadOnlyCiOperation(accessContext?.profile, name, body);
+        requireDeploymentMutationAllowed(handlerPolicy?.mutation
+          && !(name === 'hedgeMarkets' && isReadOnlyMarketAction(body))
+          && !(name === 'hedgeDeskEntity' && !isReadOnlyCiProfile(accessContext?.profile) && isReadOnlyHedgeDeskAction(body)));
         const contract = validateFunctionRequest(name, body);
         if (!contract.ok) {
           throw appError(`Invalid ${name} request: ${contract.issues.join('; ')}.`, 400, 'FUNCTION_CONTRACT_INVALID', {
@@ -19546,3 +19565,5 @@ export default async function handler(req, res) {
     },
   );
 }
+
+export default withDeploymentRequestSafety(handler);

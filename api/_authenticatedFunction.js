@@ -1,3 +1,5 @@
+import { deploymentSafeSupabaseFetch } from './_deploymentReadOnlyFetch.js';
+import { requireDeploymentMutationAllowed, withDeploymentRequestSafety } from './_deploymentReadOnly.js';
 import { createClient } from '@supabase/supabase-js';
 import { serverSupabaseConfig } from './_supabaseConfig.js';
 import { enforceFcunoFederatedAccess } from './_fcunoIdentityFederation.js';
@@ -29,7 +31,7 @@ function serviceClient() {
   const trackedFetch = async (input, init) => {
     const startedAt = Date.now();
     try {
-      const response = await fetch(input, init);
+      const response = await deploymentSafeSupabaseFetch(input, init);
       recordSupabaseRequest({ durationMs: Date.now() - startedAt, ok: response.ok });
       return response;
     } catch (error) {
@@ -150,7 +152,7 @@ function sendJson(res, payload, status = 200) {
  * }} options
  */
 export function authenticatedFunction({ handlerName, moduleId = null, mutation = false, execute }) {
-  return async function handler(req, res) {
+  return withDeploymentRequestSafety(async function handler(req, res) {
     const requestId = requestIdFrom(req);
     const resolvedHandlerName = typeof handlerName === 'function' ? handlerName(req) : handlerName;
     return runWithRequestTelemetry({ handler: resolvedHandlerName, requestId }, async () => {
@@ -159,6 +161,7 @@ export function authenticatedFunction({ handlerName, moduleId = null, mutation =
         const requestMutation = typeof mutation === 'function' ? mutation(req) : mutation;
         res.setHeader('X-FCOS-Handler-Mutation', requestMutation ? '1' : '0');
         res.setHeader('X-FCOS-External-Action', '0');
+        requireDeploymentMutationAllowed(requestMutation);
         const context = await requireActiveUser(req);
         requireReadOnlyCiOperation(context.profile, resolvedHandlerName, {}, { mutation: requestMutation });
         await requireModuleAccess(context, moduleId);
@@ -167,6 +170,8 @@ export function authenticatedFunction({ handlerName, moduleId = null, mutation =
         const result = await execute(body, req, context);
         return sendJson(res, result);
       } catch (error) {
+        // Keep the reserved CI denial contract while blocking before identity writes.
+        if (error?.code === 'FCOS_DEPLOYMENT_READ_ONLY' && process.env.FCOS_ENABLE_READ_ONLY_CI === 'true') error.code = 'FCOS_CI_READ_ONLY';
         const status = Number(error?.status || error?.statusCode || 500);
         recordRequestFailure(error, status);
         if (shouldNotifySystemError(status)) {
@@ -189,5 +194,5 @@ export function authenticatedFunction({ handlerName, moduleId = null, mutation =
         logRequestTelemetry(res.statusCode || 500);
       }
     });
-  };
+  });
 }

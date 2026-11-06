@@ -1,5 +1,5 @@
 import { createMicrosoftGraphMailTransport, verifyMicrosoftGraphMailAuthentication } from './_microsoftGraphMail.js';
-import { isExternalActionEnabled } from './_externalActionGates.js';
+import { isExternalActionEnabled, requireExternalActionGate } from './_externalActionGates.js';
 
 const PURPOSE_KEYS = new Set([
   'payment_reminders',
@@ -264,6 +264,7 @@ async function recordDelivery(client, sender, succeeded, error = null) {
 }
 
 export async function sendGraphPurposeMail({ client, purposeKey, message, mailboxSnapshot = null }, dependencies = {}) {
+  requireExternalActionGate('email_delivery', dependencies.env || process.env);
   if (!client) throw graphEmailError('Email delivery requires a server database client.', 500, 'EMAIL_DATABASE_CLIENT_MISSING');
   const sender = await resolveGraphEmailSender(client, purposeKey, {
     mailboxSnapshot,
