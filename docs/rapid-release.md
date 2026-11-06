@@ -38,7 +38,7 @@ GitHub Deployment **objects** retain append-only intent/result payloads and hash
 
 At phase/release completion report: **obstacle → correction → verification → measured time/calls saved → recurrence prevention**. Use “not measured” where no comparable before/after measurement exists. Report repair time explicitly. Notify sooner only for a meaningful dependency, exact approval or rollback.
 
-## One-time handover and activation
+## Initial activation and controller successors
 
 Git-triggered Vercel deployments are disabled in candidate/controller source; only the qualified controller stages builds. Installing these files does not activate a writer. The reviewed handover inventories actual workflows, controller pins, repository variables, Vercel auto-assignment, Deployment subscribers and original coordinator operations. It requires a current native database readback and no unresolved Production submissions. Other unknown outcomes and historical fences remain untouched.
 
@@ -49,3 +49,7 @@ Historical hosted release/bootstrap/cutover documents and canonical `.fcos-cli/r
 ## Qualification
 
 `npm run release:qualify` covers frontend-only selection, staging identity/isolation, exact artifact promotion, lost acknowledgements, interruptions, stale/expired validations, concurrent operations, recipe mismatch/failure, resumed prerequisite smoke, exact approval and compatible rollback. The complete product suite and required compatibility/migration/performance checks also apply to the final source. Local fixtures are not hosted evidence: record actual setup qualification, browser coverage and provider identities before activation.
+
+A successor plan is built from the latest finalized database receipt and the exact native active-handover pointer. Both must agree; an unactivated final, another open handover, or an unresolved Production operation blocks preparation. The read-only rapid journal audit binds its complete evidence digest and zero pending provider intents into the reviewed plan. Only the exact setup qualification manifest is excluded as it advances; older staged application releases awaiting a decision remain unchanged.
+
+Successor preparation and abort leave the legacy control permanently frozen. Qualification remains stage-only under the same global concurrency group. Finalization appends a new numbered receipt linked to its predecessor, then fresh database/native checks permit the activation pointer to switch. The previous controller hash immediately fails the normal execution verifier. An unknown GitHub receipt submission remains pending for original-operation readback; it never permits a second blind submission. The initial guard schema has not been applied live; an existing different schema requires separately reviewed migration evidence.

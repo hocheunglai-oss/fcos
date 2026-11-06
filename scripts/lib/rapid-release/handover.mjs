@@ -72,11 +72,57 @@ async function snapshot(db, locked = false) {
     history[table] = (await db.query(`select count(*)::text as count,encode(sha256(convert_to(coalesce(jsonb_agg(to_jsonb(t) order by to_jsonb(t)::text)::text,'[]'),'UTF8')),'hex') as digest from fcos_release_coordination."${table}" t`)).rows[0];
   }
   const unresolved = (await db.query("select o.operation_id,o.phase,coalesce(e.state,'missing') as state from fcos_release_coordination.operations o left join lateral (select state from fcos_release_coordination.operation_events where operation_id=o.operation_id order by event_id desc limit 1) e on true where e.state is distinct from 'complete' order by o.operation_id")).rows;
-  const receipts = tables.includes('rapid_handover_receipts') ? (await db.query('select handover_id,phase,plan_hash,evidence from fcos_release_coordination.rapid_handover_receipts order by handover_id,phase')).rows : [];
+  if (locked && tables.includes('rapid_handover_receipts')) await db.query('lock table fcos_release_coordination.rapid_handover_receipts in share row exclusive mode');
+  const receipts = tables.includes('rapid_handover_receipts') ? (await db.query('select receipt_id,handover_id,phase,plan_hash,evidence from fcos_release_coordination.rapid_handover_receipts order by receipt_id')).rows : [];
   const guard = receipts.length || tables.includes('rapid_handover_receipts') ? (await db.query("select encode(sha256(convert_to(pg_get_functiondef('fcos_release_coordination.rapid_handover_control_guard()'::regprocedure),'UTF8')),'hex') as digest, (select count(*)::int from pg_trigger where tgrelid='fcos_release_coordination.control'::regclass and tgname in ('rapid_handover_control_guard','rapid_handover_control_no_truncate') and tgenabled='O') as triggers")).rows[0] : null;
   return { control, historyDigest: handoverDigest(history), history, unresolvedProduction: unresolved.filter(row => /^production\.(stage|promote|rollback)$/.test(row.phase)),
     preservedOtherUnknowns: { count: unresolved.filter(row => !/^production\.(stage|promote|rollback)$/.test(row.phase)).length, digest: handoverDigest(unresolved.filter(row => !/^production\.(stage|promote|rollback)$/.test(row.phase))) }, receipts, guard };
 }
+
+function openHandovers(receipts, ownId = null) {
+  return receipts.filter(row => row.phase === 'prepared' && row.handover_id !== ownId
+    && !receipts.some(closed => closed.handover_id === row.handover_id && ['aborted','finalized'].includes(closed.phase)));
+}
+function parentMatches(active, receipt) {
+  return Boolean(active && receipt && active.handoverId === receipt.handover_id && active.planHash === receipt.plan_hash
+    && Number(active.databaseReceiptId) === Number(receipt.receipt_id) && active.controllerSha === receipt.evidence.controllerSha
+    && active.nativeCoordinatorReadbackDigest === handoverDigest(receipt.evidence));
+}
+function assertParentState(state, external, plan = null) {
+  const receipts = state.receipts || [], ownId = plan?.handoverId;
+  check(!openHandovers(receipts, ownId).length, 'HANDOVER_OTHER_PREPARATION_UNRESOLVED');
+  const ownFinal = receipts.find(row => row.handover_id === ownId && row.phase === 'finalized');
+  const latest = receipts.filter(row => row.phase === 'finalized').at(-1) || null;
+  if (ownFinal) check(latest?.handover_id === ownId, 'HANDOVER_PARENT_CHANGED');
+  const parent = receipts.filter(row => row.phase === 'finalized' && row.handover_id !== ownId).at(-1) || null;
+  const active = external.activeHandover || null;
+  if (!plan) {
+    check(!parent || parentMatches(active, parent), 'HANDOVER_ACTIVE_PARENT_UNCERTAIN');
+    check(parent || !active, 'HANDOVER_ACTIVE_PARENT_UNCERTAIN');
+    return active;
+  }
+  if (plan.supersedes) {
+    check(parentMatches(plan.supersedes, parent), 'HANDOVER_PARENT_CHANGED');
+    check(parentMatches(active, parent) && canonical(active) === canonical(plan.supersedes)
+      || ownFinal && parentMatches(active, ownFinal), 'HANDOVER_ACTIVE_PARENT_UNCERTAIN');
+  } else check(!parent && (!active || ownFinal && parentMatches(active, ownFinal)), 'HANDOVER_PARENT_CHANGED');
+  return plan.supersedes || null;
+}
+export function assertHandoverActivation({ plan, audit, deploymentId }) {
+  const latest = audit.database.receipts.filter(row => row.phase === 'finalized').at(-1);
+  check(latest?.handover_id === plan.handoverId && latest.plan_hash === handoverDigest(plan)
+    && !openHandovers(audit.database.receipts).length && !audit.database.unresolvedProduction.length
+    && audit.providers.rapidJournal?.unresolvedProduction === 0 && canonical(audit.providers.rapidJournal) === canonical(plan.rapidJournal)
+    && audit.database.control.mode === 'frozen' && audit.database.historyDigest === plan.historyDigest
+    && audit.database.guard?.digest === latest.evidence.guardDigest && audit.database.guard.triggers === 2
+    && audit.providers.retired && audit.providers.noRunning && audit.providers.productionId === plan.previousProductionId
+    && audit.providers.subscribersDigest === plan.subscribersDigest, 'HANDOVER_ACTIVATION_STATE_CHANGED');
+  assertParentState(audit.database, audit.providers, plan);
+  const active = audit.providers.activeHandover;
+  check(!active || active.deploymentId !== deploymentId || parentMatches(active, latest), 'HANDOVER_ACTIVATION_STATE_CHANGED');
+  return { databaseReceiptId: Number(latest.receipt_id), evidenceDigest: handoverDigest(latest.evidence) };
+}
+
 async function externalAudit({ github, vercel }) {
   const pins = handoverPins(), identity = await github.identity();
   check(identity.login === pins.account && identity.repository === pins.repository, 'HANDOVER_GITHUB_IDENTITY_MISMATCH');
@@ -91,8 +137,13 @@ async function externalAudit({ github, vercel }) {
   check(project.id === pins.projectId && project.accountId === pins.teamId && project.autoAssignCustomDomains === false, 'HANDOVER_VERCEL_TARGET_OR_AUTO_ASSIGNMENT');
   check(typeof github.eventSubscribers === 'function', 'HANDOVER_DEPLOYMENT_SUBSCRIBER_INVENTORY_REQUIRED');
   const subscribers = await github.eventSubscribers();
+  check(typeof github.rapidJournalAudit === 'function', 'HANDOVER_RAPID_JOURNAL_AUDIT_REQUIRED');
+  const rapidJournal = await github.rapidJournalAudit();
+  check(digest(rapidJournal?.digest) && Number.isSafeInteger(rapidJournal.unresolvedProduction) && rapidJournal.unresolvedProduction >= 0, 'HANDOVER_RAPID_JOURNAL_AUDIT_REQUIRED');
+  check(typeof github.activeHandover === 'function', 'HANDOVER_ACTIVE_PARENT_AUDIT_REQUIRED');
+  const activeHandover = await github.activeHandover();
   check(Array.isArray(subscribers?.inventory) && digest(subscribers.evidenceDigest), 'HANDOVER_DEPLOYMENT_SUBSCRIBER_INVENTORY_REQUIRED');
-  return { variables, workflows, subscribersDigest: handoverDigest(subscribers),
+  return { variables, workflows, rapidJournal, activeHandover, subscribersDigest: handoverDigest(subscribers),
     ...(subscribers.applicationInventory ? { applicationInventoryReportDigest: subscribers.applicationInventory.reportDigest } : {}), productionId: production.id, retired: Object.values(variables).every(value => value !== 'true')
     && Object.values(workflows).every(row => row.state === 'absent' || row.state.startsWith('disabled')), noRunning: Object.values(workflows).every(row => row.running.length === 0) };
 }
@@ -105,11 +156,14 @@ export function createHandoverPlan({ audit, controllerSha, candidateSha, buildId
   const report = applicationInventoryReport ? validateAdministratorApplicationInventory(applicationInventoryReport, { now }) : null;
   check(!audit.providers.applicationInventoryReportDigest || report && handoverDigest(report) === audit.providers.applicationInventoryReportDigest, 'HANDOVER_ADMIN_APP_REPORT_BINDING_REQUIRED');
   check(!report || handoverDigest(report) === audit.providers.applicationInventoryReportDigest, 'HANDOVER_ADMIN_APP_REPORT_BINDING_REQUIRED');
+  check(audit.providers.rapidJournal?.unresolvedProduction === 0, 'HANDOVER_RAPID_OPERATION_UNRESOLVED');
+  const supersedes = assertParentState(audit.database, audit.providers);
+  check(!(audit.database.receipts || []).some(row => row.handover_id === handoverId), 'HANDOVER_ID_ALREADY_USED');
   const c = audit.database.control;
-  check(c.mode === 'qualification' && c.singleton === true && Number.isSafeInteger(Number(c.epoch)) && Number(c.epoch) > 0
+  check(c.mode === (supersedes ? 'frozen' : 'qualification') && (!supersedes || controllerSha !== supersedes.controllerSha) && c.singleton === true && Number.isSafeInteger(Number(c.epoch)) && Number(c.epoch) > 0
     && controlColumns.filter(key => key.endsWith('_id')).every(key => c[key] === null) && !audit.database.unresolvedProduction.length && audit.providers.noRunning, 'HANDOVER_QUIESCENT_QUALIFICATION_REQUIRED');
   return { schemaVersion: 1, kind: 'fcos_rapid_handover_plan', handoverId, controllerSha, candidateSha, buildId, artifactDigest,
-    pins: handoverPins(), controlPreimage: c, historyDigest: audit.database.historyDigest, oldInventoryDigest: handoverDigest(audit.providers),
+    pins: handoverPins(), ...(supersedes ? { supersedes } : {}), rapidJournal: audit.providers.rapidJournal, controlPreimage: c, historyDigest: audit.database.historyDigest, oldInventoryDigest: handoverDigest(audit.providers),
     ...(report ? { applicationInventoryReport: report } : {}),
     previousProductionId: audit.providers.productionId, subscribersDigest: audit.providers.subscribersDigest, guardSqlDigest: handoverDigest(guardSql), financialAuthority: false };
 }
@@ -123,7 +177,7 @@ async function nativeReview(github, plan, phase) {
   const reviews = await github.get(`/repos/${pins.repository}/actions/runs/${execution.runId}/approvals`);
   const matching = reviews.filter(review => review.state === 'approved' && review.user?.login === pins.account && review.environments?.some(item => item.id === environment.id));
   check(run.head_sha === plan.controllerSha && run.event === 'workflow_dispatch' && run.status === 'in_progress' && run.actor?.login === pins.account
-    && run.repository?.full_name === pins.repository && run.path === '.github/workflows/fcos-rapid-handover.yml'
+    && run.repository?.full_name === pins.repository && String(run.path || '').split('@')[0] === '.github/workflows/fcos-rapid-handover.yml'
     && job.run_id === execution.runId && job.name === 'handover-apply' && job.status === 'in_progress' && matching.length === 1 && environment.can_admins_bypass === false
     && environment.protection_rules?.some(rule => rule.type === 'required_reviewers' && rule.reviewers.some(item => item.reviewer?.login === pins.account)), 'HANDOVER_PROTECTED_NATIVE_REVIEW_REQUIRED');
   // This trusted adapter verifies exact plan/candidate binding from the native setup job inputs/artifact;
@@ -137,7 +191,8 @@ async function nativeReview(github, plan, phase) {
  * github: identity,get (404=>null),pages (all native array pages),execution,verifyNativePlan,
  * qualification (fetch/verify exact approved setup artifact),createDeployment,findDeployment;
  * vercel: project,currentProduction,deployment. No adapter may accept raw receipt booleans as authority.
- * prepare freezes only the RELEASE singleton; abort restores its exact preimage. finalize is permanent.
+ * Initial prepare freezes only the RELEASE singleton; initial abort restores its preimage.
+ * Successors leave that permanent fence unchanged and append independently reviewed receipts.
  * Unknown old records are hashed/preserved, never marked resolved. Lost GH acknowledgement is reconciled
  * by findDeployment(planHash); an existing final DB receipt never permits a second blind GH submission.
  */
@@ -145,12 +200,13 @@ export async function applyHandover({ phase, plan, db, connection, github, verce
   assertHandoverConnection(connection);
   check(['prepare','abort','finalize'].includes(phase) && plan?.schemaVersion === 1 && plan.kind === 'fcos_rapid_handover_plan'
     && sha(plan.controllerSha) && sha(plan.candidateSha) && digest(plan.buildId) && digest(plan.artifactDigest)
-    && plan.controlPreimage?.mode === 'qualification' && controlColumns.filter(key => key.endsWith('_id')).every(key => plan.controlPreimage[key] === null)
+    && plan.controlPreimage?.mode === (plan.supersedes ? 'frozen' : 'qualification') && controlColumns.filter(key => key.endsWith('_id')).every(key => plan.controlPreimage[key] === null)
     && canonical(plan.pins) === canonical(handoverPins()) && plan.financialAuthority === false && plan.guardSqlDigest === handoverDigest(guardSql), 'HANDOVER_PLAN_TARGET_MISMATCH');
   if (plan.applicationInventoryReport) validateAdministratorApplicationInventory(plan.applicationInventoryReport);
   const planHash = handoverDigest(plan), review = await nativeReview(github, plan, phase), external = await externalAudit({ github, vercel });
   check(!external.applicationInventoryReportDigest || plan.applicationInventoryReport
     && handoverDigest(validateAdministratorApplicationInventory(plan.applicationInventoryReport)) === external.applicationInventoryReportDigest, 'HANDOVER_ADMIN_APP_REPORT_BINDING_REQUIRED');
+  check(external.rapidJournal.unresolvedProduction === 0 && canonical(external.rapidJournal) === canonical(plan.rapidJournal), 'HANDOVER_RAPID_OPERATION_OR_JOURNAL_CHANGED');
   check(external.noRunning && external.productionId === plan.previousProductionId, 'HANDOVER_OLD_WRITER_RUNNING_OR_PRODUCTION_MOVED');
   let qualification = null;
   if (phase === 'finalize') {
@@ -171,6 +227,7 @@ export async function applyHandover({ phase, plan, db, connection, github, verce
   const result = await transaction(db, false, async () => {
     let state = await snapshot(db, true);
     check(!state.unresolvedProduction.length && state.historyDigest === plan.historyDigest, 'HANDOVER_NATIVE_HISTORY_OR_PRODUCTION_UNCERTAINTY_CHANGED');
+    assertParentState(state, external, plan);
     const own = state.receipts.filter(row => row.handover_id === plan.handoverId);
     check(own.every(row => row.plan_hash === planHash), 'HANDOVER_RECEIPT_PLAN_CONFLICT');
     const prepared = own.find(row => row.phase === 'prepared'), finalized = own.find(row => row.phase === 'finalized');
@@ -179,21 +236,22 @@ export async function applyHandover({ phase, plan, db, connection, github, verce
         check(state.control.mode === 'frozen' && state.guard?.digest === prepared.evidence.guardDigest && state.guard.triggers === 2, 'HANDOVER_PREPARATION_OR_GUARD_CHANGED');
         return { resumedPreparation: true, evidence: prepared.evidence };
       }
-      check(!state.receipts.some(row => row.phase === 'finalized') && canonical(state.control) === canonical(plan.controlPreimage), 'HANDOVER_PREIMAGE_CHANGED');
+      check(!finalized && (plan.supersedes || !state.receipts.some(row => row.phase === 'finalized'))
+        && canonical(state.control) === canonical(plan.controlPreimage), 'HANDOVER_PREIMAGE_CHANGED');
       check(handoverDigest(external) === plan.oldInventoryDigest, 'HANDOVER_OLD_INVENTORY_CHANGED');
       if (!state.guard) { await db.query(guardSql); state = await snapshot(db, true); }
       check(state.guard?.triggers === 2, 'HANDOVER_GUARD_NOT_INSTALLED');
     } else check(prepared && !own.some(row => row.phase === 'aborted') && state.control.mode === 'frozen'
       && canonical({ ...state.control, mode: plan.controlPreimage.mode }) === canonical(plan.controlPreimage)
       && state.guard?.triggers === 2 && state.guard.digest === prepared.evidence.guardDigest, 'HANDOVER_PREPARATION_OR_GUARD_CHANGED');
-    if (finalized) { check(phase === 'finalize', 'HANDOVER_FINALIZED_PERMANENT'); return { resumedFinal: true, evidence: finalized.evidence }; }
-    const evidence = { review, historyDigest: state.historyDigest, otherUnknowns: state.preservedOtherUnknowns,
+    if (finalized) { check(phase === 'finalize', 'HANDOVER_FINALIZED_PERMANENT'); return { resumedFinal: true, evidence: finalized.evidence, receiptId: Number(finalized.receipt_id) }; }
+    const evidence = { review, controllerSha: plan.controllerSha, candidateSha: plan.candidateSha, buildId: plan.buildId, artifactDigest: plan.artifactDigest, supersedes: plan.supersedes || null, historyDigest: state.historyDigest, otherUnknowns: state.preservedOtherUnknowns,
       controlPreimage: plan.controlPreimage, guardDigest: state.guard.digest, externalDigest: handoverDigest(external), qualificationDigest: qualification ? handoverDigest(qualification) : null };
-    await db.query('insert into fcos_release_coordination.rapid_handover_receipts(handover_id,phase,plan_hash,evidence) values($1,$2,$3,$4::jsonb)', [plan.handoverId, phase === 'prepare' ? 'prepared' : phase === 'abort' ? 'aborted' : 'finalized', planHash, JSON.stringify(evidence)]);
-    if (phase !== 'finalize') await db.query('update fcos_release_coordination.control set mode=$1 where singleton', [phase === 'prepare' ? 'frozen' : plan.controlPreimage.mode]);
+    const inserted = await db.query('insert into fcos_release_coordination.rapid_handover_receipts(handover_id,phase,plan_hash,evidence) values($1,$2,$3,$4::jsonb) returning receipt_id', [plan.handoverId, phase === 'prepare' ? 'prepared' : phase === 'abort' ? 'aborted' : 'finalized', planHash, JSON.stringify(evidence)]);
+    if (phase !== 'finalize' && !plan.supersedes) await db.query('update fcos_release_coordination.control set mode=$1 where singleton', [phase === 'prepare' ? 'frozen' : plan.controlPreimage.mode]);
     const postimage = (await snapshot(db, true)).control;
     check(canonical(postimage) === canonical({ ...plan.controlPreimage, mode: phase === 'abort' ? plan.controlPreimage.mode : 'frozen' }), 'HANDOVER_NATIVE_POSTIMAGE_FAILED');
-    return { resumedFinal: false, evidence };
+    return { resumedFinal: false, evidence, receiptId: Number(inserted.rows[0].receipt_id) };
   });
   if (phase !== 'finalize') return { phase, planHash, state: phase === 'prepare' ? 'frozen-reversible' : 'restored', nativeReview: review };
   const existing = await github.findDeployment({ planHash, kind: 'fcos_rapid_release_handover' });
@@ -201,12 +259,15 @@ export async function applyHandover({ phase, plan, db, connection, github, verce
     check([handoverPins().account, 'github-actions[bot]'].includes(existing.creator?.login)
       && existing.payload?.kind === 'fcos_rapid_release_handover' && existing.payload.planHash === planHash
       && existing.payload.controllerSha === plan.controllerSha && existing.payload.candidateSha === plan.candidateSha
-      && existing.payload.buildId === plan.buildId && existing.payload.artifactDigest === plan.artifactDigest,
+      && existing.payload.buildId === plan.buildId && existing.payload.artifactDigest === plan.artifactDigest
+      && existing.payload.handoverId === plan.handoverId && existing.payload.databaseReceiptId === result.receiptId
+      && canonical(existing.payload.supersedes) === canonical(plan.supersedes || null)
+      && existing.payload.nativeCoordinatorReadbackDigest === handoverDigest(result.evidence),
     'HANDOVER_EXISTING_RECEIPT_BINDING_INVALID');
     return { phase, planHash, deploymentId: existing.id, reused: true };
   }
   check(!result.resumedFinal, 'HANDOVER_GITHUB_OUTCOME_RECONCILIATION_REQUIRED');
-  const payload = { kind: 'fcos_rapid_release_handover', controllerSha: plan.controllerSha, candidateSha: plan.candidateSha,
+  const payload = { kind: 'fcos_rapid_release_handover', handoverId: plan.handoverId, databaseReceiptId: result.receiptId, supersedes: plan.supersedes || null, controllerSha: plan.controllerSha, candidateSha: plan.candidateSha,
     repository: plan.pins.repository, projectId: plan.pins.projectId, teamId: plan.pins.teamId, planHash,
     unresolvedProductionOperations: 0, oldWritersRetired: true, hostedQualificationPassed: true, eventSubscribersReviewed: true,
     inventoryDigest: result.evidence.externalDigest, nativeCoordinatorReadbackDigest: handoverDigest(result.evidence),
@@ -234,6 +295,8 @@ export async function performHandover({ plan, github, coordinator, qualifyStage,
       && fresh.database.control.mode === 'frozen' && fresh.database.guard?.digest === own.evidence.guardDigest
       && !fresh.database.unresolvedProduction.length && fresh.database.historyDigest === plan.historyDigest
       && fresh.providers.noRunning && fresh.providers.productionId === plan.previousProductionId, 'HANDOVER_FRESH_FROZEN_OWNERSHIP_REQUIRED');
+    assertParentState(fresh.database, fresh.providers, plan);
+    check(fresh.providers.rapidJournal.unresolvedProduction === 0 && canonical(fresh.providers.rapidJournal) === canonical(plan.rapidJournal), 'HANDOVER_RAPID_OPERATION_OR_JOURNAL_CHANGED');
     return review;
   };
   const review = await ownershipVerifier({ phase: 'stage' });

@@ -1,13 +1,13 @@
--- Controller-only one-time setup, deliberately outside application migrations.
+-- Controller-only initial setup, deliberately outside application migrations.
 -- Derived from release_coordination.sql and the N12 control postimage. No public/financial tables.
 create table fcos_release_coordination.rapid_handover_receipts (
+ receipt_id bigint generated always as identity unique,
  handover_id text not null check(handover_id ~ '^[a-z0-9-]{8,96}$'),
  phase text not null check(phase in ('prepared','aborted','finalized')),
  plan_hash text not null check(plan_hash ~ '^[a-f0-9]{64}$'),
  evidence jsonb not null, recorded_at timestamptz not null default clock_timestamp(),
  primary key(handover_id,phase)
 );
-create unique index rapid_handover_single_final on fcos_release_coordination.rapid_handover_receipts(phase) where phase='finalized';
 alter table fcos_release_coordination.rapid_handover_receipts owner to fcos_coordinator_owner;
 alter table fcos_release_coordination.rapid_handover_receipts enable row level security;
 revoke all on fcos_release_coordination.rapid_handover_receipts from public,anon,authenticated,service_role,fcos_coordinator_runtime;

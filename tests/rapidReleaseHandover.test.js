@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
-import { auditHandover, applyHandover, performHandover, createHandoverPlan, handoverDigest, handoverPins, OLD_RELEASE_WORKFLOWS, assertHandoverConnection } from '../scripts/lib/rapid-release/handover.mjs';
+import { auditHandover, applyHandover, performHandover, createHandoverPlan, handoverDigest, handoverPins, OLD_RELEASE_WORKFLOWS, assertHandoverConnection, assertHandoverActivation } from '../scripts/lib/rapid-release/handover.mjs';
 
 const { PGlite } = createRequire(import.meta.url)('@electric-sql/pglite');
 const pins = handoverPins();
@@ -21,25 +21,26 @@ async function fixture() {
   const query = db.query.bind(db);
   // pg.Client uses simple-query mode for the reviewed DDL bundle; PGlite exposes that as exec.
   db.query = (text, parameters) => text.startsWith('-- Controller-only') ? db.exec(text).then(result => result.at(-1)) : query(text, parameters);
-  let plan, deployment = null, creates = 0, approved = true, retired = true, aliasAssigned = false, subscriberAvailable = true;
+  let plan, active = null, rapidPending = 0, creates = 0, approved = true, retired = true, aliasAssigned = false, subscriberAvailable = true;
+  const deployments = new Map();
   const connection = { host: `db.${pins.projectRef}.supabase.co`, port: 5432, user: 'postgres', database: 'postgres', ssl: { rejectUnauthorized: true } };
   const github = {
     identity: async () => ({ login: pins.account, repository: pins.repository }), execution: async () => ({ runId: 100, jobId: 101 }),
     verifyNativePlan: async ({ planHash, plan: value }) => { assert.equal(planHash, handoverDigest(value)); },
     eventSubscribers: async () => { if (!subscriberAvailable) throw Error('APP_SUBSCRIBER_SCOPE_MISSING'); return { inventory: [{ kind: 'workflow', path: 'workflow_dispatch-only' }], evidenceDigest: 'a'.repeat(64) }; },
-    pages: async () => [],
+    pages: async () => [], rapidJournalAudit: async () => ({ digest: 'e'.repeat(64), unresolvedProduction: rapidPending }), activeHandover: async () => active,
     get: async path => {
       if (path.includes('/actions/variables/')) return { value: retired ? 'false' : 'true' };
       if (path.includes('/actions/workflows/')) return { id: OLD_RELEASE_WORKFLOWS.indexOf(path.split('/').at(-1)) + 1, state: retired ? 'disabled_manually' : 'active' };
       if (path.endsWith('/approvals')) return approved ? [{ id: 90, state: 'approved', user: { login: pins.account }, environments: [{ id: 1 }] }] : [];
       if (path.includes('/environments/')) return { id: 1, can_admins_bypass: false, protection_rules: [{ type: 'required_reviewers', reviewers: [{ reviewer: { login: pins.account } }] }] };
       if (path.includes('/actions/jobs/')) return { id: 101, run_id: 100, status: 'in_progress', name: 'handover-apply' };
-      return { id: 100, head_sha: 'a'.repeat(40), event: 'workflow_dispatch', status: 'in_progress', actor: { login: pins.account }, repository: { full_name: pins.repository }, path: '.github/workflows/fcos-rapid-handover.yml' };
+      return { id: 100, head_sha: plan?.controllerSha || 'a'.repeat(40), event: 'workflow_dispatch', status: 'in_progress', actor: { login: pins.account }, repository: { full_name: pins.repository }, path: '.github/workflows/fcos-rapid-handover.yml' };
     },
     qualification: async () => ({ runId: 100, planHash: handoverDigest(plan), controllerSha: plan.controllerSha, candidateSha: plan.candidateSha,
       buildId: plan.buildId, artifactDigest: plan.artifactDigest, deploymentId: 'dpl_qualified', browser: { passed: true, login: true, restrictedAccess: true, normalRole: true, businessWrites: 0, deploymentId: 'dpl_qualified', buildId: plan.buildId } }),
-    createDeployment: async request => { creates++; deployment = { id: 200, creator: { login: pins.account }, payload: request.payload }; return deployment; },
-    findDeployment: async () => deployment,
+    createDeployment: async request => { const deployment = { id: 200 + creates++, creator: { login: pins.account }, payload: request.payload }; deployments.set(request.payload.planHash, deployment); return deployment; },
+    findDeployment: async ({ planHash }) => deployments.get(planHash),
   };
   const vercel = { project: async () => ({ id: pins.projectId, accountId: pins.teamId, autoAssignCustomDomains: false }),
     currentProduction: async () => ({ id: 'dpl_old' }),
@@ -49,7 +50,15 @@ async function fixture() {
   const input = { db, connection, github, vercel };
   const audit = await auditHandover(input);
   plan = createHandoverPlan({ audit, controllerSha: 'a'.repeat(40), candidateSha: 'b'.repeat(40), buildId: 'c'.repeat(64), artifactDigest: 'd'.repeat(64), handoverId: 'rapid-handover-test' });
-  return { ...input, plan, audit, set approved(v) { approved = v; }, set retired(v) { retired = v; }, set aliasAssigned(v) { aliasAssigned = v; },
+  return { ...input, get plan() { return plan; }, set plan(value) { plan = value; }, audit,
+    set active(value) { active = value; }, set rapidPending(value) { rapidPending = value; },
+    async activate(result) {
+      const audit = await auditHandover(input);
+      const receipt = assertHandoverActivation({ plan, audit, deploymentId: result.deploymentId });
+      active = { deploymentId: result.deploymentId, handoverId: plan.handoverId, planHash: handoverDigest(plan), controllerSha: plan.controllerSha,
+        databaseReceiptId: receipt.databaseReceiptId, nativeCoordinatorReadbackDigest: receipt.evidenceDigest };
+      return active;
+    }, set approved(v) { approved = v; }, set retired(v) { retired = v; }, set aliasAssigned(v) { aliasAssigned = v; },
     set subscriberAvailable(v) { subscriberAvailable = v; }, get creates() { return creates; }, apply: phase => applyHandover({ ...input, plan, phase }) };
 }
 
@@ -135,5 +144,56 @@ test('setup ownership permits stage only, with fresh native frozen readback', as
     assert.equal(result.deploymentId, 200);
     const sql = readFileSync(new URL('../scripts/rapid-release/handover-guard.sql', import.meta.url), 'utf8');
     assert.doesNotMatch(sql, /update\s+public\.|delete\s+from|drop\s+(?:table|trigger)|install_epoch/i);
+  } finally { await f.db.close(); }
+});
+
+async function successor(f, suffix = 'successor') {
+  const audit = await auditHandover(f);
+  f.plan = createHandoverPlan({ audit, controllerSha: 'f'.repeat(40), candidateSha: 'b'.repeat(40), buildId: 'c'.repeat(64), artifactDigest: 'd'.repeat(64), handoverId: `rapid-handover-${suffix}` });
+  return f.plan;
+}
+test('a qualified successor appends new receipts and switches the active version without unfreezing history', async () => {
+  const f = await fixture();
+  try {
+    await f.apply('prepare'); const first = await f.apply('finalize'); const parent = await f.activate(first);
+    const control = (await f.db.query('select to_jsonb(c) as value from fcos_release_coordination.control c')).rows[0].value;
+    await successor(f); assert.deepEqual(f.plan.supersedes, parent);
+    await f.apply('prepare'); const second = await f.apply('finalize'); const active = await f.activate(second);
+    assert.equal(second.deploymentId, 201); assert.equal(f.creates, 2); assert.equal(active.controllerSha, 'f'.repeat(40));
+    const rows = (await f.db.query("select * from fcos_release_coordination.rapid_handover_receipts where phase='finalized' order by receipt_id")).rows;
+    assert.equal(rows.length, 2); assert.ok(Number(rows[1].receipt_id) > Number(rows[0].receipt_id));
+    assert.deepEqual(rows[1].evidence.supersedes, parent);
+    assert.deepEqual((await f.db.query('select to_jsonb(c) as value from fcos_release_coordination.control c')).rows[0].value, control);
+    await assert.rejects(f.db.query("update fcos_release_coordination.control set mode='qualification'"), /PERMANENTLY_FENCED/);
+    assert.equal((await f.db.query('select id from fcos_release_coordination.imported_uncertainty')).rows[0].id, 'permanent-sentinel-preserved');
+    assert.equal((await f.db.query('select id from public.financial_lock')).rows[0].id, 'held');
+  } finally { await f.db.close(); }
+});
+test('successors require the latest native activated parent and refuse an older or uncertain pointer', async () => {
+  const f = await fixture();
+  try {
+    await f.apply('prepare'); const finalized = await f.apply('finalize');
+    await assert.rejects(successor(f), /ACTIVE_PARENT_UNCERTAIN/); // DB committed, native activation absent.
+    const parent = await f.activate(finalized); await successor(f);
+    const correct = f.plan;
+    f.plan = { ...correct, supersedes: { ...parent, databaseReceiptId: parent.databaseReceiptId - 1 } };
+    await assert.rejects(f.apply('prepare'), /PARENT_CHANGED/);
+    f.plan = correct; await f.apply('prepare');
+    const audit = await auditHandover(f);
+    assert.throws(() => createHandoverPlan({ audit, controllerSha: '0'.repeat(40), candidateSha: 'b'.repeat(40), buildId: 'c'.repeat(64), artifactDigest: 'd'.repeat(64), handoverId: 'rapid-other-plan' }), /OTHER_PREPARATION_UNRESOLVED/);
+    await f.apply('abort');
+    assert.equal((await f.db.query('select mode from fcos_release_coordination.control')).rows[0].mode, 'frozen');
+    assert.equal(f.creates, 1);
+  } finally { await f.db.close(); }
+});
+test('a new unresolved rapid provider intent blocks preparation and activation without changing any outcome', async () => {
+  const f = await fixture();
+  try {
+    f.rapidPending = 1;
+    await assert.rejects(f.apply('prepare'), /RAPID_OPERATION_OR_JOURNAL_CHANGED/);
+    assert.equal((await f.db.query('select mode from fcos_release_coordination.control')).rows[0].mode, 'qualification');
+    f.rapidPending = 0; await f.apply('prepare'); const result = await f.apply('finalize');
+    f.rapidPending = 1; await assert.rejects(f.activate(result), /ACTIVATION_STATE_CHANGED/);
+    assert.equal(f.creates, 1);
   } finally { await f.db.close(); }
 });
