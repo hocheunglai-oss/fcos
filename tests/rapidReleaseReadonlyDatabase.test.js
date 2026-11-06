@@ -54,3 +54,15 @@ test('wrong project, pooling mode and arbitrary SCRAM input refuse before any pr
  for(const changed of [url.replace(':5432',':6543'),url.replace('pjforfvchygdyqfcgpmw','differentproject'),`${url}?sslmode=require`])await assert.rejects(openPinnedReadonlyDatabase({url:changed,caFile:'/missing'}),/URL_REQUIRED/);
  assert.throws(()=>readonlyRoleProvisioningSql("secret';grant postgres to public;--"),/SCRAM_REQUIRED/);
 });
+test('inherited PUBLIC financial SELECT and sequence mutation privileges invalidate the reader profile',async t=>{
+ for(const sql of ['grant select on public.business_finance to public',
+  'create sequence public.synthetic_business_sequence;grant usage on sequence public.synthetic_business_sequence to public']){
+  const native=await setup(t),host=id('supabase','Database session host');await native.exec(sql);
+  await native.exec(`set session authorization ${id('supabase','Database release read-only role')}`);
+  class Client extends EventEmitter {
+   constructor(){super();const stream=new TLSSocket();stream.authorized=true;stream.servername=host;this.connection={stream};}
+   async connect(){} async query(query,params){return native.query(query,params);} async end(){this._ending=true;this.connection.stream.destroy();this.emit('end');}
+  }
+  await assert.rejects(openPinnedReadonlyDatabase({url,caFile:'/dummy/public-ca',deps:{Client,readFile:()=>Buffer.from(PUBLIC_CA)}}),/CONNECTION_REFUSED/);
+ }
+});

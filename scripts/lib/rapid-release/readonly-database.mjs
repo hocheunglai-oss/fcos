@@ -15,6 +15,12 @@ export const READONLY_DATABASE_IDENTITY_SQL=`select session_user,current_user,cu
   where n.nspname in ('public','auth','storage') and c.relkind in ('r','p','v','m','f')
   and (has_table_privilege(r.oid,c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
    or has_any_column_privilege(r.oid,c.oid,'INSERT,UPDATE,REFERENCES'))) as business_writers,
+ (select count(*)::int from pg_class c join pg_namespace n on n.oid=c.relnamespace
+  where n.nspname in ('public','auth','storage') and c.relkind in ('r','p','v','m','f')
+  and (has_table_privilege(r.oid,c.oid,'SELECT') or has_any_column_privilege(r.oid,c.oid,'SELECT'))) as business_readers,
+ (select count(*)::int from pg_class c join pg_namespace n on n.oid=c.relnamespace
+  where n.nspname not like 'pg_%' and n.nspname<>'information_schema' and c.relkind='S'
+  and case when c.relkind='S' then has_sequence_privilege(r.oid,c.oid,'USAGE,UPDATE') else false end) as sequence_writers,
  (select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace
   where n.nspname in ('public','auth','storage') and p.prosecdef and has_function_privilege(r.oid,p.oid,'EXECUTE')) as privileged_routines,
  (select count(*)::int from pg_namespace n where n.nspname in ('public','auth','storage') and has_schema_privilege(r.oid,n.oid,'CREATE')) as business_creators,
@@ -34,6 +40,7 @@ export function assertReadonlyDatabaseIdentity(row,connection,{readOnly=true}={}
 function assertProfile(row) {
   check(row?.rolname===role() && row.rolcanlogin===true && Number(row.memberships)===0
     && row.business_writers===0 && row.privileged_routines===0 && row.business_creators===0
+    && row.business_readers===0 && row.sequence_writers===0
     && ['rolsuper','rolinherit','rolcreaterole','rolcreatedb','rolreplication','rolbypassrls'].every(key=>row[key]===false)
     && Array.isArray(row.settings) && row.settings.length===1 && row.settings[0]==='default_transaction_read_only=on',
   'PINNED_READONLY_DATABASE_ROLE_REQUIRED');
