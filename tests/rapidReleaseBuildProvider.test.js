@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { artifactDigest, assertBuildArtifact, credentialFreeBuildEnvironment } from '../scripts/lib/rapid-release/build.mjs';
 import { createManifest, digest, targets } from '../scripts/lib/rapid-release/contract.mjs';
-import { githubClient, verifyExecution, nativeApproval, assertNativeQualityProducer } from '../scripts/lib/rapid-release/providers.mjs';
+import { githubClient, verifyExecution, nativeApproval, vercelProvider, assertNativeQualityProducer } from '../scripts/lib/rapid-release/providers.mjs';
 const h = 'b'.repeat(64), sha = 'a'.repeat(40);
 function manifest() { return createManifest({candidate:{sha,sourceDigest:h,lockDigest:h},controllerSha:'c'.repeat(40),
  previous:{deploymentId:'dpl_old',sha:'d'.repeat(40),schemaDigest:h,configurationDigest:h},paths:['src/components/dashboard/Table.jsx'],
@@ -83,4 +83,29 @@ test('successful quality survives downstream failure or cancellation; failed qua
   assertNativeQualityProducer(f.run,{jobs:[{name:'quality',conclusion:'success'}]},f.m);
  }
  assert.throws(()=>assertNativeQualityProducer(f.run,{jobs:[{name:'quality',conclusion:'failure'}]},f.m),/PRIOR_NATIVE_QUALITY_REQUIRED/);
+});
+
+test('Vercel target pins default only for absent or empty overrides; explicit mismatches fail closed',async()=>{
+ const p=targets();
+ for(const overrides of [{},{VERCEL_ORG_ID:'',VERCEL_PROJECT_ID:''}]){
+  let calls=0;
+  const provider=vercelProvider({manifest:manifest(),env:{VERCEL_TOKEN:'fixture-only',...overrides},execute:(_command,args,options)=>{
+   calls++;assert.equal(options.env.VERCEL_ORG_ID,p.teamId);assert.equal(options.env.VERCEL_PROJECT_ID,p.projectId);
+   if(args[0]==='--version')return '54.20.1';if(args[0]==='whoami')return p.vercelAccount;
+   return JSON.stringify({id:p.projectId,accountId:p.teamId,autoAssignCustomDomains:false});
+  }});
+  assert.equal((await provider.project()).id,p.projectId);assert.equal(calls,3);
+ }
+ for(const overrides of [{VERCEL_ORG_ID:'other'},{VERCEL_PROJECT_ID:'other'},{VERCEL_ORG_ID:' '},{VERCEL_PROJECT_ID:null}])
+  assert.throws(()=>vercelProvider({manifest:manifest(),env:{VERCEL_TOKEN:'fixture-only',...overrides}}),/VERCEL_TARGET_CREDENTIAL_REQUIRED/);
+});
+
+test('stage uses existing governed secret slots without moving private values or requiring target variables',()=>{
+ const workflow=readFileSync(new URL('../.github/workflows/fcos-rapid-release.yml',import.meta.url),'utf8');
+ const stage=workflow.slice(workflow.indexOf('  stage-and-smoke:'),workflow.indexOf('  go-live:'));
+ for(const name of ['secrets.FCOS_E2E_EMAIL','secrets.FCOS_E2E_PASSWORD','secrets.FCOS_HOSTED_RUNTIME_EMAIL','secrets.FCOS_HOSTED_RUNTIME_PASSWORD'])assert.ok(stage.includes(name));
+ assert.ok(stage.includes('secrets.FCOS_RAPID_VERCEL_STAGE_TOKEN || secrets.FCOS_HOSTED_VERCEL_TOKEN'));
+ assert.doesNotMatch(stage,/FCOS_HOSTED_RESTRICTED|vars\.FCOS_VERCEL_TEAM_ID|vars\.FCOS_VERCEL_PROJECT_ID/);
+ const live=workflow.slice(workflow.indexOf('  go-live:'));assert.ok(live.includes('secrets.FCOS_HOSTED_NORMAL_EMAIL'));
+ assert.doesNotMatch(live,/secrets\.FCOS_HOSTED_RUNTIME_EMAIL/);
 });
