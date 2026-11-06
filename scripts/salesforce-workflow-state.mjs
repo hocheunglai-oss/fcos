@@ -137,6 +137,7 @@ export function updateSalesforceEnvironmentState(record, environmentKey, changes
 }
 
 function assertBoundJob(job, frozen, { checkOnly }) {
+  if (job?.status === 'submitting' && !job.jobId) throw new Error('Salesforce submission has an uncertain outcome without a job ID; owner readback/reconciliation is required before any retry.');
   if (job?.sourceTreeHash !== frozen.sourceTreeHash
     || job?.releaseMode !== SALESFORCE_RELEASE_MODE
     || job?.deploymentScope !== COMPLETE_SALESFORCE_SCOPE

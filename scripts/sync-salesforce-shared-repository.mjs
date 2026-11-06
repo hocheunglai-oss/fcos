@@ -463,13 +463,13 @@ function publish(checkout, branch, expectedRemoteHead, pullRequest, inventory) {
   return { changed: true, branch, commit, pullRequest };
 }
 
-export function main() {
+export function main({ proofResolver = assertDeveeDeploymentProof } = {}) {
   if (!MODE || (process.argv.includes('--publish') && process.argv.includes('--check'))) {
     throw new Error('Choose exactly one mode: --check or --publish.');
   }
   assertIdentity();
   const inventory = sourceInventory();
-  const deveeDeployment = assertDeveeDeploymentProof(inventory);
+  const deveeDeployment = proofResolver(inventory);
   const manifest = expectedManifest(inventory);
   const selected = publicationBranch();
   const initialRemoteHead = remoteBranchHead(selected.branch);

@@ -78,6 +78,8 @@ test('validation and deployment resume exact jobs and reject drift or failed job
   };
   const deployment = { ...validation, jobId: '0Af000000000002AAA', checkOnly: false };
   assert.equal(validationResumeDisposition(null, frozen), 'submit');
+  assert.throws(() => validationResumeDisposition({ ...validation, status: 'submitting', jobId: null }, frozen), /uncertain outcome/);
+  assert.throws(() => deploymentResumeDisposition({ ...deployment, status: 'submitting', jobId: null }, frozen), /owner readback/);
   assert.equal(validationResumeDisposition({ ...validation, status: 'InProgress' }, frozen), 'resume');
   assert.equal(validationResumeDisposition({ ...validation, status: 'Succeeded' }, frozen), 'reuse');
   assert.equal(deploymentResumeDisposition(null, frozen), 'submit');
@@ -90,7 +92,8 @@ test('validation and deployment resume exact jobs and reject drift or failed job
 
 test('successful validation proof requires the exact target job and every local test', () => {
   const environment = { label: 'DEVEE' };
-  const result = { id: '0Af000000000001AAA', status: 'Succeeded', checkOnly: true, numberTestsTotal: 528, numberTestsCompleted: 528 };
+  const result = { id: '0Af000000000001AAA', status: 'Succeeded', checkOnly: true, numberTestsTotal: 528, numberTestsCompleted: 528,
+    done: true, success: true, rollbackOnError: true, numberComponentErrors: 0, numberTestErrors: 0 };
   assert.equal(assertJobReport(result, { checkOnly: true, environment, jobId: result.id }), undefined);
   assert.throws(() => assertJobReport({ ...result, numberTestsCompleted: 527 }, { checkOnly: true, environment, jobId: result.id }), /complete RunLocalTests/);
   assert.throws(() => assertJobReport({ ...result, checkOnly: false }, { checkOnly: true, environment, jobId: result.id }), /expected successful validation/);
