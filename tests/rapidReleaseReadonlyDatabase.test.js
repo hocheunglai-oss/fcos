@@ -59,6 +59,8 @@ test('wrong project, pooling mode and arbitrary SCRAM input refuse before any pr
 });
 test('inherited PUBLIC financial SELECT and sequence mutation privileges invalidate the reader profile',async t=>{
  for(const sql of ['grant select on public.business_finance to public',
+  'grant select(financial_evidence) on fcos_release_coordination.operations to public',
+  "create schema pgbusiness;grant usage on schema pgbusiness to public;create function pgbusiness.unsafe_finance() returns int language sql security definer as 'select 1';",
   'create sequence public.synthetic_business_sequence;grant usage on sequence public.synthetic_business_sequence to public']){
   const native=await setup(t),host=id('supabase','Database session host');await native.exec(sql);
   await native.exec(`set session authorization ${id('supabase','Database release read-only role')}`);

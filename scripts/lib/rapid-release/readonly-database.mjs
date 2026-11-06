@@ -12,18 +12,26 @@ export const READONLY_DATABASE_IDENTITY_SQL=`select session_user,current_user,cu
  r.rolcreaterole,r.rolcreatedb,r.rolreplication,r.rolbypassrls,
  (select count(*)::int from pg_auth_members where member=r.oid) as memberships,
  (select count(*)::int from pg_class c join pg_namespace n on n.oid=c.relnamespace
-  where n.nspname in ('public','auth','storage') and c.relkind in ('r','p','v','m','f')
+  where n.nspname !~ '^pg_' and n.nspname<>'information_schema' and c.relkind in ('r','p','v','m','f')
   and (has_table_privilege(r.oid,c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
    or has_any_column_privilege(r.oid,c.oid,'INSERT,UPDATE,REFERENCES'))) as business_writers,
  (select count(*)::int from pg_class c join pg_namespace n on n.oid=c.relnamespace
   where n.nspname in ('public','auth','storage') and c.relkind in ('r','p','v','m','f')
   and (has_table_privilege(r.oid,c.oid,'SELECT') or has_any_column_privilege(r.oid,c.oid,'SELECT'))) as business_readers,
+ (select count(*)::int from pg_attribute a join pg_class c on c.oid=a.attrelid join pg_namespace n on n.oid=c.relnamespace
+  where n.nspname !~ '^pg_' and n.nspname<>'information_schema' and c.relkind in ('r','p','v','m','f') and a.attnum>0 and not a.attisdropped
+  and has_column_privilege(r.oid,c.oid,a.attnum,'SELECT') and not(n.nspname='fcos_release_coordination' and (
+    c.relname='control' and a.attname in ('singleton','mode','epoch','operation_id','bootstrap_id','recovery_id','source_upgrade_id','plan_completion_id')
+    or c.relname='rapid_handover_receipts' and a.attname in ('receipt_id','handover_id','phase','plan_hash','evidence','recorded_at')
+    or c.relname='operations' and a.attname in ('operation_id','phase')
+    or c.relname='operation_events' and a.attname in ('operation_id','event_id','state')))) as unauthorized_reads,
  (select count(*)::int from pg_class c join pg_namespace n on n.oid=c.relnamespace
-  where n.nspname not like 'pg_%' and n.nspname<>'information_schema' and c.relkind='S'
+  where n.nspname !~ '^pg_' and n.nspname<>'information_schema' and c.relkind='S'
   and case when c.relkind='S' then has_sequence_privilege(r.oid,c.oid,'USAGE,UPDATE') else false end) as sequence_writers,
  (select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace
-  where n.nspname in ('public','auth','storage') and p.prosecdef and has_function_privilege(r.oid,p.oid,'EXECUTE')) as privileged_routines,
- (select count(*)::int from pg_namespace n where n.nspname in ('public','auth','storage') and has_schema_privilege(r.oid,n.oid,'CREATE')) as business_creators,
+  where n.nspname !~ '^pg_' and n.nspname<>'information_schema' and p.prosecdef
+  and has_schema_privilege(r.oid,n.oid,'USAGE') and has_function_privilege(r.oid,p.oid,'EXECUTE')) as privileged_routines,
+ (select count(*)::int from pg_namespace n where n.nspname !~ '^pg_' and n.nspname<>'information_schema' and has_schema_privilege(r.oid,n.oid,'CREATE')) as business_creators,
  (select setconfig from pg_db_role_setting where setrole=r.oid and setdatabase=0) as settings
  from pg_roles r where r.rolname=session_user`;
 const nativeTls=(db,host)=>db?.connection?.stream instanceof TLSSocket && db.connection.stream.authorized===true
@@ -40,7 +48,7 @@ export function assertReadonlyDatabaseIdentity(row,connection,{readOnly=true}={}
 function assertProfile(row) {
   check(row?.rolname===role() && row.rolcanlogin===true && Number(row.memberships)===0
     && row.business_writers===0 && row.privileged_routines===0 && row.business_creators===0
-    && row.business_readers===0 && row.sequence_writers===0
+    && row.business_readers===0 && row.sequence_writers===0 && row.unauthorized_reads===0
     && ['rolsuper','rolinherit','rolcreaterole','rolcreatedb','rolreplication','rolbypassrls'].every(key=>row[key]===false)
     && Array.isArray(row.settings) && row.settings.length===1 && row.settings[0]==='default_transaction_read_only=on',
   'PINNED_READONLY_DATABASE_ROLE_REQUIRED');
