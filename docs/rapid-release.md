@@ -8,6 +8,8 @@ Start a clean isolated worktree from the freshly read live Vercel deployment com
 
 Collect fresh native baseline evidence with `npm run release -- baseline --output /private/baseline.json` using the pinned TLS database read and Vercel identity. The non-secret JSON contains `deploymentId`, `sha`, `configurationDigest`, and `schemaDigest`, collected by the trusted native compatibility reader. Supply only approved public build settings. Run:
 
+The database transport accepts the canonical direct endpoint or the exact FCOS session-pooler host/username pair in `config/fcosConnections.js`, both on port 5432 with certificate and hostname verification. Use the session route where direct IPv6 connectivity is unavailable. Transaction pooling on port 6543 and other project usernames are rejected. Both routes must still prove native `session_user`, `current_user` and database identity as `postgres`, with the required transaction mode. Obtain the public CA from the verified project's Database Settings; never reset the database password merely to configure this workflow.
+
 ```sh
 npm run release -- prepare --candidate /absolute/clean/candidate --controller /absolute/clean/controller --baseline /private/baseline.json --public-environment /private/public-build.json --output /private/manifest.json
 ```

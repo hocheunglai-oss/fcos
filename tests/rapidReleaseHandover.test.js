@@ -7,6 +7,12 @@ import { verifyNativeHandoverDatabase } from '../scripts/lib/rapid-release/compa
 
 const { PGlite } = createRequire(import.meta.url)('@electric-sql/pglite');
 const pins = handoverPins();
+test('database transport admits only exact project-bound session pooling with verified TLS',()=>{
+ const connection={host:'aws-0-ap-southeast-1.pooler.supabase.com',port:5432,user:`postgres.${pins.projectRef}`,database:'postgres',ssl:{rejectUnauthorized:true}};
+ assertHandoverConnection(connection);
+ for(const change of [{user:'postgres.other_project'},{user:'postgres'},{port:6543},{host:'other.pooler.supabase.com'},{ssl:{rejectUnauthorized:false}},{database:'other'}])
+  assert.throws(()=>assertHandoverConnection({...connection,...change}),/PINNED_TLS/);
+});
 async function fixture() {
   const db = new PGlite();
   await db.exec(`create role anon;create role authenticated;create role service_role;create role fcos_coordinator_runtime;create role fcos_coordinator_owner;

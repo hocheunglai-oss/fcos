@@ -48,8 +48,12 @@ export function validateAdministratorApplicationInventory(report, { now = Date.n
 }
 
 export function assertHandoverConnection(connection) {
-  const pins = handoverPins();
-  check(connection?.host === `db.${pins.projectRef}.supabase.co` && connection.port === 5432 && connection.user === 'postgres'
+  const direct = connection?.host === fcosConnectionIdentifier('supabase', 'Database direct host') && connection.user === 'postgres';
+  const session = connection?.host === fcosConnectionIdentifier('supabase', 'Database session host')
+    && connection.user === fcosConnectionIdentifier('supabase', 'Database session user');
+  // Session pooling preserves the transaction/session guarantees used below.
+  // The shared host alone is insufficient: the username must pin this project.
+  check((direct || session) && connection.port === 5432
     && connection.database === 'postgres' && connection.ssl?.rejectUnauthorized === true, 'HANDOVER_PINNED_TLS_POSTGRES_REQUIRED');
 }
 async function transaction(db, readOnly, callback) {
