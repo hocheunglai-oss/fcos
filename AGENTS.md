@@ -36,7 +36,7 @@ Salesforce browser authentication is an environment-specific, authentication-onl
 
 The mandatory Salesforce promotion order is:
 
-1. Deploy and verify the reviewed manifest in DEVEE, proving baseline, changed-component/dependency coverage and the resulting complete owned tree. Keep complete-tree deployment proof distinct.
+1. Deploy and verify the complete owned metadata tree in DEVEE.
 2. Synchronize the byte-equivalent DEVEE source to the shared Salesforce GitHub repository.
 3. Promote the same verified source from DEVEE to QAT and verify it there.
 4. Promote the same verified source from QAT to Production and verify it there.

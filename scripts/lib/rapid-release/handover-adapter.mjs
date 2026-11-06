@@ -2,7 +2,8 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { handoverDigest, handoverPins, auditHandover, assertHandoverActivation, validateAdministratorApplicationInventory, withHandoverReadOnlyTransaction, OLD_RELEASE_VARIABLES, OLD_RELEASE_WORKFLOWS } from './handover.mjs';
 import { digest, requireCondition, validateManifest, targets } from './contract.mjs';
-import { verifyBootstrapAdmission } from './bootstrap-admission.mjs';
+import { verifyBootstrapAdmission, verifyBootstrapSuccessorAdmission } from './bootstrap-admission.mjs';
+import { bootstrapSuccessorConfiguration } from './bootstrap-successor.mjs';
 import { githubClient, vercelProvider, assertFrozenWorkflow, assertNativeQualityProducer } from './providers.mjs';
 import { DeploymentJournal, validateChain, pendingOperations } from './journal.mjs';
 import { stageRelease } from './engine.mjs';
@@ -135,9 +136,11 @@ export async function createHandoverAdapter({ plan, db, connection, env = proces
         || (env.FCOS_HANDOVER_BOOTSTRAP_PLAN ? JSON.parse(readFileSync(resolve(env.FCOS_HANDOVER_BOOTSTRAP_PLAN), 'utf8')) : null);
       const authenticationRunId = context?.reference?.authentication?.runId || bootstrapContext?.authenticationRunId
         || Number(env.FCOS_HANDOVER_BOOTSTRAP_AUTH_RUN_ID);
-      requireCondition(bootstrapPlan && Number.isSafeInteger(authenticationRunId) && authenticationRunId > 0
+      const successorPlan = context?.reference?.successor?.plan || bootstrapContext?.successorPlan;
+      requireCondition(bootstrapPlan && (successorPlan || Number.isSafeInteger(authenticationRunId) && authenticationRunId > 0)
         && typeof provider.previewDeployment === 'function', 'HANDOVER_BOOTSTRAP_NATIVE_CONTEXT_REQUIRED');
-      return verifyBootstrapAdmission({ bootstrapPlan, controllerSha: p?.controllerSha || plan?.controllerSha || bootstrapPlan.controllerSha,
+      const verify = successorPlan ? verifyBootstrapSuccessorAdmission : verifyBootstrapAdmission;
+      return verify({ bootstrapPlan, ...(successorPlan ? { successorPlan } : {}), controllerSha: p?.controllerSha || plan?.controllerSha || bootstrapPlan.controllerSha,
         authenticationRunId, github, vercel: { ...nativeVercel, deployment: id => provider.previewDeployment(id) },
         readDatabase: work => withHandoverReadOnlyTransaction({ db, connection }, work) });
     },
@@ -178,6 +181,10 @@ export async function createHandoverAdapter({ plan, db, connection, env = proces
     project: () => provider.project(), currentProduction: async () => ({ id: (await provider.currentProduction()).id,
       alias: new URL(targets().origin).hostname, projectId: pins.projectId, teamId: pins.teamId }),
     deployment: id => provider.rawDeployment(id),
+    configuration: async branch => {
+      requireCondition(typeof provider.previewConfiguration === 'function', 'HANDOVER_BOOTSTRAP_NATIVE_CONFIGURATION_REQUIRED');
+      return bootstrapSuccessorConfiguration({ ...(await provider.previewConfiguration(branch)), branch });
+    },
   };
   return { github, vercel: nativeVercel,
     async qualifyStage({ plan: p, planHash, nativeReview, ownershipVerifier }) {

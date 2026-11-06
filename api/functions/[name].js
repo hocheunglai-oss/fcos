@@ -19541,6 +19541,8 @@ async function handler(req, res) {
         const data = await fn(body, req, accessContext);
         return sendJson(res, data);
       } catch (error) {
+        // Preserve the CI denial contract while fixed writes still stop before authentication.
+        if (error?.code === 'FCOS_DEPLOYMENT_READ_ONLY' && process.env.FCOS_ENABLE_READ_ONLY_CI === 'true') error.code = 'FCOS_CI_READ_ONLY';
         const status = error.status || error.statusCode || 500;
         recordRequestFailure(error, status);
         if (shouldNotifySystemError(status)) {
