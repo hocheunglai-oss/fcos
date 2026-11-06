@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SOURCE_ROOT, FIXTURE_ROOT, installationControls, installationControlsV2, installationV2ManifestBytes,
-  installationControlSource, validateInstallationControlsV2, sourceBindings, validateSourceBindings,
+  installationControlSource, installationCurrentV2Body, validateInstallationControlsV2, sourceBindings, validateSourceBindings,
   assertBoundSource, hash, cleanGitEnvironment } from './helpers/runtimeCompatibilitySuccessorPortable.mjs';
 
 const packed = readFileSync(join(FIXTURE_ROOT, 'installation-controls-v2.pack'));
@@ -24,7 +24,8 @@ test('cheap fixture preflight keeps the original supplement and complete case bo
 
 test('v2 substitutes only the already-bound config with exact retained and current pins', () => {
   assert.deepEqual(installationControlsV2.sources.map(row => row.path), ['config/fcosConnections.js']);
-  const entry = installationControlsV2.sources[0], current = readFileSync(join(SOURCE_ROOT, entry.path));
+  const entry = installationControlsV2.sources[0], current = installationCurrentV2Body();
+  const actual = readFileSync(join(SOURCE_ROOT, entry.path)), actualHash=hash(actual);
   assert.ok(sourceBindings.sources.some(row => row.path === entry.path && row.sha256 === entry.sha256));
   assert.equal(current.length, entry.currentByteLength); assert.equal(hash(current), entry.currentSha256);
   const retained = installationControlSource(entry.path, current);
@@ -33,7 +34,8 @@ test('v2 substitutes only the already-bound config with exact retained and curre
   assert.equal(hash(installationControlSource(entry.path, retained)), entry.sha256);
   retained[0] ^= 1;
   assert.equal(hash(installationControlSource(entry.path, current)), entry.sha256, 'Returned bytes cannot mutate retained evidence.');
-  assert.equal(hash(readFileSync(join(SOURCE_ROOT, entry.path))), entry.currentSha256, 'Actual executing config stays current.');
+  assert.equal(hash(installationControlSource(entry.path, actual)), entry.sha256, 'Actual current config is separately source-bound.');
+  assert.equal(hash(readFileSync(join(SOURCE_ROOT, entry.path))), actualHash, 'Actual executing config stays current.');
   assert.throws(() => { entry.currentSha256 = entry.sha256; }, TypeError);
   assert.throws(() => installationControlSource('api/_deploymentReadOnly.js', readFileSync(join(SOURCE_ROOT, 'api/_deploymentReadOnly.js'))), /Unreviewed source path/);
 });

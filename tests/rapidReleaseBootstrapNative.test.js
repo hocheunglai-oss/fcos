@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { githubBootstrapPath,decodeBootstrapPrivateInput,assertBootstrapQualityBeforeCredential } from '../scripts/lib/rapid-release/bootstrap-native.mjs';
+import { githubBootstrapPath,decodeBootstrapPrivateInput,assertBootstrapQualityBeforeCredential,assertNativeBootstrapAlias } from '../scripts/lib/rapid-release/bootstrap-native.mjs';
+import {targets} from '../scripts/lib/rapid-release/contract.mjs';
+test('native alias proof requires the actual canonical project and a real original deployment ID',()=>{
+ const alias={alias:new URL(targets().origin).hostname,projectId:targets().projectId,deploymentId:'dpl_Original'};
+ assert.equal(assertNativeBootstrapAlias(alias),'dpl_Original');
+ for(const patch of [{deploymentId:undefined},{alias:'other.example'},{projectId:'other'},{redirect:'https://other.example'}])assert.throws(()=>assertNativeBootstrapAlias({...alias,...patch}),/PRODUCTION_ALIAS_REQUIRED/);
+});
 test('bootstrap private transport and native routes reject other targets and extra fields',()=>{
   assert.throws(()=>githubBootstrapPath('/repos/other/fcos'),/ROUTE_REFUSED/);
   assert.throws(()=>githubBootstrapPath('/repos/hocheunglai-oss/fcos/../other'),/ROUTE_REFUSED/);

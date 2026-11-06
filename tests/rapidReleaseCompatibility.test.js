@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { PGlite } from '@electric-sql/pglite';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join,resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { SCHEMA_FINGERPRINT_SQL, withPinnedReadOnlyDatabase } from '../scripts/lib/rapid-release/compatibility.mjs';
 import { createManagedRoleFixture, dummyDelegation, PUBLIC_CA } from './helpers/rapidDatabaseDelegationFixture.mjs';
 test('native compatibility fingerprint detects view semantics, owner and role drift without hashing business rows',async()=>{
@@ -72,7 +73,7 @@ test('management env uses the source-owned intent factory and preserves actual d
   assert.equal(storeContext.credential.kind,'supabase_management');
   assert.equal(storeContext.purpose,'rapid_compatibility_read_only');
   assert.match(storeContext.source.sha,/^[a-f0-9]{40}$/);
-  assert.equal(storeContext.directory.endsWith('/FCOS/'),true);
+  assert.equal(resolve(storeContext.directory),resolve(fileURLToPath(new URL('../',import.meta.url))));
   assert.equal(observed.session_user,'cli_login_postgres');assert.equal(observed.current_user,'postgres');
  }finally{await native.close();rmSync(directory,{recursive:true,force:true});}
 });

@@ -11,6 +11,12 @@ const CANONICAL = '/Users/vincex/Documents/FCOS';
 const VERCEL = '/Users/vincex/.local/node-lts/current/bin/vercel';
 const GITHUB = '/Users/vincex/.local/gh/current/bin/gh';
 const requireValue = requireCondition;
+export function assertNativeBootstrapAlias(alias) {
+  const pins=targets(),id=alias?.deploymentId || alias?.deployment?.id;
+  requireValue(alias?.alias===new URL(pins.origin).hostname && alias.projectId===pins.projectId && !alias.redirect
+    && /^dpl_[A-Za-z0-9]+$/.test(id || ''),'BOOTSTRAP_PRODUCTION_ALIAS_REQUIRED');
+  return id;
+}
 export function githubBootstrapPath(path) {
   const base = `/repos/${targets().repository}`;
   requireValue(typeof path === 'string' && !/[\r\n\0]/.test(path) && !path.includes('..')
@@ -112,7 +118,7 @@ export async function createBootstrapNative({ plan, cwd, privateInput }) {
     },
     async project() {const p=vget(`/v9/projects/${pins.projectId}`);requireValue(p.id===pins.projectId && p.accountId===pins.teamId && p.autoAssignCustomDomains===false,'BOOTSTRAP_VERCEL_PROJECT_MISMATCH');return p;},
     async currentProduction() {
-      const alias=vget(`/v4/aliases/${new URL(pins.origin).host}`),id=alias.deploymentId || alias.deployment?.id;
+      const alias=vget(`/v4/aliases/${new URL(pins.origin).host}`),id=assertNativeBootstrapAlias(alias);
       const d=await vercel.deployment(id);
       requireValue(d.target==='production' && d.readyState==='READY','BOOTSTRAP_PRODUCTION_READBACK_REQUIRED');
       return {id:d.id,alias:new URL(pins.origin).host,projectId:d.projectId,teamId:d.ownerId};

@@ -169,6 +169,28 @@
       "measuredTimeSavedMs": null,
       "measuredCallsSaved": null,
       "prevention": "Changed workflow, failed quality and divergent source cannot emit an admitted checkout SHA."
+    },
+    {
+      "id": "portable-controller-fixture-current-source",
+      "cause": "Native Linux quality exposed a Mac checkout-name assertion and a v2 fixture that assumed executing configuration could never advance.",
+      "correction": "Compare the real module-derived controller root; retain the exact v2 current config in a one-object non-thin carrier while verifying the actual v3 current source separately.",
+      "verification": {
+        "nativeFailedRunId": 42268734335,
+        "nativePassed": 2405,
+        "nativeFailed": 2,
+        "focusedCommand": "node --test tests/rapidReleaseCompatibility.test.js tests/runtimeCompatibilityInstallationControlsV2.test.js tests/runtimeCompatibilityInstallationReadonly.test.js",
+        "passed": 10,
+        "durationMs": 1778.536667,
+        "providerCalls": 0,
+        "regressionDigest": "229c16ed54293c104cb3ee5d25a894ccafdd3cc10684b67afc0bf696580f62da"
+      },
+      "repairTime": {
+        "measurement": "Wall elapsed since local native-failure log capture, through focused verification",
+        "elapsedMs": 249990
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Run the cheap fixture preflight before publishing another controller; all historical manifests, source bindings and original complete case body remain unchanged."
     }
   ]
 }

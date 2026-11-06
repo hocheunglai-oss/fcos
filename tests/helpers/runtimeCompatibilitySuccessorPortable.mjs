@@ -95,6 +95,13 @@ function retainedControlBodies(controls = installationControls) {
     assert.equal(offset,batch.length); retainedControls.set(controls,result); return result;
   } finally { fs.rmSync(temporary, { recursive:true, force:true }); }
 }
+const installationCurrentV2Carrier = {
+  pack: {path:'installation-current-v2.pack',byteLength:6289,sha256:'03b9310714f9a4aef370600d7fa0e9690e80f20791e30462cb043db964de358b'},
+  sources: installationControlsV2.sources.map(entry=>({path:entry.path,type:'blob',oid:entry.currentOid,byteLength:entry.currentByteLength,sha256:entry.currentSha256})),
+};
+export function installationCurrentV2Body() {
+  return Buffer.from(retainedControlBodies(installationCurrentV2Carrier).get('config/fcosConnections.js'));
+}
 export function installationControlSource(path, current) {
   const controls = installationControlsV2.sources.some(row => row.path === path) ? installationControlsV2 : installationControls;
   const entry = controls.sources.find(row => row.path === path);
