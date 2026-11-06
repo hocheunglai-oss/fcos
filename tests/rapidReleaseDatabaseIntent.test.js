@@ -9,7 +9,8 @@ import { EventEmitter } from 'node:events';
 import { TLSSocket } from 'node:tls';
 import { digest,targets } from '../scripts/lib/rapid-release/contract.mjs';
 import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
-import { createDatabaseCredentialIntentStore } from '../scripts/lib/rapid-release/database-intent.mjs';
+import { createDatabaseCredentialIntentStore,DATABASE_SCOPE_EVIDENCE_ENVIRONMENT,DATABASE_AUTH_RECONCILIATION_SQL } from '../scripts/lib/rapid-release/database-intent.mjs';
+import { MANAGED_DATABASE_ROLE_SQL } from '../scripts/lib/rapid-release/database-connection.mjs';
 import { openPinnedDatabase,isManagedDatabaseRole,DELEGATED_DATABASE_IDENTITY_SQL } from '../scripts/lib/rapid-release/database-connection.mjs';
 import { PUBLIC_CA } from './helpers/rapidDatabaseDelegationFixture.mjs';
 
@@ -27,12 +28,13 @@ function fixture(t){
  git(['-c','user.name=FCOS Test','-c','user.email=test@example.invalid','commit','-m','fixture']);
  const source={sha:git(['rev-parse','HEAD'])},tree=git(['rev-parse','HEAD^{tree}']);
  const commits=new Map([[source.sha,{sha:source.sha,tree:{sha:tree},parents:[],message:'frozen source'}]]),deployments=[],writes=[];
- const f={directory,source,commits,deployments,writes,head:null,role:roleFacts(),preflights:0,issuerPosts:0,
+ const f={directory,source,commits,deployments,writes,head:null,role:roleFacts(),observations:new Map(),preflights:0,issuerPosts:0,
   actor:{id:123,login:targets().account},repository:{full_name:targets().repository,archived:false,permissions:{push:true}}};
  let commitNumber=0,gate;
  f.armRace=()=>{let release;gate={seen:0,promise:new Promise(resolve=>{release=resolve;}),release};};
  const github={
   async read(path){if(path==='/user')return clone(f.actor);if(path===`/repos/${targets().repository}`)return clone(f.repository);
+   if(path.includes('/deployments/'))return clone(f.observations.get(Number(path.split('/').at(-1))));
    const sha=path.split('/').at(-1);if(path.includes('/git/commits/')&&commits.has(sha))return clone(commits.get(sha));throw Error(SECRET);},
   async pages(path){if(path.includes('/git/matching-refs/')){
     const snapshot=f.head?[{ref:REF,object:{type:'commit',sha:f.head}}]:[];
@@ -58,7 +60,7 @@ function fixture(t){
   role:'cli_login_postgres',method:'POST',path:`/v1/projects/${targets().supabaseProject}/cli/login-role`,body:{read_only:false}};
  f.request={...requestBody,requestDigest:digest(requestBody)};
  f.fetchImpl=async(url,options)=>{let body,status=201;
-  if(url.endsWith('/database/query')){f.preflights++;assert.equal(JSON.parse(options.body).read_only,true);body=[f.role];}
+  if(url.endsWith('/database/query')){if(f.readError)throw Error(SECRET);f.preflights++;const request=JSON.parse(options.body);assert.equal(request.read_only,true);body=request.query===DATABASE_AUTH_RECONCILIATION_SQL?(f.reconcileRows||[f.role]):[f.role];}
   else if(url.endsWith('/cli/login-role')){f.issuerPosts++;body={role:'cli_login_postgres',password:SECRET,ttl_seconds:300};}
   else{status=200;body={id:targets().supabaseProject,name:'FCOS',status:'ACTIVE_HEALTHY',organization_id:'yxyxcenpgqutvoctrdkj'};}
   const response=new Response(JSON.stringify(body),{status});Object.defineProperty(response,'url',{value:url});return response;};
@@ -67,6 +69,7 @@ function fixture(t){
  f.receipt=intent=>{const issuedAtMs=Date.now();return {intentId:intent.intentId,requestDigest:intent.requestDigest,outcome:'received',
   issuer:'https://api.supabase.com',projectRef:targets().supabaseProject,role:'cli_login_postgres',ttlSeconds:300,issuedAtMs,expiresAtMs:issuedAtMs+300000};};
  f.state=()=>JSON.parse(commits.get(f.head).message);
+ f.scopeEvidence=intent=>{const claim=f.state(),row={id:500,environment:DATABASE_SCOPE_EVIDENCE_ENVIRONMENT,sha:source.sha,creator:clone(f.actor),payload:{schemaVersion:1,kind:'fcos_database_auth_scope_observation',provenance:'owner_attested_native_dashboard',intentId:intent.intentId,requestDigest:intent.requestDigest,claimCommitSha:f.head,claimDigest:digest(claim),originalSourceSha:claim.sourceSha,reconciliationSourceSha:source.sha,projectRef:targets().supabaseProject,organizationId:f.request.organizationId,observedAt:new Date().toISOString(),evidenceDigest:'a'.repeat(64),token:{name:'FCOS CLI read-only recovery',existence:'verified_at_original_request',credentialHistory:'unchanged_since_original_request',projectRefs:[targets().supabaseProject],permissions:['database_read','project_settings_read'],scopeHistory:'immutable_since_creation',originalCredentialMatch:'private_keychain_mask_match'}}};f.observations.set(row.id,row);return row;};
  return f;
 }
 
@@ -171,4 +174,68 @@ test('private receipt fields and changed source are refused without acquiring au
  await assert.rejects(store.complete({...f.receipt(intent),password:SECRET}),/RECEIPT_REFUSED/);
  await store.uncertain({intentId:intent.intentId,requestDigest:intent.requestDigest});assert.equal(f.state().phase,'pending');
  writeFileSync(join(f.directory,'source.txt'),'changed');await assert.rejects(f.store(),/FROZEN_SOURCE_REQUIRED/);
+});
+
+test('owner-attested scope denial appends a distinct terminal child and never rewrites the unknown request as received',async t=>{
+ const f=fixture(t),store=await f.store(),intent=await store.begin(f.request),original=f.head,observation=f.scopeEvidence(intent);
+ await store.uncertain({intentId:intent.intentId,requestDigest:intent.requestDigest});
+ const recovery=await f.store(),result=await recovery.reconcileDeniedByScope({intentId:intent.intentId,evidenceDeploymentId:observation.id});
+ assert.equal(result.state,'denied_by_scope');assert.equal(f.state().receipt.httpOutcome,'unobserved');assert.equal(f.state().receipt.httpStatus,undefined);
+ assert.equal(f.state().phase,'denied_by_scope');assert.deepEqual(f.state().pending,JSON.parse(f.commits.get(original).message));
+ assert.equal(f.commits.get(f.head).parents[0].sha,original);assert.equal(f.deployments.at(-1).payload.event,'denied_by_scope');
+ assert.equal(f.deployments.some(row=>row.payload.event==='received'),false);assert.equal(f.issuerPosts,0);
+ const writes=f.writes.length,resume=await f.store();assert.equal((await resume.reconcileDeniedByScope({intentId:intent.intentId,evidenceDeploymentId:observation.id})).reused,true);assert.equal(f.writes.length,writes);
+ assert.equal((await (await f.store()).begin(f.request)).state,'fresh');
+ assert.notEqual(DATABASE_AUTH_RECONCILIATION_SQL,MANAGED_DATABASE_ROLE_SQL);assert.match(DATABASE_AUTH_RECONCILIATION_SQL,/starts_with\(r.rolname,'cli_login'\)/);
+ assert.equal(JSON.stringify(f.writes).includes(SECRET),false);
+});
+
+test('scope evidence must be a native owner Deployment with exact original request, project, immutable scope and credential history',async t=>{
+ const mutations=[r=>{r.creator={id:41898282,login:'github-actions[bot]'};},r=>{r.sha='f'.repeat(40);},r=>{r.environment='Preview';},
+  r=>{r.payload.requestDigest='0'.repeat(64);},r=>{r.payload.claimCommitSha='f'.repeat(40);},r=>{r.payload.originalSourceSha='f'.repeat(40);},
+  r=>{r.payload.projectRef='different';},r=>{r.payload.token.permissions.push('database_write');},r=>{r.payload.token.projectRefs.push('different');},
+  r=>{r.payload.token.scopeHistory='currently_readonly';},r=>{r.payload.token.credentialHistory='unknown';},r=>{r.payload.provenance='native_api_introspection';}];
+ for(const mutate of mutations){const f=fixture(t),intent=await (await f.store()).begin(f.request),e=f.scopeEvidence(intent);mutate(e);const before=f.writes.length;
+  await assert.rejects((await f.store()).reconcileDeniedByScope({intentId:intent.intentId,evidenceDeploymentId:e.id}),/SCOPE_EVIDENCE_REQUIRED/);assert.equal(f.writes.length,before);assert.equal(f.state().phase,'pending');}
+ const f=fixture(t),intent=await (await f.store()).begin(f.request);f.scopeEvidence(intent);
+ await assert.rejects((await f.store()).reconcileDeniedByScope({intentId:intent.intentId,evidenceDeploymentId:{verified:true,id:500}}),/RECONCILIATION_REFUSED/);
+});
+
+test('unchanged expired native role and no unknown or eligible active CLI login are mandatory before reconciliation writes',async t=>{
+ for(const change of [f=>{f.role.role_valid_until_ms=Date.now()+300000;},f=>{f.role.role_valid_until_ms-=1000;},
+  f=>{f.reconcileRows=[f.role,{...f.role,login_role:'cli_login_postgres_unique',role_valid_until_ms:Date.now()+300000}];},
+  f=>{f.reconcileRows=[f.role,{...f.role,login_role:'cli_login_unknown',memberships:[]}];},f=>{f.role.current_user='postgres';}]){
+  const f=fixture(t),intent=await (await f.store()).begin(f.request),e=f.scopeEvidence(intent);change(f);const before=f.writes.length;
+  await assert.rejects((await f.store()).reconcileDeniedByScope({intentId:intent.intentId,evidenceDeploymentId:e.id}),/ACTIVE_OR_UNKNOWN_LOGIN_ROLE|ORIGINAL_ROLE_CHANGED/);
+  assert.equal(f.writes.length,before);assert.equal(f.issuerPosts,0);
+ }
+ const f=fixture(t),intent=await (await f.store()).begin(f.request),e=f.scopeEvidence(intent);f.readError=true;
+ await assert.rejects((await f.store()).reconcileDeniedByScope({intentId:intent.intentId,evidenceDeploymentId:e.id}),error=>error.message==='DATABASE_AUTH_ROLE_PREFLIGHT_UNAVAILABLE'&&!String(error).includes(SECRET));
+});
+
+test('terminal closure races have one CAS winner and missing or uncertain publication never submits again even from another operator directory',async t=>{
+ const f=fixture(t),intent=await (await f.store()).begin(f.request),e=f.scopeEvidence(intent);
+ const other=mkdtempSync(join(tmpdir(),'fcos-auth-other-'));t.after(()=>rmSync(other,{recursive:true,force:true}));execFileSync('git',['clone','--local',f.directory,other],{stdio:['ignore','pipe','pipe']});
+ const stores=await Promise.all([f.store(),createDatabaseCredentialIntentStore({...f.input,directory:other})]);f.armRace();
+ const result=await Promise.allSettled(stores.map(store=>store.reconcileDeniedByScope({intentId:intent.intentId,evidenceDeploymentId:e.id})));
+ assert.equal(result.filter(row=>row.status==='fulfilled').length,1);assert.equal(f.deployments.filter(row=>row.payload.event==='denied_by_scope').length,1);assert.equal(f.issuerPosts,0);
+ const lost=fixture(t),i=await (await lost.store()).begin(lost.request),evidence=lost.scopeEvidence(i);lost.deploymentNotApplied=true;
+ await assert.rejects((await lost.store()).reconcileDeniedByScope({intentId:i.intentId,evidenceDeploymentId:evidence.id}),/ACK_UNKNOWN/);assert.equal(lost.state().phase,'denied_by_scope');
+ const elsewhere=mkdtempSync(join(tmpdir(),'fcos-auth-lost-other-'));t.after(()=>rmSync(elsewhere,{recursive:true,force:true}));execFileSync('git',['clone','--local',lost.directory,elsewhere],{stdio:['ignore','pipe','pipe']});
+ const before=lost.writes.length;await assert.rejects((await createDatabaseCredentialIntentStore({...lost.input,directory:elsewhere})).reconcileDeniedByScope({intentId:i.intentId,evidenceDeploymentId:evidence.id}),/TERMINAL_PUBLICATION_UNCERTAIN/);
+ await assert.rejects((await lost.store()).begin(lost.request),/ORIGINAL_OPERATION_UNCERTAIN/);assert.equal(lost.writes.length,before);
+});
+
+test('terminal resume rechecks the immutable owner evidence and original claim without imposing a new observation timestamp',async t=>{
+ const f=fixture(t),intent=await (await f.store()).begin(f.request),e=f.scopeEvidence(intent);await (await f.store()).reconcileDeniedByScope({intentId:intent.intentId,evidenceDeploymentId:e.id});
+ const before=f.writes.length;e.payload.token.permissions.push('database_write');
+ await assert.rejects((await f.store()).reconcileDeniedByScope({intentId:intent.intentId,evidenceDeploymentId:e.id}),/SCOPE_EVIDENCE_REQUIRED/);
+ await assert.rejects((await f.store()).begin(f.request),/SCOPE_EVIDENCE_REQUIRED/);assert.equal(f.writes.length,before);
+});
+
+test('native 401 or 403 rejection is distinct from scope reconstruction and closes only the auth CAS',async t=>{
+ for(const status of [401,403]){const f=fixture(t),store=await f.store(),intent=await store.begin(f.request);
+  await store.rejected({intentId:intent.intentId,requestDigest:intent.requestDigest,outcome:'rejected',issuer:'https://api.supabase.com',projectRef:targets().supabaseProject,httpStatus:status,observedAtMs:Date.now()});
+  assert.equal(f.state().phase,'rejected');assert.equal(f.state().receipt.httpStatus,status);assert.equal((await (await f.store()).begin(f.request)).state,'fresh');}
+ const f=fixture(t),store=await f.store(),intent=await store.begin(f.request);await assert.rejects(store.rejected({intentId:intent.intentId,requestDigest:intent.requestDigest,outcome:'rejected',issuer:'https://api.supabase.com',projectRef:targets().supabaseProject,httpStatus:400,observedAtMs:Date.now()}),/RECEIPT_REFUSED/);
 });
