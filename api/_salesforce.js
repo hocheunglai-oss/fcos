@@ -2,6 +2,7 @@ import { createSign } from 'node:crypto';
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
 import { parseSalesforceCurrencyEvidence, salesforceUserInfoEnvelope } from './_salesforceCurrency.js';
 import { salesforceReadRetryDelay } from './_salesforceReadRetry.js';
+import { requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
 import { requireExternalActionGate } from './_externalActionGates.js';
 import {
   markRuntimeCacheUnsafe,
@@ -47,6 +48,7 @@ export function salesforceServiceUrl(path, instanceUrl = getInstanceUrl(), apiVe
 }
 
 async function refreshAccessToken() {
+  requireDeploymentMutationAllowed(true);
   const clientId = process.env.SALESFORCE_CLIENT_ID;
   const clientSecret = process.env.SALESFORCE_CLIENT_SECRET;
   const refreshToken = process.env.SALESFORCE_REFRESH_TOKEN;
