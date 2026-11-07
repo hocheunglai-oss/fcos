@@ -8,6 +8,14 @@
       "path": "scripts/lib/rapid-release/remittance-readback.mjs",
       "salesforce": false,
       "database": true
+    },
+    {
+      "id": "fcuno-session-readback",
+      "status": "qualified",
+      "sourceDigest": "75be466f7b07e7d89cc8d859fc5c9bb218f108af65c1b3b6dbfdc567f90b6dd4",
+      "path": "scripts/lib/rapid-release/fcuno-readback.mjs",
+      "salesforce": false,
+      "database": true
     }
   ]
 }
