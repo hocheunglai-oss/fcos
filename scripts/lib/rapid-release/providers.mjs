@@ -84,10 +84,11 @@ export async function verifyExecution({ github, manifest, env = process.env, pha
     && Number.isSafeInteger(run.run_attempt) && run.run_attempt >= 1
     && new RegExp(`^FCOS rapid (release|resume) ${digest(manifest)} ${manifest.candidate.sha}$`).test(run.display_title || ''), 'WORKFLOW_IDENTITY_MISMATCH');
   await assertFrozenWorkflow({ github, controllerSha: manifest.controllerSha, dispatcherSha: run.head_sha });
-  const enabled = await github.read(`/repos/${targets().repository}/actions/variables/FCOS_RAPID_RELEASE_ENABLED`);
-  requireCondition(enabled.value === 'true', 'RAPID_RELEASE_NOT_ACTIVATED');
-  const setup = await github.read(`/repos/${targets().repository}/actions/variables/FCOS_RAPID_RELEASE_HANDOVER_ID`);
-  const handover = await github.read(`/repos/${targets().repository}/deployments/${setup.value}`);
+  requireCondition(env.FCOS_RAPID_RELEASE_ENABLED === 'true', 'RAPID_RELEASE_NOT_ACTIVATED');
+  const handoverId = env.FCOS_RAPID_RELEASE_HANDOVER_ID;
+  requireCondition(/^[1-9][0-9]*$/.test(handoverId || '') && Number.isSafeInteger(Number(handoverId)), 'RAPID_RELEASE_HANDOVER_POINTER_REQUIRED');
+  const handover = await github.read(`/repos/${targets().repository}/deployments/${handoverId}`);
+  requireCondition(handover.id === Number(handoverId), 'RAPID_RELEASE_HANDOVER_POINTER_CHANGED');
   const p = assertPermanentHandover(handover, manifest, run.actor.id);
   const frozenSetup = await github.read(`/repos/${targets().repository}/contents/${p.nativeReview.workflowPath}?ref=${manifest.controllerSha}`);
   requireCondition(frozenSetup.type === 'file' && frozenSetup.sha === p.nativeReview.workflowBlobSha, 'NATIVE_HANDOVER_SOURCE_MISMATCH');
