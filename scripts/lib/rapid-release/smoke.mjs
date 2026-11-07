@@ -242,8 +242,10 @@ async function verifyModuleDesktop({ page, origin, module }) {
     requireFact(response.status() === 200 && await response.finished() === null
       && modulePayloadVerified(module, await response.json()), 'SMOKE_MODULE_READ_FAILED');
   }
-  await page.waitForLoadState('networkidle', { timeout: 30000 });
-  await page.waitForFunction(() => !/\b(?:loading|fetching|preparing)\b/i.test(document.body.innerText), undefined, { timeout: 30000 });
+  if (module !== 'admin') {
+    await page.waitForLoadState('networkidle', { timeout: 30000 });
+    await page.waitForFunction(() => !/\b(?:loading|fetching|preparing)\b/i.test(document.body.innerText), undefined, { timeout: 30000 });
+  }
   if (module === 'settings') await page.getByLabel(/Annual interest rate/i).waitFor({ state: 'visible', timeout: 30000 });
   else if (module === 'xero_portal') await page.locator('dl dd').first().waitFor({ state: 'visible', timeout: 30000 });
   else if (module === 'admin') {
@@ -265,9 +267,20 @@ async function verifyModuleDesktop({ page, origin, module }) {
     ...(spec.readControl ? { readControl: spec.readControl } : {}) };
 }
 
-async function browserRun({ origin, manifest, credentials, normal, modules, env, browserFactory }) {
+async function browserRun({ origin, manifest, credentials, normal, modules, env, browserFactory, diagnostic }) {
+  async function checkModule(module, surface, check) {
+    if (!diagnostic) return check();
+    const start = performance.now();
+    let receipt, code;
+    try { receipt = await check(); }
+    catch (error) {
+      code = /^SMOKE_[A-Z0-9_]+$/.test(error?.code || '') ? error.code : 'SMOKE_MODULE_SURFACE_FAILED';
+    }
+    diagnostic({ module, surface, passed: Boolean(receipt), elapsedMs: Math.round(performance.now() - start), ...(code ? { code } : {}) });
+    return receipt;
+  }
   let phase = 'SETUP';
-  let browser, context, privateEnv, cleanupFailed = false;
+  let browser, context, privateEnv, diagnosticReads, cleanupFailed = false;
   let denialReceipts = [], extraReads = [], desktopChecks = [], authProbed = false, probeError, rejectProbe;
   const probeFailure = new Promise((_, reject) => { rejectProbe = reject; });
   probeFailure.catch(() => {});
@@ -305,12 +318,19 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
             requireFact(denial.url() === `${origin}${mutation.path}` && denial.status() === 403 && (await denial.json()).code === 'FCOS_DEPLOYMENT_READ_ONLY', 'SMOKE_NORMAL_MUTATION_NOT_DENIED');
             denialReceipts = [{ path: mutation.path, status: 403, code: 'FCOS_DEPLOYMENT_READ_ONLY' }];
           } finally { await denial?.dispose(); }
-          for (const module of modules.filter(value => !baselineModules.includes(value))) {
-            const reader = moduleReaders[module];
-            const result = await routeRead(route, origin, reader.path, moduleReadBody(module, manifest));
-            requireFact(modulePayloadVerified(module, result.response), 'SMOKE_MODULE_PAYLOAD_INCOMPLETE');
-            extraReads.push({ module, ...result.receipt, dataVerified: true, surface: 'authenticated_read_api', coverage: reader.coverage });
-          }
+          const readModules = async () => {
+            for (const module of modules.filter(value => !baselineModules.includes(value))) {
+              const reader = moduleReaders[module];
+              const receipt = await checkModule(module, 'read', async () => {
+                const result = await routeRead(route, origin, reader.path, moduleReadBody(module, manifest));
+                requireFact(modulePayloadVerified(module, result.response), 'SMOKE_MODULE_PAYLOAD_INCOMPLETE');
+                return { module, ...result.receipt, dataVerified: true, surface: 'authenticated_read_api', coverage: reader.coverage };
+              });
+              if (receipt) extraReads.push(receipt);
+            }
+          };
+          if (diagnostic) diagnosticReads = readModules;
+          else await readModules();
         }
         await route.fulfill({ response: actual });
       } catch (error) { probeError = error; rejectProbe(error); await route.abort('blockedbyclient'); }
@@ -341,6 +361,10 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
     requireFact(authResponse.status() === 200 && authProbed && !probeError, probeError?.code || 'SMOKE_LOGIN_NOT_PROVEN');
     assertIdentity(await authResponse.json(), credentials, normal, modules);
     await writePrivateE2eState({ env: privateEnv, path: privateEnv.FCOS_E2E_STORAGE_STATE, state: candidateAuthenticationState(await context.storageState(), origin) });
+    if (diagnosticReads) {
+      phase = 'NORMAL_MODULE_READS';
+      await diagnosticReads();
+    }
     const reads = [...extraReads];
     for (const module of baselineModules) {
       phase = `BASELINE_${module.toUpperCase()}`;
@@ -358,7 +382,8 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
     }
     if (normal) for (const module of modules.filter(value => !baselineModules.includes(value))) {
       phase = `DESKTOP_${module.toUpperCase()}`;
-      desktopChecks.push(await verifyModuleDesktop({ page, origin, module }));
+      const receipt = await checkModule(module, 'desktop', () => verifyModuleDesktop({ page, origin, module }));
+      if (receipt) desktopChecks.push(receipt);
     }
     if (!normal) {
       phase = 'RESTRICTED_ACCESS';
@@ -381,7 +406,23 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
   }
 }
 
-export async function runStagedSmoke({ manifest, staged, env = process.env, fetchImpl = fetch, browserFactory } = {}) {
+export function runStagedSmoke(options) {
+  return stagedSmoke(options);
+}
+
+// Diagnostics share the request guard and identity checks, but never produce
+// release evidence, even when every module succeeds.
+export async function diagnoseStagedSmoke(options) {
+  const outcomes = [];
+  let code;
+  try { await stagedSmoke(options, outcome => outcomes.push(outcome)); }
+  catch (error) {
+    code = /^(?:SMOKE_|NORMAL_ROLE_|MODULE_)[A-Z0-9_]+$/.test(error?.code || '') ? error.code : 'SMOKE_DIAGNOSTIC_FAILED';
+  }
+  return { passed: false, outcomes, ...(code ? { code } : {}) };
+}
+
+async function stagedSmoke({ manifest, staged, env = process.env, fetchImpl = fetch, browserFactory } = {}, diagnostic) {
   const origin = binding(manifest, staged);
   const selected = unique(manifest.selection?.modules || []);
   const expanded = String(env.FCOS_RAPID_NORMAL_REQUIRED_MODULES || '').split(',').map(value => value.trim()).filter(Boolean);
@@ -407,7 +448,7 @@ export async function runStagedSmoke({ manifest, staged, env = process.env, fetc
   await verifyIdentity(origin, manifest, fetchImpl, env.FCOS_E2E_VERCEL_BYPASS);
   const launch = browserFactory || (async options => (await import('@playwright/test')).chromium.launch(options));
   const restricted = await browserRun({ origin, manifest, credentials: ci, normal: false, modules: baselineModules, env, browserFactory: launch });
-  const ordinary = normal ? await browserRun({ origin, manifest, credentials: normal, normal: true, modules: normalModules, env, browserFactory: launch }) : null;
+  const ordinary = normal ? await browserRun({ origin, manifest, credentials: normal, normal: true, modules: normalModules, env, browserFactory: launch, diagnostic }) : null;
   return { passed: true, deploymentId: staged.id, buildId: staged.buildId, login: true, restrictedAccess: true, businessWrites: 0,
     modules: unique([...restricted.modules, ...(ordinary?.modules || [])]), restrictedEvidence: restricted,
     ...(ordinary ? { normalRole: true, normalRoleEvidence: ordinary } : {}) };

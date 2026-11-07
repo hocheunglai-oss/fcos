@@ -5,7 +5,7 @@ import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier } from '../config/fcos
 import { APP_MODULES } from '../src/lib/authModules.js';
 import { MODULE_READERS, MODULE_SURFACES, moduleReadBody, moduleReaderPayloadVerified } from '../scripts/lib/rapid-release/normal-role-readers.mjs';
 import { FCOS_READ_ONLY_CI as ci } from '../config/fcosCiIdentity.js';
-import { runStagedSmoke, observeLive, stagedBrowserRequestAllowed } from '../scripts/lib/rapid-release/smoke.mjs';
+import { diagnoseStagedSmoke, runStagedSmoke, observeLive, stagedBrowserRequestAllowed } from '../scripts/lib/rapid-release/smoke.mjs';
 
 const origin = 'https://fcos-a1b2c3d4e-hocheunglai-6535s-projects.vercel.app';
 const issuer = new URL(FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation.issuer).origin;
@@ -366,4 +366,18 @@ test('candidate-declared module paths must match source-reviewed desktop routes 
     await assert.rejects(runStagedSmoke({ manifest: { ...candidate, moduleInventory: inventory }, staged, env, fetchImpl: noCall, browserFactory: noCall }), { code: 'SMOKE_MODULE_PATH_BINDING_MISMATCH' });
   }
   assert.equal(calls, 0);
+});
+
+test('diagnostic records subsequent module outcomes after a denied read without granting release proof', async () => {
+  const { browserFactory, observations } = browserFixture({ deniedModule: 'review' });
+  const report = await diagnoseStagedSmoke({
+    manifest: manifest({ modules: ['review', 'settings'], normalRole: true }),
+    staged, env, fetchImpl: publicFetch(), browserFactory,
+  });
+  assert.equal(report.passed, false);
+  assert.deepEqual(report.outcomes.map(({ module, surface, passed }) => [module, surface, passed]), [
+    ['review', 'read', false], ['settings', 'read', true],
+    ['review', 'desktop', true], ['settings', 'desktop', true],
+  ]);
+  assert.equal(observations.contextsClosed, 2);
 });
