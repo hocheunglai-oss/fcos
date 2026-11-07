@@ -232,6 +232,7 @@ import { secondaryMopsFailureMessage } from '../_marketSourceHealth.js';
 import { ciModuleAccess, isReadOnlyCiProfile, isReadOnlyMarketAction, requireReadOnlyCiOperation } from '../_readOnlyCiAccess.js';
 import { isDeploymentReadOnly, requireDeploymentMutationAllowed } from '../_deploymentReadOnly.js';
 import { isReadOnlyHedgeDeskAction } from '../_deploymentReadActions.js';
+import { marketAssistantSettings, runMarketAssistant, saveMarketAssistantSettings } from '../_marketAssistant.js';
 import { analyzeMarketReportLibrary, loadMarketReportCatalogue } from '../_marketReportAnalysis.js';
 import {
   applyMasterContractPrice as applyMasterContractPriceService,
@@ -1238,6 +1239,9 @@ const HANDLER_MODULE_ACCESS = {
   marketIntelligenceCurve: ['markets'],
   marketReportCatalogue: ['markets'],
   marketReportAnalysis: ['markets'],
+  marketAssistant: ['markets'],
+  marketAssistantSettingsGet: ['markets', 'settings'],
+  marketAssistantSettingsSave: ['settings'],
   marketIntelligenceValuation: ['markets'],
   marketForwardFallbackSave: ['markets'],
   marketIntelligenceAlertRulesGet: ['markets'],
@@ -18510,6 +18514,24 @@ async function hedgeDeskAssistant(body = {}, req = null, accessContext = null) {
   return runHedgeAssistant(context.client, context.profile, body);
 }
 
+async function marketAssistant(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return runMarketAssistant(context.client, context.profile, body);
+}
+
+async function marketAssistantSettingsGet(_body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return { ...(await marketAssistantSettings(context.client)), canManage: await userHasCapability(context.client, context.profile, 'hedge_admin') };
+}
+
+async function marketAssistantSettingsSave(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  const canManage = await userHasCapability(context.client, context.profile, 'hedge_admin');
+  const result = await saveMarketAssistantSettings(context.client, context.profile, body, { canManage });
+  await writeAdminAudit(context.client, context.profile, 'market_assistant_model_changed', null, null, { modelId: result.modelId, revision: result.revision });
+  return result;
+}
+
 async function hedgeDeskAssistantSettings(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
   const capabilities = await hedgeCapabilities(context);
@@ -19117,6 +19139,9 @@ const handlers = {
   marketIntelligenceCurve,
   marketReportCatalogue,
   marketReportAnalysis,
+  marketAssistant,
+  marketAssistantSettingsGet,
+  marketAssistantSettingsSave,
   marketIntelligenceValuation,
   marketForwardFallbackSave,
   marketIntelligenceAlertRulesGet,
