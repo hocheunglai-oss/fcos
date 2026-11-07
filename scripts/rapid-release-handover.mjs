@@ -2,14 +2,36 @@ import { readFileSync, realpathSync } from 'node:fs';
 import { resolve, relative, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { auditHandover, applyHandover, performHandover, assertHandoverConnection } from './lib/rapid-release/handover.mjs';
+import { auditHandover, preflightHandoverProviders, applyHandover, performHandover, assertHandoverConnection } from './lib/rapid-release/handover.mjs';
 import { createDatabaseCredentialIntentStore } from './lib/rapid-release/database-intent.mjs';
 import { openPinnedDatabase } from './lib/rapid-release/database-connection.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+/** A lease belongs only to one awaited phase; it never spans a provider/build/
+ * browser wait, overlaps another phase, or retries an uncertain issuance. The
+ * caller supplies source-owned native factories, not serialized authority.
+ */
+export function createHandoverCoordinator({ openDatabase, createAdapter, plan }) {
+  if (typeof openDatabase !== 'function' || typeof createAdapter !== 'function') throw Error('HANDOVER_NATIVE_CONTEXT_FACTORY_REQUIRED');
+  let active = false;
+  return async (phase, work) => {
+    if (!['audit','prepare','abort','stage','finalize','activate'].includes(phase) || typeof work !== 'function' || active) throw Error('HANDOVER_NATIVE_CONTEXT_PHASE_REQUIRED');
+    active = true; let native;
+    try {
+      native = await openDatabase();
+      assertHandoverConnection(native?.connection);
+      const adapter = await createAdapter({ plan, ...native });
+      return await work({ ...native, adapter, github: adapter.github, vercel: adapter.vercel });
+    } finally {
+      try { if (native?.db) await native.db.end(); }
+      catch { throw Error('HANDOVER_DATABASE_CLOSE_UNCERTAIN'); }
+      finally { active = false; }
+    }
+  };
+}
 export async function handoverMain(argv, env = process.env) {
   const [command, ...args] = argv, options = {};
-  if (!['audit','prepare','abort','finalize','perform'].includes(command)) throw Error('HANDOVER_COMMAND_REQUIRED');
+  if (!['audit','prepare','abort','finalize','perform','activate'].includes(command)) throw Error('HANDOVER_COMMAND_REQUIRED');
   for (let index = 0; index < args.length; index += 2) {
     if (!['--adapter','--plan'].includes(args[index]) || options[args[index]] || !args[index + 1] || args[index + 1].startsWith('-')) throw Error('HANDOVER_ARGUMENT_INVALID');
     options[args[index]] = args[index + 1];
@@ -23,32 +45,40 @@ export async function handoverMain(argv, env = process.env) {
   const plan = options['--plan'] ? JSON.parse(readFileSync(resolve(options['--plan']), 'utf8')) : null;
   if (plan && git(['rev-parse','HEAD']) !== plan.controllerSha) throw Error('HANDOVER_CONTROLLER_SHA_MISMATCH');
   if (!env.FCOS_HANDOVER_DATABASE_CA || Boolean(env.FCOS_HANDOVER_DATABASE_URL) === Boolean(env.FCOS_RAPID_SUPABASE_ACCESS_TOKEN)) throw Error('HANDOVER_PRIVATE_TLS_CONNECTION_REQUIRED');
-  let db, connection;
+  const openDatabase = async () => {
   if (env.FCOS_RAPID_SUPABASE_ACCESS_TOKEN) {
     const credential={kind:'supabase_management',token:env.FCOS_RAPID_SUPABASE_ACCESS_TOKEN};
     const source={sha:git(['rev-parse','HEAD'])};
     const intentStore=await createDatabaseCredentialIntentStore({credential,directory:ROOT,source,purpose:'rapid_controller_handover'});
-    ({db,connection}=await openPinnedDatabase({credential,caFile:env.FCOS_HANDOVER_DATABASE_CA,intentStore}));
+    return openPinnedDatabase({credential,caFile:env.FCOS_HANDOVER_DATABASE_CA,intentStore});
   } else {
     const url = new URL(env.FCOS_HANDOVER_DATABASE_URL);
     if (url.protocol !== 'postgresql:' || url.search || url.hash) throw Error('HANDOVER_PRIVATE_TLS_CONNECTION_REQUIRED');
-    connection = { host:url.hostname,port:Number(url.port || 5432),database:url.pathname.slice(1),user:decodeURIComponent(url.username),
+    const connection = { host:url.hostname,port:Number(url.port || 5432),database:url.pathname.slice(1),user:decodeURIComponent(url.username),
       password:decodeURIComponent(url.password),ssl:{rejectUnauthorized:true,ca:readFileSync(env.FCOS_HANDOVER_DATABASE_CA,'utf8')} };
     assertHandoverConnection(connection);
-    const {Client}=await import('pg');db=new Client(connection);await db.connect();
+    const {Client}=await import('pg'), db=new Client(connection);
+    try { await db.connect(); return { db, connection }; }
+    catch (error) { await db.end(); throw error; }
   }
-  try {
+  };
     const module = await import(pathToFileURL(adapterPath).href);
-    const adapter = await module.createHandoverAdapter({ plan, db, connection });
-    const input = { plan, db, connection, github: adapter.github, vercel: adapter.vercel };
-    if (command === 'audit') return auditHandover(input);
-    if (command === 'perform') {
-      const result = await performHandover({ ...input, coordinator: { db, connection }, qualifyStage: adapter.qualifyStage, retireOldWriters: adapter.retireOldWriters });
-      if (typeof adapter.activate !== 'function') throw Error('HANDOVER_ACTIVATION_ADAPTER_REQUIRED');
-      await adapter.activate(result); return result;
+    const createAdapter = values => module.createHandoverAdapter({ ...values, env });
+    const withCoordinator = createHandoverCoordinator({ openDatabase, createAdapter, plan });
+    const adapter = await createAdapter({ plan }); // Native provider reads, no PG lease.
+    if (['perform','prepare','activate'].includes(command)) {
+      await preflightHandoverProviders({ plan, github: adapter.github, vercel: adapter.vercel });
     }
-    return applyHandover({ ...input, phase: command });
-  } finally { await db.end(); }
+    if (command === 'perform') {
+      const result = await performHandover({ plan, github: adapter.github, vercel: adapter.vercel, coordinator: { withCoordinator }, qualifyStage: adapter.qualifyStage, retireOldWriters: adapter.retireOldWriters });
+      await withCoordinator('activate', context => context.adapter.activate(result)); return result;
+    }
+    return withCoordinator(command, context => {
+      const input = { plan, ...context };
+      if (command === 'audit') return auditHandover(input);
+      if (command === 'activate') return context.adapter.activate();
+      return applyHandover({ ...input, phase: command });
+    });
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) handoverMain(process.argv.slice(2)).then(result => {
   console.log(JSON.stringify(result, null, 2));

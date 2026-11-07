@@ -174,6 +174,16 @@ async function externalAudit({ github, vercel }) {
     ...(subscribers.applicationInventory ? { applicationInventoryReportDigest: subscribers.applicationInventory.reportDigest } : {}), productionId: production.id, retired: Object.values(variables).every(value => value !== 'true')
     && Object.values(workflows).every(row => row.state === 'absent' || row.state.startsWith('disabled')), noRunning: Object.values(workflows).every(row => row.running.length === 0) };
 }
+// Native preflight before issuing a database credential. This never substitutes
+// for the fresh audit inside a leased/locked operation.
+export { externalAudit as auditHandoverProviders };
+export async function preflightHandoverProviders({ plan, github, vercel }) {
+  const scoped = Object.assign(Object.create(github), { activeHandover: () => github.activeHandover({ pendingPlan: plan }) });
+  const audit = await externalAudit({ github: scoped, vercel });
+  check(audit.noRunning && audit.productionId === plan.previousProductionId, 'HANDOVER_OLD_WRITER_RUNNING_OR_PRODUCTION_MOVED');
+  check(audit.rapidJournal.unresolvedProduction === 0, 'HANDOVER_RAPID_OPERATION_OR_JOURNAL_CHANGED');
+  return audit;
+}
 export async function auditHandover({ db, connection, github, vercel }) {
   assertHandoverConnection(connection);
   return { database: await transaction(db, connection, true, () => snapshot(db)), providers: await externalAudit({ github, vercel }) };
@@ -347,17 +357,80 @@ export async function applyHandover({ phase, plan, db, connection, github, verce
   return { phase, planHash, deploymentId: observed.id };
 }
 
-/** One protected setup job: reversible freeze → stage only → retire/read back old writers → finalize. */
+/** Read an already committed final outcome. Absence of its GitHub acknowledgement
+ * is uncertainty, never permission to publish again. The original protected
+ * qualification/review remains in the native receipt; the current protected job
+ * must independently authorize the exact plan before activation can continue.
+ */
+export async function readFinalizedHandover({ plan, db, connection, github, vercel }) {
+  check(plan?.kind === 'fcos_rapid_handover_plan' && canonical(plan.pins) === canonical(handoverPins())
+    && sha(plan.controllerSha) && plan.financialAuthority === false, 'HANDOVER_PLAN_TARGET_MISMATCH');
+  const planHash = handoverDigest(plan);
+  const exists = await transaction(db, connection, true, async () => {
+    if (!(await db.query("select to_regclass('fcos_release_coordination.rapid_handover_receipts')::text as name")).rows[0].name) return false;
+    return (await db.query("select receipt_id from fcos_release_coordination.rapid_handover_receipts where handover_id=$1 and phase='finalized'", [plan.handoverId])).rows.length > 0;
+  });
+  if (!exists) return null;
+  if (plan.applicationInventoryReport) validateAdministratorApplicationInventory(plan.applicationInventoryReport);
+  const admission = await freshBootstrapAdmission(github, plan);
+  await nativeReview(github, plan, 'activate');
+  const external = await externalAudit({ github: Object.assign(Object.create(github), {
+    activeHandover: () => github.activeHandover({ pendingPlan: plan }),
+  }), vercel });
+  const native = await github.findDeployment({ planHash, kind: 'fcos_rapid_release_handover' });
+  check(native && Number.isSafeInteger(native.id), 'HANDOVER_GITHUB_OUTCOME_RECONCILIATION_REQUIRED');
+  const result = await transaction(db, connection, false, async () => {
+    const state = await snapshot(db, true);
+    if (plan.bootstrap) {
+      assertNativeBootstrapAdmission(admission, { controllerSha: plan.controllerSha, reference: plan.bootstrap.reference });
+      if (plan.bootstrap.reference.schemaVersion === 2) await verifyLockedBootstrapSuccessor({ db, github, bootstrapPlan: plan.bootstrap.plan, controllerSha: plan.controllerSha, reference: plan.bootstrap.reference });
+      else await verifyLockedBootstrap({ db, bootstrapPlan: plan.bootstrap.plan, controllerSha: plan.controllerSha, reference: plan.bootstrap.reference });
+    }
+    const receipt = assertHandoverActivation({ plan, audit: { database: state, providers: external }, deploymentId: native.id });
+    const finalized = state.receipts.find(row => Number(row.receipt_id) === receipt.databaseReceiptId), p = native.payload;
+    check(native.creator?.login === plan.pins.account && native.sha === plan.controllerSha && native.environment === 'fcos-rapid-handover'
+      && p?.kind === 'fcos_rapid_release_handover' && p.attestationContract === 'fcos-owner-recorded-handover/v1'
+      && canonical(p.plan) === canonical(plan) && p.planHash === planHash && p.handoverId === plan.handoverId
+      && p.controllerSha === plan.controllerSha && p.candidateSha === plan.candidateSha && p.buildId === plan.buildId && p.artifactDigest === plan.artifactDigest
+      && p.repository === plan.pins.repository && p.projectId === plan.pins.projectId && p.teamId === plan.pins.teamId
+      && p.databaseReceiptId === receipt.databaseReceiptId && p.nativeCoordinatorReadbackDigest === receipt.evidenceDigest
+      && canonical(p.nativeReview) === canonical(finalized.evidence.review) && p.qualificationRunId === finalized.evidence.review.runId
+      && p.qualificationDigest === finalized.evidence.qualificationDigest && digest(p.qualificationDigest)
+      && p.qualificationPublisher?.account === plan.pins.account && p.qualificationPublisher.method === 'protected_controller_api'
+      && p.finalApprovalEnvironment === 'fcos-production-release' && p.unresolvedProductionOperations === 0
+      && p.oldWritersRetired === true && p.hostedQualificationPassed === true && p.eventSubscribersReviewed === true,
+    'HANDOVER_EXISTING_RECEIPT_BINDING_INVALID');
+    return { phase: 'finalize', planHash, deploymentId: native.id, reused: true };
+  });
+  const staged = await vercel.deployment(native.payload.qualificationDeploymentId);
+  check(staged?.id === native.payload.qualificationDeploymentId && staged.readyState === 'READY' && staged.target === 'production'
+    && staged.projectId === plan.pins.projectId && staged.ownerId === plan.pins.teamId && staged.aliasAssigned === false
+    && staged.meta?.githubCommitSha === plan.candidateSha && staged.meta.fcosRapidBuildId === plan.buildId
+    && staged.meta.fcosRapidArtifactDigest === plan.artifactDigest && staged.meta.fcosHandoverPlanHash === planHash,
+  'HANDOVER_REAL_STAGED_QUALIFICATION_REQUIRED');
+  return result;
+}
+
+/** One protected setup job. withCoordinator(phase, work) owns a fresh native
+ * context for the entire short work callback and closes it in finally. No
+ * database context or transaction is retained across stage/browser waits.
+ * A fixed coordinator remains supported for callers owning its native lifetime.
+ */
 export async function performHandover({ plan, github, coordinator, qualifyStage, retireOldWriters, vercel }) {
   check(typeof qualifyStage === 'function' && typeof retireOldWriters === 'function', 'HANDOVER_NATIVE_SETUP_CALLBACKS_REQUIRED');
   const input = { plan, github, vercel, db: coordinator?.db, connection: coordinator?.connection };
-  await applyHandover({ ...input, phase: 'prepare' });
+  const scoped = (phase, work) => typeof coordinator?.withCoordinator === 'function'
+    ? coordinator.withCoordinator(phase, context => work({ ...context, plan })) : work(input);
+  const initial = await scoped('prepare', async context => await readFinalizedHandover(context)
+    || applyHandover({ ...context, phase: 'prepare' }));
+  if (initial.phase === 'finalize') return initial;
   const planHash = handoverDigest(plan);
   const ownershipVerifier = async ({ phase }) => {
     check(phase === 'stage', 'HANDOVER_SETUP_CANNOT_PROMOTE_OR_ROLLBACK');
-    await freshBootstrapAdmission(github, plan);
-    const review = await nativeReview(github, plan, 'qualify');
-    const fresh = await auditHandover(input), own = fresh.database.receipts.find(row => row.handover_id === plan.handoverId && row.phase === 'prepared' && row.plan_hash === planHash);
+    return scoped('stage', async context => {
+    await freshBootstrapAdmission(context.github, plan);
+    const review = await nativeReview(context.github, plan, 'qualify');
+    const fresh = await auditHandover(context), own = fresh.database.receipts.find(row => row.handover_id === plan.handoverId && row.phase === 'prepared' && row.plan_hash === planHash);
     check(own && !fresh.database.receipts.some(row => row.handover_id === plan.handoverId && ['aborted','finalized'].includes(row.phase))
       && fresh.database.control.mode === 'frozen' && fresh.database.guard?.digest === own.evidence.guardDigest
       && !fresh.database.unresolvedProduction.length && fresh.database.historyDigest === plan.historyDigest
@@ -365,10 +438,11 @@ export async function performHandover({ plan, github, coordinator, qualifyStage,
     assertParentState(fresh.database, fresh.providers, plan);
     check(fresh.providers.rapidJournal.unresolvedProduction === 0 && canonical(fresh.providers.rapidJournal) === canonical(plan.rapidJournal), 'HANDOVER_RAPID_OPERATION_OR_JOURNAL_CHANGED');
     return review;
+    });
   };
   const review = await ownershipVerifier({ phase: 'stage' });
   const qualification = await qualifyStage({ plan, planHash, nativeReview: review, ownershipVerifier });
   // The callback is trusted controller code operating the real staged build/browser, not a file reader.
   await retireOldWriters({ plan, planHash, nativeReview: review });
-  return applyHandover({ ...input, phase: 'finalize', github: Object.assign(Object.create(github), { qualification: async () => qualification }) });
+  return scoped('finalize', context => applyHandover({ ...context, phase: 'finalize', github: Object.assign(Object.create(context.github), { qualification: async () => qualification }) }));
 }
