@@ -78,7 +78,9 @@ async function loadSupabaseUser() {
     }
     throw new Error(message);
   }
-  if (!data?.user) throw new Error('Unable to verify your account.');
+  if (!data?.user || data.user.id !== sessionData.session.user?.id || data.user.active !== true) {
+    throw new Error('Your FCOS session could not be verified. Please sign in again.');
+  }
   return {
     user: data.user,
     access: data.moduleAccess || {},
