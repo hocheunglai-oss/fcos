@@ -1,4 +1,5 @@
 import * as documents from '../src/lib/pageMethodologies.js';
+import { PAGE_METHODOLOGIES } from '../src/hedge/lib/methodology.js';
 import { XERO_PORTAL_MANUALS } from '../src/lib/xeroPortalManual.js';
 import { mkdir, writeFile } from 'node:fs/promises';
 
@@ -13,6 +14,19 @@ for (const [name, value] of Object.entries(documents)) {
   const summary = value.title ? descriptor(value, name) : Object.fromEntries(Object.entries(value).map(([key, document]) => [key, descriptor(document, `${name}:${key}`)]));
   index += `\nexport const ${name} = ${JSON.stringify(summary, null, 2).replaceAll('"contentKey":', 'contentUrl, "contentKey":')};\n`;
 }
+const hedgeTitles = Object.keys(PAGE_METHODOLOGIES);
+for (const [title, methodology] of Object.entries(PAGE_METHODOLOGIES)) {
+  contents[`hedge:${title}`] = {
+    sections: [
+      { title: 'Purpose', body: methodology.summary },
+      { title: 'Calculation and control rules', points: methodology.steps },
+    ],
+    sources: methodology.sources || [],
+  };
+}
+index += `\nexport const HEDGE_METHODOLOGY_TITLES = ${JSON.stringify(hedgeTitles)};\n`;
+index += 'export const HEDGE_METHODOLOGY_URL = contentUrl;\n';
+
 await mkdir(new URL('../src/content/', import.meta.url), { recursive: true });
 await writeFile(new URL('../src/content/page-methodologies.json', import.meta.url), JSON.stringify(contents));
 await writeFile(new URL('../src/lib/pageMethodologyIndex.js', import.meta.url), index);
