@@ -1,3 +1,5 @@
+import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
+
 function nonBlank(value) {
   return String(value || '').trim();
 }
@@ -10,16 +12,24 @@ export function serverSupabaseConfig(env = process.env) {
   const legacyServiceRoleKey = nonBlank(env.SUPABASE_SERVICE_ROLE_KEY);
   const url = canonicalUrl || legacyBrowserUrl;
   const key = secretKey || legacyServiceRoleKey;
+  const projectRef = fcosConnectionIdentifier('supabase', 'Project ref');
+  const expectedUrl = `https://${projectRef}.supabase.co`;
+  let targetValid = false;
+  try {
+    targetValid = new URL(url).href === `${expectedUrl}/`;
+  } catch { /* Missing or invalid configuration stays unavailable. */ }
 
   return {
     url,
-    key,
-    configured: Boolean(url && key),
+    key: targetValid ? key : '',
+    configured: Boolean(targetValid && key),
+    targetValid,
     urlEnv: canonicalUrl ? 'SUPABASE_URL' : legacyBrowserUrl ? 'VITE_SUPABASE_URL' : null,
     keyEnv: secretKey ? 'SUPABASE_SECRET_KEY' : legacyServiceRoleKey ? 'SUPABASE_SERVICE_ROLE_KEY' : null,
     keyType: secretKey ? 'secret' : legacyServiceRoleKey ? 'legacy_service_role' : null,
     missingEnv: [
       ...(!url ? ['SUPABASE_URL or VITE_SUPABASE_URL'] : []),
+      ...(url && !targetValid ? ['approved FCOS Supabase project URL'] : []),
       ...(!key ? ['SUPABASE_SECRET_KEY or SUPABASE_SERVICE_ROLE_KEY'] : []),
     ],
   };

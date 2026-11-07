@@ -21,7 +21,7 @@ test('executed AuthProvider rejects late auth after logout and after a newer acc
   };
   let authEvent;
   const supabase = { auth: {
-    getSession: async () => ({ data: { session: { user: { id: 'subject' } } } }),
+    getSession: async () => ({ data: { session: { user: { id: 'user-b' } } } }),
     signOut: async () => { authEvent?.('SIGNED_OUT', null); },
     onAuthStateChange: (fn) => { authEvent = fn; return { data: { subscription: { unsubscribe() {} } } }; },
   } };
@@ -49,7 +49,7 @@ test('executed AuthProvider rejects late auth after logout and after a newer acc
   await Promise.resolve();
   const newest = auth.checkUserAuth();
   await Promise.resolve();
-  pending[1]({ data: { user: { id: 'user-b' }, moduleAccess: { dashboard: true } } });
+  pending[1]({ data: { user: { id: 'user-b', active: true }, moduleAccess: { dashboard: true } } });
   await newest;
   pending[0]({ data: { user: { id: 'user-a' }, moduleAccess: { admin: true } } });
   assert.equal((await old).stale, true);
@@ -81,5 +81,11 @@ test('executed AuthProvider rejects late auth after logout and after a newer acc
   assert.equal(states[7], false);
   assert.equal(states[9].type, 'user_inactive');
   assert.equal(states[0], null);
+  const mismatched = auth.checkUserAuth();
+  await Promise.resolve();
+  pending[4]({ data: { user: { id: 'different-account', active: true }, moduleAccess: { admin: true } } });
+  assert.equal((await mismatched).user, null);
+  assert.equal(states[0], null);
+  assert.equal(clientSessionState().ownerId, null);
   delete globalThis.__authHarness;
 });
