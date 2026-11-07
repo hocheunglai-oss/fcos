@@ -1,5 +1,7 @@
+import { withDeploymentRequestSafety } from './_deploymentReadOnly.js';
 import { waitUntil } from '@vercel/functions';
 import { emailRouterWebhookHandler } from './_emailRouterHandlers.js';
+import { requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
 
 async function body(req) {
   if (req.body && typeof req.body === 'object') return req.body;
@@ -9,7 +11,7 @@ async function body(req) {
   return chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {};
 }
 
-export default async function handler(req, res) {
+async function handler(req, res) {
   const url = new URL(req.url, 'http://localhost');
   const validationToken = url.searchParams.get('validationToken');
   if (validationToken) {
@@ -23,6 +25,7 @@ export default async function handler(req, res) {
     return res.end();
   }
   try {
+    requireDeploymentMutationAllowed(true);
     const result = await emailRouterWebhookHandler(req, await body(req), { defer: waitUntil });
     res.statusCode = 202;
     res.setHeader('content-type', 'application/json; charset=utf-8');
@@ -30,6 +33,11 @@ export default async function handler(req, res) {
   } catch (error) {
     res.statusCode = error.status || error.statusCode || 500;
     res.setHeader('content-type', 'application/json; charset=utf-8');
-    return res.end(JSON.stringify({ error: error.message || 'Webhook request failed.' }));
+    return res.end(JSON.stringify({
+      error: error.message || 'Webhook request failed.',
+      code: String(error.code || 'EMAIL_ROUTER_WEBHOOK_FAILED').replace(/[^A-Z0-9_]/gi, '_').toUpperCase(),
+    }));
   }
 }
+
+export default withDeploymentRequestSafety(handler);

@@ -23,6 +23,10 @@ case "$1" in
     ;;
   config) printf '%s\\n' hocheunglai-oss ;;
   remote) printf '%s\\n' https://github.com/hocheunglai-oss/fcos.git ;;
+  ls-remote) printf '%s\\trefs/heads/main\\n' "$MOCK_MAIN_SHA" ;;
+  cat-file) while read -r object; do printf '%s commit\\n' "$object"; done ;;
+  rev-list) printf '%s\\n' "$MOCK_LOCAL_SHA" ;;
+  diff-tree) printf '%s\\n' "$MOCK_CHANGED_PATHS" ;;
   merge-base) printf '%s\\n' "$MOCK_BASE_SHA" ;;
   diff) printf '%s\\n' "$MOCK_CHANGED_PATHS" ;;
   ls-tree) printf '%s\\n' "$MOCK_TREE_PATHS" ;;
@@ -59,7 +63,7 @@ async function runHook(t, { account = 'hocheunglai-oss', changedPaths = 'src/App
   t.after(() => rm(root, { recursive: true, force: true }));
   const result = spawnSync('sh', [hook.pathname, 'origin', 'https://github.com/hocheunglai-oss/fcos.git'], {
     cwd: repo,
-    input: `refs/heads/topic ${LOCAL_SHA} refs/heads/topic ${ZERO_SHA}\\n`,
+    input: `refs/heads/topic ${LOCAL_SHA} refs/heads/topic ${ZERO_SHA}\n`,
     encoding: 'utf8',
     env: {
       PATH: `${bin}:${process.env.PATH}`,
@@ -68,6 +72,7 @@ async function runHook(t, { account = 'hocheunglai-oss', changedPaths = 'src/App
       MOCK_REPO_ROOT: repo,
       MOCK_HAS_ORIGIN_MAIN: '1',
       MOCK_MAIN_SHA: MAIN_SHA,
+      MOCK_LOCAL_SHA: LOCAL_SHA,
       MOCK_BASE_SHA: BASE_SHA,
       MOCK_TREE_PATHS: 'force-app/main/default/classes/should-not-be-used.cls',
       MOCK_CHANGED_PATHS: changedPaths,

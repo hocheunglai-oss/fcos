@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { join, relative, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmpdir } from 'node:os';
 
 export const SOURCE_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 export const FIXTURE_ROOT = join(SOURCE_ROOT, 'tests/fixtures/runtime-compatibility-successor-integration');
@@ -22,6 +23,111 @@ function regularFile(root, path) {
   }
   return fs.readFileSync(join(root, path));
 }
+export const cleanGitEnvironment = () => ({ PATH: process.env.PATH,
+  GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0' });
+
+// Explicitly reviewed installation controls may advance while these tests keep
+// their historical control source. Both current and retained bytes are pinned;
+// arbitrary current drift cannot silently fall back to an old control version.
+const installationManifestBytes = regularFile(FIXTURE_ROOT, 'installation-controls-v1.json');
+assert.equal(hash(installationManifestBytes), '264a4d0e71fbee494b1e610fa2517a443c9f073501efd23fa848d8305e0c5030', 'Installation control supplement differs.');
+export const installationControls = JSON.parse(installationManifestBytes);
+assert.equal(installationControls.schemaVersion, 1);
+assert.equal(installationControls.retainedCommit, '5d00d3983f6b8aa0beade88e98faf24ae90dc8e4');
+assert.deepEqual(installationControls.sources.map(row => row.path), [
+  '.codex/README.md', '.codex/config.toml', '.codex/control-policy.json', '.codex/control-validation.mjs',
+  '.github/workflows/quality.yml', 'AGENTS.md', 'package.json', 'vercel.json',
+]);
+assert.equal(installationControls.pack.count, 8);
+// Append-only adaptation of the one already-bound config path changed by the
+// reviewed staging repair. This cannot substitute for current runtime checks.
+export const installationV2ManifestBytes = regularFile(FIXTURE_ROOT, 'installation-controls-v2.json');
+export function validateInstallationControlsV2(bytes, packBytes) {
+  assert.equal(hash(bytes), 'b36acc281436bc2d46c66d5c6f14a587c22525f41e4cc8af4243aa69757d13b2', 'Installation v2 supplement differs.');
+  const value = JSON.parse(bytes);
+  assert.equal(value.schemaVersion, 2);
+  assert.equal(value.previousSupplementSha256, hash(installationManifestBytes));
+  assert.equal(value.retainedCommit, installationControls.retainedCommit);
+  assert.equal(value.reviewedCurrentCommit, 'f72f619d80a91cc4de9020e9eaec7d1624aa66e9');
+  assert.equal(value.sourceBindingsSha256, BINDINGS_HASH);
+  assert.deepEqual(value.sources.map(row => row.path), ['config/fcosConnections.js']);
+  assert.equal(value.pack.path, 'installation-controls-v2.pack');
+  assert.equal(value.pack.count, 1);
+  assert.equal(packBytes.length, value.pack.byteLength, 'Installation v2 pack length differs.');
+  assert.equal(hash(packBytes), value.pack.sha256, 'Installation v2 pack differs.');
+  value.sources.forEach(Object.freeze); Object.freeze(value.sources); Object.freeze(value.pack);
+  return Object.freeze(value);
+}
+export const installationControlsV2 = validateInstallationControlsV2(installationV2ManifestBytes,
+  regularFile(FIXTURE_ROOT, 'installation-controls-v2.pack'));
+// Current-only pin extension. Historical v1/v2 bytes and packed objects are
+// unchanged; the dedicated reader identity cannot replace a retained input.
+const installationV3Bytes = regularFile(FIXTURE_ROOT, 'installation-control-current-v3.json');
+assert.equal(hash(installationV3Bytes), '8be9fc10bf3c5826d03c69471888d65c6a4f1bd9a64705a56bec5e4b45e79788');
+const installationV3 = Object.freeze(JSON.parse(installationV3Bytes));
+assert.equal(installationV3.schemaVersion, 3);
+assert.equal(installationV3.previousSupplementSha256, hash(installationV2ManifestBytes));
+assert.equal(installationV3.path, 'config/fcosConnections.js');
+assert.equal(installationV3.retainedSource, 'installation-controls-v2.json');
+// Advance only the reviewed current AGENTS bytes; every historical carrier stays fixed.
+const installationV4Bytes = regularFile(FIXTURE_ROOT, 'installation-control-current-v4.json');
+assert.equal(hash(installationV4Bytes), 'af4ce6e053b3eef89756315fddaa43708ef2f98fc4fedd8fe1178c200a1370a1');
+export const installationCurrentV4 = Object.freeze(JSON.parse(installationV4Bytes));
+assert.equal(installationCurrentV4.schemaVersion, 4);
+assert.equal(installationCurrentV4.previousSupplementSha256, hash(installationV3Bytes));
+assert.equal(installationCurrentV4.reviewedCurrentCommit, '031aeea1344ec77a8d1f21d7726facbb4e6f6835');
+assert.equal(installationCurrentV4.path, 'AGENTS.md');
+assert.equal(installationCurrentV4.retainedSource, 'installation-controls-v1.json');
+const retainedControls = new Map();
+function retainedControlBodies(controls = installationControls) {
+  if (retainedControls.has(controls)) return retainedControls.get(controls);
+  const pack = regularFile(FIXTURE_ROOT, controls.pack.path);
+  assert.equal(pack.length, controls.pack.byteLength); assert.equal(hash(pack), controls.pack.sha256);
+  const temporary = fs.mkdtempSync(join(tmpdir(), 'fcos-legacy-installation-controls-'));
+  const git = (args, input) => execFileSync('git', ['--no-replace-objects', ...args], { cwd: temporary, input,
+    env: cleanGitEnvironment(), maxBuffer: 2 * 1024 * 1024, stdio: ['pipe','pipe','pipe'] });
+  try {
+    git(['-c', 'init.templateDir=', 'init', '--bare', '--quiet']);
+    git(['index-pack', '--stdin'], pack);
+    const objects = git(['cat-file','--batch-all-objects','--batch-check=%(objectname)']).toString().trim().split('\n').sort();
+    assert.deepEqual(objects, controls.sources.map(row => row.oid).sort(), 'Exact retained control objects required.');
+    const batch = git(['cat-file','--batch'], Buffer.from(controls.sources.map(row => row.oid).join('\n') + '\n'));
+    let offset = 0; const result = new Map();
+    for (const row of controls.sources) {
+      const end = batch.indexOf(10, offset); assert.ok(end > offset);
+      assert.equal(row.type, 'blob'); assert.equal(batch.subarray(offset,end).toString(), `${row.oid} blob ${row.byteLength}`);
+      const body = batch.subarray(end + 1, end + 1 + row.byteLength);
+      assert.equal(body.length,row.byteLength); assert.equal(hash(body),row.sha256);
+      assert.equal(createHash('sha1').update(`blob ${body.length}\0`).update(body).digest('hex'), row.oid);
+      result.set(row.path, Buffer.from(body)); offset = end + 1 + row.byteLength; assert.equal(batch[offset++],10);
+    }
+    assert.equal(offset,batch.length); retainedControls.set(controls,result); return result;
+  } finally { fs.rmSync(temporary, { recursive:true, force:true }); }
+}
+const installationCurrentV2Carrier = {
+  pack: {path:'installation-current-v2.pack',byteLength:6289,sha256:'03b9310714f9a4aef370600d7fa0e9690e80f20791e30462cb043db964de358b'},
+  sources: installationControlsV2.sources.map(entry=>({path:entry.path,type:'blob',oid:entry.currentOid,byteLength:entry.currentByteLength,sha256:entry.currentSha256})),
+};
+export function installationCurrentV2Body() {
+  return Buffer.from(retainedControlBodies(installationCurrentV2Carrier).get('config/fcosConnections.js'));
+}
+export function installationControlSource(path, current) {
+  const controls = installationControlsV2.sources.some(row => row.path === path) ? installationControlsV2 : installationControls;
+  const entry = controls.sources.find(row => row.path === path);
+  if (!entry || hash(current) === entry.sha256) { assertBoundSource(path,current); return current; }
+  const currentPin = controls === installationControlsV2 && path === installationV3.path && hash(current) === installationV3.currentSha256
+    ? installationV3 : controls === installationControls && path === installationCurrentV4.path && hash(current) === installationCurrentV4.currentSha256
+      ? installationCurrentV4 : entry;
+  assert.equal(hash(current),currentPin.currentSha256, `Unreviewed current installation control: ${path}`);
+  if (controls === installationControlsV2 || currentPin === installationCurrentV4) {
+    assert.equal(current.length,currentPin.currentByteLength, `Current installation length differs: ${path}`);
+    assert.equal(createHash('sha1').update(`blob ${current.length}\0`).update(current).digest('hex'),currentPin.currentOid);
+  }
+  const retained = retainedControlBodies(controls).get(path); assertBoundSource(path,retained);
+  return Buffer.from(retained);
+}
+function boundSourceFile(path) { return installationControlSource(path,regularFile(SOURCE_ROOT,path)); }
+
 const historicalManifestBytes = regularFile(FIXTURE_ROOT, 'fixture-manifest-v2.json');
 assert.equal(hash(historicalManifestBytes), '91e8ba3fdacb7cd03a2bed574248920a2d6416aa043c4e5daafd7a5f5ac53257', 'Historical public manifest differs.');
 const historicalManifest = JSON.parse(historicalManifestBytes);
@@ -111,7 +217,7 @@ export function assertBoundSource(path, bytes) {
   assert.equal(hash(bytes), row.sha256, `Bound source hash differs: ${path}`);
 }
 export function validateSourceBindings() {
-  for (const row of rows.values()) assertBoundSource(row.path, regularFile(SOURCE_ROOT, row.path));
+  for (const row of rows.values()) assertBoundSource(row.path, boundSourceFile(row.path));
 }
 export function validatePublicManifest(bytes) {
   assert.equal(hash(bytes), MANIFEST_HASH, 'Immutable public manifest differs.');
@@ -127,7 +233,7 @@ export function validatePublicManifest(bytes) {
   assert.equal(manifest.pack.sha256, PACK_HASH);
   for (const member of manifest.members) {
     const path = member.path.startsWith('checkout/') ? member.path.slice('checkout/'.length) : member.path;
-    const bytes = regularFile(member.path.startsWith('checkout/') ? SOURCE_ROOT : FIXTURE_ROOT, path);
+    const bytes = member.path.startsWith('checkout/') ? boundSourceFile(path) : regularFile(FIXTURE_ROOT, path);
     assert.equal(bytes.length, member.byteLength, `Public member length differs: ${path}`);
     assert.equal(hash(bytes), member.sha256, `Public member hash differs: ${path}`);
   }
@@ -183,17 +289,16 @@ export const manifest = validatePublicManifest(manifestBytes);
 export const pack = regularFile(FIXTURE_ROOT, 'objects-v2.pack');
 assert.equal(pack.length, 552150); assert.equal(hash(pack), PACK_HASH);
 // Run before any test body or module evaluation. All source is the actual
-// repository source; no historical checkout/module copies are versioned here.
+// repository source, with only the exact reviewed retained control supplements.
+// They are offline fixture inputs, never authority for the executing harness.
 validateSourceBindings();
 export function copyBoundSource(targetRoot, path, targetPath = path) {
-  const bytes = regularFile(SOURCE_ROOT, path); assertBoundSource(path, bytes);
+  const bytes = boundSourceFile(path); assertBoundSource(path, bytes);
   const destination = join(targetRoot, targetPath);
   assert.ok(!relative(targetRoot, destination).startsWith('..'), 'Temporary copy escaped fixture root.');
   fs.mkdirSync(dirname(destination), { recursive: true });
   fs.writeFileSync(destination, bytes);
 }
-export const cleanGitEnvironment = () => ({ PATH: process.env.PATH,
-  GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0' });
 
 const CONTROL_MANIFEST_HASH = '635b20628f0e43f9ded35b6a64dbfed7610b17454302288dd29927a3cd9da7fc';
 export const controlManifestBytes = regularFile(FIXTURE_ROOT, 'control-objects-v1.json');

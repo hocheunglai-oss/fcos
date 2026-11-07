@@ -1,0 +1,133 @@
+name: FCOS rapid handover
+run-name: FCOS rapid handover ${{ inputs.plan_hash }} ${{ inputs.candidate_sha }}
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Exact staged application SHA
+        required: true
+        type: string
+      plan_json:
+        description: Reviewed non-secret native handover plan
+        required: true
+        type: string
+      plan_hash:
+        description: Canonical SHA256 of the reviewed handover plan
+        required: true
+        type: string
+      manifest_hash:
+        description: Canonical SHA256 of the qualified release manifest
+        required: true
+        type: string
+      build_run_id:
+        description: Successful credential-free qualification run retaining the exact artifact
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: fcos-production-release
+  cancel-in-progress: false
+  queue: max
+jobs:
+  handover-apply:
+    name: handover-apply
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    environment: fcos-production-release
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      deployments: write
+    steps:
+      - name: Admit the qualified installed controller before checkout
+        id: admit-controller
+        uses: actions/github-script@v7
+        env:
+          PLAN_JSON: ${{ inputs.plan_json }}
+          PLAN_HASH: ${{ inputs.plan_hash }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        with:
+          script: |
+            const {createHash}=require('node:crypto');
+            const canonical=value=>JSON.stringify(value,(_,item)=>item&&typeof item==='object'&&!Array.isArray(item)?Object.fromEntries(Object.entries(item).sort()):item);
+            const plan=JSON.parse(process.env.PLAN_JSON),sha=plan.controllerSha;
+            const check=value=>{if(!value)throw Error('QUALIFIED_INSTALLED_HANDOVER_CONTROLLER_REQUIRED');};
+            check(/^[a-f0-9]{40}$/.test(sha||'')&&plan.candidateSha===process.env.CANDIDATE_SHA
+              &&createHash('sha256').update(canonical(plan)).digest('hex')===process.env.PLAN_HASH);
+            const {owner,repo}=context.repo;
+            check(owner==='hocheunglai-oss'&&repo==='fcos'&&context.actor===owner);
+            const {data:repository}=await github.rest.repos.get({owner,repo});
+            const {data:branch}=await github.rest.repos.getBranch({owner,repo,branch:repository.default_branch});
+            check(branch.protected===true&&branch.commit.sha===context.sha);
+            const {data:comparison}=await github.rest.repos.compareCommits({owner,repo,base:sha,head:context.sha});
+            check(['identical','ahead'].includes(comparison.status));
+            for(const path of ['.github/workflows/fcos-rapid-handover.yml','.github/workflows/fcos-rapid-release.yml']){
+              const [{data:frozen},{data:current}]=await Promise.all([sha,context.sha].map(ref=>github.rest.repos.getContent({owner,repo,path,ref})));
+              check(frozen.type==='file'&&current.type==='file'&&frozen.sha===current.sha);
+            }
+            const {data:checks}=await github.rest.checks.listForRef({owner,repo,ref:sha,check_name:'code-and-database',filter:'latest',per_page:100});
+            const quality=checks.check_runs.filter(row=>row.head_sha===sha&&row.name==='code-and-database'&&row.app?.id===15368).sort((a,b)=>b.id-a.id)[0];
+            check(checks.total_count<=100&&quality?.status==='completed'&&quality.conclusion==='success');
+            core.setOutput('controller_sha',sha);
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ steps.admit-controller.outputs.controller_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm install --global vercel@54.20.1 --ignore-scripts --no-audit --no-fund
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.build_run_id }}
+          name: rapid-build-${{ inputs.build_run_id }}
+          path: artifact
+      - name: Verify frozen plan and artifact before credentials
+        env:
+          PLAN_JSON: ${{ inputs.plan_json }}
+          PLAN_HASH: ${{ inputs.plan_hash }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import {handoverDigest} from './scripts/lib/rapid-release/handover.mjs';
+          import {requireCondition} from './scripts/lib/rapid-release/contract.mjs';
+          const plan=JSON.parse(process.env.PLAN_JSON);
+          requireCondition(handoverDigest(plan)===process.env.PLAN_HASH && plan.candidateSha===process.env.CANDIDATE_SHA,'HANDOVER_SOURCE_BINDING');
+          fs.writeFileSync('handover-plan.json',JSON.stringify(plan));
+          NODE
+          node scripts/rapid-release-artifact.mjs artifact
+      - run: npx --no-install playwright install --with-deps chromium
+      - name: Freeze old controller, qualify stage, retire writers and finalize
+        run: |
+          node --input-type=module -e 'import fs from "node:fs";fs.writeFileSync(process.env.FCOS_HANDOVER_DATABASE_CA,process.env.HANDOVER_CA,{mode:0o600})'
+          node scripts/rapid-release-handover.mjs perform --plan handover-plan.json --adapter scripts/lib/rapid-release/handover-adapter.mjs
+        env:
+          FCOS_RAPID_HANDOVER_GITHUB_TOKEN: ${{ secrets.FCOS_RAPID_HANDOVER_GITHUB_TOKEN || secrets.FCOS_RELEASE_GH_TOKEN }}
+          FCOS_HANDOVER_DATABASE_URL: ${{ secrets.FCOS_RAPID_HANDOVER_DATABASE_URL }}
+          FCOS_RAPID_SUPABASE_ACCESS_TOKEN: ${{ secrets.FCOS_RAPID_SUPABASE_ACCESS_TOKEN }}
+          FCOS_HANDOVER_DATABASE_CA: ${{ runner.temp }}/rapid-database-ca.pem
+          HANDOVER_CA: ${{ secrets.FCOS_RAPID_DATABASE_CA }}
+          FCOS_HANDOVER_ARTIFACT_DIRECTORY: artifact
+          FCOS_HANDOVER_BUILD_RUN_ID: ${{ inputs.build_run_id }}
+          FCOS_HANDOVER_MANIFEST_HASH: ${{ inputs.manifest_hash }}
+          VERCEL_TOKEN: ${{ secrets.FCOS_RELEASE_VERCEL_TOKEN }}
+          FCOS_AUTH_E2E_ENABLED: 'true'
+          FCOS_E2E_VERCEL_BYPASS: ${{ secrets.FCOS_E2E_VERCEL_BYPASS }}
+          FCOS_E2E_EMAIL: ${{ secrets.FCOS_E2E_EMAIL }}
+          FCOS_E2E_PASSWORD: ${{ secrets.FCOS_E2E_PASSWORD }}
+          FCOS_RAPID_NORMAL_EMAIL: ${{ secrets.FCOS_HOSTED_NORMAL_EMAIL }}
+          FCOS_RAPID_NORMAL_PASSWORD: ${{ secrets.FCOS_HOSTED_NORMAL_PASSWORD }}
+          FCOS_NORMAL_ROLE_APPROVED_EMAIL: ${{ vars.FCOS_NORMAL_ROLE_APPROVED_EMAIL }}
+          FCOS_HOSTED_NORMAL_EXPECTED_ROLE: ${{ vars.FCOS_HOSTED_NORMAL_EXPECTED_ROLE }}
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rapid-handover-summary-${{ github.run_id }}
+          path: handover-result.json
+          if-no-files-found: ignore

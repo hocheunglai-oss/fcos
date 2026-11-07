@@ -1,0 +1,251 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Only reproduced, verified, version-bound operational repairs belong here. No credentials, business records, commands from provider logs, or grants of authority.",
+  "recipes": [],
+  "observations": [
+    {
+      "id": "canonical-cron-fixture-scope",
+      "cause": "Direct reminder fixtures omitted the request scope now required on hosted workers.",
+      "correction": "Model canonical cron request in fixtures; retain fail-closed unscoped worker.",
+      "verification": {
+        "command": "node --test tests/missingNomBBackend.test.js tests/rapidReleaseCore.test.js tests/rapidReleaseLearning.test.js",
+        "passed": 71,
+        "elapsedMs": 155.793,
+        "providerCalls": 0,
+        "regressionDigest": "a2911e7c1ac9584d7150a79261acb715e4a9235e0fc7d07ba9d890bcb4bc29d4"
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Request-scope regression fixtures"
+    },
+    {
+      "id": "prebuilt-standalone-references",
+      "cause": "Pinned Vercel adapter default output references source files outside uploaded output.",
+      "correction": "Build standalone and reject external or traversal filePathMap references before credentials.",
+      "verification": {
+        "command": "npm run release:qualify",
+        "passed": 49,
+        "elapsedMs": 2439.688,
+        "providerCalls": 0,
+        "regressionDigest": "a2911e7c1ac9584d7150a79261acb715e4a9235e0fc7d07ba9d890bcb4bc29d4"
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Artifact confinement regression test"
+    },
+    {
+      "id": "resume-post-prerequisite-smoke",
+      "cause": "A failed post-prerequisite smoke could be skipped when prerequisite success was reused.",
+      "correction": "Persist prerequisite and affected smoke checkpoints independently.",
+      "verification": {
+        "command": "node --test tests/rapidReleaseCore.test.js",
+        "passed": 17,
+        "providerCalls": 0,
+        "regressionDigest": "a2911e7c1ac9584d7150a79261acb715e4a9235e0fc7d07ba9d890bcb4bc29d4"
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Resume test checks exactly one prerequisite write and one promotion"
+    },
+    {
+      "id": "published-history-preflight",
+      "cause": "A new application branch was compared to old main and inherited already-published Salesforce history.",
+      "correction": "Check unpublished commits against fresh exact-remote heads, preserving conservative mirror gates for real or uncertain Salesforce changes.",
+      "verification": {
+        "command": "node --test tests/fcosPushPublication.test.js tests/prePushHook.test.js tests/fcosConnections.test.js",
+        "passed": 36,
+        "representativeFixtureMs": 359,
+        "gitCliCalls": 7,
+        "githubIdentityCalls": 1,
+        "remoteAdvertisements": 1,
+        "mirrorCalls": 0,
+        "regressionDigest": "3d953e47c38d1185357152571777931fa3a1daae5bda0b7faed20673a8257174"
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Fresh-remote/reversion/merge/spoofed-ref regression cases"
+    },
+    {
+      "id": "runtime-settings-unit-isolation",
+      "cause": "Public build settings initialized runtime clients in SSR unit fixtures and retained open work.",
+      "correction": "Provide public runtime settings only to the build and pinned contract check; keep unit commands isolated.",
+      "verification": {
+        "passed": 4585,
+        "skipped": 41,
+        "fullSuiteMs": 39218.862,
+        "preparationMs": 73648,
+        "credentialedProviderWrites": 0,
+        "knownPublicGitHubReads": 4,
+        "regressionDigest": "b61a995e94541c5c6241938f2536ffb2ce2ae7fa18295c355a44a94609a1da13"
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Credential-free command environment and full clean-build qualification"
+    },
+    {
+      "id": "complete-module-source-binding",
+      "cause": "Broad changes selected normal-role checks but could leave only two baseline modules selected.",
+      "correction": "Bind actual literal candidate module inventory, broaden all affected modules, and require real read/desktop/path evidence.",
+      "verification": {
+        "moduleCount": 18,
+        "regressionDigest": "44332583dc0d3a5614d589df7e7058f73566a7685be44304e3b26833ea23452b",
+        "privateOrLiveWrites": 0
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Unknown modules and moved paths fail closed"
+    },
+    {
+      "id": "stable-controller-source-pin",
+      "cause": "Binding the controller to current main HEAD forced unrelated application commits to requalify it.",
+      "correction": "Use the qualified frozen checkout and hash-bound complete handover plan, with native workflow-blob admission before credentials.",
+      "verification": {
+        "regressionDigest": "69d6fc537e3d3c71860e07f5bd234bee33b1597bf77e803c43b9f12394d0c3e7",
+        "nativeProviderWrites": 0
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Forged source under old plan, changed workflow and failed qualification tests"
+    },
+    {
+      "id": "durable-controller-qualification",
+      "cause": "Continuing controller admission depended on old Actions run and review histories that can expire.",
+      "correction": "Retain the observed review in an owner-created Deployment and finalized private receipt; recheck the current private fence before provider writes.",
+      "verification": {
+        "command": "node --test tests/rapidReleaseBuildProvider.test.js tests/rapidReleaseWorkflow.test.js tests/rapidReleaseHandover.test.js",
+        "passed": 25,
+        "durationMs": 3988.213708,
+        "expiredHistoryReads": 0,
+        "nativeProviderWrites": 0,
+        "regressionDigest": "6e8ebb776ffa5e7ef6b9038d04e813b49ab926f50440a6e02f5000ed137d8e8f"
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Expired-history, bot-copy, latest-receipt, unknown-write and disabled-guard regression cases"
+    },
+    {
+      "id": "offline-private-archive-contract",
+      "cause": "The offline historical wrapper denied reviewed local archive creation and extraction while preserving provider refusal.",
+      "correction": "Derive the complete bounded zip create and unzip list/extract contract from the unchanged archive validator; allow only exact private fixture paths and expected JSON member.",
+      "verification": {
+        "command": "node --import tests/helpers/runtimeCompatibilityHistoricalNoProviders.mjs --test-reporter=tap --test-name-pattern=\"real GitHub seconds timestamps\" tests/runtimeCompatibilitySuccessorLive.historical.mjs (exact retained offline harness)",
+        "passed": 1,
+        "total": 1,
+        "durationMs": 13259.879042,
+        "localGitCalls": 2132,
+        "providerTransportAttempts": 0,
+        "nativeProviderWrites": 0,
+        "regressionDigest": "f8685acb77e78ded62e6e06aae036ee34f6d66af5203cb03714ecae3cca832f4",
+        "fullSuiteVerified": false
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Source-derived local archive regression plus unchanged actual case13; no executable automatic repair recipe."
+    },
+    {
+      "id": "staged-durable-oauth-refresh",
+      "cause": "Staging request restrictions did not guard Salesforce and Google refresh-token grants.",
+      "correction": "Reject both durable refresh grants inside the provider helpers before their first provider call.",
+      "verification": {
+        "command": "node --test tests/stagedCredentialRefresh.test.js",
+        "passed": 2,
+        "providerCalls": 0,
+        "regressionDigest": "4eec77e8f6b049769684155b8a41ac64f5385b18fa0262751559620818fd8a40"
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Focused zero-call regression for each provider; nonrotating Salesforce JWT authentication stays separately governed."
+    },
+    {
+      "id": "handover-precredential-source-admission",
+      "cause": "Initial handover workflow selected the credentialed controller checkout directly from plan input.",
+      "correction": "Verify installed protected-main ancestry, exact plan hash, native source quality and both frozen workflow blobs before checkout.",
+      "verification": {
+        "command": "node --test tests/rapidReleaseHandoverWorkflow.test.js tests/rapidReleaseWorkflow.test.js",
+        "passed": 4,
+        "providerCalls": 0,
+        "regressionDigest": "8450dac13d2c558fbda3e6030134d86695dae0b82e82e0385b71f18a512ca687"
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Changed workflow, failed quality and divergent source cannot emit an admitted checkout SHA."
+    },
+    {
+      "id": "portable-controller-fixture-current-source",
+      "cause": "Native Linux quality exposed a Mac checkout-name assertion and a v2 fixture that assumed executing configuration could never advance.",
+      "correction": "Compare the real module-derived controller root; retain the exact v2 current config in a one-object non-thin carrier while verifying the actual v3 current source separately.",
+      "verification": {
+        "nativeFailedRunId": 42268734335,
+        "nativePassed": 2405,
+        "nativeFailed": 2,
+        "focusedCommand": "node --test tests/rapidReleaseCompatibility.test.js tests/runtimeCompatibilityInstallationControlsV2.test.js tests/runtimeCompatibilityInstallationReadonly.test.js",
+        "passed": 10,
+        "durationMs": 1778.536667,
+        "providerCalls": 0,
+        "regressionDigest": "229c16ed54293c104cb3ee5d25a894ccafdd3cc10684b67afc0bf696580f62da"
+      },
+      "repairTime": {
+        "measurement": "Wall elapsed since local native-failure log capture, through focused verification",
+        "elapsedMs": 249990
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Run the cheap fixture preflight before publishing another controller; all historical manifests, source bindings and original complete case body remain unchanged."
+    },
+    {
+      "id": "bootstrap-public-federation-preflight",
+      "cause": "A new controller Preview branch lacked the three canonical public FCUNO federation build settings. The original build terminated before browser verification.",
+      "correction": "Verify source-derived branch-only plain Preview values before one separately journaled replacement of the known terminal failed build. Preserve both deployment identities and the original frozen controller.",
+      "preconditions": {
+        "controllerSha": "9022a87ff7830caaf82426441c72d49f26bee018",
+        "vercelCli": "54.20.1",
+        "scope": "Initial controller Preview setup only"
+      },
+      "verification": {
+        "publicConfigurationReceiptDeploymentId": 7610508525,
+        "replacementPermitDeploymentId": 7610516063,
+        "failedDeploymentId": "dpl_G5ePLcCGwhkdbJJ12sURecpvHMzo",
+        "replacementDeploymentId": "dpl_5x9fCidbBJwtyMR1ZoVk46dhK1NH",
+        "genuinePreviewSuccessStatusId": 21613743672,
+        "bootstrapQualificationReceiptId": 4,
+        "publicConfigTestsPassed": 7,
+        "replacementTestsPassed": 5,
+        "replacementSubmissionMs": 130710,
+        "postgresQueries": 242,
+        "hostedAuthenticationVerified": false
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Exact public configuration preflight; no private Production configuration copying, discarded failures, or blind provider retries."
+    },
+    {
+      "id": "github-variable-page-limit-before-lease",
+      "cause": "GitHub variable inventory returned only30 of32 rows even with per_page=100. An initial-only completeness check correctly stopped but ran after expensive native bootstrap readback.",
+      "correction": "Read complete30-item pages with stable total, unique names and exact full count; perform that preflight before opening the five-minute database lease. Keep original setup and uncertainty fences.",
+      "preconditions": {
+        "controllerSha": "9022a87ff7830caaf82426441c72d49f26bee018",
+        "scope": "Initial metadata-reader setup; GitHub repository and environment variable inventories"
+      },
+      "verification": {
+        "paginationTestsPassed": 5,
+        "credentialConfigurationTestsPassed": 8,
+        "inventoryRows": 32,
+        "correctedInventoryGitHubReads": 2,
+        "correctedInventoryPostgresQueries": 0,
+        "failedAttemptMs": 111620,
+        "failedAttemptPostgresQueries": 124,
+        "qualifiedReaderDeploymentId": 7610909400,
+        "successfulProvisionMs": 186507,
+        "successfulProvisionPostgresQueries": 254,
+        "credentialConfigurationReceiptDeploymentId": 7611117164,
+        "credentialSlotsAcknowledged": 12,
+        "publicVariablesVerified": 4,
+        "opaqueCredentialValuesIndependentlyVerified": false,
+        "normalRoleBrowserSmokeStillRequired": true
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Pagination regressions cover truncated, duplicate, changing-total and activation-present inventories; configuration metadata preflights precede private reads and writes."
+    }
+  ]
+}

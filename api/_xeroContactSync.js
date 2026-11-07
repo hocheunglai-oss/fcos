@@ -1,3 +1,5 @@
+import { requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
+import { deploymentSafeSupabaseFetch } from './_deploymentReadOnlyFetch.js';
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 import { requireExternalActionGate } from './_externalActionGates.js';
@@ -280,7 +282,7 @@ export function xeroContactSyncServiceClient(env = process.env) {
       fetch: async (input, init) => {
         const startedAt = Date.now();
         try {
-          const response = await fetch(input, init);
+          const response = await deploymentSafeSupabaseFetch(input, init);
           recordSupabaseRequest({ durationMs: Date.now() - startedAt, ok: response.ok });
           return response;
         } catch (error) {
@@ -631,6 +633,7 @@ export async function getFreshXeroConnection(client, { env, fetchImpl }) {
     return stored;
   }
 
+  requireDeploymentMutationAllowed(true, env);
   const token = await requestXeroToken(config, new URLSearchParams({
     grant_type: 'refresh_token',
     refresh_token: config.refreshToken,
@@ -706,6 +709,7 @@ export function xeroConfig(env, stored = null) {
 }
 
 export async function requestXeroToken(config, body, fetchImpl) {
+  requireDeploymentMutationAllowed(true);
   const response = await fetchImpl(`${XERO_IDENTITY_BASE}/connect/token`, {
     method: 'POST',
     headers: {
@@ -798,6 +802,8 @@ export async function createXeroContactsBatch(connection, contacts, runId, { env
 }
 
 export async function xeroAccountingFetch(connection, pathName, { method, body, idempotencyKey, retryOnRateLimit = false, env, fetchImpl, headers: extraHeaders = {}, onResponse = null }) {
+  // Reads may consume live accounting coordination state; staging cannot admit them.
+  requireDeploymentMutationAllowed(true, env);
   const headers = {
     Authorization: `Bearer ${connection.accessToken}`,
     'xero-tenant-id': connection.tenantId,

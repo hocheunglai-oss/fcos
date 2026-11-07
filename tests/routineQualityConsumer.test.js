@@ -142,6 +142,6 @@ test('consumer has only provider reads and no checkout, protected environment, i
   assert.doesNotMatch(JSON.stringify(job), /secrets\.|actions\/checkout|id-token|continue-on-error/);
   assert.doesNotMatch(consumer, /createDeployment|updateEnvironment|rerunWorkflow|workflow_dispatch.*POST/);
   const configuration = JSON.parse(readFileSync(new URL('../vercel.json', import.meta.url), 'utf8'));
-  assert.equal(configuration.git.deploymentEnabled['codex/rapid-release-workflow-20261009'], false);
-  assert.equal(configuration.git.deploymentEnabled.main, false);
+  // Global false preserves every historical branch fence and also covers new branches.
+  assert.equal(configuration.git.deploymentEnabled, false);
 });

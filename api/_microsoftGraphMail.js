@@ -148,6 +148,7 @@ export async function createMicrosoftGraphMailTransport(config, dependencies = {
     authenticatedAddress: mailbox,
     accessTokenExpiresAt: authentication.accessTokenExpiresAt,
     async sendMail({ to, cc, bcc, subject, html, text, attachments }) {
+      requireExternalActionGate('email_delivery', dependencies.env || process.env);
       const toRecipients = graphRecipients(to);
       const ccRecipients = graphRecipients(cc);
       const bccRecipients = graphRecipients(bcc);

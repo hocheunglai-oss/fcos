@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import nodeTest from 'node:test';
+import { runWithDeploymentRequestSafety } from '../api/_deploymentReadOnly.js';
+import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
+// These fixtures substitute canonical routing authority without contacting Vercel.
+const test = (name, run) => nodeTest(name, () => runWithDeploymentRequestSafety({ headers: { host: new URL(FCOS_CONNECTION_POLICY.attestation.endpoint).hostname } }, run, { VERCEL_ENV: 'production' }));
 import { readFile } from 'node:fs/promises';
 import {
   reportSystemError,

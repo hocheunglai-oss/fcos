@@ -1,7 +1,9 @@
+import { withDeploymentRequestSafety } from '../_deploymentReadOnly.js';
 import {
   processSalesforceContactSyncWebhook,
   readRawRequestBody,
 } from '../_xeroContactSync.js';
+import { requireDeploymentMutationAllowed } from '../_deploymentReadOnly.js';
 import {
   logRequestTelemetry,
   recordRequestFailure,
@@ -42,11 +44,12 @@ function publicError(error, status, requestId) {
   };
 }
 
-export default async function handler(req, res) {
+async function handler(req, res) {
   const requestId = requestIdFrom(req);
   return runWithRequestTelemetry({ handler: 'salesforceContactSyncWebhook', requestId }, async () => {
     try {
       if (req.method !== 'POST') return sendJson(res, { ok: false, error: 'Method not allowed.' }, 405);
+      requireDeploymentMutationAllowed(true);
       const rawBody = await readRawRequestBody(req);
       const result = await processSalesforceContactSyncWebhook({
         rawBody,
@@ -62,3 +65,5 @@ export default async function handler(req, res) {
     }
   });
 }
+
+export default withDeploymentRequestSafety(handler);

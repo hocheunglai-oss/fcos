@@ -135,6 +135,11 @@ const connectionPolicy = {
       identifiers: [
         { label: 'Project name', value: 'FCOS' },
         { label: 'Project ref', value: 'pjforfvchygdyqfcgpmw' },
+        { label: 'Database direct host', value: 'db.pjforfvchygdyqfcgpmw.supabase.co' },
+        { label: 'Database session host', value: 'aws-0-ap-southeast-1.pooler.supabase.com' },
+        { label: 'Database session user', value: 'postgres.pjforfvchygdyqfcgpmw' },
+        { label: 'Database release read-only role', value: 'fcos_rapid_readonly' },
+        { label: 'Database release read-only user', value: 'fcos_rapid_readonly.pjforfvchygdyqfcgpmw' },
       ],
       cliVersion: { exact: '2.113.0' },
       requiredPermissions: ['project.read', 'project.link'],
