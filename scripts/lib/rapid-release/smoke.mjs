@@ -62,6 +62,22 @@ function safeBody(value, depth = 0) {
     && !unsafeControl.test(key.replace(/[^a-z0-9]/gi, '')) && safeBody(item, depth + 1));
 }
 function bodyOf(request) { try { return JSON.parse(request.postData() || '{}'); } catch { return null; } }
+function optionalReadExclusion(url, request) {
+  if (request.method() !== 'GET' || url.protocol !== 'https:' || url.username || url.password) return null;
+  const type = request.resourceType();
+  if (url.origin === issuer) {
+    if (type === 'image' && url.pathname === '/_next/image'
+      && ['q,url,w', 'dpl,q,url,w'].includes([...url.searchParams.keys()].sort().join(','))) return 'issuer_images';
+    if (['fetch', 'xhr'].includes(type) && ['/', '/admin'].includes(url.pathname)
+      && /^\?_rsc=[A-Za-z0-9_-]+$/.test(url.search)) return 'issuer_prefetch';
+    if (['fetch', 'xhr'].includes(type) && url.pathname === '/api/admin/dashboard-swatches'
+      && !url.search) return 'issuer_dashboard_swatches';
+  }
+  if (url.origin === 'https://s3.tradingview.com' && type === 'script'
+    && url.pathname === '/external-embedding/embed-widget-market-overview.js'
+    && !url.search) return 'market_overview_embed';
+  return null;
+}
 // Protected harness policy is independent of candidate dispatch metadata. The
 // two issuer auth routes are the pinned FCUNO source's existing login contract.
 export function stagedBrowserRequestAllowed(request, { origin, credentials, normal = false }) {
@@ -85,6 +101,8 @@ export function stagedBrowserRequestAllowed(request, { origin, credentials, norm
           && body.state === 'active' && body.source === 'all';
       }
       if (url.pathname.startsWith('/api/')) return method === 'GET' && url.pathname === '/api/release-identity' && !url.search;
+      if (url.pathname === '/app-version.json' && ['fetch', 'xhr'].includes(type)
+        && /^\?t=\d{13}$/.test(url.search)) return method === 'GET';
       const loginQuery = url.pathname === '/login' && url.search === '?federated=1';
       if (normal && type === 'document' && Object.values(MODULE_SURFACES).some(surface => `${url.pathname}${url.search}` === surface.route)) return method === 'GET';
       return method === 'GET' && (!url.search || loginQuery) && (type === 'document' && ['/', '/login', '/markets', '/settings', '/email-router'].includes(url.pathname)
@@ -147,12 +165,15 @@ const cleanLaunchEnvironment = env => Object.fromEntries(['PATH', 'HOME', 'TMPDI
 
 async function installGate(context, policy, onAuthRequest) {
   let page, gateFailed = false, blocked = 0, excludedTelemetry = 0, excludedBackgroundSync = 0;
+  const excludedOptionalReads = new Set();
   const allowed = request => {
     try {
       const url = new URL(request.url());
       if (url.origin === policy.origin && url.pathname === '/_vercel/speed-insights/script.js' && request.method() === 'GET') { excludedTelemetry++; return false; }
       if (policy.normal && url.origin === policy.origin && url.pathname === '/api/email-router-background-sync' && !url.search
         && request.method() === 'POST' && exactKeys(bodyOf(request), [])) { excludedBackgroundSync++; return false; }
+      const exclusion = optionalReadExclusion(url, request);
+      if (exclusion) { excludedOptionalReads.add(exclusion); return false; }
       if (stagedBrowserRequestAllowed(request, policy)) return true;
     } catch { /* Only fixed failure labels leave the harness. */ }
     blocked++; return false;
@@ -178,7 +199,7 @@ async function installGate(context, policy, onAuthRequest) {
   await native.send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] });
   return { page, assertHealthy: () => requireFact(!gateFailed && blocked === 0, 'SMOKE_BROWSER_NETWORK_OR_RUNTIME_FAILURE'),
     summary: () => ({ blockedRequests: blocked, excludedTelemetry, excludedBackgroundSync,
-      excludedFeatures: ['speed_insights', ...(excludedBackgroundSync ? ['automatic_mailbox_sync'] : [])] }) };
+      excludedFeatures: ['speed_insights', ...(excludedBackgroundSync ? ['automatic_mailbox_sync'] : []), ...[...excludedOptionalReads].sort()] }) };
 }
 async function routeRead(route, origin, path, body, expectedStatus = 200) {
   let response;

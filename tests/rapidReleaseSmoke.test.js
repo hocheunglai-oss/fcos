@@ -48,7 +48,7 @@ const readPayloads = {
 
 // Fixtures replace browser/provider transports. They simulate the app-owned
 // bootstrap response and actual response events; they never establish live proof.
-function browserFixture({ badIdentity = false, badRead = false, badDenial = false, unexpected = false, missingModule = false, background = false, badPayload = false, badDesktop = false, deniedModule = null, role = 'manager' } = {}) {
+function browserFixture({ badIdentity = false, badRead = false, badDenial = false, unexpected = false, missingModule = false, background = false, optionalRequest = null, badPayload = false, badDesktop = false, deniedModule = null, role = 'manager' } = {}) {
   const observations = { launches: [], reads: [], contextsClosed: 0, browsersClosed: 0, nativeAborts: 0 };
   const browserFactory = async options => {
     observations.launches.push(options);
@@ -92,6 +92,7 @@ function browserFixture({ badIdentity = false, badRead = false, badDenial = fals
         assert.equal(name, 'Login');
         assert.ok(password.startsWith('PRIVATE_'));
         if (unexpected) await pausedHandler({ requestId: 'unexpected-redirect', request: { url: 'https://unexpected.invalid/collect', method: 'POST', headers: {}, postData: '{}' }, resourceType: 'fetch' });
+        if (optionalRequest) await pausedHandler({ requestId: 'optional-read', request: optionalRequest, resourceType: optionalRequest.type || 'XHR' });
         if (background && email !== ci.email) await pausedHandler({ requestId: 'automatic-mailbox-sync', request: { url: `${origin}/api/email-router-background-sync`, method: 'POST', headers: {}, postData: '{}' }, resourceType: 'fetch' });
         await simulate(requestOf(`${origin}/api/functions/authContext`, 'POST'));
         changeLocation(`${origin}/`);
@@ -209,6 +210,33 @@ test('browser policy admits only pinned login and reviewed reads, blocking provi
     request('https://unexpected.invalid/collect', 'POST')]) {
     assert.equal(stagedBrowserRequestAllowed(req, policy), false, req.url());
   }
+});
+
+test('staged version polling permits only the observed cache-busting GET', () => {
+  const policy = { origin, credentials: { email: ci.email, password: 'fixture' } };
+  assert.equal(stagedBrowserRequestAllowed(request(`${origin}/app-version.json?t=1794025900000`), policy), true);
+  for (const [query, method] of [['t=1794025900000&extra=1', 'GET'], ['t=abc', 'GET'], ['t=1794025900000', 'POST']]) {
+    assert.equal(stagedBrowserRequestAllowed(request(`${origin}/app-version.json?${query}`, method), policy), false);
+  }
+});
+
+test('issuer prefetch is blocked and reported, while a lookalike write fails the smoke', async () => {
+  const optionalRequest = { url: `${issuer}/admin?_rsc=ab123`, method: 'GET', headers: {} };
+  const fixture = browserFixture({ optionalRequest });
+  const proof = await runStagedSmoke({ manifest: manifest(), staged, env, fetchImpl: publicFetch(), browserFactory: fixture.browserFactory });
+  assert.ok(proof.restrictedEvidence.excludedFeatures.includes('issuer_prefetch'));
+  assert.equal(fixture.observations.nativeAborts, 1);
+  const unsafe = browserFixture({ optionalRequest: { ...optionalRequest, method: 'POST' } });
+  await assert.rejects(runStagedSmoke({ manifest: manifest(), staged, env, fetchImpl: publicFetch(), browserFactory: unsafe.browserFactory }),
+    { code: 'SMOKE_BROWSER_NETWORK_OR_RUNTIME_FAILURE' });
+});
+
+test('the deployed issuer image optimization request is excluded without reaching the network', async () => {
+  const optionalRequest = { url: `${issuer}/_next/image?url=%2Flogo.png&w=128&q=75&dpl=fixture`, method: 'GET', type: 'Image', headers: {} };
+  const fixture = browserFixture({ optionalRequest });
+  const proof = await runStagedSmoke({ manifest: manifest(), staged, env, fetchImpl: publicFetch(), browserFactory: fixture.browserFactory });
+  assert.ok(proof.restrictedEvidence.excludedFeatures.includes('issuer_images'));
+  assert.equal(fixture.observations.nativeAborts, 1);
 });
 
 test('five-minute live observation checks native-bound receipt, static identity and anonymous affected read gates only', async () => {
