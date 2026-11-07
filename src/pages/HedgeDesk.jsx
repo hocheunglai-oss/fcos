@@ -37,7 +37,7 @@ export default function HedgeDesk() {
   const capabilities = data.capabilities || {};
   const readOnly = !Object.values(capabilities).some(Boolean);
   const hasSnapshot = data.lastUpdated != null;
-  const showBook = hasSnapshot && !settings.loading && !settings.error;
+  const showBook = hasSnapshot && settings.hasLoaded && !settings.loading;
   const visibleTabs = canAdmin ? [...TABS, { id: 'administration', label: 'Administration', icon: Settings2 }] : TABS;
 
   useEffect(() => {

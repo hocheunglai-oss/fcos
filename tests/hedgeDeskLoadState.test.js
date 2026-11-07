@@ -47,7 +47,7 @@ const { default: HedgeDesk } = await import(`data:text/javascript;base64,${Buffe
 
 function render(data = {}, settings = {}) {
   deskData = { physicals: [], swaps: [], capabilities: {}, loading: false, refreshing: false, error: null, lastUpdated: null, reload: async () => {}, ...data };
-  appSettings = { loading: false, error: null, reload: async () => {}, ...settings };
+  appSettings = { loading: false, hasLoaded: true, error: null, reload: async () => {}, ...settings };
   return renderToStaticMarkup(React.createElement(HedgeDesk));
 }
 
@@ -73,11 +73,17 @@ test('successful empty snapshots may show true empty states and cached refresh f
 
 test('failed or loading settings never feed default values into a loaded book', () => {
   const data = { lastUpdated: new Date('2026-10-01T04:00:00Z') };
-  const failed = render(data, { error: new Error('Shared settings read failed') });
+  const failed = render(data, { hasLoaded: false, error: new Error('Shared settings read failed') });
   assert.match(failed, /Shared settings read failed/);
   assert.match(failed, /Hedge Desk unavailable/);
   assert.doesNotMatch(failed, /data-loaded-book|Cash USD 0\.00/);
   const loading = render(data, { loading: true });
   assert.match(loading, /Loading Hedge Desk settings/);
   assert.doesNotMatch(loading, /data-loaded-book|Cash USD 0\.00/);
+});
+
+test('a rejected settings save does not hide a successfully loaded book', () => {
+  const markup = render({ lastUpdated: new Date('2026-10-01T04:00:00Z') }, { error: new Error('Save rejected') });
+  assert.match(markup, /Save rejected/);
+  assert.match(markup, /data-loaded-book/);
 });
