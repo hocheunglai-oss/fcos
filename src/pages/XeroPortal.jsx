@@ -27,6 +27,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/components/ui/use-toast';
+import { useAuth } from '@/lib/AuthContext';
 import { appClient } from '@/api/appClient';
 import { emptyReceiptFields, parseReceiptText } from '@/lib/receiptExtraction';
 import { saveReceiptWithDirectUpload } from '@/lib/xeroReceiptUpload';
@@ -55,12 +56,15 @@ const STATUS_FILTERS = ['eligible', 'blocked', 'kept', 'not-selected', 'updated'
 
 const RECEIPT_CURRENCIES = ['HKD', 'USD', 'SGD', 'CNY', 'EUR', 'GBP', 'AUD', 'NZD', 'CAD', 'JPY'];
 const XeroFinancialSync = lazy(() => import('@/components/xero/XeroFinancialSync'));
+const XeroIntegrityReport = lazy(() => import('@/components/xero/XeroIntegrityReport'));
 const XeroPortalManual = lazy(() => import('@/components/xero/XeroPortalManual'));
 const XeroContactResolution = lazy(() => import('@/components/xero/XeroContactResolution'));
 
 export default function XeroPortal() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [tab, setTab] = useState('accounting');
+  const { hasCapability } = useAuth();
+  const canViewIntegrity = hasCapability('xero_portal_manage');
   const [status, setStatus] = useState(null);
   const [receipts, setReceipts] = useState([]);
   const [run, setRun] = useState(null);
@@ -520,9 +524,10 @@ export default function XeroPortal() {
           ]]].map(([title, rows]) => <ConnectionPanel key={title} title={title} rows={rows} unavailable={copy.common.unavailable} />)}
         </section></details>
 
-        <Tabs value={tab} onValueChange={setTab} className="w-full">
+        <Tabs value={tab === "integrity" && !canViewIntegrity ? "accounting" : tab} onValueChange={setTab} className="w-full">
           <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1">
             {['accounting', 'contacts', 'receipts', 'automation'].map((key) => <TabsTrigger key={key} value={key}>{copy.tabs[key]}</TabsTrigger>)}
+            {canViewIntegrity && <TabsTrigger value="integrity">Integrity</TabsTrigger>}
             <TabsTrigger value="manual">{copy.tabs.manual}</TabsTrigger>
           </TabsList>
 
@@ -810,6 +815,14 @@ export default function XeroPortal() {
               </div>
             </section>
           </TabsContent>
+
+          {canViewIntegrity && (
+            <TabsContent value="integrity">
+              <Suspense fallback={<StateBlock icon={Loader2} title="Loading integrity report" />}>
+                <XeroIntegrityReport />
+              </Suspense>
+            </TabsContent>
+          )}
 
           <TabsContent value="manual" className="space-y-4">
             <Suspense fallback={<StateBlock icon={Loader2} title={copy.manual.loadingTitle} description={copy.manual.loadingDescription} />}>
