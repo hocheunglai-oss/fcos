@@ -1254,7 +1254,8 @@ function plainLanguageWorkflow(caseRow) {
       ? caseRow.assignedBuyerTrader?.name || 'Needs assignment'
       : status === 'ready_for_invoice' ? 'Invoice team' : 'Completed';
   let nextAction = 'Waiting';
-  if (postInvoice) nextAction = 'Invoice already issued—action required';
+  if (simplifiedQueue === 'completed') nextAction = supplierStep || buyerStep ? 'Closed; paired reviews incomplete' : 'Completed';
+  else if (postInvoice) nextAction = 'Invoice already issued—action required';
   else if (awaiting) nextAction = caseRow.actionableOn ? `Available from ${caseRow.actionableOn}` : 'Add the required schedule information';
   else if (myCost && myBuyerCharge && myCost.supplierId === myBuyerCharge.supplierId) nextAction = `Confirm both sides for ${myCost.supplierName}`;
   else if (myCost) nextAction = `Confirm ${myCost.supplierName} costs`;
