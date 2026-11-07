@@ -175,6 +175,14 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
   if (DEDICATED_FUNCTION_ENDPOINTS[name]) headers['x-fcos-function-name'] = name;
   if (options.force) headers['x-fcos-cache-bypass'] = '1';
   if (authContext.accessToken) headers.authorization = `Bearer ${authContext.accessToken}`;
+  const invalidateAfterRequest = (mutationHeader = null) => {
+    const shouldInvalidateCache = options.invalidateCache === true
+      || (options.invalidateCache !== false && (mutationHeader === '1' || (!cacheKey && mutationHeader !== '0')));
+    if (shouldInvalidateCache) invalidateFunctionCache();
+    else if (options.invalidateNames?.length || options.invalidateTags?.length) {
+      invalidateFunctionCache({ names: options.invalidateNames, tags: options.invalidateTags });
+    }
+  };
   let res;
   try {
     res = await fetch(functionEndpoint(name), {
@@ -184,6 +192,8 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
       signal: options.signal,
     });
   } catch (error) {
+    if (!isCurrentClientSession(session)) return changedSessionResponse();
+    invalidateAfterRequest();
     if (error?.name === 'AbortError') {
       return {
         data: { cancelled: true },
@@ -225,6 +235,7 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
   const mutationHeader = responseHeader('x-fcos-handler-mutation');
 
   if (!responseIsJson) {
+    invalidateAfterRequest(mutationHeader);
     return {
       data: { error: res.status === 504
         ? 'The FCOS request timed out before it completed. Refresh the saved result before retrying.'
@@ -241,6 +252,7 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
   }
 
   if (!res.ok) {
+    invalidateAfterRequest(mutationHeader);
     // The list subscribes to this event. A failed list request must not refresh itself.
     if (res.status >= 500 && name !== 'workNotificationsList') {
       window.dispatchEvent(new CustomEvent('fcos:work-notifications-changed'));
@@ -287,12 +299,7 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
     trimFunctionCache();
   }
 
-  const shouldInvalidateCache = options.invalidateCache === true
-    || (options.invalidateCache !== false && (mutationHeader === '1' || (!cacheKey && mutationHeader !== '0')));
-  if (shouldInvalidateCache) invalidateFunctionCache();
-  else if (options.invalidateNames?.length || options.invalidateTags?.length) {
-    invalidateFunctionCache({ names: options.invalidateNames, tags: options.invalidateTags });
-  }
+  invalidateAfterRequest(mutationHeader);
 
   return {
     data,
