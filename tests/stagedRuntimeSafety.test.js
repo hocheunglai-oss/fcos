@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
+import { createClient } from '@supabase/supabase-js';
 import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier } from '../config/fcosConnections.js';
 import { FCOS_READ_ONLY_CI as pin } from '../config/fcosCiIdentity.js';
 import { deploymentRequestSafety, currentDeploymentRequestSafety, runWithDeploymentRequestSafety, isDeploymentReadOnly, requireDeploymentMutationAllowed } from '../api/_deploymentReadOnly.js';
-import { deploymentSafeSupabaseFetch, READ_ONLY_SUPABASE_RPCS } from '../api/_deploymentReadOnlyFetch.js';
+import { deploymentSafeSupabaseFetch, requireDeploymentSupabaseRequestAllowed, withVerifiedFcunoSessionInsert, READ_ONLY_SUPABASE_RPCS } from '../api/_deploymentReadOnlyFetch.js';
 import { externalActionGates } from '../api/_externalActionGates.js';
 import { validateCiFederation } from '../api/_readOnlyCiAccess.js';
 import { enforceFcunoFederatedAccess } from '../api/_fcunoIdentityFederation.js';
@@ -28,6 +29,41 @@ const canonical = (run) => runWithDeploymentRequestSafety(request(canonicalHost)
 const denied = { status: 403, code: 'FCOS_DEPLOYMENT_READ_ONLY' };
 const supabase = `https://${fcosConnectionIdentifier('supabase', 'Project ref')}.supabase.co`;
 function response() { return { statusCode: 200, headers: {}, body: null, setHeader(name, value) { this.headers[name.toLowerCase()] = value; }, end(body = '') { this.body = String(body); } }; }
+
+test('staging admits only the exact one-time FCUNO proof insert inside its verified scope', () => stage(() => {
+  const url = supabase + '/rest/v1/fcos_external_identity_sessions';
+  const binding = { session_id: 'signed-session', provider_token_hash: 'verified-hash' };
+  const init = { method: 'POST', body: JSON.stringify(binding) };
+  assert.throws(() => requireDeploymentSupabaseRequestAllowed(url, init), denied);
+  withVerifiedFcunoSessionInsert(binding, () => {
+    for (const [target, request] of [
+      [url + '?on_conflict=session_id', init],
+      [supabase + '/rest/v1/user_profiles', init],
+      [url, { ...init, method: 'PATCH' }],
+      [url, { ...init, body: JSON.stringify({ ...binding, active: true }) }],
+      [url, { ...init, headers: { prefer: 'resolution=merge-duplicates' } }],
+    ]) assert.throws(() => requireDeploymentSupabaseRequestAllowed(target, request), denied);
+    assert.doesNotThrow(() => requireDeploymentSupabaseRequestAllowed(url, init));
+    assert.throws(() => requireDeploymentSupabaseRequestAllowed(url, init), denied);
+  });
+}));
+
+test('the Supabase client can submit one scoped proof through the real fetch guard', async () => stage(async () => {
+  let calls = 0;
+  const binding = { session_id: 'signed-session', provider_token_hash: 'verified-hash' };
+  const client = createClient(supabase, 'sb_secret_fixture', {
+    auth: { persistSession: false, autoRefreshToken: false },
+    global: { fetch: async (url, init) => {
+      requireDeploymentSupabaseRequestAllowed(url, init);
+      calls += 1;
+      return new Response(null, { status: 201 });
+    } },
+  });
+  const result = await withVerifiedFcunoSessionInsert(binding, async () =>
+    await client.from('fcos_external_identity_sessions').insert(binding));
+  assert.equal(result.error, null);
+  assert.equal(calls, 1);
+}));
 
 // These fixtures substitute Vercel's routing Host, live identity-link reads and
 // provider transports. They do not claim actual Vercel/Supabase authentication.
@@ -202,7 +238,12 @@ test('the reserved CI principal is admitted only by trusted read-only scope with
   runWithDeploymentRequestSafety({ headers: {} }, () => assert.throws(() => validateCiFederation(input), { code: 'FCOS_CI_IDENTITY_NOT_READY' }), production);
   let writes = 0;
   const client = { from(table) { const q = { select() { return q; }, eq() { return q; }, update() { writes++; throw Error('binding forbidden'); }, upsert() { writes++; throw Error('provisioning forbidden'); }, maybeSingle: async () => ({ data: table === 'fcos_external_identity_links' ? { ...link, auth_user_id: null } : profile }) }; return q; } };
-  await stage(() => assert.rejects(enforceFcunoFederatedAccess({ client, authUser, profile, env: { FCOS_ENABLE_FCUNO_FEDERATION: 'true', FCUNO_IDENTITY_ISSUER: pin.issuer } }), denied));
+  const seconds = Math.floor(Date.now() / 1000);
+  // This fixture substitutes Supabase's already-verified bearer, not FCUNO provider proof.
+  const claims = { sub: authUser.id, session_id: '22222222-2222-4222-8222-222222222222', iat: seconds,
+    amr: [{ method: 'oauth', timestamp: seconds }] };
+  const accessToken = `fixture.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.fixture`;
+  await stage(() => assert.rejects(enforceFcunoFederatedAccess({ client, authUser, profile, accessToken, env: { FCOS_ENABLE_FCUNO_FEDERATION: 'true', FCUNO_IDENTITY_ISSUER: pin.issuer } }), denied));
   assert.equal(writes, 0);
   assert.equal(profile.active, false);
 });

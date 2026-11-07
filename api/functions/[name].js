@@ -806,6 +806,7 @@ async function requireActiveUser(req) {
     authUser: userData.user,
     profile: storedProfile,
     accessToken: token,
+    providerAccessToken: req.headers?.['x-fcos-fcuno-provider-token'] || null,
   });
   if (!profile) throw appError('User is not registered.', 403);
   if (!profile.active) throw appError('User is inactive.', 403);
@@ -1905,7 +1906,7 @@ async function findAuthUserByEmail(client, email) {
   return null;
 }
 
-async function writeAdminAudit(client, actor, action, targetUserId, targetEmail, metadata = {}) {
+async function writeAdminAudit(client, actor, action, targetUserId, targetEmail, metadata = {}, { required = false } = {}) {
   const row = {
     actor_user_id: actor?.id || null,
     actor_email: actor?.email || null,
@@ -1915,6 +1916,7 @@ async function writeAdminAudit(client, actor, action, targetUserId, targetEmail,
     metadata,
   };
   const { error } = await client.from('admin_audit_logs').insert(row);
+  if (error && required) throw error;
   if (error) console.error('Failed to write admin audit log', error.message);
 }
 
@@ -1985,19 +1987,32 @@ async function persistManagedUser(client, body, actor = null) {
     if (error) throw error;
     managedProfile = data;
     if (!managedProfile) throw appError('User not found.', 404);
+    if (identityManagedByFcuno) {
+      if (body.active !== undefined && typeof body.active !== 'boolean') {
+        throw appError('FCOS application access must be explicitly Active or Disabled.', 400, 'FCOS_APPLICATION_ACCESS_INVALID');
+      }
+      payload.active = body.active === undefined ? managedProfile.active === true : body.active;
+    }
     if (identityManagedByFcuno && (
       String(payload.email || '').toLowerCase() !== String(managedProfile?.email || '').toLowerCase()
       || String(payload.full_name || '') !== String(managedProfile?.full_name || '')
-      || payload.active !== (managedProfile?.active !== false)
       || Boolean(payload.password)
     )) {
-      throw appError('Email, name, active state and credentials are managed in FCUNO. Only FCOS authorization can be changed here.', 409, 'FCUNO_IDENTITY_READ_ONLY');
+      throw appError('Email, name and credentials are managed in FCUNO. Only FCOS authorization can be changed here.', 409, 'FCUNO_IDENTITY_READ_ONLY');
     }
     await assertAdministratorContinuity(client, {
       userId: authUser.id,
       nextActive: payload.active,
       nextUserType: payload.user_type,
     });
+    if (identityManagedByFcuno && payload.active !== (managedProfile.active === true)) {
+      // Persist the authorized local access change before any activation write.
+      // An unavailable audit must not grant unaudited application access.
+      await writeAdminAudit(client, actor, 'fcos_application_access_authorized', authUser.id, managedProfile.email, {
+        previous_active: managedProfile.active === true, active: payload.active, user_type: payload.user_type,
+        identity_authority: 'fcuno', activation_authority: 'fcos',
+      }, { required: true });
+    }
   }
 
   const transferRequested = payload.user_type === 'general_manager'
@@ -2040,22 +2055,36 @@ async function persistManagedUser(client, body, actor = null) {
   if (!authUser?.id) throw appError('Supabase did not return a user id.', 500);
 
   const nowIso = new Date().toISOString();
-  const effectiveEmail = identityManagedByFcuno ? managedProfile.email : payload.email;
-  const effectiveFullName = identityManagedByFcuno ? managedProfile.full_name : payload.full_name;
-  const effectiveActive = identityManagedByFcuno ? managedProfile.active !== false : payload.active;
-  const { error: profileError } = await client.from('user_profiles').upsert(
-    {
-      id: authUser.id,
-      email: effectiveEmail,
-      full_name: effectiveFullName,
-      user_type: stagedUserType,
-      active: effectiveActive,
+  let effectiveEmail = payload.email;
+  let effectiveFullName = payload.full_name;
+  let effectiveActive = payload.active;
+  const authorizationPatch = {
+    user_type: stagedUserType,
+    ...(!identityManagedByFcuno || body.active !== undefined ? { active: effectiveActive } : {}),
+    updated_at: nowIso,
+  };
+  if (identityManagedByFcuno) {
+    // A concurrent signed sync may have changed identity fields since the
+    // validation read. Update authorization columns only and return the current
+    // identity from the database instead of writing that old snapshot back.
+    const { data: updatedProfile, error: profileError } = await client.from('user_profiles')
+      .update(authorizationPatch).eq('id', authUser.id)
+      .eq('user_type', managedProfile.user_type).eq('active', managedProfile.active)
+      .select('email,full_name,active').maybeSingle();
+    if (profileError) throw profileError;
+    if (!updatedProfile) {
+      throw appError('FCOS authorization changed while this user was being saved. Reload the user and try again.', 409, 'FCOS_AUTHORIZATION_CONFLICT');
+    }
+    effectiveEmail = updatedProfile.email;
+    effectiveFullName = updatedProfile.full_name;
+    effectiveActive = updatedProfile.active === true;
+  } else {
+    const { error: profileError } = await client.from('user_profiles').upsert({
+      id: authUser.id, email: effectiveEmail, full_name: effectiveFullName, ...authorizationPatch,
       use_type_defaults: managedProfile?.use_type_defaults ?? true,
-      updated_at: nowIso,
-    },
-    { onConflict: 'id' },
-  );
-  if (profileError) throw profileError;
+    }, { onConflict: 'id' });
+    if (profileError) throw profileError;
+  }
 
   // Group memberships are changed only through the revision-checked group endpoint.
   // Organizational role and FCUNO identity saves never overwrite access groups.
@@ -2095,9 +2124,11 @@ async function persistManagedUser(client, body, actor = null) {
   }
 
   const currentAccess = await loadEffectiveGroupAccess(client, { id: authUser.id });
-  await writeAdminAudit(client, actor, isUpdate ? 'user_updated' : 'user_created', authUser.id, payload.email, {
+  await writeAdminAudit(client, actor, isUpdate ? 'user_updated' : 'user_created', authUser.id, effectiveEmail, {
     user_type: payload.user_type,
-    active: payload.active,
+    active: effectiveActive,
+    previous_active: managedProfile?.active === true,
+    activation_authority: 'fcos',
     use_type_defaults: payload.use_type_defaults,
     modules: Object.entries(currentAccess.permissions)
       .filter(([moduleId, value]) => permissionCanView(moduleId, value))
