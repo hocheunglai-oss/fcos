@@ -75,7 +75,7 @@ export function sanitizeConnectionProviderReport(value, providerId) {
   };
 }
 
-export function sanitizeConnectionAttestation(value) {
+export function sanitizeConnectionAttestation(value, { historical = false } = {}) {
   if (!value || typeof value !== 'object') return null;
   const providers = Object.fromEntries(CONNECTION_TARGETS.map(({ id }) => [
     id,
@@ -86,7 +86,7 @@ export function sanitizeConnectionAttestation(value) {
   const expiresAt = isoTimestamp(value.expiresAt);
   if (
     value.schemaVersion !== 1
-    || value.policyVersion !== CONNECTION_POLICY_VERSION
+    || (value.policyVersion !== CONNECTION_POLICY_VERSION && !(historical && value.policyVersion === 11))
     || value.profile !== CONNECTION_PROFILE_NAME
     || value.keyId !== CONNECTION_ATTESTATION_POLICY.keyId
     || !verifiedAt
@@ -94,7 +94,7 @@ export function sanitizeConnectionAttestation(value) {
   ) return null;
   return {
     schemaVersion: 1,
-    policyVersion: CONNECTION_POLICY_VERSION,
+    policyVersion: value.policyVersion,
     profile: CONNECTION_PROFILE_NAME,
     keyId: CONNECTION_ATTESTATION_POLICY.keyId,
     verifiedAt,
@@ -104,8 +104,8 @@ export function sanitizeConnectionAttestation(value) {
   };
 }
 
-export function connectionAttestationState(value, now = new Date()) {
-  const attestation = sanitizeConnectionAttestation(value);
+export function connectionAttestationState(value, now = new Date(), options) {
+  const attestation = sanitizeConnectionAttestation(value, options);
   if (!attestation) return { status: 'unavailable', ageSeconds: null, verifiedCount: 0, warningCount: 0 };
   const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
   const verifiedMs = new Date(attestation.verifiedAt).getTime();

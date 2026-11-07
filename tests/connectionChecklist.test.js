@@ -58,14 +58,14 @@ function attestation(overrides = {}) {
   };
 }
 
-test('one schema-validated policy owns the approved targets and API-first order', () => {
+test('one schema-validated policy owns the approved targets and CLI-first order', () => {
   assert.equal(validateFcosConnectionPolicy(FCOS_CONNECTION_POLICY), true);
   assert.deepEqual(CONNECTION_CHECKLIST_SEQUENCE.map(({ id }) => id), [
-    'api_first',
-    'cli_fallback',
+    'cli_first',
+    'api_fallback',
     'browser_fallback',
   ]);
-  assert.equal(CONNECTION_POLICY_VERSION, 11);
+  assert.equal(CONNECTION_POLICY_VERSION, 12);
   assert.equal(APPROVED_CONNECTION_BROWSER_PROFILE, 'Otto');
   assert.equal(CONNECTION_PROFILE_NAME, 'fcos-production');
   assert.equal(CONNECTION_LOCAL_STATE_DIRECTORY, '.fcos-cli');
@@ -245,4 +245,18 @@ test('Salesforce promotions fail closed and enforce DEVEE, GitHub, QAT, Producti
     source.indexOf('ensurePublication()') < source.indexOf('ensureValidation(qat)'),
     'Shared publication must succeed before QAT and Production promotion.',
   );
+});
+
+test('policy 11 evidence remains readable only for historical audit', () => {
+  const previousPolicy = attestation({ policyVersion: 11 });
+  const observedAt = new Date(VERIFIED_AT);
+  assert.equal(sanitizeConnectionAttestation(previousPolicy), null);
+  assert.equal(connectionAttestationState(previousPolicy, observedAt).status, 'unavailable');
+
+  const historical = { historical: true };
+  const decoded = sanitizeConnectionAttestation(previousPolicy, historical);
+  assert.equal(decoded.policyVersion, 11);
+  assert.equal(decoded.verifiedAt, VERIFIED_AT);
+  assert.equal(connectionAttestationState(decoded, observedAt, historical).verifiedCount, CONNECTION_TARGETS.length);
+  assert.equal(sanitizeConnectionAttestation(attestation({ policyVersion: 10 }), historical), null);
 });

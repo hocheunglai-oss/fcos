@@ -2552,8 +2552,9 @@ async function universalAuditTrail(body, req) {
       },
     })),
     safeAuditRows(client.from('connection_attestations').select('id,profile,revision,schema_version,policy_version,key_id,verified_at,expires_at,duration_ms,providers,created_at').order('created_at', { ascending: false }).limit(queryLimit), (row) => {
-      const attestation = connectionAttestationFromRow(row);
-      const state = connectionAttestationState(attestation, row.created_at);
+      const historical = { historical: true };
+      const attestation = connectionAttestationFromRow(row, historical);
+      const state = connectionAttestationState(attestation, row.created_at, historical);
       return {
         id: `connection-attestation:${row.id}`,
         source: 'System Connections',
@@ -6889,7 +6890,7 @@ async function cachedHealthCheck(namespace, ttlSeconds, force, loader, payload =
   return cached.value;
 }
 
-function connectionAttestationFromRow(row) {
+function connectionAttestationFromRow(row, options) {
   const attestation = sanitizeConnectionAttestation({
     schemaVersion: row?.schema_version,
     policyVersion: row?.policy_version,
@@ -6899,7 +6900,7 @@ function connectionAttestationFromRow(row) {
     expiresAt: row?.expires_at,
     durationMs: row?.duration_ms,
     providers: row?.providers,
-  });
+  }, options);
   return attestation ? { ...attestation, revision: Number(row.revision) } : null;
 }
 
