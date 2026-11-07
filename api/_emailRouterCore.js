@@ -642,7 +642,7 @@ export async function fetchEmailRouterDetail({ client, mailbox, messageId, hasAt
   }
   const indexed = await indexedPromise;
   const actionHistory = await actionHistoryPromise;
-  if (indexed) {
+  if (indexed && !isDeploymentReadOnly(dependencies.env || process.env)) {
     const attachments = Array.isArray(message?.attachments) ? message.attachments : [];
     const metadataJob = synchronizeEmailRouterAttachmentMetadata(client, indexed, attachments).catch(() => null);
     if (typeof dependencies.defer === 'function') dependencies.defer(metadataJob);
