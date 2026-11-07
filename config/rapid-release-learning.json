@@ -246,6 +246,97 @@
       "measuredTimeSavedMs": null,
       "measuredCallsSaved": null,
       "prevention": "Pagination regressions cover truncated, duplicate, changing-total and activation-present inventories; configuration metadata preflights precede private reads and writes."
+    },
+    {
+      "id": "readonly-salesforce-preview-slot-isolation",
+      "cause": "The prior controller Preview token returned INVALID_SESSION_ID; an earlier legacy-slot update had an unknown acknowledgement.",
+      "correction": "Preserve the unknown legacy request and use a distinct branch-scoped sensitive token key, preferred only inside governed read-only requests.",
+      "preconditions": {
+        "controllerSha": "42375e42e009b91cc455e6a9d3fd307db76d9610",
+        "scope": "Initial controller Preview qualification only"
+      },
+      "verification": {
+        "nativeAuthenticationRunId": 42315766759,
+        "nativeAuthenticationConclusion": "success",
+        "previewDeploymentId": "dpl_9iLm6Z3U5i8tXumWjdrej83Aikc6",
+        "credentialReceiptDeploymentId": 7613403402,
+        "focusedAuthTestsPassed": 26,
+        "credentialSlotTestsPassed": 7,
+        "legacyUnknownPreserved": true,
+        "productionEnvironmentWrites": 0
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Dedicated read-only preference tests preserve JWT-first canonical behavior and durable refresh refusal; sanitized native HTTP observations precede acknowledgements."
+    },
+    {
+      "id": "stale-unstarted-legacy-auth-gate",
+      "cause": "The handover quiescence check found an authenticated-release run waiting since 23 October, after costly bootstrap admission.",
+      "correction": "Verify the exact old restricted job has no executed steps, journal its cancellation intent, cancel only that stale waiting run, and read back its terminal state.",
+      "preconditions": {
+        "repository": "hocheunglai-oss/fcos",
+        "runId": 40012985920,
+        "credentialedJobId": 120617856601,
+        "originalStatus": "waiting",
+        "credentialedStepsExecuted": 0
+      },
+      "verification": {
+        "originalFailureCode": "HANDOVER_QUIESCENT_QUALIFICATION_REQUIRED",
+        "nativeIntentDeploymentId": 7614160257,
+        "nativeReadbackStatus": "completed",
+        "nativeReadbackConclusion": "cancelled",
+        "productionMutations": 0,
+        "diagnosticProviderTextStored": false
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Check exact overlapping workflow liveness before private setup and preserve active-write/unknown-operation fences; cancellation is not an automatic repair recipe."
+    },
+    {
+      "id": "native-handover-plan-hash-domain",
+      "cause": "An external plan helper used locale-ordered release canonicalization for the native handover plan; nested controlPreimage/controllerSha keys produce a different digest.",
+      "correction": "Use the source-owned handoverDigest for handover plans and keep existing manifest/bootstrap/successor digest domains unchanged.",
+      "verification": {
+        "command": "node --test outputs/rapid-release-implementation-20261106-01a1b035/dispatch-initial-handover-20261107.test.mjs",
+        "passed": 11,
+        "skipped": 0,
+        "durationMs": 230.070875,
+        "providerCalls": 0,
+        "nativeDispatches": 0,
+        "reproducedHashMismatch": true
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Cross-domain regression rejects a locale digest while accepting the actual source-owned native handover digest before dispatch."
+    },
+    {
+      "id": "handover-scoped-lease-finalized-recovery",
+      "cause": "The original setup held one five-minute managed database lease across staging waits and lacked recovery from final receipt success before activation. A merged installation also needed a separately bound replacement PR.",
+      "correction": "Close source-owned database contexts before waits, open a fresh native context at each checkpoint, recover activation only from the exact locked private and owner GitHub final receipts, and bind replacement PR identity without changing old plan bytes.",
+      "verification": {
+        "rootIntegratedTestsPassed": 182,
+        "skipped": 0,
+        "firstGroupMs": 13188.474958,
+        "remainingGroupMs": 9303.757125,
+        "changedSourceLintPassed": true,
+        "typecheckPassed": true,
+        "simulatedStageWaitMs": 600000,
+        "stageWritesAcrossResume": 1,
+        "smokeRunsAcrossResume": 1,
+        "finalReceiptWritesAcrossResume": 1,
+        "regressionDigest": "60553683d8a2390fe9db42715759870a123072203a5d9a600d35f7ff7a26f486",
+        "nativeProviderCalls": 0,
+        "liveActivationVerified": false
+      },
+      "repairTime": {
+        "measurement": "Wall elapsed from sanitized exact handover refusal capture through integrated affected tests",
+        "startedAt": "2026-11-07T00:42:19.440Z",
+        "completedAt": "2026-11-07T00:54:38.970102+00:00",
+        "elapsedMs": 739530
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Real native-role lifecycle fixtures, actual bootstrap guard plus final receipt recovery, strict unknown acknowledgement tests, precredential stale workflow gate, and unchanged historical PR plan golden hashes."
     }
   ]
 }

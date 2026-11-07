@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { handoverDigest, handoverPins, auditHandover, assertHandoverActivation, validateAdministratorApplicationInventory, withHandoverReadOnlyTransaction, OLD_RELEASE_VARIABLES, OLD_RELEASE_WORKFLOWS } from './handover.mjs';
+import { handoverDigest, handoverPins, readFinalizedHandover, validateAdministratorApplicationInventory, withHandoverReadOnlyTransaction, OLD_RELEASE_VARIABLES, OLD_RELEASE_WORKFLOWS } from './handover.mjs';
 import { digest, requireCondition, validateManifest, targets } from './contract.mjs';
 import { verifyBootstrapAdmission, verifyBootstrapSuccessorAdmission } from './bootstrap-admission.mjs';
 import { bootstrapSuccessorConfiguration } from './bootstrap-successor.mjs';
@@ -47,18 +47,22 @@ export async function collectRapidJournalState({ pages, manifest, actorIds }) {
     ignoredQualification: { releaseId: manifest.releaseId, manifestHash: digest(manifest) } };
 }
 
-export async function readActiveHandover({ get }) {
+export async function readActiveHandover({ get, pendingPlan }) {
   const pins = handoverPins(), base = `/repos/${pins.repository}`;
   const [enabled, pointer] = await Promise.all(['FCOS_RAPID_RELEASE_ENABLED','FCOS_RAPID_RELEASE_HANDOVER_ID'].map(name => get(`${base}/actions/variables/${name}`)));
   if (!pointer && enabled?.value !== 'true') return null;
-  requireCondition(enabled?.value === 'true' && /^[1-9][0-9]*$/.test(pointer?.value || ''), 'HANDOVER_ACTIVE_POINTER_UNCERTAIN');
+  requireCondition((enabled?.value === 'true' || pendingPlan && (!enabled || enabled.value === 'false')) && /^[1-9][0-9]*$/.test(pointer?.value || ''), 'HANDOVER_ACTIVE_POINTER_UNCERTAIN');
   const record = await get(`${base}/deployments/${pointer.value}`), p = record?.payload;
   requireCondition(record?.id === Number(pointer.value) && record?.creator?.login === pins.account
     && p?.kind === 'fcos_rapid_release_handover' && p.repository === pins.repository && p.projectId === pins.projectId && p.teamId === pins.teamId
     && /^[a-z0-9-]{8,96}$/.test(p.handoverId || '') && /^[a-f0-9]{64}$/.test(p.planHash || '')
     && /^[a-f0-9]{40}$/.test(p.controllerSha || '') && Number.isSafeInteger(p.databaseReceiptId) && p.databaseReceiptId > 0
     && /^[a-f0-9]{64}$/.test(p.nativeCoordinatorReadbackDigest || ''), 'HANDOVER_ACTIVE_RECEIPT_INVALID');
-  return { deploymentId: record.id, handoverId: p.handoverId, planHash: p.planHash, controllerSha: p.controllerSha,
+  // Recovery alone may observe the exact finalized pointer before enablement.
+  // The caller must still match its native receipt to the locked private final.
+  const pending = enabled?.value !== 'true';
+  requireCondition(!pending || p.planHash === handoverDigest(pendingPlan) && handoverDigest(p.plan) === handoverDigest(pendingPlan), 'HANDOVER_ACTIVE_POINTER_UNCERTAIN');
+  return { ...(pending ? { pendingActivation: true } : {}), deploymentId: record.id, handoverId: p.handoverId, planHash: p.planHash, controllerSha: p.controllerSha,
     databaseReceiptId: p.databaseReceiptId, nativeCoordinatorReadbackDigest: p.nativeCoordinatorReadbackDigest };
 }
 
@@ -165,7 +169,7 @@ export async function createHandoverAdapter({ plan, db, connection, env = proces
         && manifest.candidate.sha === p.candidateSha && manifest.build.buildId === p.buildId, 'HANDOVER_EXACT_NATIVE_PLAN_REQUIRED');
     },
     rapidJournalAudit: () => collectRapidJournalState({ pages, manifest, actorIds: [operator.id, bot.id] }),
-    activeHandover: () => readActiveHandover({ get: path => request(path) }),
+    activeHandover: ({ pendingPlan } = {}) => readActiveHandover({ get: path => request(path), pendingPlan }),
     eventSubscribers: () => collectReviewedEventSubscribers({ pages, applicationInventoryReport: appReport }),
     qualification: async () => { requireCondition(stagedQualification, 'HANDOVER_QUALIFICATION_NOT_RUN'); return stagedQualification; },
     async findDeployment({ planHash, kind }) {
@@ -216,18 +220,16 @@ export async function createHandoverAdapter({ plan, db, connection, env = proces
       }
     },
     async activate(result) {
-      requireCondition(result.phase === 'finalize' && Number.isSafeInteger(result.deploymentId), 'HANDOVER_FINAL_RECEIPT_REQUIRED');
-      const audit = await auditHandover({ db, connection, github, vercel: nativeVercel });
-      const receipt = assertHandoverActivation({ plan, audit, deploymentId: result.deploymentId });
-      const native = await request(`${base}/deployments/${result.deploymentId}`);
-      requireCondition(native.payload?.planHash === handoverDigest(plan) && native.payload.databaseReceiptId === receipt.databaseReceiptId
-        && native.payload.nativeCoordinatorReadbackDigest === receipt.evidenceDigest, 'HANDOVER_ACTIVATION_RECEIPT_MISMATCH');
-      for (const [name, value] of [['FCOS_RAPID_RELEASE_HANDOVER_ID', String(result.deploymentId)], ['FCOS_RAPID_RELEASE_ENABLED', 'true']]) {
+      const recovered = await readFinalizedHandover({ plan, db, connection, github, vercel: nativeVercel });
+      requireCondition(recovered && (!result || result.phase === 'finalize' && result.planHash === recovered.planHash
+        && result.deploymentId === recovered.deploymentId), 'HANDOVER_FINAL_RECEIPT_REQUIRED');
+      for (const [name, value] of [['FCOS_RAPID_RELEASE_HANDOVER_ID', String(recovered.deploymentId)], ['FCOS_RAPID_RELEASE_ENABLED', 'true']]) {
         const existing = await request(`${base}/actions/variables/${name}`);
-        await request(existing ? `${base}/actions/variables/${name}` : `${base}/actions/variables`, existing ? 'PATCH' : 'POST', { name, value });
+        if (existing?.value !== value) await request(existing ? `${base}/actions/variables/${name}` : `${base}/actions/variables`, existing ? 'PATCH' : 'POST', { name, value });
         requireCondition((await request(`${base}/actions/variables/${name}`))?.value === value, 'HANDOVER_ACTIVATION_READBACK_REQUIRED');
       }
-      writeFileSync(resolve('handover-result.json'), `${JSON.stringify(result)}\n`, { mode: 0o600 });
+      writeFileSync(resolve('handover-result.json'), `${JSON.stringify(recovered)}\n`, { mode: 0o600 });
+      return recovered;
     },
   };
 }
