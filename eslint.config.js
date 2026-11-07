@@ -37,6 +37,9 @@ export default [
       "unused-imports": pluginUnusedImports,
     },
     rules: {
+      // React's flat preset replaces the core preset's rules above. Keep the
+      // undefined-name check explicit so runtime render crashes fail lint.
+      "no-undef": "error",
       "no-unused-vars": "off",
       "react/jsx-uses-vars": "error",
       "react/jsx-uses-react": "error",

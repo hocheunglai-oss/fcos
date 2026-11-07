@@ -1201,6 +1201,8 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
   const currentStep = text(activeCase.currentStep || workflow.currentStep);
   const financials = activeCase.financialSummary || {};
   const activeSupplierRows = reviewRows.filter((row) => rowSupplierId(row) === activeSupplierId);
+  const activeSupplierNoteRequired = !routineCostReview(activeSupplierRows, reviews, extraDrafts,
+    addDrafts.filter(item => item.supplierAccountId === activeSupplierId));
   const unresolvedBuyerRows = reviewRows.filter((row) => !['include', 'exclude'].includes(reviews[row.key]?.buyerChargeDecision));
   const visibleBuyerRows = showAllBuyerRows ? reviewRows : unresolvedBuyerRows;
 
@@ -1325,8 +1327,8 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
               </div>
               {canSupplierEdit && <div className="space-y-3"><Button type="button" variant="outline" size="sm" className="gap-2" onClick={() => setAddDrafts((current) => [...current, initialAddDraft(activeCase, activeSupplierId)])}><PackagePlus className="h-4 w-4" /> Add supplier charge</Button>{addDrafts.filter((draft) => text(draft.supplierAccountId) === activeSupplierId).map((draft) => <NewExtraCostEditor key={draft.localId} draft={draft} products={products} supplierAccounts={supplierAccounts.filter((row) => text(row.id) === activeSupplierId)} files={[]} defaultPaymentTerm={supplierPaymentTerm} supplierStage disabled={!canSupplierEdit} onChange={(patch) => updateAddDraft(draft.localId, patch)} onRemove={() => setAddDrafts((current) => current.filter((row) => row.localId !== draft.localId))} />)}</div>}
               <div className="space-y-2">
-                <RequiredLabel required={costNoteRequired} htmlFor={`supplier-review-note-${activeSupplierId}`}>Supplier reference or note</RequiredLabel>
-                <Textarea id={`supplier-review-note-${activeSupplierId}`} aria-required={costNoteRequired} value={supplierReviewNotes[activeSupplierId] || ''} onChange={(event) => setSupplierReviewNotes((current) => ({ ...current, [activeSupplierId]: event.target.value.slice(0, 1000) }))} placeholder="Invoice reference, supplier confirmation, or short review note" disabled={!canSupplierEdit || Boolean(supplierSavingId)} />
+                <RequiredLabel required={activeSupplierNoteRequired} htmlFor={`supplier-review-note-${activeSupplierId}`}>Supplier reference or note</RequiredLabel>
+                <Textarea id={`supplier-review-note-${activeSupplierId}`} aria-required={activeSupplierNoteRequired} value={supplierReviewNotes[activeSupplierId] || ''} onChange={(event) => setSupplierReviewNotes((current) => ({ ...current, [activeSupplierId]: event.target.value.slice(0, 1000) }))} placeholder="Invoice reference, supplier confirmation, or short review note" disabled={!canSupplierEdit || Boolean(supplierSavingId)} />
                 <p className="text-xs text-muted-foreground">One note covers all charges for this supplier. Salesforce Files remain optional.</p>
               </div>
               {salesforceFiles.length ? <OptionalEvidence files={salesforceFiles} selectedIds={activeSupplierRows[0] ? reviews[activeSupplierRows[0].key]?.evidenceDocumentIds || [] : []} disabled={!canSupplierEdit || Boolean(supplierSavingId)} onToggle={(fileId) => activeSupplierRows.forEach((row) => toggleEvidence(row.key, fileId))} /> : null}
