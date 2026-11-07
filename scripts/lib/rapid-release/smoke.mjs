@@ -276,14 +276,15 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
     catch (error) {
       code = /^SMOKE_[A-Z0-9_]+$/.test(error?.code || '') ? error.code : 'SMOKE_MODULE_SURFACE_FAILED';
     }
-    diagnostic({ module, surface, passed: Boolean(receipt), elapsedMs: Math.round(performance.now() - start), ...(code ? { code } : {}) });
+    diagnostic.record({ module, surface, passed: Boolean(receipt), elapsedMs: Math.round(performance.now() - start), ...(code ? { code } : {}) });
     return receipt;
   }
   let phase = 'SETUP';
   let browser, context, privateEnv, diagnosticReads, cleanupFailed = false;
-  let denialReceipts = [], extraReads = [], desktopChecks = [], authProbed = false, probeError, rejectProbe;
+  let denialReceipts = [], extraReads = [], desktopChecks = [], authProbed = false, probeError, rejectProbe, resolveProbe;
   const probeFailure = new Promise((_, reject) => { rejectProbe = reject; });
   probeFailure.catch(() => {});
+  const probeSettled = new Promise(resolve => { resolveProbe = resolve; });
   try {
     const directory = await mkdtemp(join(env.RUNNER_TEMP || tmpdir(), 'fcos-rapid-smoke-'));
     privateEnv = { FCOS_E2E_STATE_DIR: directory, FCOS_E2E_STORAGE_STATE: join(directory, 'auth.json'), FCOS_E2E_PROTECTION_STATE: join(directory, 'protection.json') };
@@ -334,7 +335,11 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
         }
         await route.fulfill({ response: actual });
       } catch (error) { probeError = error; rejectProbe(error); await route.abort('blockedbyclient'); }
-      finally { await actual?.dispose(); }
+      finally {
+        try { await actual?.dispose(); }
+        catch { rejectProbe(fail('SMOKE_AUTH_RESPONSE_CLEANUP_FAILED')); }
+        finally { resolveProbe(); }
+      }
       return true;
     });
     const page = gate.page;
@@ -357,6 +362,7 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
       Promise.race([page.waitForResponse(response => response.url() === `${origin}/api/functions/authContext` && response.request().method() === 'POST', { timeout: 90000 }), probeFailure]),
       page.getByRole('button', { name: 'Login', exact: true }).click(),
     ]);
+    await Promise.race([probeSettled, probeFailure]);
     await page.waitForURL(url => url.origin === origin && url.pathname !== '/login', { timeout: 30000 });
     requireFact(authResponse.status() === 200 && authProbed && !probeError, probeError?.code || 'SMOKE_LOGIN_NOT_PROVEN');
     assertIdentity(await authResponse.json(), credentials, normal, modules);
@@ -380,7 +386,7 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
       requireFact(new URL(page.url()).origin === origin, 'SMOKE_CANDIDATE_NAVIGATION_CHANGED');
       reads.push({ module, path: reader.path, status: 200, authenticated: true, dataVerified: true, surface: 'browser' });
     }
-    if (normal) for (const module of modules.filter(value => !baselineModules.includes(value))) {
+    if (normal && diagnostic?.desktop !== false) for (const module of modules.filter(value => !baselineModules.includes(value))) {
       phase = `DESKTOP_${module.toUpperCase()}`;
       const receipt = await checkModule(module, 'desktop', () => verifyModuleDesktop({ page, origin, module }));
       if (receipt) desktopChecks.push(receipt);
@@ -412,10 +418,10 @@ export function runStagedSmoke(options) {
 
 // Diagnostics share the request guard and identity checks, but never produce
 // release evidence, even when every module succeeds.
-export async function diagnoseStagedSmoke(options) {
+export async function diagnoseStagedSmoke(options, { desktop = true } = {}) {
   const outcomes = [];
   let code;
-  try { await stagedSmoke(options, outcome => outcomes.push(outcome)); }
+  try { await stagedSmoke(options, { record: outcome => outcomes.push(outcome), desktop }); }
   catch (error) {
     code = /^(?:SMOKE_|NORMAL_ROLE_|MODULE_)[A-Z0-9_]+$/.test(error?.code || '') ? error.code : 'SMOKE_DIAGNOSTIC_FAILED';
   }
