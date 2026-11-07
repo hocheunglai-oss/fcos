@@ -17,6 +17,18 @@ function pullRequestNumber(plan) {
   const number=Object.hasOwn(plan||{},'pullRequestNumber')?plan.pullRequestNumber:124;
   check(positive(number),'BOOTSTRAP_SUCCESSOR_PLAN_INVALID');return number;
 }
+// The frozen bootstrap predates the recovery workflow installed by protected PR 126.
+const installedRecovery = Object.freeze({
+  rootPlanHash: 'be974ea4298298621c773eef34d9bba15e64c9d64403ed7161c5a413ba80b3ef',
+  mergeSha: '821aacbbb86a4c3db2dc692e02f69fd014c506b0',
+  path: '.github/workflows/fcos-rapid-handover-recovery.yml',
+  blobSha: '63e66ae28f30fe2a4bd2f2e8de40ed6018449f93',
+});
+function inheritsInstalledRecovery(plan, patch) {
+  return plan.rootPlanHash === installedRecovery.rootPlanHash && patch.path === installedRecovery.path
+    && patch.oldSha === null && patch.oldMode === null
+    && patch.newSha === installedRecovery.blobSha && patch.newMode === '100644';
+}
 function assertPlan(plan,root) {
   const {operationId,...body}=plan||{},hasPullRequest=Object.hasOwn(plan||{},'pullRequestNumber');
   check(plan?.schemaVersion===1 && plan.kind===kind && positive(plan.revision) && isSha(plan.controllerSha) && plan.controllerSha!==root.controllerSha
@@ -27,7 +39,7 @@ function assertPlan(plan,root) {
     && operationId===`fcos-bootstrap-successor-${digest(body).slice(0,40)}` && Array.isArray(plan.patch) && plan.patch.length>0 && plan.patch.length<=100
     && same(plan.patch.map(x=>x.path),[...new Set(plan.patch.map(x=>x.path))].sort())
     && plan.patch.every(x=>typeof x.path==='string' && /^[A-Za-z0-9_.@()[\]/ -]{1,250}$/.test(x.path) && !x.path.split('/').includes('..')
-      && !/^(?:\.github\/workflows\/|force-app\/|supabase\/migrations\/|vercel\.json$|config\/fcosConnections\.js$|package(?:-lock)?\.json$|scripts\/rapid-release\/(?:bootstrap|handover)-guard\.sql$)/.test(x.path)
+      && (!/^(?:\.github\/workflows\/|force-app\/|supabase\/migrations\/|vercel\.json$|config\/fcosConnections\.js$|package(?:-lock)?\.json$|scripts\/rapid-release\/(?:bootstrap|handover)-guard\.sql$)/.test(x.path) || inheritsInstalledRecovery(plan,x))
       && same(Object.keys(x).sort(),['path','oldSha','newSha','oldMode','newMode'].sort())
       && [x.oldSha,x.newSha].every(v=>v===null||isSha(v)) && [x.oldMode,x.newMode].every(v=>v===null||['100644','100755'].includes(v))
       && (x.oldSha!==x.newSha || x.oldMode!==x.newMode) && (x.oldSha===null)===(x.oldMode===null) && (x.newSha===null)===(x.newMode===null))
@@ -86,6 +98,12 @@ async function source(github,plan,root,repo,{requireOpen=false}={}) {
   const patch=[...new Set(trees.flatMap(t=>[...t.keys()]))].sort().flatMap(path=>{const [a,b]=trees.map(t=>t.get(path));return a?.sha===b?.sha&&a?.mode===b?.mode?[]:
     [{path,oldSha:a?.sha||null,newSha:b?.sha||null,oldMode:a?.mode||null,newMode:b?.mode||null}];});
   check(same(patch,plan.patch),'BOOTSTRAP_SUCCESSOR_REVIEWED_PATCH_CHANGED');
+  if (patch.some(entry=>inheritsInstalledRecovery(plan,entry))) {
+    const installed = await read(github,`${base()}/compare/${installedRecovery.mergeSha}...${plan.controllerSha}`);
+    check(installed.status==='ahead' && installed.base_commit?.sha===installedRecovery.mergeSha
+      && installed.merge_base_commit?.sha===installedRecovery.mergeSha && installed.total_commits>0,
+    'BOOTSTRAP_SUCCESSOR_INSTALLED_RECOVERY_ANCESTRY_REQUIRED');
+  }
   if(requireOpen){const number=pullRequestNumber(plan),[pr,ref]=await Promise.all([read(github,`${base()}/pulls/${number}`),read(github,`${base()}/git/ref/heads/${encodeURIComponent(plan.branch)}`)]);
     check(pr.number===number && pr.state==='open' && pr.base?.repo?.id===repo.id && repo.default_branch==='main' && pr.base.ref===repo.default_branch && pr.head?.repo?.id===repo.id
       && pr.head.ref===plan.branch && pr.head.sha===plan.controllerSha && ref.object?.sha===plan.controllerSha,'BOOTSTRAP_SUCCESSOR_EXACT_PR_REQUIRED');}
