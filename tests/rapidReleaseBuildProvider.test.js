@@ -41,8 +41,6 @@ function nativeFixture() {
  const environment={id:9,name:'fcos-production-release',can_admins_bypass:false,protection_rules:[{type:'required_reviewers',reviewers:[{reviewer:{login:p.account}}]}]};
  const gh={pages:async()=>[],identity:async()=>({user:{login:'github-actions[bot]',id:1},repo:{default_branch:'main'}}),read:async path=>{
   if(path.includes('/contents/.github/workflows/'))return{type:'file',sha:'e'.repeat(40)};
-  if(path.endsWith('/FCOS_RAPID_RELEASE_ENABLED'))return{value:'true'};
-  if(path.endsWith('/FCOS_RAPID_RELEASE_HANDOVER_ID'))return{value:'100'};
   if(path.endsWith('/deployments/100'))return{id:100,creator:{login:p.account},payload:setup};
   if(path.endsWith('/runs/88'))return run;
   if(path.endsWith('/runs/77'))return{id:77,head_sha:m.controllerSha,path:'.github/workflows/fcos-rapid-handover.yml',event:'workflow_dispatch',actor:{login:p.account},conclusion:'success',run_attempt:1,display_title:`FCOS rapid handover ${setup.planHash} ${sha}`};
@@ -52,8 +50,18 @@ function nativeFixture() {
   if(path.includes('/environments/'))return environment;
   throw Error(`unexpected native read ${path}`);
  }};
- return{m,gh,run,setup,env:{GITHUB_ACTIONS:'true',GITHUB_RUN_ID:'88',GITHUB_REPOSITORY:p.repository,GITHUB_SHA:m.controllerSha}};
+ return{m,gh,run,setup,env:{FCOS_RAPID_RELEASE_ENABLED:'true',FCOS_RAPID_RELEASE_HANDOVER_ID:'100',GITHUB_ACTIONS:'true',GITHUB_RUN_ID:'88',GITHUB_REPOSITORY:p.repository,GITHUB_SHA:m.controllerSha}};
 }
+test('trusted activation values require the exact native Deployment ID', async () => {
+ const fixture=nativeFixture();
+ for(const pointer of ['', '12/../100', '9007199254740992']) {
+  const env={...fixture.env,FCOS_RAPID_RELEASE_HANDOVER_ID:pointer};
+  await assert.rejects(verifyExecution({github:fixture.gh,manifest:fixture.m,env,phase:'stage'}),/RAPID_RELEASE_HANDOVER_POINTER_REQUIRED/);
+ }
+ const read=fixture.gh.read;
+ fixture.gh.read=async path=>path.endsWith('/deployments/100')?{...(await read(path)),id:101}:read(path);
+ await assert.rejects(verifyExecution({github:fixture.gh,manifest:fixture.m,env:fixture.env,phase:'stage'}),/RAPID_RELEASE_HANDOVER_POINTER_CHANGED/);
+});
 test('native admission requires durable owner-recorded qualification and exact current manifest',async()=>{
  const f=nativeFixture();await verifyExecution({github:f.gh,manifest:f.m,env:f.env,phase:'stage'});
  f.setup.nativeReview.reviewer='unapproved-publisher';
