@@ -5,6 +5,7 @@ const reader = (handler, fields, coverage = 'module_data_read', body = {}) => Ob
   path: `/api/functions/${handler}`, fields: Object.freeze(fields), coverage, body: Object.freeze(body),
 });
 const incomingPaymentSignAdvisory = 'Supplier-invoice-linked negative payments are classified as supplier refunds. Confirm if Salesforce uses the opposite sign.';
+const stagedRefreshDenial = 'This verification environment permits read-only operations.';
 export const MODULE_READERS = Object.freeze({
   dashboard: Object.freeze({ ...reader('dashboardSummary', []), route: '/', heading: 'Dashboard' }),
   markets: Object.freeze({ ...reader('marketPulseSnapshot', []), route: '/markets', heading: 'Markets' }),
@@ -56,9 +57,13 @@ export function moduleReaderPayloadVerified(module, payload) {
   if (module === 'settings') return Number.isSafeInteger(data.settings?.revision) && data.settings.revision > 0
     && Number.isFinite(data.settings.annualInterestRatePct) && ['UBS', 'DBS'].every(bank => Number.isFinite(data.settings.bankChargesUsd?.[bank]));
   if (module === 'email_router') return typeof data.mailbox?.id === 'string' && Array.isArray(data.destinations) && Array.isArray(data.groups);
-  if (module === 'xero_portal') return typeof data.xero?.configured === 'boolean' && typeof data.xero.connected === 'boolean'
-    && !data.xero.refreshError && Object.keys(data.externalActions || {}).length > 0
-    && Object.values(data.externalActions).every(gate => gate.enabled === false);
+  if (module === 'xero_portal') {
+    const gates = Object.values(data.externalActions || {});
+    return typeof data.xero?.configured === 'boolean' && typeof data.xero.connected === 'boolean'
+      && gates.length > 0 && gates.every(gate => gate?.enabled === false)
+      && (!data.xero.refreshError || (data.xero.refreshError === stagedRefreshDenial
+        && gates.every(gate => gate.control === 'deployment_read_only')));
+  }
   if (module === 'hedge_desk') return ['physicals', 'swaps', 'mops', 'clearing', 'counterparties', 'invoices', 'auditLogs'].every(key => Array.isArray(data[key]))
     && data.capabilities && typeof data.capabilities === 'object' && data.expiryAutomation?.readOnly === true;
   if (module === 'pnl') return Array.isArray(data.rows) && Number.isSafeInteger(data.totals?.count) && data.totals.count === data.rows.length;

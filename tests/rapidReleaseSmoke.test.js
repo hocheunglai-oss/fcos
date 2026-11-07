@@ -249,6 +249,18 @@ test('incoming payment verification distinguishes the sign advisory from missing
   assert.equal(moduleReaderPayloadVerified('brokers', { rows: [], schemaWarnings: [advisory] }), false);
 });
 
+test('Xero status accepts the staged refresh refusal only when every action is disabled by the stage fence', () => {
+  const xero = { configured: true, connected: true, refreshError: 'This verification environment permits read-only operations.' };
+  const gate = { enabled: false, control: 'deployment_read_only' };
+  const verified = (status, action) => moduleReaderPayloadVerified('xero_portal', {
+    xero: status, externalActions: { action },
+  });
+  assert.equal(verified(xero, gate), true);
+  assert.equal(verified({ ...xero, refreshError: 'Unexpected token failure' }, gate), false);
+  assert.equal(verified(xero, { ...gate, enabled: true }), false);
+  assert.equal(verified(xero, { ...gate, control: 'emergency_kill_switch' }), false);
+});
+
 test('five-minute live observation checks native-bound receipt, static identity and anonymous affected read gates only', async () => {
   let time = 0; const sleeps = [], calls = [];
   const proof = await observeLive({ manifest: manifest({ modules: ['settings'] }), staged, durationMs: 300000, fetchImpl: publicFetch({ calls }), now: () => time,
