@@ -246,6 +246,10 @@ async function verifyModuleDesktop({ page, origin, module }) {
   await page.waitForFunction(() => !/\b(?:loading|fetching|preparing)\b/i.test(document.body.innerText), undefined, { timeout: 30000 });
   if (module === 'settings') await page.getByLabel(/Annual interest rate/i).waitFor({ state: 'visible', timeout: 30000 });
   else if (module === 'xero_portal') await page.locator('dl dd').first().waitFor({ state: 'visible', timeout: 30000 });
+  else if (module === 'admin') {
+    await page.locator('[aria-label="Group details"]').first().waitFor({ state: 'visible', timeout: 30000 });
+    await page.getByText('Group name', { exact: true }).first().waitFor({ state: 'visible', timeout: 30000 });
+  }
   else {
     const surface = page.locator('table, [role="table"], [role="grid"]');
     // No heading-only success: require an actual table/grid or an explicit
