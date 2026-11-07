@@ -71,6 +71,8 @@ function optionalReadExclusion(url, request) {
       && ['q,url,w', 'dpl,q,url,w'].includes([...url.searchParams.keys()].sort().join(','))) return 'issuer_images';
     if (['fetch', 'xhr'].includes(type) && ['/', '/admin'].includes(url.pathname)
       && /^\?_rsc=[A-Za-z0-9_-]+$/.test(url.search)) return 'issuer_prefetch';
+    if (['fetch', 'xhr'].includes(type) && url.pathname === '/api/parser-reports'
+      && [...url.searchParams.keys()].length === 3) return 'issuer_parser_reports';
     if (['fetch', 'xhr'].includes(type) && url.pathname === '/api/admin/dashboard-swatches'
       && !url.search) return 'issuer_dashboard_swatches';
   }
@@ -251,7 +253,9 @@ async function verifyModuleDesktop({ page, origin, module }) {
   requireFact(spec, 'MODULE_DESKTOP_COVERAGE_MISSING');
   await page.goto(`${origin}${spec.route}`, { waitUntil: 'domcontentloaded', timeout: 45000 });
   requireFact(page.url() === `${origin}${spec.route}`, 'SMOKE_CANDIDATE_NAVIGATION_CHANGED');
-  await page.getByRole('heading', { name: spec.heading }).first().waitFor({ state: 'visible', timeout: 30000 });
+  try {
+    await page.getByRole('heading', { name: spec.heading }).first().waitFor({ state: 'visible', timeout: 30000 });
+  } catch { throw fail('SMOKE_MODULE_DESKTOP_HEADING_MISSING'); }
   if (spec.readControl) {
     const [response] = await Promise.all([
       page.waitForResponse(value => value.url() === `${origin}${moduleReaders[module].path}` && value.request().method() === 'POST', { timeout: 45000 }),
@@ -260,25 +264,27 @@ async function verifyModuleDesktop({ page, origin, module }) {
     requireFact(response.status() === 200 && await response.finished() === null
       && modulePayloadVerified(module, await response.json()), 'SMOKE_MODULE_READ_FAILED');
   }
-  if (module === 'settings') await page.getByLabel(/Annual financing rate/i).waitFor({ state: 'visible', timeout: 30000 });
-  else if (module === 'xero_portal') {
-    await page.getByRole('tab', { name: 'Receipts', exact: true }).click();
-    await page.locator('[aria-label="Receipt audit"] tbody tr').first().waitFor({ state: 'visible', timeout: 30000 });
-  }
-  else if (module === 'email_router') {
-    await page.locator('button:has(time), :text-is("Inbox is clear")').first().waitFor({ state: 'visible', timeout: 30000 });
-  }
-  else if (module === 'admin') {
-    await page.locator('[aria-label="Group details"]').first().waitFor({ state: 'visible', timeout: 30000 });
-    await page.getByText('Group name', { exact: true }).first().waitFor({ state: 'visible', timeout: 30000 });
-  }
-  else {
-    // Wait for populated rows or an explicit business empty state, including
-    // when the table is mounted after the first React render.
-    const surface = page.locator('table tbody tr, [role="rowgroup"] [role="row"]');
-    const empty = page.getByText(/No (?:records|rows|items|invoices|payments|receipts|messages|contracts|terms|trades|positions|data|STEMs|matching|Accounts|Dispute Workflow|forecast rows)(?:\b)/i);
-    await surface.or(empty).first().waitFor({ state: 'visible', timeout: 30000 });
-  }
+  try {
+    if (module === 'settings') await page.getByLabel(/Annual financing rate/i).waitFor({ state: 'visible', timeout: 30000 });
+    else if (module === 'xero_portal') {
+      await page.getByRole('tab', { name: 'Receipts', exact: true }).click();
+      await page.locator('[aria-label="Receipt audit"] tbody tr').first().waitFor({ state: 'visible', timeout: 30000 });
+    }
+    else if (module === 'email_router') {
+      await page.locator('button:has(time), :text-is("Inbox is clear")').first().waitFor({ state: 'visible', timeout: 30000 });
+    }
+    else if (module === 'admin') {
+      await page.locator('[aria-label="Group details"]').first().waitFor({ state: 'visible', timeout: 30000 });
+      await page.getByText('Group name', { exact: true }).first().waitFor({ state: 'visible', timeout: 30000 });
+    }
+    else {
+      // Wait for populated rows or an explicit business empty state, including
+      // when the table is mounted after the first React render.
+      const surface = page.locator('table tbody tr, [role="rowgroup"] [role="row"]');
+      const empty = page.getByText(/No (?:records|rows|items|invoices|payments|receipts|messages|contracts|terms|trades|positions|data|STEMs|matching|Accounts|Dispute Workflow|forecast rows)(?:\b)/i);
+      await surface.or(empty).first().waitFor({ state: 'visible', timeout: 30000 });
+    }
+  } catch { throw fail('SMOKE_MODULE_DESKTOP_CONTENT_MISSING'); }
   const body = await page.locator('body').innerText();
   requireFact(!/Access denied|Something went wrong|temporarily unavailable|could not (?:load|read|verify)|No validator data loaded|Loading Hedge Desk/i.test(body), 'SMOKE_MODULE_DESKTOP_INCOMPLETE');
   return { module, route: spec.route, rendered: true, dataSource: moduleReaders[module].path, businessSurface: true,
@@ -403,7 +409,8 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
       requireFact(new URL(page.url()).origin === origin, 'SMOKE_CANDIDATE_NAVIGATION_CHANGED');
       reads.push({ module, path: reader.path, status: 200, authenticated: true, dataVerified: true, surface: 'browser' });
     }
-    if (normal && diagnostic?.desktop !== false) for (const module of modules.filter(value => !baselineModules.includes(value))) {
+    if (normal && diagnostic?.desktop !== false) for (const module of modules.filter(value => !baselineModules.includes(value)
+      && (!diagnostic?.desktopModules || diagnostic.desktopModules.includes(value)))) {
       phase = `DESKTOP_${module.toUpperCase()}`;
       const receipt = await checkModule(module, 'desktop', () => verifyModuleDesktop({ page, origin, module }));
       if (receipt) desktopChecks.push(receipt);
@@ -435,10 +442,15 @@ export function runStagedSmoke(options) {
 
 // Diagnostics share the request guard and identity checks, but never produce
 // release evidence, even when every module succeeds.
-export async function diagnoseStagedSmoke(options, { desktop = true } = {}) {
+export async function diagnoseStagedSmoke(options, { desktop = true, desktopModules, onOutcome } = {}) {
   const outcomes = [];
   let code;
-  try { await stagedSmoke(options, { record: outcome => outcomes.push(outcome), desktop }); }
+  try {
+    await stagedSmoke(options, {
+      record(outcome) { outcomes.push(outcome); onOutcome?.(outcome); },
+      desktop, desktopModules,
+    });
+  }
   catch (error) {
     code = /^(?:SMOKE_|NORMAL_ROLE_|MODULE_)[A-Z0-9_]+$/.test(error?.code || '') ? error.code : 'SMOKE_DIAGNOSTIC_FAILED';
   }

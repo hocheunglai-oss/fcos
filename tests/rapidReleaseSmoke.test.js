@@ -315,7 +315,7 @@ test('denied module reads, heading-only pages, unsafe snapshots and partial data
   for (const options of [{ badDesktop: true }, { deniedModule: 'settings' }]) {
     const fixture = browserFixture(options);
     const run = runStagedSmoke({ manifest: manifest({ normalRole: true, modules: [options.badDesktop ? 'brokers' : 'settings'] }), staged, env, fetchImpl: publicFetch(), browserFactory: fixture.browserFactory });
-    if (options.badDesktop) await assert.rejects(run, { code: 'SMOKE_BROWSER_DESKTOP_BROKERS_FAILED' });
+    if (options.badDesktop) await assert.rejects(run, { code: 'SMOKE_MODULE_DESKTOP_CONTENT_MISSING' });
     else await assert.rejects(run);
     assert.equal(fixture.observations.contextsClosed, fixture.observations.launches.length);
   }
