@@ -35,6 +35,22 @@ test('one current buyer invoice proves identity, with every source field and a d
   assert.equal(reversed.documents.length, 2);
 });
 
+test('stored buyer proofs tolerate property reordering but reject changed values and digests', () => {
+  const reorder = (value) => Array.isArray(value) ? value.map(reorder)
+    : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, reorder(value[key])])) : value;
+  const archived = reorder(proof());
+  assert.deepEqual(buyerPaymentDocumentBlockers({ ...payment(), _buyerDocumentEvidence: archived }, mapping()), []);
+  for (const mutate of [
+    (value) => { value.documents[0].amount = 101; },
+    (value) => { value.documents[0].accountId = id(21); },
+    (value) => { value.digest = '0'.repeat(64); },
+    (value) => { value.complete = false; },
+  ]) {
+    const changed = structuredClone(archived); mutate(changed);
+    assert.match(buyerPaymentDocumentBlockers({ ...payment(), _buyerDocumentEvidence: changed }, mapping()).join(' '), /incomplete or changed/);
+  }
+});
+
 test('a second active positive invoice or credit blocks even when one invoice is durably mapped', () => {
   for (const extra of [invoice(3, { Amount__c: 50 }), invoice(3, { Amount__c: -20 })]) {
     const evidence = proof([invoice(), extra]);
