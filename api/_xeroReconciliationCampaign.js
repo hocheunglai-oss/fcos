@@ -81,9 +81,17 @@ async function sharedAllowance(client, tenantId) {
 
 function publicCase(row) {
   const item = row.evidence || {};
+  const reconciled = row.status === 'reconciled';
+  const completedReason = row.category === 'contact' ? 'Contact identity verified in Xero.'
+    : row.category === 'draft' ? 'Draft created and verified in Xero.'
+      : item.sourceObject === 'Payment__c' ? 'Existing payment and invoice allocation verified and linked.'
+        : 'Existing Xero document verified and linked.';
+  const reason = row.outcome?.reason || (reconciled ? completedReason : item.reason) || null;
+  const reasons = reconciled ? [reason] : row.outcome?.reason ? [reason, ...(item.reasons || [])]
+    : Array.isArray(item.reasons) ? item.reasons : [];
   return { id: row.id, caseKey: row.case_key, category: row.category, status: row.status,
     title: item.title || null, accountName: item.accountName || null, documentNumber: item.documentNumber || null,
-    reason: row.outcome?.reason || item.reason || null, reasons: row.outcome?.reason ? [row.outcome.reason, ...(item.reasons || [])] : Array.isArray(item.reasons) ? item.reasons : [],
+    reason, reasons,
     dependencies: Array.isArray(item.dependencies) ? item.dependencies : [],
     ownerId: item.ownerId || null, ownerName: item.ownerName || null,
     sourceObject: item.sourceObject || null, sourceId: item.sourceId || null, targetId: item.targetId || null,
