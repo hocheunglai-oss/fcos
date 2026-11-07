@@ -1,3 +1,4 @@
+import { richTextToCopyText } from '../shared/specialTermsCopyText.js';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
@@ -418,7 +419,8 @@ test('detail loading selects the latest Draft and returns the proposed source-ru
         Name: 'Approved term',
         Approval_Status__c: 'Approved',
         Clause_Structure_Status__c: 'Active',
-        Confirmation_Clause_Status__c: 'Active',
+        Confirmation_Clause_Status__c: 'Legacy',
+        Special_Remark_in_Confirmation__c: '<p>Keep &amp; review</p><ol><li>Exact wording</li></ol>',
         Nomination_Clause_Status__c: 'Active',
         Confirmation_Clause_Style__c: 'Hyphen',
         Nomination_Clause_Style__c: 'Hyphen',
@@ -443,10 +445,14 @@ test('detail loading selects the latest Draft and returns the proposed source-ru
       throw new Error(`Unexpected SOQL: ${query}`);
     },
   });
+  context.richTextToCopyText = richTextToCopyText;
   evaluate([apiPrelude, mapVersionSource, detailSource], ['getSpecialTermDetail'], context);
 
   const detail = await context.getSpecialTermDetail(TERM_ID);
   assert.equal(detail.revision.status, 'Draft');
+  assert.equal(detail.projections.confirmationRemark.plainText, 'Keep & review\n\n1. Exact wording');
+  assert.equal(detail.revision.projections.confirmationRemark.plainText, detail.projections.confirmationRemark.plainText);
+  assert.equal(detail.projections.termsText.plainText, undefined);
   assert.equal(detail.revision.rules[0].sourceRuleId, RULE_ID);
   assert.equal(detail.revision.rules[0].sourceLastModifiedAt, '2026-09-12T01:30:00.000Z');
   assert.equal(seenQueries.some((query) => query.includes("Status__c IN ('Draft','In Review','Ready for Approval','Changes Requested')")), true);

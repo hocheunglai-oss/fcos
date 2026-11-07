@@ -1,4 +1,5 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { richTextToCopyText } from '../shared/specialTermsCopyText.js';
 import { SPECIAL_TERM_PENDING_REASON } from '../shared/specialTermDraftPolicy.js';
 import { getApiVersion, getInstanceUrl, sfQuery, sfRequest } from './_salesforce.js';
 import { expireRuntimeCacheTags, getOrLoadRuntimeCache } from './_runtimeCache.js';
@@ -971,12 +972,14 @@ export async function getSpecialTermDetail(termId, { force = false } = {}) {
   for (const config of PROJECTION_LIST) {
     const projected = assignments.filter((assignment) => assignment.projection === config.key);
     const status = term[config.statusField] || 'Legacy';
+    const projectionText = term[config.textField] || '';
     const style = config.styleField ? term[config.styleField] || config.defaultStyle : config.defaultStyle;
     projectionDetails[config.key] = {
       key: config.key,
       value: config.value,
       label: config.label,
-      text: term[config.textField] || '',
+      text: projectionText,
+      ...(status !== 'Active' ? { plainText: richTextToCopyText(projectionText) } : {}),
       status,
       style,
       compiledHash: term[config.hashField] || null,
