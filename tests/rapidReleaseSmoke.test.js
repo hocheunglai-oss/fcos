@@ -87,6 +87,7 @@ function browserFixture({ badIdentity = false, badRead = false, badDenial = fals
       waitFor: async () => {},
       fill: async value => { if (name === 'Username') email = value; if (name === 'Password') password = value; },
       click: async () => {
+        if (name === 'Receipts') return;
         if (name === 'Run') { emit(apiResponse(`${origin}/api/functions/stemPnl`, readPayloads.pnl)); return; }
         if (name === 'Continue with FCUNO') { changeLocation(`${issuer}/admin`); return; }
         assert.equal(name, 'Login');
@@ -102,7 +103,7 @@ function browserFixture({ badIdentity = false, badRead = false, badDenial = fals
       url: () => location,
       on: () => {},
       waitForLoadState: async () => {}, waitForFunction: async () => {},
-      locator: selector => ({ count: async () => badDesktop ? 0 : 1, first() { return this; }, waitFor: async () => { if (badDesktop) throw Error('MISSING_DESKTOP_SURFACE'); }, innerText: async () => badDesktop ? 'Something went wrong' : 'Verified fixture business surface' }),
+      locator: selector => ({ or() { return this; }, count: async () => badDesktop ? 0 : 1, first() { return this; }, waitFor: async () => { if (badDesktop) throw Error('MISSING_DESKTOP_SURFACE'); }, innerText: async () => badDesktop ? 'Something went wrong' : 'Verified fixture business surface' }),
       getByText: () => ({ first() { return this; }, waitFor: async () => { if (badDesktop) throw Error('MISSING_DESKTOP_SURFACE'); } }),
       getByRole: (role, options) => locator(role, options.name),
       getByLabel: name => locator('label', name),
@@ -332,8 +333,15 @@ test('normal-only snapshot and saved Xero reads keep all mutation selectors and 
   const normal = { origin, credentials: { email: env.FCOS_RAPID_NORMAL_EMAIL, password: 'fixture' }, normal: true };
   assert.equal(stagedBrowserRequestAllowed(request(`${origin}/api/functions/hedgeDeskEntity`, 'POST', { action: 'snapshot' }), normal), true);
   assert.equal(stagedBrowserRequestAllowed(request(`${origin}/api/functions/hedgeDeskEntity`, 'POST', { action: 'snapshot' }), { ...normal, normal: false }), false);
+  assert.equal(stagedBrowserRequestAllowed(request(`${origin}/api/functions/hedgeDeskEntity`, 'POST',
+    { action: 'list', entity: 'AppConfig', sort: '-created_date', limit: 1000 }), normal), true);
   for (const body of [{ action: 'list', entity: 'PhysicalTrade' }, { action: 'snapshot', force: false }, { action: 'snapshot', entity: 'Invoice' }, { action: 'save' }])
     assert.equal(stagedBrowserRequestAllowed(request(`${origin}/api/functions/hedgeDeskEntity`, 'POST', body), normal), false);
+  const detail = { contractId: '26de2e57-7d65-49ed-a91f-ed97d9ba169a', includeLive: true, force: false };
+  assert.equal(stagedBrowserRequestAllowed(request(`${origin}/api/functions/masterContractDetail`, 'POST', detail), normal), true);
+  assert.equal(stagedBrowserRequestAllowed(request(`${origin}/api/functions/masterContractDetail`, 'POST', { ...detail, force: true }), normal), false);
+  assert.equal(stagedBrowserRequestAllowed(request(`${origin}/api/functions/xeroFinancialSyncLatest`, 'POST', {}), normal), true);
+  assert.equal(stagedBrowserRequestAllowed(request(`${origin}/api/functions/xeroFinancialMappingsGet`, 'POST', {}), normal), false);
   assert.equal(stagedBrowserRequestAllowed(request(`${origin}/api/functions/xeroPortalStatus`, 'POST', { forceRefresh: false }), normal), true);
   assert.equal(stagedBrowserRequestAllowed(request(`${origin}/api/functions/xeroPortalStatus`, 'POST', { forceRefresh: true }), normal), false);
   for (const handler of ['xeroPortalContactLifecyclePreview', 'xeroPortalReceiptSync', 'paymentCollectionsReconcile', 'workspacePreferencesSave'])

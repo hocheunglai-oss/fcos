@@ -1,3 +1,4 @@
+import { isReadOnlyHedgeDeskAction } from '../../../api/_deploymentReadActions.js';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -88,7 +89,13 @@ export function stagedBrowserRequestAllowed(request, { origin, credentials, norm
     if (url.origin === origin) {
       if (url.pathname.startsWith('/api/functions/')) {
         const name = url.pathname.split('/').pop(), body = bodyOf(request);
-        if (name === 'hedgeDeskEntity') return normal && method === 'POST' && !url.search && exactKeys(body, ['action']) && body.action === 'snapshot';
+        if (name === 'hedgeDeskEntity') return normal && method === 'POST' && !url.search && isReadOnlyHedgeDeskAction(body) && (body.action === 'snapshot'
+            || body.action === 'list' && body.entity === 'AppConfig' && body.sort === '-created_date' && body.limit === 1000);
+        if (name === 'masterContractDetail') return normal && method === 'POST' && !url.search
+          && exactKeys(body, ['contractId', 'includeLive', 'force'])
+          && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(body.contractId)
+          && body.includeLive === true && body.force === false;
+        if (name === 'xeroFinancialSyncLatest') return normal && method === 'POST' && !url.search && exactKeys(body, []);
         if (normal && name === 'xeroPortalStatus' && exactKeys(body, ['forceRefresh'])) return method === 'POST' && !url.search && body.forceRefresh === false;
         return method === 'POST' && !url.search && safeBody(body)
           && ((normal ? normalReadHandlers : readHandlers).has(name) || name === 'hedgeMarkets' && isReadOnlyMarketAction(body));
@@ -164,7 +171,7 @@ const cleanLaunchEnvironment = env => Object.fromEntries(['PATH', 'HOME', 'TMPDI
   .filter(key => typeof env[key] === 'string').map(key => [key, env[key]]));
 
 async function installGate(context, policy, onAuthRequest) {
-  let page, gateFailed = false, blocked = 0, excludedTelemetry = 0, excludedBackgroundSync = 0;
+  let page, gateFailed = false, blocked = 0, excludedTelemetry = 0, excludedBackgroundSync = 0, excludedAutoReconciliation = 0, excludedExternalMappings = 0;
   const excludedOptionalReads = new Set();
   const allowed = request => {
     try {
@@ -172,6 +179,17 @@ async function installGate(context, policy, onAuthRequest) {
       if (url.origin === policy.origin && url.pathname === '/_vercel/speed-insights/script.js' && request.method() === 'GET') { excludedTelemetry++; return false; }
       if (policy.normal && url.origin === policy.origin && url.pathname === '/api/email-router-background-sync' && !url.search
         && request.method() === 'POST' && exactKeys(bodyOf(request), [])) { excludedBackgroundSync++; return false; }
+      if (policy.normal && url.origin === policy.origin && url.pathname === '/api/functions/paymentCollectionsReconcile'
+        && !url.search && request.method() === 'POST') {
+        const body = bodyOf(request);
+        if (exactKeys(body, ['force']) && body.force === false) { excludedAutoReconciliation++; return false; }
+      }
+      // This desktop initializer can refresh the Xero credential. Keep it off
+      // the network even though its handler is registered as a read.
+      if (policy.normal && url.origin === policy.origin && url.pathname === '/api/functions/xeroFinancialMappingsGet'
+        && !url.search && request.method() === 'POST' && exactKeys(bodyOf(request), [])) {
+        excludedExternalMappings++; return false;
+      }
       const exclusion = optionalReadExclusion(url, request);
       if (exclusion) { excludedOptionalReads.add(exclusion); return false; }
       if (stagedBrowserRequestAllowed(request, policy)) return true;
@@ -198,8 +216,8 @@ async function installGate(context, policy, onAuthRequest) {
   });
   await native.send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] });
   return { page, assertHealthy: () => requireFact(!gateFailed && blocked === 0, 'SMOKE_BROWSER_NETWORK_OR_RUNTIME_FAILURE'),
-    summary: () => ({ blockedRequests: blocked, excludedTelemetry, excludedBackgroundSync,
-      excludedFeatures: ['speed_insights', ...(excludedBackgroundSync ? ['automatic_mailbox_sync'] : []), ...[...excludedOptionalReads].sort()] }) };
+    summary: () => ({ blockedRequests: blocked, excludedTelemetry, excludedBackgroundSync, excludedAutoReconciliation, excludedExternalMappings,
+      excludedFeatures: ['speed_insights', ...(excludedBackgroundSync ? ['automatic_mailbox_sync'] : []), ...(excludedAutoReconciliation ? ['automatic_payment_reconciliation'] : []), ...(excludedExternalMappings ? ['external_xero_mapping_options'] : []), ...[...excludedOptionalReads].sort()] }) };
 }
 async function routeRead(route, origin, path, body, expectedStatus = 200) {
   let response;
@@ -242,24 +260,24 @@ async function verifyModuleDesktop({ page, origin, module }) {
     requireFact(response.status() === 200 && await response.finished() === null
       && modulePayloadVerified(module, await response.json()), 'SMOKE_MODULE_READ_FAILED');
   }
-  if (module !== 'admin') {
-    await page.waitForLoadState('networkidle', { timeout: 30000 });
-    await page.waitForFunction(() => !/\b(?:loading|fetching|preparing)\b/i.test(document.body.innerText), undefined, { timeout: 30000 });
+  if (module === 'settings') await page.getByLabel(/Annual financing rate/i).waitFor({ state: 'visible', timeout: 30000 });
+  else if (module === 'xero_portal') {
+    await page.getByRole('tab', { name: 'Receipts', exact: true }).click();
+    await page.locator('[aria-label="Receipt audit"] tbody tr').first().waitFor({ state: 'visible', timeout: 30000 });
   }
-  if (module === 'settings') await page.getByLabel(/Annual interest rate/i).waitFor({ state: 'visible', timeout: 30000 });
-  else if (module === 'xero_portal') await page.locator('dl dd').first().waitFor({ state: 'visible', timeout: 30000 });
+  else if (module === 'email_router') {
+    await page.locator('button:has(time), :text-is("Inbox is clear")').first().waitFor({ state: 'visible', timeout: 30000 });
+  }
   else if (module === 'admin') {
     await page.locator('[aria-label="Group details"]').first().waitFor({ state: 'visible', timeout: 30000 });
     await page.getByText('Group name', { exact: true }).first().waitFor({ state: 'visible', timeout: 30000 });
   }
   else {
-    const surface = page.locator('table, [role="table"], [role="grid"]');
-    // No heading-only success: require an actual table/grid or an explicit
-    // business empty state. A loading/default uninitialized panel is not proof.
-    if (!await surface.count()) {
-      await page.getByText(/No (?:records|rows|items|invoices|payments|receipts|messages|contracts|terms|trades|positions|data|STEMs|matching|Accounts|Dispute Workflow|forecast rows)(?:\b)/i).first()
-        .waitFor({ state: 'visible', timeout: 30000 });
-    } else await surface.first().waitFor({ state: 'visible', timeout: 30000 });
+    // Wait for populated rows or an explicit business empty state, including
+    // when the table is mounted after the first React render.
+    const surface = page.locator('table tbody tr, [role="rowgroup"] [role="row"]');
+    const empty = page.getByText(/No (?:records|rows|items|invoices|payments|receipts|messages|contracts|terms|trades|positions|data|STEMs|matching|Accounts|Dispute Workflow|forecast rows)(?:\b)/i);
+    await surface.or(empty).first().waitFor({ state: 'visible', timeout: 30000 });
   }
   const body = await page.locator('body').innerText();
   requireFact(!/Access denied|Something went wrong|temporarily unavailable|could not (?:load|read|verify)|No validator data loaded|Loading Hedge Desk/i.test(body), 'SMOKE_MODULE_DESKTOP_INCOMPLETE');
