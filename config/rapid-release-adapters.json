@@ -1,4 +1,21 @@
 {
   "schemaVersion": 1,
-  "adapters": []
+  "adapters": [
+    {
+      "id": "remittance-cents-readback",
+      "status": "qualified",
+      "sourceDigest": "9ea3e206287289add2c7593a9df6735042c58b1f2370dad048e58013a9c5429f",
+      "path": "scripts/lib/rapid-release/remittance-readback.mjs",
+      "salesforce": false,
+      "database": true
+    },
+    {
+      "id": "fcuno-session-readback",
+      "status": "qualified",
+      "sourceDigest": "75be466f7b07e7d89cc8d859fc5c9bb218f108af65c1b3b6dbfdc567f90b6dd4",
+      "path": "scripts/lib/rapid-release/fcuno-readback.mjs",
+      "salesforce": false,
+      "database": true
+    }
+  ]
 }

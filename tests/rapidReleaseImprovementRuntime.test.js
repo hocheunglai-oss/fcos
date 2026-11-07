@@ -39,6 +39,15 @@ test('unknown failures are captured once with no raw provider message, stack, cr
   assert.doesNotMatch(stored, /PRIVATE_|MALICIOUS|Bearer/);
 }));
 
+test('fixed browser failures retain their diagnostic code without accepting unknown smoke codes', async () => fixture(async ({ outputFile }) => {
+  const known = await call({ error: { code: 'SMOKE_BROWSER_BASELINE_DASHBOARD_FAILED', message: 'PRIVATE_DETAILS' }, outputFile });
+  const unknown = await call({ error: { code: 'SMOKE_PRIVATE_PROVIDER_DETAIL', message: 'PRIVATE_DETAILS' }, outputFile });
+  assert.equal(known.incident.code, 'SMOKE_BROWSER_BASELINE_DASHBOARD_FAILED');
+  assert.equal(known.incident.kind, 'test_failure');
+  assert.equal(unknown.incident.code, 'UNCLASSIFIED_RELEASE_OBSTACLE');
+  assert.doesNotMatch(await readFile(outputFile, 'utf8'), /PRIVATE_DETAILS|PRIVATE_PROVIDER_DETAIL/);
+}));
+
 test('real original-operation discovery records only a matching applied native result and never submits', async () => fixture(async ({ outputFile }) => {
   const j = journal(), request = { buildId: manifest.build.buildId, candidateSha: manifest.candidate.sha, artifactDigest: 'd'.repeat(64) };
   await j.append('stage.intent', { operationId: `${manifest.releaseId}-stage`, request, requestHash: digest(request) });
