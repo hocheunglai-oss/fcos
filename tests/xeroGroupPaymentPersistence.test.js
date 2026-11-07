@@ -38,14 +38,20 @@ function sourceFixture(count = 2) {
   return { payment: siblings[0], options };
 }
 
-async function fixture(t, { database, roles = true, beforeMigration } = {}) {
+async function fixture(t, { database, roles = true, beforeMigration, amountTail = false } = {}) {
   const db = database || new PGlite(); if (!database) t.after(() => db.close());
   if (roles) await db.exec('create role anon; create role authenticated; create role service_role bypassrls;');
   await db.exec('grant usage on schema public to service_role;');
   for (const name of ['20260829080726_xero_financial_sync.sql','20260923213339_xero_payment_reference_link.sql','20260923222821_xero_grouped_preservation_link.sql']) {
     await db.exec((await readFile(new URL(`../supabase/migrations/${name}`, import.meta.url), 'utf8')).replace(/^create extension if not exists pgcrypto;$/m, ''));
   }
-  const source = sourceFixture(); const tenantId = randomUUID(); const actor = { id: randomUUID(), email: 'finance@example.test' };
+  const source = sourceFixture();
+  if (amountTail) {
+    source.options.siblings[0].Amount__c=131317.19999999995;
+    source.options.parent.Amount__c=131367.19999999995;
+    source.options.buyerDocumentInventories[0].records[0].Amount__c=131317.2;
+  }
+  const tenantId = randomUUID(); const actor = { id: randomUUID(), email: 'finance@example.test' };
   const bank = { id: randomUUID(), salesforce_bank_name: 'UBS', xero_bank_account_id: randomUUID(), revision: 2, enabled: true };
   await db.query(`insert into public.xero_financial_bank_mappings(id,salesforce_bank_name,xero_bank_account_id,xero_bank_account_name,revision,enabled)
     values($1,'UBS',$2,'UBS USD',2,true)`, [bank.id, bank.xero_bank_account_id]);
@@ -66,6 +72,7 @@ async function fixture(t, { database, roles = true, beforeMigration } = {}) {
   }
   if (beforeMigration) await beforeMigration({ db, rows });
   await db.exec(await readFile(new URL(`../supabase/migrations/${migration}`, import.meta.url), 'utf8'));
+  await db.exec(await readFile(new URL('../supabase/migrations/20261001011301_xero_group_payment_confirmed_cents.sql', import.meta.url), 'utf8'));
   const raw = async (name, p, connection = db) => {
     const entries = Object.entries(p); const sql = `select public.${name}(${entries.map(([key], n) => `${key} => $${n + 1}`).join(',')}) as result`;
     return (await connection.query(sql, entries.map(([,v]) => typeof v === 'object' && v !== null ? JSON.stringify(v) : v))).rows[0].result;
@@ -379,4 +386,25 @@ test('existing posting orchestrator uses Group atomic proof path before and afte
     assert.equal(saved.audits.length,2);if(transportFails)assert.equal(saved.mappings,null);else assert.deepEqual(saved.mappings[0].bank_source_evidence,row.bankSourceEvidence);
     assert.equal((await postReviewedPaymentBatch([row],options))[0].status,'failed');assert.equal(writes,1);
   });
+});
+
+test('confirmed cents retain a raw Salesforce binary tail, reject material differences and recover exactly once',async t=>{
+  const f=await fixture(t,{amountTail:true});const row=postingRow(f.rows[0]);
+  const claim=await claimReviewedGroupPayment(f.client,f.tenantId,row,f.actor);
+  const before=await f.snapshot();
+  const values={xero_payment_id:f.rows[0].xeroPaymentId,xero_bank_account_id:row.bankAccountId,amount:131317.2,currency:row.currency,payment_date:row.paymentDate};
+  for(const amount of [131317.21,131317.19,131317.20001,0,-1]) {
+    await assert.rejects(finishReviewedGroupPayment(f.client,claim,f.actor,'confirmed',null,[values.xero_payment_id],{...values,amount}));
+    assert.deepEqual(await f.snapshot(),before);
+  }
+  await finishReviewedGroupPayment(f.client,claim,f.actor,'confirmed',null,[values.xero_payment_id],values);
+  const saved=await f.snapshot();assert.equal(saved.mappings.length,1);assert.equal(Number(saved.mappings[0].amount),131317.2);
+  assert.deepEqual(saved.mappings[0].bank_source_evidence,row.bankSourceEvidence);
+  assert.equal(saved.claims[0].control_totals.paymentPosting.reviewed.amount,131317.19999999995);
+  assert.equal(saved.claims[0].control_totals.paymentPosting.state,'confirmed');
+  assert.equal(await claimReviewedGroupPayment(f.client,f.tenantId,row,f.actor),null);
+  assert.deepEqual(await f.snapshot(),saved);
+  const links=await fixture(t,{amountTail:true});await links.persist([links.rows[0]]);
+  const linked=await links.persist([links.rows[0]]);assert.equal(linked.summary.alreadyLinked,1);
+  assert.equal((await links.snapshot()).mappings.length,1);
 });
