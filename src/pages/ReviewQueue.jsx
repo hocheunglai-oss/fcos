@@ -34,6 +34,10 @@ const WORKFLOW_STATUSES = ['Open', 'Acknowledged', 'In Progress', 'Resolved', 'D
 const WORKFLOW_DEPARTMENTS = ['Unassigned', 'Trading', 'Operations', 'Accounting', 'Management'];
 const WORKFLOW_PRIORITIES = ['High', 'Medium', 'Low'];
 
+const TABLE_HEADER = 'sticky top-0 z-10 bg-card py-2.5 px-3 font-semibold uppercase tracking-wide text-muted-foreground';
+const LEFT_TABLE_HEADER = `${TABLE_HEADER} text-left`;
+const RIGHT_TABLE_HEADER = `${TABLE_HEADER} text-right`;
+
 const REVIEW_FILTERS = [
   { key: 'all', label: 'All exceptions' },
   { key: 'potential-delay', label: 'Potential Delay' },
@@ -426,18 +430,18 @@ export default function ReviewQueue() {
             <table className="w-full text-xs">
               <thead>
                 <tr className="border-b border-border">
-                  <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground">Priority</th>
-                  <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground">Exception Reason</th>
-                  <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground">Name</th>
-                  <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground">Buyer Name</th>
-                  <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground">Delivery / Schedule</th>
-                  <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground">Workflow</th>
-                  <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground">Owner</th>
-                  <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground">Due</th>
-                  <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-right font-semibold uppercase tracking-wide text-muted-foreground">Buyer Invoice</th>
-                  <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-right font-semibold uppercase tracking-wide text-muted-foreground">Supplier Invoice</th>
-                  <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-right font-semibold uppercase tracking-wide text-muted-foreground">Gross Profit</th>
-                  <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-right font-semibold uppercase tracking-wide text-muted-foreground">Action</th>
+                  <th className={LEFT_TABLE_HEADER}>Priority</th>
+                  <th className={LEFT_TABLE_HEADER}>Exception Reason</th>
+                  <th className={LEFT_TABLE_HEADER}>Name</th>
+                  <th className={LEFT_TABLE_HEADER}>Buyer Name</th>
+                  <th className={LEFT_TABLE_HEADER}>Delivery / Schedule</th>
+                  <th className={LEFT_TABLE_HEADER}>Workflow</th>
+                  <th className={LEFT_TABLE_HEADER}>Owner</th>
+                  <th className={LEFT_TABLE_HEADER}>Due</th>
+                  <th className={RIGHT_TABLE_HEADER}>Buyer Invoice</th>
+                  <th className={RIGHT_TABLE_HEADER}>Supplier Invoice</th>
+                  <th className={RIGHT_TABLE_HEADER}>Gross Profit</th>
+                  <th className={RIGHT_TABLE_HEADER}>Action</th>
                 </tr>
               </thead>
               <tbody>
