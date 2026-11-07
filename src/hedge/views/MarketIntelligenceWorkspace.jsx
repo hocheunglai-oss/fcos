@@ -29,6 +29,7 @@ import { formatDate, formatMoney } from '@/hedge/lib/domain';
 import { marketSymbolLabel } from '@/hedge/lib/marketLabels';
 import { reconcileDeliveredPortSelection } from '@/hedge/lib/marketDeliveredSelection';
 import { MarketSignedAxisTick, MarketSignedText, MarketSignedValue } from '@/components/markets/MarketSignedValue';
+import MarketAssistant from '@/components/markets/MarketAssistant';
 import {
   Button,
   Drawer,
@@ -666,7 +667,7 @@ export function MarketIntelligenceWorkspace({ data, pulse, canReadBook = false, 
   };
   return (
     <div className="app-page market-intelligence-workspace workspace-trading-canvas">
-      <PageHeader eyebrow="Trading market intelligence" title="Markets" description="Official prices, delivered-market comparisons, forward curves, and source-linked market evidence." showSalesforceSync={false} actions={(canManageMarketData || canManageAlertRules) ? <Button icon={Settings2} onClick={openTools}>Market tools</Button> : null} />
+      <PageHeader eyebrow="Trading market intelligence" title="Markets" description="Official prices, delivered-market comparisons, forward curves, and source-linked market evidence." showSalesforceSync={false} actions={<><MarketAssistant />{(canManageMarketData || canManageAlertRules) ? <Button icon={Settings2} onClick={openTools}>Market tools</Button> : null}</>} />
       <div className="market-workspace-tabs app-navigation-caption-material" role="tablist" aria-label="Market views">{TABS.map((item) => <button key={item.value} type="button" role="tab" aria-selected={tab === item.value} className={tab === item.value ? 'is-active' : ''} onClick={() => selectTab(item.value)}>{item.label}</button>)}</div>
       <MarketDateToolbar brief={brief} selection={dateSelection} loading={dateLoading} error={dateError} onSelect={selectDate} onRefresh={() => { setDateLoading(true); setBriefRefreshKey((value) => value + 1); }} />
       {visitedTabs.has('brief') ? <div role="tabpanel" hidden={tab !== 'brief'} aria-label="Overview"><MarketDecisionBrief canReadBook={canReadBook} bookContext={bookContext} bookLoading={bookLoading} bookError={bookError} onRetryBook={onRetryBook} onNavigateMarketView={selectTab} initialBrief={intelligence.brief || null} refreshKey={briefRefreshKey} pulse={pulse} pulseLoading={marketPulseLoading} pulseError={marketPulseError} requestedDate={dateSelection.mode === 'historical' ? dateSelection.date : null} dateMode={dateSelection.mode} onBriefResolved={resolveBrief} onBriefError={resolveBriefError} intraday={tab === 'brief' && dateReady ? <MarketIntradayStrip canManage={canManageMarketData} refreshKey={briefRefreshKey} asOfDate={displayedDate || null} /> : null} /></div> : null}
