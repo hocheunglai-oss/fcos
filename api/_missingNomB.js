@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
 import { NOM_B_TRADER_LOGIN_EMAILS } from '../config/nomBTraderIdentities.js';
+import { missingNomBRecoveryActions } from './_missingNomBRecovery.js';
 import { NOM_B_EXTENSIONS, NOM_B_MAX_BYTES } from '../shared/missingNomB.js';
 import { getApiVersion, sfRequest } from './_salesforce.js';
 import { isExternalActionEnabled, requireExternalActionGate } from './_externalActionGates.js';
@@ -517,10 +518,18 @@ export async function missingNomBStatus({ client, env = process.env, now = new D
     .order('updated_at',{ ascending:false }).limit(10);
   if (uploadOutcomes.error) throw uploadOutcomes.error;
   const state = stateResult.data;
-  const scanLagSeconds = state?.completed_through ? Math.max(0, Math.floor((new Date(now).getTime()-Date.parse(state.completed_through))/1000)) : null;
+  const completedThrough = Date.parse(state?.completed_through);
+  const nowMs = new Date(now).getTime();
+  const scanLagSeconds = Number.isFinite(completedThrough) && Number.isFinite(nowMs)
+    ? Math.max(0, Math.floor((nowMs - completedThrough) / 1000)) : null;
   const active = enabled(env);
-  const healthStatus = counts.uncertain || counts.uncertainUploads || counts.stalledDeliveries || counts.failed || counts.blocked || (active && (!state || scanLagSeconds > 900)) ? 'warning' : active ? 'online' : 'disabled';
+  const scanLagWarningSeconds = 900;
+  const scanUnverified = active && (scanLagSeconds == null || scanLagSeconds > scanLagWarningSeconds);
+  const hasIncidents = counts.uncertain || counts.uncertainUploads || counts.stalledDeliveries || counts.failed || counts.blocked;
+  const healthStatus = hasIncidents || scanUnverified ? 'warning' : active ? 'online' : 'disabled';
+  const recoveryActions = missingNomBRecoveryActions({ enabled: active, scanLagSeconds, scanLagWarningSeconds, ...counts });
   return { status: active ? 'enabled' : 'disabled',healthStatus,enabled: active,activatedAt: state?.activated_at || null,lastScanAt: state?.last_success_at || null,scanLagSeconds,...counts,
+    recoveryActions,
     recentOutcomes: (outcomes.data || []).map((row) => ({status:row.status,code:row.last_error_code,at:row.updated_at})),
     recentUploadOutcomes: (uploadOutcomes.data || []).map((row) => ({status:row.status,code:row.last_error_code,at:row.updated_at})) };
 }
