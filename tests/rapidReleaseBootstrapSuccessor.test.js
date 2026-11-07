@@ -67,13 +67,15 @@ async function fixture({complete=true,pg:supplied}={}) {
 }
 
 
-import {createBootstrapSuccessorPlan,claimBootstrapSuccessor,submitBootstrapSuccessor,observeBootstrapSuccessor,qualifyBootstrapSuccessor,verifyLockedBootstrapSuccessor,bootstrapSuccessorRef,BOOTSTRAP_SUCCESSOR_REVIEW_ENVIRONMENT,BOOTSTRAP_SUCCESSOR_AUTH_ENVIRONMENT,failBootstrapSuccessor,bootstrapSuccessorConfiguration,abortBootstrapSuccessor,BOOTSTRAP_SUCCESSOR_ABORT_ENVIRONMENT,createBootstrapSuccessorReconciliationNative} from '../scripts/lib/rapid-release/bootstrap-successor.mjs';
+import {createBootstrapSuccessorPlan,bootstrapSuccessorRequest,claimBootstrapSuccessor,submitBootstrapSuccessor,observeBootstrapSuccessor,qualifyBootstrapSuccessor,verifyLockedBootstrapSuccessor,bootstrapSuccessorRef,BOOTSTRAP_SUCCESSOR_REVIEW_ENVIRONMENT,BOOTSTRAP_SUCCESSOR_AUTH_ENVIRONMENT,failBootstrapSuccessor,bootstrapSuccessorConfiguration,abortBootstrapSuccessor,BOOTSTRAP_SUCCESSOR_ABORT_ENVIRONMENT,createBootstrapSuccessorReconciliationNative} from '../scripts/lib/rapid-release/bootstrap-successor.mjs';
 import {createHandoverPlan} from '../scripts/lib/rapid-release/handover.mjs';
 
 async function successorFixture(options) {
   const f=await fixture(options),newSha='1'.repeat(40),treeOld='2'.repeat(40),treeNew='3'.repeat(40),url=`fcos-987654321-${pins.team}.vercel.app`;
   const patch=[{path:'api/safety.js',oldSha:'4'.repeat(40),newSha:'5'.repeat(40),oldMode:'100644',newMode:'100644'}];
-  f.successor=createBootstrapSuccessorPlan({bootstrapPlan:f.plan,controllerSha:newSha,sourceDigest:'6'.repeat(64),lockDigest:f.plan.lockDigest,configurationDigest:digest({fixtureVersion:1}),quality:{checkRunId:110,runId:111,jobId:112},patch});
+  f.successor=createBootstrapSuccessorPlan({bootstrapPlan:f.plan,controllerSha:newSha,sourceDigest:'6'.repeat(64),lockDigest:f.plan.lockDigest,configurationDigest:digest({fixtureVersion:1}),quality:{checkRunId:110,runId:111,jobId:112},patch,
+    ...(options?.pullRequestNumber===undefined?{}:{pullRequestNumber:options.pullRequestNumber})});
+  f.pullRequests=[];
   f.repo.permissions={admin:true};f.run.conclusion='failure';
   f.newRun={...f.run,id:150,conclusion:'success'};
   const start=Date.now()-60000,payload={candidateSha:newSha,candidateUrl:`https://${url}`,harnessSha:f.newRun.head_sha};
@@ -91,7 +93,8 @@ async function successorFixture(options) {
     if(path.includes('/compare/'))return{status:f.compareStatus||'ahead',merge_base_commit:{sha:f.plan.controllerSha},base_commit:{sha:f.plan.controllerSha},total_commits:1};
     if(path.includes('/git/commits/')){const row=commits.get(path.split('/').at(-1));assert.ok(row,'Native commit exists');return row;}
     if(path.includes('/git/trees/')){const old=path.includes(treeOld);return{sha:old?treeOld:treeNew,truncated:false,tree:[{path:'api/safety.js',mode:'100644',type:'blob',sha:old?patch[0].oldSha:f.changedBlob||patch[0].newSha}]};}
-    if(path.endsWith('/pulls/124'))return{number:124,state:'open',base:{repo:f.repo,ref:'main'},head:{repo:f.repo,ref:f.successor.branch,sha:f.wrongPr||newSha}};
+    if(/\/pulls\/[1-9][0-9]*$/.test(path)){f.pullRequests.push(Number(path.split('/').at(-1)));return{number:f.returnedPullRequestNumber??options?.pullRequestNumber??124,state:f.prState||'open',
+      base:{repo:f.prBaseRepo||f.repo,ref:f.prBase||'main'},head:{repo:f.prHeadRepo||f.repo,ref:f.prBranch||f.successor.branch,sha:f.wrongPr||newSha}};}
     if(path.includes('/git/ref/heads/'))return{object:{sha:newSha}};
     if(path.endsWith('/check-runs/110'))return{id:110,app:{id:15368},head_sha:newSha,status:'completed',conclusion:f.newQuality||'success',details_url:`https://github.com/${pins.repository}/actions/runs/111/job/112`};
     if(path.endsWith('/actions/runs/111'))return{id:111,head_sha:newSha,repository:f.repo,head_repository:f.repo,event:'pull_request',path:'.github/workflows/quality.yml'};
@@ -112,7 +115,7 @@ async function successorFixture(options) {
   f.github.patch=async(path,body)=>{f.gitWrites++;assert.equal(body.force,false);assert.equal(commits.get(body.sha).parents[0].sha,f.head,'Only native fast-forward allowed');f.head=body.sha;return{object:{sha:f.head}};};
   const oldDeployment=f.vercel.deployment;
   f.newPreview={id:'dpl_successor',url,target:null,readyState:'READY',ownerId:pins.teamId,projectId:pins.projectId,
-    gitSource:{type:'github',sha:newSha,repoId,ref:f.successor.branch,prId:124},meta:{githubCommitSha:newSha,fcosBootstrapOperation:f.successor.operationId,fcosBootstrapPlanHash:digest(f.successor)}};
+    gitSource:{type:'github',sha:newSha,repoId,ref:f.successor.branch,prId:options?.pullRequestNumber??124},meta:{githubCommitSha:newSha,fcosBootstrapOperation:f.successor.operationId,fcosBootstrapPlanHash:digest(f.successor)}};
   f.vercel.deployment=async id=>id==='dpl_successor'?f.newPreview:oldDeployment(id);
   f.vercel.find=async({operationId})=>operationId===f.newPreview.meta.fcosBootstrapOperation?f.deployments:[];f.configuration={fixtureVersion:1};f.vercel.configuration=async()=>f.configuration;
   f.vercel.create=async request=>{f.creates++;assert.equal(request.gitSource.sha,newSha);if(!f.noProviderEffect)f.deployments=[{id:'dpl_successor'}];if(f.lostAck)throw Error('Provider secret never exposed');return f.newPreview;};
@@ -307,7 +310,8 @@ test('source-owned reconciliation factory qualifies executing source but cannot 
   const f=await successorFixture(),directory=join(f.directory,'executing');mkdirSync(directory);writeFileSync(join(directory,'package-lock.json'),'{"lockfileVersion":3}');
   writeFileSync(join(directory,'vercel.json'),'{"git":{"deploymentEnabled":false}}');
   const run=args=>execFileSync('git',args,{cwd:directory,stdio:'pipe',encoding:'utf8'});run(['init','-q']);run(['remote','add','origin',`https://github.com/${pins.repository}.git`]);run(['add','.']);run(['-c','user.name=FCOS offline fixture','-c','user.email=fixture@example.invalid','commit','-qm','Offline executing fixture']);
-  const snapshot=sourceSnapshot(directory),executing=createBootstrapSuccessorPlan({...f.successor,bootstrapPlan:f.plan,controllerSha:snapshot.sha,sourceDigest:snapshot.sourceDigest,lockDigest:snapshot.lockDigest,quality:{checkRunId:310,runId:311,jobId:312},configurationDigest:digest({changed:true}),revision:2});
+  const snapshot=sourceSnapshot(directory),legacyExecuting=createBootstrapSuccessorPlan({...f.successor,bootstrapPlan:f.plan,controllerSha:snapshot.sha,sourceDigest:snapshot.sourceDigest,lockDigest:snapshot.lockDigest,quality:{checkRunId:310,runId:311,jobId:312},configurationDigest:digest({changed:true}),revision:2});
+  const executing=createBootstrapSuccessorPlan({...legacyExecuting,bootstrapPlan:f.plan,pullRequestNumber:125});let nativePrNumber=124;
   const child=createRequire(import.meta.url)('node:child_process'),original=child.execFileSync,calls=[];
   const fake=(binary,args,options)=>{
     if(binary==='git')return original(binary,args,options);calls.push([binary,args]);
@@ -322,7 +326,7 @@ test('source-owned reconciliation factory qualifies executing source but cannot 
       else if(path.includes('/compare/'))row={status:'ahead',merge_base_commit:{sha:f.plan.controllerSha},base_commit:{sha:f.plan.controllerSha},total_commits:1};
       else if(path.includes('/git/commits/')){const id=path.split('/').at(-1);row={sha:id,tree:{sha:(id===f.plan.controllerSha?'2':'3').repeat(40)}};}
       else if(path.includes('/git/trees/')){const old=path.includes('2'.repeat(40));row={sha:(old?'2':'3').repeat(40),truncated:false,tree:[{type:'blob',path:'api/safety.js',mode:'100644',sha:(old?'4':'5').repeat(40)}]};}
-      else if(path.endsWith('/pulls/124'))row={number:124,state:'open',base:{repo:f.repo,ref:'main'},head:{repo:f.repo,ref:f.plan.branch,sha:snapshot.sha}};
+      else if(/\/pulls\/(?:124|125)$/.test(path))row={number:nativePrNumber,state:'open',base:{repo:f.repo,ref:'main'},head:{repo:f.repo,ref:f.plan.branch,sha:snapshot.sha}};
       else if(path.includes('/git/ref/heads/'))row={object:{sha:snapshot.sha}};
       else throw Error('Unexpected offline route');return JSON.stringify(row);
     }
@@ -332,11 +336,59 @@ test('source-owned reconciliation factory qualifies executing source but cannot 
     throw Error('Unexpected offline Vercel route');
   };
   try{mock.method(child,'execFileSync',fake);syncBuiltinESMExports();
+    await createBootstrapSuccessorReconciliationNative({bootstrapPlan:f.plan,successorPlan:f.successor,executingPlan:legacyExecuting,cwd:directory});
+    assert.ok(calls.some(([,args])=>args[1]?.endsWith('/pulls/124')));const start=calls.length;nativePrNumber=125;
     const native=await createBootstrapSuccessorReconciliationNative({bootstrapPlan:f.plan,successorPlan:f.successor,executingPlan:executing,cwd:directory});
+    assert.ok(calls.slice(start).some(([,args])=>args[1]?.endsWith('/pulls/125')));assert.ok(!calls.slice(start).some(([,args])=>args[1]?.endsWith('/pulls/124')));
+    nativePrNumber=124;await assert.rejects(createBootstrapSuccessorReconciliationNative({bootstrapPlan:f.plan,successorPlan:f.successor,executingPlan:executing,cwd:directory}),/EXACT_PR_REQUIRED/);
     assert.equal(native.source.sha,snapshot.sha);assert.ok(calls.some(([,args])=>args[1]?.includes('/check-runs/310')));assert.ok(calls.some(([,args])=>args[1]?.includes('/check-runs/110')));
     assert.ok(!calls.some(([,args])=>args[1]?.includes('/env?')),'Old configuration is never demanded for terminal-only clients');
     for(const operation of[claimBootstrapSuccessor,submitBootstrapSuccessor,observeBootstrapSuccessor,qualifyBootstrapSuccessor,verifyBootstrapSuccessorAdmission])await assert.rejects(operation({...f.context,vercel:native.vercel}),/RECONCILIATION_ONLY/);
     await assert.rejects(native.vercel.create({}),/RECONCILIATION_ONLY/);await assert.rejects(native.vercel.configuration(f.plan.branch),/RECONCILIATION_ONLY/);
     assert.ok(calls.every(([,args])=>!args.includes('POST')),'Factory/readback mode sends zero provider mutations');
   }finally{mock.restoreAll();syncBuiltinESMExports();await f.close();}
+});
+
+const fixedSuccessorInput=()=>({bootstrapPlan:{controllerSha:'a'.repeat(40),branch:'codex/rapid-controller-install-20261106',inventoryDigest:'b'.repeat(64),previousProductionId:'dpl_old'},
+  controllerSha:'c'.repeat(40),sourceDigest:'d'.repeat(64),lockDigest:'e'.repeat(64),configurationDigest:'f'.repeat(64),quality:{checkRunId:1,runId:2,jobId:3},
+  patch:[{path:'api/safety.js',oldSha:'1'.repeat(40),newSha:'2'.repeat(40),oldMode:'100644',newMode:'100644'}]});
+test('optional successor PR keeps absent/default historical plan and request bytes unchanged',()=>{
+  const input=fixedSuccessorInput(),plan=createBootstrapSuccessorPlan(input),request=bootstrapSuccessorRequest(plan);
+  assert.equal(Object.hasOwn(plan,'pullRequestNumber'),false);assert.equal(digest(plan),'76403679dbc226a9c13b078a2ae08ffb33dc9ca28b3136e5647f96135ee96702');
+  assert.equal(digest(request),'745da3bccaf74dbb4ec66cbb8f7bfcd7b7598e6c62ebb87d504c34c57352ab10');assert.equal(request.gitSource.prId,124);
+  assert.deepEqual(createBootstrapSuccessorPlan({...input,pullRequestNumber:undefined}),plan);
+});
+test('optional successor PR is positive, exact, and bound into plan/operation/request hashes',()=>{
+  const input=fixedSuccessorInput(),legacy=createBootstrapSuccessorPlan(input),plan=createBootstrapSuccessorPlan({...input,pullRequestNumber:125});
+  assert.equal(plan.pullRequestNumber,125);assert.equal(bootstrapSuccessorRequest(plan).gitSource.prId,125);assert.notEqual(digest(plan),digest(legacy));assert.notEqual(plan.operationId,legacy.operationId);
+  const next=createBootstrapSuccessorPlan({...input,pullRequestNumber:126});assert.notEqual(digest(plan),digest(next));assert.notEqual(digest(bootstrapSuccessorRequest(plan)),digest(bootstrapSuccessorRequest(next)));
+  for(const number of [0,-1,1.5,'125',null,true,NaN,Infinity,Number.MAX_SAFE_INTEGER+1])assert.throws(()=>createBootstrapSuccessorPlan({...input,pullRequestNumber:number}),/PLAN_INVALID/);
+});
+test('bound replacement PR is read exactly and its matching Preview can qualify without reusing PR124',async()=>{
+  const f=await successorFixture({pullRequestNumber:125});try{
+    await f.prepare();assert.ok(f.pullRequests.length>0);assert.deepEqual([...new Set(f.pullRequests)],[125]);assert.equal(f.creates,1);
+    const admission=await verifyBootstrapSuccessorAdmission(f.context);assert.equal(admission.reference.successor.plan.pullRequestNumber,125);
+  }finally{await f.close();}
+});
+test('bound replacement PR mismatches never fall back to PR124 or create a native claim',async()=>{
+  for(const mutate of [f=>{f.returnedPullRequestNumber=124;},f=>{f.prBase='other';},f=>{f.prState='closed';},f=>{f.prBranch='codex/other';},
+    f=>{f.prHeadRepo={...f.repo,id:999};},f=>{f.prBaseRepo={...f.repo,id:999};},f=>{f.wrongPr='9'.repeat(40);}]){
+    const f=await successorFixture({pullRequestNumber:125});try{mutate(f);await assert.rejects(claimBootstrapSuccessor(f.context),/EXACT_PR_REQUIRED/);assert.deepEqual(f.pullRequests,[125]);assert.equal(f.gitWrites,0);assert.equal(f.creates,0);}finally{await f.close();}
+  }
+});
+test('a new PR number or extra unbound plan field cannot be inserted into a reviewed plan',async()=>{
+  for(const mutate of [f=>{f.successor.pullRequestNumber=125;},f=>{f.successor.pullRequest=125;},f=>{f.successor.pullRequestNumber=undefined;}]){
+    const f=await successorFixture();try{mutate(f);await assert.rejects(claimBootstrapSuccessor(f.context),/PLAN_INVALID/);assert.equal(f.gitWrites,0);assert.equal(f.creates,0);}finally{await f.close();}
+  }
+});
+test('a bound replacement PR refuses a Preview tied to historical PR124 without another submission',async()=>{
+  const f=await successorFixture({pullRequestNumber:125});try{f.newPreview.gitSource.prId=124;await claimBootstrapSuccessor(f.context);
+    await assert.rejects(submitBootstrapSuccessor(f.context),/PREVIEW_OR_ALIAS_CHANGED/);assert.equal(f.creates,1);
+    await assert.rejects(observeBootstrapSuccessor(f.context),/PREVIEW_OR_ALIAS_CHANGED/);
+    await assert.rejects(qualifyBootstrapSuccessor(f.context),/OBSERVED_PREVIEW_REQUIRED|PREVIEW_OR_ALIAS_CHANGED/);
+    await assert.rejects(submitBootstrapSuccessor(f.context),/PREVIEW_OR_ALIAS_CHANGED/);assert.equal(f.creates,1);
+  }finally{await f.close();}
+  const qualified=await successorFixture({pullRequestNumber:125});try{await qualified.prepare();qualified.newPreview.gitSource.prId=124;
+    await assert.rejects(verifyBootstrapSuccessorAdmission(qualified.context),/PREVIEW_OR_ALIAS_CHANGED/);assert.equal(qualified.creates,1);
+  }finally{await qualified.close();}
 });

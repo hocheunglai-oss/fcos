@@ -13,12 +13,17 @@ const kind='fcos_initial_bootstrap_successor',base=()=>`/repos/${targets().repos
 const same=(a,b)=>canonical(a)===canonical(b),positive=n=>Number.isSafeInteger(n)&&n>0;
 const phases=['claimed','vercel_intent','vercel_observed','qualified','failed','aborted'],writePermits=new WeakMap(),transportKinds=new WeakMap();
 export const bootstrapSuccessorRef=plan=>`refs/heads/codex/rapid-bootstrap-successor-${plan.rootPlanHash.slice(0,24)}`;
+function pullRequestNumber(plan) {
+  const number=Object.hasOwn(plan||{},'pullRequestNumber')?plan.pullRequestNumber:124;
+  check(positive(number),'BOOTSTRAP_SUCCESSOR_PLAN_INVALID');return number;
+}
 function assertPlan(plan,root) {
-  const {operationId,...body}=plan||{};
+  const {operationId,...body}=plan||{},hasPullRequest=Object.hasOwn(plan||{},'pullRequestNumber');
   check(plan?.schemaVersion===1 && plan.kind===kind && positive(plan.revision) && isSha(plan.controllerSha) && plan.controllerSha!==root.controllerSha
     && plan.rootPlanHash===digest(root) && plan.branch===root.branch && isDigest(plan.sourceDigest) && isDigest(plan.lockDigest) && isDigest(plan.configurationDigest)
     && plan.inventoryDigest===root.inventoryDigest && plan.previousProductionId===root.previousProductionId
-    && same(Object.keys(plan).sort(),['schemaVersion','kind','revision','rootPlanHash','controllerSha','sourceDigest','lockDigest','configurationDigest','branch','quality','patch','inventoryDigest','previousProductionId','operationId'].sort())
+    && (!hasPullRequest||positive(plan.pullRequestNumber))
+    && same(Object.keys(plan).sort(),['schemaVersion','kind','revision','rootPlanHash','controllerSha','sourceDigest','lockDigest','configurationDigest','branch','quality','patch','inventoryDigest','previousProductionId','operationId',...(hasPullRequest?['pullRequestNumber']:[])].sort())
     && operationId===`fcos-bootstrap-successor-${digest(body).slice(0,40)}` && Array.isArray(plan.patch) && plan.patch.length>0 && plan.patch.length<=100
     && same(plan.patch.map(x=>x.path),[...new Set(plan.patch.map(x=>x.path))].sort())
     && plan.patch.every(x=>typeof x.path==='string' && /^[A-Za-z0-9_.@()[\]/ -]{1,250}$/.test(x.path) && !x.path.split('/').includes('..')
@@ -29,9 +34,9 @@ function assertPlan(plan,root) {
     && same(Object.keys(plan.quality||{}).sort(),['checkRunId','runId','jobId'].sort()) && Object.values(plan.quality).every(positive), 'BOOTSTRAP_SUCCESSOR_PLAN_INVALID');
 }
 /** A plan is data, never authority. Claim verifies every blob and the owner review natively. */
-export function createBootstrapSuccessorPlan({bootstrapPlan,controllerSha,sourceDigest,lockDigest,configurationDigest,quality,patch,revision=1}) {
+export function createBootstrapSuccessorPlan({bootstrapPlan,controllerSha,sourceDigest,lockDigest,configurationDigest,quality,patch,revision=1,pullRequestNumber}) {
   const body={schemaVersion:1,kind,revision,rootPlanHash:digest(bootstrapPlan),controllerSha,sourceDigest,lockDigest,configurationDigest,branch:bootstrapPlan.branch,quality,patch,
-    inventoryDigest:bootstrapPlan.inventoryDigest,previousProductionId:bootstrapPlan.previousProductionId};
+    inventoryDigest:bootstrapPlan.inventoryDigest,previousProductionId:bootstrapPlan.previousProductionId,...(pullRequestNumber===undefined?{}:{pullRequestNumber})};
   const plan={...body,operationId:`fcos-bootstrap-successor-${digest(body).slice(0,40)}`};assertPlan(plan,bootstrapPlan);return plan;
 }
 /** Only public allowlisted values + version metadata are retained. Never hash secret values. */
@@ -49,7 +54,7 @@ export function bootstrapSuccessorConfiguration({project,rows,branch}) {
     environment:relevant.map(r=>({id:r.id,key:r.key,type:r.type,target:r.target.slice().sort(),gitBranch:r.gitBranch||null,updatedAt:r.updatedAt})).sort((a,b)=>a.id.localeCompare(b.id))};
 }
 export function bootstrapSuccessorRequest(plan) {
-  return {name:'fcos',project:targets().projectId,gitSource:{type:'github',repoId:1278654816,ref:plan.branch,sha:plan.controllerSha,prId:124},
+  return {name:'fcos',project:targets().projectId,gitSource:{type:'github',repoId:1278654816,ref:plan.branch,sha:plan.controllerSha,prId:pullRequestNumber(plan)},
     meta:{fcosBootstrapOperation:plan.operationId,fcosBootstrapPlanHash:digest(plan)}};
 }
 const read=async(github,path)=>{try{return await (github.read||github.get).call(github,path);}catch{throw Error('BOOTSTRAP_SUCCESSOR_NATIVE_READ_UNKNOWN');}};
@@ -81,8 +86,8 @@ async function source(github,plan,root,repo,{requireOpen=false}={}) {
   const patch=[...new Set(trees.flatMap(t=>[...t.keys()]))].sort().flatMap(path=>{const [a,b]=trees.map(t=>t.get(path));return a?.sha===b?.sha&&a?.mode===b?.mode?[]:
     [{path,oldSha:a?.sha||null,newSha:b?.sha||null,oldMode:a?.mode||null,newMode:b?.mode||null}];});
   check(same(patch,plan.patch),'BOOTSTRAP_SUCCESSOR_REVIEWED_PATCH_CHANGED');
-  if(requireOpen){const [pr,ref]=await Promise.all([read(github,`${base()}/pulls/124`),read(github,`${base()}/git/ref/heads/${encodeURIComponent(plan.branch)}`)]);
-    check(pr.number===124 && pr.state==='open' && pr.base?.repo?.id===repo.id && pr.base.ref===repo.default_branch && pr.head?.repo?.id===repo.id
+  if(requireOpen){const number=pullRequestNumber(plan),[pr,ref]=await Promise.all([read(github,`${base()}/pulls/${number}`),read(github,`${base()}/git/ref/heads/${encodeURIComponent(plan.branch)}`)]);
+    check(pr.number===number && pr.state==='open' && pr.base?.repo?.id===repo.id && repo.default_branch==='main' && pr.base.ref===repo.default_branch && pr.head?.repo?.id===repo.id
       && pr.head.ref===plan.branch && pr.head.sha===plan.controllerSha && ref.object?.sha===plan.controllerSha,'BOOTSTRAP_SUCCESSOR_EXACT_PR_REQUIRED');}
 }
 async function review(github,plan,id,repo) {
@@ -183,7 +188,7 @@ async function preview(context,id,{ready=false,terminal=false}={}) {
   const [p,project,production]=await Promise.all([vercel.deployment(id),vercel.project(),vercel.currentProduction()]);
   check(/^dpl_[A-Za-z0-9]+$/.test(id) && p.id===id && p.target===null && p.ownerId===targets().teamId && p.projectId===targets().projectId
     && p.gitSource?.type==='github' && Number(p.gitSource.repoId)===1278654816 && p.gitSource.sha===plan.controllerSha
-    && p.gitSource.ref===plan.branch && Number(p.gitSource.prId)===124 && p.meta?.githubCommitSha===plan.controllerSha
+    && p.gitSource.ref===plan.branch && Number(p.gitSource.prId)===pullRequestNumber(plan) && p.meta?.githubCommitSha===plan.controllerSha
     && p.meta.fcosBootstrapOperation===plan.operationId && p.meta.fcosBootstrapPlanHash===digest(plan)
     && project.id===targets().projectId && project.accountId===targets().teamId && project.autoAssignCustomDomains===false
     && production.id===plan.previousProductionId && production.alias===new URL(targets().origin).hostname && production.projectId===targets().projectId

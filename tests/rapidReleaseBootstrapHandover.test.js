@@ -10,7 +10,7 @@ import { targets,digest,createManifest } from '../scripts/lib/rapid-release/cont
 import { readBootstrapDatabase,claimBootstrap,createBootstrapPlan,bootstrapRequest,BOOTSTRAP_ENVIRONMENT } from '../scripts/lib/rapid-release/bootstrap.mjs';
 import { verifyBootstrapAdmission,verifyLockedBootstrap,assertNativeBootstrapAdmission } from '../scripts/lib/rapid-release/bootstrap-admission.mjs';
 
-import { auditHandover, applyHandover, createHandoverPlan, handoverDigest, withHandoverReadOnlyTransaction } from '../scripts/lib/rapid-release/handover.mjs';
+import { auditHandover, readFinalizedHandover, applyHandover, createHandoverPlan, handoverDigest, withHandoverReadOnlyTransaction } from '../scripts/lib/rapid-release/handover.mjs';
 import { createHandoverAdapter, readHandoverArtifactArchive } from '../scripts/lib/rapid-release/handover-adapter.mjs';
 import { readonlyRoleProvisioningSql, createReadonlyRoleVerifier } from '../scripts/lib/rapid-release/readonly-database.mjs';
 import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
@@ -90,7 +90,7 @@ async function handoverFixture() {
     },
     qualification:async()=>({runId:100,planHash:handoverDigest(plan),controllerSha:plan.controllerSha,candidateSha:plan.candidateSha,buildId:plan.buildId,artifactDigest:plan.artifactDigest,
       deploymentId:'dpl_staged',browser:{passed:true,login:true,restrictedAccess:true,normalRole:true,businessWrites:0,deploymentId:'dpl_staged',buildId:plan.buildId}}),
-    findDeployment:async()=>created,createDeployment:async body=>(created={id:200,creator:owner,payload:body.payload}),
+    findDeployment:async()=>created,createDeployment:async body=>(created={id:200,sha:body.ref,environment:body.environment,creator:owner,payload:body.payload}),
   };
   const vercel={...f.vercel,deployment:async()=>({id:'dpl_staged',target:'production',readyState:'READY',projectId:pins.projectId,ownerId:pins.teamId,aliasAssigned:false,
     meta:{githubCommitSha:plan.candidateSha,fcosRapidBuildId:plan.buildId,fcosRapidArtifactDigest:plan.artifactDigest,fcosHandoverPlanHash:handoverDigest(plan)}})};
@@ -152,6 +152,20 @@ test('bootstrap finalize retains the real staged qualification boundary and idem
     assert.equal((await f.apply('finalize')).reused,true);assert.equal(f.admissions,4);
     assert.equal((await f.pg.query('select mode from fcos_release_coordination.control')).rows[0].mode,'frozen');
     assert.equal((await f.pg.query("select count(*)::int as count from fcos_release_coordination.rapid_handover_receipts where phase='finalized'")).rows[0].count,1);
+  }finally{await f.close();}
+});
+
+test('native bootstrap admission and final recovery remain valid after the actual permanent handover guard and receipts',async()=>{
+  const f=await handoverFixture();try{
+    const before=await f.verify();
+    await f.apply('prepare');const final=await f.apply('finalize');
+    const after=await f.verify();assert.deepEqual(after.reference,before.reference);assert.deepEqual(after.controlPreimage,before.controlPreimage);
+    assert.equal((await f.pg.query("select count(*)::int as count from pg_trigger where tgrelid='fcos_release_coordination.control'::regclass and tgname in ('rapid_handover_control_guard','rapid_handover_control_no_truncate') and tgenabled='O'")).rows[0].count,2);
+    f.input.github.qualification=async()=>{throw Error('do not repeat staged/browser work');};
+    const recovered=await readFinalizedHandover({...f.input,plan:f.handoverPlan});
+    assert.equal(recovered.deploymentId,final.deploymentId);assert.equal(recovered.reused,true);
+    assert.equal((await f.pg.query("select count(*)::int as count from fcos_release_coordination.rapid_handover_receipts where phase='finalized'")).rows[0].count,1);
+    await assert.rejects(f.pg.query("update fcos_release_coordination.control set mode='qualification'"),/FENCED/);
   }finally{await f.close();}
 });
 
