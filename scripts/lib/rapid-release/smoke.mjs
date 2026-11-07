@@ -280,7 +280,7 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
     return receipt;
   }
   let phase = 'SETUP';
-  let browser, context, privateEnv, diagnosticReads, cleanupFailed = false;
+  let browser, context, privateEnv, readNormalModules, cleanupFailed = false;
   let denialReceipts = [], extraReads = [], desktopChecks = [], authProbed = false, probeError, rejectProbe, resolveProbe;
   const probeFailure = new Promise((_, reject) => { rejectProbe = reject; });
   probeFailure.catch(() => {});
@@ -319,7 +319,7 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
             requireFact(denial.url() === `${origin}${mutation.path}` && denial.status() === 403 && (await denial.json()).code === 'FCOS_DEPLOYMENT_READ_ONLY', 'SMOKE_NORMAL_MUTATION_NOT_DENIED');
             denialReceipts = [{ path: mutation.path, status: 403, code: 'FCOS_DEPLOYMENT_READ_ONLY' }];
           } finally { await denial?.dispose(); }
-          const readModules = async () => {
+          readNormalModules = async () => {
             for (const module of modules.filter(value => !baselineModules.includes(value))) {
               const reader = moduleReaders[module];
               const receipt = await checkModule(module, 'read', async () => {
@@ -330,8 +330,6 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
               if (receipt) extraReads.push(receipt);
             }
           };
-          if (diagnostic) diagnosticReads = readModules;
-          else await readModules();
         }
         await route.fulfill({ response: actual });
       } catch (error) { probeError = error; rejectProbe(error); await route.abort('blockedbyclient'); }
@@ -367,9 +365,10 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
     requireFact(authResponse.status() === 200 && authProbed && !probeError, probeError?.code || 'SMOKE_LOGIN_NOT_PROVEN');
     assertIdentity(await authResponse.json(), credentials, normal, modules);
     await writePrivateE2eState({ env: privateEnv, path: privateEnv.FCOS_E2E_STORAGE_STATE, state: candidateAuthenticationState(await context.storageState(), origin) });
-    if (diagnosticReads) {
+    if (normal) {
+      requireFact(readNormalModules, 'SMOKE_NORMAL_READS_NOT_BOUND');
       phase = 'NORMAL_MODULE_READS';
-      await diagnosticReads();
+      await readNormalModules();
     }
     const reads = [...extraReads];
     for (const module of baselineModules) {
