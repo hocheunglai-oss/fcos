@@ -126,6 +126,8 @@ jobs:
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea
         env:
           RELEASE_MANIFEST: ${{ inputs.manifest_json }}
+          FCOS_RAPID_RELEASE_ENABLED: ${{ vars.FCOS_RAPID_RELEASE_ENABLED }}
+          FCOS_RAPID_RELEASE_HANDOVER_ID: ${{ vars.FCOS_RAPID_RELEASE_HANDOVER_ID }}
         with:
           script: |
             const crypto = require('node:crypto');
@@ -136,10 +138,10 @@ jobs:
             const canonical = value => JSON.stringify(value,(_,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.entries(v).sort()):v);
             const hash = value => crypto.createHash('sha256').update(canonical(value)).digest('hex');
             need(m.targets.repository===repository && m.targets.account===base.owner && context.actor===base.owner && /^[a-f0-9]{40}$/.test(m.controllerSha));
-            const enabled=(await github.rest.actions.getRepoVariable({...base,name:'FCOS_RAPID_RELEASE_ENABLED'})).data;
-            const pointer=(await github.rest.actions.getRepoVariable({...base,name:'FCOS_RAPID_RELEASE_HANDOVER_ID'})).data;
-            need(enabled.value==='true' && /^[1-9][0-9]*$/.test(pointer.value));
-            const d=(await github.rest.repos.getDeployment({...base,deployment_id:Number(pointer.value)})).data;
+            const pointer=process.env.FCOS_RAPID_RELEASE_HANDOVER_ID;
+            need(process.env.FCOS_RAPID_RELEASE_ENABLED==='true' && /^[1-9][0-9]*$/.test(pointer) && Number.isSafeInteger(Number(pointer)));
+            const d=(await github.rest.repos.getDeployment({...base,deployment_id:Number(pointer)})).data;
+            need(d.id===Number(pointer));
             const p=d.payload;
             need([base.owner,'github-actions[bot]'].includes(d.creator.login) && p.kind==='fcos_rapid_release_handover' && p.repository===repository
               && p.controllerSha===m.controllerSha && p.plan.controllerSha===m.controllerSha && hash(p.plan)===p.planHash);
@@ -155,6 +157,7 @@ jobs:
             const [a,b]=await Promise.all([m.controllerSha,context.sha].map(ref=>github.rest.repos.getContent({...base,path:'.github/workflows/fcos-rapid-release.yml',ref})));
             need(a.data.type==='file'&&b.data.type==='file'&&a.data.sha===b.data.sha);
             core.setOutput('controller_sha',m.controllerSha);
+            core.setOutput('handover_id',pointer);
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           path: controller
@@ -183,6 +186,8 @@ jobs:
         run: node controller/scripts/rapid-release.mjs stage --controller controller --manifest artifact/manifest.json --build artifact/build.json --artifact-directory artifact/candidate --output stage-result.json
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          FCOS_RAPID_RELEASE_ENABLED: ${{ vars.FCOS_RAPID_RELEASE_ENABLED }}
+          FCOS_RAPID_RELEASE_HANDOVER_ID: ${{ steps.admit-controller.outputs.handover_id }}
           VERCEL_TOKEN: ${{ secrets.FCOS_RAPID_VERCEL_STAGE_TOKEN || secrets.FCOS_HOSTED_VERCEL_TOKEN }}
           FCOS_RAPID_DATABASE_URL: ${{ secrets.FCOS_RAPID_READONLY_DATABASE_URL }}
           FCOS_RAPID_DATABASE_CA: ${{ runner.temp }}/rapid-database-ca.pem
@@ -223,6 +228,8 @@ jobs:
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea
         env:
           RELEASE_MANIFEST: ${{ inputs.manifest_json }}
+          FCOS_RAPID_RELEASE_ENABLED: ${{ vars.FCOS_RAPID_RELEASE_ENABLED }}
+          FCOS_RAPID_RELEASE_HANDOVER_ID: ${{ vars.FCOS_RAPID_RELEASE_HANDOVER_ID }}
         with:
           script: |
             const crypto = require('node:crypto');
@@ -233,10 +240,10 @@ jobs:
             const canonical = value => JSON.stringify(value,(_,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.entries(v).sort()):v);
             const hash = value => crypto.createHash('sha256').update(canonical(value)).digest('hex');
             need(m.targets.repository===repository && m.targets.account===base.owner && context.actor===base.owner && /^[a-f0-9]{40}$/.test(m.controllerSha));
-            const enabled=(await github.rest.actions.getRepoVariable({...base,name:'FCOS_RAPID_RELEASE_ENABLED'})).data;
-            const pointer=(await github.rest.actions.getRepoVariable({...base,name:'FCOS_RAPID_RELEASE_HANDOVER_ID'})).data;
-            need(enabled.value==='true' && /^[1-9][0-9]*$/.test(pointer.value));
-            const d=(await github.rest.repos.getDeployment({...base,deployment_id:Number(pointer.value)})).data;
+            const pointer=process.env.FCOS_RAPID_RELEASE_HANDOVER_ID;
+            need(process.env.FCOS_RAPID_RELEASE_ENABLED==='true' && /^[1-9][0-9]*$/.test(pointer) && Number.isSafeInteger(Number(pointer)));
+            const d=(await github.rest.repos.getDeployment({...base,deployment_id:Number(pointer)})).data;
+            need(d.id===Number(pointer));
             const p=d.payload;
             need([base.owner,'github-actions[bot]'].includes(d.creator.login) && p.kind==='fcos_rapid_release_handover' && p.repository===repository
               && p.controllerSha===m.controllerSha && p.plan.controllerSha===m.controllerSha && hash(p.plan)===p.planHash);
@@ -252,6 +259,7 @@ jobs:
             const [a,b]=await Promise.all([m.controllerSha,context.sha].map(ref=>github.rest.repos.getContent({...base,path:'.github/workflows/fcos-rapid-release.yml',ref})));
             need(a.data.type==='file'&&b.data.type==='file'&&a.data.sha===b.data.sha);
             core.setOutput('controller_sha',m.controllerSha);
+            core.setOutput('handover_id',pointer);
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: ${{ steps.admit-controller.outputs.controller_sha }}
@@ -275,6 +283,8 @@ jobs:
         run: node scripts/rapid-release.mjs promote --manifest manifest.json --output release-result.json
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          FCOS_RAPID_RELEASE_ENABLED: ${{ vars.FCOS_RAPID_RELEASE_ENABLED }}
+          FCOS_RAPID_RELEASE_HANDOVER_ID: ${{ steps.admit-controller.outputs.handover_id }}
           VERCEL_TOKEN: ${{ secrets.FCOS_RELEASE_VERCEL_TOKEN }}
           FCOS_RAPID_DATABASE_URL: ${{ secrets.FCOS_RAPID_READONLY_DATABASE_URL }}
           FCOS_RAPID_DATABASE_CA: ${{ runner.temp }}/rapid-database-ca.pem
