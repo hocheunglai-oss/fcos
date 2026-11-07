@@ -2,8 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
-import { auditHandover, applyHandover, performHandover, createHandoverPlan, handoverDigest, handoverPins, OLD_RELEASE_WORKFLOWS, assertHandoverConnection, assertHandoverDatabaseIdentity, assertHandoverActivation } from '../scripts/lib/rapid-release/handover.mjs';
+import { auditHandover, preflightHandoverProviders, readFinalizedHandover, applyHandover, performHandover, createHandoverPlan, handoverDigest, handoverPins, OLD_RELEASE_WORKFLOWS, assertHandoverConnection, assertHandoverDatabaseIdentity, assertHandoverActivation } from '../scripts/lib/rapid-release/handover.mjs';
 import { verifyNativeHandoverDatabase } from '../scripts/lib/rapid-release/compatibility.mjs';
+import { openPinnedDatabase } from '../scripts/lib/rapid-release/database-connection.mjs';
+import { createHandoverCoordinator } from '../scripts/rapid-release-handover.mjs';
+import { readActiveHandover } from '../scripts/lib/rapid-release/handover-adapter.mjs';
 import { dummyDelegation } from './helpers/rapidDatabaseDelegationFixture.mjs';
 
 const { PGlite } = createRequire(import.meta.url)('@electric-sql/pglite');
@@ -48,7 +51,7 @@ async function fixture() {
     },
     qualification: async () => ({ runId: 100, planHash: handoverDigest(plan), controllerSha: plan.controllerSha, candidateSha: plan.candidateSha,
       buildId: plan.buildId, artifactDigest: plan.artifactDigest, deploymentId: 'dpl_qualified', browser: { passed: true, login: true, restrictedAccess: true, normalRole: true, businessWrites: 0, deploymentId: 'dpl_qualified', buildId: plan.buildId } }),
-    createDeployment: async request => { const deployment = { id: 200 + creates++, creator: { login: pins.account }, payload: request.payload }; deployments.set(request.payload.planHash, deployment); return deployment; },
+    createDeployment: async request => { const deployment = { id: 200 + creates++, sha: request.ref, environment: request.environment, creator: { login: pins.account }, payload: request.payload }; deployments.set(request.payload.planHash, deployment); return deployment; },
     findDeployment: async ({ planHash }) => deployments.get(planHash),
   };
   const vercel = { project: async () => ({ id: pins.projectId, accountId: pins.teamId, autoAssignCustomDomains: false }),
@@ -239,5 +242,115 @@ test('a new unresolved rapid provider intent blocks preparation and activation w
     f.rapidPending = 0; await f.apply('prepare'); const result = await f.apply('finalize');
     f.rapidPending = 1; await assert.rejects(f.activate(result), /ACTIVATION_STATE_CHANGED/);
     assert.equal(f.creates, 1);
+  } finally { await f.db.close(); }
+});
+
+test('waiting old workflow is refused before any database credential/context is opened', async () => {
+  const f = await fixture(); let opens = 0;
+  try {
+    const pages = f.github.pages;
+    f.github.pages = async path => path.includes(`/workflows/${OLD_RELEASE_WORKFLOWS.indexOf('authenticated-release.yml') + 1}/runs?`)
+      ? [{ id: 40012985920, status: 'waiting' }] : pages(path);
+    const withCoordinator = createHandoverCoordinator({ plan: f.plan, openDatabase: async () => { opens++; throw Error('must not issue'); }, createAdapter: async () => ({}) });
+    const execute = async () => {
+      await preflightHandoverProviders(f);
+      return withCoordinator('prepare', () => { throw Error('must not execute'); });
+    };
+    await assert.rejects(execute(), /OLD_WRITER_RUNNING_OR_PRODUCTION_MOVED/);
+    assert.equal(opens, 0); assert.equal(f.creates, 0);
+    assert.equal((await f.db.query("select to_regclass('fcos_release_coordination.rapid_handover_receipts') as name")).rows[0].name, null);
+  } finally { await f.db.close(); }
+});
+
+test('fresh native leases close before long stage/browser waits and resumed qualification does not duplicate stage/smoke', async () => {
+  const f = await fixture(), factory = await dummyDelegation(f.db);
+  let clock = Date.now(), active = 0, stageWrites = 0, smokeRuns = 0, saved = false, interrupt = true;
+  const leases = [], phases = [];
+  const withCoordinator = createHandoverCoordinator({ plan: f.plan,
+    openDatabase: async () => {
+      const native = await openPinnedDatabase({ credential: factory.credential, caFile: '/dummy/public-ca.crt',
+        intentStore: { ...factory.intentStore, begin: async request => { const intent = await factory.intentStore.begin(request); return { ...intent, preflight: { ...intent.preflight, observedAtMs: clock } }; } },
+        deps: { ...factory.deps, now: () => clock } });
+      leases.push(native); active++;
+      const end = native.db.end.bind(native.db); native.db.end = async () => { await end(); active--; };
+      return native;
+    }, createAdapter: async () => ({ github: f.github, vercel: f.vercel }) });
+  const coordinator = { withCoordinator: (phase, work) => { phases.push(phase); return withCoordinator(phase, work); } };
+  const input = { plan: f.plan, github: f.github, vercel: f.vercel, coordinator, retireOldWriters: async () => assert.equal(active, 0),
+    qualifyStage: async ({ ownershipVerifier }) => {
+      assert.equal(active, 0);
+      await ownershipVerifier({ phase: 'stage' }); assert.equal(active, 0);
+      if (!saved) { stageWrites++; smokeRuns++; saved = true; }
+      clock += 600000; // Longer than the real issuer's 300-second lease.
+      for (const lease of leases) assert.throws(() => assertHandoverConnection(lease.connection), /PINNED_TLS/);
+      if (interrupt) { interrupt = false; throw Error('browser-complete-checkpoint-interruption'); }
+      return f.github.qualification();
+    } };
+  try {
+    await assert.rejects(performHandover(input), /checkpoint-interruption/);
+    assert.equal(active, 0);
+    const result = await performHandover(input);
+    assert.equal(result.phase, 'finalize'); assert.equal(active, 0);
+    assert.equal(stageWrites, 1); assert.equal(smokeRuns, 1); assert.equal(f.creates, 1);
+    assert.equal(phases.filter(value => value === 'prepare').length, 2);
+    assert.ok(phases.includes('finalize'));
+    const recovered = await performHandover({ ...input, qualifyStage: async () => { throw Error('must not stage a final'); }, retireOldWriters: async () => { throw Error('must not retire again'); } });
+    assert.equal(recovered.deploymentId, result.deploymentId); assert.equal(active, 0); assert.equal(f.creates, 1);
+  } finally { assert.equal(active, 0); await f.db.close(); }
+});
+
+test('scoped coordinator closes on adapter/callback errors and refuses overlapping native contexts', async () => {
+  const f = await fixture(); let opens = 0, closes = 0, adapterFails = true;
+  const withCoordinator = createHandoverCoordinator({ plan: f.plan,
+    openDatabase: async () => { opens++; return { connection: f.connection, db: { end: async () => { closes++; } } }; },
+    createAdapter: async () => { if (adapterFails) throw Error('adapter refused'); return { github: f.github, vercel: f.vercel }; } });
+  try {
+    await assert.rejects(withCoordinator('prepare', async () => {}), /adapter refused/);
+    assert.equal(closes, 1); adapterFails = false;
+    await assert.rejects(withCoordinator('stage', async () => { throw Error('native ownership refused'); }), /ownership refused/);
+    assert.equal(closes, 2);
+    await withCoordinator('stage', async () => {
+      await assert.rejects(withCoordinator('finalize', async () => {}), /CONTEXT_PHASE_REQUIRED/);
+      assert.equal(opens, 3);
+    });
+    assert.equal(closes, 3);
+  } finally { await f.db.close(); }
+});
+
+test('finalized receipt recovery preserves original qualification and stops at missing/forged acknowledgements', async () => {
+  const f = await fixture();
+  try {
+    await f.apply('prepare'); const final = await f.apply('finalize');
+    const native = await f.github.findDeployment({ planHash: handoverDigest(f.plan) });
+    f.github.qualification = async () => { throw Error('must not repeat qualification'); };
+    assert.equal((await readFinalizedHandover(f)).deploymentId, final.deploymentId);
+    f.approved = false; await assert.rejects(readFinalizedHandover(f), /PROTECTED_NATIVE_REVIEW_REQUIRED/); f.approved = true;
+    const original = f.github.findDeployment;
+    f.github.findDeployment = async () => null;
+    await assert.rejects(performHandover({ ...f, coordinator: f, qualifyStage: async () => {}, retireOldWriters: async () => {} }), /GITHUB_OUTCOME_RECONCILIATION_REQUIRED/);
+    assert.equal(f.creates, 1); f.github.findDeployment = original;
+    for (const mutate of [() => native.payload.nativeReview.runId++, () => native.payload.controllerSha = 'f'.repeat(40), () => native.creator.login = 'github-actions[bot]']) {
+      const before = JSON.stringify(native); mutate();
+      await assert.rejects(readFinalizedHandover(f), /EXISTING_RECEIPT_BINDING_INVALID/);
+      Object.assign(native, JSON.parse(before));
+    }
+    f.aliasAssigned = true; await assert.rejects(readFinalizedHandover(f), /REAL_STAGED_QUALIFICATION_REQUIRED/);
+    assert.equal(f.creates, 1);
+  } finally { await f.db.close(); }
+});
+
+test('partial activation is typed recovery input only for the exact native plan; ordinary admission stays strict', async () => {
+  const f = await fixture();
+  try {
+    await f.apply('prepare'); await f.apply('finalize');
+    const native = await f.github.findDeployment({ planHash: handoverDigest(f.plan) });
+    const get = async path => path.endsWith('/FCOS_RAPID_RELEASE_ENABLED') ? { value: 'false' }
+      : path.endsWith('/FCOS_RAPID_RELEASE_HANDOVER_ID') ? { value: String(native.id) } : native;
+    await assert.rejects(readActiveHandover({ get }), /ACTIVE_POINTER_UNCERTAIN/);
+    const pending = await readActiveHandover({ get, pendingPlan: f.plan });
+    assert.equal(pending.pendingActivation, true); assert.equal(pending.deploymentId, native.id);
+    await assert.rejects(readActiveHandover({ get, pendingPlan: { ...f.plan, buildId: '0'.repeat(64) } }), /ACTIVE_POINTER_UNCERTAIN/);
+    f.github.activeHandover = ({ pendingPlan } = {}) => readActiveHandover({ get, pendingPlan });
+    assert.equal((await readFinalizedHandover(f)).deploymentId, native.id);
   } finally { await f.db.close(); }
 });
