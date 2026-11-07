@@ -1,3 +1,4 @@
+import { runWithDeploymentRequestSafety } from '../api/_deploymentReadOnly.js';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
@@ -11,6 +12,8 @@ import {
   getEmailRouterActionStatus,
   extractEmailRouterInlineContentIds,
   listEmailRouterDirectory,
+  listEmailRouterMessages,
+  syncEmailRouterMetadata,
   normalizeEmailRouterDestinationSelections,
   normalizeEmailRouterManualRecipients,
   processEmailRouterOutbox,
@@ -775,4 +778,35 @@ test('migration sync diagnostics expose only a bounded provider code', async () 
   assert.match(source, /entity_type: 'mailbox'/);
   assert.doesNotMatch(source, /entity_type: 'mailbox_connection'/);
   assert.doesNotMatch(source, /stack|response\.text|access_token|client_assertion/i);
+});
+
+test('staged mailbox list uses saved metadata without contacting Graph or writing storage', async () => {
+  const seen = [];
+  const query = {
+    select() { seen.push('select'); return this; },
+    eq() { return this; },
+    is() { return this; },
+    order() { return this; },
+    async limit(value) {
+      assert.equal(value, 30);
+      return { data: [{ provider_message_id: 'fixture-message', is_read: false }], error: null };
+    },
+  };
+  const client = { schema(name) {
+    assert.equal(name, 'emailrouter');
+    return { from(table) { assert.equal(table, 'messages'); return query; } };
+  } };
+  const stage = { headers: { host: 'fcos-fixture.vercel.app' } };
+  const env = { VERCEL_ENV: 'production' };
+  await runWithDeploymentRequestSafety(stage, async () => {
+    const args = { client, mailbox: { id: 'fixture-mailbox' }, limit: 30 };
+    const dependencies = { env, fetchImpl() { assert.fail('staging must never contact Graph'); } };
+    const result = await listEmailRouterMessages(args, dependencies);
+    assert.equal(result.source, 'saved_metadata');
+    assert.equal(result.total, 1);
+    assert.equal(result.items[0].provider_message_id, 'fixture-message');
+    await assert.rejects(listEmailRouterMessages({ ...args, search: 'lookup' }, dependencies), { code: 'FCOS_DEPLOYMENT_READ_ONLY' });
+    await assert.rejects(syncEmailRouterMetadata({ ...args, folder: 'inbox', messages: [{ id: 'fixture-message' }] }), { code: 'FCOS_DEPLOYMENT_READ_ONLY' });
+    assert.deepEqual(seen, ['select']);
+  }, env);
 });

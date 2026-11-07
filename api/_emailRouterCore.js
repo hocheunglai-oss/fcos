@@ -364,6 +364,7 @@ function storageUnavailable(error) {
 }
 
 export async function syncEmailRouterMetadata({ client, mailbox, folder, messages }) {
+  requireDeploymentMutationAllowed(true);
   if (!FOLDERS.has(folder)) throw routerError('Unsupported mailbox folder.', 400, 'EMAIL_ROUTER_FOLDER_INVALID');
   const rows = (messages || []).filter((message) => message?.id && !message['@removed']).map((message) => messageMetadata(message, mailbox.id, folder));
   const removedIds = (messages || []).filter((message) => message?.id && message['@removed']).map((message) => safeId(message.id, 'Graph message identifier'));
@@ -437,6 +438,19 @@ export async function listEmailRouterMessages({ client, mailbox, folder = 'inbox
   folder = String(folder || 'inbox').trim().toLowerCase();
   if (!FOLDERS.has(folder)) throw routerError('Unsupported mailbox folder.', 400, 'EMAIL_ROUTER_FOLDER_INVALID');
   const maximum = Math.min(50, Math.max(1, Number(limit) || 30));
+  if (isDeploymentReadOnly(dependencies.env || process.env)) {
+    if (cursor || String(search || '').trim()) {
+      throw routerError('Mailbox search and paging are unavailable in this read-only environment.', 403, 'FCOS_DEPLOYMENT_READ_ONLY');
+    }
+    const saved = await listEmailRouterMetadata({ client, mailbox, folder, limit: maximum });
+    return {
+      ...saved,
+      items: saved.items.map(item => ({ ...item, subject: 'Saved mailbox metadata' })),
+      total: saved.items.length,
+      nextCursor: null,
+      source: 'saved_metadata',
+    };
+  }
   const selected = 'id,subject,from,receivedDateTime,sentDateTime,hasAttachments,isRead,importance';
   const nextUrl = decodeGraphCursor(cursor, mailbox);
   const params = new URLSearchParams({ '$select': selected, '$top': String(maximum) });
