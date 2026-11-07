@@ -1,0 +1,123 @@
+name: FCOS rapid handover recovery
+run-name: FCOS rapid handover abort ${{ inputs.plan_hash }} ${{ inputs.recovery_sha }} ${{ inputs.prepared_receipt_id }} ${{ inputs.terminal_run_id }} ${{ inputs.stage_record_id }} ${{ inputs.staged_deployment_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      recovery_sha:
+        description: Exact installed and qualified recovery controller SHA
+        required: true
+        type: string
+      plan_json:
+        description: Original non-secret prepared bootstrap handover plan
+        required: true
+        type: string
+      plan_hash:
+        description: Original handover plan digest
+        required: true
+        type: string
+      prepared_receipt_id:
+        description: Exact private preparation receipt ID
+        required: true
+        type: string
+      terminal_run_id:
+        description: Exact completed failed handover run ID
+        required: true
+        type: string
+      stage_record_id:
+        description: Exact durable staging result Deployment object ID
+        required: true
+        type: string
+      staged_deployment_id:
+        description: Exact unaliased Vercel staging deployment ID
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: fcos-production-release
+  cancel-in-progress: false
+  queue: max
+jobs:
+  handover-abort:
+    name: handover-abort
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    environment: fcos-production-release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+    steps:
+      - name: Admit installed and qualified recovery source before checkout
+        id: admit-recovery
+        uses: actions/github-script@v7
+        env:
+          RECOVERY_SHA: ${{ inputs.recovery_sha }}
+          PLAN_JSON: ${{ inputs.plan_json }}
+          PLAN_HASH: ${{ inputs.plan_hash }}
+          PREPARED_RECEIPT_ID: ${{ inputs.prepared_receipt_id }}
+          TERMINAL_RUN_ID: ${{ inputs.terminal_run_id }}
+          STAGE_RECORD_ID: ${{ inputs.stage_record_id }}
+          STAGED_DEPLOYMENT_ID: ${{ inputs.staged_deployment_id }}
+        with:
+          script: |
+            const {createHash}=require('node:crypto');
+            const canonical=value=>JSON.stringify(value,(_,item)=>item&&typeof item==='object'&&!Array.isArray(item)?Object.fromEntries(Object.entries(item).sort()):item);
+            const check=value=>{if(!value)throw Error('QUALIFIED_INSTALLED_HANDOVER_RECOVERY_REQUIRED');};
+            const sha=process.env.RECOVERY_SHA,plan=JSON.parse(process.env.PLAN_JSON);
+            check(/^[a-f0-9]{40}$/.test(sha)&&/^[a-f0-9]{40}$/.test(plan.controllerSha)&&sha!==plan.controllerSha
+              &&plan.kind==='fcos_rapid_handover_plan'&&plan.bootstrap?.reference?.schemaVersion===2
+              &&createHash('sha256').update(canonical(plan)).digest('hex')===process.env.PLAN_HASH
+              &&[process.env.PREPARED_RECEIPT_ID,process.env.TERMINAL_RUN_ID,process.env.STAGE_RECORD_ID].every(value=>/^[1-9][0-9]*$/.test(value)&&Number.isSafeInteger(Number(value)))
+              &&/^dpl_[A-Za-z0-9]+$/.test(process.env.STAGED_DEPLOYMENT_ID));
+            const {owner,repo}=context.repo;
+            check(owner==='hocheunglai-oss'&&repo==='fcos'&&context.actor===owner);
+            const {data:repository}=await github.rest.repos.get({owner,repo});
+            const {data:branch}=await github.rest.repos.getBranch({owner,repo,branch:repository.default_branch});
+            check(branch.protected===true&&branch.commit.sha===context.sha);
+            for(const base of [plan.controllerSha,sha]){
+              const {data:comparison}=await github.rest.repos.compareCommits({owner,repo,base,head:context.sha});
+              check(['identical','ahead'].includes(comparison.status));
+            }
+            const path='.github/workflows/fcos-rapid-handover-recovery.yml';
+            const [{data:frozen},{data:current}]=await Promise.all([sha,context.sha].map(ref=>github.rest.repos.getContent({owner,repo,path,ref})));
+            check(frozen.type==='file'&&current.type==='file'&&frozen.sha===current.sha);
+            const {data:checks}=await github.rest.checks.listForRef({owner,repo,ref:sha,check_name:'code-and-database',filter:'latest',per_page:100});
+            const quality=checks.check_runs.filter(row=>row.head_sha===sha&&row.name==='code-and-database'&&row.app?.id===15368).sort((a,b)=>b.id-a.id)[0];
+            check(checks.total_count<=100&&quality?.status==='completed'&&quality.conclusion==='success');
+            const qualityLink=quality.details_url?.match(/^https:\/\/github\.com\/hocheunglai-oss\/fcos\/actions\/runs\/([1-9][0-9]*)\/job\/([1-9][0-9]*)$/);
+            check(qualityLink&&qualityLink.slice(1).every(value=>Number.isSafeInteger(Number(value))));
+            const run_id=Number(qualityLink[1]),job_id=Number(qualityLink[2]);
+            const [{data:run},{data:job}]=await Promise.all([github.rest.actions.getWorkflowRun({owner,repo,run_id}),github.rest.actions.getJobForWorkflowRun({owner,repo,job_id})]);
+            check(run.id===run_id&&run.head_sha===sha&&run.repository?.id===repository.id&&run.head_repository?.id===repository.id
+              &&['pull_request','push'].includes(run.event)&&String(run.path).split('@')[0]==='.github/workflows/quality.yml'
+              &&job.id===job_id&&job.run_id===run_id&&job.head_sha===sha&&job.name==='code-and-database'&&job.status==='completed'&&job.conclusion==='success');
+            core.setOutput('controller_sha',sha);
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ steps.admit-recovery.outputs.controller_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm install --global vercel@54.20.1 --ignore-scripts --no-audit --no-fund
+      - name: Append only the exact abort receipt and verify the frozen fence
+        run: |
+          node --input-type=module -e 'import fs from "node:fs";fs.writeFileSync(process.env.FCOS_HANDOVER_DATABASE_CA,process.env.HANDOVER_CA,{mode:0o600})'
+          node scripts/rapid-release-handover-recovery.mjs
+        env:
+          RECOVERY_SHA: ${{ steps.admit-recovery.outputs.controller_sha }}
+          PLAN_JSON: ${{ inputs.plan_json }}
+          PLAN_HASH: ${{ inputs.plan_hash }}
+          PREPARED_RECEIPT_ID: ${{ inputs.prepared_receipt_id }}
+          TERMINAL_RUN_ID: ${{ inputs.terminal_run_id }}
+          STAGE_RECORD_ID: ${{ inputs.stage_record_id }}
+          STAGED_DEPLOYMENT_ID: ${{ inputs.staged_deployment_id }}
+          FCOS_RAPID_HANDOVER_GITHUB_TOKEN: ${{ secrets.FCOS_RAPID_HANDOVER_GITHUB_TOKEN || secrets.FCOS_RELEASE_GH_TOKEN }}
+          FCOS_HANDOVER_DATABASE_URL: ${{ secrets.FCOS_RAPID_HANDOVER_DATABASE_URL }}
+          FCOS_RAPID_SUPABASE_ACCESS_TOKEN: ${{ secrets.FCOS_RAPID_SUPABASE_ACCESS_TOKEN }}
+          FCOS_HANDOVER_DATABASE_CA: ${{ runner.temp }}/rapid-recovery-database-ca.pem
+          HANDOVER_CA: ${{ secrets.FCOS_RAPID_DATABASE_CA }}
+          VERCEL_TOKEN: ${{ secrets.FCOS_RELEASE_VERCEL_TOKEN }}
