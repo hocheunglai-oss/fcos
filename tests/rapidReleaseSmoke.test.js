@@ -5,7 +5,7 @@ import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier } from '../config/fcos
 import { APP_MODULES } from '../src/lib/authModules.js';
 import { MODULE_READERS, MODULE_SURFACES, moduleReadBody, moduleReaderPayloadVerified } from '../scripts/lib/rapid-release/normal-role-readers.mjs';
 import { FCOS_READ_ONLY_CI as ci } from '../config/fcosCiIdentity.js';
-import { runStagedSmoke, observeLive, stagedBrowserRequestAllowed } from '../scripts/lib/rapid-release/smoke.mjs';
+import { diagnoseStagedSmoke, runStagedSmoke, observeLive, stagedBrowserRequestAllowed } from '../scripts/lib/rapid-release/smoke.mjs';
 
 const origin = 'https://fcos-a1b2c3d4e-hocheunglai-6535s-projects.vercel.app';
 const issuer = new URL(FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation.issuer).origin;
@@ -48,7 +48,7 @@ const readPayloads = {
 
 // Fixtures replace browser/provider transports. They simulate the app-owned
 // bootstrap response and actual response events; they never establish live proof.
-function browserFixture({ badIdentity = false, badRead = false, badDenial = false, unexpected = false, missingModule = false, background = false, badPayload = false, badDesktop = false, deniedModule = null, role = 'manager' } = {}) {
+function browserFixture({ badIdentity = false, badRead = false, badDenial = false, unexpected = false, missingModule = false, background = false, optionalRequest = null, badPayload = false, badDesktop = false, deniedModule = null, role = 'manager' } = {}) {
   const observations = { launches: [], reads: [], contextsClosed: 0, browsersClosed: 0, nativeAborts: 0 };
   const browserFactory = async options => {
     observations.launches.push(options);
@@ -87,11 +87,13 @@ function browserFixture({ badIdentity = false, badRead = false, badDenial = fals
       waitFor: async () => {},
       fill: async value => { if (name === 'Username') email = value; if (name === 'Password') password = value; },
       click: async () => {
+        if (name === 'Receipts') return;
         if (name === 'Run') { emit(apiResponse(`${origin}/api/functions/stemPnl`, readPayloads.pnl)); return; }
         if (name === 'Continue with FCUNO') { changeLocation(`${issuer}/admin`); return; }
         assert.equal(name, 'Login');
         assert.ok(password.startsWith('PRIVATE_'));
         if (unexpected) await pausedHandler({ requestId: 'unexpected-redirect', request: { url: 'https://unexpected.invalid/collect', method: 'POST', headers: {}, postData: '{}' }, resourceType: 'fetch' });
+        if (optionalRequest) await pausedHandler({ requestId: 'optional-read', request: optionalRequest, resourceType: optionalRequest.type || 'XHR' });
         if (background && email !== ci.email) await pausedHandler({ requestId: 'automatic-mailbox-sync', request: { url: `${origin}/api/email-router-background-sync`, method: 'POST', headers: {}, postData: '{}' }, resourceType: 'fetch' });
         await simulate(requestOf(`${origin}/api/functions/authContext`, 'POST'));
         changeLocation(`${origin}/`);
@@ -101,7 +103,7 @@ function browserFixture({ badIdentity = false, badRead = false, badDenial = fals
       url: () => location,
       on: () => {},
       waitForLoadState: async () => {}, waitForFunction: async () => {},
-      locator: selector => ({ count: async () => badDesktop ? 0 : 1, first() { return this; }, waitFor: async () => { if (badDesktop) throw Error('MISSING_DESKTOP_SURFACE'); }, innerText: async () => badDesktop ? 'Something went wrong' : 'Verified fixture business surface' }),
+      locator: selector => ({ or() { return this; }, count: async () => badDesktop ? 0 : 1, first() { return this; }, waitFor: async () => { if (badDesktop) throw Error('MISSING_DESKTOP_SURFACE'); }, innerText: async () => badDesktop ? 'Something went wrong' : 'Verified fixture business surface' }),
       getByText: () => ({ first() { return this; }, waitFor: async () => { if (badDesktop) throw Error('MISSING_DESKTOP_SURFACE'); } }),
       getByRole: (role, options) => locator(role, options.name),
       getByLabel: name => locator('label', name),
@@ -211,6 +213,55 @@ test('browser policy admits only pinned login and reviewed reads, blocking provi
   }
 });
 
+test('staged version polling permits only the observed cache-busting GET', () => {
+  const policy = { origin, credentials: { email: ci.email, password: 'fixture' } };
+  assert.equal(stagedBrowserRequestAllowed(request(`${origin}/app-version.json?t=1794025900000`), policy), true);
+  for (const [query, method] of [['t=1794025900000&extra=1', 'GET'], ['t=abc', 'GET'], ['t=1794025900000', 'POST']]) {
+    assert.equal(stagedBrowserRequestAllowed(request(`${origin}/app-version.json?${query}`, method), policy), false);
+  }
+});
+
+test('issuer prefetch is blocked and reported, while a lookalike write fails the smoke', async () => {
+  const optionalRequest = { url: `${issuer}/admin?_rsc=ab123`, method: 'GET', headers: {} };
+  const fixture = browserFixture({ optionalRequest });
+  const proof = await runStagedSmoke({ manifest: manifest(), staged, env, fetchImpl: publicFetch(), browserFactory: fixture.browserFactory });
+  assert.ok(proof.restrictedEvidence.excludedFeatures.includes('issuer_prefetch'));
+  assert.equal(fixture.observations.nativeAborts, 1);
+  const unsafe = browserFixture({ optionalRequest: { ...optionalRequest, method: 'POST' } });
+  await assert.rejects(runStagedSmoke({ manifest: manifest(), staged, env, fetchImpl: publicFetch(), browserFactory: unsafe.browserFactory }),
+    { code: 'SMOKE_BROWSER_NETWORK_OR_RUNTIME_FAILURE' });
+});
+
+test('the deployed issuer image optimization request is excluded without reaching the network', async () => {
+  const optionalRequest = { url: `${issuer}/_next/image?url=%2Flogo.png&w=128&q=75&dpl=fixture`, method: 'GET', type: 'Image', headers: {} };
+  const fixture = browserFixture({ optionalRequest });
+  const proof = await runStagedSmoke({ manifest: manifest(), staged, env, fetchImpl: publicFetch(), browserFactory: fixture.browserFactory });
+  assert.ok(proof.restrictedEvidence.excludedFeatures.includes('issuer_images'));
+  assert.equal(fixture.observations.nativeAborts, 1);
+});
+
+test('incoming payment verification distinguishes the sign advisory from missing schema', () => {
+  const advisory = 'Supplier-invoice-linked negative payments are classified as supplier refunds. Confirm if Salesforce uses the opposite sign.';
+  assert.equal(moduleReaderPayloadVerified('incoming_payments', { rows: [], schemaWarnings: [advisory] }), true);
+  assert.equal(moduleReaderPayloadVerified('incoming_payments', {
+    rows: [], schemaWarnings: [advisory, 'No amount-like field was found on Payment__c.'],
+  }), false);
+  assert.equal(moduleReaderPayloadVerified('incoming_payments', { schemaWarnings: [advisory] }), false);
+  assert.equal(moduleReaderPayloadVerified('brokers', { rows: [], schemaWarnings: [advisory] }), false);
+});
+
+test('Xero status accepts the staged refresh refusal only when every action is disabled by the stage fence', () => {
+  const xero = { configured: true, connected: true, refreshError: 'This verification environment permits read-only operations.' };
+  const gate = { enabled: false, control: 'deployment_read_only' };
+  const verified = (status, action) => moduleReaderPayloadVerified('xero_portal', {
+    xero: status, externalActions: { action },
+  });
+  assert.equal(verified(xero, gate), true);
+  assert.equal(verified({ ...xero, refreshError: 'Unexpected token failure' }, gate), false);
+  assert.equal(verified(xero, { ...gate, enabled: true }), false);
+  assert.equal(verified(xero, { ...gate, control: 'emergency_kill_switch' }), false);
+});
+
 test('five-minute live observation checks native-bound receipt, static identity and anonymous affected read gates only', async () => {
   let time = 0; const sleeps = [], calls = [];
   const proof = await observeLive({ manifest: manifest({ modules: ['settings'] }), staged, durationMs: 300000, fetchImpl: publicFetch({ calls }), now: () => time,
@@ -263,7 +314,9 @@ test('all maintained modules require actual read contracts and affected desktop 
 test('denied module reads, heading-only pages, unsafe snapshots and partial data never prove coverage', async () => {
   for (const options of [{ badDesktop: true }, { deniedModule: 'settings' }]) {
     const fixture = browserFixture(options);
-    await assert.rejects(runStagedSmoke({ manifest: manifest({ normalRole: true, modules: ['settings'] }), staged, env, fetchImpl: publicFetch(), browserFactory: fixture.browserFactory }));
+    const run = runStagedSmoke({ manifest: manifest({ normalRole: true, modules: [options.badDesktop ? 'brokers' : 'settings'] }), staged, env, fetchImpl: publicFetch(), browserFactory: fixture.browserFactory });
+    if (options.badDesktop) await assert.rejects(run, { code: 'SMOKE_MODULE_DESKTOP_CONTENT_MISSING' });
+    else await assert.rejects(run);
     assert.equal(fixture.observations.contextsClosed, fixture.observations.launches.length);
   }
   const hedge = structuredClone(readPayloads.hedge_desk); delete hedge.expiryAutomation;
@@ -280,8 +333,15 @@ test('normal-only snapshot and saved Xero reads keep all mutation selectors and 
   const normal = { origin, credentials: { email: env.FCOS_RAPID_NORMAL_EMAIL, password: 'fixture' }, normal: true };
   assert.equal(stagedBrowserRequestAllowed(request(`${origin}/api/functions/hedgeDeskEntity`, 'POST', { action: 'snapshot' }), normal), true);
   assert.equal(stagedBrowserRequestAllowed(request(`${origin}/api/functions/hedgeDeskEntity`, 'POST', { action: 'snapshot' }), { ...normal, normal: false }), false);
+  assert.equal(stagedBrowserRequestAllowed(request(`${origin}/api/functions/hedgeDeskEntity`, 'POST',
+    { action: 'list', entity: 'AppConfig', sort: '-created_date', limit: 1000 }), normal), true);
   for (const body of [{ action: 'list', entity: 'PhysicalTrade' }, { action: 'snapshot', force: false }, { action: 'snapshot', entity: 'Invoice' }, { action: 'save' }])
     assert.equal(stagedBrowserRequestAllowed(request(`${origin}/api/functions/hedgeDeskEntity`, 'POST', body), normal), false);
+  const detail = { contractId: '26de2e57-7d65-49ed-a91f-ed97d9ba169a', includeLive: true, force: false };
+  assert.equal(stagedBrowserRequestAllowed(request(`${origin}/api/functions/masterContractDetail`, 'POST', detail), normal), true);
+  assert.equal(stagedBrowserRequestAllowed(request(`${origin}/api/functions/masterContractDetail`, 'POST', { ...detail, force: true }), normal), false);
+  assert.equal(stagedBrowserRequestAllowed(request(`${origin}/api/functions/xeroFinancialSyncLatest`, 'POST', {}), normal), true);
+  assert.equal(stagedBrowserRequestAllowed(request(`${origin}/api/functions/xeroFinancialMappingsGet`, 'POST', {}), normal), false);
   assert.equal(stagedBrowserRequestAllowed(request(`${origin}/api/functions/xeroPortalStatus`, 'POST', { forceRefresh: false }), normal), true);
   assert.equal(stagedBrowserRequestAllowed(request(`${origin}/api/functions/xeroPortalStatus`, 'POST', { forceRefresh: true }), normal), false);
   for (const handler of ['xeroPortalContactLifecyclePreview', 'xeroPortalReceiptSync', 'paymentCollectionsReconcile', 'workspacePreferencesSave'])
@@ -314,4 +374,18 @@ test('candidate-declared module paths must match source-reviewed desktop routes 
     await assert.rejects(runStagedSmoke({ manifest: { ...candidate, moduleInventory: inventory }, staged, env, fetchImpl: noCall, browserFactory: noCall }), { code: 'SMOKE_MODULE_PATH_BINDING_MISMATCH' });
   }
   assert.equal(calls, 0);
+});
+
+test('diagnostic records subsequent module outcomes after a denied read without granting release proof', async () => {
+  const { browserFactory, observations } = browserFixture({ deniedModule: 'review' });
+  const report = await diagnoseStagedSmoke({
+    manifest: manifest({ modules: ['review', 'settings'], normalRole: true }),
+    staged, env, fetchImpl: publicFetch(), browserFactory,
+  });
+  assert.equal(report.passed, false);
+  assert.deepEqual(report.outcomes.map(({ module, surface, passed }) => [module, surface, passed]), [
+    ['review', 'read', false], ['settings', 'read', true],
+    ['review', 'desktop', true], ['settings', 'desktop', true],
+  ]);
+  assert.equal(observations.contextsClosed, 2);
 });
