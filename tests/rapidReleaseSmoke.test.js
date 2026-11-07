@@ -239,6 +239,16 @@ test('the deployed issuer image optimization request is excluded without reachin
   assert.equal(fixture.observations.nativeAborts, 1);
 });
 
+test('incoming payment verification distinguishes the sign advisory from missing schema', () => {
+  const advisory = 'Supplier-invoice-linked negative payments are classified as supplier refunds. Confirm if Salesforce uses the opposite sign.';
+  assert.equal(moduleReaderPayloadVerified('incoming_payments', { rows: [], schemaWarnings: [advisory] }), true);
+  assert.equal(moduleReaderPayloadVerified('incoming_payments', {
+    rows: [], schemaWarnings: [advisory, 'No amount-like field was found on Payment__c.'],
+  }), false);
+  assert.equal(moduleReaderPayloadVerified('incoming_payments', { schemaWarnings: [advisory] }), false);
+  assert.equal(moduleReaderPayloadVerified('brokers', { rows: [], schemaWarnings: [advisory] }), false);
+});
+
 test('five-minute live observation checks native-bound receipt, static identity and anonymous affected read gates only', async () => {
   let time = 0; const sleeps = [], calls = [];
   const proof = await observeLive({ manifest: manifest({ modules: ['settings'] }), staged, durationMs: 300000, fetchImpl: publicFetch({ calls }), now: () => time,

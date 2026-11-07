@@ -4,6 +4,7 @@
 const reader = (handler, fields, coverage = 'module_data_read', body = {}) => Object.freeze({
   path: `/api/functions/${handler}`, fields: Object.freeze(fields), coverage, body: Object.freeze(body),
 });
+const incomingPaymentSignAdvisory = 'Supplier-invoice-linked negative payments are classified as supplier refunds. Confirm if Salesforce uses the opposite sign.';
 export const MODULE_READERS = Object.freeze({
   dashboard: Object.freeze({ ...reader('dashboardSummary', []), route: '/', heading: 'Dashboard' }),
   markets: Object.freeze({ ...reader('marketPulseSnapshot', []), route: '/markets', heading: 'Markets' }),
@@ -42,7 +43,9 @@ export function moduleReaderPayloadVerified(module, payload) {
   const data = payload?.data ?? payload;
   if (!data || typeof data !== 'object' || Array.isArray(data) || data.error || data.cancelled
     || data.status === 'unavailable' || data.available === false || data.complete === false
-    || ['schemaWarnings', 'unavailableSources'].some(key => Array.isArray(data[key]) && data[key].length > 0)) return false;
+    || (Array.isArray(data.unavailableSources) && data.unavailableSources.length > 0)
+    || (Array.isArray(data.schemaWarnings) && data.schemaWarnings.some(warning =>
+      module !== 'incoming_payments' || warning !== incomingPaymentSignAdvisory))) return false;
   if (module === 'dashboard') return data.complete === true && Array.isArray(data.financials);
   if (module === 'markets') return data.complete === true && data.reportCompleteness?.complete === true
     && /^\d{4}-\d{2}-\d{2}$/.test(data.asOfDate || '') && Array.isArray(data.products) && data.products.length === 3
