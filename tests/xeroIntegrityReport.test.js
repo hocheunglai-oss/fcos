@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { integrityFilters, integrityDocumentRow, integrityCorrectionHistory, integrityPaymentSnapshot, xeroIntegrityReport } from '../api/_xeroIntegrityReport.js';
+import { runWithDeploymentRequestSafety } from '../api/_deploymentReadOnly.js';
 import { registeredHandlerBehavior } from '../api/_handlerPolicyRegistry.js';
 import { XERO_RECONCILIATION_VERSION } from '../api/_xeroFinancialSync.js';
 import { compactPreviewPayments } from '../api/_xeroPreviewPayments.js';
@@ -257,6 +258,23 @@ test('missing or corrupt compacted payments stay unavailable rather than zero or
   assert.equal(report.coverage.find(row => row.key === 'payments').total, null);
   assert.equal(report.coverage.find(row => row.key === 'payments').available, false);
   assert.ok(report.health.errors.some(row => row.code === 'XERO_INTEGRITY_PAYMENT_EVIDENCE_UNAVAILABLE'));
+});
+
+test('staging preserves saved document evidence without calling payment checkpoint RPCs', async () => {
+  const f = fixture({ snapshot: { includePayments: true, paymentsReference: { salesforceOrgId: SF_ORG } } });
+  let rpcCalls = 0;
+  f.client.rpc = async () => { rpcCalls += 1; throw new Error('Unexpected staged checkpoint read'); };
+  const report = await runWithDeploymentRequestSafety(
+    { headers: { host: 'fcos-candidate.vercel.app' } },
+    () => xeroIntegrityReport({}, { client: f.client, now: NOW }),
+    { VERCEL_ENV: 'production' },
+  );
+  assert.equal(rpcCalls, 0);
+  assert.equal(report.metrics.matched, 1);
+  assert.deepEqual(report.coverage.find(row => row.key === 'payments'), {
+    key: 'payments', label: 'Payments / allocations', checkedAt: new Date(CHECKED).toISOString(),
+    available: false, complete: false, total: null, notice: 'Saved payment checkpoints are excluded from staging verification.',
+  });
 });
 
 test('compacted payment hydration uses only audited read RPCs and verifies full captured hashes', async () => {
