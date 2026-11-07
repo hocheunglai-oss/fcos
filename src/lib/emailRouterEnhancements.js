@@ -142,3 +142,13 @@ export function emailRouterShortcut(event, { hasMessage = false } = {}) {
   if (key === 'r') return 'focus_route';
   return null;
 }
+
+export function formatEmailRouterSyncAge(value, now = Date.now()) {
+  if (!value || !['string', 'number'].includes(typeof value)) return 'Not yet recorded';
+  const elapsed = now - new Date(value).getTime();
+  if (!Number.isFinite(elapsed) || elapsed < 0) return 'Not yet recorded';
+  const seconds = Math.round(elapsed / 1000);
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.round(seconds / 60);
+  return minutes < 60 ? `${minutes}m ago` : `${Math.round(minutes / 60)}h ago`;
+}
