@@ -262,6 +262,7 @@ async function verifyModuleDesktop({ page, origin, module }) {
 }
 
 async function browserRun({ origin, manifest, credentials, normal, modules, env, browserFactory }) {
+  let phase = 'SETUP';
   let browser, context, privateEnv, cleanupFailed = false;
   let denialReceipts = [], extraReads = [], desktopChecks = [], authProbed = false, probeError, rejectProbe;
   const probeFailure = new Promise((_, reject) => { rejectProbe = reject; });
@@ -313,6 +314,7 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
       return true;
     });
     const page = gate.page;
+    phase = 'ISSUER_NAVIGATION';
     await page.goto(`${origin}/login`, { waitUntil: 'domcontentloaded', timeout: 45000 });
     if (new URL(page.url()).origin !== issuer) {
       const button = page.getByRole('button', { name: 'Continue with FCUNO', exact: true });
@@ -326,6 +328,7 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
     atIssuer(); await page.getByLabel('Username', { exact: true }).fill(credentials.email);
     atIssuer(); await page.getByLabel('Password', { exact: true }).fill(credentials.password);
     atIssuer();
+    phase = 'SIGN_IN';
     const [authResponse] = await Promise.all([
       Promise.race([page.waitForResponse(response => response.url() === `${origin}/api/functions/authContext` && response.request().method() === 'POST', { timeout: 90000 }), probeFailure]),
       page.getByRole('button', { name: 'Login', exact: true }).click(),
@@ -336,6 +339,7 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
     await writePrivateE2eState({ env: privateEnv, path: privateEnv.FCOS_E2E_STORAGE_STATE, state: candidateAuthenticationState(await context.storageState(), origin) });
     const reads = [...extraReads];
     for (const module of baselineModules) {
+      phase = `BASELINE_${module.toUpperCase()}`;
       const reader = moduleReaders[module];
       const [response] = await Promise.all([
         page.waitForResponse(value => value.url() === `${origin}${reader.path}` && value.request().method() === 'POST', { timeout: 45000 }),
@@ -349,9 +353,11 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
       reads.push({ module, path: reader.path, status: 200, authenticated: true, dataVerified: true, surface: 'browser' });
     }
     if (normal) for (const module of modules.filter(value => !baselineModules.includes(value))) {
+      phase = `DESKTOP_${module.toUpperCase()}`;
       desktopChecks.push(await verifyModuleDesktop({ page, origin, module }));
     }
     if (!normal) {
+      phase = 'RESTRICTED_ACCESS';
       for (const route of ['/settings', '/email-router']) {
         await page.goto(`${origin}${route}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
         await page.getByRole('heading', { name: /^Access denied$/i }).waitFor({ state: 'visible', timeout: 10000 });
@@ -362,7 +368,7 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
     return { role: credentials.role, requiredModules: unique(modules), modules: unique(reads.map(read => read.module)), reads, desktopChecks, denialReceipts,
       ...gate.summary(), candidateSha: manifest.candidate.sha };
   } catch (error) {
-    throw fail(probeError?.code || (/^(?:SMOKE_|NORMAL_ROLE_)[A-Z0-9_]+$/.test(error?.code || '') ? error.code : 'SMOKE_BROWSER_VERIFICATION_FAILED'));
+    throw fail(probeError?.code || (/^(?:SMOKE_|NORMAL_ROLE_)[A-Z0-9_]+$/.test(error?.code || '') ? error.code : `SMOKE_BROWSER_${phase}_FAILED`));
   } finally {
     try { await context?.close(); } catch { cleanupFailed = true; }
     try { await browser?.close(); } catch { cleanupFailed = true; }

@@ -313,7 +313,9 @@ test('all maintained modules require actual read contracts and affected desktop 
 test('denied module reads, heading-only pages, unsafe snapshots and partial data never prove coverage', async () => {
   for (const options of [{ badDesktop: true }, { deniedModule: 'settings' }]) {
     const fixture = browserFixture(options);
-    await assert.rejects(runStagedSmoke({ manifest: manifest({ normalRole: true, modules: ['settings'] }), staged, env, fetchImpl: publicFetch(), browserFactory: fixture.browserFactory }));
+    const run = runStagedSmoke({ manifest: manifest({ normalRole: true, modules: [options.badDesktop ? 'brokers' : 'settings'] }), staged, env, fetchImpl: publicFetch(), browserFactory: fixture.browserFactory });
+    if (options.badDesktop) await assert.rejects(run, { code: 'SMOKE_BROWSER_DESKTOP_BROKERS_FAILED' });
+    else await assert.rejects(run);
     assert.equal(fixture.observations.contextsClosed, fixture.observations.launches.length);
   }
   const hedge = structuredClone(readPayloads.hedge_desk); delete hedge.expiryAutomation;
