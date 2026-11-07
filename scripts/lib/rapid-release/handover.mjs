@@ -105,6 +105,7 @@ async function snapshot(db, locked = false) {
   return { control, historyDigest: handoverDigest(history), history, unresolvedProduction: unresolved.filter(row => /^production\.(stage|promote|rollback)$/.test(row.phase)),
     preservedOtherUnknowns: { count: unresolved.filter(row => !/^production\.(stage|promote|rollback)$/.test(row.phase)).length, digest: handoverDigest(unresolved.filter(row => !/^production\.(stage|promote|rollback)$/.test(row.phase))) }, receipts, guard };
 }
+export { transaction as handoverTransaction, snapshot as readHandoverSnapshot };
 
 function openHandovers(receipts, ownId = null) {
   return receipts.filter(row => row.phase === 'prepared' && row.handover_id !== ownId
