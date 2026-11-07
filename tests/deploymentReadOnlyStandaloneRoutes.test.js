@@ -26,7 +26,7 @@ function unreadableMutationRequest({ method = 'POST', url = '/api/test' } = {}) 
     req: {
       method,
       url,
-      headers: {},
+      headers: { host: 'fcos-staged-runtime.vercel.app' },
       get body() {
         bodyReads += 1;
         return undefined;
@@ -73,6 +73,7 @@ test('standalone mutation routes reject Preview and explicit read-only deploymen
   for (const env of [
     { VERCEL_ENV: 'preview', FCOS_ENABLE_READ_ONLY_CI: undefined },
     { VERCEL_ENV: 'production', FCOS_ENABLE_READ_ONLY_CI: 'true' },
+    { VERCEL_ENV: 'production', FCOS_ENABLE_READ_ONLY_CI: undefined },
   ]) {
     await withReadOnlyDeployment(env, async () => {
       for (const [name, handler, requestOptions] of protectedMutationRoutes) {
@@ -117,6 +118,7 @@ test('authenticated mutation wrapper preserves CI denial before authentication, 
   }
   await withReadOnlyDeployment({ VERCEL_ENV: 'production' }, async () => {
     const { req, bodyReads } = unreadableMutationRequest({ url: '/api/work-notifications' });
+    req.headers.host = 'fcos.fcuno.com';
     const res = response();
     await workNotifications(req, res);
     assert.equal(res.statusCode, 401);

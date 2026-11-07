@@ -1,9 +1,11 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import { sourceInventory } from './sync-salesforce-shared-repository.mjs';
+import { salesforcePromotionHash, assertSuccessfulSalesforceReport } from './lib/salesforce-promotion-journal.mjs';
+import { assertProductionAuthorization } from './lib/salesforce-reviewed-release.mjs';
 import {
   COMPLETE_SALESFORCE_SCOPE,
   FULL_SALESFORCE_TEST_LEVEL,
@@ -52,7 +54,8 @@ export function parseDeploymentArguments(argv = process.argv.slice(2), environme
   if (!completeOwnedTree && !checkOnly) throw new Error('Partial Salesforce manifests are validation-only and cannot deploy or authorize complete-source publication.');
   if (stopAfter && !STAGES.includes(stopAfter)) throw new Error(`Unknown stop stage ${stopAfter}.`);
   if (stopAfter && checkOnly) throw new Error('--stop-after is for the durable promotion workflow; check-only never deploys.');
-  return { manifest, checkOnly, completeOwnedTree, stopAfter, resume, waitMinutes, releaseMode: SALESFORCE_RELEASE_MODE };
+  return { manifest, checkOnly, completeOwnedTree, stopAfter, resume, waitMinutes, releaseMode: SALESFORCE_RELEASE_MODE,
+    adapter: optionValue(argv, '--adapter'), authorization: optionValue(argv, '--authorization') };
 }
 
 function pathInsideRepository(value, description) {
@@ -136,7 +139,8 @@ export function assertJobReport(result, { checkOnly, environment, jobId }) {
   if (result?.id !== jobId || result?.status !== 'Succeeded' || result?.checkOnly !== checkOnly) {
     throw new Error(`${environment.label} job ${jobId} does not provide the expected successful ${checkOnly ? 'validation' : 'deployment'} proof.`);
   }
-  if (checkOnly && (!(Number(result?.numberTestsTotal) > 0) || Number(result?.numberTestsCompleted) !== Number(result?.numberTestsTotal))) {
+  assertSuccessfulSalesforceReport(result, { validation: checkOnly, environment, jobId });
+  if (!(Number(result?.numberTestsTotal) > 0) || Number(result?.numberTestsCompleted) !== Number(result?.numberTestsTotal)) {
     throw new Error(`${environment.label} validation did not prove a complete RunLocalTests result.`);
   }
 }
@@ -174,7 +178,7 @@ export function acceptRefreshedMirrorWorkflow(refreshedWorkflow, frozen, proof) 
   return refreshedWorkflow;
 }
 
-export function main(argv = process.argv.slice(2)) {
+export async function main(argv = process.argv.slice(2)) {
   const options = parseDeploymentArguments(argv);
   if (salesforce.environments.map(({ key }) => key).join(',') !== EXPECTED_ORDER.join(',')) throw new Error('Salesforce promotion order must be DEVEE, QAT, then Production.');
   if (!options.completeOwnedTree) {
@@ -187,6 +191,33 @@ export function main(argv = process.argv.slice(2)) {
   const source = pathInsideRepository(COMPLETE_SALESFORCE_SCOPE, 'Authoritative Salesforce source');
   const initialInventory = sourceInventory(source.absolute);
   const frozen = { sourceTreeHash: initialInventory.sourceTreeHash, releaseMode: SALESFORCE_RELEASE_MODE };
+  const binding = { ...frozen, sourceScope: COMPLETE_SALESFORCE_SCOPE, manifestSha256: null,
+    configurationSha256: salesforcePromotionHash(salesforce),
+    orgIds: Object.fromEntries(salesforce.environments.map(({ key, orgId }) => [key, orgId])),
+    testPlan: { level: FULL_SALESFORCE_TEST_LEVEL, tests: [], minimumTests: 1 } };
+  const releasePlan = { binding, fingerprint: salesforcePromotionHash(binding) };
+  let adapter;
+  if (options.adapter) {
+    const module = await import(pathToFileURL(pathInsideRepository(options.adapter, 'Release ownership adapter').absolute).href);
+    if (typeof module.createSalesforceAdapter !== 'function') throw new Error('The release adapter must export createSalesforceAdapter.');
+    adapter = await module.createSalesforceAdapter({ cwd: REPO_ROOT, plan: releasePlan, policy: salesforce });
+  }
+  const checkpoint = async (environment, operation, record) => {
+    if (typeof adapter?.journal?.checkpoint !== 'function') throw new Error('Complete-tree writes require an external durable release journal adapter.');
+    await adapter.journal.checkpoint({ fingerprint: releasePlan.fingerprint, stage: environment.key, operation, record });
+  };
+  const writeGate = async (environment, operation) => {
+    if (typeof adapter?.ownership?.assert !== 'function') throw new Error('Complete-tree writes require external release ownership; a local workflow is not global serialization.');
+    if (environment.key === 'production' && operation !== 'validation') {
+      if (!options.authorization) throw new Error('Complete-tree Production deployment requires exact unexpired source/org authorization.');
+      const authorization = JSON.parse(readFileSync(pathInsideRepository(options.authorization, 'Production authorization').absolute, 'utf8'));
+      assertProductionAuthorization(authorization, releasePlan);
+    }
+    const receipt = await adapter.ownership.assert({ fingerprint: releasePlan.fingerprint, stage: environment.key, orgId: environment.orgId, operation });
+    if (!receipt?.receiptId || receipt.fingerprint !== releasePlan.fingerprint || receipt.stage !== environment.key
+      || receipt.orgId !== environment.orgId || receipt.operation !== operation || !(Date.parse(receipt.expiresAt) > Date.now())) throw new Error('Complete-tree release ownership receipt is absent, expired, or mismatched.');
+    return { receiptId: receipt.receiptId, receiptExpiresAt: receipt.expiresAt };
+  };
   const crlfFiles = initialInventory.files.filter((relativePath) => readFileSync(path.join(source.absolute, relativePath)).includes(Buffer.from('\r\n')));
   if (crlfFiles.length) throw new Error(`Salesforce source must use LF line endings before deployment and mirror publication (${crlfFiles.length} file(s) use CRLF).`);
 
@@ -219,7 +250,7 @@ export function main(argv = process.argv.slice(2)) {
     return sf(args, { allowFailure: Boolean(waitMinutes) });
   };
 
-  const finishValidation = (environment, jobId) => {
+  const finishValidation = async (environment, jobId) => {
     recheckFrozen();
     const attempt = report(environment, jobId, options.waitMinutes);
     const result = attempt.parsed?.result;
@@ -230,23 +261,35 @@ export function main(argv = process.argv.slice(2)) {
         ...workflow.environments[environment.key].validation, ...summarizeJob(result), jobId, status,
         checkOnly: true, testLevel: FULL_SALESFORCE_TEST_LEVEL, sourceTreeHash: frozen.sourceTreeHash,
         releaseMode: SALESFORCE_RELEASE_MODE, deploymentScope: COMPLETE_SALESFORCE_SCOPE,
-        completedAt: status === 'Succeeded' ? new Date().toISOString() : null,
+        completedAt: workflow.environments[environment.key].validation?.completedAt || (status === 'Succeeded' ? new Date().toISOString() : null),
+        verifiedAt: new Date().toISOString(),
       },
     });
+    await checkpoint(environment, 'validation', workflow.environments[environment.key].validation);
     if (attempt.exitStatus !== 0 || attempt.parsed?.status !== 0 || status !== 'Succeeded') throw new Error(resultFailure(attempt.parsed) || `${environment.label} complete-source validation did not succeed.`);
   };
 
-  const ensureValidation = (environment) => {
+  const ensureValidation = async (environment) => {
     const state = workflow.environments[environment.key];
     const disposition = validationResumeDisposition(state.validation, frozen);
     if (disposition === 'reuse') {
       recheckFrozen();
       assertJobReport(report(environment, state.validation.jobId).parsed?.result, { checkOnly: true, environment, jobId: state.validation.jobId });
+      persistEnvironment(environment, { validation: { ...state.validation, verifiedAt: new Date().toISOString() } });
+      await checkpoint(environment, 'validation', workflow.environments[environment.key].validation);
       return;
     }
     if (disposition === 'resume') return finishValidation(environment, state.validation.jobId);
     recheckFrozen();
     verifyIdentity(environment);
+    const gate = await writeGate(environment, 'validation');
+    const intent = { status: 'submitting', jobId: null, checkOnly: true, testLevel: FULL_SALESFORCE_TEST_LEVEL,
+      sourceTreeHash: frozen.sourceTreeHash, releaseMode: SALESFORCE_RELEASE_MODE, deploymentScope: COMPLETE_SALESFORCE_SCOPE,
+      submittedAt: new Date().toISOString(), completedAt: null, ...gate };
+    persistEnvironment(environment, { validation: intent });
+    await checkpoint(environment, 'validation', intent);
+    recheckFrozen();
+    if (!(Date.parse(gate.receiptExpiresAt) > Date.now())) throw new Error('Release ownership expired before validation submission; reconcile saved intent.');
     const submission = sf(['project', 'deploy', 'validate', '--target-org', environment.alias, '--source-dir', COMPLETE_SALESFORCE_SCOPE, '--test-level', FULL_SALESFORCE_TEST_LEVEL, '--async', '--json']).parsed?.result;
     if (!submission?.id) throw new Error(`${environment.label} validation did not return a reusable job ID.`);
     persistEnvironment(environment, {
@@ -254,20 +297,21 @@ export function main(argv = process.argv.slice(2)) {
         jobId: submission.id, status: safeStatus(submission) === 'Unknown' ? 'Submitted' : safeStatus(submission),
         checkOnly: true, testLevel: FULL_SALESFORCE_TEST_LEVEL, sourceTreeHash: frozen.sourceTreeHash,
         releaseMode: SALESFORCE_RELEASE_MODE, deploymentScope: COMPLETE_SALESFORCE_SCOPE,
-        submittedAt: new Date().toISOString(), completedAt: null,
+        submittedAt: intent.submittedAt, completedAt: null, ...gate,
       },
     });
+    await checkpoint(environment, 'validation', workflow.environments[environment.key].validation);
     recheckFrozen();
-    finishValidation(environment, submission.id);
+    await finishValidation(environment, submission.id);
   };
 
-  const finishDeployment = (environment, jobId) => {
+  const finishDeployment = async (environment, jobId) => {
     recheckFrozen();
     const attempt = report(environment, jobId, options.waitMinutes);
     const result = attempt.parsed?.result;
     const status = safeStatus(result);
     if (status === 'Succeeded') { assertJobReport(result, { checkOnly: false, environment, jobId }); recheckFrozen(); }
-    const completedAt = status === 'Succeeded' ? new Date().toISOString() : null;
+    const completedAt = workflow.environments[environment.key].deployment?.completedAt || (status === 'Succeeded' ? new Date().toISOString() : null);
     persistEnvironment(environment, {
       deployment: {
         ...workflow.environments[environment.key].deployment, ...summarizeJob(result), jobId, status,
@@ -277,6 +321,7 @@ export function main(argv = process.argv.slice(2)) {
         completedAt, verifiedAt: completedAt,
       },
     });
+    await checkpoint(environment, 'deployment', workflow.environments[environment.key].deployment);
     if (attempt.exitStatus !== 0 || attempt.parsed?.status !== 0 || status !== 'Succeeded') throw new Error(resultFailure(attempt.parsed) || `${environment.label} complete-source quick deployment did not succeed.`);
     if (environment.key === 'devee') {
       writeDeveeSourceState({
@@ -288,12 +333,14 @@ export function main(argv = process.argv.slice(2)) {
     }
   };
 
-  const ensureDeployment = (environment) => {
+  const ensureDeployment = async (environment) => {
     const state = workflow.environments[environment.key];
     const disposition = deploymentResumeDisposition(state.deployment, frozen);
     if (disposition === 'reuse') {
       recheckFrozen();
       assertJobReport(report(environment, state.deployment.jobId).parsed?.result, { checkOnly: false, environment, jobId: state.deployment.jobId });
+      persistEnvironment(environment, { deployment: { ...state.deployment, verifiedAt: new Date().toISOString() } });
+      await checkpoint(environment, 'deployment', workflow.environments[environment.key].deployment);
       return;
     }
     if (disposition === 'resume') return finishDeployment(environment, state.deployment.jobId);
@@ -301,6 +348,18 @@ export function main(argv = process.argv.slice(2)) {
     verifyIdentity(environment);
     const validationJobId = state.validation?.jobId;
     if (state.validation?.status !== 'Succeeded' || !validationJobId) throw new Error(`${environment.label} has no successful reusable validation.`);
+    const gate = await writeGate(environment, 'deployment');
+    const intent = { status: 'submitting', jobId: null, validationJobId, checkOnly: false, testLevel: FULL_SALESFORCE_TEST_LEVEL,
+      sourceTreeHash: frozen.sourceTreeHash, releaseMode: SALESFORCE_RELEASE_MODE, deploymentScope: COMPLETE_SALESFORCE_SCOPE,
+      submittedAt: new Date().toISOString(), completedAt: null, ...gate };
+    persistEnvironment(environment, { deployment: intent });
+    await checkpoint(environment, 'deployment', intent);
+    recheckFrozen();
+    if (!(Date.parse(gate.receiptExpiresAt) > Date.now())) throw new Error('Release ownership expired before quick deployment; reconcile saved intent.');
+    if (environment.key === 'production') {
+      const authorization = JSON.parse(readFileSync(pathInsideRepository(options.authorization, 'Production authorization').absolute, 'utf8'));
+      assertProductionAuthorization(authorization, releasePlan);
+    }
     const submission = sf(['project', 'deploy', 'quick', '--target-org', environment.alias, '--job-id', validationJobId, '--async', '--json']).parsed?.result;
     if (!submission?.id) throw new Error(`${environment.label} quick deployment did not return a resumable job ID.`);
     persistEnvironment(environment, {
@@ -309,23 +368,28 @@ export function main(argv = process.argv.slice(2)) {
         status: safeStatus(submission) === 'Unknown' ? 'Submitted' : safeStatus(submission), checkOnly: false,
         testLevel: FULL_SALESFORCE_TEST_LEVEL, sourceTreeHash: frozen.sourceTreeHash,
         releaseMode: SALESFORCE_RELEASE_MODE, deploymentScope: COMPLETE_SALESFORCE_SCOPE,
-        submittedAt: new Date().toISOString(), completedAt: null,
+        submittedAt: intent.submittedAt, completedAt: null, ...gate,
       },
     });
+    await checkpoint(environment, 'deployment', workflow.environments[environment.key].deployment);
     recheckFrozen();
-    finishDeployment(environment, submission.id);
+    await finishDeployment(environment, submission.id);
   };
 
-  const mirror = (mode) => {
+  const mirror = async (mode) => {
     recheckFrozen();
+    if (mode === 'publish') {
+      const gate = await writeGate(salesforce.environments[0], 'shared-publication');
+      await checkpoint(salesforce.environments[0], 'shared-publication', { status: 'submitting', ...gate });
+    }
     const result = commandJson(process.execPath, ['scripts/sync-salesforce-shared-repository.mjs', `--${mode}`]);
     recheckFrozen();
     const proof = selectedMirrorProof(result.parsed, frozen);
     workflow = acceptRefreshedMirrorWorkflow(readSalesforceWorkflowState(), frozen, proof);
     return proof;
   };
-  const ensurePublication = () => { const proof = mirror(workflow.publication ? 'check' : 'publish'); persistWorkflow({ publication: proof }); return proof; };
-  const finalMirror = () => { const proof = mirror('check'); persistWorkflow({ finalMirror: proof }); return proof; };
+  const ensurePublication = async () => { const proof = await mirror(workflow.publication ? 'check' : 'publish'); persistWorkflow({ publication: proof }); return proof; };
+  const finalMirror = async () => { const proof = await mirror('check'); persistWorkflow({ finalMirror: proof }); return proof; };
   const stop = (stage) => options.stopAfter === stage;
   const output = (mode, stoppedAfter = null) => process.stdout.write(`${JSON.stringify({
     mode, stoppedAfter, releaseMode: SALESFORCE_RELEASE_MODE, source: COMPLETE_SALESFORCE_SCOPE,
@@ -334,30 +398,30 @@ export function main(argv = process.argv.slice(2)) {
   }, null, 2)}\n`);
 
   if (options.checkOnly) {
-    for (const environment of salesforce.environments) { verifyIdentity(environment); ensureValidation(environment); }
+    for (const environment of salesforce.environments) { verifyIdentity(environment); await ensureValidation(environment); }
     output('complete-source-validation-only');
     return;
   }
 
   const [devee, qat, production] = salesforce.environments;
-  ensureValidation(devee);
+  await ensureValidation(devee);
   if (stop('devee-validation')) return output('promotion-stopped', 'devee-validation');
-  ensureDeployment(devee);
+  await ensureDeployment(devee);
   if (stop('devee-deployment')) return output('promotion-stopped', 'devee-deployment');
-  ensurePublication();
+  await ensurePublication();
   if (stop('shared-publication')) return output('promotion-stopped', 'shared-publication');
-  ensureValidation(qat);
+  await ensureValidation(qat);
   if (stop('qat-validation')) return output('promotion-stopped', 'qat-validation');
-  ensureDeployment(qat);
+  await ensureDeployment(qat);
   if (stop('qat-deployment')) return output('promotion-stopped', 'qat-deployment');
   // Re-read the immutable shared draft before the first Production operation.
-  ensurePublication();
-  ensureValidation(production);
+  await ensurePublication();
+  await ensureValidation(production);
   if (stop('production-validation')) return output('promotion-stopped', 'production-validation');
-  ensureDeployment(production);
+  await ensureDeployment(production);
   if (stop('production-deployment')) return output('promotion-stopped', 'production-deployment');
-  finalMirror();
+  await finalMirror();
   output('complete-source-promoted', stop('final-mirror') ? 'final-mirror' : null);
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main().catch(error => { console.error(error.message); process.exitCode = 1; });

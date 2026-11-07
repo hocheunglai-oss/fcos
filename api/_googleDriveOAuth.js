@@ -1,3 +1,5 @@
+import { requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
+
 export const GOOGLE_DRIVE_MARKET_OAUTH_REQUIRED_ENV = Object.freeze([
   'GOOGLE_DRIVE_CLIENT_ID',
   'GOOGLE_DRIVE_CLIENT_SECRET',
@@ -31,6 +33,7 @@ export function googleDriveMarketOAuthConfig(environment = process.env) {
 }
 
 export async function exchangeGoogleDriveRefreshToken(config, { fetchImpl = fetch } = {}) {
+  requireDeploymentMutationAllowed(true);
   const response = await fetchImpl('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },

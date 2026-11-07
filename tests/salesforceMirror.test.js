@@ -307,5 +307,6 @@ test('shared Salesforce publication requires fresh proof from the exact DEVEE so
   assert.match(mirror, /record\?\.testLevel !== FULL_SALESFORCE_TEST_LEVEL/);
   assert.match(mirror, /deployment\?\.result\?\.status !== 'Succeeded'/);
   assert.doesNotMatch(mirror, /project', 'deploy', 'validate/);
-  assert.match(mirror, /const deveeDeployment = assertDeveeDeploymentProof\(inventory\)/);
+  assert.match(mirror, /main\(\{ proofResolver = assertDeveeDeploymentProof \} = \{\}\)/);
+  assert.match(mirror, /const deveeDeployment = proofResolver\(inventory\)/);
 });

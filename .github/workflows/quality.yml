@@ -124,7 +124,9 @@ jobs:
     # environment, or renewable identity. A PR candidate is untrusted code.
     # The protected default-branch harness publishes a non-secret evidence
     # artifact instead. A check-run name alone is forgeable by another workflow.
-    if: ${{ github.event_name == 'pull_request' }}
+    # After qualified native handover, staged authentication is required by the rapid controller.
+    # Preserve the existing gate while the successor remains inactive.
+    if: ${{ github.event_name == 'pull_request' && vars.FCOS_RAPID_RELEASE_ENABLED != 'true' }}
     runs-on: ubuntu-latest
     permissions:
       actions: read

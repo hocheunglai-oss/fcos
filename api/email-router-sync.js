@@ -1,3 +1,4 @@
+import { withDeploymentRequestSafety } from './_deploymentReadOnly.js';
 import { timingSafeEqual } from 'node:crypto';
 import { createEmailRouterServiceClient, currentEmailRouterMailbox, syncEmailRouterFolderFromStoredCursor } from './_emailRouterCore.js';
 import { requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
@@ -43,7 +44,7 @@ function validateRequest(value) {
   return { folders: [...new Set(folders)], idempotencyKey: value.idempotencyKey };
 }
 
-export default async function handler(req, res) {
+async function handler(req, res) {
   if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed.' });
   try {
     requireDeploymentMutationAllowed(true);
@@ -95,3 +96,5 @@ export default async function handler(req, res) {
     });
   }
 }
+
+export default withDeploymentRequestSafety(handler);

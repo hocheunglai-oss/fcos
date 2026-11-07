@@ -1,3 +1,5 @@
+import { requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
+import { deploymentSafeSupabaseFetch } from './_deploymentReadOnlyFetch.js';
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 import { requireExternalActionGate } from './_externalActionGates.js';
@@ -282,7 +284,7 @@ export function xeroContactSyncServiceClient(env = process.env) {
       fetch: async (input, init) => {
         const startedAt = Date.now();
         try {
-          const response = await fetch(input, init);
+          const response = await deploymentSafeSupabaseFetch(input, init);
           recordSupabaseRequest({ durationMs: Date.now() - startedAt, ok: response.ok });
           return response;
         } catch (error) {
@@ -628,6 +630,7 @@ export async function getFreshXeroConnection(client, { env = process.env, fetchI
   const stored = await readStoredXeroConnection(client, { sharedControl: control });
   // Existing valid access does not depend on renewal configuration being present.
   if (stored?.accessToken && stored?.tenantId && Date.parse(stored.expiresAt || '') > Date.now() + 90_000) return stored;
+  requireDeploymentMutationAllowed(true, env);
   if (!stored?.tenantId || !stored?.tokenVersion) throw xeroControlError('XERO_CONNECTION_REQUIRED');
   const config = xeroConfig(env, stored);
   if (!config.configured) throw xeroControlError('XERO_CONNECTION_RENEWAL_UNAVAILABLE');
@@ -709,6 +712,7 @@ export function xeroConfig(env, stored = null) {
 }
 
 export async function requestXeroToken(config, body, fetchImpl) {
+  requireDeploymentMutationAllowed(true);
   const response = await fetchImpl(`${XERO_IDENTITY_BASE}/connect/token`, {
     method: 'POST',
     headers: {
@@ -829,6 +833,9 @@ export async function createXeroContactsBatch(connection, contacts, runId, { env
 
 export async function xeroAccountingFetch(connection, pathName, options = {}) {
   const { method, body, rawBody, idempotencyKey, retryOnRateLimit, env = process.env, fetchImpl = fetch, headers: extraHeaders = {}, onResponse = null, callsPerMinute = 0, wait = sleep, requestGate = xeroRequestGate(fetchImpl) } = options;
+  // Even accounting reads need durable admission/observation writes. A staged
+  // runtime must not consume or change the live Xero coordination state.
+  requireDeploymentMutationAllowed(true, env);
   const context = xeroSharedContext(connection, options);
   const control = context.sharedControl;
   const requestMethod = String(method || 'GET').toUpperCase();

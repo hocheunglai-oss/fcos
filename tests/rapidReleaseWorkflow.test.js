@@ -1,0 +1,49 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { load } from 'js-yaml';
+import { handoverDigest } from '../scripts/lib/rapid-release/handover.mjs';
+const workflow = load(readFileSync(new URL('../.github/workflows/fcos-rapid-release.yml', import.meta.url), 'utf8'));
+const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+function setup({ forgedPlan = false, changedWorkflow = false, successful = true, botClone = false } = {}) {
+ const owner='hocheunglai-oss',repo='fcos',controllerSha='c'.repeat(40),dispatcherSha='d'.repeat(40),candidateSha='a'.repeat(40);
+ const plan={controllerSha,candidateSha},review={state:'approved',user:{login:owner},environments:[{id:1}]};
+ const payload={kind:'fcos_rapid_release_handover',repository:`${owner}/${repo}`,controllerSha,plan,planHash:handoverDigest(plan),candidateSha,
+  attestationContract:'fcos-owner-recorded-handover/v1',qualificationPublisher:{account:owner,method:'protected_controller_api'},
+  nativeReview:{runId:7,jobId:8,reviewDigest:handoverDigest(review),planHash:handoverDigest(plan),reviewer:owner,reviewerId:7,state:successful?'approved':'rejected',environment:'fcos-production-release',environmentId:1,protectionDigest:'b'.repeat(64),workflowPath:'.github/workflows/fcos-rapid-handover.yml',workflowBlobSha:'b'.repeat(40)}};
+ if(forgedPlan)payload.plan={...plan,controllerSha:'f'.repeat(40)};
+ const github={rest:{actions:{getRepoVariable:async({name})=>({data:{value:name.endsWith('_ENABLED')?'true':'12'}}),
+  getWorkflowRun:async()=>({data:{id:7,conclusion:successful?'success':'failure',event:'workflow_dispatch',actor:{login:owner},path:'.github/workflows/fcos-rapid-handover.yml@main',display_title:`FCOS rapid handover ${payload.planHash} ${candidateSha}`,head_sha:controllerSha}}),
+  listJobsForWorkflowRun:async()=>({data:{jobs:[{id:8,name:'handover-apply',conclusion:'success'}]}})},
+  repos:{getDeployment:async()=>({data:{creator:{login:botClone?'github-actions[bot]':owner},payload}}),getContent:async({ref})=>({data:{type:'file',sha:changedWorkflow&&ref===dispatcherSha?'e'.repeat(40):'b'.repeat(40)}})}},
+  request:async()=>({data:[review]})};
+ return{github,context:{repo:{owner,repo},actor:owner,sha:dispatcherSha},manifest:{targets:{repository:`${owner}/${repo}`,account:owner},controllerSha}};
+}
+test('three ordinary jobs keep credential-free preparation independent and serialize only provider execution',()=>{
+ assert.deepEqual(Object.keys(workflow.jobs),['quality','stage-and-smoke','go-live']);assert.equal(workflow.concurrency,undefined);
+ assert.equal(workflow.jobs.quality.permissions.deployments,undefined);
+ for(const name of ['stage-and-smoke','go-live']){
+  const job=workflow.jobs[name];assert.equal(job.concurrency.group,'fcos-production-release');assert.equal(job.concurrency['cancel-in-progress'],false);assert.equal(job.concurrency.queue,'max');
+  const admission=job.steps.findIndex(step=>step.id==='admit-controller');const checkout=job.steps.findIndex(step=>step.uses?.startsWith('actions/checkout@'));
+  assert.ok(admission>=0&&checkout>admission);assert.match(job.steps[checkout].with.ref,/admit-controller.outputs.controller_sha/);
+  for(const [index,step] of job.steps.entries())if(step.env?.VERCEL_TOKEN)assert.ok(index>checkout);
+ }
+ assert.match(workflow.jobs.quality.steps.find(step=>step.with?.path==='controller').with.ref,/controllerSha/);
+});
+test('GitHub-only admission accepts an unchanged frozen workflow on a newer application dispatcher',async()=>{
+ const fixture=setup(),step=workflow.jobs['stage-and-smoke'].steps.find(step=>step.id==='admit-controller'),outputs={};
+ const original=process.env.RELEASE_MANIFEST;process.env.RELEASE_MANIFEST=JSON.stringify(fixture.manifest);
+ try{await new AsyncFunction('require','github','context','core',step.with.script)(await import('node:module').then(m=>m.createRequire(import.meta.url)),fixture.github,fixture.context,{setOutput:(key,value)=>outputs[key]=value});}
+ finally{if(original===undefined)delete process.env.RELEASE_MANIFEST;else process.env.RELEASE_MANIFEST=original;}
+ assert.equal(outputs.controller_sha,fixture.manifest.controllerSha);
+});
+test('forged source under an old plan hash, changed dispatcher, and failed qualification stop before credentialed checkout',async()=>{
+ const step=workflow.jobs['go-live'].steps.find(step=>step.id==='admit-controller');const original=process.env.RELEASE_MANIFEST;
+ try{
+  for(const options of [{forgedPlan:true},{changedWorkflow:true},{successful:false},{botClone:true}]){
+   const fixture=setup(options);process.env.RELEASE_MANIFEST=JSON.stringify(fixture.manifest);let outputs=0;
+   await assert.rejects(new AsyncFunction('require','github','context','core',step.with.script)(await import('node:module').then(m=>m.createRequire(import.meta.url)),fixture.github,fixture.context,{setOutput:()=>outputs++}),/QUALIFIED_FROZEN_CONTROLLER_REQUIRED/);
+   assert.equal(outputs,0);
+  }
+ }finally{if(original===undefined)delete process.env.RELEASE_MANIFEST;else process.env.RELEASE_MANIFEST=original;}
+});

@@ -1,3 +1,5 @@
+import { deploymentSafeSupabaseFetch } from './_deploymentReadOnlyFetch.js';
+import { isDeploymentReadOnly, requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 import { getVercelOidcToken } from '@vercel/oidc';
@@ -92,7 +94,7 @@ export function createEmailRouterServiceClient(env = process.env, dependencies =
   if (dependencies.client) return dependencies.client;
   const config = serverSupabaseConfig(env);
   if (!config.configured) throw routerError('Email Router server storage is not configured.', 503, 'EMAIL_ROUTER_STORAGE_NOT_CONFIGURED');
-  return createClient(config.url, config.key, { auth: { persistSession: false, autoRefreshToken: false } });
+  return createClient(config.url, config.key, { global: { fetch: deploymentSafeSupabaseFetch }, auth: { persistSession: false, autoRefreshToken: false } });
 }
 
 export async function requireEmailRouterUser(req, dependencies = {}) {
@@ -221,6 +223,7 @@ async function graphAccessToken(env, dependencies = {}) {
 }
 
 export async function emailRouterGraphFetch(pathOrUrl, options = {}, dependencies = {}) {
+  requireDeploymentMutationAllowed(!['GET', 'HEAD'].includes(String(options.method || 'GET').toUpperCase()), dependencies.env || process.env);
   const env = dependencies.env || process.env;
   const token = await graphAccessToken(env, dependencies);
   const url = String(pathOrUrl).startsWith('https://') ? new URL(pathOrUrl) : new URL(`${GRAPH_ROOT}${pathOrUrl}`);
@@ -361,6 +364,7 @@ function storageUnavailable(error) {
 }
 
 export async function syncEmailRouterMetadata({ client, mailbox, folder, messages }) {
+  requireDeploymentMutationAllowed(true);
   if (!FOLDERS.has(folder)) throw routerError('Unsupported mailbox folder.', 400, 'EMAIL_ROUTER_FOLDER_INVALID');
   const rows = (messages || []).filter((message) => message?.id && !message['@removed']).map((message) => messageMetadata(message, mailbox.id, folder));
   const removedIds = (messages || []).filter((message) => message?.id && message['@removed']).map((message) => safeId(message.id, 'Graph message identifier'));
@@ -434,6 +438,19 @@ export async function listEmailRouterMessages({ client, mailbox, folder = 'inbox
   folder = String(folder || 'inbox').trim().toLowerCase();
   if (!FOLDERS.has(folder)) throw routerError('Unsupported mailbox folder.', 400, 'EMAIL_ROUTER_FOLDER_INVALID');
   const maximum = Math.min(50, Math.max(1, Number(limit) || 30));
+  if (isDeploymentReadOnly(dependencies.env || process.env)) {
+    if (cursor || String(search || '').trim()) {
+      throw routerError('Mailbox search and paging are unavailable in this read-only environment.', 403, 'FCOS_DEPLOYMENT_READ_ONLY');
+    }
+    const saved = await listEmailRouterMetadata({ client, mailbox, folder, limit: maximum });
+    return {
+      ...saved,
+      items: saved.items.map(item => ({ ...item, subject: 'Saved mailbox metadata' })),
+      total: saved.items.length,
+      nextCursor: null,
+      source: 'saved_metadata',
+    };
+  }
   const selected = 'id,subject,from,receivedDateTime,sentDateTime,hasAttachments,isRead,importance';
   const nextUrl = decodeGraphCursor(cursor, mailbox);
   const params = new URLSearchParams({ '$select': selected, '$top': String(maximum) });
@@ -2208,6 +2225,7 @@ export async function syncEmailRouterMailboxIfDue({
   minimumIntervalMs = EMAIL_ROUTER_BACKGROUND_SYNC_MIN_INTERVAL_MS,
   maxPages = 4,
 } = {}, dependencies = {}) {
+  if (isDeploymentReadOnly(dependencies.env || process.env)) return { claimed: false, status: 'not_run', changed: 0, reason: 'deployment_read_only' };
   const nowMs = typeof dependencies.now === 'function' ? Number(dependencies.now()) : Date.now();
   const claimedAt = new Date(nowMs).toISOString();
   const { data: connection, error: connectionError } = await routerTable(client, EMAIL_ROUTER_STORAGE.mailboxes)

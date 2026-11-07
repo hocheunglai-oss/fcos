@@ -1,3 +1,4 @@
+import { isReadOnlyCiEnabled } from './_deploymentReadOnly.js';
 import { FCOS_READ_ONLY_CI } from '../config/fcosCiIdentity.js';
 
 const validatedProfiles = new WeakSet();
@@ -18,7 +19,7 @@ export function isReservedCiIdentity(authUser, profile = null) {
 // checks. Do not accept browser metadata or an email-only identity match.
 export function validateCiFederation({ authUser, profile, link, issuer, subject, env = process.env }) {
   if (!isReservedCiIdentity(authUser, profile)) return false;
-  if (env.FCOS_ENABLE_READ_ONLY_CI !== 'true'
+  if (!isReadOnlyCiEnabled(env)
     || issuer !== FCOS_READ_ONLY_CI.issuer || subject !== FCOS_READ_ONLY_CI.subject
     || normalizedEmail(authUser?.email) !== FCOS_READ_ONLY_CI.email
     || normalizedEmail(link?.email) !== FCOS_READ_ONLY_CI.email
@@ -36,7 +37,7 @@ export function denyCiWithoutFederation(authUser, profile) {
 
 export function readOnlyCiProfile(profile) {
   if (!profile) throw reject('FCOS_CI_IDENTITY_NOT_READY');
-  // The pinned principal is enabled by the deployment flag + live FCUNO
+  // The pinned principal is enabled by the read-only request boundary + live FCUNO
   // entitlement, not ordinary Viewer defaults. Leave its stored profile inactive
   // with zero permissions: a rollback to an older application cannot admit it.
   const restricted = { ...profile, active: true, user_type: 'viewer', use_type_defaults: false };

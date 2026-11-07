@@ -15,10 +15,16 @@ assertCurrentReleaseHistory(APP_VERSION, APP_VERSION_HISTORY);
 const provenance = collectBuildProvenance({ cwd: fileURLToPath(new URL('../', import.meta.url)) });
 const commit = provenance.commit;
 const deploymentId = process.env.VERCEL_DEPLOYMENT_ID || null;
-const buildId = deploymentId || `${commit || APP_VERSION}-${builtAt}`;
+const rapidBuildId = process.env.FCOS_RAPID_BUILD_ID || null;
+const sourceDigest = process.env.FCOS_RAPID_SOURCE_DIGEST || provenance.sourceDigest;
+if (rapidBuildId && (!/^[a-f0-9]{64}$/.test(rapidBuildId) || !/^[a-f0-9]{64}$/.test(sourceDigest) || !provenance.releaseEligible)) {
+  throw new Error('Rapid release build requires verified immutable source and build identity.');
+}
+const buildId = rapidBuildId || deploymentId || `${commit || APP_VERSION}-${builtAt}`;
 
 mkdirSync(dirname(outputPath), { recursive: true });
-writeFileSync(outputPath, `${JSON.stringify({
+const receipt = {
+  schemaVersion: 2,
   version: APP_VERSION,
   buildId,
   commit,
@@ -26,4 +32,8 @@ writeFileSync(outputPath, `${JSON.stringify({
   builtAt,
   gitDirty: provenance.gitDirty,
   provenance,
-}, null, 2)}\n`);
+  sourceDigest,
+};
+writeFileSync(outputPath, `${JSON.stringify(receipt, null, 2)}\n`);
+// Embedded in server function bundles; its digest is excluded from its own input closure.
+writeFileSync(fileURLToPath(new URL('../api/_runtime-build-receipt.json', import.meta.url)), `${JSON.stringify(receipt, null, 2)}\n`);

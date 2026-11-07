@@ -1,3 +1,5 @@
+import { runWithDeploymentRequestSafety } from '../api/_deploymentReadOnly.js';
+import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
@@ -10,6 +12,7 @@ import {
 } from '../api/_fcunoIdentityFederation.js';
 
 const issuer = 'https://identity.fcuno.example';
+const canonicalRequest = (run) => runWithDeploymentRequestSafety({ headers: { host: new URL(FCOS_CONNECTION_POLICY.attestation.endpoint).hostname } }, run, { VERCEL_ENV: 'production' });
 const audience = 'fcos-identity-sync';
 const syncEnv = {
   FCOS_ENABLE_FCUNO_FEDERATION: 'false',
@@ -392,22 +395,22 @@ test('Preview and explicit read-only deployments block FCUNO binding and profile
   }
 
   const productionClient = trackedFederationClient({ ...linked, auth_user_id: null }, profile);
-  const productionResolved = await enforceFcunoFederatedAccess({
+  const productionResolved = await canonicalRequest(() => enforceFcunoFederatedAccess({
     client: productionClient,
     authUser,
     profile,
     env: { FCOS_ENABLE_FCUNO_FEDERATION: 'true', FCUNO_IDENTITY_ISSUER: issuer, VERCEL_ENV: 'production' },
-  });
+  }));
   assert.equal(productionResolved, profile);
   assert.deepEqual(productionClient.writes, ['identity_link_claim']);
 
   const provisionClient = trackedFederationClient(linked, null);
-  const provisioned = await enforceFcunoFederatedAccess({
+  const provisioned = await canonicalRequest(() => enforceFcunoFederatedAccess({
     client: provisionClient,
     authUser,
     profile: null,
     env: { FCOS_ENABLE_FCUNO_FEDERATION: 'true', FCUNO_IDENTITY_ISSUER: issuer, VERCEL_ENV: 'production' },
-  });
+  }));
   assert.equal(provisioned.id, authUser.id);
   assert.equal(provisioned.active, false);
   assert.deepEqual(provisionClient.writes, ['profile_provision']);

@@ -7,6 +7,7 @@ const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 test('PR quality is read-only and blocks rather than executing an authenticated harness', async () => {
   const quality = await read('../.github/workflows/quality.yml');
   assert.match(quality, /authenticated-browser/);
+  assert.match(quality, /vars\.FCOS_RAPID_RELEASE_ENABLED != 'true'/);
   assert.match(quality, /actions: read/);
   assert.match(quality, /listWorkflowRuns/);
   assert.match(quality, /workflow_id: 'authenticated-release\.yml'/);

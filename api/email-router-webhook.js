@@ -1,3 +1,4 @@
+import { withDeploymentRequestSafety } from './_deploymentReadOnly.js';
 import { waitUntil } from '@vercel/functions';
 import { emailRouterWebhookHandler } from './_emailRouterHandlers.js';
 import { requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
@@ -10,7 +11,7 @@ async function body(req) {
   return chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {};
 }
 
-export default async function handler(req, res) {
+async function handler(req, res) {
   const url = new URL(req.url, 'http://localhost');
   const validationToken = url.searchParams.get('validationToken');
   if (validationToken) {
@@ -38,3 +39,5 @@ export default async function handler(req, res) {
     }));
   }
 }
+
+export default withDeploymentRequestSafety(handler);

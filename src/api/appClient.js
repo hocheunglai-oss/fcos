@@ -241,7 +241,8 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
   }
 
   if (!res.ok) {
-    if (res.status >= 500) {
+    // The list subscribes to this event. A failed list request must not refresh itself.
+    if (res.status >= 500 && name !== 'workNotificationsList') {
       window.dispatchEvent(new CustomEvent('fcos:work-notifications-changed'));
     }
     return {

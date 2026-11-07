@@ -1,0 +1,294 @@
+name: FCOS rapid release
+run-name: FCOS rapid ${{ inputs.mode }} ${{ inputs.manifest_hash }} ${{ inputs.candidate_sha }}
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Exact reviewed application commit, independent of controller source
+        required: true
+        type: string
+      mode:
+        description: Qualification builds are credential-free and cannot release Production
+        required: true
+        default: qualify
+        type: choice
+        options: [qualify, release, resume]
+      manifest_json:
+        description: Frozen non-secret manifest for a previously prepared/resumed release
+        required: true
+        type: string
+      resume_build_run_id:
+        description: For resume, successful original quality producer retaining the exact prebuilt artifact
+        required: false
+        type: string
+      manifest_hash:
+        description: SHA256 of the canonical frozen manifest bound to native review
+        required: true
+        type: string
+
+permissions:
+  contents: read
+jobs:
+  quality:
+    name: quality
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          path: controller
+          ref: ${{ fromJSON(inputs.manifest_json).controllerSha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        if: inputs.mode != 'resume'
+        with:
+          path: candidate
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+          cache: npm
+          cache-dependency-path: controller/package-lock.json
+      - name: Install trusted tools without deployment credentials
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Install pinned Vercel CLI
+        run: npm install --global vercel@54.20.1 --ignore-scripts --no-audit --no-fund
+      - name: Validate frozen manifest and execute isolated quality/build
+        env:
+          FCOS_RAPID_MANIFEST: ${{ inputs.manifest_json }}
+          EXPECTED_CANDIDATE: ${{ inputs.candidate_sha }}
+          EXPECTED_MANIFEST_HASH: ${{ inputs.manifest_hash }}
+          FCOS_RAPID_MODE: ${{ inputs.mode }}
+          FCOS_RAPID_BUILD_HOME: ${{ runner.temp }}/rapid-build-home
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import {validateManifest, requireCondition, digest} from './controller/scripts/lib/rapid-release/contract.mjs';
+          const m=JSON.parse(process.env.FCOS_RAPID_MANIFEST);validateManifest(m);
+          requireCondition(m.candidate.sha===process.env.EXPECTED_CANDIDATE && digest(m)===process.env.EXPECTED_MANIFEST_HASH,'WORKFLOW_SOURCE_BINDING');
+          fs.writeFileSync('manifest.json',JSON.stringify(m));
+          NODE
+          if [ "$FCOS_RAPID_MODE" != resume ]; then
+            node controller/scripts/rapid-release.mjs quality --manifest manifest.json --candidate candidate --controller controller --output build.json
+          fi
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        if: inputs.mode == 'resume'
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.resume_build_run_id }}
+          name: rapid-build-${{ inputs.resume_build_run_id }}
+          path: resume-artifact
+      - name: Reuse successful original quality and exact artifact without rebuilding
+        if: inputs.mode == 'resume'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_RAPID_BUILD_RUN_ID: ${{ inputs.resume_build_run_id }}
+        run: node controller/scripts/rapid-release.mjs reuse-quality --manifest resume-artifact/manifest.json --build resume-artifact/build.json --artifact-directory resume-artifact/candidate --controller controller --output build.json
+      - name: Retain bounded artifact and receipt; never upload browser state or environment files
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rapid-build-${{ github.run_id }}
+          include-hidden-files: true
+          path: |
+            manifest.json
+            build.json
+            candidate/.vercel/output/
+          retention-days: 7
+          if-no-files-found: error
+          overwrite: false
+  stage-and-smoke:
+    name: stage-and-smoke
+    needs: quality
+    if: inputs.mode != 'qualify' && vars.FCOS_RAPID_RELEASE_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: fcos-hosted-preview
+    permissions:
+      contents: read
+      actions: read
+      deployments: write
+      id-token: write
+    concurrency:
+      group: fcos-production-release
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - name: Admit frozen controller before provider credentials
+        id: admit-controller
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea
+        env:
+          RELEASE_MANIFEST: ${{ inputs.manifest_json }}
+        with:
+          script: |
+            const crypto = require('node:crypto');
+            const m = JSON.parse(process.env.RELEASE_MANIFEST);
+            const base = {owner:context.repo.owner,repo:context.repo.repo};
+            const repository = `${base.owner}/${base.repo}`;
+            const need = (value) => {if(!value) throw Error('QUALIFIED_FROZEN_CONTROLLER_REQUIRED')};
+            const canonical = value => JSON.stringify(value,(_,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.entries(v).sort()):v);
+            const hash = value => crypto.createHash('sha256').update(canonical(value)).digest('hex');
+            need(m.targets.repository===repository && m.targets.account===base.owner && context.actor===base.owner && /^[a-f0-9]{40}$/.test(m.controllerSha));
+            const enabled=(await github.rest.actions.getRepoVariable({...base,name:'FCOS_RAPID_RELEASE_ENABLED'})).data;
+            const pointer=(await github.rest.actions.getRepoVariable({...base,name:'FCOS_RAPID_RELEASE_HANDOVER_ID'})).data;
+            need(enabled.value==='true' && /^[1-9][0-9]*$/.test(pointer.value));
+            const d=(await github.rest.repos.getDeployment({...base,deployment_id:Number(pointer.value)})).data;
+            const p=d.payload;
+            need([base.owner,'github-actions[bot]'].includes(d.creator.login) && p.kind==='fcos_rapid_release_handover' && p.repository===repository
+              && p.controllerSha===m.controllerSha && p.plan.controllerSha===m.controllerSha && hash(p.plan)===p.planHash);
+            const r=p.nativeReview;
+            need(d.creator.login===base.owner && p.attestationContract==='fcos-owner-recorded-handover/v1'
+              && p.qualificationPublisher.account===base.owner && p.qualificationPublisher.method==='protected_controller_api'
+              && r.planHash===p.planHash && r.reviewer===base.owner && Number.isSafeInteger(r.reviewerId) && r.state==='approved'
+              && r.environment==='fcos-production-release' && Number.isSafeInteger(r.environmentId)
+              && /^[a-f0-9]{64}$/.test(r.reviewDigest) && /^[a-f0-9]{64}$/.test(r.protectionDigest)
+              && r.workflowPath==='.github/workflows/fcos-rapid-handover.yml' && /^[a-f0-9]{40}$/.test(r.workflowBlobSha));
+            const setup=(await github.rest.repos.getContent({...base,path:r.workflowPath,ref:m.controllerSha})).data;
+            need(setup.type==='file'&&setup.sha===r.workflowBlobSha);
+            const [a,b]=await Promise.all([m.controllerSha,context.sha].map(ref=>github.rest.repos.getContent({...base,path:'.github/workflows/fcos-rapid-release.yml',ref})));
+            need(a.data.type==='file'&&b.data.type==='file'&&a.data.sha===b.data.sha);
+            core.setOutput('controller_sha',m.controllerSha);
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          path: controller
+          ref: ${{ steps.admit-controller.outputs.controller_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - run: npm install --global vercel@54.20.1 --ignore-scripts --no-audit --no-fund
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: rapid-build-${{ github.run_id }}
+          path: artifact
+      - name: Validate staged artifact before providing deployment credentials
+        run: node controller/scripts/rapid-release-artifact.mjs artifact
+      - name: Install governed browser
+        run: npx --no-install playwright install --with-deps chromium
+        working-directory: controller
+      - name: Prepare pinned database TLS certificate
+        env:
+          FCOS_CA: ${{ secrets.FCOS_RAPID_DATABASE_CA }}
+        run: node --input-type=module -e 'import fs from "node:fs";fs.writeFileSync(process.env.RUNNER_TEMP+"/rapid-database-ca.pem",process.env.FCOS_CA,{mode:0o600})'
+      - name: Stage immutable build and verify actual read-only browser coverage
+        run: node controller/scripts/rapid-release.mjs stage --controller controller --manifest artifact/manifest.json --build artifact/build.json --artifact-directory artifact/candidate --output stage-result.json
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          VERCEL_TOKEN: ${{ secrets.FCOS_RAPID_VERCEL_STAGE_TOKEN || secrets.FCOS_HOSTED_VERCEL_TOKEN }}
+          FCOS_RAPID_DATABASE_URL: ${{ secrets.FCOS_RAPID_READONLY_DATABASE_URL }}
+          FCOS_RAPID_DATABASE_CA: ${{ runner.temp }}/rapid-database-ca.pem
+          FCOS_E2E_VERCEL_BYPASS: ${{ secrets.FCOS_E2E_VERCEL_BYPASS }}
+          FCOS_AUTH_E2E_ENABLED: 'true'
+          FCOS_E2E_EMAIL: ${{ secrets.FCOS_E2E_EMAIL }}
+          FCOS_E2E_PASSWORD: ${{ secrets.FCOS_E2E_PASSWORD }}
+          FCOS_RAPID_NORMAL_EMAIL: ${{ secrets.FCOS_HOSTED_RUNTIME_EMAIL }}
+          FCOS_RAPID_NORMAL_PASSWORD: ${{ secrets.FCOS_HOSTED_RUNTIME_PASSWORD }}
+          FCOS_NORMAL_ROLE_APPROVED_EMAIL: ${{ vars.FCOS_NORMAL_ROLE_APPROVED_EMAIL }}
+          FCOS_HOSTED_NORMAL_EXPECTED_ROLE: ${{ vars.FCOS_HOSTED_NORMAL_EXPECTED_ROLE }}
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rapid-stage-summary-${{ github.run_id }}
+          path: stage-result.json
+          if-no-files-found: ignore
+  go-live:
+    name: go-live
+    needs: stage-and-smoke
+    if: inputs.mode != 'qualify' && vars.FCOS_RAPID_RELEASE_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment:
+      name: fcos-production-release
+    permissions:
+      contents: read
+      actions: read
+      deployments: write
+      id-token: write
+    concurrency:
+      group: fcos-production-release
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - name: Admit frozen controller before provider credentials
+        id: admit-controller
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea
+        env:
+          RELEASE_MANIFEST: ${{ inputs.manifest_json }}
+        with:
+          script: |
+            const crypto = require('node:crypto');
+            const m = JSON.parse(process.env.RELEASE_MANIFEST);
+            const base = {owner:context.repo.owner,repo:context.repo.repo};
+            const repository = `${base.owner}/${base.repo}`;
+            const need = (value) => {if(!value) throw Error('QUALIFIED_FROZEN_CONTROLLER_REQUIRED')};
+            const canonical = value => JSON.stringify(value,(_,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.entries(v).sort()):v);
+            const hash = value => crypto.createHash('sha256').update(canonical(value)).digest('hex');
+            need(m.targets.repository===repository && m.targets.account===base.owner && context.actor===base.owner && /^[a-f0-9]{40}$/.test(m.controllerSha));
+            const enabled=(await github.rest.actions.getRepoVariable({...base,name:'FCOS_RAPID_RELEASE_ENABLED'})).data;
+            const pointer=(await github.rest.actions.getRepoVariable({...base,name:'FCOS_RAPID_RELEASE_HANDOVER_ID'})).data;
+            need(enabled.value==='true' && /^[1-9][0-9]*$/.test(pointer.value));
+            const d=(await github.rest.repos.getDeployment({...base,deployment_id:Number(pointer.value)})).data;
+            const p=d.payload;
+            need([base.owner,'github-actions[bot]'].includes(d.creator.login) && p.kind==='fcos_rapid_release_handover' && p.repository===repository
+              && p.controllerSha===m.controllerSha && p.plan.controllerSha===m.controllerSha && hash(p.plan)===p.planHash);
+            const r=p.nativeReview;
+            need(d.creator.login===base.owner && p.attestationContract==='fcos-owner-recorded-handover/v1'
+              && p.qualificationPublisher.account===base.owner && p.qualificationPublisher.method==='protected_controller_api'
+              && r.planHash===p.planHash && r.reviewer===base.owner && Number.isSafeInteger(r.reviewerId) && r.state==='approved'
+              && r.environment==='fcos-production-release' && Number.isSafeInteger(r.environmentId)
+              && /^[a-f0-9]{64}$/.test(r.reviewDigest) && /^[a-f0-9]{64}$/.test(r.protectionDigest)
+              && r.workflowPath==='.github/workflows/fcos-rapid-handover.yml' && /^[a-f0-9]{40}$/.test(r.workflowBlobSha));
+            const setup=(await github.rest.repos.getContent({...base,path:r.workflowPath,ref:m.controllerSha})).data;
+            need(setup.type==='file'&&setup.sha===r.workflowBlobSha);
+            const [a,b]=await Promise.all([m.controllerSha,context.sha].map(ref=>github.rest.repos.getContent({...base,path:'.github/workflows/fcos-rapid-release.yml',ref})));
+            need(a.data.type==='file'&&b.data.type==='file'&&a.data.sha===b.data.sha);
+            core.setOutput('controller_sha',m.controllerSha);
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ steps.admit-controller.outputs.controller_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm install --global vercel@54.20.1 --ignore-scripts --no-audit --no-fund
+      - name: Install governed browser for conditional prerequisite smoke
+        run: npx --no-install playwright install --with-deps chromium
+      - name: Reuse frozen release manifest
+        env:
+          FCOS_RAPID_MANIFEST: ${{ inputs.manifest_json }}
+        run: node --input-type=module -e 'import fs from "node:fs"; fs.writeFileSync("manifest.json",process.env.FCOS_RAPID_MANIFEST)'
+      - name: Prepare pinned database TLS certificate
+        env:
+          FCOS_CA: ${{ secrets.FCOS_RAPID_DATABASE_CA }}
+        run: node --input-type=module -e 'import fs from "node:fs";fs.writeFileSync(process.env.RUNNER_TEMP+"/rapid-database-ca.pem",process.env.FCOS_CA,{mode:0o600})'
+      - name: Verify native approval, promote same deployment and observe live behavior
+        run: node scripts/rapid-release.mjs promote --manifest manifest.json --output release-result.json
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          VERCEL_TOKEN: ${{ secrets.FCOS_RELEASE_VERCEL_TOKEN }}
+          FCOS_RAPID_DATABASE_URL: ${{ secrets.FCOS_RAPID_READONLY_DATABASE_URL }}
+          FCOS_RAPID_DATABASE_CA: ${{ runner.temp }}/rapid-database-ca.pem
+          FCOS_AUTH_E2E_ENABLED: 'true'
+          FCOS_E2E_VERCEL_BYPASS: ${{ secrets.FCOS_E2E_VERCEL_BYPASS }}
+          FCOS_E2E_EMAIL: ${{ secrets.FCOS_E2E_EMAIL }}
+          FCOS_E2E_PASSWORD: ${{ secrets.FCOS_E2E_PASSWORD }}
+          FCOS_RAPID_NORMAL_EMAIL: ${{ secrets.FCOS_HOSTED_NORMAL_EMAIL }}
+          FCOS_RAPID_NORMAL_PASSWORD: ${{ secrets.FCOS_HOSTED_NORMAL_PASSWORD }}
+          FCOS_NORMAL_ROLE_APPROVED_EMAIL: ${{ vars.FCOS_NORMAL_ROLE_APPROVED_EMAIL }}
+          FCOS_HOSTED_NORMAL_EXPECTED_ROLE: ${{ vars.FCOS_HOSTED_NORMAL_EXPECTED_ROLE }}
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rapid-live-summary-${{ github.run_id }}
+          path: release-result.json
+          if-no-files-found: ignore
