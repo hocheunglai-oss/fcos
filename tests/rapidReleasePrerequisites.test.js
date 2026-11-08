@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import { createManifest, digest, sourceSnapshot, targets } from '../scripts/lib/rapid-release/contract.mjs';
+import { applyReviewedPrerequisites as applySalesforce } from '../scripts/lib/rapid-release/salesforce-reviewed-adapter.mjs';
 import { verifyBeforeBootstrap, runPrerequisites } from '../scripts/lib/rapid-release/prerequisites.mjs';
 function fixture({ salesforce = false } = {}) {
  const directory=mkdtempSync(join(tmpdir(),'rapid-prerequisite-')),source='// Tracked, reviewed adapter fixture.\n',h='b'.repeat(64);
@@ -97,4 +98,21 @@ test('Salesforce prerequisite binds per-operation ownership to the protected run
     const result = await runPrerequisites({ ...input, env });
     assert.equal(result.salesforce.mirrorVerified, true);
   } finally { f.cleanup(); }
+});
+
+test('hosted Salesforce adapter refuses unreviewed input and metadata outside the owned package', async () => {
+  const f = fixture({ salesforce: true });
+  try {
+    const input = { manifest: f.manifest, approval: f.approval, plan: { backwardCompatible: true },
+      salesforceCandidateDirectory: f.candidateDirectory,
+      salesforce: { journal: { async readCheckpoints() { throw new Error('unexpected journal read'); } },
+        ownership: { async assert() { throw new Error('unexpected ownership assertion'); } } } };
+    await assert.rejects(applySalesforce({ ...input, approval: {} }), /SALESFORCE_HOSTED_REVIEW_REQUIRED/);
+    writeFileSync(join(f.candidateDirectory, 'sfdx-project.json'), JSON.stringify({
+      namespace: '', packageDirectories: [{ path: '../other', default: true }],
+    }));
+    await assert.rejects(applySalesforce(input), /SALESFORCE_HOSTED_PROJECT_SCOPE_INVALID/);
+  } finally {
+    f.cleanup();
+  }
 });
