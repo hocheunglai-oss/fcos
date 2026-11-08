@@ -149,6 +149,37 @@ test('Salesforce checkpoint recovers a lost journal acknowledgement without expo
   assert.equal(writes, 1);
 });
 
+test('Salesforce checkpoints retain the original job locator without copying provider data', async () => {
+  const records = [];
+  const github = { candidateSha: sha, async pages() { return records; }, async write(_path, body) {
+    records.push({ id: records.length + 1, creator: { id: 7 }, payload: body.payload });
+  } };
+  const journal = new DeploymentJournal({ github, releaseId: 'salesforce', manifestHash: h, actorIds: [7] });
+  const submittedAt = '2026-11-08T12:00:00.000Z';
+  const validationJobId = '0AfHF00000700KB0AY';
+  const jobId = '0AfHF00000702c50AA';
+  const checkpoint = { fingerprint: h, stage: 'devee', operation: 'deployment' };
+  const record = { status: 'submitting', jobId: null, validationJobId, submittedAt, privateReceipt: 'internal' };
+  await journal.checkpoint({ ...checkpoint, record });
+  await journal.checkpoint({ ...checkpoint, record: { ...record, status: 'Submitted', jobId } });
+  const resumed = new DeploymentJournal({ github, releaseId: 'salesforce', manifestHash: h, actorIds: [7] });
+  const chain = await resumed.read();
+  assert.deepEqual(chain.map(entry => entry.payload.data.job), [
+    { id: null, validationId: validationJobId, submittedAt },
+    { id: jobId, validationId: validationJobId, submittedAt },
+  ]);
+  assert.ok(!JSON.stringify(chain).includes('internal'));
+  const otherFingerprint = 'c'.repeat(64);
+  await journal.checkpoint({ ...checkpoint, fingerprint: otherFingerprint, record });
+  const [latest] = await resumed.readSalesforceCheckpoints(h);
+  assert.equal(latest.job.id, jobId);
+  assert.equal(latest.outcome, 'pending');
+  assert.equal((await resumed.readSalesforceCheckpoints(h)).length, 1);
+  assert.equal((await resumed.readSalesforceCheckpoints(otherFingerprint))[0].job.id, null);
+  await assert.rejects(journal.checkpoint({ ...checkpoint, record: { ...record, jobId: 'invalid' } }), /SALESFORCE_CHECKPOINT_JOB_INVALID/);
+  assert.equal(records.length, 3);
+});
+
 test('Salesforce journal keeps ambiguous provider operations pending across release chains', async () => {
   const records = [];
   const github = { candidateSha: sha, async pages() { return records; }, async write(_path, body) {

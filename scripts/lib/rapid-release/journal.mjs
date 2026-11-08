@@ -73,6 +73,27 @@ export class DeploymentJournal {
         ? 'resolved'
         : 'pending';
     const data = { fingerprint, stage, operation, outcome, evidenceDigest: digest(record) };
+    if (['validation', 'deployment', 'bootstrap'].includes(operation) && Object.hasOwn(record, 'jobId')) {
+      const validJob = value => typeof value === 'string' && /^0Af[A-Za-z0-9]{12}(?:[A-Za-z0-9]{3})?$/u.test(value);
+      const { jobId, validationJobId, submittedAt } = record;
+      const submitted = Date.parse(submittedAt);
+      requireCondition((validJob(jobId) || (jobId === null && status === 'submitting'))
+        && (validJob(validationJobId) || validationJobId === null)
+        && Number.isFinite(submitted) && new Date(submitted).toISOString() === submittedAt,
+      'SALESFORCE_CHECKPOINT_JOB_INVALID');
+      data.job = { id: jobId, validationId: validationJobId, submittedAt };
+    }
+    if (stage === 'shared_mirror' && operation === 'publication' && status === 'Succeeded' && record.result) {
+      const { commit, pullRequest } = record.result;
+      requireCondition(/^[a-f0-9]{40}$/u.test(commit || '') && Number.isSafeInteger(pullRequest?.number)
+        && pullRequest.number > 0 && pullRequest.headRefOid === commit, 'SALESFORCE_CHECKPOINT_MIRROR_INVALID');
+      data.mirror = { commit, pullRequest: pullRequest.number };
+    }
+    if (stage === 'production' && operation === 'preparation' && status === 'ready') {
+      requireCondition(/^0Af[A-Za-z0-9]{12}(?:[A-Za-z0-9]{3})?$/u.test(record.validationJobId || ''),
+        'SALESFORCE_CHECKPOINT_PREPARATION_INVALID');
+      data.preparation = { validationJobId: record.validationJobId };
+    }
     const find = chain => chain.find(entry => entry.payload.event === 'salesforce.checkpoint'
       && canonical(entry.payload.data) === canonical(data));
     const chain = await this.read();
@@ -86,6 +107,15 @@ export class DeploymentJournal {
       if (recovered) return recovered;
       throw error;
     }
+  }
+  async readSalesforceCheckpoints(fingerprint) {
+    requireCondition(/^[a-f0-9]{64}$/u.test(fingerprint || ''), 'SALESFORCE_CHECKPOINT_INVALID');
+    const latest = new Map();
+    for (const { payload: { event, data } } of await this.read()) {
+      if (event !== 'salesforce.checkpoint' || data.fingerprint !== fingerprint) continue;
+      latest.set(`${data.stage}:${data.operation}`, data);
+    }
+    return [...latest.values()];
   }
   async assertNoUnresolvedOtherRelease() {
     const records = await this.github.pages(`/repos/${targets().repository}/deployments?environment=fcos-release-journal-v1&per_page=100`);
