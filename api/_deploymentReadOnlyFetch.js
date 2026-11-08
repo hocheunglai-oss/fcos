@@ -2,9 +2,9 @@ import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
 import { isDeploymentReadOnly, requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
 
 const supabaseOrigin = `https://${fcosConnectionIdentifier('supabase', 'Project ref')}.supabase.co`;
-// Reviewed SQL read functions, required by access evaluation and Dashboard usage.
+// Reviewed SQL read functions, required by access evaluation, Dashboard usage, and notifications.
 // Unknown RPCs remain denied even when invoked with GET or Prefer: tx=rollback.
-export const READ_ONLY_SUPABASE_RPCS = Object.freeze(['fcos_effective_access', 'dashboard_ai_usage_summary']);
+export const READ_ONLY_SUPABASE_RPCS = Object.freeze(['fcos_effective_access', 'dashboard_ai_usage_summary', 'load_work_notification_snapshot']);
 
 export function requireDeploymentSupabaseRequestAllowed(input, init = {}) {
   if (!isDeploymentReadOnly()) return;

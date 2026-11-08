@@ -121,12 +121,12 @@ test('privileged Supabase transport denies every write, arbitrary RPC and storag
     await deploymentSafeSupabaseFetch(`${supabase}/auth/v1/user`, { method: 'GET' });
     await deploymentSafeSupabaseFetch(`${supabase}/rest/v1/user_profiles?select=id`, { method: 'GET' });
     for (const rpc of READ_ONLY_SUPABASE_RPCS) await deploymentSafeSupabaseFetch(`${supabase}/rest/v1/rpc/${rpc}`, { method: 'POST' });
-    assert.equal(calls, 4);
+    assert.equal(calls, 5);
   } finally { globalThis.fetch = original; }
 }));
 
 test('safe read RPCs are an exact allowlist of SQL STABLE functions and every service client uses the barrier', async () => {
-  assert.deepEqual(READ_ONLY_SUPABASE_RPCS, ['fcos_effective_access', 'dashboard_ai_usage_summary']);
+  assert.deepEqual(READ_ONLY_SUPABASE_RPCS, ['fcos_effective_access', 'dashboard_ai_usage_summary', 'load_work_notification_snapshot']);
   const sql = (await Promise.all((await readdir(new URL('../supabase/migrations/', import.meta.url))).filter(name => name.endsWith('.sql')).map(name => readFile(new URL(`../supabase/migrations/${name}`, import.meta.url), 'utf8')))).join('\n');
   for (const rpc of READ_ONLY_SUPABASE_RPCS) assert.match(sql, new RegExp(`function public\\.${rpc}\\([\\s\\S]*?language sql\\s+stable`, 'i'));
   const apiFiles = (await readdir(new URL('../api/', import.meta.url), { recursive: true })).filter(name => name.endsWith('.js'));
