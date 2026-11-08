@@ -290,6 +290,34 @@ test('permission assignment resumes by readback without repeating an uncertain w
   } finally { f.cleanup(); }
 });
 
+test('a saved permission result must reach the durable journal before promotion resumes', async () => {
+  const f = fixture({ bootstrap: true });
+  try {
+    const checkpoint = f.externalJournal.checkpoint;
+    let unavailable = true;
+    f.externalJournal.checkpoint = async event => {
+      if (event.stage === 'devee' && event.operation === 'permission:Reviewed' && event.record.status === 'Succeeded' && unavailable) {
+        throw new Error('Durable checkpoint unavailable');
+      }
+      return checkpoint(event);
+    };
+
+    await assert.rejects(f.run('prepare'), /Durable checkpoint unavailable/);
+    const saved = structuredClone(f.journal.state.stages.devee['permission:Reviewed']);
+    assert.equal(saved.status, 'Succeeded');
+    f.reopen();
+    await assert.rejects(f.run('prepare'), /Durable checkpoint unavailable/);
+    assert.equal(f.calls.filter(call => call[0] === 'validate').length, 0);
+    assert.equal(f.calls.filter(call => call[0] === 'permission-write' && call[1] === 'devee').length, 1);
+
+    unavailable = false;
+    await f.run('prepare');
+    assert.ok(f.checkpoints.some(event => event.stage === 'devee' && event.operation === 'permission:Reviewed'
+      && JSON.stringify(event.record) === JSON.stringify(saved)));
+    assert.equal(f.calls.filter(call => call[0] === 'permission-write' && call[1] === 'devee').length, 1);
+  } finally { f.cleanup(); }
+});
+
 test('crash after submission without job ID never blindly resubmits', async () => {
   const f = fixture();
   try {
