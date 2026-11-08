@@ -141,6 +141,9 @@ test('prepare then apply consumes exact saved Production validation without anot
     assert.equal(f.journal.state.stages.devee.deployment.completedAt, completedAt);
     assert.equal(f.journal.state.stages.devee.deployment.verifiedAt, fixedNow.toISOString());
     assert.ok(f.calls.findIndex(call => call[0] === 'mirror') < f.calls.findIndex(call => call[0] === 'validate' && call[1] === 'qat'));
+    const publication = f.journal.state.stages.shared_mirror.publication;
+    assert.equal(publication.status, 'Succeeded');
+    assert.equal(publication.receiptId, 'external-lease-1');
     assert.ok(f.checkpoints.some(event => event.operation === 'deployment' && event.record.status === 'submitting' && event.stage === 'production'));
   } finally { f.cleanup(); }
 });

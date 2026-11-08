@@ -358,11 +358,12 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
     await unchanged();
     const deployment = get('devee', 'deployment');
     if (deployment?.status !== 'Succeeded') throw new Error('Verified DEVEE deployment is required before the complete derived source mirror.');
-    const saved = get('shared_mirror', 'publication');
+    let saved = get('shared_mirror', 'publication');
     const action = saved ? 'check' : 'publish';
     if (!saved) {
       const gate = await writeGate(policy.environments[0], 'shared-publication');
-      await persist('shared_mirror', 'publication', { status: 'submitting', ...gate });
+      saved = await persist('shared_mirror', 'publication', { status: 'submitting', ...gate });
+      if (!(Date.parse(saved.receiptExpiresAt) > now().getTime())) throw new Error('Salesforce mirror ownership expired while saving intent; reconcile the saved intent before retry.');
     }
     const result = assertMirror(await provider.mirror(action, { plan, journalFile: journal.file, deveeDeployment: deployment }), plan, policy, deployment.jobId);
     await unchanged();
