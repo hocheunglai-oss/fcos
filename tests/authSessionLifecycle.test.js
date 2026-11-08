@@ -26,7 +26,8 @@ test('executed AuthProvider rejects late auth after logout and after a newer acc
     onAuthStateChange: (fn) => { authEvent = fn; return { data: { subscription: { unsubscribe() {} } } }; },
   } };
   const client = { functions: { clearCache() {}, invoke: () => new Promise((resolve) => pending.push(resolve)) } };
-  globalThis.window = { sessionStorage: { removeItem() {}, setItem() {} }, localStorage: {}, setTimeout };
+  const sessionStorage = new Map();
+  globalThis.window = { sessionStorage: { removeItem: (key) => sessionStorage.delete(key), setItem: (key, value) => sessionStorage.set(key, value) }, localStorage: {}, setTimeout, clearTimeout };
   globalThis.__authHarness = { react, supabase, client };
   let source = await readFile(new URL('../src/lib/AuthContext.jsx', import.meta.url), 'utf8');
   source = source.replace(/^import .*;\n/gm, '').replaceAll('import.meta.env.', 'testEnv.');
@@ -51,8 +52,9 @@ test('executed AuthProvider rejects late auth after logout and after a newer acc
   await Promise.resolve();
   pending[1]({ data: { user: { id: 'user-b', active: true }, moduleAccess: { dashboard: true } } });
   await newest;
-  pending[0]({ data: { user: { id: 'user-a' }, moduleAccess: { admin: true } } });
+  pending[0]({ data: { code: 'FCUNO_IDENTITY_SESSION_REVOKED', error: 'The older session was revoked.' } });
   assert.equal((await old).stale, true);
+  assert.equal(sessionStorage.has('fcos:fcuno-force-reauth'), false);
   assert.equal(states[0].id, 'user-b');
   assert.equal(clientSessionState().ownerId, 'user-b');
   const beforeLogout = auth.checkUserAuth();
@@ -87,5 +89,18 @@ test('executed AuthProvider rejects late auth after logout and after a newer acc
   assert.equal((await mismatched).user, null);
   assert.equal(states[0], null);
   assert.equal(clientSessionState().ownerId, null);
+  const recovered = auth.checkUserAuth();
+  await Promise.resolve();
+  pending[5]({ data: { user: { id: 'user-b', active: true }, moduleAccess: { dashboard: true } } });
+  await recovered;
+  authEvent('TOKEN_REFRESHED', { user: { id: 'user-b' } });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(pending.length, 7, 'a refreshed token must trigger a current server authorization check');
+  pending[6]({ data: { code: 'FCUNO_IDENTITY_SESSION_REVOKED', error: 'This FCOS session was revoked. Sign in again.' } });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(states[0], null);
+  assert.deepEqual(states[1], {});
+  assert.equal(states[9].type, 'auth_required');
+  assert.equal(sessionStorage.get('fcos:fcuno-force-reauth'), 'true');
   delete globalThis.__authHarness;
 });
