@@ -25,12 +25,12 @@ async function fetchPinnedFile(file) {
     .split('/')
     .map((segment) => encodeURIComponent(segment))
     .join('/');
-  const url = new URL(
-    `/repos/${repositoryPath}/contents/${contractFilePath}`,
-    'https://api.github.com',
-  );
-  url.searchParams.set('ref', pin.providerCommit);
   const token = process.env.GITHUB_TOKEN?.trim();
+  // Public pinned bytes can be read without giving isolated builds a GitHub token.
+  const url = token
+    ? new URL(`/repos/${repositoryPath}/contents/${contractFilePath}`, 'https://api.github.com')
+    : new URL(`/${repositoryPath}/${encodeURIComponent(pin.providerCommit)}/${contractFilePath}`, 'https://raw.githubusercontent.com');
+  if (token) url.searchParams.set('ref', pin.providerCommit);
   const response = await fetch(url, {
     headers: {
       Accept: 'application/vnd.github.raw+json',
