@@ -128,6 +128,27 @@ test('journal creates persistent object payloads with no auto-merge; statuses ne
   assert.equal(writes[0].path.endsWith('/deployments'), true);
 });
 
+test('handover accepts verified historical bot chains without accepting bot writes to its own chain', async () => {
+  const records = [];
+  const github = { async pages() { return records; } };
+  const journal = new DeploymentJournal({ github, releaseId: 'setup', manifestHash: h, actorIds: [7], otherReleaseActorIds: [7, 8] });
+  const receipt = (releaseId, actor, event = 'release.prepared', data = {}, previous) => {
+    const content = { schemaVersion: 1, kind: 'fcos_rapid_release_event', releaseId, manifestHash: h,
+      sequence: previous ? 1 : 0, previousHash: previous?.payload.recordHash || null, event, data };
+    return { creator: { id: actor }, payload: { ...content, recordHash: digest(content) } };
+  };
+  records.push(receipt('historical', 8));
+  await journal.assertNoUnresolvedOtherRelease();
+  records.push(receipt('foreign', 9));
+  await assert.rejects(journal.assertNoUnresolvedOtherRelease(), /JOURNAL_ACTOR_MISMATCH/);
+  records.pop();
+  records.push(receipt('historical', 8, 'stage.intent', { operationId: 'original-stage' }, records[0]));
+  await assert.rejects(journal.assertNoUnresolvedOtherRelease(), /EARLIER_RELEASE_OUTCOME_UNRESOLVED/);
+  records.pop();
+  records.push(receipt('setup', 8));
+  await assert.rejects(journal.read(), /JOURNAL_ACTOR_MISMATCH/);
+});
+
 test('reviewed schema bootstrap can precede dependent smoke, with one decision and no promotion until full checks pass', async () => {
   const f = fixture();
   f.manifest = createManifest({ candidate: f.manifest.candidate, controllerSha: f.manifest.controllerSha, previous: f.manifest.previous,
