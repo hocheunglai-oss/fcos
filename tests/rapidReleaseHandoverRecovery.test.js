@@ -22,7 +22,7 @@ const controllerSha = 'b'.repeat(40), recoverySha = 'c'.repeat(40), dispatcherSh
 const handoverBlob = 'f'.repeat(40), recoveryBlob = 'a'.repeat(40), stagedDeploymentId = 'dpl_staged';
 const guardSql = readFileSync(new URL('../scripts/rapid-release/handover-guard.sql', import.meta.url), 'utf8');
 
-async function fixture(t) {
+async function fixture(t, { unstaged = false } = {}) {
   const pg = new PGlite();
   t.after(() => pg.close());
   await pg.exec(`create role anon; create role authenticated; create role service_role;
@@ -90,13 +90,24 @@ async function fixture(t) {
     candidateSha: candidate.sha, buildId, artifactDigest, pins: handoverPins(), controlPreimage: baseline.control, historyDigest: baseline.historyDigest,
     guardSqlDigest: handoverDigest(guardSql), previousProductionId, financialAuthority: false, bootstrap: { plan: rootPlan, reference },
     rapidJournal: { digest: handoverDigest([]), unresolvedProduction: 0, ignoredQualification: { releaseId: manifest.releaseId, manifestHash } } };
-  const planHash = handoverDigest(plan), preparedReceiptId = 1, terminalRunId = 40, stageRecordId = 43, runId = 44;
+  const parentEvidence = { controllerSha: '9'.repeat(40) };
+  const parentPlanHash = '0'.repeat(64);
+  if (unstaged) {
+    delete plan.bootstrap;
+    plan.supersedes = { deploymentId: 88, handoverId: 'active-parent', planHash: parentPlanHash,
+      controllerSha: parentEvidence.controllerSha, databaseReceiptId: 2, nativeCoordinatorReadbackDigest: handoverDigest(parentEvidence) };
+    await pg.query("insert into fcos_release_coordination.rapid_handover_receipts(handover_id,phase,plan_hash,evidence) values('active-parent','prepared',$1,$2::jsonb),('active-parent','finalized',$1,$2::jsonb)",
+      [parentPlanHash, JSON.stringify(parentEvidence)]);
+  }
+  const planHash = handoverDigest(plan), preparedReceiptId = unstaged ? 3 : 1, terminalRunId = 40, stageRecordId = unstaged ? 0 : 43, runId = 44;
+  const stagedInput = unstaged ? 'none' : stagedDeploymentId;
   const originalRunId = 39, originalJobId = 47;
   const originalReview = { runId: originalRunId, jobId: originalJobId, dispatcherSha: originalDispatcherSha, workflowBlobSha: handoverBlob,
     reviewDigest: handoverDigest(review), reviewer: owner.login, reviewerId: owner.id, state: review.state, environment: environment.name,
     environmentId: environment.id, workflowPath: originalPath, observedAt: '2026-11-07T00:00:00Z', planHash };
   const originalEvidence = { review: originalReview, controllerSha, candidateSha: candidate.sha, buildId, artifactDigest,
-    supersedes: null, historyDigest: plan.historyDigest, controlPreimage: plan.controlPreimage, bootstrap: reference, guardDigest: prepared.guard.digest,
+    supersedes: plan.supersedes || null, historyDigest: plan.historyDigest, controlPreimage: plan.controlPreimage,
+    ...(unstaged ? {} : { bootstrap: reference }), guardDigest: prepared.guard.digest,
     qualificationDigest: null };
   await pg.query("insert into fcos_release_coordination.rapid_handover_receipts(handover_id,phase,plan_hash,evidence) values($1,'prepared',$2,$3::jsonb)",
     [plan.handoverId, planHash, JSON.stringify(originalEvidence)]);
@@ -111,13 +122,14 @@ async function fixture(t) {
     return { id: stageRecordId - 3 + sequence, environment: 'fcos-release-journal-v1', sha: candidate.sha, creator: owner,
       payload: { ...payload, recordHash: previousHash } };
   });
+  if (unstaged) records.splice(2);
   const original = { repository: repo, head_repository: repo, head_branch: 'main', actor: owner, triggering_actor: owner, event: 'workflow_dispatch',
     run_attempt: 1, head_sha: originalDispatcherSha, path: originalPath, status: 'completed', conclusion: 'failure',
     display_title: `FCOS rapid handover ${planHash} ${candidate.sha}`, updated_at: '2026-11-07T00:01:00Z' };
   const current = { ...original, id: runId, head_sha: dispatcherSha, path, status: 'in_progress', conclusion: null,
-    display_title: `FCOS rapid handover abort ${planHash} ${recoverySha} ${preparedReceiptId} ${terminalRunId} ${stageRecordId} ${stagedDeploymentId}` };
+    display_title: `FCOS rapid handover abort ${planHash} ${recoverySha} ${preparedReceiptId} ${terminalRunId} ${stageRecordId} ${stagedInput}` };
   Object.assign(f, { records, current, original, originalEvidence, plan, planHash, originalRunId, terminalRunId, recoverySha, guard: prepared.guard,
-    input: { plan, planHash, recoverySha, preparedReceiptId, terminalRunId, stageRecordId, stagedDeploymentId } });
+    input: { plan, planHash, recoverySha, preparedReceiptId, terminalRunId, stageRecordId, stagedDeploymentId: stagedInput } });
   const github = {
     async read(requestPath) {
       if (requestPath === '/user') return owner;
@@ -125,6 +137,11 @@ async function fixture(t) {
       if (requestPath === `/repos/${pins.repository}`) return repo;
       if (requestPath.endsWith('/approvals')) return f.noReview ? [] : [review];
       if (requestPath.includes('/environments/')) return { ...environment, protection_rules: [{ type: 'required_reviewers', reviewers: [{ type: 'User', reviewer: owner }] }] };
+      if (unstaged && requestPath.endsWith('/FCOS_RAPID_RELEASE_ENABLED')) return { value: 'true' };
+      if (unstaged && requestPath.endsWith('/FCOS_RAPID_RELEASE_HANDOVER_ID')) return { value: String(f.pointer || 88) };
+      if (unstaged && requestPath.endsWith('/deployments/88')) return { id: 88, creator: owner,
+        payload: { ...plan.supersedes, kind: 'fcos_rapid_release_handover', repository: pins.repository,
+          projectId: pins.projectId, teamId: pins.teamId } };
       if (requestPath.includes('/actions/variables/')) return f.active;
       if (requestPath.includes('/actions/workflows/')) return requestPath.endsWith('fcos-rapid-handover.yml') ? { id: 49, path: originalPath } : null;
       if (requestPath.includes('/contents/')) return { type: 'file', sha: requestPath.includes(path) ? recoveryBlob : handoverBlob };
@@ -145,6 +162,11 @@ async function fixture(t) {
     },
   };
   const vercel = {
+    async discover(args) {
+      assert.equal(args.requireAbsentHandoverPlanHash, planHash);
+      assert.equal(args.operationId, operationId);
+      return { outcome: f.stageOutcome || 'absent' };
+    },
     async currentProduction() { return { id: f.live || previousProductionId }; },
     async project() { return { id: pins.projectId, accountId: pins.teamId, autoAssignCustomDomains: false }; },
     async rawDeployment() { return { id: stagedDeploymentId, url: stageUrl, target: 'production', projectId: pins.projectId, ownerId: pins.teamId,
@@ -248,4 +270,25 @@ test('workflow serializes recovery and admits exact protected installed source b
     await assert.rejects(run(), /QUALIFIED_INSTALLED_HANDOVER_RECOVERY_REQUIRED/);
   }
   assert.equal(outputs, 1);
+});
+
+test('unstaged successor recovery binds the active parent and rejects uncertain or recorded staging', async t => {
+  const f = await fixture(t, { unstaged: true });
+  f.stageOutcome = 'unknown';
+  await assert.rejects(f.close(), /STAGE_ABSENCE_REQUIRED/);
+  f.stageOutcome = null;
+  const previous = f.records[1];
+  const intent = { ...previous.payload, sequence: 2, previousHash: previous.payload.recordHash,
+    event: 'stage.intent', data: { operationId: 'original-stage' } };
+  delete intent.recordHash;
+  f.records.push({ ...previous, id: previous.id + 1, payload: { ...intent, recordHash: digest(intent) } });
+  await assert.rejects(f.close(), /STAGE_RESULT_REQUIRED/);
+  f.records.pop();
+  assert.equal(f.opens, 0);
+  const closed = await f.close();
+  assert.equal(closed.receiptId, 4);
+  assert.deepEqual(await f.close(), { ...closed, reused: true });
+  const rows = (await f.pg.query('select phase,evidence from fcos_release_coordination.rapid_handover_receipts order by receipt_id')).rows;
+  assert.deepEqual(rows.map(row => row.phase), ['prepared', 'finalized', 'prepared', 'aborted']);
+  assert.equal(rows[3].evidence.closure.stage.noSubmission, true);
 });

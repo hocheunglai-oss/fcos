@@ -208,7 +208,7 @@ export function vercelProvider({ manifest, github, env = process.env, execute = 
       const matches = list.deployments?.filter(d => d.meta?.fcosRapidOperationId === operationId && d.meta?.fcosRapidManifestHash === manifestHash) || [];
       requireCondition(matches.length === 1, 'DEPLOYMENT_ACK_UNCERTAIN'); return inspect(matches[0].uid || matches[0].id);
     },
-    async discover({ phase, operationId, manifestHash, request }) {
+    async discover({ phase, operationId, manifestHash, request, requireAbsentHandoverPlanHash }) {
       if (phase !== 'stage') {
         const d = await provider.currentProduction();
         return d.id === request.deploymentId ? { outcome: 'applied', result: d } : { outcome: 'unknown' };
@@ -217,9 +217,14 @@ export function vercelProvider({ manifest, github, env = process.env, execute = 
       for (let page = 0; page < 20; page += 1) {
         const list = get(`/v6/deployments?projectId=${pins.projectId}&limit=100${until ? `&until=${until}` : ''}`);
         requireCondition(Array.isArray(list.deployments), 'DEPLOYMENT_LIST_INVALID');
-        matches.push(...list.deployments.filter(d => d.meta?.fcosRapidOperationId === operationId && d.meta?.fcosRapidManifestHash === manifestHash));
+        matches.push(...list.deployments.filter(d => d.meta?.fcosRapidOperationId === operationId && d.meta?.fcosRapidManifestHash === manifestHash
+          || requireAbsentHandoverPlanHash && d.meta?.fcosHandoverPlanHash === requireAbsentHandoverPlanHash));
         if (!list.pagination?.next) break; until = list.pagination.next;
         requireCondition(page < 19, 'DEPLOYMENT_DISCOVERY_INCOMPLETE');
+      }
+      if (requireAbsentHandoverPlanHash) {
+        requireCondition(matches.length === 0, 'HANDOVER_RECOVERY_STAGE_SUBMISSION_EXISTS');
+        return { outcome: 'absent' };
       }
       if (matches.length !== 1) return { outcome: 'unknown' };
       const d = inspect(matches[0].uid || matches[0].id);
