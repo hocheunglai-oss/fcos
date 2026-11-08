@@ -89,6 +89,11 @@ export class DeploymentJournal {
         && pullRequest.number > 0 && pullRequest.headRefOid === commit, 'SALESFORCE_CHECKPOINT_MIRROR_INVALID');
       data.mirror = { commit, pullRequest: pullRequest.number };
     }
+    if (stage === 'production' && operation === 'preparation' && status === 'ready') {
+      requireCondition(/^0Af[A-Za-z0-9]{12}(?:[A-Za-z0-9]{3})?$/u.test(record.validationJobId || ''),
+        'SALESFORCE_CHECKPOINT_PREPARATION_INVALID');
+      data.preparation = { validationJobId: record.validationJobId };
+    }
     const find = chain => chain.find(entry => entry.payload.event === 'salesforce.checkpoint'
       && canonical(entry.payload.data) === canonical(data));
     const chain = await this.read();

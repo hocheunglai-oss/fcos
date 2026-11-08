@@ -640,3 +640,27 @@ test('missing local mirror receipt can only be recovered at the original verifie
     f.cleanup();
   }
 });
+
+test('recovers missing completed preparation only for its exact saved Production validation', async () => {
+  const f = fixture();
+  try {
+    await f.run('prepare');
+    const original = f.journal.state.stages.production.validation.jobId;
+    delete f.journal.state.stages.production.preparation;
+    const preparation = { validationJobId: jobId(99) };
+    f.externalJournal.readCheckpoints = async () => [{ fingerprint: f.plan.fingerprint, stage: 'production',
+      operation: 'preparation', outcome: 'evidence', preparation }];
+    f.calls.length = 0;
+    await assert.rejects(f.run('apply', { authorization: f.authorization }), /successful prepare checkpoint/);
+    assert.deepEqual(f.calls, []);
+    preparation.validationJobId = original;
+    await assert.rejects(f.run('apply'), /Production mutation requires/);
+    assert.deepEqual(f.calls, []);
+    await f.run('apply', { authorization: f.authorization });
+    assert.equal(f.journal.state.stages.production.preparation.validationJobId, original);
+    assert.ok(f.calls.some(call => call[0] === 'deploy' && call[1] === 'production' && call[2] === original));
+    assert.ok(!f.calls.some(call => call[0] === 'validate'));
+  } finally {
+    f.cleanup();
+  }
+});

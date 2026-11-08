@@ -252,10 +252,6 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
   authorization = null, now = () => new Date(), assertUnchanged, replaceValidation = [], reconcile = {} }) {
   if (!['prepare', 'apply'].includes(mode)) throw new Error('Choose prepare or apply.');
   if (journal.state.fingerprint !== plan.fingerprint || !same(journal.state.binding, plan.binding)) throw new Error('Reviewed workflow fingerprint changed; prepare a new release from DEVEE.');
-  const preparation = journal.state.stages.production?.preparation;
-  if (mode === 'apply' && (preparation?.fingerprint !== plan.fingerprint || !['ready', 'awaiting-authorized-bootstrap'].includes(preparation?.status))) {
-    throw new Error('Apply requires a successful prepare checkpoint for this exact unchanged reviewed fingerprint.');
-  }
   if (typeof ownership?.assert !== 'function' || typeof externalJournal?.checkpoint !== 'function') throw new Error('Salesforce writes require external release ownership and a durable checkpoint adapter; a local lock is not global serialization.');
   const timestamp = () => now().toISOString();
   const checkpoint = (stage, operation, record) => externalJournal.checkpoint({ fingerprint: plan.fingerprint, stage, operation, record });
@@ -303,9 +299,12 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
   }
   if (typeof externalJournal.readCheckpoints === 'function') {
     const missing = [];
-    let missingMirror;
+    let missingMirror, preparationValidationId;
     for (const entry of await externalJournal.readCheckpoints()) {
       if (entry.fingerprint !== plan.fingerprint) throw new Error('Durable Salesforce checkpoint does not match the reviewed fingerprint.');
+      if (entry.stage === 'production' && entry.operation === 'preparation' && entry.outcome === 'evidence') {
+        preparationValidationId = entry.preparation?.validationJobId;
+      }
       if (!['pending', 'resolved'].includes(entry.outcome)) continue;
       const local = get(entry.stage, entry.operation);
       if (local && digestCheckpoint(local) === entry.evidenceDigest) continue;
@@ -334,6 +333,19 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
       await reportJob(environment, entry.operation, record);
     }
     if (missingMirror) await mirror(missingMirror);
+    if (mode === 'apply' && !get('production', 'preparation') && !plan.review.bootstrap
+      && JOB_ID.test(preparationValidationId || '')
+      && get('production', 'validation')?.jobId === preparationValidationId
+      && get('production', 'validation')?.status === 'Succeeded'
+      && get('devee', 'deployment')?.status === 'Succeeded' && get('qat', 'deployment')?.status === 'Succeeded'
+      && get('shared_mirror', 'publication')?.status === 'Succeeded') {
+      assertProductionAuthorization(authorization, plan, now());
+      await persist('production', 'preparation', { status: 'ready', fingerprint: plan.fingerprint, validationJobId: preparationValidationId });
+    }
+  }
+  const preparation = get('production', 'preparation');
+  if (mode === 'apply' && (preparation?.fingerprint !== plan.fingerprint || !['ready', 'awaiting-authorized-bootstrap'].includes(preparation?.status))) {
+    throw new Error('Apply requires a successful prepare checkpoint for this exact unchanged reviewed fingerprint.');
   }
   async function job(environment, operation, submit, { validationJobId = null } = {}) {
     await unchanged();
