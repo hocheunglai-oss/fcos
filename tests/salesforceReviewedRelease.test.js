@@ -619,3 +619,24 @@ test('fresh hosted runner verifies and reuses a known durable validation job', a
     f.cleanup();
   }
 });
+
+test('missing local mirror receipt can only be recovered at the original verified draft head', async () => {
+  const f = fixture();
+  try {
+    await f.run('prepare');
+    delete f.journal.state.stages.shared_mirror.publication;
+    const mirror = { commit: 'c'.repeat(40), pullRequest: 123 };
+    f.externalJournal.readCheckpoints = async () => [{ fingerprint: f.plan.fingerprint, stage: 'shared_mirror',
+      operation: 'publication', outcome: 'resolved', mirror }];
+    f.calls.length = 0;
+    await assert.rejects(f.run('prepare'), /differs from the original durable publication/);
+    assert.deepEqual(f.calls.filter(call => call[0] === 'mirror'), [['mirror', 'check']]);
+    mirror.commit = 'b'.repeat(40);
+    f.calls.length = 0;
+    await f.run('prepare');
+    assert.equal(f.journal.state.stages.shared_mirror.publication.result.commit, mirror.commit);
+    assert.ok(!f.calls.some(call => call[0] === 'mirror' && call[1] === 'publish'));
+  } finally {
+    f.cleanup();
+  }
+});

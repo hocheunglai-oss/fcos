@@ -303,11 +303,18 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
   }
   if (typeof externalJournal.readCheckpoints === 'function') {
     const missing = [];
+    let missingMirror;
     for (const entry of await externalJournal.readCheckpoints()) {
       if (entry.fingerprint !== plan.fingerprint) throw new Error('Durable Salesforce checkpoint does not match the reviewed fingerprint.');
       if (!['pending', 'resolved'].includes(entry.outcome)) continue;
       const local = get(entry.stage, entry.operation);
       if (local && digestCheckpoint(local) === entry.evidenceDigest) continue;
+      if (!local && entry.stage === 'shared_mirror' && entry.operation === 'publication'
+        && entry.outcome === 'resolved' && /^[a-f0-9]{40}$/u.test(entry.mirror?.commit || '')
+        && Number.isSafeInteger(entry.mirror.pullRequest) && entry.mirror.pullRequest > 0) {
+        missingMirror = entry.mirror;
+        continue;
+      }
       const environment = policy.environments.find(item => item.key === entry.stage);
       const locator = entry.job;
       if (local || !environment || typeof provider.reconcile !== 'function'
@@ -326,6 +333,7 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
       await verifyRecoveredJob(environment, entry.operation, record.jobId, record);
       await reportJob(environment, entry.operation, record);
     }
+    if (missingMirror) await mirror(missingMirror);
   }
   async function job(environment, operation, submit, { validationJobId = null } = {}) {
     await unchanged();
@@ -391,18 +399,21 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
       await persist(environment.key, operation, { ...record, status: 'Succeeded', addedByRelease: !record.prestate, verifiedAt: timestamp() });
     }
   }
-  async function mirror() {
+  async function mirror(original = null) {
     await unchanged();
     const deployment = get('devee', 'deployment');
     if (deployment?.status !== 'Succeeded') throw new Error('Verified DEVEE deployment is required before the complete derived source mirror.');
     let saved = get('shared_mirror', 'publication');
-    const action = saved ? 'check' : 'publish';
-    if (!saved) {
+    const action = saved || original ? 'check' : 'publish';
+    if (action === 'publish') {
       const gate = await writeGate(policy.environments[0], 'shared-publication');
       saved = await persist('shared_mirror', 'publication', { status: 'submitting', ...gate });
       if (!(Date.parse(saved.receiptExpiresAt) > now().getTime())) throw new Error('Salesforce mirror ownership expired while saving intent; reconcile the saved intent before retry.');
     }
     const result = assertMirror(await provider.mirror(action, { plan, journalFile: journal.file, deveeDeployment: deployment }), plan, policy, deployment.jobId);
+    if (original && (result.commit !== original.commit || result.pullRequest.number !== original.pullRequest)) {
+      throw new Error('Shared mirror readback differs from the original durable publication.');
+    }
     await unchanged();
     await persist('shared_mirror', 'publication', { ...saved, status: 'Succeeded', result, verifiedAt: timestamp() });
     return result;
