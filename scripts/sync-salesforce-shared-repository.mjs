@@ -424,7 +424,7 @@ export function publicationReport({ inventory, deveeDeployment, publication, pul
   };
 }
 
-function publish(checkout, branch, expectedRemoteHead, pullRequest, inventory) {
+function publish(checkout, branch, expectedRemoteHead, pullRequest, inventory, assertPublicationCurrent) {
   const paths = [PUBLICATION.targetRoot, PUBLICATION.manifestPath];
   configurePushIdentity(checkout);
   run('git', ['add', '--', ...paths], { cwd: checkout });
@@ -444,6 +444,7 @@ function publish(checkout, branch, expectedRemoteHead, pullRequest, inventory) {
   if (expectedRemoteHead) pushArgs.push(`--force-with-lease=refs/heads/${branch}:${expectedRemoteHead}`);
   pushArgs.push('origin', `HEAD:${branch}`);
   assertInventoryUnchanged(inventory);
+  assertPublicationCurrent();
   run('git', pushArgs, { cwd: checkout });
   const commit = run('git', ['rev-parse', 'HEAD'], { cwd: checkout });
   assertCommitAttribution(commit);
@@ -453,6 +454,7 @@ function publish(checkout, branch, expectedRemoteHead, pullRequest, inventory) {
       '',
       'The complete owned `src/` inventory is recorded in `.fcos-salesforce-mirror.json` and verified byte-for-byte before publication.',
     ].join('\n');
+    assertPublicationCurrent();
     const url = run('gh', [
       'pr', 'create', '--repo', PUBLICATION.repository, '--draft',
       '--base', PUBLICATION.defaultBranch, '--head', branch,
@@ -463,7 +465,7 @@ function publish(checkout, branch, expectedRemoteHead, pullRequest, inventory) {
   return { changed: true, branch, commit, pullRequest };
 }
 
-export function main({ proofResolver = assertDeveeDeploymentProof } = {}) {
+export function main({ proofResolver = assertDeveeDeploymentProof, assertPublicationCurrent = () => {} } = {}) {
   if (!MODE || (process.argv.includes('--publish') && process.argv.includes('--check'))) {
     throw new Error('Choose exactly one mode: --check or --publish.');
   }
@@ -486,7 +488,7 @@ export function main({ proofResolver = assertDeveeDeploymentProof } = {}) {
     if (MODE === 'publish') syncCheckout(checkout, inventory, manifest);
     verifyCheckout(checkout, inventory, manifest);
     const publication = MODE === 'publish'
-      ? publish(checkout, selected.branch, initialRemoteHead, selected.pullRequest, inventory)
+      ? publish(checkout, selected.branch, initialRemoteHead, selected.pullRequest, inventory, assertPublicationCurrent)
       : { changed: false, branch: selected.branch, commit: run('git', ['rev-parse', 'HEAD'], { cwd: checkout }), pullRequest: selected.pullRequest };
     const pullRequest = refetchPullRequest(publication.pullRequest, publication.branch);
     validatePublicationPullRequest(pullRequest, { branch: publication.branch, headOid: publication.commit });
