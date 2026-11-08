@@ -97,6 +97,15 @@ export class DeploymentJournal {
       throw error;
     }
   }
+  async readSalesforceCheckpoints(fingerprint) {
+    requireCondition(/^[a-f0-9]{64}$/u.test(fingerprint || ''), 'SALESFORCE_CHECKPOINT_INVALID');
+    const latest = new Map();
+    for (const { payload: { event, data } } of await this.read()) {
+      if (event !== 'salesforce.checkpoint' || data.fingerprint !== fingerprint) continue;
+      latest.set(`${data.stage}:${data.operation}`, data);
+    }
+    return [...latest.values()];
+  }
   async assertNoUnresolvedOtherRelease() {
     const records = await this.github.pages(`/repos/${targets().repository}/deployments?environment=fcos-release-journal-v1&per_page=100`);
     const releases = new Map();

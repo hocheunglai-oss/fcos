@@ -51,6 +51,7 @@ test('Salesforce prerequisite binds per-operation ownership to the protected run
   const journal = {
     async assertNoUnresolvedOtherRelease() { calls.push('prior-operations'); },
     async checkpoint(event) { calls.push(event); },
+    async readSalesforceCheckpoints(fingerprint) { return [{ fingerprint, stage: 'devee', operation: 'validation' }]; },
   };
   try {
     const { salesforceFingerprint, salesforceSourceTreeHash } = f.manifest.prerequisites.plan;
@@ -66,6 +67,7 @@ test('Salesforce prerequisite binds per-operation ownership to the protected run
       assert.ok(Date.parse(first.expiresAt) > Date.now());
       const event = { fingerprint: salesforceFingerprint, stage: 'shared_mirror', operation: 'publication', record: { status: 'submitting' } };
       assert.throws(() => salesforce.journal.checkpoint({ ...event, fingerprint: 'c'.repeat(64) }), /OPERATION_MISMATCH/);
+      assert.deepEqual(await salesforce.journal.readCheckpoints(), [{ fingerprint: salesforceFingerprint, stage: 'devee', operation: 'validation' }]);
       await salesforce.journal.checkpoint(event);
       assert.deepEqual(calls.at(-1), event);
       return { passed: true, manifestHash: digest(f.manifest), backwardCompatible: true, completedOperations: [],

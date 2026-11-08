@@ -169,8 +169,15 @@ test('Salesforce checkpoints retain the original job locator without copying pro
     { id: jobId, validationId: validationJobId, submittedAt },
   ]);
   assert.ok(!JSON.stringify(chain).includes('internal'));
+  const otherFingerprint = 'c'.repeat(64);
+  await journal.checkpoint({ ...checkpoint, fingerprint: otherFingerprint, record });
+  const [latest] = await resumed.readSalesforceCheckpoints(h);
+  assert.equal(latest.job.id, jobId);
+  assert.equal(latest.outcome, 'pending');
+  assert.equal((await resumed.readSalesforceCheckpoints(h)).length, 1);
+  assert.equal((await resumed.readSalesforceCheckpoints(otherFingerprint))[0].job.id, null);
   await assert.rejects(journal.checkpoint({ ...checkpoint, record: { ...record, jobId: 'invalid' } }), /SALESFORCE_CHECKPOINT_JOB_INVALID/);
-  assert.equal(records.length, 2);
+  assert.equal(records.length, 3);
 });
 
 test('Salesforce journal keeps ambiguous provider operations pending across release chains', async () => {

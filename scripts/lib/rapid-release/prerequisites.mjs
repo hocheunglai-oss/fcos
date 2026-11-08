@@ -22,7 +22,7 @@ export async function qualifiedAdapter({ manifest, controllerDirectory, load = u
 
 function protectedSalesforceContext({ manifest, approval, staged, journal, provider, plan }) {
   const fingerprint = plan.salesforceFingerprint;
-  requireCondition(isDigest(fingerprint) && typeof journal?.checkpoint === 'function'
+  requireCondition(isDigest(fingerprint) && typeof journal?.checkpoint === 'function' && typeof journal?.readSalesforceCheckpoints === 'function'
     && typeof provider?.assertOwnership === 'function' && typeof provider?.verifyApproval === 'function',
   'SALESFORCE_PROTECTED_OWNERSHIP_REQUIRED');
   const policy = FCOS_CONNECTION_POLICY.providers.find(item => item.id === 'salesforce');
@@ -45,6 +45,7 @@ function protectedSalesforceContext({ manifest, approval, staged, journal, provi
       },
     },
     journal: {
+      readCheckpoints() { return journal.readSalesforceCheckpoints(fingerprint); },
       checkpoint(event) {
         requireCondition(event.fingerprint === fingerprint, 'SALESFORCE_PROTECTED_OPERATION_MISMATCH');
         return journal.checkpoint(event);
