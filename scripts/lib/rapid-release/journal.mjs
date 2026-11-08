@@ -65,7 +65,14 @@ export class DeploymentJournal {
       && ['devee', 'shared_mirror', 'qat', 'production'].includes(stage)
       && /^(?:validation|deployment|bootstrap|publication|inventory-checkpoint|preparation|restoration-checkpoint|permission:[A-Za-z][A-Za-z0-9_]*)$/.test(operation || '')
       && record && typeof record === 'object' && !Array.isArray(record), 'SALESFORCE_CHECKPOINT_INVALID');
-    const data = { fingerprint, stage, operation, evidenceDigest: digest(record) };
+    const providerOperation = /^(?:validation|deployment|bootstrap|publication|permission:)/.test(operation);
+    const status = record.status;
+    const outcome = !providerOperation || !status || ['observed', 'ready', 'awaiting-authorized-bootstrap', 'review-required'].includes(status)
+      ? 'evidence'
+      : status === 'Succeeded' || (operation === 'validation' && ['Failed', 'Canceled', 'Expired'].includes(status))
+        ? 'resolved'
+        : 'pending';
+    const data = { fingerprint, stage, operation, outcome, evidenceDigest: digest(record) };
     const find = chain => chain.find(entry => entry.payload.event === 'salesforce.checkpoint'
       && canonical(entry.payload.data) === canonical(data));
     const chain = await this.read();
@@ -100,6 +107,11 @@ export function pendingOperations(chain) {
   for (const { payload: { event, data } } of chain) {
     if (event.endsWith('.intent')) pending.set(data.operationId, { event, data });
     if (event.endsWith('.result')) pending.delete(data.operationId);
+    if (event === 'salesforce.checkpoint') {
+      const key = `salesforce:${data.fingerprint}:${data.stage}:${data.operation}`;
+      if (data.outcome === 'pending') pending.set(key, { event, data });
+      if (data.outcome === 'resolved') pending.delete(key);
+    }
   }
   return [...pending.values()];
 }

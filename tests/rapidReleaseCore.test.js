@@ -143,10 +143,27 @@ test('Salesforce checkpoint recovers a lost journal acknowledgement without expo
   assert.equal((await journal.checkpoint(checkpoint)).id, 1);
   assert.equal(writes, 1);
   assert.deepEqual(records[0].payload.data, {
-    fingerprint: h, stage: 'devee', operation: 'permission:Reviewed', evidenceDigest: digest(record),
+    fingerprint: h, stage: 'devee', operation: 'permission:Reviewed', outcome: 'resolved', evidenceDigest: digest(record),
   });
   await assert.rejects(journal.checkpoint({ ...checkpoint, operation: 'unrecognized' }), /SALESFORCE_CHECKPOINT_INVALID/);
   assert.equal(writes, 1);
+});
+
+test('Salesforce journal keeps ambiguous provider operations pending across release chains', async () => {
+  const records = [];
+  const github = { candidateSha: sha, async pages() { return records; }, async write(_path, body) {
+    records.push({ id: records.length + 1, creator: { id: 7 }, payload: body.payload });
+  } };
+  const salesforce = new DeploymentJournal({ github, releaseId: 'salesforce', manifestHash: h, actorIds: [7] });
+  const other = new DeploymentJournal({ github, releaseId: 'other', manifestHash: h, actorIds: [7] });
+  const save = (operation, status) => salesforce.checkpoint({ fingerprint: h, stage: 'devee', operation, record: { status } });
+  await save('deployment', 'submitting');
+  await save('validation', 'submitting');
+  await save('validation', 'Failed');
+  await save('deployment', 'Failed');
+  await assert.rejects(other.assertNoUnresolvedOtherRelease(), /EARLIER_RELEASE_OUTCOME_UNRESOLVED/);
+  await save('deployment', 'Succeeded');
+  await other.assertNoUnresolvedOtherRelease();
 });
 
 test('handover accepts verified historical bot chains without accepting bot writes to its own chain', async () => {
