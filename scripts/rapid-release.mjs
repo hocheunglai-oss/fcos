@@ -126,7 +126,7 @@ async function rapidReleaseCommand(argv, env, runtime) {
     const approval = await nativeApproval({ github, manifest, staged, env });
     result = await promoteRelease({ manifest, journal, provider, approval, smoke,
       observe: values => observeLive({ ...values, env }),
-      prerequisites: values => runPrerequisites({ ...values, staged, journal, controllerDirectory: controller, env }) });
+      prerequisites: values => runPrerequisites({ ...values, staged, journal, provider, controllerDirectory: controller, env }) });
   }
   if (opts.output) write(opts.output, result);
   return result;
