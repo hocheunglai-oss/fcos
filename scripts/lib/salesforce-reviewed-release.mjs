@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync, lstatSync } from 'node:fs';
 import path from 'node:path';
+import { digest as digestCheckpoint } from './rapid-release/contract.mjs';
 import { salesforcePromotionHash as hash, assertSuccessfulSalesforceReport } from './salesforce-promotion-journal.mjs';
 
 export const REVIEWED_SALESFORCE_MODE = 'reviewed-manifest-incremental-v1';
@@ -251,10 +252,6 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
   authorization = null, now = () => new Date(), assertUnchanged, replaceValidation = [], reconcile = {} }) {
   if (!['prepare', 'apply'].includes(mode)) throw new Error('Choose prepare or apply.');
   if (journal.state.fingerprint !== plan.fingerprint || !same(journal.state.binding, plan.binding)) throw new Error('Reviewed workflow fingerprint changed; prepare a new release from DEVEE.');
-  const preparation = journal.state.stages.production?.preparation;
-  if (mode === 'apply' && (preparation?.fingerprint !== plan.fingerprint || !['ready', 'awaiting-authorized-bootstrap'].includes(preparation?.status))) {
-    throw new Error('Apply requires a successful prepare checkpoint for this exact unchanged reviewed fingerprint.');
-  }
   if (typeof ownership?.assert !== 'function' || typeof externalJournal?.checkpoint !== 'function') throw new Error('Salesforce writes require external release ownership and a durable checkpoint adapter; a local lock is not global serialization.');
   const timestamp = () => now().toISOString();
   const checkpoint = (stage, operation, record) => externalJournal.checkpoint({ fingerprint: plan.fingerprint, stage, operation, record });
@@ -290,17 +287,73 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
     return persist(environment.key, operation, { ...record, ...proof, status: 'Succeeded',
       completedAt: record.completedAt || proof.completedAt || timestamp(), verifiedAt: timestamp() });
   };
+  async function verifyRecoveredJob(environment, operation, jobId, { submittedAt, validationJobId }) {
+    if (typeof provider.reconcile !== 'function') throw new Error('A recovered job requires provider source/test-plan readback before adoption.');
+    const adoption = await provider.reconcile(environment, jobId, { plan, operation, submittedAt, validationJobId });
+    const verifiedAt = Date.parse(adoption?.verifiedAt);
+    if (adoption?.fingerprint !== plan.fingerprint || adoption?.orgId !== environment.orgId || adoption?.jobId !== jobId
+      || adoption?.operation !== operation || adoption?.sourceTreeHash !== plan.binding.sourceTreeHash || adoption?.manifestSha256 !== plan.binding.manifestSha256
+      || !HASH.test(adoption?.evidenceSha256 || '') || !(verifiedAt >= now().getTime() - 300000 && verifiedAt <= now().getTime() + 30000)) {
+      throw new Error('Recovered Salesforce job readback does not bind the reviewed source, org, operation, and manifest.');
+    }
+  }
+  if (typeof externalJournal.readCheckpoints === 'function') {
+    const missing = [];
+    let missingMirror, preparationValidationId;
+    for (const entry of await externalJournal.readCheckpoints()) {
+      if (entry.fingerprint !== plan.fingerprint) throw new Error('Durable Salesforce checkpoint does not match the reviewed fingerprint.');
+      if (entry.stage === 'production' && entry.operation === 'preparation' && entry.outcome === 'evidence') {
+        preparationValidationId = entry.preparation?.validationJobId;
+      }
+      if (!['pending', 'resolved'].includes(entry.outcome)) continue;
+      const local = get(entry.stage, entry.operation);
+      if (local && digestCheckpoint(local) === entry.evidenceDigest) continue;
+      if (!local && entry.stage === 'shared_mirror' && entry.operation === 'publication'
+        && entry.outcome === 'resolved' && /^[a-f0-9]{40}$/u.test(entry.mirror?.commit || '')
+        && Number.isSafeInteger(entry.mirror.pullRequest) && entry.mirror.pullRequest > 0) {
+        missingMirror = entry.mirror;
+        continue;
+      }
+      const environment = policy.environments.find(item => item.key === entry.stage);
+      const locator = entry.job;
+      if (local || !environment || typeof provider.reconcile !== 'function'
+        || !['validation', 'deployment', 'bootstrap'].includes(entry.operation) || !JOB_ID.test(locator?.id || '')
+        || !Number.isFinite(Date.parse(locator.submittedAt))
+        || (entry.operation === 'deployment' ? !JOB_ID.test(locator.validationId || '') : locator.validationId !== null)) {
+        throw new Error('Durable Salesforce operation differs from local state; reconcile the original checkpoint before continuing.');
+      }
+      missing.push({ entry, environment, locator });
+    }
+    for (const { entry, environment, locator } of missing) {
+      const record = { fingerprint: plan.fingerprint, orgId: environment.orgId, jobId: locator.id,
+        validationJobId: locator.validationId, submittedAt: locator.submittedAt, reconciledAt: timestamp() };
+      await unchanged();
+      await provider.verifyIdentity(environment);
+      await verifyRecoveredJob(environment, entry.operation, record.jobId, record);
+      await reportJob(environment, entry.operation, record);
+    }
+    if (missingMirror) await mirror(missingMirror);
+    if (mode === 'apply' && !get('production', 'preparation') && !plan.review.bootstrap
+      && JOB_ID.test(preparationValidationId || '')
+      && get('production', 'validation')?.jobId === preparationValidationId
+      && get('production', 'validation')?.status === 'Succeeded'
+      && get('devee', 'deployment')?.status === 'Succeeded' && get('qat', 'deployment')?.status === 'Succeeded'
+      && get('shared_mirror', 'publication')?.status === 'Succeeded') {
+      assertProductionAuthorization(authorization, plan, now());
+      await persist('production', 'preparation', { status: 'ready', fingerprint: plan.fingerprint, validationJobId: preparationValidationId });
+    }
+  }
+  const preparation = get('production', 'preparation');
+  if (mode === 'apply' && (preparation?.fingerprint !== plan.fingerprint || !['ready', 'awaiting-authorized-bootstrap'].includes(preparation?.status))) {
+    throw new Error('Apply requires a successful prepare checkpoint for this exact unchanged reviewed fingerprint.');
+  }
   async function job(environment, operation, submit, { validationJobId = null } = {}) {
     await unchanged();
     let record = get(environment.key, operation);
     if (record?.status === 'submitting' && !record.jobId) {
       const recoveredId = reconcile[`${environment.key}.${operation}`];
       if (!JOB_ID.test(recoveredId || '')) throw new Error(`${environment.label} ${operation} has an uncertain submission without an ID; owner readback/reconciliation is required. No duplicate was submitted.`);
-      if (typeof provider.reconcile !== 'function') throw new Error('A recovered job requires provider source/test-plan readback before adoption.');
-      const adoption = await provider.reconcile(environment, recoveredId, { plan, operation, submittedAt: record.submittedAt, validationJobId });
-      if (adoption?.fingerprint !== plan.fingerprint || adoption?.orgId !== environment.orgId || adoption?.jobId !== recoveredId
-        || adoption?.operation !== operation || adoption?.sourceTreeHash !== plan.binding.sourceTreeHash || adoption?.manifestSha256 !== plan.binding.manifestSha256
-        || !HASH.test(adoption?.evidenceSha256 || '') || !(Date.parse(adoption?.verifiedAt) >= now().getTime() - 300000)) throw new Error('Recovered Salesforce job readback does not bind the reviewed source, org, operation, and manifest.');
+      await verifyRecoveredJob(environment, operation, recoveredId, { submittedAt: record.submittedAt, validationJobId });
       record = await persist(environment.key, operation, { ...record, jobId: recoveredId, status: 'Submitted', reconciledAt: timestamp() });
     }
     if (record?.jobId) {
@@ -358,18 +411,21 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
       await persist(environment.key, operation, { ...record, status: 'Succeeded', addedByRelease: !record.prestate, verifiedAt: timestamp() });
     }
   }
-  async function mirror() {
+  async function mirror(original = null) {
     await unchanged();
     const deployment = get('devee', 'deployment');
     if (deployment?.status !== 'Succeeded') throw new Error('Verified DEVEE deployment is required before the complete derived source mirror.');
     let saved = get('shared_mirror', 'publication');
-    const action = saved ? 'check' : 'publish';
-    if (!saved) {
+    const action = saved || original ? 'check' : 'publish';
+    if (action === 'publish') {
       const gate = await writeGate(policy.environments[0], 'shared-publication');
       saved = await persist('shared_mirror', 'publication', { status: 'submitting', ...gate });
       if (!(Date.parse(saved.receiptExpiresAt) > now().getTime())) throw new Error('Salesforce mirror ownership expired while saving intent; reconcile the saved intent before retry.');
     }
     const result = assertMirror(await provider.mirror(action, { plan, journalFile: journal.file, deveeDeployment: deployment }), plan, policy, deployment.jobId);
+    if (original && (result.commit !== original.commit || result.pullRequest.number !== original.pullRequest)) {
+      throw new Error('Shared mirror readback differs from the original durable publication.');
+    }
     await unchanged();
     await persist('shared_mirror', 'publication', { ...saved, status: 'Succeeded', result, verifiedAt: timestamp() });
     return result;

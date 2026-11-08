@@ -586,3 +586,81 @@ test('read-only inventory allows exact layout and profile names with spaces', ()
   assert.throws(() => parseReviewedPackage(packageXml(['Profile:Sales *']).toString('utf8'), { inventory: true }), /Wildcards/);
   assert.throws(() => parseReviewedPackage(packageXml(['ApexClass:Example Class']).toString('utf8'), { inventory: true }), /unsupported Salesforce members/);
 });
+
+test('hosted recovery refuses a fresh runner with unresolved durable provider history', async () => {
+  const f = fixture();
+  try {
+    f.externalJournal.readCheckpoints = async () => [{ fingerprint: f.plan.fingerprint, stage: 'devee',
+      operation: 'validation', outcome: 'pending', job: { id: jobId(1) } }];
+    await assert.rejects(f.run('prepare'), /reconcile the original checkpoint/);
+    assert.deepEqual(f.calls, []);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('fresh hosted runner verifies and reuses a known durable validation job', async () => {
+  const f = fixture();
+  try {
+    const id = jobId(19);
+    f.reports.set(id, f.makeReport(id, true));
+    f.externalJournal.readCheckpoints = async () => [{ fingerprint: f.plan.fingerprint, stage: 'devee',
+      operation: 'validation', outcome: 'pending', job: { id, validationId: null, submittedAt: fixedNow.toISOString() } }];
+    f.provider.reconcile = async (org, jobId, { operation }) => ({
+      fingerprint: f.plan.fingerprint, orgId: org.orgId, jobId, operation,
+      sourceTreeHash: f.plan.binding.sourceTreeHash, manifestSha256: f.plan.binding.manifestSha256,
+      evidenceSha256: 'b'.repeat(64), verifiedAt: fixedNow.toISOString(),
+    });
+    await f.run('prepare');
+    assert.equal(f.journal.state.stages.devee.validation.jobId, id);
+    assert.ok(f.calls.some(call => call[0] === 'report' && call[2] === id));
+    assert.ok(!f.calls.some(call => call[0] === 'validate' && call[1] === 'devee'));
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('missing local mirror receipt can only be recovered at the original verified draft head', async () => {
+  const f = fixture();
+  try {
+    await f.run('prepare');
+    delete f.journal.state.stages.shared_mirror.publication;
+    const mirror = { commit: 'c'.repeat(40), pullRequest: 123 };
+    f.externalJournal.readCheckpoints = async () => [{ fingerprint: f.plan.fingerprint, stage: 'shared_mirror',
+      operation: 'publication', outcome: 'resolved', mirror }];
+    f.calls.length = 0;
+    await assert.rejects(f.run('prepare'), /differs from the original durable publication/);
+    assert.deepEqual(f.calls.filter(call => call[0] === 'mirror'), [['mirror', 'check']]);
+    mirror.commit = 'b'.repeat(40);
+    f.calls.length = 0;
+    await f.run('prepare');
+    assert.equal(f.journal.state.stages.shared_mirror.publication.result.commit, mirror.commit);
+    assert.ok(!f.calls.some(call => call[0] === 'mirror' && call[1] === 'publish'));
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('recovers missing completed preparation only for its exact saved Production validation', async () => {
+  const f = fixture();
+  try {
+    await f.run('prepare');
+    const original = f.journal.state.stages.production.validation.jobId;
+    delete f.journal.state.stages.production.preparation;
+    const preparation = { validationJobId: jobId(99) };
+    f.externalJournal.readCheckpoints = async () => [{ fingerprint: f.plan.fingerprint, stage: 'production',
+      operation: 'preparation', outcome: 'evidence', preparation }];
+    f.calls.length = 0;
+    await assert.rejects(f.run('apply', { authorization: f.authorization }), /successful prepare checkpoint/);
+    assert.deepEqual(f.calls, []);
+    preparation.validationJobId = original;
+    await assert.rejects(f.run('apply'), /Production mutation requires/);
+    assert.deepEqual(f.calls, []);
+    await f.run('apply', { authorization: f.authorization });
+    assert.equal(f.journal.state.stages.production.preparation.validationJobId, original);
+    assert.ok(f.calls.some(call => call[0] === 'deploy' && call[1] === 'production' && call[2] === original));
+    assert.ok(!f.calls.some(call => call[0] === 'validate'));
+  } finally {
+    f.cleanup();
+  }
+});
