@@ -338,10 +338,13 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
         if (!assigned) throw new Error('A previously verified permission assignment drifted.');
         continue;
       }
+      if (!assigned && record?.status === 'submitting') {
+        throw new Error('Permission assignment remains uncertain; reconcile the original submission before retry.');
+      }
       if (!record) record = await persist(environment.key, operation, { name, prestate: assigned, status: 'observed', orgId: environment.orgId });
       if (!assigned) {
         const gate = await writeGate(environment, operation);
-        await persist(environment.key, operation, { ...record, status: 'submitting', ...gate });
+        record = await persist(environment.key, operation, { ...record, status: 'submitting', ...gate });
         await unchanged();
         if (!(Date.parse(gate.receiptExpiresAt) > now().getTime())) throw new Error('Salesforce ownership expired before permission assignment.');
         if (environment.key === 'production') assertProductionAuthorization(authorization, plan, now());
@@ -355,11 +358,12 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
     await unchanged();
     const deployment = get('devee', 'deployment');
     if (deployment?.status !== 'Succeeded') throw new Error('Verified DEVEE deployment is required before the complete derived source mirror.');
-    const saved = get('shared_mirror', 'publication');
+    let saved = get('shared_mirror', 'publication');
     const action = saved ? 'check' : 'publish';
     if (!saved) {
       const gate = await writeGate(policy.environments[0], 'shared-publication');
-      await persist('shared_mirror', 'publication', { status: 'submitting', ...gate });
+      saved = await persist('shared_mirror', 'publication', { status: 'submitting', ...gate });
+      if (!(Date.parse(saved.receiptExpiresAt) > now().getTime())) throw new Error('Salesforce mirror ownership expired while saving intent; reconcile the saved intent before retry.');
     }
     const result = assertMirror(await provider.mirror(action, { plan, journalFile: journal.file, deveeDeployment: deployment }), plan, policy, deployment.jobId);
     await unchanged();

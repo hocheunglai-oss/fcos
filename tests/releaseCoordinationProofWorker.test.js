@@ -94,7 +94,7 @@ const absentLateEffects = async directory => {
     // A killed Linux orphan may await init reaping; it cannot execute any late work.
     if (process.platform === 'linux') {
       try { if (/^State:\s+Z/m.test(readFileSync(`/proc/${pid}/status`, 'utf8'))) return false; }
-      catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+      catch (error) { if (error.code === 'ENOENT' || error.code === 'ESRCH') return false; throw error; }
     }
     return true;
   };
