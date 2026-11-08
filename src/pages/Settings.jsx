@@ -576,7 +576,7 @@ function SystemHealthPanel() {
         <WorkflowMetrics />
       </TabsContent>
       <TabsContent value="connections" className="mt-0">
-        <Suspense fallback={<StateBlock icon={Loader2} title="Loading connection checklist" description="Preparing the API-first connection runbook." />}>
+        <Suspense fallback={<StateBlock icon={Loader2} title="Loading connection checklist" description="Preparing the CLI-first connection runbook." />}>
           <ConnectionChecklist />
         </Suspense>
       </TabsContent>
