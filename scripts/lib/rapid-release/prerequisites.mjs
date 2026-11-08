@@ -1,7 +1,8 @@
 import { readFileSync, realpathSync } from 'node:fs';
 import { resolve, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { assertAuthorization, digest, git, requireCondition } from './contract.mjs';
+import { assertAuthorization, digest, git, isDigest, requireCondition } from './contract.mjs';
+import { FCOS_CONNECTION_POLICY } from '../../../config/fcosConnections.js';
 
 export async function qualifiedAdapter({ manifest, controllerDirectory, load = url => import(url) }) {
   const descriptor = manifest.prerequisites;
@@ -19,21 +20,58 @@ export async function qualifiedAdapter({ manifest, controllerDirectory, load = u
   return { adapter, entry, root, descriptor };
 }
 
+function protectedSalesforceContext({ manifest, approval, staged, journal, provider, plan }) {
+  const fingerprint = plan.salesforceFingerprint;
+  requireCondition(isDigest(fingerprint) && typeof journal?.checkpoint === 'function'
+    && typeof provider?.assertOwnership === 'function' && typeof provider?.verifyApproval === 'function',
+  'SALESFORCE_PROTECTED_OWNERSHIP_REQUIRED');
+  const policy = FCOS_CONNECTION_POLICY.providers.find(item => item.id === 'salesforce');
+  const allowedOperation = /^(?:validation|deployment|bootstrap|shared-publication|permission:[A-Za-z][A-Za-z0-9_]*)$/;
+  return {
+    ownership: {
+      async assert(binding) {
+        const { stage, orgId, operation } = binding;
+        requireCondition(binding.fingerprint === fingerprint && allowedOperation.test(operation || '')
+          && policy.environments.some(environment => environment.key === stage && environment.orgId === orgId)
+          && (operation !== 'shared-publication' || stage === 'devee'), 'SALESFORCE_PROTECTED_OPERATION_MISMATCH');
+        assertAuthorization(approval, manifest, staged);
+        await provider.verifyApproval(approval, { manifest, staged });
+        await journal.assertNoUnresolvedOtherRelease();
+        await provider.assertOwnership({ phase: 'prerequisites' });
+        assertAuthorization(approval, manifest, staged);
+        const expiresAt = new Date(Math.min(Date.now() + 300_000, Date.parse(approval.approvedAt) + 86_400_000)).toISOString();
+        const receiptId = digest({ manifestHash: approval.manifestHash, runId: approval.runId, fingerprint, stage, orgId, operation });
+        return { fingerprint, stage, orgId, operation, receiptId, expiresAt };
+      },
+    },
+    journal: {
+      checkpoint(event) {
+        requireCondition(event.fingerprint === fingerprint, 'SALESFORCE_PROTECTED_OPERATION_MISMATCH');
+        return journal.checkpoint(event);
+      },
+    },
+  };
+}
+
 // Only adapters reviewed into the trusted controller may receive provider credentials.
 // Candidate files and provider responses are data, never executable repair adapters.
-export async function runPrerequisites({ manifest, approval, staged, journal, controllerDirectory, env, load = url => import(url) }) {
+export async function runPrerequisites({ manifest, approval, staged, journal, provider, controllerDirectory, env, load = url => import(url) }) {
   assertAuthorization(approval, manifest, staged);
   const needed = manifest.selection.salesforce || manifest.selection.database;
   if (!needed) return { passed: true, manifestHash: digest(manifest), backwardCompatible: true, providerCalls: 0 };
   const { adapter, root, descriptor } = await qualifiedAdapter({ manifest, controllerDirectory, load });
   requireCondition(typeof adapter.applyReviewedPrerequisites === 'function', 'PREREQUISITE_ADAPTER_CONTRACT_REQUIRED');
-  const result = await adapter.applyReviewedPrerequisites({ manifest, approval, journal, controllerDirectory: root, env,
+  const salesforce = manifest.selection.salesforce
+    ? protectedSalesforceContext({ manifest, approval, staged, journal, provider, plan: descriptor.plan })
+    : undefined;
+  const result = await adapter.applyReviewedPrerequisites({ manifest, approval, journal, controllerDirectory: root, env, salesforce,
     plan: descriptor.plan, authorization: { manifestHash: digest(manifest), nativeReview: approval } });
   requireCondition(result?.passed === true && result.manifestHash === digest(manifest)
     && result.backwardCompatible === true && Array.isArray(result.completedOperations)
     && result.completedOperations.every(operation => operation.verified === true && operation.intentRecorded === true)
     && (!manifest.selection.salesforce || result.salesforce?.order === 'devee-mirror-qat-production'
-      && result.salesforce.mirrorVerified === true && result.salesforce.sourceTreeHash === descriptor.plan.salesforceSourceTreeHash)
+      && result.salesforce.mirrorVerified === true && result.salesforce.sourceTreeHash === descriptor.plan.salesforceSourceTreeHash
+      && result.salesforce.fingerprint === descriptor.plan.salesforceFingerprint)
     && (!manifest.selection.database || result.database?.destructiveRollback === false && result.database.readbackVerified === true), 'PREREQUISITE_VERIFICATION_REQUIRED');
   // Private adapter evidence stays in its private store; publish only typed checkpoint metadata.
   const operations = result.completedOperations.map(operation => {
