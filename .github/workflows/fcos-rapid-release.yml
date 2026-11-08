@@ -269,6 +269,14 @@ jobs:
           node-version: 24.18.0
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: npm install --global vercel@54.20.1 --ignore-scripts --no-audit --no-fund
+      - name: Check out exact Salesforce metadata as release data
+        if: fromJSON(inputs.manifest_json).selection.salesforce
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ fromJSON(inputs.manifest_json).candidate.sha }}
+          path: salesforce-candidate
+          fetch-depth: 0
+          persist-credentials: false
       - name: Install governed browser for conditional prerequisite smoke
         run: npx --no-install playwright install --with-deps chromium
       - name: Reuse frozen release manifest
@@ -286,6 +294,7 @@ jobs:
           FCOS_RAPID_RELEASE_ENABLED: ${{ vars.FCOS_RAPID_RELEASE_ENABLED }}
           FCOS_RAPID_RELEASE_HANDOVER_ID: ${{ steps.admit-controller.outputs.handover_id }}
           VERCEL_TOKEN: ${{ secrets.FCOS_RELEASE_VERCEL_TOKEN }}
+          FCOS_RAPID_SALESFORCE_CANDIDATE: ${{ github.workspace }}/salesforce-candidate
           FCOS_RAPID_DATABASE_URL: ${{ secrets.FCOS_RAPID_READONLY_DATABASE_URL }}
           FCOS_RAPID_DATABASE_CA: ${{ runner.temp }}/rapid-database-ca.pem
           FCOS_AUTH_E2E_ENABLED: 'true'

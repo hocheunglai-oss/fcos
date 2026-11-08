@@ -1,7 +1,7 @@
 import { readFileSync, realpathSync } from 'node:fs';
 import { resolve, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { assertAuthorization, digest, git, isDigest, requireCondition } from './contract.mjs';
+import { assertAuthorization, digest, git, isDigest, requireCondition, sourceSnapshot } from './contract.mjs';
 import { FCOS_CONNECTION_POLICY } from '../../../config/fcosConnections.js';
 
 export async function qualifiedAdapter({ manifest, controllerDirectory, load = url => import(url) }) {
@@ -56,16 +56,25 @@ function protectedSalesforceContext({ manifest, approval, staged, journal, provi
 
 // Only adapters reviewed into the trusted controller may receive provider credentials.
 // Candidate files and provider responses are data, never executable repair adapters.
-export async function runPrerequisites({ manifest, approval, staged, journal, provider, controllerDirectory, env, load = url => import(url) }) {
+export async function runPrerequisites({ manifest, approval, staged, journal, provider, controllerDirectory, env = process.env, load = url => import(url) }) {
   assertAuthorization(approval, manifest, staged);
   const needed = manifest.selection.salesforce || manifest.selection.database;
   if (!needed) return { passed: true, manifestHash: digest(manifest), backwardCompatible: true, providerCalls: 0 };
   const { adapter, root, descriptor } = await qualifiedAdapter({ manifest, controllerDirectory, load });
   requireCondition(typeof adapter.applyReviewedPrerequisites === 'function', 'PREREQUISITE_ADAPTER_CONTRACT_REQUIRED');
+  let salesforceCandidateDirectory;
+  if (manifest.selection.salesforce) {
+    requireCondition(env.FCOS_RAPID_SALESFORCE_CANDIDATE, 'SALESFORCE_CANDIDATE_SOURCE_REQUIRED');
+    salesforceCandidateDirectory = realpathSync(env.FCOS_RAPID_SALESFORCE_CANDIDATE);
+    requireCondition(salesforceCandidateDirectory !== root, 'SALESFORCE_CANDIDATE_SOURCE_REQUIRED');
+    const actual = sourceSnapshot(salesforceCandidateDirectory);
+    requireCondition(actual.sha === manifest.candidate.sha && actual.sourceDigest === manifest.candidate.sourceDigest
+      && actual.lockDigest === manifest.candidate.lockDigest, 'SALESFORCE_CANDIDATE_SOURCE_MISMATCH');
+  }
   const salesforce = manifest.selection.salesforce
     ? protectedSalesforceContext({ manifest, approval, staged, journal, provider, plan: descriptor.plan })
     : undefined;
-  const result = await adapter.applyReviewedPrerequisites({ manifest, approval, journal, controllerDirectory: root, env, salesforce,
+  const result = await adapter.applyReviewedPrerequisites({ manifest, approval, journal, controllerDirectory: root, env, salesforce, salesforceCandidateDirectory,
     plan: descriptor.plan, authorization: { manifestHash: digest(manifest), nativeReview: approval } });
   requireCondition(result?.passed === true && result.manifestHash === digest(manifest)
     && result.backwardCompatible === true && Array.isArray(result.completedOperations)
