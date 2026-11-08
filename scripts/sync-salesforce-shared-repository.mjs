@@ -259,17 +259,17 @@ export function selectPublicationTarget(
   return { branch: `${publication.branchPrefix}-${suffix}`, pullRequest: null };
 }
 
-function publicationBranch() {
-  return selectPublicationTarget(openPullRequests());
+function publicationBranch(mode) {
+  return selectPublicationTarget(openPullRequests(), { mode });
 }
 
-function cloneBranch(destination, branch, existsRemotely) {
+function cloneBranch(destination, branch, existsRemotely, mode) {
   const cloneArgs = ['repo', 'clone', PUBLICATION.repository, destination, '--'];
-  const cloneSourceBranch = MODE === 'publish' && !existsRemotely ? PUBLICATION.defaultBranch : branch;
+  const cloneSourceBranch = mode === 'publish' && !existsRemotely ? PUBLICATION.defaultBranch : branch;
   cloneArgs.push('--branch', cloneSourceBranch, '--single-branch');
   run('gh', cloneArgs, { env: ghEnvironment });
   configurePushIdentity(destination);
-  if (MODE === 'publish' && !existsRemotely) run('git', ['switch', '-c', branch], { cwd: destination });
+  if (mode === 'publish' && !existsRemotely) run('git', ['switch', '-c', branch], { cwd: destination });
 }
 
 function readOwnedFiles(checkout) {
@@ -465,15 +465,15 @@ function publish(checkout, branch, expectedRemoteHead, pullRequest, inventory, a
   return { changed: true, branch, commit, pullRequest };
 }
 
-export function main({ proofResolver = assertDeveeDeploymentProof, assertPublicationCurrent = () => {} } = {}) {
-  if (!MODE || (process.argv.includes('--publish') && process.argv.includes('--check'))) {
+export function executeSharedMirror({ mode, metadataRoot = sourceRoot, proofResolver, assertPublicationCurrent = () => {} }) {
+  if (!['check', 'publish'].includes(mode)) {
     throw new Error('Choose exactly one mode: --check or --publish.');
   }
   assertIdentity();
-  const inventory = sourceInventory();
+  const inventory = sourceInventory(metadataRoot);
   const deveeDeployment = proofResolver(inventory);
   const manifest = expectedManifest(inventory);
-  const selected = publicationBranch();
+  const selected = publicationBranch(mode);
   const initialRemoteHead = remoteBranchHead(selected.branch);
   if (selected.pullRequest && selected.pullRequest.headRefOid !== initialRemoteHead) {
     throw new Error('The shared Salesforce draft pull request head changed before publication verification.');
@@ -484,25 +484,32 @@ export function main({ proofResolver = assertDeveeDeploymentProof, assertPublica
   const temporary = mkdtempSync(path.join(tmpdir(), 'fcos-salesforce-mirror-'));
   const checkout = path.join(temporary, 'repository');
   try {
-    cloneBranch(checkout, selected.branch, Boolean(initialRemoteHead));
-    if (MODE === 'publish') syncCheckout(checkout, inventory, manifest);
+    cloneBranch(checkout, selected.branch, Boolean(initialRemoteHead), mode);
+    if (mode === 'publish') syncCheckout(checkout, inventory, manifest);
     verifyCheckout(checkout, inventory, manifest);
-    const publication = MODE === 'publish'
+    const publication = mode === 'publish'
       ? publish(checkout, selected.branch, initialRemoteHead, selected.pullRequest, inventory, assertPublicationCurrent)
       : { changed: false, branch: selected.branch, commit: run('git', ['rev-parse', 'HEAD'], { cwd: checkout }), pullRequest: selected.pullRequest };
     const pullRequest = refetchPullRequest(publication.pullRequest, publication.branch);
     validatePublicationPullRequest(pullRequest, { branch: publication.branch, headOid: publication.commit });
     assertCommitAttribution(publication.commit);
     verifyImmutableRemoteHead(checkout, pullRequest, inventory, manifest);
-    process.stdout.write(`${JSON.stringify(publicationReport({
+    return publicationReport({
+      mode,
       inventory,
       deveeDeployment,
       publication,
       pullRequest,
-    }), null, 2)}\n`);
+    });
   } finally {
     rmSync(temporary, { recursive: true, force: true });
   }
+}
+
+export function main({ proofResolver = assertDeveeDeploymentProof, assertPublicationCurrent = () => {} } = {}) {
+  const mode = process.argv.includes('--publish') && process.argv.includes('--check') ? '' : MODE;
+  const report = executeSharedMirror({ mode, proofResolver, assertPublicationCurrent });
+  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();
