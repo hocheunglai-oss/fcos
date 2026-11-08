@@ -7,8 +7,8 @@ import test from 'node:test';
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import { createSalesforceWorkflowState, updateSalesforceEnvironmentState, SALESFORCE_RELEASE_MODE } from '../scripts/salesforce-workflow-state.mjs';
 import { openSalesforcePromotionJournal, salesforcePromotionHash as hash } from '../scripts/lib/salesforce-promotion-journal.mjs';
-import { INVENTORY_BASELINE_MODE, REVIEWED_SALESFORCE_MODE, createReviewedSalesforcePlan, inventoryFromFiles, reviewedCheckpointInventory, runReviewedSalesforceRelease, assertReviewedJobReport, assertProductionAuthorization } from '../scripts/lib/salesforce-reviewed-release.mjs';
-import { assertReviewedInputsUnchanged, baselineGitInventory, loadReviewedSalesforcePlan, reviewedSalesforceOptions } from '../scripts/deploy-salesforce-reviewed-manifest.mjs';
+import { INVENTORY_BASELINE_MODE, REVIEWED_SALESFORCE_MODE, createReviewedSalesforcePlan, inventoryFromFiles, parseReviewedPackage, reviewedCheckpointInventory, runReviewedSalesforceRelease, assertReviewedJobReport, assertProductionAuthorization } from '../scripts/lib/salesforce-reviewed-release.mjs';
+import { assertReviewedInputsUnchanged, baselineGitInventory, cliSalesforceProvider, loadReviewedSalesforcePlan, reviewedSalesforceOptions } from '../scripts/deploy-salesforce-reviewed-manifest.mjs';
 import { reviewedDeveePublicationProof } from '../scripts/sync-salesforce-reviewed-repository.mjs';
 
 const policy = FCOS_CONNECTION_POLICY.providers.find(({ id }) => id === 'salesforce');
@@ -526,4 +526,63 @@ test('inventory baseline loads from the exact Git tree without a deployment-proo
     assert.equal(loaded.baselineWorkflowAbsolute, null);
     assertReviewedInputsUnchanged(loaded, { cwd: directory, policy });
   } finally { f.cleanup(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('native inventory retrieval binds manifest, org, and observed bytes and removes temporary source', () => {
+  const cwd = mkdtempSync(path.join(tmpdir(), 'fcos-inventory-fixture-'));
+  try {
+    const environment = policy.environments[0];
+    const expected = inventoryFromFiles(files);
+    const manifest = packageXml(['ApexClass:Example']);
+    writeFileSync(path.join(cwd, 'inventory.xml'), manifest);
+    writeFileSync(path.join(cwd, 'sfdx-project.json'), '{}');
+    const descriptor = { path: 'inventory.xml', sha256: hash(manifest) };
+    const input = { plan: { review: { inventoryManifests: { [expected.inventoryHash]: descriptor } } },
+      expectedInventoryHash: expected.inventoryHash, expectedSourceTreeHash: expected.sourceTreeHash };
+    let retrievedProject, changed = false, retrieves = 0, displayCalls = 0;
+    const provider = cliSalesforceProvider({ cwd, run(program, args, project) {
+      assert.equal(program, 'sf');
+      assert.equal(args[args.indexOf('--target-org') + 1], environment.alias);
+      if (args[0] === 'org') {
+        displayCalls++;
+        return { id: environment.orgId, username: environment.username, connectedStatus: 'Connected' };
+      }
+      if (args[0] === 'data') return { records: [{ Id: environment.orgId, IsSandbox: environment.isSandbox }] };
+      assert.deepEqual(args.slice(0, 3), ['project', 'retrieve', 'start']);
+      assert.notEqual(project, cwd);
+      assert.deepEqual(readFileSync(args[args.indexOf('--manifest') + 1]), manifest);
+      retrievedProject = project;
+      retrieves++;
+      mkdirSync(path.join(project, 'retrieved/classes'));
+      for (const [name, bytes] of Object.entries(files)) {
+        writeFileSync(path.join(project, 'retrieved', name), changed ? 'different' : bytes);
+      }
+      return { id: '09SHF000002gTFl2AM', status: 'Succeeded', done: true, success: true };
+    } });
+
+    const receipt = provider.verifyInventory(environment, input);
+    assert.equal(receipt.sourceTreeHash, expected.sourceTreeHash);
+    assert.deepEqual(receipt.observedInventory, expected.files);
+    assert.equal(receipt.identity.orgId, environment.orgId);
+    assert.equal(displayCalls, 2);
+    assert.throws(() => readFileSync(path.join(retrievedProject, 'inventory.xml')), { code: 'ENOENT' });
+
+    changed = true;
+    assert.throws(() => provider.verifyInventory(environment, input), /differs from the exact reviewed inventory/);
+    assert.throws(() => readFileSync(path.join(retrievedProject, 'inventory.xml')), { code: 'ENOENT' });
+    descriptor.sha256 = '0'.repeat(64);
+    assert.throws(() => provider.verifyInventory(environment, input), /manifest digest mismatch/);
+    assert.equal(retrieves, 2);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('read-only inventory allows exact layout and profile names with spaces', () => {
+  const members = ['Layout:Invoice__c-Invoice Layout', 'Profile:Sales Support'];
+  const manifest = packageXml(members).toString('utf8');
+  assert.deepEqual(parseReviewedPackage(manifest, { inventory: true }), members);
+  assert.throws(() => parseReviewedPackage(manifest), /unsupported Salesforce members/);
+  assert.throws(() => parseReviewedPackage(packageXml(['Profile:Sales *']).toString('utf8'), { inventory: true }), /Wildcards/);
+  assert.throws(() => parseReviewedPackage(packageXml(['ApexClass:Example Class']).toString('utf8'), { inventory: true }), /unsupported Salesforce members/);
 });

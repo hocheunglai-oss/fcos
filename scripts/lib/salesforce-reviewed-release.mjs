@@ -52,7 +52,7 @@ export function readReviewedInventory(root) {
   return inventoryFromFiles(files);
 }
 
-export function parseReviewedPackage(xml) {
+export function parseReviewedPackage(xml, { inventory = false } = {}) {
   if (typeof xml !== 'string' || /<!|&|<\s*destructiveChanges\b/iu.test(xml)) failCoverage('Unsupported Salesforce package XML.');
   const members = [];
   for (const [, body] of xml.matchAll(/<types>([\s\S]*?)<\/types>/gu)) {
@@ -60,7 +60,9 @@ export function parseReviewedPackage(xml) {
     const values = [...body.matchAll(/<members>([^<]+)<\/members>/gu)].map(([, name]) => name.trim());
     if (names.length !== 1 || !values.length) failCoverage('Each reviewed package type must have exact members.');
     for (const member of values) {
-      if (!/^[A-Za-z0-9_.$-]+$/u.test(member) || member.includes('*')) failCoverage('Wildcards and unsupported Salesforce members are prohibited.');
+      const namedInventoryMember = inventory && ['Layout', 'Profile'].includes(names[0])
+        && /^[A-Za-z0-9_.$-]+(?: +[A-Za-z0-9_.$-]+)+$/u.test(member);
+      if (!/^[A-Za-z0-9_.$-]+$/u.test(member) && !namedInventoryMember) failCoverage('Wildcards and unsupported Salesforce members are prohibited.');
       members.push(`${names[0]}:${member}`);
     }
   }
