@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync, lstatSync } from 'node:fs';
 import path from 'node:path';
+import { digest as digestCheckpoint } from './rapid-release/contract.mjs';
 import { salesforcePromotionHash as hash, assertSuccessfulSalesforceReport } from './salesforce-promotion-journal.mjs';
 
 export const REVIEWED_SALESFORCE_MODE = 'reviewed-manifest-incremental-v1';
@@ -256,6 +257,16 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
     throw new Error('Apply requires a successful prepare checkpoint for this exact unchanged reviewed fingerprint.');
   }
   if (typeof ownership?.assert !== 'function' || typeof externalJournal?.checkpoint !== 'function') throw new Error('Salesforce writes require external release ownership and a durable checkpoint adapter; a local lock is not global serialization.');
+  if (typeof externalJournal.readCheckpoints === 'function') {
+    for (const entry of await externalJournal.readCheckpoints()) {
+      if (entry.fingerprint !== plan.fingerprint) throw new Error('Durable Salesforce checkpoint does not match the reviewed fingerprint.');
+      if (!['pending', 'resolved'].includes(entry.outcome)) continue;
+      const local = journal.state.stages[entry.stage]?.[entry.operation];
+      if (!local || digestCheckpoint(local) !== entry.evidenceDigest) {
+        throw new Error('Durable Salesforce operation differs from local state; reconcile the original checkpoint before continuing.');
+      }
+    }
+  }
   const timestamp = () => now().toISOString();
   const checkpoint = (stage, operation, record) => externalJournal.checkpoint({ fingerprint: plan.fingerprint, stage, operation, record });
   const persist = async (stage, operation, record) => {

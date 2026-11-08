@@ -586,3 +586,15 @@ test('read-only inventory allows exact layout and profile names with spaces', ()
   assert.throws(() => parseReviewedPackage(packageXml(['Profile:Sales *']).toString('utf8'), { inventory: true }), /Wildcards/);
   assert.throws(() => parseReviewedPackage(packageXml(['ApexClass:Example Class']).toString('utf8'), { inventory: true }), /unsupported Salesforce members/);
 });
+
+test('hosted recovery refuses a fresh runner with unresolved durable provider history', async () => {
+  const f = fixture();
+  try {
+    f.externalJournal.readCheckpoints = async () => [{ fingerprint: f.plan.fingerprint, stage: 'devee',
+      operation: 'validation', outcome: 'pending', job: { id: jobId(1) } }];
+    await assert.rejects(f.run('prepare'), /reconcile the original checkpoint/);
+    assert.deepEqual(f.calls, []);
+  } finally {
+    f.cleanup();
+  }
+});
