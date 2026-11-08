@@ -338,10 +338,13 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
         if (!assigned) throw new Error('A previously verified permission assignment drifted.');
         continue;
       }
+      if (!assigned && record?.status === 'submitting') {
+        throw new Error('Permission assignment remains uncertain; reconcile the original submission before retry.');
+      }
       if (!record) record = await persist(environment.key, operation, { name, prestate: assigned, status: 'observed', orgId: environment.orgId });
       if (!assigned) {
         const gate = await writeGate(environment, operation);
-        await persist(environment.key, operation, { ...record, status: 'submitting', ...gate });
+        record = await persist(environment.key, operation, { ...record, status: 'submitting', ...gate });
         await unchanged();
         if (!(Date.parse(gate.receiptExpiresAt) > now().getTime())) throw new Error('Salesforce ownership expired before permission assignment.');
         if (environment.key === 'production') assertProductionAuthorization(authorization, plan, now());

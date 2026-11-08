@@ -259,6 +259,34 @@ test('schema prepare stops before Production bootstrap and exact apply authorize
   } finally { f.cleanup(); }
 });
 
+test('permission assignment resumes by readback without repeating an uncertain write', async () => {
+  const f = fixture({ bootstrap: true });
+  try {
+    const original = f.provider.assignPermission;
+    let attempts = 0;
+    f.provider.assignPermission = async (environment, name) => {
+      if (environment.key === 'devee') {
+        attempts += 1;
+        throw new Error('Lost permission response');
+      }
+      return original(environment, name);
+    };
+
+    await assert.rejects(f.run('prepare'), /Lost permission response/);
+    f.reopen();
+    await assert.rejects(f.run('prepare'), /Permission assignment remains uncertain/);
+    assert.equal(attempts, 1);
+
+    f.assignments.add('devee:Reviewed');
+    await f.run('prepare');
+    assert.equal(attempts, 1);
+    const saved = f.journal.state.stages.devee['permission:Reviewed'];
+    assert.equal(saved.status, 'Succeeded');
+    assert.equal(saved.addedByRelease, true);
+    assert.equal(saved.receiptId, 'external-lease-1');
+  } finally { f.cleanup(); }
+});
+
 test('crash after submission without job ID never blindly resubmits', async () => {
   const f = fixture();
   try {
