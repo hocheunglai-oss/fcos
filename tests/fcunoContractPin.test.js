@@ -21,12 +21,14 @@ test('connection policy rejects an unpinned or cross-connected federation', () =
   assert.throws(() => validateFcosConnectionPolicy(crossConnected), /separate Supabase projects/);
 });
 
-test('the consumer verifier fetches only immutable contract JSON through the GitHub Contents API', async () => {
+test('the consumer verifier uses pinned Contents API or credential-free raw contract JSON', async () => {
   const source = await readFile(new URL('../scripts/verify-fcuno-federation-contract.mjs', import.meta.url), 'utf8');
   assert.match(source, /api\.github\.com/);
   assert.match(source, /\/contents\//);
   assert.match(source, /application\/vnd\.github\.raw\+json/);
-  assert.doesNotMatch(source, /raw\.githubusercontent\.com/);
+  assert.match(source, /token\s*\? new URL\([^\n]+api\.github\.com[^\n]+\n\s*:\s*new URL\([^\n]+pin\.providerCommit[^\n]+raw\.githubusercontent\.com/);
+  assert.match(source, /\.\.\.\(token \? \{ Authorization:/);
+  assert.match(source, /redirect: 'error'/);
   assert.match(source, /pin\.providerCommit/);
   assert.match(source, /pin\.contractPath/);
   assert.match(source, /\.schema\.json/);
