@@ -60,6 +60,26 @@ export class DeploymentJournal {
     const written = (await this.read()).filter(record => record.payload.recordHash === payload.recordHash);
     requireCondition(written.length === 1, 'JOURNAL_WRITE_UNCERTAIN'); return written[0];
   }
+  async checkpoint({ fingerprint, stage, operation, record }) {
+    requireCondition(/^[a-f0-9]{64}$/.test(fingerprint || '')
+      && ['devee', 'shared_mirror', 'qat', 'production'].includes(stage)
+      && /^(?:validation|deployment|bootstrap|publication|inventory-checkpoint|preparation|restoration-checkpoint|permission:[A-Za-z][A-Za-z0-9_]*)$/.test(operation || '')
+      && record && typeof record === 'object' && !Array.isArray(record), 'SALESFORCE_CHECKPOINT_INVALID');
+    const data = { fingerprint, stage, operation, evidenceDigest: digest(record) };
+    const find = chain => chain.find(entry => entry.payload.event === 'salesforce.checkpoint'
+      && canonical(entry.payload.data) === canonical(data));
+    const chain = await this.read();
+    const saved = find(chain);
+    if (saved) return saved;
+    try {
+      return await this.append('salesforce.checkpoint', data, { expectedPreviousHash: chain.at(-1)?.payload.recordHash || null });
+    } catch (error) {
+      // Read back the same checkpoint after a lost acknowledgement.
+      const recovered = find(await this.read());
+      if (recovered) return recovered;
+      throw error;
+    }
+  }
   async assertNoUnresolvedOtherRelease() {
     const records = await this.github.pages(`/repos/${targets().repository}/deployments?environment=fcos-release-journal-v1&per_page=100`);
     const releases = new Map();
