@@ -141,6 +141,9 @@ test('prepare then apply consumes exact saved Production validation without anot
     assert.equal(f.journal.state.stages.devee.deployment.completedAt, completedAt);
     assert.equal(f.journal.state.stages.devee.deployment.verifiedAt, fixedNow.toISOString());
     assert.ok(f.calls.findIndex(call => call[0] === 'mirror') < f.calls.findIndex(call => call[0] === 'validate' && call[1] === 'qat'));
+    const publication = f.journal.state.stages.shared_mirror.publication;
+    assert.equal(publication.status, 'Succeeded');
+    assert.equal(publication.receiptId, 'external-lease-1');
     assert.ok(f.checkpoints.some(event => event.operation === 'deployment' && event.record.status === 'submitting' && event.stage === 'production'));
   } finally { f.cleanup(); }
 });
@@ -256,6 +259,62 @@ test('schema prepare stops before Production bootstrap and exact apply authorize
     assert.equal(f.journal.state.stages.production.bootstrap.apexTestProof, false);
     assert.equal(f.journal.state.stages.production.validation.apexTestProof, true);
     assert.equal(f.journal.state.stages.production.validation.testPlan.level, 'RunLocalTests');
+  } finally { f.cleanup(); }
+});
+
+test('permission assignment resumes by readback without repeating an uncertain write', async () => {
+  const f = fixture({ bootstrap: true });
+  try {
+    const original = f.provider.assignPermission;
+    let attempts = 0;
+    f.provider.assignPermission = async (environment, name) => {
+      if (environment.key === 'devee') {
+        attempts += 1;
+        throw new Error('Lost permission response');
+      }
+      return original(environment, name);
+    };
+
+    await assert.rejects(f.run('prepare'), /Lost permission response/);
+    f.reopen();
+    await assert.rejects(f.run('prepare'), /Permission assignment remains uncertain/);
+    assert.equal(attempts, 1);
+
+    f.assignments.add('devee:Reviewed');
+    await f.run('prepare');
+    assert.equal(attempts, 1);
+    const saved = f.journal.state.stages.devee['permission:Reviewed'];
+    assert.equal(saved.status, 'Succeeded');
+    assert.equal(saved.addedByRelease, true);
+    assert.equal(saved.receiptId, 'external-lease-1');
+  } finally { f.cleanup(); }
+});
+
+test('a saved permission result must reach the durable journal before promotion resumes', async () => {
+  const f = fixture({ bootstrap: true });
+  try {
+    const checkpoint = f.externalJournal.checkpoint;
+    let unavailable = true;
+    f.externalJournal.checkpoint = async event => {
+      if (event.stage === 'devee' && event.operation === 'permission:Reviewed' && event.record.status === 'Succeeded' && unavailable) {
+        throw new Error('Durable checkpoint unavailable');
+      }
+      return checkpoint(event);
+    };
+
+    await assert.rejects(f.run('prepare'), /Durable checkpoint unavailable/);
+    const saved = structuredClone(f.journal.state.stages.devee['permission:Reviewed']);
+    assert.equal(saved.status, 'Succeeded');
+    f.reopen();
+    await assert.rejects(f.run('prepare'), /Durable checkpoint unavailable/);
+    assert.equal(f.calls.filter(call => call[0] === 'validate').length, 0);
+    assert.equal(f.calls.filter(call => call[0] === 'permission-write' && call[1] === 'devee').length, 1);
+
+    unavailable = false;
+    await f.run('prepare');
+    assert.ok(f.checkpoints.some(event => event.stage === 'devee' && event.operation === 'permission:Reviewed'
+      && JSON.stringify(event.record) === JSON.stringify(saved)));
+    assert.equal(f.calls.filter(call => call[0] === 'permission-write' && call[1] === 'devee').length, 1);
   } finally { f.cleanup(); }
 });
 

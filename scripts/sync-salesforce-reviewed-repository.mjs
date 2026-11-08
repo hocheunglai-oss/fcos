@@ -48,14 +48,23 @@ export async function main(argv = process.argv.slice(2), { cwd = ROOT, policy = 
   const adapter = await module.createSalesforceAdapter({ cwd, plan, policy });
   const provider = cliSalesforceProvider({ cwd, policy, adapter });
   const proof = await reviewedDeveePublicationProof({ plan, state, policy, provider, assertUnchanged: () => assertReviewedInputsUnchanged(plan, { cwd, policy }) });
+  let assertPublicationCurrent;
   if (modes[0] === '--publish') {
-    const receipt = await adapter?.ownership?.assert?.({ fingerprint: plan.fingerprint, stage: 'devee', orgId: policy.environments[0].orgId, operation: 'shared-publication' });
-    if (!receipt?.receiptId || receipt.fingerprint !== plan.fingerprint || receipt.orgId !== policy.environments[0].orgId
-      || receipt.stage !== 'devee' || receipt.operation !== 'shared-publication' || !(Date.parse(receipt.expiresAt) > Date.now()) || typeof adapter?.journal?.checkpoint !== 'function') throw new Error('Reviewed mirror publication requires fresh external release ownership and durable intent.');
-    await adapter.journal.checkpoint({ fingerprint: plan.fingerprint, stage: 'shared_mirror', operation: 'publication', record: { status: 'submitting', receiptId: receipt.receiptId } });
+    const intent = state.stages?.shared_mirror?.publication;
+    const orgId = policy.environments[0].orgId;
+    const receipt = await adapter?.ownership?.assert?.({ fingerprint: plan.fingerprint, stage: 'devee', orgId, operation: 'shared-publication' });
+    assertPublicationCurrent = () => {
+      if (intent?.status !== 'submitting' || !intent.receiptId || receipt?.receiptId !== intent.receiptId
+        || receipt.fingerprint !== plan.fingerprint || receipt.orgId !== orgId || receipt.stage !== 'devee' || receipt.operation !== 'shared-publication'
+        || !(Math.min(Date.parse(intent.receiptExpiresAt), Date.parse(receipt.expiresAt)) > Date.now())) {
+        throw new Error('Reviewed mirror publication requires the original durable intent and unexpired ownership.');
+      }
+      assertReviewedInputsUnchanged(plan, { cwd, policy });
+    };
+    assertPublicationCurrent();
   }
   assertReviewedInputsUnchanged(plan, { cwd, policy });
-  return syncSharedRepository({ proofResolver(inventory) {
+  return syncSharedRepository({ assertPublicationCurrent, proofResolver(inventory) {
     assertReviewedInputsUnchanged(plan, { cwd, policy });
     if (inventory.sourceTreeHash !== proof.sourceTreeHash) throw new Error('Derived DEVEE source changed before byte-for-byte publication.');
     return proof;
