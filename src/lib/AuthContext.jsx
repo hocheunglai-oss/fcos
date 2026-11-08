@@ -66,6 +66,9 @@ async function loadSupabaseUser() {
   const { data } = await appClient.functions.invoke('authContext', {}, { force: true });
   if (data?.error) {
     const message = String(data.error || 'Unable to verify your account.');
+    if (data.code === 'FCUNO_IDENTITY_REAUTHENTICATION_REQUIRED' || data.code === 'FCUNO_IDENTITY_SESSION_REVOKED') {
+      return { user: null, forceReauthentication: true, error: { type: 'auth_required', message } };
+    }
     const normalizedMessage = message.toLowerCase();
     if (normalizedMessage.includes('inactive')) {
       return { user: null, access: {}, accessLevels: {}, error: { type: 'user_inactive' } };
@@ -143,7 +146,8 @@ export const AuthProvider = ({ children }) => {
       const result = await loadSupabaseUser();
       if (request !== authRequest.current || !isCurrentClientSession(session)) return { user: null, stale: true };
       setClientSessionOwner(result.user?.id);
-      if (result.user) window.sessionStorage.removeItem(FCUNO_FORCE_REAUTH_KEY);
+      if (result.forceReauthentication) window.sessionStorage.setItem(FCUNO_FORCE_REAUTH_KEY, 'true');
+      else if (result.user) window.sessionStorage.removeItem(FCUNO_FORCE_REAUTH_KEY);
       const nextAccessSnapshot = JSON.stringify([result.user?.id, result.user?.user_type, result.access, result.accessLevels, result.capabilities]);
       if (accessSnapshot.current !== nextAccessSnapshot) appClient.functions.clearCache();
       accessSnapshot.current = nextAccessSnapshot;
@@ -186,9 +190,10 @@ export const AuthProvider = ({ children }) => {
 
   useEffect(() => {
     if (!isSupabaseConfigured) return undefined;
+    let pendingCheck;
     const { data } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED') return;
-      if (loggingOut.current) return;
+      if (event === 'INITIAL_SESSION' || loggingOut.current) return;
+      window.clearTimeout(pendingCheck);
       appClient.functions.clearCache();
       authRequest.current += 1;
       if (event === 'SIGNED_OUT' || clientSessionState().ownerId !== session?.user?.id) {
@@ -210,9 +215,12 @@ export const AuthProvider = ({ children }) => {
         setIsLoadingAuth(false);
         return;
       }
-      window.setTimeout(() => checkUserAuth({ showLoader: false }), 0);
+      pendingCheck = window.setTimeout(() => checkUserAuth({ showLoader: false }), 0);
     });
-    return () => data?.subscription?.unsubscribe();
+    return () => {
+      window.clearTimeout(pendingCheck);
+      data?.subscription?.unsubscribe();
+    };
   }, [checkUserAuth]);
 
   useEffect(() => {
