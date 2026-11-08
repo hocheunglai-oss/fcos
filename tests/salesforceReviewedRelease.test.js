@@ -7,7 +7,7 @@ import test from 'node:test';
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import { createSalesforceWorkflowState, updateSalesforceEnvironmentState, SALESFORCE_RELEASE_MODE } from '../scripts/salesforce-workflow-state.mjs';
 import { openSalesforcePromotionJournal, salesforcePromotionHash as hash } from '../scripts/lib/salesforce-promotion-journal.mjs';
-import { INVENTORY_BASELINE_MODE, REVIEWED_SALESFORCE_MODE, createReviewedSalesforcePlan, inventoryFromFiles, reviewedCheckpointInventory, runReviewedSalesforceRelease, assertReviewedJobReport, assertProductionAuthorization } from '../scripts/lib/salesforce-reviewed-release.mjs';
+import { INVENTORY_BASELINE_MODE, REVIEWED_SALESFORCE_MODE, createReviewedSalesforcePlan, inventoryFromFiles, parseReviewedPackage, reviewedCheckpointInventory, runReviewedSalesforceRelease, assertReviewedJobReport, assertProductionAuthorization } from '../scripts/lib/salesforce-reviewed-release.mjs';
 import { assertReviewedInputsUnchanged, baselineGitInventory, cliSalesforceProvider, loadReviewedSalesforcePlan, reviewedSalesforceOptions } from '../scripts/deploy-salesforce-reviewed-manifest.mjs';
 import { reviewedDeveePublicationProof } from '../scripts/sync-salesforce-reviewed-repository.mjs';
 
@@ -576,4 +576,13 @@ test('native inventory retrieval binds manifest, org, and observed bytes and rem
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }
+});
+
+test('read-only inventory allows exact layout and profile names with spaces', () => {
+  const members = ['Layout:Invoice__c-Invoice Layout', 'Profile:Sales Support'];
+  const manifest = packageXml(members).toString('utf8');
+  assert.deepEqual(parseReviewedPackage(manifest, { inventory: true }), members);
+  assert.throws(() => parseReviewedPackage(manifest), /unsupported Salesforce members/);
+  assert.throws(() => parseReviewedPackage(packageXml(['Profile:Sales *']).toString('utf8'), { inventory: true }), /Wildcards/);
+  assert.throws(() => parseReviewedPackage(packageXml(['ApexClass:Example Class']).toString('utf8'), { inventory: true }), /unsupported Salesforce members/);
 });

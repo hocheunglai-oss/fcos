@@ -123,7 +123,7 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
       if (!manifest) throw new Error('Current Salesforce inventory requires an exact reviewed retrieval manifest.');
       const bytes = readFileSync(safeProjectFile(cwd, manifest.path));
       if (salesforcePromotionHash(bytes) !== manifest.sha256) throw new Error('Salesforce inventory retrieval manifest digest mismatch.');
-      parseReviewedPackage(bytes.toString('utf8'));
+      parseReviewedPackage(bytes.toString('utf8'), { inventory: true });
 
       const before = this.verifyIdentity(environment);
       const project = mkdtempSync(path.join(tmpdir(), 'fcos-salesforce-inventory-'));
