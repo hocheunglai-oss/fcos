@@ -95,11 +95,11 @@ async function fixture(t, { unstaged = false } = {}) {
   if (unstaged) {
     delete plan.bootstrap;
     plan.supersedes = { deploymentId: 88, handoverId: 'active-parent', planHash: parentPlanHash,
-      controllerSha: parentEvidence.controllerSha, databaseReceiptId: 1, nativeCoordinatorReadbackDigest: handoverDigest(parentEvidence) };
-    await pg.query("insert into fcos_release_coordination.rapid_handover_receipts(handover_id,phase,plan_hash,evidence) values('active-parent','finalized',$1,$2::jsonb)",
+      controllerSha: parentEvidence.controllerSha, databaseReceiptId: 2, nativeCoordinatorReadbackDigest: handoverDigest(parentEvidence) };
+    await pg.query("insert into fcos_release_coordination.rapid_handover_receipts(handover_id,phase,plan_hash,evidence) values('active-parent','prepared',$1,$2::jsonb),('active-parent','finalized',$1,$2::jsonb)",
       [parentPlanHash, JSON.stringify(parentEvidence)]);
   }
-  const planHash = handoverDigest(plan), preparedReceiptId = unstaged ? 2 : 1, terminalRunId = 40, stageRecordId = unstaged ? 0 : 43, runId = 44;
+  const planHash = handoverDigest(plan), preparedReceiptId = unstaged ? 3 : 1, terminalRunId = 40, stageRecordId = unstaged ? 0 : 43, runId = 44;
   const stagedInput = unstaged ? 'none' : stagedDeploymentId;
   const originalRunId = 39, originalJobId = 47;
   const originalReview = { runId: originalRunId, jobId: originalJobId, dispatcherSha: originalDispatcherSha, workflowBlobSha: handoverBlob,
@@ -286,9 +286,9 @@ test('unstaged successor recovery binds the active parent and rejects uncertain 
   f.records.pop();
   assert.equal(f.opens, 0);
   const closed = await f.close();
-  assert.equal(closed.receiptId, 3);
+  assert.equal(closed.receiptId, 4);
   assert.deepEqual(await f.close(), { ...closed, reused: true });
   const rows = (await f.pg.query('select phase,evidence from fcos_release_coordination.rapid_handover_receipts order by receipt_id')).rows;
-  assert.deepEqual(rows.map(row => row.phase), ['finalized', 'prepared', 'aborted']);
-  assert.equal(rows[2].evidence.closure.stage.noSubmission, true);
+  assert.deepEqual(rows.map(row => row.phase), ['prepared', 'finalized', 'prepared', 'aborted']);
+  assert.equal(rows[3].evidence.closure.stage.noSubmission, true);
 });

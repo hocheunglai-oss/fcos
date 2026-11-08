@@ -216,7 +216,7 @@ export async function closePreparedHandover({ input, github, vercel, openDatabas
       check(parentMatches && state.historyDigest === plan.historyDigest && !state.unresolvedProduction.length && same(state.control, plan.controlPreimage)
         && prepared && Number(prepared.receipt_id) === binding.preparedReceiptId && own.every(row => row.plan_hash === planHash)
         && !state.receipts.some(row => row.phase === 'finalized' && row.handover_id === plan.handoverId || row.phase === 'prepared' && row.handover_id !== plan.handoverId
-          && !state.receipts.some(other => other.handover_id === row.handover_id && other.phase === 'aborted'))
+          && !state.receipts.some(other => other.handover_id === row.handover_id && ['aborted', 'finalized'].includes(other.phase)))
         && state.guard?.triggers === 2 && state.guard.digest === prepared.evidence.guardDigest,
       'HANDOVER_RECOVERY_PREPARED_STATE_CHANGED');
       const original = prepared.evidence;
