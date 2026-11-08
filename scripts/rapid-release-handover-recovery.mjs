@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { canonical, digest, git, isDigest, isSha, requireCondition as check, targets, validateManifest } from './lib/rapid-release/contract.mjs';
 import { assertBuildReceipt } from './lib/rapid-release/engine.mjs';
 import { assertHandoverConnection, handoverDigest, handoverPins, handoverTransaction, OLD_RELEASE_WORKFLOWS, readHandoverSnapshot } from './lib/rapid-release/handover.mjs';
-import { collectRapidJournalState } from './lib/rapid-release/handover-adapter.mjs';
+import { collectRapidJournalState, readActiveHandover } from './lib/rapid-release/handover-adapter.mjs';
 import { assertPublicPayload, pendingOperations, validateChain } from './lib/rapid-release/journal.mjs';
 import { verifyLockedBootstrapSuccessor } from './lib/rapid-release/bootstrap-successor.mjs';
 import { createDatabaseCredentialIntentStore } from './lib/rapid-release/database-intent.mjs';
@@ -27,14 +27,17 @@ const guardSqlDigest = handoverDigest(readFileSync(new URL('./rapid-release/hand
 function assertRecoveryTarget(input) {
   const { plan, planHash, recoverySha, preparedReceiptId, terminalRunId, stageRecordId, stagedDeploymentId } = input;
   assertPublicPayload(plan);
+  const unstaged = Boolean(plan?.supersedes) && !plan.bootstrap;
   check(isSha(recoverySha) && recoverySha !== plan?.controllerSha && positive(preparedReceiptId) && positive(terminalRunId)
-    && positive(stageRecordId) && deploymentId(stagedDeploymentId) && isDigest(planHash) && handoverDigest(plan) === planHash
+    && (unstaged ? stageRecordId === 0 && stagedDeploymentId === 'none' : positive(stageRecordId) && deploymentId(stagedDeploymentId))
+    && isDigest(planHash) && handoverDigest(plan) === planHash
     && plan.schemaVersion === 1 && plan.kind === 'fcos_rapid_handover_plan' && /^[a-z0-9-]{8,96}$/.test(plan.handoverId || '')
     && isSha(plan.controllerSha) && isSha(plan.candidateSha) && isDigest(plan.buildId) && isDigest(plan.artifactDigest)
-    && same(plan.pins, handoverPins()) && plan.financialAuthority === false && !plan.supersedes
+    && same(plan.pins, handoverPins()) && plan.financialAuthority === false
     && plan.guardSqlDigest === guardSqlDigest && plan.controlPreimage?.mode === 'frozen'
-    && plan.bootstrap?.reference?.schemaVersion === 2 && plan.bootstrap.reference.kind === 'fcos_initial_bootstrap_successor_reference'
-    && plan.bootstrap.reference.successor?.plan?.controllerSha === plan.controllerSha
+    && (unstaged || !plan.supersedes && plan.bootstrap?.reference?.schemaVersion === 2
+      && plan.bootstrap.reference.kind === 'fcos_initial_bootstrap_successor_reference'
+      && plan.bootstrap.reference.successor?.plan?.controllerSha === plan.controllerSha)
     && plan.rapidJournal?.unresolvedProduction === 0 && isDigest(plan.rapidJournal.ignoredQualification?.manifestHash)
     && deploymentId(plan.previousProductionId) && plan.previousProductionId !== stagedDeploymentId,
   'HANDOVER_RECOVERY_EXACT_BOOTSTRAP_PLAN_REQUIRED');
@@ -107,7 +110,8 @@ async function assertProductionUnchanged({ plan, github, vercel }) {
     github.read(`${base()}/actions/variables/FCOS_RAPID_RELEASE_HANDOVER_ID`),
     vercel.currentProduction(),
   ]);
-  check(!pointer && (!enabled || enabled.value === 'false') && current.id === plan.previousProductionId,
+  const active = plan.supersedes ? await readActiveHandover({ get: path => github.read(path) }) : null;
+  check((plan.supersedes ? same(active, plan.supersedes) : !pointer && (!enabled || enabled.value === 'false')) && current.id === plan.previousProductionId,
     'HANDOVER_RECOVERY_ACTIVATION_OR_PRODUCTION_CHANGED');
 }
 
@@ -126,10 +130,12 @@ async function verifyObservedStage({ input, github, vercel, actorIds }) {
     && row.creator?.id === actorIds[0] && row.creator.login === targets().account),
     'HANDOVER_RECOVERY_STAGE_JOURNAL_TARGET_MISMATCH');
   const chain = validateChain(own, manifestHash, releaseId), payloads = chain.map(row => row.payload);
-  check(same(payloads.map(row => row.event), ['release.prepared', 'build.passed', 'stage.intent', 'stage.result'])
-    && own.length === chain.length && chain[3].id === stageRecordId && !pendingOperations(chain).length,
+  const unstaged = Boolean(plan.supersedes);
+  const expected = unstaged ? ['release.prepared', 'build.passed'] : ['release.prepared', 'build.passed', 'stage.intent', 'stage.result'];
+  check(same(payloads.map(row => row.event), expected)
+    && own.length === chain.length && (unstaged || chain[3].id === stageRecordId) && !pendingOperations(chain).length,
   'HANDOVER_RECOVERY_STAGE_RESULT_REQUIRED');
-  const [{ data: { manifest } }, { data: build }, { data: intent }, { data }] = payloads;
+  const [{ data: { manifest } }, { data: build }] = payloads;
   check(manifest && validateManifest(manifest) === manifestHash && manifest.controllerSha === plan.controllerSha
     && manifest.candidate.sha === plan.candidateSha && manifest.build.buildId === plan.buildId
     && manifest.previous.deploymentId === plan.previousProductionId && build?.artifactDigest === plan.artifactDigest,
@@ -138,14 +144,23 @@ async function verifyObservedStage({ input, github, vercel, actorIds }) {
   const request = { buildId: plan.buildId, artifactDigest: plan.artifactDigest, candidateSha: plan.candidateSha,
     previousDeploymentId: plan.previousProductionId, target: 'production', skipDomain: true };
   const operationId = `${releaseId}-stage`;
+  const rapidJournal = await collectRapidJournalState({ pages: async () => records, manifest, actorIds });
+  check(same(rapidJournal, plan.rapidJournal), 'HANDOVER_RECOVERY_OTHER_JOURNAL_CHANGED');
+  if (unstaged) {
+    const project = await vercel.project();
+    check(project.id === plan.pins.projectId && project.accountId === plan.pins.teamId
+      && project.autoAssignCustomDomains === false, 'HANDOVER_RECOVERY_STAGE_PROJECT_MISMATCH');
+    const observation = await vercel.discover({ phase: 'stage', operationId, manifestHash, request, requireAbsentHandoverPlanHash: planHash });
+    check(observation.outcome === 'absent', 'HANDOVER_RECOVERY_STAGE_ABSENCE_REQUIRED');
+    return { manifestHash, operationId, buildRecordHash: chain[1].payload.recordHash, noSubmission: true };
+  }
+  const [, , { data: intent }, { data }] = payloads;
   check(same(intent, { operationId, requestHash: digest(request), request }), 'HANDOVER_RECOVERY_STAGE_RESULT_REQUIRED');
   const observed = data.result;
   check(data.operationId === operationId && data.outcome === 'applied' && observed?.id === stagedDeploymentId
     && observed.buildId === plan.buildId && observed.artifactDigest === plan.artifactDigest && observed.sha === plan.candidateSha
     && observed.manifestHash === manifestHash && observed.operationId === operationId && observed.target === 'production',
   'HANDOVER_RECOVERY_STAGE_RESULT_MISMATCH');
-  const rapidJournal = await collectRapidJournalState({ pages: async () => records, manifest, actorIds });
-  check(same(rapidJournal, plan.rapidJournal), 'HANDOVER_RECOVERY_OTHER_JOURNAL_CHANGED');
   const [project, staged] = await Promise.all([vercel.project(), vercel.rawDeployment(stagedDeploymentId)]);
   check(project.id === plan.pins.projectId && project.accountId === plan.pins.teamId && project.autoAssignCustomDomains === false
     && staged.id === stagedDeploymentId && staged.target === 'production' && staged.projectId === plan.pins.projectId
@@ -193,17 +208,22 @@ export async function closePreparedHandover({ input, github, vercel, openDatabas
       const state = await readHandoverSnapshot(db, true);
       const own = state.receipts.filter(row => row.handover_id === plan.handoverId);
       const prepared = own.find(row => row.phase === 'prepared'), closed = own.find(row => row.phase === 'aborted');
-      check(state.historyDigest === plan.historyDigest && !state.unresolvedProduction.length && same(state.control, plan.controlPreimage)
+      const parent = state.receipts.filter(row => row.phase === 'finalized').at(-1);
+      const parentMatches = plan.supersedes ? parent?.handover_id === plan.supersedes.handoverId
+        && parent.plan_hash === plan.supersedes.planHash && Number(parent.receipt_id) === plan.supersedes.databaseReceiptId
+        && parent.evidence.controllerSha === plan.supersedes.controllerSha
+        && handoverDigest(parent.evidence) === plan.supersedes.nativeCoordinatorReadbackDigest : !parent;
+      check(parentMatches && state.historyDigest === plan.historyDigest && !state.unresolvedProduction.length && same(state.control, plan.controlPreimage)
         && prepared && Number(prepared.receipt_id) === binding.preparedReceiptId && own.every(row => row.plan_hash === planHash)
-        && !state.receipts.some(row => row.phase === 'finalized' || row.phase === 'prepared' && row.handover_id !== plan.handoverId
+        && !state.receipts.some(row => row.phase === 'finalized' && row.handover_id === plan.handoverId || row.phase === 'prepared' && row.handover_id !== plan.handoverId
           && !state.receipts.some(other => other.handover_id === row.handover_id && other.phase === 'aborted'))
         && state.guard?.triggers === 2 && state.guard.digest === prepared.evidence.guardDigest,
       'HANDOVER_RECOVERY_PREPARED_STATE_CHANGED');
       const original = prepared.evidence;
       check(original.controllerSha === plan.controllerSha && original.candidateSha === plan.candidateSha
         && original.buildId === plan.buildId && original.artifactDigest === plan.artifactDigest
-        && original.historyDigest === plan.historyDigest && original.supersedes === null && original.qualificationDigest === null
-        && same(original.controlPreimage, plan.controlPreimage) && same(original.bootstrap, plan.bootstrap.reference)
+        && original.historyDigest === plan.historyDigest && same(original.supersedes, plan.supersedes || null) && original.qualificationDigest === null
+        && same(original.controlPreimage, plan.controlPreimage) && same(original.bootstrap, plan.bootstrap?.reference)
         && original.review?.planHash === planHash && original.review.reviewerId === owner.id && original.review.reviewer === owner.login
         && original.review.state === 'approved' && original.review.environment === environmentName
         && original.review.workflowPath === handoverPath && original.review.workflowBlobSha === originalBlob
@@ -219,10 +239,10 @@ export async function closePreparedHandover({ input, github, vercel, openDatabas
           && row.environments?.some(item => item.id === original.review.environmentId && item.name === environmentName)
           && handoverDigest(row) === original.review.reviewDigest).length === 1, 'HANDOVER_RECOVERY_ORIGINAL_RECEIPT_MISMATCH');
       await assertAppendOnlyReceiptTable(db);
-      await verifyLockedBootstrapSuccessor({ db, github, bootstrapPlan: plan.bootstrap.plan,
+      if (plan.bootstrap) await verifyLockedBootstrapSuccessor({ db, github, bootstrapPlan: plan.bootstrap.plan,
         controllerSha: plan.controllerSha, reference: plan.bootstrap.reference });
       await assertProductionUnchanged({ plan, github, vercel });
-      const closure = { kind: 'fcos_protected_initial_handover_abort', binding, stage, originalReceiptDigest: handoverDigest(original),
+      const closure = { kind: plan.supersedes ? 'fcos_protected_unstaged_successor_abort' : 'fcos_protected_initial_handover_abort', binding, stage, originalReceiptDigest: handoverDigest(original),
         terminalJobId: terminalProof.job.id, terminalConclusion: terminalProof.run.conclusion, guardDigest: state.guard.digest,
         controlDigest: handoverDigest(state.control) };
       if (closed) {
@@ -302,8 +322,8 @@ async function main(env) {
     && git(root, ['rev-parse', 'HEAD']) === input.recoverySha && !git(root, ['status', '--porcelain', '--untracked-files=no']),
   'HANDOVER_RECOVERY_FROZEN_CONTROLLER_REQUIRED');
   const github = nativeGithub(env.FCOS_RAPID_HANDOVER_GITHUB_TOKEN);
-  const { project, currentProduction, rawDeployment } = vercelProvider({ env });
-  return closePreparedHandover({ input, github, vercel: { project, currentProduction, rawDeployment }, openDatabase: () => openNativeDatabase(env),
+  const { project, currentProduction, rawDeployment, discover } = vercelProvider({ env });
+  return closePreparedHandover({ input, github, vercel: { project, currentProduction, rawDeployment, discover }, openDatabase: () => openNativeDatabase(env),
     runId: Number(env.GITHUB_RUN_ID), dispatcherSha: env.GITHUB_SHA });
 }
 
