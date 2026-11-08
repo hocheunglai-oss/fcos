@@ -73,6 +73,16 @@ export class DeploymentJournal {
         ? 'resolved'
         : 'pending';
     const data = { fingerprint, stage, operation, outcome, evidenceDigest: digest(record) };
+    if (['validation', 'deployment', 'bootstrap'].includes(operation) && Object.hasOwn(record, 'jobId')) {
+      const validJob = value => typeof value === 'string' && /^0Af[A-Za-z0-9]{12}(?:[A-Za-z0-9]{3})?$/u.test(value);
+      const { jobId, validationJobId, submittedAt } = record;
+      const submitted = Date.parse(submittedAt);
+      requireCondition((validJob(jobId) || (jobId === null && status === 'submitting'))
+        && (validJob(validationJobId) || validationJobId === null)
+        && Number.isFinite(submitted) && new Date(submitted).toISOString() === submittedAt,
+      'SALESFORCE_CHECKPOINT_JOB_INVALID');
+      data.job = { id: jobId, validationId: validationJobId, submittedAt };
+    }
     const find = chain => chain.find(entry => entry.payload.event === 'salesforce.checkpoint'
       && canonical(entry.payload.data) === canonical(data));
     const chain = await this.read();
