@@ -598,3 +598,24 @@ test('hosted recovery refuses a fresh runner with unresolved durable provider hi
     f.cleanup();
   }
 });
+
+test('fresh hosted runner verifies and reuses a known durable validation job', async () => {
+  const f = fixture();
+  try {
+    const id = jobId(19);
+    f.reports.set(id, f.makeReport(id, true));
+    f.externalJournal.readCheckpoints = async () => [{ fingerprint: f.plan.fingerprint, stage: 'devee',
+      operation: 'validation', outcome: 'pending', job: { id, validationId: null, submittedAt: fixedNow.toISOString() } }];
+    f.provider.reconcile = async (org, jobId, { operation }) => ({
+      fingerprint: f.plan.fingerprint, orgId: org.orgId, jobId, operation,
+      sourceTreeHash: f.plan.binding.sourceTreeHash, manifestSha256: f.plan.binding.manifestSha256,
+      evidenceSha256: 'b'.repeat(64), verifiedAt: fixedNow.toISOString(),
+    });
+    await f.run('prepare');
+    assert.equal(f.journal.state.stages.devee.validation.jobId, id);
+    assert.ok(f.calls.some(call => call[0] === 'report' && call[2] === id));
+    assert.ok(!f.calls.some(call => call[0] === 'validate' && call[1] === 'devee'));
+  } finally {
+    f.cleanup();
+  }
+});
