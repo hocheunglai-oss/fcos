@@ -255,9 +255,10 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
   }
   if (typeof ownership?.assert !== 'function' || typeof externalJournal?.checkpoint !== 'function') throw new Error('Salesforce writes require external release ownership and a durable checkpoint adapter; a local lock is not global serialization.');
   const timestamp = () => now().toISOString();
+  const checkpoint = (stage, operation, record) => externalJournal.checkpoint({ fingerprint: plan.fingerprint, stage, operation, record });
   const persist = async (stage, operation, record) => {
     const saved = journal.update(stage, operation, record);
-    await externalJournal.checkpoint({ fingerprint: plan.fingerprint, stage, operation, record: saved });
+    await checkpoint(stage, operation, saved);
     return saved;
   };
   const get = (stage, operation) => journal.state.stages[stage]?.[operation];
@@ -336,6 +337,7 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
       const assigned = await provider.permissionAssigned(environment, name);
       if (record?.status === 'Succeeded') {
         if (!assigned) throw new Error('A previously verified permission assignment drifted.');
+        await checkpoint(environment.key, operation, record);
         continue;
       }
       if (!assigned && record?.status === 'submitting') {
