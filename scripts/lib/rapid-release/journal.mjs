@@ -32,7 +32,9 @@ export function validateChain(records, manifestHash, releaseId) {
   return chain;
 }
 export class DeploymentJournal {
-  constructor({ github, releaseId, manifestHash, actorIds }) { Object.assign(this, { github, releaseId, manifestHash, actorIds }); }
+  constructor({ github, releaseId, manifestHash, actorIds, otherReleaseActorIds = actorIds }) {
+    Object.assign(this, { github, releaseId, manifestHash, actorIds, otherReleaseActorIds });
+  }
   async read() {
     const records = await this.github.pages(`/repos/${targets().repository}/deployments?environment=fcos-release-journal-v1&sha=${this.github.candidateSha}&per_page=100`);
     const own = records.filter(record => record.payload?.releaseId === this.releaseId);
@@ -64,7 +66,7 @@ export class DeploymentJournal {
     for (const record of records) {
       const p = record.payload;
       if (p?.kind !== 'fcos_rapid_release_event' || p.releaseId === this.releaseId) continue;
-      requireCondition(this.actorIds.includes(record.creator?.id), 'JOURNAL_ACTOR_MISMATCH');
+      requireCondition(this.otherReleaseActorIds.includes(record.creator?.id), 'JOURNAL_ACTOR_MISMATCH');
       const group = releases.get(p.releaseId) || []; group.push(record); releases.set(p.releaseId, group);
     }
     for (const [id, group] of releases) {

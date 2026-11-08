@@ -24,11 +24,11 @@ on:
         required: true
         type: string
       stage_record_id:
-        description: Exact durable staging result Deployment object ID
+        description: Exact durable staging result Deployment object ID, or 0 for an unstaged successor
         required: true
         type: string
       staged_deployment_id:
-        description: Exact unaliased Vercel staging deployment ID
+        description: Exact unaliased Vercel staging deployment ID, or none for an unstaged successor
         required: true
         type: string
 permissions:
@@ -66,11 +66,14 @@ jobs:
             const canonical=value=>JSON.stringify(value,(_,item)=>item&&typeof item==='object'&&!Array.isArray(item)?Object.fromEntries(Object.entries(item).sort()):item);
             const check=value=>{if(!value)throw Error('QUALIFIED_INSTALLED_HANDOVER_RECOVERY_REQUIRED');};
             const sha=process.env.RECOVERY_SHA,plan=JSON.parse(process.env.PLAN_JSON);
+            const unstaged=Boolean(plan.supersedes)&&!plan.bootstrap;
             check(/^[a-f0-9]{40}$/.test(sha)&&/^[a-f0-9]{40}$/.test(plan.controllerSha)&&sha!==plan.controllerSha
-              &&plan.kind==='fcos_rapid_handover_plan'&&plan.bootstrap?.reference?.schemaVersion===2
+              &&plan.kind==='fcos_rapid_handover_plan'&&(unstaged || !plan.supersedes&&plan.bootstrap?.reference?.schemaVersion===2)
               &&createHash('sha256').update(canonical(plan)).digest('hex')===process.env.PLAN_HASH
-              &&[process.env.PREPARED_RECEIPT_ID,process.env.TERMINAL_RUN_ID,process.env.STAGE_RECORD_ID].every(value=>/^[1-9][0-9]*$/.test(value)&&Number.isSafeInteger(Number(value)))
-              &&/^dpl_[A-Za-z0-9]+$/.test(process.env.STAGED_DEPLOYMENT_ID));
+              &&[process.env.PREPARED_RECEIPT_ID,process.env.TERMINAL_RUN_ID].every(value=>/^[1-9][0-9]*$/.test(value)&&Number.isSafeInteger(Number(value)))
+              &&(unstaged ? process.env.STAGE_RECORD_ID==='0'&&process.env.STAGED_DEPLOYMENT_ID==='none'
+                : /^[1-9][0-9]*$/.test(process.env.STAGE_RECORD_ID)&&Number.isSafeInteger(Number(process.env.STAGE_RECORD_ID))
+                  &&/^dpl_[A-Za-z0-9]+$/.test(process.env.STAGED_DEPLOYMENT_ID)));
             const {owner,repo}=context.repo;
             check(owner==='hocheunglai-oss'&&repo==='fcos'&&context.actor===owner);
             const {data:repository}=await github.rest.repos.get({owner,repo});
