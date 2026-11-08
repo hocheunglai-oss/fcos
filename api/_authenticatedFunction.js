@@ -91,7 +91,13 @@ async function requireModuleAccess(context, moduleId) {
 
 async function readBody(req) {
   if (req.method === 'GET') return {};
-  if (req.body && typeof req.body === 'object') return req.body;
+  if (req.body && typeof req.body === 'object') {
+    const bodyBytes = Buffer.isBuffer(req.body) ? req.body.length : Buffer.byteLength(JSON.stringify(req.body), 'utf8');
+    if (bodyBytes > MAX_JSON_BODY_BYTES) {
+      throw endpointError('Request body is too large.', 413, 'FCOS_REQUEST_TOO_LARGE');
+    }
+    return req.body;
+  }
   const rawBody = typeof req.body === 'string'
     ? req.body
     : Buffer.concat(await (async () => {
