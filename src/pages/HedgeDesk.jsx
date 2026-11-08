@@ -29,14 +29,15 @@ export default function HedgeDesk() {
   const { hasCapability } = useAuth();
   const data = useDeskData();
   const settings = useAppSettings();
-  const canAdmin = hasCapability('hedge_admin');
+  const hasSnapshot = data.lastUpdated != null;
+  const deploymentReadOnly = data.expiryAutomation?.readOnly === true;
+  const canAdmin = hasSnapshot && !deploymentReadOnly && hasCapability('hedge_admin');
   const requestedTab = searchParams.get('tab');
   const [tab, setTab] = useState(() => requestedTab === 'administration' && canAdmin ? 'administration' : TABS.some((item) => item.id === requestedTab) ? requestedTab : 'overview');
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [quickCreateSignals] = useState({ physical: 0, hedges: 0 });
-  const capabilities = data.capabilities || {};
+  const capabilities = deploymentReadOnly ? {} : data.capabilities || {};
   const readOnly = !Object.values(capabilities).some(Boolean);
-  const hasSnapshot = data.lastUpdated != null;
   const showBook = hasSnapshot && settings.hasLoaded && !settings.loading;
   const visibleTabs = canAdmin ? [...TABS, { id: 'administration', label: 'Administration', icon: Settings2 }] : TABS;
 

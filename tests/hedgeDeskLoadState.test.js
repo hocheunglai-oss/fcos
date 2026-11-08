@@ -9,7 +9,7 @@ import { transform } from 'esbuild';
 let deskData;
 let appSettings;
 const noop = () => {};
-const loadedView = () => React.createElement('div', { 'data-loaded-book': true }, 'No position exposure · No audit activity · Cash USD 0.00');
+const loadedView = ({ readOnly }) => React.createElement('div', { 'data-loaded-book': true, 'data-read-only': readOnly }, 'No position exposure · No audit activity · Cash USD 0.00');
 const modules = {
   react: React,
   'react/jsx-runtime': jsxRuntime,
@@ -86,4 +86,16 @@ test('a rejected settings save does not hide a successfully loaded book', () => 
   const markup = render({ lastUpdated: new Date('2026-10-01T04:00:00Z') }, { error: new Error('Save rejected') });
   assert.match(markup, /Save rejected/);
   assert.match(markup, /data-loaded-book/);
+});
+
+test('staging displays a loaded Hedge Desk as view-only even for a trading administrator', () => {
+  const data = { lastUpdated: new Date('2026-10-01T04:00:00Z'), capabilities: { hedge_book_manage: true } };
+  const stage = render({ ...data, expiryAutomation: { readOnly: true } });
+  assert.match(stage, /View only/);
+  assert.match(stage, /data-read-only="true"/);
+  assert.doesNotMatch(stage, /Administration/);
+  const live = render(data);
+  assert.match(live, /Live book/);
+  assert.match(live, /data-read-only="false"/);
+  assert.match(live, /Administration/);
 });
