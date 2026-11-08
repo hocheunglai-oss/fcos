@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import { createManifest, digest, sourceSnapshot, targets } from '../scripts/lib/rapid-release/contract.mjs';
-import { applyReviewedPrerequisites as applySalesforce } from '../scripts/lib/rapid-release/salesforce-reviewed-adapter.mjs';
+import { applyReviewedPrerequisites as applySalesforce, reconcileHostedSalesforceJob } from '../scripts/lib/rapid-release/salesforce-reviewed-adapter.mjs';
 import { verifyBeforeBootstrap, runPrerequisites } from '../scripts/lib/rapid-release/prerequisites.mjs';
 function fixture({ salesforce = false } = {}) {
  const directory=mkdtempSync(join(tmpdir(),'rapid-prerequisite-')),source='// Tracked, reviewed adapter fixture.\n',h='b'.repeat(64);
@@ -115,4 +115,29 @@ test('hosted Salesforce adapter refuses unreviewed input and metadata outside th
   } finally {
     f.cleanup();
   }
+});
+
+test('hosted Salesforce recovery requires the acknowledged original job and its exact provider report', async () => {
+  const environment = FCOS_CONNECTION_POLICY.providers.find(item => item.id === 'salesforce').environments[0];
+  const jobId = '0AfHF00000700KB0AY', submittedAt = '2026-11-08T12:00:00.000Z';
+  const fingerprint = 'b'.repeat(64);
+  const reviewed = { fingerprint, manifest: ['ApexClass:Example'],
+    binding: { sourceTreeHash: 'c'.repeat(64), manifestSha256: 'd'.repeat(64),
+      testPlan: { level: 'RunLocalTests', minimumTests: 1 } } };
+  const checkpoint = { fingerprint, stage: environment.key, operation: 'validation', outcome: 'pending',
+    job: { id: jobId, validationId: null, submittedAt }, evidenceDigest: 'e'.repeat(64) };
+  const report = { id: jobId, status: 'Succeeded', success: true, done: true, checkOnly: true, rollbackOnError: true,
+    numberComponentsTotal: 1, numberComponentsDeployed: 1, numberTestsTotal: 1, numberTestsCompleted: 1,
+    completedDate: '2026-11-08T12:01:00.000Z',
+    details: { componentSuccesses: [{ componentType: 'ApexClass', fullName: 'Example', success: true }] } };
+  let reads = 0;
+  const provider = { async verifyIdentity(org) { assert.equal(org.orgId, environment.orgId); },
+    async report() { reads++; return report; } };
+  const input = { environment, jobId, reviewed, operation: 'validation', submittedAt, validationJobId: null, provider,
+    journal: { async readCheckpoints() { return [checkpoint]; } }, now: () => new Date('2026-11-08T12:02:00.000Z') };
+  await assert.rejects(reconcileHostedSalesforceJob({ ...input, jobId: '0AfHF00000702c50AA' }), /ORIGINAL_JOB_REQUIRED/);
+  assert.equal(reads, 0);
+  assert.equal((await reconcileHostedSalesforceJob(input)).jobId, jobId);
+  report.checkOnly = false;
+  await assert.rejects(reconcileHostedSalesforceJob(input), /all-or-none proof/);
 });

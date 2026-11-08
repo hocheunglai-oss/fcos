@@ -5,10 +5,34 @@ import { FCOS_CONNECTION_POLICY } from '../../../config/fcosConnections.js';
 import { assertReviewedInputsUnchanged, cliSalesforceProvider, loadReviewedSalesforcePlan } from '../../deploy-salesforce-reviewed-manifest.mjs';
 import { runReviewedMirror } from '../../sync-salesforce-reviewed-repository.mjs';
 import { openSalesforcePromotionJournal } from '../salesforce-promotion-journal.mjs';
-import { runReviewedSalesforceRelease, safeProjectFile } from '../salesforce-reviewed-release.mjs';
+import { assertReviewedJobReport, runReviewedSalesforceRelease, safeProjectFile } from '../salesforce-reviewed-release.mjs';
 import { digest, requireCondition, targets } from './contract.mjs';
 
 const policy = FCOS_CONNECTION_POLICY.providers.find(item => item.id === 'salesforce');
+
+export async function reconcileHostedSalesforceJob({ environment, jobId, reviewed, operation, submittedAt, validationJobId,
+  provider, journal, now = () => new Date() }) {
+  const target = policy.environments.find(item => item.key === environment.key);
+  requireCondition(target?.orgId === environment.orgId && ['validation', 'deployment'].includes(operation),
+    'SALESFORCE_HOSTED_RECOVERY_SCOPE_INVALID');
+  const entries = await journal.readCheckpoints();
+  const original = entries.find(item => item.fingerprint === reviewed.fingerprint && item.stage === target.key
+    && item.operation === operation && ['pending', 'resolved'].includes(item.outcome)
+    && item.job?.id === jobId && item.job.validationId === validationJobId && item.job.submittedAt === submittedAt);
+  requireCondition(original && /^[a-f0-9]{64}$/u.test(original.evidenceDigest || ''),
+    'SALESFORCE_HOSTED_ORIGINAL_JOB_REQUIRED');
+  await provider.verifyIdentity(target);
+  const report = await provider.report(target, jobId);
+  const proof = assertReviewedJobReport(report, { environment: target, jobId, validation: operation === 'validation',
+    testPlan: reviewed.binding.testPlan, expectedComponents: reviewed.manifest });
+  const verifiedAt = now();
+  const completed = Date.parse(proof.completedAt);
+  requireCondition(completed >= Date.parse(submittedAt) - 30_000 && completed <= verifiedAt.getTime() + 30_000,
+    'SALESFORCE_HOSTED_ORIGINAL_JOB_TIMING_INVALID');
+  return { fingerprint: reviewed.fingerprint, orgId: target.orgId, jobId, operation,
+    sourceTreeHash: reviewed.binding.sourceTreeHash, manifestSha256: reviewed.binding.manifestSha256,
+    evidenceSha256: digest({ original, reportSha256: proof.reportSha256 }), verifiedAt: verifiedAt.toISOString() };
+}
 
 export async function applyReviewedPrerequisites({ manifest, approval, plan, salesforce, salesforceCandidateDirectory: cwd }) {
   const manifestHash = digest(manifest);
@@ -32,6 +56,9 @@ export async function applyReviewedPrerequisites({ manifest, approval, plan, sal
     const journal = openSalesforcePromotionJournal({ directory, binding: reviewed.binding });
     try {
       const provider = cliSalesforceProvider({ cwd, policy });
+      provider.reconcile = (environment, jobId, { operation, submittedAt, validationJobId }) =>
+        reconcileHostedSalesforceJob({ environment, jobId, reviewed, operation, submittedAt, validationJobId,
+          provider, journal: salesforce.journal });
       provider.mirror = mode => runReviewedMirror({ mode, cwd, plan: reviewed, state: journal.state, policy,
         provider, ownership: salesforce.ownership });
       const authorization = {
