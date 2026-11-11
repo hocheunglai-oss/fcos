@@ -176,6 +176,33 @@ test('reviewed validation rules require exact source and positive test proof in 
   } finally { f.cleanup(); }
 });
 
+test('reviewed Trading FX UI metadata binds exact page, permission, action and layout files', () => {
+  const f = fixture({ bootstrap: true, inventoryBaseline: true });
+  try {
+    const extra = {
+      'ApexPage:NativeInvoice': ['pages/NativeInvoice.page', 'pages/NativeInvoice.page-meta.xml'],
+      'CustomPermission:NativeInvoice': ['customPermissions/NativeInvoice.customPermission-meta.xml'],
+      'QuickAction:Invoice__c.Finalize': ['quickActions/Invoice__c.Finalize.quickAction-meta.xml'],
+      'Layout:Invoice__c-Invoice Layout': ['layouts/Invoice__c-Invoice Layout.layout-meta.xml'],
+    };
+    const finalInventory = inventoryFromFiles({ ...files, ...Object.fromEntries(
+      [...f.plan.changedFiles, ...Object.values(extra).flat()].map(name => [name, Buffer.from('<changed/>\n')]),
+    ) });
+    const manifestBytes = packageXml([...f.plan.manifest, ...Object.keys(extra)]);
+    const review = { ...f.inputs.review, manifestSha256: hash(manifestBytes), sourceTreeHash: finalInventory.sourceTreeHash,
+      components: [...f.inputs.review.components, ...Object.entries(extra).map(([id, paths]) => ({ id, files: paths, dependsOn: [] }))],
+      inventoryCatalogControls: { production: ['QuickAction:Account.Child_Account', 'CustomPermission:ExistingPermission'] } };
+    const input = { ...f.inputs, review, manifestBytes, finalInventory };
+    const plan = createReviewedSalesforcePlan(input);
+    assert.ok(Object.keys(extra).every(id => plan.manifest.includes(id) && !plan.review.bootstrap.components.includes(id)));
+    assert.throws(() => createReviewedSalesforcePlan({ ...input, review: { ...review,
+      inventoryCatalogControls: { production: ['CustomPermission:NativeInvoice'] } } }), /exact independent metadata members/);
+    const page = review.components.find(({ id }) => id === 'ApexPage:NativeInvoice');
+    page.files = [page.files[0]];
+    assert.throws(() => createReviewedSalesforcePlan(input), /Incorrect component file\/dependency coverage for ApexPage/);
+  } finally { f.cleanup(); }
+});
+
 test('prepare then apply consumes exact saved Production validation without another submission', async () => {
   const f = fixture();
   try {
@@ -856,10 +883,11 @@ test('failed local bootstrap preparation leaves no uncertain provider intent', a
   } finally { f.cleanup(); }
 });
 
-test('read-only inventory allows exact layout and profile names with spaces', () => {
+test('reviewed layouts and inventory profiles allow exact names with spaces', () => {
   const members = ['Layout:Invoice__c-Invoice Layout', 'Profile:Sales Support'];
   const manifest = packageXml(members).toString('utf8');
   assert.deepEqual(parseReviewedPackage(manifest, { inventory: true }), members);
+  assert.deepEqual(parseReviewedPackage(packageXml([members[0]]).toString('utf8')), [members[0]]);
   assert.throws(() => parseReviewedPackage(manifest), /unsupported Salesforce members/);
   assert.throws(() => parseReviewedPackage(packageXml(['Profile:Sales *']).toString('utf8'), { inventory: true }), /Wildcards/);
   assert.throws(() => parseReviewedPackage(packageXml(['ApexClass:Example Class']).toString('utf8'), { inventory: true }), /unsupported Salesforce members/);

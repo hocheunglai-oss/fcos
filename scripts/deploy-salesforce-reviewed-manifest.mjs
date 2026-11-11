@@ -255,7 +255,9 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
           || (expectedSourceTreeHash && observed.sourceTreeHash !== expectedSourceTreeHash)) {
           throw new Error('Native Salesforce retrieval differs from the exact reviewed inventory.');
         }
-        const absence = expectedAbsentComponents.length ? proveSalesforceInventoryAbsence({ expectedAbsentComponents, presentComponents,
+        const absence = expectedAbsentComponents.length ? proveSalesforceInventoryAbsence({ expectedAbsentComponents,
+          presentComponents: [...presentComponents, ...(plan.review.inventoryCatalogControls?.[environment.key] || [])],
+          listMetadata: type => sf(['org', 'list', 'metadata', '--target-org', environment.alias, '--metadata-type', type, '--json'], project),
           query: (soql, tooling) => sf(['data', 'query', ...(tooling ? ['--use-tooling-api'] : []),
             '--target-org', environment.alias, '--query', soql, '--json'], project) }) : null;
         const after = this.verifyIdentity(environment);

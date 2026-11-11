@@ -72,7 +72,7 @@ export function parseReviewedPackage(xml, { inventory = false } = {}) {
     const values = [...body.matchAll(/<members>([^<]+)<\/members>/gu)].map(([, name]) => name.trim());
     if (names.length !== 1 || !values.length) failCoverage('Each reviewed package type must have exact members.');
     for (const member of values) {
-      const namedInventoryMember = inventory && ['Layout', 'Profile'].includes(names[0])
+      const namedInventoryMember = (names[0] === 'Layout' || (inventory && names[0] === 'Profile'))
         && /^[A-Za-z0-9_.$-]+(?: +[A-Za-z0-9_.$-]+)+$/u.test(member);
       if (!/^[A-Za-z0-9_.$-]+$/u.test(member) && !namedInventoryMember) failCoverage('Wildcards and unsupported Salesforce members are prohibited.');
       members.push(`${names[0]}:${member}`);
@@ -90,10 +90,20 @@ function componentFiles(id, inventory) {
   const direct = {
     ApexClass: [`classes/${member}.cls`, `classes/${member}.cls-meta.xml`],
     ApexTrigger: [`triggers/${member}.trigger`, `triggers/${member}.trigger-meta.xml`],
+    ApexPage: [`pages/${member}.page`, `pages/${member}.page-meta.xml`],
+    CustomPermission: [`customPermissions/${member}.customPermission-meta.xml`],
     PermissionSet: [`permissionsets/${member}.permissionset-meta.xml`],
     CustomObject: [`objects/${member}/${member}.object-meta.xml`],
   };
   let result = direct[type];
+  if (type === 'QuickAction') {
+    if (!/^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)?$/u.test(member)) failCoverage('QuickAction requires an exact action name and optional object qualifier.');
+    result = [`quickActions/${member}.quickAction-meta.xml`];
+  }
+  if (type === 'Layout') {
+    if (!/^[A-Za-z][A-Za-z0-9_]*-[A-Za-z0-9_.$-]+(?: +[A-Za-z0-9_.$-]+)*$/u.test(member)) failCoverage('Layout requires an exact object-qualified layout name.');
+    result = [`layouts/${member}.layout-meta.xml`];
+  }
   if (type === 'CustomField') {
     const parts = member.split('.');
     if (parts.length !== 2) failCoverage('CustomField members must name Object.Field.');
@@ -139,6 +149,12 @@ export function createReviewedSalesforcePlan({ review, manifestBytes, bootstrapB
   const changed = Object.keys(finalInventory.files).filter(name => !same(finalInventory.files[name], baselineInventory.files[name]));
   if (!changed.length || changed.some(name => !coveredFiles.has(name))) failCoverage('Changed Salesforce files are missing manifest coverage.');
   const orgBaselines = review.orgBaselines;
+  const catalogControls = review.inventoryCatalogControls;
+  if (catalogControls !== undefined && (baselineMode !== INVENTORY_BASELINE_MODE || !catalogControls || Array.isArray(catalogControls)
+    || typeof catalogControls !== 'object' || Object.entries(catalogControls).some(([key, controls]) =>
+      !ENVIRONMENTS.includes(key) || !Array.isArray(controls) || new Set(controls).size !== controls.length || controls.some(id =>
+        !/^(?:(?:ApexPage|CustomPermission):[A-Za-z][A-Za-z0-9_]*|QuickAction:[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)?)$/u.test(id)
+        || manifest.includes(id))))) failCoverage('Inventory catalog controls must be exact independent metadata members for pinned orgs.');
   if (orgBaselines !== undefined || orgBaselineInventories !== undefined) {
     if (baselineMode !== INVENTORY_BASELINE_MODE || !orgBaselines || !orgBaselineInventories
       || !same(sorted(Object.keys(orgBaselines)), sorted(ENVIRONMENTS))

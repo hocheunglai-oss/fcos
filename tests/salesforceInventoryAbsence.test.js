@@ -47,3 +47,25 @@ test('catalog blocks metadata drift, an inaccessible control, and incomplete pro
   assert.throws(() => fixture({ catalog: { CustomField: [] } }).verify(), /failed its CustomField control/);
   assert.throws(() => fixture({ truncated: true }).verify(), /catalog response is incomplete/);
 });
+
+test('UI metadata uses exact action names and independently checks a completely empty permission catalog', () => {
+  const expectedAbsentComponents = ['ApexPage:NativeInvoice', 'CustomPermission:NativeInvoice', 'QuickAction:Invoice__c.Finalize'];
+  const presentComponents = ['ApexPage:ConfirmationToBuyer', 'QuickAction:Account.Child_Account'];
+  let permissions = [], actions = [{ type: 'QuickAction', fullName: 'Account.Child_Account' },
+    { type: 'QuickAction', fullName: 'Other__c.Finalize' }];
+  const input = { expectedAbsentComponents, presentComponents,
+    query(soql, tooling) {
+      const page = soql.includes(' FROM ApexPage ');
+      assert.equal(tooling, page);
+      if (!page) assert.equal(soql, 'SELECT DeveloperName FROM CustomPermission WHERE NamespacePrefix = null');
+      const records = page ? [{ Name: 'ConfirmationToBuyer' }] : [];
+      return { done: true, totalSize: records.length, records };
+    },
+    listMetadata(type) { return type === 'CustomPermission' ? permissions : actions; } };
+  assert.deepEqual(proveSalesforceInventoryAbsence(input).absentComponents, expectedAbsentComponents);
+  permissions = [{ type: 'CustomPermission', fullName: 'Unexpected' }];
+  assert.throws(() => proveSalesforceInventoryAbsence(input), /nonempty CustomPermission catalog/);
+  permissions = [];
+  actions = [...actions, { type: 'QuickAction', fullName: 'Invoice__c.Finalize' }];
+  assert.throws(() => proveSalesforceInventoryAbsence(input), /expected absent metadata is present: QuickAction:Invoice__c.Finalize/);
+});
