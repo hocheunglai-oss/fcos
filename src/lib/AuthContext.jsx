@@ -120,6 +120,9 @@ async function loadSupabaseUser() {
     accessLevels: data.moduleAccessLevels || {},
     applications: data.applications || [],
     capabilities: data.capabilities || {},
+    deploymentCapabilities: typeof data.deploymentCapabilities?.mutationsAllowed === 'boolean'
+      ? { mutationsAllowed: data.deploymentCapabilities.mutationsAllowed }
+      : null,
     navigationPreferences: data.navigationPreferences || null,
     workspacePreferences: data.workspacePreferences || null,
     error: null,
@@ -144,6 +147,7 @@ export const AuthProvider = ({ children }) => {
   const [authError, setAuthError] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [groupAccess, setGroupAccess] = useState({ permissionGroups: [], accessRevision: null, grantSources: {} });
+  const [deploymentCapabilities, setDeploymentCapabilities] = useState(null);
   const authMode = isSupabaseConfigured ? 'supabase' : isLocalAdminAllowed ? 'local' : 'unavailable';
 
   const applyLocalAdmin = useCallback(() => {
@@ -154,6 +158,7 @@ export const AuthProvider = ({ children }) => {
     setModuleAccessLevels(fullAccessLevels());
     setApplications(LOCAL_APPLICATIONS);
     setCapabilities(FULL_CAPABILITIES);
+    setDeploymentCapabilities({ mutationsAllowed: false });
     setBootstrapPreferences(null);
     setIsAuthenticated(true);
     setAuthError(null);
@@ -165,6 +170,7 @@ export const AuthProvider = ({ children }) => {
     if (loggingOut.current || signOutFailed.current) return { user: null, stale: true };
     const request = ++authRequest.current;
     const session = clientSessionState();
+    setDeploymentCapabilities(null);
     if (showLoader) setIsLoadingAuth(true);
     setAuthError(null);
     try {
@@ -184,7 +190,9 @@ export const AuthProvider = ({ children }) => {
         window.sessionStorage.removeItem(FAILED_SIGN_OUT_SESSION_KEY);
         verifiedSessionId.current = result.sessionId;
       }
-      const nextAccessSnapshot = JSON.stringify([result.user?.id, result.user?.user_type, result.access, result.accessLevels, result.capabilities]);
+      const nextAccessSnapshot = JSON.stringify([
+        result.user?.id, result.user?.user_type, result.access, result.accessLevels, result.capabilities, result.deploymentCapabilities,
+      ]);
       if (accessSnapshot.current !== nextAccessSnapshot) appClient.functions.clearCache();
       accessSnapshot.current = nextAccessSnapshot;
       setGroupAccess({ permissionGroups: result.permissionGroups || [], accessRevision: result.accessRevision ?? null, grantSources: result.grantSources || {} });
@@ -193,6 +201,7 @@ export const AuthProvider = ({ children }) => {
       setModuleAccessLevels(result.accessLevels || {});
       setApplications(result.applications || []);
       setCapabilities(result.capabilities || {});
+      setDeploymentCapabilities(result.deploymentCapabilities || null);
       setBootstrapPreferences({
         navigation: result.navigationPreferences || null,
         workspace: result.workspacePreferences || null,
@@ -210,6 +219,7 @@ export const AuthProvider = ({ children }) => {
       setModuleAccessLevels({});
       setApplications([]);
       setCapabilities({});
+      setDeploymentCapabilities(null);
       setBootstrapPreferences(null);
       setAuthError(nextError);
       setIsAuthenticated(false);
@@ -232,6 +242,7 @@ export const AuthProvider = ({ children }) => {
       window.clearTimeout(pendingCheck);
       appClient.functions.clearCache();
       authRequest.current += 1;
+      setDeploymentCapabilities(null);
       if (event === 'SIGNED_OUT' || clientSessionState().ownerId !== session?.user?.id) {
         setClientSessionOwner(null);
         setUser(null);
@@ -362,6 +373,7 @@ export const AuthProvider = ({ children }) => {
     setAuthChecked(false);
     setClientSessionOwner(null);
     setUser(null);
+    setDeploymentCapabilities(null);
     setGroupAccess({ permissionGroups: [], accessRevision: null, grantSources: {} });
     setIsAuthenticated(false);
     setAuthError({ type: 'auth_required' });
@@ -433,6 +445,8 @@ export const AuthProvider = ({ children }) => {
     moduleAccessLevels,
     applications,
     capabilities,
+    deploymentCapabilities,
+    deploymentMutationAllowed: Boolean(user) && deploymentCapabilities?.mutationsAllowed === true,
     bootstrapPreferences,
     permissionGroups: user ? groupAccess.permissionGroups : [],
     accessRevision: user ? groupAccess.accessRevision : null,
