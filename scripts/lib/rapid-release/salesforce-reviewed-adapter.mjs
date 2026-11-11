@@ -7,7 +7,7 @@ import { runReviewedMirror } from '../../sync-salesforce-reviewed-repository.mjs
 import { preflightSharedMirrorPublication } from '../../sync-salesforce-shared-repository.mjs';
 import { openSalesforcePromotionJournal } from '../salesforce-promotion-journal.mjs';
 import { assertReviewedJobReport, matchesSalesforceCheckpoint, reviewedJobExpectations, runReviewedSalesforceRelease, safeProjectFile } from '../salesforce-reviewed-release.mjs';
-import { authenticateHostedSalesforce } from './salesforce-hosted-auth.mjs';
+import { assertHostedSalesforceRunner, authenticateHostedSalesforce } from './salesforce-hosted-auth.mjs';
 import { digest, git, requireCondition, targets } from './contract.mjs';
 import { runPreBootstrapSmoke } from './smoke.mjs';
 
@@ -88,11 +88,13 @@ export async function applyReviewedPrerequisites({ manifest, approval, plan, sal
   const schemaBootstrap = Boolean(reviewed.review.bootstrap);
   if (schemaBootstrap || plan.deferSchemaDependentSmoke) reviewedBootstrapFingerprint(reviewed, plan);
 
+  assertHostedSalesforceRunner(env);
+  const saved = await salesforce.journal.readCheckpoints();
   const directory = mkdtempSync(join(tmpdir(), 'fcos-salesforce-hosted-'));
   const credentials = mkdtempSync(join(tmpdir(), 'fcos-salesforce-credentials-'));
   let finished = false;
   try {
-    const commandEnvironment = authenticateHostedSalesforce({ directory: credentials, cwd, env });
+    const commandEnvironment = authenticateHostedSalesforce({ directory: credentials, cwd, env, requireMirrorCredential: saved.length === 0 });
     const journal = openSalesforcePromotionJournal({ directory, binding: reviewed.binding });
     try {
       const provider = cliSalesforceProvider({ cwd, policy, commandEnvironment });
@@ -121,7 +123,6 @@ export async function applyReviewedPrerequisites({ manifest, approval, plan, sal
         ownership, externalJournal: salesforce.journal,
         authorization: mode === 'apply' ? authorization : null,
         assertUnchanged: () => assertReviewedInputsUnchanged(reviewed, { cwd, policy }) });
-      const saved = await salesforce.journal.readCheckpoints();
       if (!saved.some(item => item.stage === 'production' && item.operation === 'preparation'
         && (item.preparation?.validationJobId || item.preparation?.status === 'awaiting-authorized-bootstrap'))) {
         requireCondition((await run('prepare')).mode === 'prepared', 'SALESFORCE_HOSTED_PREPARATION_REQUIRED');
