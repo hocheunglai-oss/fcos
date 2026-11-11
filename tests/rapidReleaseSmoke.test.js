@@ -48,7 +48,7 @@ const readPayloads = {
 
 // Fixtures replace browser/provider transports. They simulate the app-owned
 // bootstrap response and actual response events; they never establish live proof.
-function browserFixture({ badIdentity = false, badRead = false, badDenial = false, unexpected = false, missingModule = false, background = false, optionalRequest = null, badPayload = false, badDesktop = false, deniedModule = null, role = 'manager', companyFxRows = undefined } = {}) {
+function browserFixture({ badIdentity = false, badRead = false, badDenial = false, unexpected = false, missingModule = false, background = false, optionalRequest = null, badPayload = false, badDesktop = false, deniedModule = null, role = 'manager', companyFxRows = undefined, supplierBoundaryRegression = null } = {}) {
   const observations = { launches: [], reads: [], contextsClosed: 0, browsersClosed: 0, nativeAborts: 0 };
   const browserFactory = async options => {
     observations.launches.push(options);
@@ -76,6 +76,15 @@ function browserFixture({ badIdentity = false, badRead = false, badDenial = fals
           observations.reads.push({ url, method: overrides.method || request.method(), body: overrides.postData });
           if (url.endsWith('/authContext')) return apiResponse(url, auth(), 200, request);
           if (url.endsWith('/companyFxHistoryGet')) return apiResponse(url, { canSave: true, rows: companyFxRows });
+          const supplierAction = /\/xeroSupplierFinancialBucket(Read|Preview|Apply)$/.exec(url)?.[1];
+          if (supplierAction) {
+            const restricted = email === ci.email;
+            if (supplierBoundaryRegression === (restricted ? 'restricted' : 'normal') + supplierAction) return apiResponse(url, {});
+            if (supplierAction === 'Read') return restricted
+              ? apiResponse(url, { code: 'FCOS_CI_READ_ONLY' }, 403)
+              : apiResponse(url, { code: 'XERO_SUPPLIER_FINANCIAL_WORKFLOW_INVALID' }, 409);
+            return apiResponse(url, { code: 'FCOS_DEPLOYMENT_READ_ONLY' }, 403);
+          }
           const module = Object.keys(MODULE_READERS).find(key => url.endsWith(MODULE_READERS[key].path));
           if (module) return apiResponse(url, badPayload ? {} : readPayloads[module], module === deniedModule ? 403 : 200);
           return apiResponse(url, { code: 'FCOS_DEPLOYMENT_READ_ONLY' }, badDenial ? 200 : 403);
@@ -439,4 +448,25 @@ test('Company FX history smoke runs only after its prerequisite and verifies see
   const incomplete = browserFixture({ role: 'general_manager', companyFxRows: [] });
   await assert.rejects(runStagedSmoke({ ...options, afterPrerequisites: true, browserFactory: incomplete.browserFactory }),
     { code: 'SMOKE_COMPANY_FX_HISTORY_READ_FAILED' });
+});
+
+test('supplier bucket smoke covers both identities with empty bodies before and after prerequisites', async () => {
+  const candidate = { ...manifest({ normalRole: true, modules: ['xero_portal'] }),
+    prerequisites: { adapter: 'supplier-bucket-migrations' } };
+  const fixture = browserFixture();
+  const options = { manifest: candidate, staged, env, fetchImpl: publicFetch(), browserFactory: fixture.browserFactory };
+  for (const afterPrerequisites of [false, true]) {
+    const result = await runStagedSmoke({ ...options, afterPrerequisites });
+    assert.deepEqual(result.supplierBucket, { restrictedVerified: true, normalVerified: true });
+    assert.equal(result.businessWrites, 0);
+  }
+  const requests = fixture.observations.reads.filter(row => row.url.includes('/xeroSupplierFinancialBucket'));
+  assert.equal(requests.length, 12);
+  assert.ok(requests.every(({ body, method }) => body === '{}' && method === 'POST'));
+  for (const supplierBoundaryRegression of ['restrictedRead', 'normalRead', 'normalApply', 'normalPreview']) {
+    await assert.rejects(runStagedSmoke({ ...options, browserFactory: browserFixture({ supplierBoundaryRegression }).browserFactory }),
+      { code: 'SMOKE_SUPPLIER_BUCKET_ROUTE_BOUNDARY_FAILED' });
+  }
+  await assert.rejects(runStagedSmoke({ ...options, manifest: { ...candidate, selection: { ...candidate.selection, normalRole: false,
+    modules: ['dashboard'] } } }), { code: 'SMOKE_SUPPLIER_BUCKET_NORMAL_ROLE_REQUIRED' });
 });

@@ -72,8 +72,9 @@ test('forged source under an old plan hash, changed dispatcher, and failed quali
  }finally{restore();if(original===undefined)delete process.env.RELEASE_MANIFEST;else process.env.RELEASE_MANIFEST=original;}
 });
 
-test('Company FX writer credentials are limited to the protected exact database adapter', () => {
- const names=['FCOS_RAPID_COMPANY_FX_DB_ACCESS_TOKEN','FCOS_RAPID_COMPANY_FX_GH_OWNER_TOKEN'];
+for(const [adapter,prefix] of [['company-fx-history','COMPANY_FX'],['supplier-bucket-migrations','SUPPLIER_BUCKET']]){
+ test(`${adapter} writer credentials are limited to the protected exact database adapter`, () => {
+ const names=[`FCOS_RAPID_${prefix}_DB_ACCESS_TOKEN`,`FCOS_RAPID_${prefix}_GH_OWNER_TOKEN`];
  for(const [name,job] of Object.entries(workflow.jobs)){
   const matches=job.steps.filter(step=>names.some(key=>Object.hasOwn(step.env||{},key)));
   if(name!=='go-live'){assert.equal(matches.length,0);continue;}
@@ -82,9 +83,10 @@ test('Company FX writer credentials are limited to the protected exact database 
   const [step]=matches;
   assert.match(step.run,/scripts\/rapid-release\.mjs promote/);
   assert.ok(job.steps.indexOf(step)>job.steps.findIndex(item=>item.id==='admit-controller'));
-  for(const key of names)assert.match(step.env[key],/selection\.database && !.*selection\.salesforce && .*prerequisites\.adapter == 'company-fx-history'/);
+  for(const key of names)assert.match(step.env[key],new RegExp(`selection\\.database && !.*selection\\.salesforce && .*prerequisites\\.adapter == '${adapter}'`));
  }
-});
+ });
+}
 
 test('ordinary promotion retains staging browsers and installs go-live browsers only for prerequisite smoke', () => {
  const stage=workflow.jobs['stage-and-smoke'].steps.find(step=>step.name==='Install governed browser');

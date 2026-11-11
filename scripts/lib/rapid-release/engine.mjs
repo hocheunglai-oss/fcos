@@ -1,4 +1,4 @@
-import { requiresCompanyFxHistorySmoke, assertAuthorization, digest, requireCondition, validateManifest } from './contract.mjs';
+import { requiresCompanyFxHistorySmoke, requiresSupplierBucketSmoke, assertAuthorization, digest, requireCondition, validateManifest } from './contract.mjs';
 
 const events = records => records.map(record => record.payload);
 export function phaseResult(records, phase) { return events(records).filter(event => event.event === `${phase}.result`).at(-1)?.data; }
@@ -38,11 +38,16 @@ export function assertBuildReceipt(receipt, manifest) {
     && receipt.controllerSha === manifest.controllerSha && receipt.qualityPassed === true
     && receipt.performancePassed === true && receipt.node === manifest.build.node, 'BUILD_RECEIPT_MISMATCH');
 }
+function supplierBucketSmokeVerified(proof, manifest) {
+  return !requiresSupplierBucketSmoke(manifest)
+    || proof?.supplierBucket?.restrictedVerified === true && proof.supplierBucket.normalVerified === true;
+}
 export function assertSmokeProof(proof, manifest, staged) {
   requireCondition(proof?.passed === true && proof.deploymentId === staged.id && proof.buildId === manifest.build.buildId
     && proof.login === true && proof.restrictedAccess === true && proof.businessWrites === 0
     && manifest.selection.modules.every(module => proof.modules?.includes(module))
     && (!manifest.selection.normalRole || proof.normalRole === true), 'STAGED_SMOKE_INCOMPLETE');
+  requireCondition(supplierBucketSmokeVerified(proof, manifest), 'SMOKE_SUPPLIER_BUCKET_ROUTE_BOUNDARY_FAILED');
 }
 export function assertPreBootstrapProof(proof, manifest, staged) {
   const plan = manifest.prerequisites?.plan;
@@ -82,6 +87,7 @@ export async function stageRelease({ manifest, journal, provider, build, smoke, 
   const acceptanceEvent = deferred ? 'stage.pre_bootstrap_passed' : 'smoke.passed';
   const existing = events(records).find(event => event.event === acceptanceEvent && event.data.deploymentId === ready.id);
   if (existing && deferred) assertPreBootstrapProof(existing.data, manifest, ready);
+  if (existing && requiresSupplierBucketSmoke(manifest)) assertSmokeProof(existing.data, manifest, ready);
   if (!existing) {
     if (deferred) {
       requireCondition(typeof beforeBootstrap === 'function', 'QUALIFIED_PREBOOTSTRAP_VERIFIER_REQUIRED');
@@ -101,10 +107,11 @@ export async function promoteRelease({ manifest, journal, provider, approval, pr
   const records = await journal.read(), all = events(records), stagedReference = phaseResult(records, 'stage')?.result;
   const preBootstrap = all.find(event => event.event === 'stage.pre_bootstrap_passed' && event.data.deploymentId === stagedReference?.id)?.data;
   const build = all.find(event => event.event === 'build.passed')?.data;
-  const fullStage = all.some(event => event.event === 'smoke.passed' && event.data.deploymentId === stagedReference?.id);
+  const fullStage = all.find(event => event.event === 'smoke.passed' && event.data.deploymentId === stagedReference?.id);
   const deferred = manifest.prerequisites?.plan?.deferSchemaDependentSmoke === true;
   requireCondition(stagedReference && (deferred ? preBootstrap : fullStage), 'STAGED_ACCEPTANCE_REQUIRED');
   if (deferred) assertPreBootstrapProof(preBootstrap, manifest, stagedReference);
+  if (requiresSupplierBucketSmoke(manifest)) assertSmokeProof(fullStage?.data, manifest, stagedReference);
   assertBuildReceipt(build, manifest);
   const staged = await provider.ready(stagedReference.id);
   requireCondition(staged.id === stagedReference.id && staged.state === 'READY' && staged.buildId === manifest.build.buildId
@@ -136,6 +143,7 @@ export async function promoteRelease({ manifest, journal, provider, approval, pr
     const historyRequired = requiresCompanyFxHistorySmoke(manifest);
     if (!events(await journal.read()).some(event => event.event === 'prerequisites.smoke_passed'
       && event.data.prerequisiteDigest === prerequisiteDigest && event.data.deploymentId === staged.id
+      && supplierBucketSmokeVerified(event.data, manifest)
       && (!historyRequired || event.data.companyFxHistory?.readVerified === true && event.data.companyFxHistory?.writeDenied === true))) {
       const currentStage = await provider.ready(staged.id);
       requireCondition(currentStage.id === staged.id && currentStage.state === 'READY' && currentStage.buildId === staged.buildId

@@ -285,3 +285,29 @@ test('Company FX promotion requires history readback and can resume without reap
   assert.equal(applications, 1);
   assert.equal(f.calls.filter(call => call === 'promote').length, 1);
 });
+
+test('supplier bucket requires both staging proofs and reuses a successful database operation', async () => {
+  const f = fixture();
+  f.manifest = createManifest({ candidate: f.manifest.candidate, controllerSha: f.manifest.controllerSha,
+    previous: f.manifest.previous, paths: ['supabase/migrations/20990101000000_fixture.sql'],
+    publicEnvironment: f.manifest.build.publicEnvironment, releaseId: f.manifest.releaseId,
+    prerequisites: { adapter: 'supplier-bucket-migrations', adapterDigest: h, plan: {} } });
+  f.approval.manifestHash = digest(f.manifest);
+  const originalSmoke = f.smoke;
+  let stageVerified = false, postVerified = false, applications = 0;
+  f.smoke = async ({ afterPrerequisites }) => ({ ...await originalSmoke(),
+    modules: f.manifest.selection.modules, normalRole: true,
+    supplierBucket: { restrictedVerified: true, normalVerified: afterPrerequisites ? postVerified : stageVerified } });
+  f.prerequisites = async () => { applications++; return { passed: true, manifestHash: digest(f.manifest), backwardCompatible: true }; };
+  await assert.rejects(stageRelease(f), /SMOKE_SUPPLIER_BUCKET_ROUTE_BOUNDARY_FAILED/);
+  await assert.rejects(promoteRelease(f), /STAGED_ACCEPTANCE_REQUIRED/);
+  assert.equal(applications, 0);
+  stageVerified = true;
+  await stageRelease(f);
+  await assert.rejects(promoteRelease(f), /SMOKE_SUPPLIER_BUCKET_ROUTE_BOUNDARY_FAILED/);
+  assert.equal(f.calls.includes('promote'), false);
+  postVerified = true;
+  assert.equal((await promoteRelease(f)).state, 'complete');
+  assert.equal(applications, 1);
+  assert.equal(f.calls.filter(call => call === 'promote').length, 1);
+});

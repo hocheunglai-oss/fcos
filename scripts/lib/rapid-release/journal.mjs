@@ -1,7 +1,8 @@
 import { canonical, digest, requireCondition, targets } from './contract.mjs';
 
 export const EVENT_TYPES = Object.freeze(['release.prepared', 'quality.passed', 'build.passed', 'stage.intent', 'stage.result',
-  'smoke.passed', 'stage.pre_bootstrap_passed', 'approval.accepted', 'prerequisites.intent', 'prerequisites.result', 'prerequisites.passed', 'prerequisites.smoke_passed', 'promote.intent', 'promote.result', 'live.passed',
+  'smoke.passed', 'stage.pre_bootstrap_passed', 'approval.accepted', 'prerequisites.intent', 'prerequisites.database_submitting',
+  'prerequisites.result', 'prerequisites.passed', 'prerequisites.smoke_passed', 'promote.intent', 'promote.result', 'live.passed',
   'rollback.intent', 'rollback.result', 'release.complete', 'obstacle.detected', 'repair.attempted', 'repair.verified',
   'repair.disabled', 'release.waiting', 'salesforce.checkpoint', 'handover.completed']);
 const forbiddenKeys = /(?:password|token|secret|cookie|authorizationheader|databaseurl|financialrecords|customeremail)/i;
