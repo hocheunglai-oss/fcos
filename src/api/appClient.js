@@ -224,7 +224,6 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
   }
   const responseContentType = res.headers?.get?.('content-type') || '';
   const responseIsJson = responseContentType.toLowerCase().includes('application/json');
-  const data = responseIsJson ? await res.json().catch(() => ({})) : {};
   if (!isCurrentClientSession(session)) return changedSessionResponse();
   const responseHeader = (name) => res.headers?.get?.(name) || null;
   const serverCacheStatus = responseHeader('x-fcos-cache') || 'BYPASS';
@@ -252,6 +251,30 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
       },
     };
   }
+
+  let data;
+  try {
+    data = await res.json();
+  } catch (error) {
+    if (!isCurrentClientSession(session)) return changedSessionResponse();
+    invalidateAfterRequest(mutationHeader);
+    const cancelled = error?.name === 'AbortError' || options.signal?.aborted === true;
+    return {
+      data: cancelled
+        ? { cancelled: true }
+        : { code: 'FCOS_RESPONSE_INVALID', error: 'The FCOS response could not be read. Refresh the saved result before retrying.' },
+      meta: {
+        cached: false,
+        cacheLayer: 'network',
+        cacheStatus: cancelled ? 'CANCELLED' : 'UNAVAILABLE',
+        cachedAt: null,
+        requestId,
+        salesforceCalls: Number.isFinite(salesforceCalls) ? salesforceCalls : null,
+        ...(cancelled ? { cancelled: true } : {}),
+      },
+    };
+  }
+  if (!isCurrentClientSession(session)) return changedSessionResponse();
 
   if (!res.ok) {
     invalidateAfterRequest(mutationHeader);
