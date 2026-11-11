@@ -296,6 +296,8 @@ async function claimWithoutIntent(t, { publishIntent=false } = {}) {
 
 test('unsubmitted claim closes as a native child and permits a fresh independently checked operation',async t=>{
  const {f,claim,claimSha,args}=await claimWithoutIntent(t);
+ // PostgreSQL returns an epoch with submillisecond precision.
+ f.role.role_valid_until_ms+=0.02;
  const result=await (await f.store()).reconcileUnsubmitted(args);
  assert.equal(result.state,'unsubmitted');
  assert.equal(f.state().phase,'unsubmitted');

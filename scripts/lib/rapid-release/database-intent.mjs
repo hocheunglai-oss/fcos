@@ -343,7 +343,10 @@ export async function createDatabaseCredentialIntentStore({credential,directory,
         && prior.receipt.expiresAtMs<claim.claimedAtMs,'DATABASE_AUTH_UNSUBMITTED_PARENT_REQUIRED');
       const {rows,managed}=await readExpiredRoles(claim);
       const expiry=managed[0].role_valid_until_ms;
-      check(rows.length===1 && expiry===evidence.roleExpiresAtMs && Math.abs(expiry-prior.receipt.expiresAtMs)<=30000,
+      // The observation uses ISO millisecond precision. PostgreSQL retains
+      // fractional milliseconds in its timestamp-to-epoch projection.
+      check(rows.length===1 && Math.floor(expiry)===evidence.roleExpiresAtMs
+        && Math.abs(expiry-prior.receipt.expiresAtMs)<=30000,
         'DATABASE_AUTH_ORIGINAL_ROLE_CHANGED');
       const [fresh,currentJournal]=await Promise.all([head(),journal()]);
       check(fresh?.sha===owned.sha && !currentJournal.intents.has(intentId) && !currentJournal.received.has(intentId)
