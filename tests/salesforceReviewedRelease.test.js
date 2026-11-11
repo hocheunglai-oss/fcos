@@ -787,7 +787,7 @@ test('native bootstrap stages only exact reviewed files in a temporary project',
   const field = 'objects/Demo__c/fields/Value__c.field-meta.xml';
   const permission = 'permissionsets/Reviewed.permissionset-meta.xml';
   const source = path.join(cwd, policy.publication.sourceRoot);
-  const fieldSource = '<CustomField><defaultValue>false</defaultValue><description> </description></CustomField>\n';
+  const fieldSource = "<CustomField><defaultValue>false</defaultValue><description> </description><label>Party's field</label></CustomField>\n";
   f.plan.finalInventory.files[field] = { sha256: hash(Buffer.from(fieldSource)), size: Buffer.byteLength(fieldSource) };
   try {
     for (const [name, bytes] of Object.entries({
@@ -803,8 +803,8 @@ test('native bootstrap stages only exact reviewed files in a temporary project',
     mkdirSync(path.join(cwd, 'manifest'));
     const manifest = path.join(cwd, 'manifest/bootstrap.xml');
     writeFileSync(manifest, f.inputs.bootstrapBytes);
-    let submittedProject, unexpectedChild = false;
-    let roundTripField = fieldSource.replaceAll('><', '>\n  <');
+    let submittedProject, unexpectedChild = false, expandedParent = false;
+    let roundTripField = fieldSource.replaceAll('><', '>\n  <').replace("Party's", 'Party&apos;s');
     const provider = cliSalesforceProvider({ cwd, run(program, args, project) {
       assert.equal(program, 'sf');
       if (args[1] === 'convert') {
@@ -813,7 +813,8 @@ test('native bootstrap stages only exact reviewed files in a temporary project',
           mkdirSync(path.join(output, 'objects'), { recursive: true });
           mkdirSync(path.join(output, 'permissionsets'));
           writeFileSync(path.join(output, 'package.xml'), f.inputs.bootstrapBytes);
-          writeFileSync(path.join(output, 'objects/Demo__c.object'), '<CustomObject/>\n');
+          writeFileSync(path.join(output, 'objects/Demo__c.object'),
+            `<CustomObject><fields><fullName>Value__c</fullName></fields>${expandedParent ? '<actionOverrides/>' : ''}</CustomObject>\n`);
           writeFileSync(path.join(output, 'permissionsets/Reviewed.permissionset'), '<PermissionSet/>\n');
         } else {
           assert.equal(args[2], 'mdapi');
@@ -858,6 +859,9 @@ test('native bootstrap stages only exact reviewed files in a temporary project',
     unexpectedChild = true;
     assert.throws(() => provider.prepareBootstrap(policy.environments[0], f.plan), /expanded outside reviewed source/);
     unexpectedChild = false;
+    expandedParent = true;
+    assert.throws(() => provider.prepareBootstrap(policy.environments[0], f.plan), /expanded outside reviewed source/);
+    expandedParent = false;
     roundTripField = fieldSource.replace('false', 'true');
     assert.throws(() => provider.prepareBootstrap(policy.environments[0], f.plan), /definition differs from reviewed source/);
     roundTripField = fieldSource.replace('> </description>', '></description>');
@@ -880,6 +884,76 @@ test('failed local bootstrap preparation leaves no uncertain provider intent', a
     assert.equal(f.journal.state.stages.devee?.bootstrap, undefined);
     assert.ok(!f.checkpoints.some(({ operation }) => operation === 'bootstrap'));
     assert.ok(!f.calls.some(([operation]) => operation === 'bootstrap'));
+  } finally { f.cleanup(); }
+});
+
+test('native validation submits only the verified metadata package with the reviewed test arguments', () => {
+  const f = fixture({ level: 'RunSpecifiedTests' });
+  const cwd = mkdtempSync(path.join(tmpdir(), 'fcos-validation-fixture-'));
+  const selected = { ...files, 'classes/Example.cls': Buffer.from('class Example { String value; }\n') };
+  const put = (root, name, bytes) => {
+    const destination = path.join(root, name);
+    mkdirSync(path.dirname(destination), { recursive: true });
+    writeFileSync(destination, bytes);
+  };
+  let payload, submits = 0;
+  try {
+    for (const [name, bytes] of Object.entries(selected)) put(cwd, `${policy.publication.sourceRoot}/${name}`, bytes);
+    put(cwd, 'manifest.xml', f.inputs.manifestBytes);
+    const provider = cliSalesforceProvider({ cwd, run(_program, args, project) {
+      if (args[1] === 'convert') {
+        const output = args[args.indexOf('--output-dir') + 1];
+        if (args[2] === 'source') {
+          payload = output;
+          put(output, 'package.xml', f.inputs.manifestBytes);
+        }
+        const root = args[2] === 'source' ? output : path.join(output, 'main/default');
+        for (const [name, bytes] of Object.entries(selected)) put(root, name, bytes);
+        return {};
+      }
+      submits++;
+      assert.deepEqual(args.slice(0, 3), ['project', 'deploy', 'validate']);
+      assert.equal(args[args.indexOf('--metadata-dir') + 1], payload);
+      assert.equal(args[args.indexOf('--test-level') + 1], 'RunSpecifiedTests');
+      assert.equal(args[args.indexOf('--tests') + 1], 'ExampleTest');
+      assert.ok(args.includes('--single-package') && !args.includes('--manifest'));
+      assert.notEqual(project, cwd);
+      return { id: jobId(98) };
+    } });
+    const plan = { ...f.plan, manifestPath: 'manifest.xml' };
+    const prepared = provider.prepareValidation(policy.environments[0], plan);
+    try {
+      assert.match(prepared.packageSha256, /^[a-f0-9]{64}$/u);
+      assert.deepEqual(prepared.submit(), { id: jobId(98) });
+      put(payload, 'classes/Example.cls', 'unexpected source');
+      assert.throws(() => prepared.submit(), /package changed before submission/);
+      assert.equal(submits, 1);
+    } finally { prepared.cleanup(); }
+  } finally {
+    f.cleanup();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('validation conversion failure leaves no submission intent and resume keeps the original verified package receipt', async () => {
+  const f = fixture();
+  let conversions = 0;
+  const validate = f.provider.validate;
+  try {
+    f.provider.prepareValidation = () => { throw new Error('Offline package verification failed'); };
+    await assert.rejects(f.run('prepare'), /Offline package verification failed/);
+    assert.ok(!f.checkpoints.some(({ operation }) => operation === 'validation'));
+    f.provider.prepareValidation = environment => {
+      conversions++;
+      return { packageSha256: 'a'.repeat(64), submit: () => {
+        assert.equal(f.journal.state.stages[environment.key].validation.packageSha256, 'a'.repeat(64));
+        return validate(environment);
+      }, cleanup() {} };
+    };
+    await f.run('prepare');
+    assert.equal(conversions, 3);
+    await f.run('apply', { authorization: f.authorization });
+    assert.equal(conversions, 3);
   } finally { f.cleanup(); }
 });
 

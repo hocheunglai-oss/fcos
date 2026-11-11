@@ -13,7 +13,7 @@ import { runPreBootstrapSmoke } from './smoke.mjs';
 
 const policy = FCOS_CONNECTION_POLICY.providers.find(item => item.id === 'salesforce');
 
-export async function reconcileHostedSalesforceJob({ environment, jobId, reviewed, operation, submittedAt, validationJobId,
+export async function reconcileHostedSalesforceJob({ environment, jobId, reviewed, operation, submittedAt, validationJobId, packageSha256,
   provider, journal, now = () => new Date() }) {
   const target = policy.environments.find(item => item.key === environment.key);
   const reviewedBootstrap = operation === 'bootstrap' && validationJobId === null && reviewed.review?.bootstrap?.components?.length > 0
@@ -23,7 +23,8 @@ export async function reconcileHostedSalesforceJob({ environment, jobId, reviewe
   const entries = await journal.readCheckpoints();
   const original = entries.find(item => item.fingerprint === reviewed.fingerprint && item.stage === target.key
     && item.operation === operation && ['pending', 'resolved'].includes(item.outcome)
-    && item.job?.id === jobId && item.job.validationId === validationJobId && item.job.submittedAt === submittedAt);
+    && item.job?.id === jobId && item.job.validationId === validationJobId && item.job.submittedAt === submittedAt
+    && item.job.packageSha256 === packageSha256);
   requireCondition(original && /^[a-f0-9]{64}$/u.test(original.evidenceDigest || ''),
     'SALESFORCE_HOSTED_ORIGINAL_JOB_REQUIRED');
   await provider.verifyIdentity(target);
@@ -81,9 +82,9 @@ export async function applyReviewedPrerequisites({ manifest, approval, plan, sal
     const journal = openSalesforcePromotionJournal({ directory, binding: reviewed.binding });
     try {
       const provider = cliSalesforceProvider({ cwd, policy, commandEnvironment });
-      provider.reconcile = (environment, jobId, { operation, submittedAt, validationJobId }) =>
+      provider.reconcile = (environment, jobId, { operation, submittedAt, validationJobId, packageSha256 }) =>
         reconcileHostedSalesforceJob({ environment, jobId, reviewed, operation, submittedAt, validationJobId,
-          provider, journal: salesforce.journal });
+          packageSha256, provider, journal: salesforce.journal });
       provider.mirror = mode => runReviewedMirror({ mode, cwd, plan: reviewed, state: journal.state, policy,
         provider, ownership: salesforce.ownership });
       const authorization = {

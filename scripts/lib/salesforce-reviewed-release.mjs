@@ -361,9 +361,9 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
     return persist(environment.key, operation, { ...record, ...proof, status: 'Succeeded',
       completedAt: record.completedAt || proof.completedAt || timestamp(), verifiedAt: timestamp() });
   };
-  async function verifyRecoveredJob(environment, operation, jobId, { submittedAt, validationJobId }) {
+  async function verifyRecoveredJob(environment, operation, jobId, { submittedAt, validationJobId, packageSha256 }) {
     if (typeof provider.reconcile !== 'function') throw new Error('A recovered job requires provider source/test-plan readback before adoption.');
-    const adoption = await provider.reconcile(environment, jobId, { plan, operation, submittedAt, validationJobId });
+    const adoption = await provider.reconcile(environment, jobId, { plan, operation, submittedAt, validationJobId, packageSha256 });
     const verifiedAt = Date.parse(adoption?.verifiedAt);
     if (adoption?.fingerprint !== plan.fingerprint || adoption?.orgId !== environment.orgId || adoption?.jobId !== jobId
       || adoption?.operation !== operation || adoption?.sourceTreeHash !== plan.binding.sourceTreeHash || adoption?.manifestSha256 !== plan.binding.manifestSha256
@@ -402,6 +402,7 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
       const locator = entry.job;
       if (local || !environment || typeof provider.reconcile !== 'function'
         || !['validation', 'deployment', 'bootstrap'].includes(entry.operation) || !JOB_ID.test(locator?.id || '')
+        || (locator.packageSha256 !== undefined && (entry.operation === 'deployment' || !HASH.test(locator.packageSha256)))
         || !Number.isFinite(Date.parse(locator.submittedAt))
         || (entry.operation === 'deployment' ? !JOB_ID.test(locator.validationId || '') : locator.validationId !== null)) {
         throw new Error('Durable Salesforce operation differs from local state; reconcile the original checkpoint before continuing.');
@@ -425,7 +426,8 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
     }
     for (const { entry, environment, locator } of missing) {
       const record = { fingerprint: plan.fingerprint, orgId: environment.orgId, jobId: locator.id,
-        validationJobId: locator.validationId, submittedAt: locator.submittedAt, reconciledAt: timestamp() };
+        validationJobId: locator.validationId, submittedAt: locator.submittedAt, reconciledAt: timestamp(),
+        ...(locator.packageSha256 ? { packageSha256: locator.packageSha256 } : {}) };
       await unchanged();
       await provider.verifyIdentity(environment);
       await verifyRecoveredJob(environment, entry.operation, record.jobId, record);
@@ -452,7 +454,7 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
     if (record?.status === 'submitting' && !record.jobId) {
       const recoveredId = reconcile[`${environment.key}.${operation}`];
       if (!JOB_ID.test(recoveredId || '')) throw new Error(`${environment.label} ${operation} has an uncertain submission without an ID; owner readback/reconciliation is required. No duplicate was submitted.`);
-      await verifyRecoveredJob(environment, operation, recoveredId, { submittedAt: record.submittedAt, validationJobId });
+      await verifyRecoveredJob(environment, operation, recoveredId, { ...record, validationJobId });
       record = await persist(environment.key, operation, { ...record, jobId: recoveredId, status: 'Submitted', reconciledAt: timestamp() });
     }
     if (record?.jobId) {
@@ -471,11 +473,13 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
     }
     const prepared = await prepare?.();
     try {
+      if (prepared?.packageSha256 !== undefined && !HASH.test(prepared.packageSha256)) throw new Error('Invalid reviewed Salesforce package digest.');
       const gate = await writeGate(environment, operation);
       const previous = get(environment.key, operation);
       const attempts = previous ? [...(previous.attempts || []), { ...previous, attempts: undefined }] : [];
       record = await persist(environment.key, operation, { fingerprint: plan.fingerprint, orgId: environment.orgId,
-        status: 'submitting', jobId: null, validationJobId, submittedAt: timestamp(), attempts, ...gate });
+        status: 'submitting', jobId: null, validationJobId, submittedAt: timestamp(), attempts, ...gate,
+        ...(prepared?.packageSha256 ? { packageSha256: prepared.packageSha256 } : {}) });
       await unchanged();
       if (!(Date.parse(gate.receiptExpiresAt) > now().getTime())) throw new Error('Salesforce ownership expired while saving intent; reconcile the saved intent before retry.');
       if (environment.key === 'production' && operation !== 'validation') assertProductionAuthorization(authorization, plan, now());
@@ -488,6 +492,9 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
     }
     return reportJob(environment, operation, record);
   }
+  const runValidation = environment => job(environment, 'validation', () => provider.validate(environment, plan), {
+    prepare: provider.prepareValidation ? () => provider.prepareValidation(environment, plan) : undefined,
+  });
   async function permissions(environment, names) {
     for (const name of names) {
       const operation = `permission:${name}`;
@@ -565,7 +572,7 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
       // Successful upstream jobs are reattested, preserving original completedAt and IDs.
       if (stage.deployment) {
         if (!stage.validation) throw new Error('Deployment lacks its saved successful validation.');
-        const validation = await job(environment, 'validation', () => provider.validate(environment, plan));
+        const validation = await runValidation(environment);
         await job(environment, 'deployment', () => provider.deploy(environment, validation.jobId, plan), { validationJobId: validation.jobId });
         await verifyReviewedOrgInventory({ provider, environment, plan, expected: plan.finalInventory, now });
         await permissions(environment, plan.binding.permissionSets);
@@ -586,7 +593,7 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
         await verifyReviewedOrgInventory({ provider, environment, plan, expected: predeploymentInventory, now });
         await permissions(environment, plan.review.bootstrap.permissionSets || []);
       } else await verifyReviewedOrgInventory({ provider, environment, plan, expected: baseline, now });
-      const validation = await job(environment, 'validation', () => provider.validate(environment, plan));
+      const validation = await runValidation(environment);
       if (environment.key === 'production' && mode === 'prepare') {
         await persist('production', 'preparation', { status: 'ready', fingerprint: plan.fingerprint, validationJobId: validation.jobId });
         return { mode: 'prepared', productionValidation: 'Succeeded', fingerprint: plan.fingerprint, journal: journal.file };

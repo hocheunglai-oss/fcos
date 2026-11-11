@@ -151,6 +151,10 @@ test('hosted Salesforce recovery requires the acknowledged original job and its 
   await assert.rejects(reconcileHostedSalesforceJob({ ...input, jobId: '0AfHF00000702c50AA' }), /ORIGINAL_JOB_REQUIRED/);
   assert.equal(reads, 0);
   assert.equal((await reconcileHostedSalesforceJob(input)).jobId, jobId);
+  checkpoint.job.packageSha256 = 'a'.repeat(64);
+  await assert.rejects(reconcileHostedSalesforceJob(input), /ORIGINAL_JOB_REQUIRED/);
+  input.packageSha256 = checkpoint.job.packageSha256;
+  assert.equal((await reconcileHostedSalesforceJob(input)).jobId, jobId);
   report.checkOnly = false;
   await assert.rejects(reconcileHostedSalesforceJob(input), /all-or-none proof/);
 });

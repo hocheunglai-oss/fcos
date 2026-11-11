@@ -95,44 +95,65 @@ export function assertReviewedInputsUnchanged(plan, { cwd = ROOT, policy = POLIC
     || salesforcePromotionHash(policy) !== plan.binding.configurationSha256) throw new Error('Salesforce source, manifest, review, baseline, or connection policy changed; restart prepare from DEVEE.');
 }
 
-function normalizedBootstrapDefinition(xml) {
-  if (xml.includes('xml:space')) return [xml];
-  const { children } = parseDocument(xml, { xmlMode: true, decodeEntities: false });
-  function significantText(nodes) {
+function normalizedMetadataDefinition(xml) {
+  if (/xml:space|<!DOCTYPE|<!ENTITY/iu.test(xml)) return [xml];
+  const { children } = parseDocument(xml, { xmlMode: true, decodeEntities: true });
+  function definition(nodes) {
     const elementOnly = nodes.some(node => node.type === 'tag')
-      && !nodes.some(node => node.type === 'text' && node.data.trim() !== '');
-    return nodes.flatMap(node => {
-      if (node.children) return significantText(node.children);
-      return node.type === 'text' && !elementOnly ? [node.data] : [];
-    });
+      && !nodes.some(node => node.type === 'cdata' || (node.type === 'text' && node.data.trim() !== ''));
+    return nodes.filter(node => node.type !== 'text' || !elementOnly || node.data.trim())
+      .map(node => [node.type, node.name || null, node.data ?? null,
+        node.attribs ? Object.entries(node.attribs).sort(([left], [right]) => left.localeCompare(right)) : null,
+        node.children ? definition(node.children) : null]);
   }
-  // Check the raw markup as well as leaf and mixed-content whitespace. Only
-  // whitespace between structural elements may vary during conversion.
-  return [xml.trim().replace(/>\s+</gu, '><'), significantText(children)];
+  // The converter can escape literal apostrophes. Preserve decoded text,
+  // element order and leaf/mixed-content whitespace while ignoring indentation.
+  return definition(children);
 }
 
-function assertBootstrapPackage(converted, roundTrip, members, files, sourceRoot, apiVersion) {
+function assertConvertedPackage(converted, roundTrip, members, files, sourceRoot, apiVersion, operation) {
   const packageBytes = readFileSync(safeProjectFile(converted, 'package.xml'), 'utf8');
   const actualMembers = parseReviewedPackage(packageBytes);
   const versions = [...packageBytes.matchAll(/<version>\s*(\d+\.0)\s*<\/version>/gu)];
   if (JSON.stringify(actualMembers) !== JSON.stringify([...members].sort())
     || versions.length !== 1 || versions[0][1] !== apiVersion) {
-    throw new Error('Converted Salesforce bootstrap manifest differs from the reviewed package.');
+    throw new Error(`Converted Salesforce ${operation} manifest differs from the reviewed package.`);
   }
   const expectedPackageFiles = new Set(['package.xml']);
   const allowedShells = new Set();
-  for (const id of members) {
-    const [type, name] = id.split(':');
-    if (type === 'PermissionSet') expectedPackageFiles.add(`permissionsets/${name}.permissionset`);
-    else {
-      const object = name.split('.')[0];
+  for (const file of files) {
+    const [directory, object] = file.split('/');
+    if (directory === 'objects') {
       expectedPackageFiles.add(`objects/${object}.object`);
       if (!members.has(`CustomObject:${object}`)) allowedShells.add(`objects/${object}/${object}.object-meta.xml`);
+    } else {
+      const mdapiSuffix = ['customPermissions', 'layouts', 'permissionsets', 'quickActions'].includes(directory);
+      expectedPackageFiles.add(mdapiSuffix ? file.replace(/-meta\.xml$/u, '') : file);
     }
   }
   const actualPackageFiles = Object.keys(readReviewedInventory(converted).files);
   if (JSON.stringify(actualPackageFiles.sort()) !== JSON.stringify([...expectedPackageFiles].sort())) {
-    throw new Error('Converted Salesforce bootstrap contains unexpected or missing package files.');
+    throw new Error(`Converted Salesforce ${operation} contains unexpected or missing package files.`);
+  }
+  const embedded = [];
+  for (const file of actualPackageFiles.filter(name => name.startsWith('objects/'))) {
+    const object = file.slice('objects/'.length, -'.object'.length);
+    const xml = readFileSync(safeProjectFile(converted, file), 'utf8');
+    const roots = parseDocument(xml, { xmlMode: true, decodeEntities: true }).children.filter(node => node.type === 'tag');
+    if (roots.length !== 1 || roots[0].name !== 'CustomObject') throw new Error(`Converted Salesforce ${operation} object metadata is invalid: ${file}`);
+    for (const child of roots[0].children.filter(node => node.type === 'tag')) {
+      if (child.name === 'fields' || child.name === 'validationRules') {
+        const fullName = child.children.find(node => node.type === 'tag' && node.name === 'fullName');
+        const name = fullName?.children.map(node => node.data).join('');
+        embedded.push(`${child.name === 'fields' ? 'CustomField' : 'ValidationRule'}:${object}.${name}`);
+      } else if (!members.has(`CustomObject:${object}`)) {
+        throw new Error(`Converted Salesforce ${operation} expanded outside reviewed source: ${file}`);
+      }
+    }
+  }
+  const expectedEmbedded = [...members].filter(id => /^(?:CustomField|ValidationRule):/u.test(id)).sort();
+  if (JSON.stringify(embedded.sort()) !== JSON.stringify(expectedEmbedded)) {
+    throw new Error(`Converted Salesforce ${operation} object components differ from the reviewed package.`);
   }
   const roundTripFiles = Object.keys(readReviewedInventory(roundTrip).files);
   for (const file of roundTripFiles) {
@@ -140,21 +161,71 @@ function assertBootstrapPackage(converted, roundTrip, members, files, sourceRoot
     const shell = allowedShells.has(file) && readFileSync(safeProjectFile(roundTrip, file), 'utf8')
       .replace(/^<\?xml[^?]*\?>\s*/u, '').trim();
     if (!shell || !/^<CustomObject xmlns="http:\/\/soap\.sforce\.com\/2006\/04\/metadata"(?:\s*\/>|>\s*<\/CustomObject>)$/u.test(shell)) {
-      throw new Error(`Converted Salesforce bootstrap expanded outside reviewed source: ${file}`);
+      throw new Error(`Converted Salesforce ${operation} expanded outside reviewed source: ${file}`);
     }
   }
-  if ([...files].some(file => !roundTripFiles.includes(file))) throw new Error('Converted Salesforce bootstrap is missing reviewed source.');
+  if ([...files].some(file => !roundTripFiles.includes(file))) throw new Error(`Converted Salesforce ${operation} is missing reviewed source.`);
   for (const file of files) {
-    const source = readFileSync(safeProjectFile(sourceRoot, file), 'utf8');
-    const restored = readFileSync(safeProjectFile(roundTrip, file), 'utf8');
-    if (source !== restored && JSON.stringify(normalizedBootstrapDefinition(source)) !== JSON.stringify(normalizedBootstrapDefinition(restored))) {
-      throw new Error(`Converted Salesforce bootstrap definition differs from reviewed source: ${file}`);
+    const source = readFileSync(safeProjectFile(sourceRoot, file));
+    const restored = readFileSync(safeProjectFile(roundTrip, file));
+    if (!source.equals(restored) && (!file.endsWith('-meta.xml')
+      || JSON.stringify(normalizedMetadataDefinition(source.toString('utf8'))) !== JSON.stringify(normalizedMetadataDefinition(restored.toString('utf8'))))) {
+      throw new Error(`Converted Salesforce ${operation} definition differs from reviewed source: ${file}`);
     }
   }
 }
 
 export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = localCommand, adapter = {}, adapterPath, commandEnvironment } = {}) {
   const sf = (args, directory = cwd) => run('sf', args, directory, { env: commandEnvironment });
+  function preparePackage(plan, { operation, manifestPath, manifestSha256, components, command }) {
+    const manifest = readFileSync(safeProjectFile(cwd, manifestPath));
+    if (salesforcePromotionHash(manifest) !== manifestSha256) throw new Error(`Salesforce ${operation} manifest changed.`);
+    const versions = [...manifest.toString('utf8').matchAll(/<version>\s*(\d+\.0)\s*<\/version>/gu)];
+    if (versions.length !== 1) throw new Error(`Salesforce ${operation} requires one explicit metadata API version.`);
+    const members = new Set(components);
+    const files = new Set(plan.review.components.filter(({ id }) => members.has(id)).flatMap(({ files }) => files));
+    const project = mkdtempSync(path.join(tmpdir(), `fcos-salesforce-${operation}-`));
+    const cleanup = () => rmSync(project, { recursive: true, force: true });
+    try {
+      writeFileSync(path.join(project, 'sfdx-project.json'), JSON.stringify({
+        packageDirectories: [{ path: 'force-app', default: true }], namespace: '', sourceApiVersion: versions[0][1],
+      }));
+      writeFileSync(path.join(project, `${operation}.xml`), manifest, { mode: 0o600 });
+      // A source-format manifest can otherwise pull in unreviewed parent and child metadata.
+      for (const name of files) {
+        const relative = `${policy.publication.sourceRoot}/${name}`;
+        const bytes = readFileSync(safeProjectFile(cwd, relative));
+        if (salesforcePromotionHash(bytes) !== plan.finalInventory.files[name]?.sha256) {
+          throw new Error(`Salesforce ${operation} source changed: ${name}`);
+        }
+        const destination = path.join(project, relative);
+        mkdirSync(path.dirname(destination), { recursive: true });
+        writeFileSync(destination, bytes, { mode: 0o600 });
+      }
+      const converted = path.join(project, 'converted');
+      const roundTrip = path.join(project, 'round-trip');
+      const apiVersion = versions[0][1];
+      sf(['project', 'convert', 'source', '--manifest', `${operation}.xml`, '--output-dir', converted,
+        '--api-version', apiVersion, '--json'], project);
+      sf(['project', 'convert', 'mdapi', '--root-dir', converted, '--output-dir', roundTrip, '--json'], project);
+      assertConvertedPackage(converted, path.join(roundTrip, 'main/default'), members, files,
+        path.join(project, policy.publication.sourceRoot), apiVersion, operation);
+      const packageSha256 = readReviewedInventory(converted).sourceTreeHash;
+      return {
+        packageSha256,
+        submit() {
+          if (readReviewedInventory(converted).sourceTreeHash !== packageSha256) {
+            throw new Error(`Verified Salesforce ${operation} package changed before submission.`);
+          }
+          return sf([...command, '--metadata-dir', converted, '--single-package', '--api-version', apiVersion, '--async', '--json'], project);
+        },
+        cleanup,
+      };
+    } catch (error) {
+      cleanup();
+      throw error;
+    }
+  }
   return {
     verifyIdentity(environment) {
       const display = sf(['org', 'display', '--target-org', environment.alias, '--json']);
@@ -164,55 +235,24 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
       return display;
     },
     report(environment, jobId) { return sf(['project', 'deploy', 'report', '--target-org', environment.alias, '--job-id', jobId, '--wait', '60', '--json']); },
+    prepareValidation(environment, plan) {
+      const command = ['project', 'deploy', 'validate', '--target-org', environment.alias, '--test-level', plan.binding.testPlan.level];
+      if (plan.binding.testPlan.level === 'RunSpecifiedTests') for (const name of plan.binding.testPlan.tests) command.push('--tests', name);
+      return preparePackage(plan, { operation: 'validation', manifestPath: plan.manifestPath,
+        manifestSha256: plan.binding.manifestSha256, components: plan.manifest, command });
+    },
     validate(environment, plan) {
-      const args = ['project', 'deploy', 'validate', '--target-org', environment.alias, '--manifest', plan.manifestPath, '--test-level', plan.binding.testPlan.level, '--async', '--json'];
-      if (plan.binding.testPlan.level === 'RunSpecifiedTests') for (const name of plan.binding.testPlan.tests) args.push('--tests', name);
-      return sf(args);
+      const prepared = this.prepareValidation(environment, plan);
+      try { return prepared.submit(); }
+      finally { prepared.cleanup(); }
     },
     deploy(environment, validationJobId) { return sf(['project', 'deploy', 'quick', '--target-org', environment.alias, '--job-id', validationJobId, '--async', '--json']); },
     prepareBootstrap(environment, plan) {
       const bootstrap = plan.review.bootstrap;
-      const manifest = readFileSync(safeProjectFile(cwd, bootstrap.manifestPath));
-      if (salesforcePromotionHash(manifest) !== plan.binding.bootstrapSha256) throw new Error('Salesforce bootstrap manifest changed.');
-      const versions = [...manifest.toString('utf8').matchAll(/<version>\s*(\d+\.0)\s*<\/version>/gu)];
-      if (versions.length !== 1) throw new Error('Salesforce bootstrap requires one explicit metadata API version.');
-      const members = new Set(bootstrap.components);
-      const files = new Set(plan.review.components.filter(({ id }) => members.has(id)).flatMap(({ files }) => files));
-      const project = mkdtempSync(path.join(tmpdir(), 'fcos-salesforce-bootstrap-'));
-      const cleanup = () => rmSync(project, { recursive: true, force: true });
-      try {
-        writeFileSync(path.join(project, 'sfdx-project.json'), JSON.stringify({
-          packageDirectories: [{ path: 'force-app', default: true }], namespace: '', sourceApiVersion: versions[0][1],
-        }));
-        writeFileSync(path.join(project, 'bootstrap.xml'), manifest, { mode: 0o600 });
-        // A source-format manifest can otherwise pull in unreviewed parent and child metadata.
-        for (const name of files) {
-          const relative = `${policy.publication.sourceRoot}/${name}`;
-          const bytes = readFileSync(safeProjectFile(cwd, relative));
-          if (salesforcePromotionHash(bytes) !== plan.finalInventory.files[name]?.sha256) {
-            throw new Error(`Salesforce bootstrap source changed: ${name}`);
-          }
-          const destination = path.join(project, relative);
-          mkdirSync(path.dirname(destination), { recursive: true });
-          writeFileSync(destination, bytes, { mode: 0o600 });
-        }
-        const converted = path.join(project, 'converted');
-        const roundTrip = path.join(project, 'round-trip');
-        const apiVersion = versions[0][1];
-        sf(['project', 'convert', 'source', '--manifest', 'bootstrap.xml', '--output-dir', converted,
-          '--api-version', apiVersion, '--json'], project);
-        sf(['project', 'convert', 'mdapi', '--root-dir', converted, '--output-dir', roundTrip, '--json'], project);
-        assertBootstrapPackage(converted, path.join(roundTrip, 'main/default'), members, files,
-          path.join(project, policy.publication.sourceRoot), apiVersion);
-        return {
-          submit: () => sf(['project', 'deploy', 'start', '--target-org', environment.alias, '--metadata-dir', converted, '--single-package', '--api-version', apiVersion,
-            '--test-level', environment.isSandbox ? 'NoTestRun' : 'RunRelevantTests', '--async', '--json'], project),
-          cleanup,
-        };
-      } catch (error) {
-        cleanup();
-        throw error;
-      }
+      return preparePackage(plan, { operation: 'bootstrap', manifestPath: bootstrap.manifestPath,
+        manifestSha256: plan.binding.bootstrapSha256, components: bootstrap.components,
+        command: ['project', 'deploy', 'start', '--target-org', environment.alias,
+          '--test-level', environment.isSandbox ? 'NoTestRun' : 'RunRelevantTests'] });
     },
     permissionAssigned(environment, name) {
       const username = environment.username || this.verifyIdentity(environment).username;
