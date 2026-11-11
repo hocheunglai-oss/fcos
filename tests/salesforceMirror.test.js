@@ -179,6 +179,20 @@ test('mirror command refetches and validates the PR before verifying immutable r
   assert.match(source, /checkout', '--detach', pullRequest\.headRefOid/);
 });
 
+test('hosted mirror uses the exact candidate tree throughout publication and remote verification', async () => {
+  const source = await readFile(new URL('../scripts/sync-salesforce-shared-repository.mjs', import.meta.url), 'utf8');
+  const entrypoint = source.slice(source.indexOf('export function executeSharedMirror('));
+  assert.match(entrypoint, /sourceInventory\(metadataRoot\)/);
+  assert.match(entrypoint, /syncCheckout\(checkout, inventory, manifest, metadataRoot\)/);
+  assert.match(entrypoint, /verifyCheckout\(checkout, inventory, manifest, metadataRoot\)/);
+  assert.match(entrypoint, /publish\(checkout, selected\.branch, initialRemoteHead, selected\.pullRequest, inventory, assertPublicationCurrent, metadataRoot\)/);
+  assert.match(entrypoint, /verifyImmutableRemoteHead\(checkout, pullRequest, inventory, manifest, metadataRoot\)/);
+  const publish = source.slice(source.indexOf('function publish('), source.indexOf('export function executeSharedMirror('));
+  assert.match(publish, /assertInventoryUnchanged\(inventory, metadataRoot\)/);
+  const remoteReadback = source.slice(source.indexOf('function verifyImmutableRemoteHead('), source.indexOf('export function publicationReport('));
+  assert.match(remoteReadback, /verifyCheckout\(checkout, inventory, manifest, metadataRoot\)/);
+});
+
 test('mirror synchronization changes only manifest-owned paths and verifies exact bytes', () => {
   const temporary = mkdtempSync(path.join(tmpdir(), 'fcos-mirror-test-'));
   const authoritative = path.join(temporary, 'authoritative');

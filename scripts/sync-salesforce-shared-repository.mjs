@@ -382,7 +382,7 @@ export function validateFetchedPullRequestHead(fetchedHead, pullRequest) {
   return true;
 }
 
-function verifyImmutableRemoteHead(checkout, pullRequest, inventory, manifest) {
+function verifyImmutableRemoteHead(checkout, pullRequest, inventory, manifest, metadataRoot) {
   run('git', [
     'fetch', '--force', 'origin',
     `refs/heads/${pullRequest.headRefName}:refs/remotes/origin/${pullRequest.headRefName}`,
@@ -390,7 +390,7 @@ function verifyImmutableRemoteHead(checkout, pullRequest, inventory, manifest) {
   const fetchedHead = run('git', ['rev-parse', `refs/remotes/origin/${pullRequest.headRefName}`], { cwd: checkout });
   validateFetchedPullRequestHead(fetchedHead, pullRequest);
   run('git', ['checkout', '--detach', pullRequest.headRefOid], { cwd: checkout });
-  verifyCheckout(checkout, inventory, manifest);
+  verifyCheckout(checkout, inventory, manifest, metadataRoot);
 }
 
 export function publicationReport({ inventory, deveeDeployment, publication, pullRequest, mode = MODE }) {
@@ -424,7 +424,7 @@ export function publicationReport({ inventory, deveeDeployment, publication, pul
   };
 }
 
-function publish(checkout, branch, expectedRemoteHead, pullRequest, inventory, assertPublicationCurrent) {
+function publish(checkout, branch, expectedRemoteHead, pullRequest, inventory, assertPublicationCurrent, metadataRoot) {
   const paths = [PUBLICATION.targetRoot, PUBLICATION.manifestPath];
   configurePushIdentity(checkout);
   run('git', ['add', '--', ...paths], { cwd: checkout });
@@ -443,7 +443,7 @@ function publish(checkout, branch, expectedRemoteHead, pullRequest, inventory, a
   const pushArgs = ['push', '--set-upstream'];
   if (expectedRemoteHead) pushArgs.push(`--force-with-lease=refs/heads/${branch}:${expectedRemoteHead}`);
   pushArgs.push('origin', `HEAD:${branch}`);
-  assertInventoryUnchanged(inventory);
+  assertInventoryUnchanged(inventory, metadataRoot);
   assertPublicationCurrent();
   run('git', pushArgs, { cwd: checkout });
   const commit = run('git', ['rev-parse', 'HEAD'], { cwd: checkout });
@@ -485,15 +485,15 @@ export function executeSharedMirror({ mode, metadataRoot = sourceRoot, proofReso
   const checkout = path.join(temporary, 'repository');
   try {
     cloneBranch(checkout, selected.branch, Boolean(initialRemoteHead), mode);
-    if (mode === 'publish') syncCheckout(checkout, inventory, manifest);
-    verifyCheckout(checkout, inventory, manifest);
+    if (mode === 'publish') syncCheckout(checkout, inventory, manifest, metadataRoot);
+    verifyCheckout(checkout, inventory, manifest, metadataRoot);
     const publication = mode === 'publish'
-      ? publish(checkout, selected.branch, initialRemoteHead, selected.pullRequest, inventory, assertPublicationCurrent)
+      ? publish(checkout, selected.branch, initialRemoteHead, selected.pullRequest, inventory, assertPublicationCurrent, metadataRoot)
       : { changed: false, branch: selected.branch, commit: run('git', ['rev-parse', 'HEAD'], { cwd: checkout }), pullRequest: selected.pullRequest };
     const pullRequest = refetchPullRequest(publication.pullRequest, publication.branch);
     validatePublicationPullRequest(pullRequest, { branch: publication.branch, headOid: publication.commit });
     assertCommitAttribution(publication.commit);
-    verifyImmutableRemoteHead(checkout, pullRequest, inventory, manifest);
+    verifyImmutableRemoteHead(checkout, pullRequest, inventory, manifest, metadataRoot);
     return publicationReport({
       mode,
       inventory,
