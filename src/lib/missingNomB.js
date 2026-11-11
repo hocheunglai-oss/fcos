@@ -3,6 +3,15 @@ import { NOM_B_EXTENSIONS, NOM_B_MAX_BYTES } from '../../shared/missingNomB.js';
 export const NOM_B_ACCEPT = '.pdf,.jpg,.jpeg,.png,.doc,.docx';
 export const PENDING_NOM_B_UPLOAD_KEY = 'fcos:missing-nom-b:pending-upload:v1';
 
+export function nomBDataIssues(row) {
+  return [
+    ['buyerName', 'Buyer details unavailable'],
+    ['vesselName', 'Vessel details unavailable'],
+    ['portName', 'Port details unavailable'],
+    ['imo', 'IMO unavailable'],
+  ].filter(([field]) => !String(row?.[field] ?? '').trim()).map(([, message]) => message);
+}
+
 export function validateNomBFile(file) {
   if (!file) return 'Choose a Nom B document.';
   const extension = String(file.name || '').match(/\.([^.]+)$/)?.[1]?.toLowerCase();
