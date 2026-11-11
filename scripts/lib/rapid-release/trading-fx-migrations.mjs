@@ -13,15 +13,15 @@ export const TRADING_FX_MIGRATIONS = Object.freeze([
   },
   {
     path: 'supabase/migrations/20261111180145_xero_rounding_policy.sql',
-    digest: 'e085affa0e95868bbf9b8a8ba94f8425270ba7e4daecef98682bcc478763c160',
+    digest: '3fd57d66df4a0fc140a16250ac650f5cfbc03526b05078170cdd70b79396154f',
   },
   {
     path: 'supabase/migrations/20261111180146_xero_prepayment_operation_ledger.sql',
-    digest: '02239afa40c13c3ed007b7ac58921658a8715d374bcfcde47dab11ccb1326120',
+    digest: '08a8dc2d42d223d369c4e201ebaf7e57561510f74850cb085c21e6f56cabcc6c',
   },
   {
     path: 'supabase/migrations/20261111180148_xero_prepayment_posting_policy.sql',
-    digest: 'e6dbe4932886bfaaea94fb3d1a976d9a53dea5f2ae197c575cfb8a84810d8750',
+    digest: '29d9f510f6cb269dc0b7433c419bb6521344c5e665c127790e790ec97b51a57d',
   },
   {
     path: 'supabase/migrations/20261111180149_xero_native_hkd_atomic_payment_confirmation.sql',
@@ -29,7 +29,7 @@ export const TRADING_FX_MIGRATIONS = Object.freeze([
   },
   {
     path: 'supabase/migrations/20261111201838_xero_native_document_draft_journal.sql',
-    digest: '07a0c7e3ac9877e0350f3f51c92f6b100ea71be2eb015f3be1cba835a21db57e',
+    digest: 'eed5b935e0af9d38ed679d588da10dcc1abfa9285c77cd2b55dbd778d9ac1ac4',
     transactionEnvelope: true,
   },
 ].map(Object.freeze));
