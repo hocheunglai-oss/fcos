@@ -1,5 +1,7 @@
 const COMPANY_FX_PAIR = 'USD/HKD';
-const HK_TIME_ZONE_OFFSET = '+08:00';
+const hkOffset = new Intl.DateTimeFormat('en', {
+  timeZone: 'Asia/Hong_Kong', timeZoneName: 'longOffset',
+});
 const RATE_MAXIMUM = 100n;
 const DECIMAL = /^([+-]?)(\d+)(?:\.(\d+))?$/;
 const MAX_DECIMAL_DIGITS = 30;
@@ -102,16 +104,29 @@ function validRevision(value) {
   return revision;
 }
 
-function hkEndOfDay(date) {
+function hkNextMidnight(date) {
   const source = String(date || '').trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(source)) {
-    throw companyFxError('An ISO calendar date is required for the FX lookup.', 'COMPANY_FX_DATE_INVALID');
+  const day = new Date(`${source}T00:00:00.000Z`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(source) || !Number.isFinite(day.getTime()) || day.toISOString().slice(0, 10) !== source) {
+    throw companyFxError('The FX lookup date is invalid. Use an ISO calendar date.', 'COMPANY_FX_DATE_INVALID');
   }
-  const timestamp = new Date(`${source}T23:59:59.999${HK_TIME_ZONE_OFFSET}`);
-  if (!Number.isFinite(timestamp.getTime()) || timestamp.toLocaleDateString('en-CA', { timeZone: 'Asia/Hong_Kong' }) !== source) {
-    throw companyFxError('The FX lookup date is invalid.', 'COMPANY_FX_DATE_INVALID');
-  }
-  return timestamp.toISOString();
+  day.setUTCDate(day.getUTCDate() + 1);
+  const nextMidnight = day.getTime();
+  const approximate = new Date(nextMidnight - 8 * 3600000);
+  const localOffset = hkOffset.formatToParts(approximate).find(part => part.type === 'timeZoneName')?.value;
+  const offset = /^GMT([+-])(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(localOffset || '');
+  if (!offset) throw companyFxError('The Hong Kong time offset is unavailable.', 'COMPANY_FX_DATE_INVALID');
+  const [, sign, hours, minutes, seconds = '0'] = offset;
+  const offsetMs = (Number(hours) * 3600 + Number(minutes) * 60 + Number(seconds)) * 1000;
+  return new Date(nextMidnight - (sign === '+' ? offsetMs : -offsetMs)).toISOString();
+}
+
+function exactTimestamp(value) {
+  const timestamp = String(value ?? '');
+  const match = /T\d{2}:\d{2}:\d{2}(?:\.(\d{1,6}))?(?:Z|[+-]\d{2}:\d{2})$/.exec(timestamp);
+  const parsed = new Date(timestamp);
+  if (!match || !Number.isFinite(parsed.getTime())) return null;
+  return `${parsed.toISOString().slice(0, 19)}.${(match[1] || '').padEnd(6, '0')}Z`;
 }
 
 function serializeHistoryRate(row) {
@@ -179,23 +194,24 @@ export async function loadCurrentCompanyFxRate(client) {
     .eq('settings_revision', revision)
     .maybeSingle(), 'The current company USD/HKD rate has no immutable history record.');
   const serialized = serializeHistoryRate(history);
+  const effectiveAt = exactTimestamp(history.effective_at);
   if (!decimalsEqual(validRate(history.rate), validRate(settings.usd_hkd_rate))
-      || serialized.effectiveAt !== new Date(settings.updated_at).toISOString()) {
+      || !effectiveAt || effectiveAt !== exactTimestamp(settings.updated_at)) {
     throw companyFxError('Company USD/HKD settings do not match their immutable history record.', 'COMPANY_FX_RATE_MISMATCH');
   }
   return serialized;
 }
 
 export async function loadCompanyFxRateForDate(client, date) {
-  const cutoff = hkEndOfDay(date);
+  const cutoff = hkNextMidnight(date);
   const history = requireResult(await client.from('company_fx_rate_history')
     .select('id,pair,rate,settings_revision,effective_at')
     .eq('pair', COMPANY_FX_PAIR)
-    .lte('effective_at', cutoff)
+    .lt('effective_at', cutoff)
     .order('effective_at', { ascending: false })
     .limit(1)
     .maybeSingle(), 'No company USD/HKD rate was effective on the requested Hong Kong date.');
   return serializeHistoryRate(history);
 }
 
-export const companyFxRateInternals = { COMPANY_FX_PAIR, hkEndOfDay, serializeHistoryRate, decimalsEqual, validRate };
+export const companyFxRateInternals = { COMPANY_FX_PAIR, hkNextMidnight, serializeHistoryRate, decimalsEqual, validRate };
