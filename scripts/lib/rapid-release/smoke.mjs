@@ -8,6 +8,7 @@ import { READ_ONLY_CI_HANDLERS, isReadOnlyMarketAction, CI_DENIAL_PROBES } from 
 import { canonicalFcosE2eCandidateUrl } from '../../verify-e2e-candidate.mjs';
 import { candidateAuthenticationState, writePrivateE2eState, removePrivateE2eState } from '../../e2e-private-state.mjs';
 import { candidateProtectionState } from '../../e2e-protection-state.mjs';
+import { digest } from './contract.mjs';
 import { MODULE_READERS as moduleReaders, MODULE_SURFACES, NORMAL_NAVIGATION_READS, moduleReadBody, moduleReaderPayloadVerified as modulePayloadVerified } from './normal-role-readers.mjs';
 
 const issuer = new URL(FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation.issuer).origin;
@@ -440,6 +441,25 @@ export function runStagedSmoke(options) {
   return stagedSmoke(options);
 }
 
+export async function runPreBootstrapSmoke(options, verifiedBootstrapFingerprint) {
+  const { manifest, staged } = options;
+  const plan = manifest.prerequisites?.plan;
+  const deferred = plan?.deferredModules;
+  const selected = manifest.selection.modules;
+  requireFact((manifest.selection.salesforce || manifest.selection.database) && plan?.deferSchemaDependentSmoke === true
+    && /^[a-f0-9]{64}$/u.test(verifiedBootstrapFingerprint || '') && verifiedBootstrapFingerprint === plan.bootstrapFingerprint
+    && Array.isArray(deferred) && deferred.length > 0 && new Set(deferred).size === deferred.length
+    && deferred.every(module => selected.includes(module) && !baselineModules.includes(module)), 'PREBOOTSTRAP_STAGE_PROOF_REQUIRED');
+  const proof = await stagedSmoke(options, undefined, deferred);
+  const completedModules = selected.filter(module => !deferred.includes(module));
+  requireFact(completedModules.every(module => proof.modules.includes(module))
+    && (!manifest.selection.normalRole || proof.normalRole === true), 'PREBOOTSTRAP_STAGE_PROOF_REQUIRED');
+  return { passed: true, mode: 'pre_bootstrap', deploymentId: staged.id, buildId: staged.buildId,
+    manifestHash: digest(manifest), bootstrapFingerprint: verifiedBootstrapFingerprint, isolationVerified: true, businessWrites: proof.businessWrites,
+    completedChecks: ['runtime_identity', 'authenticated_login', 'authentication_denials', 'request_isolation'],
+    completedModules, deferredChecks: deferred, ...(proof.normalRole === true ? { normalRole: true } : {}) };
+}
+
 // Diagnostics share the request guard and identity checks, but never produce
 // release evidence, even when every module succeeds.
 export async function diagnoseStagedSmoke(options, { desktop = true, desktopModules, onOutcome } = {}) {
@@ -457,10 +477,11 @@ export async function diagnoseStagedSmoke(options, { desktop = true, desktopModu
   return { passed: false, outcomes, ...(code ? { code } : {}) };
 }
 
-async function stagedSmoke({ manifest, staged, env = process.env, fetchImpl = fetch, browserFactory } = {}, diagnostic) {
+async function stagedSmoke({ manifest, staged, env = process.env, fetchImpl = fetch, browserFactory } = {}, diagnostic, deferredModules = []) {
   const origin = binding(manifest, staged);
-  const selected = unique(manifest.selection?.modules || []);
-  const expanded = String(env.FCOS_RAPID_NORMAL_REQUIRED_MODULES || '').split(',').map(value => value.trim()).filter(Boolean);
+  const selected = unique(manifest.selection?.modules || []).filter(module => !deferredModules.includes(module));
+  const expanded = String(env.FCOS_RAPID_NORMAL_REQUIRED_MODULES || '').split(',').map(value => value.trim())
+    .filter(module => module && !deferredModules.includes(module));
   const normalModules = unique([...baselineModules, ...selected, ...expanded]);
   const missingModules = normalModules.filter(module => !Object.hasOwn(moduleReaders, module));
   if (missingModules.length) throw Object.assign(fail('MODULE_SAFE_READER_COVERAGE_MISSING'), { missingModules });

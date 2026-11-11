@@ -29,9 +29,11 @@ function fixture({ salesforce = false } = {}) {
  }
  const manifest=createManifest({candidate,controllerSha:git(['rev-parse','HEAD']),previous:{deploymentId:'dpl_old',sha:'d'.repeat(40),configurationDigest:h,schemaDigest:h},paths:salesforce?['force-app/main/default/classes/Example.cls']:['supabase/migrations/20990101000000_fixture.sql'],
  publicEnvironment:{VITE_SUPABASE_URL:`https://${targets().supabaseProject}.supabase.co`,VITE_SUPABASE_PUBLISHABLE_KEY:`sb_publishable_${'p'.repeat(25)}`},releaseId:'rapid-schema-fixture',
- prerequisites:{adapter:'schema-fixture',adapterDigest:digest(Buffer.from(source)),plan:salesforce?{salesforceFingerprint:h,salesforceSourceTreeHash:h}:{deferSchemaDependentSmoke:true,bootstrapFingerprint:h}}});
+ prerequisites:{adapter:'schema-fixture',adapterDigest:digest(Buffer.from(source)),plan:salesforce?{salesforceFingerprint:h,salesforceSourceTreeHash:h}:{deferSchemaDependentSmoke:true,bootstrapFingerprint:h,deferredModules:['hedge_desk']}}});
  const staged={id:'dpl_new',buildId:manifest.build.buildId};
- const proof={passed:true,mode:'pre_bootstrap',deploymentId:staged.id,buildId:staged.buildId,manifestHash:digest(manifest),isolationVerified:true,businessWrites:0,completedChecks:['runtime_identity','authentication_denials'],deferredChecks:manifest.selection.modules,bootstrapFingerprint:h};
+ const proof={passed:true,mode:'pre_bootstrap',deploymentId:staged.id,buildId:staged.buildId,manifestHash:digest(manifest),isolationVerified:true,businessWrites:0,normalRole:true,
+  completedChecks:['runtime_identity','authenticated_login','authentication_denials','request_isolation'],deferredChecks:['hedge_desk'],
+  completedModules:manifest.selection.modules.filter(module=>module!=='hedge_desk'),bootstrapFingerprint:h};
  const approval={manifestHash:digest(manifest),candidateSha:manifest.candidate.sha,buildId:staged.buildId,deploymentId:staged.id,previousDeploymentId:'dpl_old',environment:'fcos-production-release',reviewer:targets().account,nativeReviewVerified:true,runId:1,approvedAt:new Date().toISOString()};
  return{directory,candidateDirectory,manifest,staged,proof,approval,cleanup:()=>rmSync(directory,{recursive:true,force:true})};
 }
@@ -39,7 +41,18 @@ test('deferred schema evidence must bind the actual verified bootstrap, never su
  const f=fixture();try{
   await assert.rejects(verifyBeforeBootstrap({manifest:f.manifest,staged:f.staged,controllerDirectory:f.directory,load:async()=>({verifyPreBootstrapStage:async()=>({...f.proof,bootstrapFingerprint:'f'.repeat(64)})})}),/PREBOOTSTRAP_STAGE_PROOF_REQUIRED/);
   const proof=await verifyBeforeBootstrap({manifest:f.manifest,staged:f.staged,controllerDirectory:f.directory,load:async()=>({verifyPreBootstrapStage:async()=>f.proof})});
-  assert.equal(proof.mode,'pre_bootstrap');assert.deepEqual(proof.deferredChecks,f.manifest.selection.modules);
+  assert.equal(proof.mode,'pre_bootstrap');assert.deepEqual(proof.deferredChecks,['hedge_desk']);
+  assert.deepEqual(proof.completedModules,f.proof.completedModules);
+  for (const invalid of [
+    { deferredChecks: ['hedge_desk', 'dashboard'] },
+    { deferredChecks: ['hedge_desk', 'hedge_desk'] },
+    { completedModules: f.proof.completedModules.slice(1) },
+    { normalRole: false },
+    { completedChecks: ['runtime_identity', 'authentication_denials'] },
+  ]) {
+    await assert.rejects(verifyBeforeBootstrap({manifest:f.manifest,staged:f.staged,controllerDirectory:f.directory,
+      load:async()=>({verifyPreBootstrapStage:async()=>({...f.proof,...invalid})})}),/PREBOOTSTRAP_STAGE_PROOF_REQUIRED/);
+  }
  }finally{f.cleanup();}
 });
 test('qualified prerequisite results publish typed recovery receipts and keep private evidence private',async()=>{

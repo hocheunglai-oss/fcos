@@ -225,14 +225,24 @@ test('reviewed schema bootstrap can precede dependent smoke, with one decision a
   const f = fixture();
   f.manifest = createManifest({ candidate: f.manifest.candidate, controllerSha: f.manifest.controllerSha, previous: f.manifest.previous,
     paths: ['supabase/migrations/20990101000000_fixture.sql'], publicEnvironment: f.manifest.build.publicEnvironment, releaseId: f.manifest.releaseId,
-    prerequisites: { adapter: 'schema-fixture', adapterDigest: h, plan: { deferSchemaDependentSmoke: true, bootstrapFingerprint: h } } });
+    prerequisites: { adapter: 'schema-fixture', adapterDigest: h,
+      plan: { deferSchemaDependentSmoke: true, bootstrapFingerprint: h, deferredModules: ['hedge_desk'] } } });
   f.approval.manifestHash = digest(f.manifest); let applied = 0, fullChecks = 0;
   f.beforeBootstrap = async () => ({ passed: true, mode: 'pre_bootstrap', manifestHash: digest(f.manifest), deploymentId: f.staged.id,
-    buildId: f.build.buildId, isolationVerified: true, businessWrites: 0, bootstrapFingerprint: h, deferredChecks: f.manifest.selection.modules });
+    buildId: f.build.buildId, isolationVerified: true, businessWrites: 0, normalRole: true, bootstrapFingerprint: h, deferredChecks: ['hedge_desk'],
+    completedChecks: ['runtime_identity', 'authenticated_login', 'authentication_denials', 'request_isolation'],
+    completedModules: f.manifest.selection.modules.filter(module => module !== 'hedge_desk') });
   f.smoke = async () => { fullChecks++; throw Error('SCHEMA_DEPENDENT_CHECK_FAILED'); };
-  assert.equal((await stageRelease(f)).state, 'awaiting_authorized_bootstrap'); assert.equal(fullChecks, 0);
+  const stage = await stageRelease(f);
+  assert.equal(stage.state, 'awaiting_authorized_bootstrap'); assert.deepEqual(stage.deferredChecks, ['hedge_desk']);
+  assert.equal(fullChecks, 0);
   assert.equal(f.journal.records.some(row => row.payload.event === 'smoke.passed'), false);
   f.prerequisites = async () => { applied++; return { passed: true, manifestHash: digest(f.manifest), backwardCompatible: true }; };
+  const ready = f.provider.ready;
+  f.provider.ready = async () => ({ ...f.staged, artifactDigest: '0'.repeat(64) });
+  await assert.rejects(promoteRelease(f), /STAGED_ACCEPTANCE_CHANGED/);
+  assert.equal(applied, 0);
+  f.provider.ready = ready;
   await assert.rejects(promoteRelease(f), /SCHEMA_DEPENDENT_CHECK_FAILED/);
   assert.equal(applied, 1); assert.equal(f.calls.includes('promote'), false);
   f.smoke = async () => ({ passed: true, deploymentId: f.staged.id, buildId: f.build.buildId, login: true, restrictedAccess: true,

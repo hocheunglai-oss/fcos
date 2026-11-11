@@ -2,6 +2,7 @@ import { readFileSync, realpathSync } from 'node:fs';
 import { resolve, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { assertAuthorization, digest, git, isDigest, requireCondition, sourceSnapshot } from './contract.mjs';
+import { assertPreBootstrapProof } from './engine.mjs';
 import { FCOS_CONNECTION_POLICY } from '../../../config/fcosConnections.js';
 
 export async function qualifiedAdapter({ manifest, controllerDirectory, load = url => import(url) }) {
@@ -101,14 +102,10 @@ export async function verifyBeforeBootstrap({ manifest, staged, controllerDirect
   requireCondition(descriptor.plan.deferSchemaDependentSmoke === true && /^[a-f0-9]{64}$/.test(descriptor.plan.bootstrapFingerprint || '')
     && entry.supportsDeferredStage === true && typeof adapter.verifyPreBootstrapStage === 'function', 'QUALIFIED_PREBOOTSTRAP_VERIFIER_REQUIRED');
   const proof = await adapter.verifyPreBootstrapStage({ manifest, staged, controllerDirectory, env });
-  requireCondition(proof?.passed === true && proof.mode === 'pre_bootstrap' && proof.deploymentId === staged.id
-    && proof.buildId === manifest.build.buildId && proof.manifestHash === digest(manifest)
-    && proof.bootstrapFingerprint === descriptor.plan.bootstrapFingerprint
-    && proof.isolationVerified === true && proof.businessWrites === 0 && Array.isArray(proof.completedChecks)
-    && proof.completedChecks.length > 0 && proof.completedChecks.every(check => /^[a-z][a-z0-9_]{1,80}$/.test(check))
-    && Array.isArray(proof.deferredChecks) && proof.deferredChecks.length > 0
-    && proof.deferredChecks.every(check => manifest.selection.modules.includes(check)), 'PREBOOTSTRAP_STAGE_PROOF_REQUIRED');
+  assertPreBootstrapProof(proof, manifest, staged);
+  requireCondition(proof.completedChecks.every(check => /^[a-z][a-z0-9_]{1,80}$/.test(check)), 'PREBOOTSTRAP_STAGE_PROOF_REQUIRED');
   return { passed: true, mode: 'pre_bootstrap', deploymentId: proof.deploymentId, buildId: proof.buildId,
     manifestHash: proof.manifestHash, isolationVerified: true, businessWrites: 0,
-    completedChecks: proof.completedChecks, deferredChecks: proof.deferredChecks, bootstrapFingerprint: descriptor.plan.bootstrapFingerprint };
+    completedChecks: proof.completedChecks, completedModules: proof.completedModules, deferredChecks: proof.deferredChecks,
+    bootstrapFingerprint: descriptor.plan.bootstrapFingerprint, ...(proof.normalRole === true ? { normalRole: true } : {}) };
 }
