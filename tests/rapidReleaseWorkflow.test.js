@@ -70,3 +70,17 @@ test('forged source under an old plan hash, changed dispatcher, and failed quali
   }
  }finally{restore();if(original===undefined)delete process.env.RELEASE_MANIFEST;else process.env.RELEASE_MANIFEST=original;}
 });
+
+test('Company FX writer credentials are limited to the protected exact database adapter', () => {
+ const names=['FCOS_RAPID_COMPANY_FX_DB_ACCESS_TOKEN','FCOS_RAPID_COMPANY_FX_GH_OWNER_TOKEN'];
+ for(const [name,job] of Object.entries(workflow.jobs)){
+  const matches=job.steps.filter(step=>names.some(key=>Object.hasOwn(step.env||{},key)));
+  if(name!=='go-live'){assert.equal(matches.length,0);continue;}
+  assert.equal(job.environment.name,'fcos-production-release');
+  assert.equal(matches.length,1);
+  const [step]=matches;
+  assert.match(step.run,/scripts\/rapid-release\.mjs promote/);
+  assert.ok(job.steps.indexOf(step)>job.steps.findIndex(item=>item.id==='admit-controller'));
+  for(const key of names)assert.match(step.env[key],/selection\.database && !.*selection\.salesforce && .*prerequisites\.adapter == 'company-fx-history'/);
+ }
+});

@@ -314,6 +314,8 @@ jobs:
           FCOS_RAPID_SALESFORCE_QAT_CLIENT_ID: ${{ fromJSON(inputs.manifest_json).selection.salesforce && secrets.FCOS_RAPID_SALESFORCE_QAT_CLIENT_ID || '' }}
           FCOS_RAPID_SALESFORCE_DEVEE_PRIVATE_KEY: ${{ fromJSON(inputs.manifest_json).selection.salesforce && secrets.FCOS_RAPID_SALESFORCE_DEVEE_PRIVATE_KEY || '' }}
           FCOS_RAPID_SALESFORCE_DEVEE_CLIENT_ID: ${{ fromJSON(inputs.manifest_json).selection.salesforce && secrets.FCOS_RAPID_SALESFORCE_DEVEE_CLIENT_ID || '' }}
+          FCOS_RAPID_COMPANY_FX_DB_ACCESS_TOKEN: ${{ fromJSON(inputs.manifest_json).selection.database && !fromJSON(inputs.manifest_json).selection.salesforce && fromJSON(inputs.manifest_json).prerequisites.adapter == 'company-fx-history' && secrets.FCOS_RAPID_SUPABASE_ACCESS_TOKEN || '' }}
+          FCOS_RAPID_COMPANY_FX_GH_OWNER_TOKEN: ${{ fromJSON(inputs.manifest_json).selection.database && !fromJSON(inputs.manifest_json).selection.salesforce && fromJSON(inputs.manifest_json).prerequisites.adapter == 'company-fx-history' && (secrets.FCOS_RAPID_HANDOVER_GITHUB_TOKEN || secrets.FCOS_RELEASE_GH_TOKEN) || '' }}
           FCOS_RAPID_DATABASE_URL: ${{ secrets.FCOS_RAPID_READONLY_DATABASE_URL }}
           FCOS_RAPID_DATABASE_CA: ${{ runner.temp }}/rapid-database-ca.pem
           FCOS_AUTH_E2E_ENABLED: 'true'

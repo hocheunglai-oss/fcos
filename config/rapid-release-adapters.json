@@ -16,6 +16,15 @@
       "path": "scripts/lib/rapid-release/fcuno-readback.mjs",
       "salesforce": false,
       "database": true
+    },
+    {
+      "id": "company-fx-history",
+      "status": "qualified",
+      "sourceDigest": "ffc8ed995d6e0a8693c688fd6de97f74c5b583d866a3118a7ad444d906006f2f",
+      "path": "scripts/lib/rapid-release/company-fx-adapter.mjs",
+      "salesforce": false,
+      "database": true,
+      "databaseWrite": true
     }
   ]
 }
