@@ -6,7 +6,7 @@ import { assertReviewedInputsUnchanged, cliSalesforceProvider, loadReviewedSales
 import { runReviewedMirror } from '../../sync-salesforce-reviewed-repository.mjs';
 import { preflightSharedMirrorPublication } from '../../sync-salesforce-shared-repository.mjs';
 import { openSalesforcePromotionJournal } from '../salesforce-promotion-journal.mjs';
-import { assertReviewedJobReport, runReviewedSalesforceRelease, safeProjectFile } from '../salesforce-reviewed-release.mjs';
+import { assertReviewedJobReport, reviewedJobExpectations, runReviewedSalesforceRelease, safeProjectFile } from '../salesforce-reviewed-release.mjs';
 import { authenticateHostedSalesforce } from './salesforce-hosted-auth.mjs';
 import { digest, requireCondition, targets } from './contract.mjs';
 
@@ -15,7 +15,9 @@ const policy = FCOS_CONNECTION_POLICY.providers.find(item => item.id === 'salesf
 export async function reconcileHostedSalesforceJob({ environment, jobId, reviewed, operation, submittedAt, validationJobId,
   provider, journal, now = () => new Date() }) {
   const target = policy.environments.find(item => item.key === environment.key);
-  requireCondition(target?.orgId === environment.orgId && ['validation', 'deployment'].includes(operation),
+  const reviewedBootstrap = operation === 'bootstrap' && validationJobId === null && reviewed.review?.bootstrap?.components?.length > 0
+    && /^[a-f0-9]{64}$/u.test(reviewed.binding.bootstrapSha256 || '');
+  requireCondition(target?.orgId === environment.orgId && (['validation', 'deployment'].includes(operation) || reviewedBootstrap),
     'SALESFORCE_HOSTED_RECOVERY_SCOPE_INVALID');
   const entries = await journal.readCheckpoints();
   const original = entries.find(item => item.fingerprint === reviewed.fingerprint && item.stage === target.key
@@ -25,8 +27,7 @@ export async function reconcileHostedSalesforceJob({ environment, jobId, reviewe
     'SALESFORCE_HOSTED_ORIGINAL_JOB_REQUIRED');
   await provider.verifyIdentity(target);
   const report = await provider.report(target, jobId);
-  const proof = assertReviewedJobReport(report, { environment: target, jobId, validation: operation === 'validation',
-    testPlan: reviewed.binding.testPlan, expectedComponents: reviewed.manifest });
+  const proof = assertReviewedJobReport(report, { environment: target, jobId, ...reviewedJobExpectations(reviewed, target, operation) });
   const verifiedAt = now();
   const completed = Date.parse(proof.completedAt);
   requireCondition(completed >= Date.parse(submittedAt) - 30_000 && completed <= verifiedAt.getTime() + 30_000,

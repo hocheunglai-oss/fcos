@@ -165,6 +165,15 @@ export function createReviewedSalesforcePlan({ review, manifestBytes, bootstrapB
   return { fingerprint: hash(binding), binding, review, manifest, changedFiles: changed, finalInventory, baselineInventory, baselineWorkflow };
 }
 
+export function reviewedJobExpectations(plan, environment, operation) {
+  const bootstrap = operation === 'bootstrap';
+  return {
+    validation: operation === 'validation', bootstrap,
+    testPlan: bootstrap ? { level: environment.isSandbox ? 'NoTestRun' : 'RunRelevantTests', tests: [], minimumTests: 1 } : plan.binding.testPlan,
+    expectedComponents: bootstrap ? plan.review.bootstrap.components : plan.manifest,
+  };
+}
+
 export function assertReviewedJobReport(report, { environment, jobId, validation = false, testPlan, bootstrap = false, expectedComponents = [] }) {
   const proof = assertSuccessfulSalesforceReport(report, { environment, jobId, validation });
   if (!JOB_ID.test(jobId) || Number(report.numberComponentsDeployed) !== Number(report.numberComponentsTotal) || Number(report.numberComponentsTotal) < 1) throw new Error('Salesforce report did not prove all reviewed components deployed.');
@@ -284,9 +293,7 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
       throw new Error(`${environment.label} ${operation} is ${status}; saved job must be reconciled before progression.`);
     }
     const proof = assertReviewedJobReport(report, {
-      environment, jobId: record.jobId, validation: operation === 'validation',
-      testPlan: operation === 'bootstrap' ? { level: environment.isSandbox ? 'NoTestRun' : 'RunRelevantTests', tests: [], minimumTests: 1 } : plan.binding.testPlan,
-      bootstrap: operation === 'bootstrap', expectedComponents: operation === 'bootstrap' ? plan.review.bootstrap.components : plan.manifest,
+      environment, jobId: record.jobId, ...reviewedJobExpectations(plan, environment, operation),
     });
     await unchanged();
     return persist(environment.key, operation, { ...record, ...proof, status: 'Succeeded',

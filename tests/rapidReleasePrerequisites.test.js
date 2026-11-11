@@ -141,3 +141,34 @@ test('hosted Salesforce recovery requires the acknowledged original job and its 
   report.checkOnly = false;
   await assert.rejects(reconcileHostedSalesforceJob(input), /all-or-none proof/);
 });
+
+test('hosted bootstrap recovery proves the exact original schema job without submitting again', async () => {
+  const { environments } = FCOS_CONNECTION_POLICY.providers.find(item => item.id === 'salesforce');
+  const jobId = '0AfHF00000700KB0AY', submittedAt = '2026-11-08T12:00:00.000Z';
+  const fingerprint = 'b'.repeat(64);
+  const component = 'CustomField:Demo__c.Value__c';
+  const reviewed = { fingerprint, manifest: ['ApexClass:Example', component], review: { bootstrap: { components: [component] } },
+    binding: { sourceTreeHash: 'c'.repeat(64), manifestSha256: 'd'.repeat(64), bootstrapSha256: 'f'.repeat(64),
+      testPlan: { level: 'RunLocalTests', minimumTests: 1 } } };
+  for (const environment of [environments[0], environments.at(-1)]) {
+    const checkpoint = { fingerprint, stage: environment.key, operation: 'bootstrap', outcome: 'pending',
+      job: { id: jobId, validationId: null, submittedAt }, evidenceDigest: 'e'.repeat(64) };
+    const count = environment.isSandbox ? 0 : 1;
+    const report = { id: jobId, status: 'Succeeded', success: true, done: true, checkOnly: false, rollbackOnError: true,
+      numberComponentsTotal: 1, numberComponentsDeployed: 1, numberTestsTotal: count, numberTestsCompleted: count,
+      completedDate: '2026-11-08T12:01:00.000Z',
+      details: { componentSuccesses: [{ componentType: 'CustomField', fullName: 'Demo__c.Value__c', success: true }] } };
+    let reads = 0;
+    const provider = { async verifyIdentity(org) { assert.equal(org.orgId, environment.orgId); },
+      async report(org, id) { assert.equal(org.orgId, environment.orgId); assert.equal(id, jobId); reads++; return report; } };
+    const input = { environment, jobId, reviewed, operation: 'bootstrap', submittedAt, validationJobId: null, provider,
+      journal: { async readCheckpoints() { return [checkpoint]; } }, now: () => new Date('2026-11-08T12:02:00.000Z') };
+    await assert.rejects(reconcileHostedSalesforceJob({ ...input, reviewed: { ...reviewed, review: {} } }), /RECOVERY_SCOPE_INVALID/);
+    await assert.rejects(reconcileHostedSalesforceJob({ ...input, jobId: '0AfHF00000702c50AA' }), /ORIGINAL_JOB_REQUIRED/);
+    assert.equal(reads, 0);
+    assert.equal((await reconcileHostedSalesforceJob(input)).operation, 'bootstrap');
+    assert.equal(reads, 1);
+    report.details.componentSuccesses.push({ componentType: 'ApexClass', fullName: 'Example', success: true });
+    await assert.rejects(reconcileHostedSalesforceJob(input), /unexpected non-schema component/);
+  }
+});
