@@ -26,10 +26,11 @@ export async function reviewedDeveePublicationProof({ plan, state, policy = POLI
   }
   await verifyReviewedOrgInventory({ provider, environment, plan, expected: plan.finalInventory, now });
   await assertUnchanged();
+  const deveeBaseline = plan.binding.orgBaselines?.devee;
   return { releaseMode: REVIEWED_SALESFORCE_MODE, baselineMode: plan.binding.baselineMode,
     proofKind: plan.binding.baselineMode === INVENTORY_BASELINE_MODE ? 'verified-native-inventory-plus-covered-manifest' : 'verified-complete-baseline-plus-covered-manifest',
-    sourceTreeHash: plan.binding.sourceTreeHash, baselineSourceTreeHash: plan.binding.baselineSourceTreeHash,
-    baselineInventoryHash: plan.binding.baselineInventoryHash, manifestSha256: plan.binding.manifestSha256,
+    sourceTreeHash: plan.binding.sourceTreeHash, baselineSourceTreeHash: deveeBaseline?.sourceTreeHash || plan.binding.baselineSourceTreeHash,
+    baselineInventoryHash: deveeBaseline?.inventoryHash || plan.binding.baselineInventoryHash, manifestSha256: plan.binding.manifestSha256,
     fingerprint: plan.fingerprint, deploymentJobId: stage.deployment.jobId, verifiedAt: new Date().toISOString() };
 }
 

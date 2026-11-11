@@ -111,7 +111,8 @@ function componentFiles(id, inventory) {
 }
 
 /** Baselines bind a Git tree; native inventory or complete v2 deployment evidence establishes org state. */
-export function createReviewedSalesforcePlan({ review, manifestBytes, bootstrapBytes = null, baselineWorkflow, baselineInventory, finalInventory, policy }) {
+export function createReviewedSalesforcePlan({ review, manifestBytes, bootstrapBytes = null, baselineWorkflow, baselineInventory,
+  orgBaselineInventories, finalInventory, policy }) {
   if (policy.environments.map(({ key }) => key).join(',') !== ENVIRONMENTS.join(',')) throw new Error('Salesforce order must be DEVEE → shared mirror → QAT → Production.');
   if (review?.schemaVersion !== 1 || review?.releaseMode !== REVIEWED_SALESFORCE_MODE || !HASH.test(review?.sourceTreeHash || '')
     || review.sourceTreeHash !== finalInventory.sourceTreeHash || review.manifestSha256 !== hash(manifestBytes)
@@ -137,6 +138,26 @@ export function createReviewedSalesforcePlan({ review, manifestBytes, bootstrapB
   if (removed.length || review.destructiveChanges?.length) failCoverage('Destructive metadata changes are unsupported by the incremental route.');
   const changed = Object.keys(finalInventory.files).filter(name => !same(finalInventory.files[name], baselineInventory.files[name]));
   if (!changed.length || changed.some(name => !coveredFiles.has(name))) failCoverage('Changed Salesforce files are missing manifest coverage.');
+  const orgBaselines = review.orgBaselines;
+  if (orgBaselines !== undefined || orgBaselineInventories !== undefined) {
+    if (baselineMode !== INVENTORY_BASELINE_MODE || !orgBaselines || !orgBaselineInventories
+      || !same(sorted(Object.keys(orgBaselines)), sorted(ENVIRONMENTS))
+      || !same(sorted(Object.keys(orgBaselineInventories)), sorted(ENVIRONMENTS))) failCoverage('Exact per-org inventory baselines are required for DEVEE, QAT and Production.');
+    for (const { key, orgId } of policy.environments) {
+      const descriptor = orgBaselines[key], inventory = orgBaselineInventories[key];
+      if (!descriptor || !inventory || descriptor.orgId !== orgId || !/^[a-f0-9]{40}$/u.test(descriptor.commit || '')
+        || descriptor.sourceTreeHash !== inventory.sourceTreeHash || descriptor.inventoryHash !== inventory.inventoryHash) {
+        failCoverage(`Salesforce ${key} baseline Git tree or pinned org does not match the review.`);
+      }
+      if (Object.keys(inventory.files).some(name => !finalInventory.files[name])) failCoverage(`Salesforce ${key} baseline would require metadata removal.`);
+      if (Object.keys(finalInventory.files).some(name => !same(finalInventory.files[name], inventory.files[name]) && !coveredFiles.has(name))) {
+        failCoverage(`Salesforce ${key} baseline differs outside reviewed manifest coverage.`);
+      }
+      if (components.some(({ files }) => files.some(name => inventory.files[name]) && files.some(name => !inventory.files[name]))) {
+        failCoverage(`Salesforce ${key} baseline has a partially present reviewed component.`);
+      }
+    }
+  }
   const testPlan = review.testPlan;
   if (!['RunLocalTests', 'RunSpecifiedTests', 'RunRelevantTests'].includes(testPlan?.level)
     || !Number.isSafeInteger(testPlan.minimumTests) || testPlan.minimumTests < 1
@@ -172,8 +193,10 @@ export function createReviewedSalesforcePlan({ review, manifestBytes, bootstrapB
     baselineInventoryHash: baselineInventory.inventoryHash, baselineCommit: review.baselineCommit,
     baselineMode, baselineJobs, configurationSha256: hash(policy), testPlan, permissionSets: permissions,
     orgIds: Object.fromEntries(policy.environments.map(({ key, orgId }) => [key, orgId])),
+    ...(orgBaselines ? { orgBaselines } : {}),
   };
-  return { fingerprint: hash(binding), binding, review, manifest, changedFiles: changed, finalInventory, baselineInventory, baselineWorkflow };
+  return { fingerprint: hash(binding), binding, review, manifest, changedFiles: changed, finalInventory,
+    baselineInventory, orgBaselineInventories, baselineWorkflow };
 }
 
 export function reviewedJobExpectations(plan, environment, operation) {
@@ -220,7 +243,8 @@ export function assertReviewedJobReport(report, { environment, jobId, validation
 export async function verifyReviewedOrgInventory({ provider, environment, plan, expected, now = () => new Date() }) {
   if (typeof provider.verifyInventory !== 'function') throw new Error('Current Salesforce org inventory verification is required; a historical successful deployment is not current baseline proof.');
   const receipt = await provider.verifyInventory(environment, { plan, expectedInventory: expected.files,
-    expectedSourceTreeHash: expected.sourceTreeHash || null, expectedInventoryHash: expected.inventoryHash });
+    expectedSourceTreeHash: expected.sourceTreeHash || null, expectedInventoryHash: expected.inventoryHash,
+    expectedAbsentComponents: expected.absentComponents || [] });
   const verifiedAt = Date.parse(receipt?.verifiedAt);
   if (receipt?.orgId !== environment.orgId || receipt?.sourceTreeHash !== (expected.sourceTreeHash || null)
     || receipt?.inventoryHash !== expected.inventoryHash || !HASH.test(receipt?.evidenceSha256 || '')
@@ -234,17 +258,28 @@ export async function verifyReviewedOrgInventory({ provider, environment, plan, 
       || identity?.connectedStatus !== 'Connected' || !String(identity?.username || '').trim() || (environment.username && identity.username !== environment.username)
       || !observed
       || !same(observed, expected.files) || hash(observed) !== expected.inventoryHash) throw new Error('Inventory baseline requires current native owned-tree file evidence and the pinned org identity; hashes or caller booleans alone are insufficient.');
+    if (expected.absentComponents?.length && (!same(receipt.absentComponents, expected.absentComponents)
+      || receipt.absenceVerificationMethod !== 'native-metadata-catalog')) {
+      throw new Error('Current Salesforce inventory lacks native evidence for the exact absent reviewed components.');
+    }
   }
   return receipt;
 }
 
-export function reviewedCheckpointInventory(plan, stage = {}) {
+export function reviewedCheckpointInventory(plan, stage = {}, environmentKey) {
   if (stage.deployment?.status === 'Succeeded') return plan.finalInventory;
-  if (!plan.review.bootstrap || stage.bootstrap?.status !== 'Succeeded') return plan.baselineInventory;
-  const files = new Set(plan.review.components.filter(({ id }) => plan.review.bootstrap.components.includes(id)).flatMap(({ files }) => files));
-  const inventory = Object.fromEntries(Object.entries({ ...plan.baselineInventory.files,
-    ...Object.fromEntries([...files].map(name => [name, plan.finalInventory.files[name]])) }).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
-  return { files: inventory, inventoryHash: hash(inventory) };
+  const baseline = plan.orgBaselineInventories ? plan.orgBaselineInventories[environmentKey] : plan.baselineInventory;
+  if (!baseline) throw new Error('Salesforce inventory checkpoint requires the pinned org baseline.');
+  let checkpoint = baseline;
+  if (plan.review.bootstrap && stage.bootstrap?.status === 'Succeeded') {
+    const files = plan.review.components.filter(({ id }) => plan.review.bootstrap.components.includes(id)).flatMap(({ files }) => files);
+    const inventory = Object.fromEntries(Object.entries({ ...baseline.files,
+      ...Object.fromEntries(files.map(name => [name, plan.finalInventory.files[name]])) }).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
+    checkpoint = { files: inventory, inventoryHash: hash(inventory) };
+  }
+  if (!plan.orgBaselineInventories) return checkpoint;
+  const absentComponents = plan.review.components.filter(({ files }) => files.every(name => !checkpoint.files[name])).map(({ id }) => id);
+  return { ...checkpoint, absentComponents: sorted(absentComponents) };
 }
 
 export function assertProductionAuthorization(authorization, plan, now = new Date()) {
@@ -501,7 +536,8 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
           await job(environment, operation, () => { throw new Error('Inventory preflight cannot submit an unresolved operation.'); },
             { validationJobId: operation === 'deployment' ? saved.validation?.jobId || null : null });
         }
-        const receipt = await verifyReviewedOrgInventory({ provider, environment, plan, expected: reviewedCheckpointInventory(plan, journal.state.stages[environment.key]), now });
+        const expected = reviewedCheckpointInventory(plan, journal.state.stages[environment.key], environment.key);
+        const receipt = await verifyReviewedOrgInventory({ provider, environment, plan, expected, now });
         await persist(environment.key, 'inventory-checkpoint', { baselineMode: INVENTORY_BASELINE_MODE, orgId: environment.orgId,
           inventoryHash: receipt.inventoryHash, sourceTreeHash: receipt.sourceTreeHash, verifiedAt: receipt.verifiedAt, evidenceSha256: receipt.evidenceSha256 });
       }
@@ -509,6 +545,7 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
     for (const environment of policy.environments) {
       if (environment.key !== 'devee') await mirror();
       const stage = journal.state.stages[environment.key] || {};
+      const baseline = reviewedCheckpointInventory(plan, {}, environment.key);
       // Successful upstream jobs are reattested, preserving original completedAt and IDs.
       if (stage.deployment) {
         if (!stage.validation) throw new Error('Deployment lacks its saved successful validation.');
@@ -519,20 +556,20 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
         continue;
       }
       if (environment.key === 'production' && mode === 'prepare' && plan.review.bootstrap && stage.bootstrap?.status !== 'Succeeded') {
-        await verifyReviewedOrgInventory({ provider, environment, plan, expected: plan.baselineInventory, now });
+        await verifyReviewedOrgInventory({ provider, environment, plan, expected: baseline, now });
         await persist('production', 'preparation', { status: 'awaiting-authorized-bootstrap', fingerprint: plan.fingerprint });
         return { mode: 'prepared', productionValidation: 'deferred-until-authorized-bootstrap', fingerprint: plan.fingerprint, journal: journal.file };
       }
-      let predeploymentInventory = plan.baselineInventory;
+      let predeploymentInventory = baseline;
       if (plan.review.bootstrap) {
-        if (!stage.bootstrap) await verifyReviewedOrgInventory({ provider, environment, plan, expected: plan.baselineInventory, now });
+        if (!stage.bootstrap) await verifyReviewedOrgInventory({ provider, environment, plan, expected: baseline, now });
         await job(environment, 'bootstrap', () => provider.bootstrap(environment, plan), {
           prepare: provider.prepareBootstrap ? () => provider.prepareBootstrap(environment, plan) : undefined,
         });
-        predeploymentInventory = reviewedCheckpointInventory(plan, journal.state.stages[environment.key]);
+        predeploymentInventory = reviewedCheckpointInventory(plan, journal.state.stages[environment.key], environment.key);
         await verifyReviewedOrgInventory({ provider, environment, plan, expected: predeploymentInventory, now });
         await permissions(environment, plan.review.bootstrap.permissionSets || []);
-      } else await verifyReviewedOrgInventory({ provider, environment, plan, expected: plan.baselineInventory, now });
+      } else await verifyReviewedOrgInventory({ provider, environment, plan, expected: baseline, now });
       const validation = await job(environment, 'validation', () => provider.validate(environment, plan));
       if (environment.key === 'production' && mode === 'prepare') {
         await persist('production', 'preparation', { status: 'ready', fingerprint: plan.fingerprint, validationJobId: validation.jobId });
@@ -550,6 +587,7 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
     // This is a reviewable restoration checkpoint, not a destructive automatic rollback.
     const restoration = [...policy.environments].reverse().filter(environment => get(environment.key, 'deployment') || get(environment.key, 'bootstrap'))
       .map(environment => ({ environment: environment.key, orgId: environment.orgId, baseline: plan.binding.baselineJobs?.[environment.key]
+        || plan.binding.orgBaselines?.[environment.key]
         || { mode: INVENTORY_BASELINE_MODE, commit: plan.binding.baselineCommit, sourceTreeHash: plan.binding.baselineSourceTreeHash, inventoryHash: plan.binding.baselineInventoryHash },
         metadata: 'Stop promotion; review all-or-none restoration of the known baseline through the required DEVEE/shared/QAT/Production controls.',
         permissions: plan.binding.permissionSets.filter(name => get(environment.key, `permission:${name}`)?.prestate === false) }));

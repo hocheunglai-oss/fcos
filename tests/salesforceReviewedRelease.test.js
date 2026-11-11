@@ -24,7 +24,7 @@ const files = { 'classes/Example.cls': Buffer.from('class Example {}\n'), 'class
 const validationRuleId = 'ValidationRule:Trade_Document_Line__c.Exactly_One_Document_Parent';
 const validationRulePath = 'objects/Trade_Document_Line__c/validationRules/Exactly_One_Document_Parent.validationRule-meta.xml';
 
-function fixture({ bootstrap = false, level = 'RunLocalTests', inventoryBaseline = false, validationRule = false } = {}) {
+function fixture({ bootstrap = false, level = 'RunLocalTests', inventoryBaseline = false, validationRule = false, asymmetric = false } = {}) {
   const baselineInventory = inventoryFromFiles(files);
   const finalFiles = { ...files, 'classes/Example.cls': Buffer.from('class Example { String value; }\n') };
   const componentIds = ['ApexClass:Example'];
@@ -75,18 +75,32 @@ function fixture({ bootstrap = false, level = 'RunLocalTests', inventoryBaseline
     ...(bootstrap ? { bootstrap: { manifestPath: 'manifest/bootstrap.xml', sha256: hash(bootstrapBytes), components: bootstrapIds, permissionSets: ['Reviewed'] } } : {}),
   };
   if (inventoryBaseline) { review.baselineMode = INVENTORY_BASELINE_MODE; delete review.baselineWorkflowPath; baselineWorkflow = null; }
-  const inputs = { review, manifestBytes, bootstrapBytes, baselineWorkflow, baselineInventory, finalInventory, policy };
+  let orgBaselineInventories;
+  if (asymmetric) {
+    const [field, permission] = bootstrapIds;
+    orgBaselineInventories = {
+      devee: inventoryFromFiles({ ...files, [componentPaths[field][0]]: finalFiles[componentPaths[field][0]] }),
+      qat: inventoryFromFiles({ ...files, [componentPaths[permission][0]]: finalFiles[componentPaths[permission][0]] }),
+      production: baselineInventory,
+    };
+    review.orgBaselines = Object.fromEntries(policy.environments.map(({ key, orgId }, index) => {
+      const { sourceTreeHash, inventoryHash } = orgBaselineInventories[key];
+      return [key, { orgId, commit: String(index + 1).repeat(40), sourceTreeHash, inventoryHash }];
+    }));
+  }
+  const inputs = { review, manifestBytes, bootstrapBytes, baselineWorkflow, baselineInventory, orgBaselineInventories, finalInventory, policy };
   const plan = createReviewedSalesforcePlan(inputs);
   const directory = mkdtempSync(path.join(tmpdir(), 'fcos-reviewed-sf-'));
   let journal = openSalesforcePromotionJournal({ directory, binding: plan.binding, now });
   const calls = [], assignments = new Set(), checkpoints = [];
-  const orgInventories = new Map(policy.environments.map(environment => [environment.key, structuredClone(baselineInventory)]));
+  const orgInventories = new Map(policy.environments.map(({ key }) => [key, structuredClone(reviewedCheckpointInventory(plan, {}, key))]));
   let sequence = 100;
   const provider = {
     async verifyInventory(environment, expected) { calls.push(['inventory', environment.key, expected.expectedInventoryHash]);
       const actual = orgInventories.get(environment.key);
       return { orgId: environment.orgId, sourceTreeHash: actual.sourceTreeHash || null, inventoryHash: actual.inventoryHash, verifiedAt: fixedNow.toISOString(), evidenceSha256: 'a'.repeat(64),
         verificationMethod: 'metadata-api-owned-tree-inventory', scope: 'force-app/main/default', observedInventory: structuredClone(actual.files),
+        ...(actual.absentComponents ? { absentComponents: actual.absentComponents, absenceVerificationMethod: 'native-metadata-catalog' } : {}),
         identity: { alias: environment.alias, orgId: environment.orgId, isSandbox: environment.isSandbox, username: environment.username || 'production@example.invalid', connectedStatus: 'Connected' } }; },
     async verifyIdentity(environment) { calls.push(['identity', environment.key]); },
     async report(environment, id) { calls.push(['report', environment.key, id]); return reports.get(id); },
@@ -95,7 +109,7 @@ function fixture({ bootstrap = false, level = 'RunLocalTests', inventoryBaseline
     async bootstrap(environment) { const id = jobId(++sequence); calls.push(['bootstrap', environment.key, id]);
       const report = makeReport(id, false, { zero: true });
       report.details.componentSuccesses = bootstrapIds.map(id => { const [componentType, fullName] = id.split(':'); return { componentType, fullName, success: true }; });
-      reports.set(id, report); orgInventories.set(environment.key, reviewedCheckpointInventory(plan, { bootstrap: { status: 'Succeeded' } })); return { id }; },
+      reports.set(id, report); orgInventories.set(environment.key, reviewedCheckpointInventory(plan, { bootstrap: { status: 'Succeeded' } }, environment.key)); return { id }; },
     async permissionAssigned(environment, name) { calls.push(['permission-read', environment.key, name]); return assignments.has(`${environment.key}:${name}`); },
     async assignPermission(environment, name) { calls.push(['permission-write', environment.key, name]); assignments.add(`${environment.key}:${name}`); },
     async mirror(action, { deveeDeployment }) {
@@ -298,6 +312,59 @@ test('schema prepare stops before Production bootstrap and exact apply authorize
     assert.equal(f.journal.state.stages.production.bootstrap.apexTestProof, false);
     assert.equal(f.journal.state.stages.production.validation.apexTestProof, true);
     assert.equal(f.journal.state.stages.production.validation.testPlan.level, 'RunLocalTests');
+  } finally { f.cleanup(); }
+});
+
+test('per-org baselines are checked before mutation and schema overlays preserve the exact remaining absences', async () => {
+  const f = fixture({ bootstrap: true, inventoryBaseline: true, asymmetric: true, validationRule: true });
+  try {
+    const environmentKeys = policy.environments.map(({ key }) => key);
+    const initial = environmentKeys.map(key => reviewedCheckpointInventory(f.plan, {}, key));
+    assert.equal(new Set(initial.map(item => item.inventoryHash)).size, 3);
+    assert.deepEqual(initial.map(item => item.absentComponents), [
+      ['PermissionSet:Reviewed', validationRuleId],
+      ['CustomField:Demo__c.Value__c', validationRuleId],
+      ['CustomField:Demo__c.Value__c', 'PermissionSet:Reviewed', validationRuleId],
+    ]);
+    const afterBootstrap = reviewedCheckpointInventory(f.plan, { bootstrap: { status: 'Succeeded' } }, 'devee');
+    assert.deepEqual(afterBootstrap.absentComponents, [validationRuleId]);
+    const verifyInventory = f.provider.verifyInventory;
+    f.provider.verifyInventory = async (environment, input) => {
+      const receipt = await verifyInventory(environment, input);
+      if (environment.key === 'production') delete receipt.absentComponents;
+      return receipt;
+    };
+    await assert.rejects(f.run('prepare'), /lacks native evidence for the exact absent reviewed components/);
+    assert.deepEqual(f.calls, [
+      ...environmentKeys.map(key => ['identity', key]),
+      ...environmentKeys.map((key, index) => ['inventory', key, initial[index].inventoryHash]),
+    ]);
+    f.provider.verifyInventory = verifyInventory;
+    const prepared = await f.run('prepare');
+    assert.equal(prepared.productionValidation, 'deferred-until-authorized-bootstrap');
+    assert.deepEqual(f.calls.filter(([operation]) => operation === 'bootstrap').map(([, key]) => key), ['devee', 'qat']);
+    await f.run('apply', { authorization: f.authorization });
+    assert.deepEqual(f.calls.filter(([operation]) => operation === 'bootstrap').map(([, key]) => key), environmentKeys);
+  } finally { f.cleanup(); }
+});
+
+test('per-org baselines reject a substituted org, removal, and a partially present reviewed component', () => {
+  const f = fixture({ bootstrap: true, inventoryBaseline: true, asymmetric: true });
+  try {
+    const inputs = structuredClone(f.inputs);
+    inputs.manifestBytes = f.inputs.manifestBytes;
+    inputs.bootstrapBytes = f.inputs.bootstrapBytes;
+    inputs.review.orgBaselines.qat.orgId = inputs.review.orgBaselines.devee.orgId;
+    assert.throws(() => createReviewedSalesforcePlan(inputs), /qat baseline Git tree or pinned org/);
+    inputs.review.orgBaselines.qat = { ...f.inputs.review.orgBaselines.qat };
+    const inventory = inventoryFromFiles({ ...files, 'objects/Unrelated__c/Unrelated__c.object-meta.xml': Buffer.from('<CustomObject/>') });
+    inputs.orgBaselineInventories.qat = inventory;
+    Object.assign(inputs.review.orgBaselines.qat, { inventoryHash: inventory.inventoryHash, sourceTreeHash: inventory.sourceTreeHash });
+    assert.throws(() => createReviewedSalesforcePlan(inputs), /qat baseline would require metadata removal/);
+    const partial = inventoryFromFiles({ 'classes/Example.cls': files['classes/Example.cls'] });
+    inputs.orgBaselineInventories.qat = partial;
+    Object.assign(inputs.review.orgBaselines.qat, { inventoryHash: partial.inventoryHash, sourceTreeHash: partial.sourceTreeHash });
+    assert.throws(() => createReviewedSalesforcePlan(inputs), /qat baseline has a partially present reviewed component/);
   } finally { f.cleanup(); }
 });
 
@@ -588,16 +655,26 @@ test('hosted stage derives its bootstrap binding from the reviewed tracked candi
     run(['init', '--quiet']);
     for (const [name, bytes] of Object.entries(files)) write(`force-app/main/default/${name}`, bytes);
     commit('baseline');
-    const review = { ...f.inputs.review, baselineCommit: run(['rev-parse', 'HEAD']) };
+    const baselineCommit = run(['rev-parse', 'HEAD']);
+    const review = { ...f.inputs.review, baselineCommit };
     write('sfdx-project.json', JSON.stringify({ namespace: '', packageDirectories: [{ path: 'force-app', default: true }] }));
-    write('force-app/main/default/classes/Example.cls', 'class Example { String value; }\n');
     write('force-app/main/default/objects/Demo__c/fields/Value__c.field-meta.xml', '<CustomField/>\n');
+    commit('sandbox baseline');
+    const sandboxCommit = run(['rev-parse', 'HEAD']);
+    review.orgBaselines = Object.fromEntries(policy.environments.map(({ key, orgId }) => {
+      const sha = key === 'production' ? baselineCommit : sandboxCommit;
+      const { sourceTreeHash, inventoryHash } = baselineGitInventory(cwd, sha);
+      return [key, { orgId, commit: sha, sourceTreeHash, inventoryHash }];
+    }));
+    write('force-app/main/default/classes/Example.cls', 'class Example { String value; }\n');
     write('force-app/main/default/permissionsets/Reviewed.permissionset-meta.xml', '<PermissionSet/>\n');
     write('manifest/release.xml', f.inputs.manifestBytes);
     write('manifest/bootstrap.xml', f.inputs.bootstrapBytes);
     write('manifest/review.json', JSON.stringify(review));
     commit('candidate');
     const reviewed = loadReviewedSalesforcePlan({ cwd, manifestPath: 'manifest/release.xml', reviewPath: 'manifest/review.json', policy });
+    assert.notEqual(reviewed.orgBaselineInventories.devee.inventoryHash, reviewed.orgBaselineInventories.production.inventoryHash);
+    assert.equal(reviewed.orgBaselineInventories.devee, reviewed.orgBaselineInventories.qat);
     const plan = { backwardCompatible: true, deferSchemaDependentSmoke: true, deferredModules: ['hedge_desk'],
       salesforceManifestPath: 'manifest/release.xml', salesforceReviewPath: 'manifest/review.json',
       salesforceFingerprint: reviewed.fingerprint, salesforceSourceTreeHash: reviewed.binding.sourceTreeHash,

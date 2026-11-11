@@ -39,7 +39,7 @@ function localCommand(program, args, cwd, { json = true, env = process.env, bina
 export function baselineGitInventory(cwd, commit, run = localCommand) {
   if (!/^[a-f0-9]{40}$/u.test(commit || '')) throw new Error('Baseline must be an exact Git commit.');
   const prefix = 'force-app/main/default/';
-  const listing = run('git', ['ls-tree', '-rz', commit, '--', prefix], cwd, { json: false });
+  const listing = run('git', ['ls-tree', '-rz', `${commit}^{commit}`, '--', prefix], cwd, { json: false });
   const entries = listing.split('\0').filter(Boolean).map(line => {
     const match = /^(100644|100755) blob ([a-f0-9]{40})\t(.+)$/u.exec(line);
     if (!match || !match[3].startsWith(prefix)) throw new Error('Baseline metadata contains unsupported file types.');
@@ -69,8 +69,17 @@ export function loadReviewedSalesforcePlan({ cwd = ROOT, manifestPath, reviewPat
   const baselineWorkflow = baselineWorkflowAbsolute ? JSON.parse(readFileSync(baselineWorkflowAbsolute, 'utf8')) : null;
   const sourceRoot = path.join(cwd, policy.publication.sourceRoot);
   const bootstrapAbsolute = review.bootstrap ? safeProjectFile(cwd, review.bootstrap.manifestPath) : null;
+  const baselines = new Map();
+  const inventoryAt = commit => {
+    if (!baselines.has(commit)) baselines.set(commit, baselineGitInventory(cwd, commit));
+    return baselines.get(commit);
+  };
+  const baselineInventory = inventoryAt(review.baselineCommit);
+  const orgBaselineInventories = review.orgBaselines
+    ? Object.fromEntries(Object.entries(review.orgBaselines).map(([key, descriptor]) => [key, inventoryAt(descriptor?.commit)]))
+    : undefined;
   const inputs = { review, manifestBytes: readFileSync(manifestAbsolute), bootstrapBytes: bootstrapAbsolute ? readFileSync(bootstrapAbsolute) : null,
-    baselineWorkflow, baselineInventory: baselineGitInventory(cwd, review.baselineCommit), finalInventory: readReviewedInventory(sourceRoot), policy };
+    baselineWorkflow, baselineInventory, orgBaselineInventories, finalInventory: readReviewedInventory(sourceRoot), policy };
   const plan = createReviewedSalesforcePlan(inputs);
   return { ...plan, manifestPath, reviewPath, manifestAbsolute, reviewAbsolute, baselineWorkflowAbsolute, bootstrapAbsolute,
     inputDigests: { review: salesforcePromotionHash(readFileSync(reviewAbsolute)), baseline: baselineWorkflowAbsolute ? salesforcePromotionHash(readFileSync(baselineWorkflowAbsolute)) : null } };
