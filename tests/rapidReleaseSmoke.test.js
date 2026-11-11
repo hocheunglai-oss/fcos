@@ -407,3 +407,12 @@ test('diagnostic records subsequent module outcomes after a denied read without 
   ]);
   assert.equal(observations.contextsClosed, 2);
 });
+
+test('native smoke identifies the reviewed module and surface that failed', async () => {
+  const { browserFactory, observations } = browserFixture({ deniedModule: 'review' });
+  await assert.rejects(runStagedSmoke({
+    manifest: manifest({ modules: ['review', 'settings'], normalRole: true }),
+    staged, env, fetchImpl: publicFetch(), browserFactory,
+  }), { code: 'SMOKE_AUTHENTICATED_READ_FAILED', smokeModule: 'review', smokeSurface: 'read' });
+  assert.equal(observations.contextsClosed, 2);
+});
