@@ -201,11 +201,17 @@ function assertDeveeDeploymentProof(inventory) {
 
 function remoteBranchHead(branch) {
   const ref = encodeURIComponent(`heads/${branch}`);
+  let result;
   try {
-    return json('gh', ['api', `repos/${PUBLICATION.repository}/git/ref/${ref}`], { env: ghEnvironment })?.object?.sha || '';
-  } catch {
-    return '';
+    result = json('gh', ['api', `repos/${PUBLICATION.repository}/git/ref/${ref}`], { env: ghEnvironment });
+  } catch (error) {
+    if (/^gh: Not Found \(HTTP 404\)$/u.test(error.message)) return '';
+    throw error;
   }
+  if (result?.ref !== `refs/heads/${branch}` || !/^[a-f0-9]{40}$/u.test(result?.object?.sha || '')) {
+    throw new Error('Shared Salesforce publication branch readback is invalid.');
+  }
+  return result.object.sha;
 }
 
 function openPullRequests() {
@@ -261,6 +267,16 @@ export function selectPublicationTarget(
 
 function publicationBranch(mode) {
   return selectPublicationTarget(openPullRequests(), { mode });
+}
+
+// Read-only check before starting a release that must publish the DEVEE tree.
+export function preflightSharedMirrorPublication() {
+  assertIdentity();
+  const selected = publicationBranch('publish');
+  const remoteHead = remoteBranchHead(selected.branch);
+  if (selected.pullRequest ? selected.pullRequest.headRefOid !== remoteHead : remoteHead) {
+    throw new Error('Shared Salesforce publication branch does not match the selected draft state.');
+  }
 }
 
 function cloneBranch(destination, branch, existsRemotely, mode) {

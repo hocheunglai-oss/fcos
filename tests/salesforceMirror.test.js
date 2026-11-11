@@ -179,6 +179,20 @@ test('mirror command refetches and validates the PR before verifying immutable r
   assert.match(source, /checkout', '--detach', pullRequest\.headRefOid/);
 });
 
+test('hosted Salesforce checks mirror access and draft state before granting its first write receipt', async () => {
+  const mirror = await readFile(new URL('../scripts/sync-salesforce-shared-repository.mjs', import.meta.url), 'utf8');
+  const preflight = mirror.slice(mirror.indexOf('export function preflightSharedMirrorPublication('), mirror.indexOf('function cloneBranch('));
+  assert.match(preflight, /assertIdentity\(\)[\s\S]*publicationBranch\('publish'\)[\s\S]*remoteBranchHead\(selected\.branch\)/);
+  assert.doesNotMatch(preflight, /cloneBranch\(|executeSharedMirror\(|publish\(/);
+  const branchLookup = mirror.slice(mirror.indexOf('function remoteBranchHead('), mirror.indexOf('function openPullRequests('));
+  assert.match(branchLookup, /HTTP 404/);
+  assert.match(branchLookup, /throw error;/);
+  assert.match(branchLookup, /result\?\.ref !== `refs\/heads\//);
+  const adapter = await readFile(new URL('../scripts/lib/rapid-release/salesforce-reviewed-adapter.mjs', import.meta.url), 'utf8');
+  assert.match(adapter, /if \(!mirrorPreflightPassed\) \{\s*preflightSharedMirrorPublication\(\);\s*mirrorPreflightPassed = true;\s*\}\s*return salesforce\.ownership\.assert\(binding\)/);
+  assert.match(adapter, /runReviewedSalesforceRelease\(\{[\s\S]*?\n\s*ownership, externalJournal:/);
+});
+
 test('hosted mirror uses the exact candidate tree throughout publication and remote verification', async () => {
   const source = await readFile(new URL('../scripts/sync-salesforce-shared-repository.mjs', import.meta.url), 'utf8');
   const entrypoint = source.slice(source.indexOf('export function executeSharedMirror('));

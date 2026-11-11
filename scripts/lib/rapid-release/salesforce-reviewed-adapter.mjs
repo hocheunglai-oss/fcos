@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { FCOS_CONNECTION_POLICY } from '../../../config/fcosConnections.js';
 import { assertReviewedInputsUnchanged, cliSalesforceProvider, loadReviewedSalesforcePlan } from '../../deploy-salesforce-reviewed-manifest.mjs';
 import { runReviewedMirror } from '../../sync-salesforce-reviewed-repository.mjs';
+import { preflightSharedMirrorPublication } from '../../sync-salesforce-shared-repository.mjs';
 import { openSalesforcePromotionJournal } from '../salesforce-promotion-journal.mjs';
 import { assertReviewedJobReport, runReviewedSalesforceRelease, safeProjectFile } from '../salesforce-reviewed-release.mjs';
 import { digest, requireCondition, targets } from './contract.mjs';
@@ -67,8 +68,18 @@ export async function applyReviewedPrerequisites({ manifest, approval, plan, sal
         authorizedBy: approval.reviewer, evidence: manifestHash,
         expiresAt: new Date(Date.parse(approval.approvedAt) + 86_400_000).toISOString(),
       };
+      let mirrorPreflightPassed = false;
+      const ownership = {
+        async assert(binding) {
+          if (!mirrorPreflightPassed) {
+            preflightSharedMirrorPublication();
+            mirrorPreflightPassed = true;
+          }
+          return salesforce.ownership.assert(binding);
+        },
+      };
       const run = mode => runReviewedSalesforceRelease({ plan: reviewed, mode, policy, journal, provider,
-        ownership: salesforce.ownership, externalJournal: salesforce.journal,
+        ownership, externalJournal: salesforce.journal,
         authorization: mode === 'apply' ? authorization : null,
         assertUnchanged: () => assertReviewedInputsUnchanged(reviewed, { cwd, policy }) });
       const saved = await salesforce.journal.readCheckpoints();
