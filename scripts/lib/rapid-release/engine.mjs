@@ -1,4 +1,4 @@
-import { requiresCompanyFxHistorySmoke, requiresSupplierBucketSmoke, requiresGroupedPetroleumSmoke,
+import { requiresCompanyFxHistorySmoke, requiresSupplierBucketSmoke, requiresGroupedPetroleumSmoke, requiresTradingFxSmoke,
   assertAuthorization, digest, requireCondition, validateManifest } from './contract.mjs';
 
 const events = records => records.map(record => record.payload);
@@ -48,6 +48,11 @@ function groupedPetroleumSmokeVerified(proof, manifest) {
     || proof?.groupedPetroleum?.restrictedVerified === true && proof.groupedPetroleum.normalVerified === true
       && proof.groupedPetroleum.desktopVerified === true;
 }
+function tradingFxSmokeVerified(proof, manifest) {
+  return !requiresTradingFxSmoke(manifest)
+    || proof?.tradingFx?.restrictedVerified === true && proof.tradingFx.normalVerified === true
+      && proof.tradingFx.desktopVerified === true;
+}
 export function assertSmokeProof(proof, manifest, staged) {
   requireCondition(proof?.passed === true && proof.deploymentId === staged.id && proof.buildId === manifest.build.buildId
     && proof.login === true && proof.restrictedAccess === true && proof.businessWrites === 0
@@ -55,6 +60,7 @@ export function assertSmokeProof(proof, manifest, staged) {
     && (!manifest.selection.normalRole || proof.normalRole === true), 'STAGED_SMOKE_INCOMPLETE');
   requireCondition(supplierBucketSmokeVerified(proof, manifest), 'SMOKE_SUPPLIER_BUCKET_ROUTE_BOUNDARY_FAILED');
   requireCondition(groupedPetroleumSmokeVerified(proof, manifest), 'SMOKE_GROUPED_PETROLEUM_BOUNDARY_REQUIRED');
+  requireCondition(tradingFxSmokeVerified(proof, manifest), 'SMOKE_TRADING_FX_BOUNDARY_REQUIRED');
 }
 export function assertPreBootstrapProof(proof, manifest, staged) {
   const plan = manifest.prerequisites?.plan;
@@ -74,6 +80,7 @@ export function assertPreBootstrapProof(proof, manifest, staged) {
     && exactModules(completed, selected.filter(module => !deferred.includes(module)))
     && Array.isArray(proof.completedChecks) && ['runtime_identity', 'authenticated_login', 'authentication_denials', 'request_isolation']
       .every(check => proof.completedChecks.includes(check)), 'PREBOOTSTRAP_STAGE_PROOF_REQUIRED');
+  requireCondition(tradingFxSmokeVerified(proof, manifest), 'SMOKE_TRADING_FX_BOUNDARY_REQUIRED');
 }
 export async function stageRelease({ manifest, journal, provider, build, smoke, beforeBootstrap }) {
   validateManifest(manifest); assertBuildReceipt(build, manifest);
@@ -94,7 +101,8 @@ export async function stageRelease({ manifest, journal, provider, build, smoke, 
   const acceptanceEvent = deferred ? 'stage.pre_bootstrap_passed' : 'smoke.passed';
   const existing = events(records).find(event => event.event === acceptanceEvent && event.data.deploymentId === ready.id);
   if (existing && deferred) assertPreBootstrapProof(existing.data, manifest, ready);
-  if (existing && (requiresSupplierBucketSmoke(manifest) || requiresGroupedPetroleumSmoke(manifest))) assertSmokeProof(existing.data, manifest, ready);
+  if (existing && (requiresSupplierBucketSmoke(manifest) || requiresGroupedPetroleumSmoke(manifest)
+    || !deferred && requiresTradingFxSmoke(manifest))) assertSmokeProof(existing.data, manifest, ready);
   if (!existing) {
     if (deferred) {
       requireCondition(typeof beforeBootstrap === 'function', 'QUALIFIED_PREBOOTSTRAP_VERIFIER_REQUIRED');
@@ -118,7 +126,8 @@ export async function promoteRelease({ manifest, journal, provider, approval, pr
   const deferred = manifest.prerequisites?.plan?.deferSchemaDependentSmoke === true;
   requireCondition(stagedReference && (deferred ? preBootstrap : fullStage), 'STAGED_ACCEPTANCE_REQUIRED');
   if (deferred) assertPreBootstrapProof(preBootstrap, manifest, stagedReference);
-  if (requiresSupplierBucketSmoke(manifest) || requiresGroupedPetroleumSmoke(manifest)) assertSmokeProof(fullStage?.data, manifest, stagedReference);
+  if (requiresSupplierBucketSmoke(manifest) || requiresGroupedPetroleumSmoke(manifest)
+    || !deferred && requiresTradingFxSmoke(manifest)) assertSmokeProof(fullStage?.data, manifest, stagedReference);
   assertBuildReceipt(build, manifest);
   const staged = await provider.ready(stagedReference.id);
   requireCondition(staged.id === stagedReference.id && staged.state === 'READY' && staged.buildId === manifest.build.buildId
@@ -152,6 +161,7 @@ export async function promoteRelease({ manifest, journal, provider, approval, pr
       && event.data.prerequisiteDigest === prerequisiteDigest && event.data.deploymentId === staged.id
       && supplierBucketSmokeVerified(event.data, manifest)
       && groupedPetroleumSmokeVerified(event.data, manifest)
+      && tradingFxSmokeVerified(event.data, manifest)
       && (!historyRequired || event.data.companyFxHistory?.readVerified === true && event.data.companyFxHistory?.writeDenied === true))) {
       const currentStage = await provider.ready(staged.id);
       requireCondition(currentStage.id === staged.id && currentStage.state === 'READY' && currentStage.buildId === staged.buildId

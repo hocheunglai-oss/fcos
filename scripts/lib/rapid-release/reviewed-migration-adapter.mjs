@@ -6,7 +6,7 @@ import { githubClient } from './providers.mjs';
 const submissionEvent = 'prerequisites.database_submitting';
 const writerIdentity = "select session_user,current_user,current_database() as database,current_setting('transaction_read_only') as read_only";
 
-export function reviewedMigrationAdapter({ migrations, workflowPaths, transactMigration, errorPrefix, credentialsPrefix, purpose }) {
+export function reviewedMigrationAdapter({ migrations, workflowPaths, transactMigration, errorPrefix, credentialsPrefix, purpose, withSalesforce = false }) {
   const expectedPlan = { migrations };
   const reviewedPaths = migrations.map(({ path }) => path);
   const check = (condition, code) => requireCondition(condition, `${errorPrefix}_${code}`);
@@ -29,8 +29,9 @@ export function reviewedMigrationAdapter({ migrations, workflowPaths, transactMi
   }, { github = githubClient, connect = openWriter, verifyIdentity = assertPinnedDatabaseIdentity,
     transact = transactMigration } = {}) {
     const manifestHash = digest(manifest);
-    check(digest(plan) === digest(expectedPlan) && manifest.selection.database === true
-      && manifest.selection.salesforce === false && manifest.selection.normalRole === true && isSha(manifest.candidate.sha)
+    const databasePlan = withSalesforce ? { migrations: plan?.migrations } : plan;
+    check(digest(databasePlan) === digest(expectedPlan) && manifest.selection.database === true
+      && manifest.selection.salesforce === withSalesforce && manifest.selection.normalRole === true && isSha(manifest.candidate.sha)
       && manifest.selection.modules.includes('xero_portal')
       && workflowPaths.every(path => manifest.paths.includes(path))
       && digest(manifest.paths.filter(path => path.startsWith('supabase/migrations/'))) === digest(reviewedPaths),
