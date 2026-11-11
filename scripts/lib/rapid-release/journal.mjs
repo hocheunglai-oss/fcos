@@ -106,6 +106,13 @@ export class DeploymentJournal {
         'SALESFORCE_CHECKPOINT_PREPARATION_INVALID');
       data.preparation = { validationJobId: record.validationJobId };
     }
+    if (stage === 'production' && operation === 'preparation' && status === 'awaiting-authorized-bootstrap') {
+      const time = Date.parse(record.recordedAt);
+      requireCondition(record.fingerprint === fingerprint && /^[a-f0-9]{64}$/u.test(record.bootstrapSha256 || '')
+        && Number.isFinite(time) && new Date(time).toISOString() === record.recordedAt
+        && !Object.hasOwn(record, 'validationJobId'), 'SALESFORCE_CHECKPOINT_PREPARATION_INVALID');
+      data.preparation = { status, bootstrapSha256: record.bootstrapSha256, recordedAt: record.recordedAt };
+    }
     const find = chain => chain.find(entry => entry.payload.event === 'salesforce.checkpoint'
       && canonical(entry.payload.data) === canonical(data));
     const chain = await this.read();

@@ -10,7 +10,7 @@ import { openSalesforcePromotionJournal, salesforcePromotionHash as hash } from 
 import { INVENTORY_BASELINE_MODE, REVIEWED_SALESFORCE_MODE, createReviewedSalesforcePlan, inventoryFromFiles, matchesSalesforceCheckpoint, parseReviewedPackage, reviewedCheckpointInventory, runReviewedSalesforceRelease, assertReviewedJobReport, assertProductionAuthorization } from '../scripts/lib/salesforce-reviewed-release.mjs';
 import { assertReviewedInputsUnchanged, baselineGitInventory, cliSalesforceProvider, loadReviewedSalesforcePlan, reviewedSalesforceOptions } from '../scripts/deploy-salesforce-reviewed-manifest.mjs';
 import { reviewedDeveePublicationProof } from '../scripts/sync-salesforce-reviewed-repository.mjs';
-import { verifyPreBootstrapStage } from '../scripts/lib/rapid-release/salesforce-reviewed-adapter.mjs';
+import { applyReviewedPrerequisites, verifyPreBootstrapStage } from '../scripts/lib/rapid-release/salesforce-reviewed-adapter.mjs';
 import { digest, targets } from '../scripts/lib/rapid-release/contract.mjs';
 
 const policy = FCOS_CONNECTION_POLICY.providers.find(({ id }) => id === 'salesforce');
@@ -340,6 +340,48 @@ test('schema prepare stops before Production bootstrap and exact apply authorize
     assert.equal(f.journal.state.stages.production.bootstrap.apexTestProof, false);
     assert.equal(f.journal.state.stages.production.validation.apexTestProof, true);
     assert.equal(f.journal.state.stages.production.validation.testPlan.level, 'RunLocalTests');
+  } finally { f.cleanup(); }
+});
+
+test('restores the exact deferred Production preparation without repeating a completed bootstrap', async () => {
+  const f = fixture({ bootstrap: true });
+  try {
+    await f.run('prepare');
+    const original = f.journal.state.stages.production.preparation;
+    const preparation = { status: original.status, bootstrapSha256: original.bootstrapSha256, recordedAt: original.recordedAt };
+    const evidence = { fingerprint: f.plan.fingerprint, stage: 'production', operation: 'preparation',
+      outcome: 'evidence', evidenceDigest: digest(original), preparation };
+    f.externalJournal.readCheckpoints = async () => [evidence];
+    delete f.journal.state.stages.production.preparation;
+    f.calls.length = 0;
+    preparation.bootstrapSha256 = 'f'.repeat(64);
+    await assert.rejects(f.run('apply', { authorization: f.authorization }), /successful prepare checkpoint/);
+    assert.deepEqual(f.calls, []);
+    preparation.bootstrapSha256 = original.bootstrapSha256;
+    await assert.rejects(f.run('apply'), /Production mutation requires/);
+    assert.deepEqual(f.calls, []);
+
+    f.provider.prepareValidation = (environment) => {
+      assert.equal(environment.key, 'production');
+      throw Error('local validation preparation interrupted');
+    };
+    await assert.rejects(f.run('apply', { authorization: f.authorization }), /local validation preparation interrupted/);
+    const bootstrapId = f.journal.state.stages.production.bootstrap.jobId;
+    assert.ok(bootstrapId);
+    assert.equal(f.journal.state.stages.production.validation, undefined);
+    delete f.journal.state.stages.production.preparation;
+    delete f.provider.prepareValidation;
+    f.calls.length = 0;
+    await f.run('apply', { authorization: f.authorization });
+    assert.deepEqual(f.journal.state.stages.production.preparation, {
+      ...original, originalRecordedAt: original.recordedAt, recoveredEvidenceDigest: evidence.evidenceDigest,
+    });
+    assert.equal(f.checkpoints.filter(row => row.operation === 'preparation').length, 1);
+    assert.equal(f.journal.state.stages.production.bootstrap.jobId, bootstrapId);
+    assert.ok(f.calls.some(call => call[0] === 'report' && call[2] === bootstrapId));
+    assert.ok(!f.calls.some(call => call[0] === 'bootstrap'));
+    assert.deepEqual(f.calls.filter(call => call[0] === 'validate').map(call => call[1]), ['production']);
+    assert.deepEqual(f.calls.filter(call => call[0] === 'deploy').map(call => call[1]), ['production']);
   } finally { f.cleanup(); }
 });
 
@@ -711,6 +753,15 @@ test('hosted stage derives its bootstrap binding from the reviewed tracked candi
       manifest: { targets: targets(), selection: { salesforce: true, modules: ['hedge_desk'] }, prerequisites: { plan } } };
     await assert.rejects(verifyPreBootstrapStage({ ...input, plan: { ...plan, bootstrapFingerprint: 'f'.repeat(64) } }), /SALESFORCE_HOSTED_BOOTSTRAP_PLAN_MISMATCH/);
     await assert.rejects(verifyPreBootstrapStage(input), /SMOKE_DEPLOYMENT_BINDING_MISMATCH/);
+    const approval = { manifestHash: digest(input.manifest), nativeReviewVerified: true, reviewer: targets().account };
+    const apply = { ...input, approval, env: {}, salesforce: {
+      journal: { readCheckpoints: async () => { throw Error('Unexpected checkpoint read'); } },
+      ownership: { assert: async () => { throw Error('Unexpected ownership claim'); } },
+    } };
+    await assert.rejects(applyReviewedPrerequisites({ ...apply, approval: { ...approval, nativeReviewVerified: false } }), /SALESFORCE_HOSTED_REVIEW_REQUIRED/);
+    await assert.rejects(applyReviewedPrerequisites({ ...apply, plan: { ...plan, deferSchemaDependentSmoke: false } }), /SALESFORCE_HOSTED_BOOTSTRAP_PLAN_REQUIRED/);
+    await assert.rejects(applyReviewedPrerequisites({ ...apply, plan: { ...plan, bootstrapFingerprint: 'f'.repeat(64) } }), /SALESFORCE_HOSTED_BOOTSTRAP_PLAN_MISMATCH/);
+    await assert.rejects(applyReviewedPrerequisites(apply), /SALESFORCE_HOSTED_RUNNER_REQUIRED/);
     run(['rm', '--cached', 'manifest/bootstrap.xml']);
     await assert.rejects(verifyPreBootstrapStage(input), /ls-files/);
   } finally {

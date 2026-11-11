@@ -375,11 +375,11 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
   if (typeof externalJournal.readCheckpoints === 'function') {
     const missing = [];
     const missingPermissions = [];
-    let missingMirror, preparationValidationId;
+    let missingMirror, savedPreparation;
     for (const entry of await externalJournal.readCheckpoints()) {
       if (entry.fingerprint !== plan.fingerprint) throw new Error('Durable Salesforce checkpoint does not match the reviewed fingerprint.');
       if (entry.stage === 'production' && entry.operation === 'preparation' && entry.outcome === 'evidence') {
-        preparationValidationId = entry.preparation?.validationJobId;
+        savedPreparation = entry;
       }
       if (!['pending', 'resolved'].includes(entry.outcome)) continue;
       const local = get(entry.stage, entry.operation);
@@ -434,14 +434,26 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
       await reportJob(environment, entry.operation, record);
     }
     if (missingMirror) await mirror(missingMirror);
-    if (mode === 'apply' && !get('production', 'preparation') && !plan.review.bootstrap
-      && JOB_ID.test(preparationValidationId || '')
-      && get('production', 'validation')?.jobId === preparationValidationId
-      && get('production', 'validation')?.status === 'Succeeded'
+    if (mode === 'apply' && !get('production', 'preparation')
       && get('devee', 'deployment')?.status === 'Succeeded' && get('qat', 'deployment')?.status === 'Succeeded'
       && get('shared_mirror', 'publication')?.status === 'Succeeded') {
-      assertProductionAuthorization(authorization, plan, now());
-      await persist('production', 'preparation', { status: 'ready', fingerprint: plan.fingerprint, validationJobId: preparationValidationId });
+      const validationJobId = savedPreparation?.preparation?.validationJobId;
+      const ready = JOB_ID.test(validationJobId || '') && get('production', 'validation')?.jobId === validationJobId
+        && get('production', 'validation')?.status === 'Succeeded'
+        && (!plan.review.bootstrap || get('production', 'bootstrap')?.status === 'Succeeded');
+      const deferred = { status: 'awaiting-authorized-bootstrap', fingerprint: plan.fingerprint,
+        bootstrapSha256: plan.binding.bootstrapSha256 };
+      const originalRecordedAt = savedPreparation?.preparation?.recordedAt;
+      const awaiting = plan.review.bootstrap && savedPreparation?.preparation?.status === deferred.status
+        && savedPreparation.preparation.bootstrapSha256 === deferred.bootstrapSha256
+        && Number.isFinite(Date.parse(originalRecordedAt))
+        && new Date(originalRecordedAt).toISOString() === originalRecordedAt
+        && savedPreparation.evidenceDigest === digestCheckpoint({ ...deferred, recordedAt: originalRecordedAt });
+      if (ready || awaiting) {
+        assertProductionAuthorization(authorization, plan, now());
+        if (ready) await persist('production', 'preparation', { status: 'ready', fingerprint: plan.fingerprint, validationJobId });
+        else journal.update('production', 'preparation', { ...deferred, originalRecordedAt, recoveredEvidenceDigest: savedPreparation.evidenceDigest });
+      }
     }
   }
   const preparation = get('production', 'preparation');
@@ -580,7 +592,8 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
       }
       if (environment.key === 'production' && mode === 'prepare' && plan.review.bootstrap && stage.bootstrap?.status !== 'Succeeded') {
         await verifyReviewedOrgInventory({ provider, environment, plan, expected: baseline, now });
-        await persist('production', 'preparation', { status: 'awaiting-authorized-bootstrap', fingerprint: plan.fingerprint });
+        await persist('production', 'preparation', { status: 'awaiting-authorized-bootstrap', fingerprint: plan.fingerprint,
+          bootstrapSha256: plan.binding.bootstrapSha256 });
         return { mode: 'prepared', productionValidation: 'deferred-until-authorized-bootstrap', fingerprint: plan.fingerprint, journal: journal.file };
       }
       let predeploymentInventory = baseline;

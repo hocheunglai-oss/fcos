@@ -187,6 +187,14 @@ test('Salesforce checkpoints retain the original job locator without copying pro
   const packageCheckpoint = (await resumed.readSalesforceCheckpoints(h)).find(entry => entry.operation === 'validation');
   assert.equal(packageCheckpoint.job.packageSha256, packageRecord.packageSha256);
   await assert.rejects(journal.checkpoint({ ...validation, record: { ...packageRecord, packageSha256: 'invalid' } }), /SALESFORCE_CHECKPOINT_JOB_INVALID/);
+  const preparation = { fingerprint: h, stage: 'production', operation: 'preparation' };
+  const deferred = { status: 'awaiting-authorized-bootstrap', fingerprint: h, bootstrapSha256: 'd'.repeat(64), recordedAt: submittedAt };
+  await journal.checkpoint({ ...preparation, record: deferred });
+  const savedPreparation = (await resumed.readSalesforceCheckpoints(h)).find(entry => entry.operation === 'preparation');
+  assert.equal(savedPreparation.evidenceDigest, digest(deferred));
+  assert.deepEqual(savedPreparation.preparation, { status: deferred.status, bootstrapSha256: deferred.bootstrapSha256, recordedAt: submittedAt });
+  await assert.rejects(journal.checkpoint({ ...preparation, record: { ...deferred, validationJobId } }),
+    /SALESFORCE_CHECKPOINT_PREPARATION_INVALID/);
 });
 
 test('Salesforce journal keeps ambiguous provider operations pending across release chains', async () => {
