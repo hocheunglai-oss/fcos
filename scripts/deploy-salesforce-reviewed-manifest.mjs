@@ -84,8 +84,8 @@ export function assertReviewedInputsUnchanged(plan, { cwd = ROOT, policy = POLIC
     || salesforcePromotionHash(policy) !== plan.binding.configurationSha256) throw new Error('Salesforce source, manifest, review, baseline, or connection policy changed; restart prepare from DEVEE.');
 }
 
-export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = localCommand, adapter = {}, adapterPath } = {}) {
-  const sf = args => run('sf', args, cwd);
+export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = localCommand, adapter = {}, adapterPath, commandEnvironment } = {}) {
+  const sf = (args, directory = cwd) => run('sf', args, directory, { env: commandEnvironment });
   return {
     verifyIdentity(environment) {
       const display = sf(['org', 'display', '--target-org', environment.alias, '--json']);
@@ -133,7 +133,7 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
         mkdirSync(path.join(project, 'retrieved'));
         const manifestPath = path.join(project, 'inventory.xml');
         writeFileSync(manifestPath, bytes, { mode: 0o600 });
-        const result = run('sf', ['project', 'retrieve', 'start', '--target-org', environment.alias,
+        const result = sf(['project', 'retrieve', 'start', '--target-org', environment.alias,
           '--manifest', manifestPath, '--output-dir', 'retrieved', '--wait', '5', '--json'], project);
         if (result?.success !== true || result.done !== true || result.status !== 'Succeeded'
           || !/^09S[A-Za-z0-9]{15}$/u.test(result.id || '') || result.messages?.length) {

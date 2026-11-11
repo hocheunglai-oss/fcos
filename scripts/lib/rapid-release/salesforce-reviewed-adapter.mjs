@@ -7,6 +7,7 @@ import { runReviewedMirror } from '../../sync-salesforce-reviewed-repository.mjs
 import { preflightSharedMirrorPublication } from '../../sync-salesforce-shared-repository.mjs';
 import { openSalesforcePromotionJournal } from '../salesforce-promotion-journal.mjs';
 import { assertReviewedJobReport, runReviewedSalesforceRelease, safeProjectFile } from '../salesforce-reviewed-release.mjs';
+import { authenticateHostedSalesforce } from './salesforce-hosted-auth.mjs';
 import { digest, requireCondition, targets } from './contract.mjs';
 
 const policy = FCOS_CONNECTION_POLICY.providers.find(item => item.id === 'salesforce');
@@ -35,7 +36,7 @@ export async function reconcileHostedSalesforceJob({ environment, jobId, reviewe
     evidenceSha256: digest({ original, reportSha256: proof.reportSha256 }), verifiedAt: verifiedAt.toISOString() };
 }
 
-export async function applyReviewedPrerequisites({ manifest, approval, plan, salesforce, salesforceCandidateDirectory: cwd }) {
+export async function applyReviewedPrerequisites({ manifest, approval, plan, salesforce, salesforceCandidateDirectory: cwd, env = process.env }) {
   const manifestHash = digest(manifest);
   requireCondition(manifest.selection.salesforce && !manifest.selection.database && plan.backwardCompatible === true
     && cwd && typeof salesforce?.journal?.readCheckpoints === 'function'
@@ -52,11 +53,13 @@ export async function applyReviewedPrerequisites({ manifest, approval, plan, sal
   requireCondition(!reviewed.review.bootstrap, 'SALESFORCE_HOSTED_BOOTSTRAP_UNQUALIFIED');
 
   const directory = mkdtempSync(join(tmpdir(), 'fcos-salesforce-hosted-'));
+  const credentials = mkdtempSync(join(tmpdir(), 'fcos-salesforce-credentials-'));
   let finished = false;
   try {
+    const commandEnvironment = authenticateHostedSalesforce({ directory: credentials, cwd, env });
     const journal = openSalesforcePromotionJournal({ directory, binding: reviewed.binding });
     try {
-      const provider = cliSalesforceProvider({ cwd, policy });
+      const provider = cliSalesforceProvider({ cwd, policy, commandEnvironment });
       provider.reconcile = (environment, jobId, { operation, submittedAt, validationJobId }) =>
         reconcileHostedSalesforceJob({ environment, jobId, reviewed, operation, submittedAt, validationJobId,
           provider, journal: salesforce.journal });
@@ -104,6 +107,7 @@ export async function applyReviewedPrerequisites({ manifest, approval, plan, sal
       journal.close();
     }
   } finally {
+    rmSync(credentials, { recursive: true, force: true });
     if (finished) rmSync(directory, { recursive: true, force: true });
   }
 }
