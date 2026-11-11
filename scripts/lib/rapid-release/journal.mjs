@@ -82,6 +82,18 @@ export class DeploymentJournal {
         && Number.isFinite(submitted) && new Date(submitted).toISOString() === submittedAt,
       'SALESFORCE_CHECKPOINT_JOB_INVALID');
       data.job = { id: jobId, validationId: validationJobId, submittedAt };
+      if (Object.hasOwn(record, 'packageSha256')) {
+        requireCondition(/^[a-f0-9]{64}$/u.test(record.packageSha256 || '') && operation !== 'deployment',
+          'SALESFORCE_CHECKPOINT_JOB_INVALID');
+        data.job.packageSha256 = record.packageSha256;
+      }
+    }
+    if (operation.startsWith('permission:') && status === 'Succeeded') {
+      const { name, orgId, prestate, addedByRelease } = record;
+      requireCondition(stage !== 'shared_mirror' && operation === `permission:${name}`
+        && /^00D[A-Za-z0-9]{15}$/u.test(orgId || '') && typeof prestate === 'boolean'
+        && addedByRelease === !prestate, 'SALESFORCE_CHECKPOINT_PERMISSION_INVALID');
+      data.permission = { name, orgId, prestate };
     }
     if (stage === 'shared_mirror' && operation === 'publication' && status === 'Succeeded' && record.result) {
       const { commit, pullRequest } = record.result;

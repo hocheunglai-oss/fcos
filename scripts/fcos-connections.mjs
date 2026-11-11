@@ -70,13 +70,14 @@ function commonGitDirectory(repoRoot = REPO_ROOT) {
   return directory ? path.resolve(repoRoot, directory) : '';
 }
 
-export function githubConfigDirectory({ repoRoot = REPO_ROOT, commonDirectory = commonGitDirectory(repoRoot) } = {}) {
-  // Git local config is shared by linked worktrees. Keep its credential helper
-  // pinned to the primary checkout's isolated GH store, rather than rewriting
-  // the helper to whichever worktree most recently ran the verifier.
-  return commonDirectory
-    ? path.join(path.dirname(commonDirectory), target('github').configPath)
-    : path.join(repoRoot, target('github').configPath);
+export function githubConfigDirectory({ repoRoot = REPO_ROOT, commonDirectory = commonGitDirectory(repoRoot),
+  configPath = target('github').configPath } = {}) {
+  const mirrorConfigPath = FCOS_CONNECTION_POLICY.providers.find(({ id }) => id === 'salesforce').publication.configPath;
+  if (![target('github').configPath, mirrorConfigPath].includes(configPath)) {
+    throw new Error('GitHub configuration must use a pinned FCOS profile.');
+  }
+  // Keep both isolated profiles anchored in the primary checkout of linked worktrees.
+  return path.join(commonDirectory ? path.dirname(commonDirectory) : repoRoot, configPath);
 }
 
 function ensureStateDirectories() {
