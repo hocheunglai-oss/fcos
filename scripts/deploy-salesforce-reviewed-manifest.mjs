@@ -287,6 +287,30 @@ function assertConvertedPackage(converted, roundTrip, members, files, sourceRoot
   }
 }
 
+function inspectNativeSupplementalFiles(root, reviewed, { allowObjectShells = false } = {}) {
+  const expected = new Set(reviewed.flatMap(({ files }) => files));
+  const observed = readReviewedInventory(root, { nativeExport: true });
+  const extra = Object.keys(observed.files).filter(name => !expected.has(name));
+  const possibleShells = new Set(allowObjectShells ? reviewed.flatMap(({ id }) => {
+    const child = /^(?:CustomField|ValidationRule):([A-Za-z][A-Za-z0-9_]*)\.[A-Za-z][A-Za-z0-9_]*$/u.exec(id);
+    return child ? [`objects/${child[1]}/${child[1]}.object-meta.xml`] : [];
+  }) : []);
+  if ([...expected].some(name => !Object.hasOwn(observed.files, name))
+    || extra.some(name => !possibleShells.has(name))) {
+    throw new Error(`Native ${allowObjectShells ? 'metadata' : 'Apex'} retrieval returned an unexpected path set.`);
+  }
+  const shells = {};
+  for (const name of extra) {
+    const file = safeProjectFile(root, name);
+    const source = readFileSync(file, 'utf8');
+    const valid = /^\s*(?:<\?xml version="1\.0" encoding="UTF-8"\?>\s*)?<CustomObject xmlns="http:\/\/soap\.sforce\.com\/2006\/04\/metadata"\s*(?:\/>|>\s*<\/CustomObject>)\s*$/u;
+    if (!valid.test(source)) throw new Error(`Native metadata retrieval returned an unexpected nonempty object descriptor: ${name}`);
+    shells[name] = observed.files[name];
+    rmSync(file);
+  }
+  return shells;
+}
+
 export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = localCommand, adapter = {}, adapterPath, commandEnvironment } = {}) {
   const sf = (args, directory = cwd) => run('sf', args, directory, { env: commandEnvironment });
   function preparePackage(plan, { operation, manifestPath, manifestSha256, components, command }) {
@@ -431,13 +455,8 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
         const supplementalJobId = supplementalBytes ? retrieve(supplementalBytes, `${supplementalName}.xml`, supplementalName) : null;
         const root = path.join(project, 'retrieved');
         const supplementalRoot = supplementalJobId ? path.join(project, supplementalName) : null;
-        if (supplementalRoot) {
-          const expectedPaths = presentReviewed.flatMap(({ files }) => files).sort();
-          const supplementalInventory = readReviewedInventory(supplementalRoot, { nativeExport: true });
-          if (JSON.stringify(Object.keys(supplementalInventory.files)) !== JSON.stringify(expectedPaths)) {
-            throw new Error(`Native ${nativeBootstrap ? 'metadata' : 'Apex'} retrieval returned an unexpected path set.`);
-          }
-        }
+        const supplementalObjectShells = supplementalRoot
+          ? inspectNativeSupplementalFiles(supplementalRoot, presentReviewed, { allowObjectShells: nativeBootstrap }) : {};
         const observed = readReviewedInventory(root, { nativeExport, supplementalRoot });
         const inventoryMatches = projectedNativeInventory
           ? nativeBootstrap && projectionPaths.length > 0
@@ -468,13 +487,13 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
           ...(projectedNativeInventory ? { observedNativeInventoryHash: observed.inventoryHash } : {}),
           ...(supplementalJobId ? (nativeBootstrap ? { metadataJobId: supplementalJobId, metadataManifestSha256: supplementalManifest.sha256 }
             : { apexJobId: supplementalJobId, apexManifestSha256: supplementalManifest.sha256 }) : {}),
-          ...(nativeBootstrap ? { verifiedProjectionPaths: projectionPaths } : {}), ...permissionEvidence,
+          ...(nativeBootstrap ? { verifiedProjectionPaths: projectionPaths, supplementalObjectShells } : {}), ...permissionEvidence,
           ...(nativeExport ? { nativeSourceTreeHash: observed.sourceTreeHash, apexProjectionVerified: verifyApexProjection } : {}), ...absence });
         return { orgId: identity.orgId, identity, verifiedAt, sourceTreeHash, inventoryHash: expectedInventoryHash,
           ...(projectedNativeInventory ? { observedNativeInventoryHash: observed.inventoryHash } : {}),
           evidenceSha256, observedInventory: observed.files,
           ...(nativeExport ? { nativeSourceTreeHash: observed.sourceTreeHash, apexProjectionVerified: verifyApexProjection } : {}),
-          ...(nativeBootstrap ? { verifiedProjectionPaths: projectionPaths } : {}), ...permissionEvidence,
+          ...(nativeBootstrap ? { verifiedProjectionPaths: projectionPaths, supplementalObjectShells } : {}), ...permissionEvidence,
           verificationMethod: nativeExport ? 'metadata-api-reviewed-native-byte-inventory' : 'metadata-api-owned-tree-inventory',
           scope: 'force-app/main/default', ...absence };
       } finally {

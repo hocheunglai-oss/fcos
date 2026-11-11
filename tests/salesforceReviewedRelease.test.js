@@ -1334,9 +1334,14 @@ test('mixed native readback verifies reviewed definition content even when raw h
     const xml = content => `<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">${content}</CustomField>\n`;
     const source = { [field]: Buffer.from(xml('<required>false</required>')) };
     const stable = { 'profiles/Example.profile-meta.xml': Buffer.from('<Profile/>\r\n') };
+    const shellPath = 'objects/Demo__c/Demo__c.object-meta.xml';
+    const shell = Buffer.from('<?xml version="1.0" encoding="UTF-8"?>\n<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata"></CustomObject>\n');
+    const stableObject = Buffer.from('<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata"><label>Demo</label></CustomObject>');
+    stable[shellPath] = stableObject;
+    let extraMetadata = { [shellPath]: shell };
     let nativeField = Buffer.from(xml('\r\n  <required>false</required>\r\n').replace(/(?<!\r)\n/gu, '\r\n'));
     const metadata = packageXml(['CustomField:Demo__c.Value__c']);
-    const manifest = packageXml(['Profile:Example']);
+    const manifest = packageXml(['Profile:Example', 'CustomObject:Demo__c']);
     const target = path.join(cwd, policy.publication.sourceRoot, field);
     mkdirSync(path.dirname(target), { recursive: true });
     writeFileSync(target, source[field]);
@@ -1347,7 +1352,7 @@ test('mixed native readback verifies reviewed definition content even when raw h
       if (args[0] === 'org') return { id: environment.orgId, username: environment.username, connectedStatus: 'Connected' };
       if (args[0] === 'data') return { records: [{ Id: environment.orgId, IsSandbox: environment.isSandbox }] };
       const directory = args[args.indexOf('--output-dir') + 1];
-      const returned = directory === 'metadata' ? { [field]: nativeField } : stable;
+      const returned = directory === 'metadata' ? { [field]: nativeField, ...extraMetadata } : stable;
       for (const [name, bytes] of Object.entries(returned)) {
         const destination = path.join(project, directory, name);
         mkdirSync(path.dirname(destination), { recursive: true });
@@ -1363,7 +1368,17 @@ test('mixed native readback verifies reviewed definition content even when raw h
           metadata: { path: 'metadata.xml', sha256: hash(metadata) } } },
       } }, expectedInventoryHash: inventoryHash, nativeExport: true, nativeBootstrap: true, projectionPaths: [field] };
     };
-    assert.deepEqual(provider.verifyInventory(environment, input()).verifiedProjectionPaths, [field]);
+    const receipt = provider.verifyInventory(environment, input());
+    assert.deepEqual(receipt.verifiedProjectionPaths, [field]);
+    assert.deepEqual(receipt.supplementalObjectShells, { [shellPath]: { sha256: hash(shell), size: shell.length } });
+    assert.equal(receipt.observedInventory[shellPath].sha256, hash(stableObject));
+    extraMetadata = { [shellPath]: stableObject };
+    assert.throws(() => provider.verifyInventory(environment, input()), /unexpected nonempty object descriptor/);
+    extraMetadata = { 'objects/Unreviewed__c/Unreviewed__c.object-meta.xml': shell };
+    assert.throws(() => provider.verifyInventory(environment, input()), /unexpected path set/);
+    extraMetadata = { [shellPath]: shell, [validationRulePath]: Buffer.from('<ValidationRule/>') };
+    assert.throws(() => provider.verifyInventory(environment, input()), /unexpected path set/);
+    extraMetadata = { [shellPath]: shell };
     const exact = input();
     const pinned = inventoryFromFiles(stable).files;
     const projectedHash = projectedNativeInventoryHash(pinned, [field]);
