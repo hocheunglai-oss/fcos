@@ -24,7 +24,7 @@ const files = { 'classes/Example.cls': Buffer.from('class Example {}\n'), 'class
 const validationRuleId = 'ValidationRule:Trade_Document_Line__c.Exactly_One_Document_Parent';
 const validationRulePath = 'objects/Trade_Document_Line__c/validationRules/Exactly_One_Document_Parent.validationRule-meta.xml';
 
-function fixture({ bootstrap = false, level = 'RunLocalTests', inventoryBaseline = false, validationRule = false, asymmetric = false } = {}) {
+function fixture({ bootstrap = false, level = 'RunLocalTests', inventoryBaseline = false, validationRule = false, asymmetric = false, nativeRaw = false } = {}) {
   const baselineInventory = inventoryFromFiles(files);
   const finalFiles = { ...files, 'classes/Example.cls': Buffer.from('class Example { String value; }\n') };
   const componentIds = ['ApexClass:Example'];
@@ -75,6 +75,16 @@ function fixture({ bootstrap = false, level = 'RunLocalTests', inventoryBaseline
     ...(bootstrap ? { bootstrap: { manifestPath: 'manifest/bootstrap.xml', sha256: hash(bootstrapBytes), components: bootstrapIds, permissionSets: ['Reviewed'] } } : {}),
   };
   if (inventoryBaseline) { review.baselineMode = INVENTORY_BASELINE_MODE; delete review.baselineWorkflowPath; baselineWorkflow = null; }
+  if (nativeRaw) {
+    const raw = source => inventoryFromFiles({ ...source, 'profiles/Example.profile-meta.xml': Buffer.from('<Profile/>\r\n') });
+    const before = raw(files), after = raw(finalFiles);
+    const descriptor = ({ files, inventoryHash }) => ({ files, inventoryHash });
+    review.nativeInventories = Object.fromEntries(policy.environments.map(({ key, orgId }) =>
+      [key, { orgId, baseline: descriptor(before), final: descriptor(after) }]));
+    const retrieval = { path: 'stable.xml', sha256: hash(packageXml(['Profile:Example'])),
+      apex: { path: 'apex.xml', sha256: hash(packageXml(componentIds)) } };
+    review.inventoryManifests = { [before.inventoryHash]: retrieval, [after.inventoryHash]: retrieval };
+  }
   let orgBaselineInventories;
   if (asymmetric) {
     const [field, permission] = bootstrapIds;
@@ -99,14 +109,22 @@ function fixture({ bootstrap = false, level = 'RunLocalTests', inventoryBaseline
     async verifyInventory(environment, expected) { calls.push(['inventory', environment.key, expected.expectedInventoryHash]);
       const actual = orgInventories.get(environment.key);
       return { orgId: environment.orgId, sourceTreeHash: actual.sourceTreeHash || null, inventoryHash: actual.inventoryHash, verifiedAt: fixedNow.toISOString(), evidenceSha256: 'a'.repeat(64),
-        verificationMethod: 'metadata-api-owned-tree-inventory', scope: 'force-app/main/default', observedInventory: structuredClone(actual.files),
+        verificationMethod: actual.nativeExport ? 'metadata-api-reviewed-native-byte-inventory' : 'metadata-api-owned-tree-inventory',
+        scope: 'force-app/main/default', observedInventory: structuredClone(actual.files),
+        ...(actual.nativeExport ? { nativeSourceTreeHash: 'd'.repeat(64), apexProjectionVerified: actual.verifyApexProjection === true } : {}),
         ...(actual.absentComponents ? { absentComponents: actual.absentComponents, absenceVerificationMethod: 'native-metadata-catalog',
           absenceEvidenceSha256: 'b'.repeat(64) } : {}),
         identity: { alias: environment.alias, orgId: environment.orgId, isSandbox: environment.isSandbox, username: environment.username || 'production@example.invalid', connectedStatus: 'Connected' } }; },
     async verifyIdentity(environment) { calls.push(['identity', environment.key]); },
     async report(environment, id) { calls.push(['report', environment.key, id]); return reports.get(id); },
     async validate(environment) { const id = jobId(++sequence); calls.push(['validate', environment.key, id]); reports.set(id, makeReport(id, true)); return { id }; },
-    async deploy(environment, validationId) { const id = jobId(++sequence); calls.push(['deploy', environment.key, validationId, id]); reports.set(id, makeReport(id, false)); orgInventories.set(environment.key, structuredClone(finalInventory)); return { id }; },
+    async deploy(environment, validationId) {
+      const id = jobId(++sequence);
+      calls.push(['deploy', environment.key, validationId, id]);
+      reports.set(id, makeReport(id, false));
+      orgInventories.set(environment.key, structuredClone(reviewedCheckpointInventory(plan, { deployment: { status: 'Succeeded' } }, environment.key)));
+      return { id };
+    },
     async bootstrap(environment) { const id = jobId(++sequence); calls.push(['bootstrap', environment.key, id]);
       const report = makeReport(id, false, { zero: true });
       report.details.componentSuccesses = bootstrapIds.map(id => { const [componentType, fullName] = id.split(':'); return { componentType, fullName, success: true }; });
@@ -660,6 +678,23 @@ test('incremental DEVEE publication rechecks actual baseline and delta jobs with
     assert.equal(proof.proofKind, 'verified-complete-baseline-plus-covered-manifest');
     const changed = structuredClone(f.journal.state); changed.stages.devee.deployment.validationJobId = jobId(999);
     await assert.rejects(reviewedDeveePublicationProof({ plan: f.plan, state: changed, policy, provider: f.provider, assertUnchanged: async () => {} }), /verified DEVEE/);
+  } finally { f.cleanup(); }
+});
+
+test('native Apex checkpoints carry through DEVEE publication while the mirror remains bound to LF source', async () => {
+  const f = fixture({ inventoryBaseline: true, nativeRaw: true });
+  try {
+    assert.equal((await f.run('prepare')).productionValidation, 'Succeeded');
+    const input = { plan: f.plan, state: f.journal.state, policy, provider: f.provider, assertUnchanged: async () => {}, now };
+    const proof = await reviewedDeveePublicationProof(input);
+    assert.equal(proof.sourceTreeHash, f.plan.finalInventory.sourceTreeHash);
+    assert.equal(proof.nativeInventoryHash, f.plan.nativeInventories.devee.final.inventoryHash);
+    assert.notEqual(proof.nativeInventoryHash, f.plan.finalInventory.inventoryHash);
+    assert.equal(proof.nativeSourceTreeHash, 'd'.repeat(64));
+    assert.equal(proof.verifiedAt, fixedNow.toISOString());
+    const verify = f.provider.verifyInventory;
+    f.provider.verifyInventory = async (...args) => ({ ...await verify(...args), apexProjectionVerified: false });
+    await assert.rejects(reviewedDeveePublicationProof(input), /requires current native owned-tree file evidence/);
   } finally { f.cleanup(); }
 });
 
