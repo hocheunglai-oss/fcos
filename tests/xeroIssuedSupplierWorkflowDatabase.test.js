@@ -6,6 +6,8 @@ import { xeroFinancialDocumentPreservationPreview as preview, xeroFinancialDocum
 import { issuedSupplierWorkflowFixture } from './xeroIssuedSupplierPreservationFixtures.js';
 import { issuedPetroleumFixture, issuedPetroleumOwnerFixture } from './xeroIssuedPetroleumPreservationFixtures.js';
 import { issuedPetroleumV2Fixture } from './xeroIssuedPetroleumV2Fixtures.js';
+import { issuedGroupedPetroleumFixture } from './xeroIssuedGroupedPetroleumPreservationFixtures.js';
+import { issuedGroupedPetroleumReviewHash } from '../api/_xeroIssuedPetroleumFiles.js';
 
 const actor = { id: '00000000-0000-4000-8000-000000000099', email: 'finance@example.com' };
 const clone = value => structuredClone(value);
@@ -16,6 +18,8 @@ const migrations = [
   '20260927175805_xero_issued_supplier_preservation_link.sql', '20260927185526_xero_issued_petroleum_preservation_link.sql',
   '20260927213024_xero_petroleum_inactive_source_ownership.sql',
   '20260928033217_xero_issued_petroleum_attachment_preservation_v2.sql',
+  '20260927223013_xero_trustee_source_cent_rounding.sql', '20260928005135_xero_group_remittance_bank_evidence.sql',
+  '20261111164003_xero_issued_grouped_petroleum_preservation.sql',
 ];
 const rpcParameters = {
   persist_xero_financial_preview_v1: ['p_run', 'p_items', 'p_review_identity'],
@@ -25,6 +29,7 @@ const rpcParameters = {
   link_xero_issued_supplier_document_v1: ['p_run_id', 'p_expected_run_revision', 'p_item_id', 'p_expected_item_updated_at', 'p_tenant_id', 'p_review', 'p_actor_id', 'p_actor_email'],
   link_xero_issued_petroleum_document_v1: ['p_run_id', 'p_expected_run_revision', 'p_item_id', 'p_expected_item_updated_at', 'p_tenant_id', 'p_review', 'p_actor_id', 'p_actor_email'],
   link_xero_issued_petroleum_document_v2: ['p_run_id', 'p_expected_run_revision', 'p_item_id', 'p_expected_item_updated_at', 'p_tenant_id', 'p_review', 'p_actor_id', 'p_actor_email'],
+  link_xero_issued_grouped_petroleum_document_v1: ['p_run_id', 'p_expected_run_revision', 'p_item_id', 'p_expected_item_updated_at', 'p_tenant_id', 'p_review', 'p_actor_id', 'p_actor_email'],
 };
 const jsonParameters = new Set(['p_run', 'p_items', 'p_review', 'p_classification_summary', 'p_rate_limit_snapshot']);
 
@@ -46,7 +51,7 @@ async function harness(t, f) {
       m.enabled, m.revision, m.approved_by || actor.id, m.approved_by_email || actor.email, m.approved_at || '2026-09-01T00:00:00.000Z']);
   }
   await db.exec('set role service_role');
-  const calls = [], errors = [], transforms = { persist: null };
+  const calls = [], errors = [], transforms = { persist: null, loseGroupedLinkAcknowledgement: false };
   const identifier = value => { assert.match(value, /^[a-z_]+$/); return `"${value}"`; };
   const allowedTables = new Set(['xero_financial_sync_runs', 'xero_financial_sync_items', 'xero_financial_document_mappings', 'xero_financial_audit_events', 'dispute_beta_cases']);
   const client = {
@@ -79,6 +84,9 @@ async function harness(t, f) {
       try {
         const result = await db.query(`select to_jsonb(public.${name}(${names.map((key, i) => `$${i + 1}${jsonParameters.has(key) ? '::jsonb' : ''}`).join(',')})) as result`,
           names.map(key => jsonParameters.has(key) ? JSON.stringify(payload[key]) : payload[key]));
+        if (name === 'link_xero_issued_grouped_petroleum_document_v1' && transforms.loseGroupedLinkAcknowledgement) {
+          throw new Error('Fixture lost the acknowledgement after commit');
+        }
         return { data: result.rows[0].result, error: null };
       } catch (error) {
         const safe = { code: error.code, message: error.message };
@@ -92,7 +100,8 @@ async function harness(t, f) {
     getConnection: read('connection', () => ({ tenantId: f.ids.tenant })), collectFiles: read('files', () => f.files),
     loadSalesforce: read('salesforce', () => f.salesforce), loadXero: read('xero', () => f.xero),
     loadControls: read('controls', () => f.stored), collectVessels: read('vessels', () => f.vessels),
-    collectPetroleumScope: read('petroleum_scope', () => f.scope) };
+    collectPetroleumScope: read('petroleum_scope', () => f.scope), collectGroupedPetroleumScope: read('grouped_petroleum_scope', () => f.scope),
+    approvedGroupedReviewHashes: f.packet.records.map(issuedGroupedPetroleumReviewHash) };
   const snapshot = async () => (await db.query(`select
     (select coalesce(jsonb_agg(to_jsonb(r) order by id),'[]') from public.xero_financial_sync_runs r) as runs,
     (select coalesce(jsonb_agg(to_jsonb(i) order by row_index),'[]') from public.xero_financial_sync_items i) as items,
@@ -108,6 +117,8 @@ for (const [label, makeFixture, linkRpc] of [
   ['petroleum singleton', issuedPetroleumFixture, 'link_xero_issued_petroleum_document_v1'],
   ['petroleum inactive owners', issuedPetroleumOwnerFixture, 'link_xero_issued_petroleum_document_v1'],
   ['petroleum full attachment review', issuedPetroleumV2Fixture, 'link_xero_issued_petroleum_document_v2'],
+  ...['buyer', 'supplier'].map(direction => [`grouped petroleum ${direction}`,
+    () => issuedGroupedPetroleumFixture({ direction }), 'link_xero_issued_grouped_petroleum_document_v1']),
 ]) test(`${label} real Preview → persistence SQL → Run → link SQL preserves original bills`, async t => {
   const h = await harness(t, makeFixture()); const before = clone({ salesforce: h.f.salesforce, xero: h.f.xero });
   const reviewed = await h.preview().catch(error => assert.fail(`${error.code}: ${JSON.stringify(h.errors)}`));
@@ -118,7 +129,15 @@ for (const [label, makeFixture, linkRpc] of [
   assert.equal(saved.runs[0].idempotency_key, `preview:${reviewed.run.id}`);
   assert.equal(saved.items[0].source_payload.postingMode, saved.runs[0].control_totals.postingMode);
   assert.deepEqual(saved.items[0].proposed_payload, {}); assert.equal(saved.items[0].mutation_attempts, 0);
-  assert.equal(saved.items[0].source_payload.readiness.ready, false);
+  if (label.startsWith('grouped petroleum')) {
+    const payload = saved.items[0].source_payload;
+    assert.ok(payload.issuedGroupedSourceEvidence);
+    assert.match(payload.issuedGroupedSourceEvidenceFingerprint, /^[a-f0-9]{64}$/);
+    const beforeCrossActor = h.calls.length;
+    await assert.rejects(run(h.body(reviewed), { ...h.dependencies, accessContext: { profile: { ...actor, email: 'other@example.test' } } }),
+      /belongs to a different Finance session/);
+    assert.ok(h.calls.slice(beforeCrossActor).every(call => call.type === 'read'));
+  } else assert.equal(saved.items[0].source_payload.readiness.ready, false);
   assert.equal(saved.audits[0].event_type, 'preview_completed');
   const repeated = await h.preview().catch(error => assert.fail(`${error.code}: ${JSON.stringify(h.errors)}`));
   assert.equal(repeated.run.id, reviewed.run.id); assert.equal(repeated.rows[0].id, reviewed.rows[0].id);
@@ -140,6 +159,32 @@ for (const [label, makeFixture, linkRpc] of [
   assert.deepEqual(await h.snapshot(), linked);
   assert.deepEqual({ salesforce: h.f.salesforce, xero: h.f.xero }, before);
   assert.deepEqual(h.errors, []);
+});
+
+test('grouped petroleum reads the original committed link after a lost acknowledgement and finalizes once', async t => {
+  const h = await harness(t, issuedGroupedPetroleumFixture({ direction: 'buyer' }));
+  await assert.rejects(preview({ packet: h.f.packet }, { ...h.dependencies, approvedGroupedReviewHashes: [] }),
+    /independently approved exact review/);
+  assert.deepEqual(h.calls, []);
+  const reviewed = await h.preview();
+  const readback = { ...h.body(reviewed), readbackOnly: true };
+  const beforeUnsubmitted = h.calls.length;
+  await assert.rejects(run(readback, h.dependencies), { code: 'XERO_GROUPED_PETROLEUM_OUTCOME_PENDING' });
+  assert.ok(h.calls.slice(beforeUnsubmitted).every(call => call.type === 'read'));
+  assert.equal((await h.snapshot()).runs[0].status, 'ready_for_review');
+  h.transforms.loseGroupedLinkAcknowledgement = true;
+  await assert.rejects(run(h.body(reviewed), h.dependencies), /transaction was not confirmed/);
+  const interrupted = await h.snapshot();
+  assert.equal(interrupted.runs[0].status, 'processing');
+  assert.equal(interrupted.mappings.length, 1);
+  const beforeReadback = h.calls.length;
+  const recovered = await run(readback, h.dependencies);
+  assert.equal(recovered.run.status, 'completed');
+  assert.equal(recovered.outcomes[0].alreadyLinked, true);
+  assert.deepEqual(h.calls.slice(beforeReadback).filter(call => call.type !== 'read').map(call => call.name),
+    ['finish_xero_financial_sync_run_v1']);
+  assert.equal(h.calls.filter(call => call.name === 'link_xero_issued_grouped_petroleum_document_v1').length, 1);
+  assert.deepEqual((await h.snapshot()).mappings, interrupted.mappings);
 });
 
 for (const [label, makeFixture] of [

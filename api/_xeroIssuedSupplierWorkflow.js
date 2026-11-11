@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
-import { ISSUED_SUPPLIER_POLICY, ISSUED_PETROLEUM_POLICY, ISSUED_PETROLEUM_V2_POLICY, isIssuedPreservationPolicy } from '../config/xeroIssuedPreservationPolicies.js';
+import { ISSUED_SUPPLIER_POLICY, ISSUED_PETROLEUM_POLICY, ISSUED_PETROLEUM_V2_POLICY } from '../config/xeroIssuedPreservationPolicies.js';
 import { getFreshXeroConnection, xeroContactSyncServiceClient } from './_xeroContactSync.js';
 import { requireExternalActionGate } from './_externalActionGates.js';
 import { buildFinancialClassifications, loadSalesforceFinancialSnapshot, loadXeroFinancialSnapshot,
@@ -12,9 +12,13 @@ import { evaluateIssuedSupplierFinancialDocument } from './_xeroIssuedSupplierPr
 import { collectIssuedSupplierFiles, collectIssuedSupplierVessels, validateIssuedSupplierPacket } from './_xeroIssuedSupplierFiles.js';
 import { evaluatePetroleumFinancialDocument } from './_xeroIssuedPetroleumPreservationAdapter.js';
 import { collectPetroleumPreservationScope } from './_xeroIssuedPetroleumScope.js';
-import { collectIssuedPetroleumFiles, validateIssuedPetroleumPacket } from './_xeroIssuedPetroleumFiles.js';
+import { collectIssuedPetroleumFiles, validateIssuedPetroleumPacket,
+  collectIssuedGroupedPetroleumFiles, validateIssuedGroupedPetroleumPacket, issuedGroupedPetroleumReviewHash } from './_xeroIssuedPetroleumFiles.js';
 import { collectIssuedPetroleumV2Files, validateIssuedPetroleumV2Packet } from './_xeroIssuedPetroleumV2Files.js';
 import { persistFinancialPreview, preparePreviewPersistence, previewEvidenceHash as hash } from './_xeroPreviewPersistence.js';
+import { ISSUED_GROUPED_PETROLEUM_PRESERVATION_POLICY as GROUPED_PETROLEUM_POLICY } from './_xeroIssuedGroupedPetroleumPreservation.js';
+import { evaluateGroupedPetroleumFinancialDocument } from './_xeroIssuedGroupedPetroleumPreservationAdapter.js';
+import { collectGroupedPetroleumPreservationScope } from './_xeroIssuedGroupedPetroleumScope.js';
 
 const POLICIES = Object.freeze({
   [ISSUED_SUPPLIER_POLICY]: { validate: validateIssuedSupplierPacket, files: collectIssuedSupplierFiles,
@@ -26,16 +30,22 @@ const POLICIES = Object.freeze({
   [ISSUED_PETROLEUM_V2_POLICY]: { validate: validateIssuedPetroleumV2Packet, files: collectIssuedPetroleumV2Files,
     evaluate: (source, target, context, file) => evaluatePetroleumFinancialDocument(source, target, context, file, { policyVersion: ISSUED_PETROLEUM_V2_POLICY }),
     rpc: 'link_xero_issued_petroleum_document_v2', event: 'issued_petroleum_document_preservation_linked' },
+  [GROUPED_PETROLEUM_POLICY]: { validate: validateIssuedGroupedPetroleumPacket, files: collectIssuedGroupedPetroleumFiles,
+    evaluate: evaluateGroupedPetroleumFinancialDocument, rpc: 'link_xero_issued_grouped_petroleum_document_v1',
+    event: 'issued_grouped_petroleum_document_preservation_linked' },
 });
 const fail = (message, code = 'XERO_ISSUED_PRESERVATION_INVALID', status = 409) => Object.assign(new Error(message), { code, status });
 const uuid = (value) => /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value || '');
 const sameId = (a, b) => typeof a === 'string' && typeof b === 'string' && a.slice(0, 15) === b.slice(0, 15);
+const objectForRequest = (policy, request) => policy === GROUPED_PETROLEUM_POLICY && request.sourceId.startsWith('a0K')
+  ? 'Invoice__c' : 'Supplier_Invoice__c';
+const xeroTypeFor = object => object === 'Invoice__c' ? 'ACCREC' : 'ACCPAY';
 function packetPolicy(packet) {
   if (!packet || typeof packet !== 'object' || Array.isArray(packet)
     || Object.keys(packet).some((key) => !['records', 'policyVersion'].includes(key))) throw fail('The issued-evidence packet has an unsupported structure.');
   // Only old packets which omit the discriminator retain the trustee contract.
   const policy = Object.hasOwn(packet, 'policyVersion') ? packet.policyVersion : ISSUED_SUPPLIER_POLICY;
-  if (!isIssuedPreservationPolicy(policy)) throw fail('The issued-evidence policy is not supported.');
+  if (typeof policy !== 'string' || !Object.hasOwn(POLICIES, policy)) throw fail('The issued-evidence policy is not supported.');
   return policy;
 }
 const actorFor = (context) => {
@@ -62,12 +72,13 @@ function savedRequests(run, rows, descriptor, policy) {
     || run.source_fingerprint !== hash(rows.map((row) => row.source_payload))
     || run.xero_fingerprint !== hash(rows.map((row) => row.xero_payload))) throw fail('The original preservation review scope changed.');
   const requests = descriptor.validate({ policyVersion: policy, records: rows.map((row) => row.source_payload?.issuedSupplierRequest) });
-  if (rows.some((row, index) => row.source_object !== 'Supplier_Invoice__c'
+  if (rows.some((row, index) => row.source_object !== objectForRequest(policy, requests[index])
     || row.source_payload?.issuedSupplierPreservation?.policyVersion !== policy
     || !sameId(row.source_id, requests[index].sourceId) || !sameId(row.source_payload.salesforceId, row.source_id)
     || !uuid(row.xero_document_id) || !uuid(row.xero_payload?.id)
     || row.xero_document_id.toLowerCase() !== requests[index].xeroDocumentId.toLowerCase()
-    || row.xero_payload.id.toLowerCase() !== row.xero_document_id.toLowerCase())) throw fail('The original preservation document identities changed.');
+    || row.xero_payload.id.toLowerCase() !== row.xero_document_id.toLowerCase()
+    || policy === GROUPED_PETROLEUM_POLICY && row.xero_payload.type !== xeroTypeFor(row.source_object))) throw fail('The original preservation document identities changed.');
   return requests;
 }
 
@@ -77,7 +88,12 @@ async function currentEvidence(records, dependencies, rate, policy) {
     getConnection = getFreshXeroConnection, loadSalesforce = loadSalesforceFinancialSnapshot,
     loadXero = loadXeroFinancialSnapshot, collectFiles = descriptor.files,
     collectVessels = collectIssuedSupplierVessels, loadControls = loadStoredFinancialControls,
-    collectPetroleumScope = collectPetroleumPreservationScope } = dependencies;
+    collectPetroleumScope = collectPetroleumPreservationScope,
+    collectGroupedPetroleumScope = collectGroupedPetroleumPreservationScope, approvedGroupedReviewHashes = [] } = dependencies;
+  const grouped = policy === GROUPED_PETROLEUM_POLICY;
+  if (grouped && !records.every(record => approvedGroupedReviewHashes.includes(issuedGroupedPetroleumReviewHash(record)))) {
+    throw fail('Grouped documentary evidence requires an independently approved exact review.');
+  }
   const connection = await getConnection(client, { env, fetchImpl });
   const onResponse = ({ headers }) => {
     Object.assign(rate, xeroFinancialRateSnapshot(headers, rate));
@@ -85,7 +101,8 @@ async function currentEvidence(records, dependencies, rate, policy) {
   };
   // These adapters only read providers. No accounting mutation client is imported.
   // Verify the pinned Salesforce organisation and exact native documents first.
-  const files = await collectFiles({ policyVersion: policy, records }, { tenantId: connection.tenantId });
+  const files = await collectFiles({ policyVersion: policy, records }, { tenantId: connection.tenantId,
+    ...(grouped ? { approvedReviewHashes: approvedGroupedReviewHashes } : {}) });
   const [salesforce, xero, stored, vessels] = await Promise.all([
     loadSalesforce(XERO_FINANCIAL_CUTOFF), loadXero(connection, XERO_FINANCIAL_CUTOFF, { env, fetchImpl, onResponse }),
     loadControls(client), policy === ISSUED_SUPPLIER_POLICY ? collectVessels(XERO_FINANCIAL_CUTOFF) : Promise.resolve(new Map()),
@@ -108,13 +125,18 @@ async function currentEvidence(records, dependencies, rate, policy) {
   context.documents = [...xero.documents, ...(xero.inactiveDocuments || [])];
   if ([ISSUED_PETROLEUM_POLICY, ISSUED_PETROLEUM_V2_POLICY].includes(policy)) context.petroleum = await collectPetroleumScope({ records, connection,
     salesforce, xero, sources: built.sources, stored }, { env, fetchImpl, onResponse });
+  if (policy === GROUPED_PETROLEUM_POLICY) context.groupedPetroleum = await collectGroupedPetroleumScope({ records, connection,
+    salesforce, xero, sources: built.sources, stored }, { env, fetchImpl, onResponse });
   const stemIds = [...new Set(built.sources.filter((s) => records.some((r) => sameId(r.sourceId, s.salesforceId))).map((s) => s.stemId))];
   const disputes = stemIds.length ? await client.from('dispute_beta_cases').select('stem_id,workflow_status').in('stem_id', stemIds) : { data: [] };
   if (disputes.error) throw fail('Current dispute evidence is unavailable.');
   const rows = records.map((request) => {
     const source = built.sources.find((s) => sameId(s.salesforceId, request.sourceId));
     const target = context.documents.find((d) => d.id?.toLowerCase() === request.xeroDocumentId.toLowerCase());
-    if (!source || source.salesforceObject !== 'Supplier_Invoice__c' || !target) throw fail('A requested source or existing Xero bill is outside the complete current scope.');
+    if (!source || source.salesforceObject !== objectForRequest(policy, request) || !target
+      || policy === GROUPED_PETROLEUM_POLICY && target.type !== xeroTypeFor(source.salesforceObject)) {
+      throw fail('A requested source or existing Xero document is outside the complete current scope.');
+    }
     const result = descriptor.evaluate(source, target, context, files.get(request.sourceId));
     const blockers = (result.blockers || []).map((b) => `${b.code || 'EVIDENCE'}: ${b.message}`);
     if ((disputes.data || []).some((d) => sameId(d.stem_id, source.stemId) && !['closed', 'resolved', 'cancelled'].includes(String(d.workflow_status).toLowerCase()))) blockers.push('An unresolved dispute affects this STEM.');
@@ -122,7 +144,7 @@ async function currentEvidence(records, dependencies, rate, policy) {
     const summary = { policyVersion: policy, eligible, accepted: false, requiresExplicitReview: true, fingerprint: result.fingerprint || null,
       evidenceFingerprint: result.evidenceFingerprint || null };
     const reviewed = { ...source, action: eligible ? 'protected_legacy' : 'blocked', status: eligible ? 'eligible' : 'blocked',
-      blockers, warnings: ['Existing Xero bill details will be preserved. This action only records a verified link.'],
+      blockers, warnings: ['Existing Xero document details will be preserved. This action only records a verified link.'],
       xero: target, proposedPayload: null, differences: built.rows.find((r) => sameId(r.salesforceId, source.salesforceId))?.differences || [],
       reviewRequired: true, acceptedLegacy: false, issuedSupplierPreservation: summary };
     const reviewFingerprint = hash({ source: source.sourceFingerprint, xero: target, summary, differences: reviewed.differences, blockers });
@@ -147,6 +169,10 @@ export async function xeroFinancialDocumentPreservationPreview(body = {}, depend
       const { id, quantity, unitAmount, lineAmount } = reviewed.groupedAccounting.lines[0];
       item.source_payload.issuedSupplierRoundingSource = { id, quantity, unitAmount, lineAmount };
     }
+    if (policy === GROUPED_PETROLEUM_POLICY && proof?.accounting?.sourceEvidence) {
+      item.source_payload.issuedGroupedSourceEvidence = proof.accounting.sourceEvidence;
+      item.source_payload.issuedGroupedSourceEvidenceFingerprint = proof.accounting.sourceEvidenceFingerprint;
+    }
     item.source_payload.issuedSupplierRequest = request;
     item.source_payload.issuedSupplierReviewFingerprint = reviewFingerprint;
     return item;
@@ -160,7 +186,8 @@ export async function xeroFinancialDocumentPreservationPreview(body = {}, depend
   const saved = await persistFinancialPreview(client, preparePreviewPersistence(run, items, { tenantId: current.tenantId,
     salesforceOrgId: fcosSalesforceEnvironment('production').orgId, includePayments: false, inputEvidenceHash: hash(current.rows) }));
   const persisted = saved.reused ? await storedRows(client, saved.run.id) : items.map((i) => ({ ...i, id: saved.identities.get(i.row_key) }));
-  return { run: runView(saved.run), rows: persisted.map(rowView), summary, rateLimit: rate, financialWrites: 0 };
+  return { run: runView(saved.run), rows: persisted.map(rowView), summary, rateLimit: rate, financialWrites: 0,
+    ...(policy === GROUPED_PETROLEUM_POLICY ? { policyVersion: policy } : {}) };
 }
 
 export async function xeroFinancialDocumentPreservationRun(body = {}, dependencies = {}) {
@@ -173,14 +200,20 @@ export async function xeroFinancialDocumentPreservationRun(body = {}, dependenci
   const saved = await client.from('xero_financial_sync_runs').select('*').eq('id', body.runId).maybeSingle();
   const run = saved.data;
   const policy = run?.control_totals?.preservationPolicy;
-  if (saved.error || !run || !isIssuedPreservationPolicy(policy)) throw fail('This is not a supported issued-supplier preservation review.');
+  if (saved.error || !run || typeof policy !== 'string' || !Object.hasOwn(POLICIES, policy)) throw fail('This is not a supported issued preservation review.');
+  if (policy === GROUPED_PETROLEUM_POLICY
+    && (run.created_by !== actor.id || run.created_by_email !== actor.email)) throw fail('The grouped review belongs to a different Finance session.');
+  if (Object.hasOwn(body, 'readbackOnly') && (body.readbackOnly !== true || policy !== GROUPED_PETROLEUM_POLICY)) {
+    throw fail('Original-outcome recovery requires the grouped petroleum policy.');
+  }
   const descriptor = POLICIES[policy];
   let rows = await storedRows(client, run.id);
   const selected = rows.filter((r) => ids.includes(r.id));
   if (selected.length !== ids.length || selected.some((r) => r.proposed_action !== 'protected_legacy'
     || r.source_payload?.issuedSupplierPreservation?.policyVersion !== policy || r.blockers?.length
     || Object.keys(r.proposed_payload || {}).length || r.mutation_attempts > 0)) throw fail('The selection contains an unverified or accounting-write row.');
-  if (run.status === 'completed' && run.reviewed_by === actor.id && run.reviewed_by_email === actor.email
+  const recoveringGrouped = policy === GROUPED_PETROLEUM_POLICY && run.status === 'processing';
+  if ((run.status === 'completed' || recoveringGrouped) && run.reviewed_by === actor.id && run.reviewed_by_email === actor.email
     && rows.filter((r) => r.selected).length === ids.length && selected.every((r) => r.selected && r.status === 'linked')) {
     const [mappings, audits] = await Promise.all([
       client.from('xero_financial_document_mappings').select('*').in('xero_document_id', selected.map((r) => r.xero_document_id)),
@@ -193,7 +226,7 @@ export async function xeroFinancialDocumentPreservationRun(body = {}, dependenci
       const audit = audits.data.filter((a) => a.fingerprints?.itemId === row.id && a.fingerprints?.mappingId === mapping?.id);
       if (matches.length !== 1 || mapping.protected_legacy !== true || receipt?.acceptance?.runId !== run.id
         || receipt.acceptance.itemId !== row.id || receipt.acceptance.actorId !== actor.id || receipt.acceptance.actorEmail !== actor.email
-        || mapping.salesforce_object !== row.source_object || mapping.xero_document_type !== 'ACCPAY'
+        || mapping.salesforce_object !== row.source_object || mapping.xero_document_type !== xeroTypeFor(row.source_object)
         || mapping.xero_contact_id !== row.xero_payload.contactId || mapping.xero_document_number !== row.xero_payload.invoiceNumber
         || mapping.source_fingerprint !== row.source_payload.sourceFingerprint || mapping.financial_fingerprint !== row.source_payload.financialFingerprint
         || !receipt.reviewedXero || hash(receipt.reviewedXero) !== hash(row.xero_payload)
@@ -203,10 +236,21 @@ export async function xeroFinancialDocumentPreservationRun(body = {}, dependenci
         || receipt.fingerprint !== hash({ policyVersion: policy, accounting: receipt.evidence?.accounting }) || audit.length !== 1
         || audit[0].outcome !== 'success' || audit[0].actor_id !== actor.id || audit[0].record_counts?.financialWrites !== 0
         || !audit[0].fingerprints?.issuedSupplierPreservation
+        || recoveringGrouped && (receipt.acceptance.runRevision !== run.revision
+          || audit[0].actor_email !== actor.email || audit[0].fingerprints.tenantId !== run.control_totals?.workflowSnapshot?.tenantId)
         || hash(audit[0].fingerprints.issuedSupplierPreservation) !== hash(receipt)) throw fail('A completed preservation link is missing its matching immutable audit receipt.');
     }
-    return { run: runView(run), outcomes: selected.map((r) => ({ id: r.id, status: 'linked', xeroDocumentId: r.xero_document_id, alreadyLinked: true })), financialWrites: 0 };
+    const outcomes = selected.map((r) => ({ id: r.id, status: 'linked', xeroDocumentId: r.xero_document_id, alreadyLinked: true }));
+    if (!recoveringGrouped) return { run: runView(run), outcomes, financialWrites: 0 };
+    const finished = await client.rpc('finish_xero_financial_sync_run_v1', {
+      p_run_id: run.id, p_status: 'completed', p_expected_revision: run.revision,
+      p_classification_summary: { total: ids.length, linked: outcomes.length, financialWrites: 0 },
+      p_rate_limit_snapshot: run.rate_limit_snapshot || {}, p_error_code: null, p_error_message: null,
+    });
+    if (finished.error || !finished.data) throw fail('The original links were verified, but the final run status requires inspection.');
+    return { run: runView(finished.data), outcomes, financialWrites: 0 };
   }
+  if (body.readbackOnly === true) throw fail('The exact original linked outcome is not yet confirmed.', 'XERO_GROUPED_PETROLEUM_OUTCOME_PENDING');
   const resumable = run.status === 'authorised' && run.reviewed_by === actor.id && run.reviewed_by_email === actor.email
     && rows.filter((r) => r.selected).length === ids.length && selected.every((r) => r.selected && r.status === 'selected');
   if ((!resumable && (run.status !== 'ready_for_review' || rows.some((r) => r.selected))) || run.revision !== body.revision) throw fail('This review has already started or changed. Inspect its saved outcome before trying again.');
@@ -262,6 +306,8 @@ export async function xeroFinancialDocumentPreservationRun(body = {}, dependenci
       localCommitPending = false;
       outcomes.push(result.data);
     }
+    // Grouped recovery can verify the original receipts if finalization loses its acknowledgement.
+    if (policy === GROUPED_PETROLEUM_POLICY) localCommitPending = true;
     const finished = await finish('completed');
     if (finished.error || !finished.data) throw fail('The links were saved, but the final run status requires inspection.');
     return { run: runView(finished.data), outcomes, financialWrites: 0, rateLimit: rate };
