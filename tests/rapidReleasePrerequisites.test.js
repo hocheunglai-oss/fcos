@@ -189,3 +189,28 @@ test('hosted bootstrap recovery proves the exact original schema job without sub
     await assert.rejects(reconcileHostedSalesforceJob(input), /unexpected non-schema component/);
   }
 });
+
+test('hosted quick-deploy recovery verifies its original positive validation checkpoint', async () => {
+  const environment = FCOS_CONNECTION_POLICY.providers.find(provider => provider.id === 'salesforce').environments[0];
+  const validationJobId = '0AfHF00000700KB0AY', jobId = '0AfHF00000702c50AA';
+  const submittedAt = '2026-11-08T12:01:00.000Z', fingerprint = 'b'.repeat(64);
+  const reviewed = { fingerprint, manifest: ['ApexClass:Example'], binding: {
+    sourceTreeHash: 'c'.repeat(64), manifestSha256: 'd'.repeat(64), testPlan: { level: 'RunLocalTests', minimumTests: 1 },
+  } };
+  const deployment = { id: jobId, status: 'Succeeded', success: true, done: true, checkOnly: false, rollbackOnError: true,
+    numberComponentsTotal: 1, numberComponentsDeployed: 1, numberTestsTotal: 0, numberTestsCompleted: 0,
+    completedDate: '2026-11-08T12:02:00.000Z',
+    details: { componentSuccesses: [{ componentType: 'ApexClass', fullName: 'Example', success: true }] } };
+  const validation = { ...deployment, id: validationJobId, checkOnly: true, numberTestsTotal: 1, numberTestsCompleted: 1,
+    completedDate: '2026-11-08T12:00:00.000Z' };
+  const common = { fingerprint, stage: environment.key, evidenceDigest: 'e'.repeat(64), outcome: 'resolved' };
+  const checkpoints = [{ ...common, operation: 'deployment', job: { id: jobId, validationId: validationJobId, submittedAt } }];
+  const provider = { async verifyIdentity() {}, async report(_env, id) { return id === jobId ? deployment : validation; } };
+  const input = { environment, jobId, reviewed, operation: 'deployment', submittedAt, validationJobId, provider,
+    journal: { async readCheckpoints() { return checkpoints; } }, now: () => new Date('2026-11-08T12:03:00.000Z') };
+  await assert.rejects(reconcileHostedSalesforceJob(input), /ORIGINAL_VALIDATION_REQUIRED/);
+  checkpoints.push({ ...common, operation: 'validation', job: { id: validationJobId, validationId: null } });
+  assert.equal((await reconcileHostedSalesforceJob(input)).jobId, jobId);
+  validation.numberTestsTotal = validation.numberTestsCompleted = 0;
+  await assert.rejects(reconcileHostedSalesforceJob(input), /positive test execution/);
+});

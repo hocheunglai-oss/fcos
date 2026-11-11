@@ -29,7 +29,15 @@ export async function reconcileHostedSalesforceJob({ environment, jobId, reviewe
     'SALESFORCE_HOSTED_ORIGINAL_JOB_REQUIRED');
   await provider.verifyIdentity(target);
   const report = await provider.report(target, jobId);
-  const proof = assertReviewedJobReport(report, { environment: target, jobId, ...reviewedJobExpectations(reviewed, target, operation) });
+  let quickValidation;
+  if (operation === 'deployment' && Number(report.numberTestsTotal) === 0) {
+    requireCondition(entries.some(item => item.fingerprint === reviewed.fingerprint && item.stage === target.key
+      && item.operation === 'validation' && item.outcome === 'resolved' && item.job?.id === validationJobId
+      && /^[a-f0-9]{64}$/u.test(item.evidenceDigest || '')), 'SALESFORCE_HOSTED_ORIGINAL_VALIDATION_REQUIRED');
+    quickValidation = { id: validationJobId, report: await provider.report(target, validationJobId) };
+  }
+  const proof = assertReviewedJobReport(report, { environment: target, jobId,
+    ...reviewedJobExpectations(reviewed, target, operation), quickValidation });
   const verifiedAt = now();
   const completed = Date.parse(proof.completedAt);
   requireCondition(completed >= Date.parse(submittedAt) - 30_000 && completed <= verifiedAt.getTime() + 30_000,
