@@ -3,6 +3,7 @@ import { reviewedMigrationAdapter } from './reviewed-migration-adapter.mjs';
 import { prepareReviewedSalesforcePrerequisites, verifyPreBootstrapStage as verifySalesforceStage } from './salesforce-reviewed-adapter.mjs';
 import { TRADING_FX_MIGRATIONS } from './trading-fx-migrations.mjs';
 import { runTradingFxTransaction } from './trading-fx-transaction.mjs';
+import { verifyTradingFxXeroQualification } from './trading-fx-xero-qualification.mjs';
 
 const workflowPaths = ['api/_xeroNativeDocumentActions.js', 'api/_xeroPaymentPosting.js'];
 const migrationPaths = TRADING_FX_MIGRATIONS.map(({ path }) => path);
@@ -62,3 +63,7 @@ export function createTradingFxPrerequisiteAdapter({
     },
   };
 }
+
+export const { applyReviewedPrerequisites, verifyPreBootstrapStage } = createTradingFxPrerequisiteAdapter({
+  verifyXeroQualification: verifyTradingFxXeroQualification,
+});

@@ -292,10 +292,11 @@ for (const [adapter, field, errorCode] of [
   ['trading-fx-prerequisites', 'tradingFx', 'SMOKE_TRADING_FX_BOUNDARY_REQUIRED'],
 ]) test(`${adapter} requires both staging proofs and reuses a successful database operation`, async () => {
   const f = fixture();
+  const tradingFx = adapter === 'trading-fx-prerequisites';
   f.manifest = createManifest({ candidate: f.manifest.candidate, controllerSha: f.manifest.controllerSha,
-    previous: f.manifest.previous, paths: ['supabase/migrations/20990101000000_fixture.sql'],
+    previous: f.manifest.previous, paths: [...(tradingFx ? ['force-app/main/default/classes/Fixture.cls'] : []), 'supabase/migrations/20990101000000_fixture.sql'],
     publicEnvironment: f.manifest.build.publicEnvironment, releaseId: f.manifest.releaseId,
-    prerequisites: { adapter, adapterDigest: h, plan: {} } });
+    prerequisites: { adapter, adapterDigest: h, plan: tradingFx ? { xeroQualificationDeploymentId: 17, xeroQualificationDigest: h } : {} } });
   f.approval.manifestHash = digest(f.manifest);
   const originalSmoke = f.smoke;
   let stageVerified = false, postVerified = false, applications = 0;

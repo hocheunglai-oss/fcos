@@ -51,6 +51,16 @@
       "salesforce": false,
       "database": true,
       "databaseWrite": true
+    },
+    {
+      "id": "trading-fx-prerequisites",
+      "status": "qualified",
+      "sourceDigest": "0701d4813fa4b302988b72df8b1b762585a2cf536693c067d741e470abfd113c",
+      "path": "scripts/lib/rapid-release/trading-fx-adapter.mjs",
+      "salesforce": true,
+      "database": true,
+      "databaseWrite": true,
+      "supportsDeferredStage": true
     }
   ]
 }

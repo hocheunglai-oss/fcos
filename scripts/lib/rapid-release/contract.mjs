@@ -122,6 +122,11 @@ export function createManifest({ candidate, controllerSha, previous, paths, publ
   if (prerequisites !== null) requireCondition((selection.salesforce || selection.database)
     && /^[a-z][a-z0-9-]{3,64}$/.test(prerequisites.adapter || '') && isDigest(prerequisites.adapterDigest)
     && prerequisites.plan && Object.getPrototypeOf(prerequisites.plan) === Object.prototype, 'PREREQUISITE_DESCRIPTOR_INVALID');
+  if (requiresTradingFxSmoke({ prerequisites })) {
+    const { xeroQualificationDeploymentId, xeroQualificationDigest } = prerequisites.plan;
+    requireCondition(selection.salesforce && selection.database && Number.isSafeInteger(xeroQualificationDeploymentId)
+      && xeroQualificationDeploymentId > 0 && isDigest(xeroQualificationDigest), 'TRADING_FX_XERO_QUALIFICATION_LOCATOR_REQUIRED');
+  }
   const buildId = digest({ sha: candidate.sha, sourceDigest: candidate.sourceDigest, lockDigest: candidate.lockDigest,
     node: process.version, publicEnvironment: buildEnvironment });
   return { schemaVersion: 1, contract: 'fcos-rapid-release/v1', releaseId, createdAt: now, targets: targets(),
