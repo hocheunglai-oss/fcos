@@ -263,3 +263,25 @@ test('reviewed schema bootstrap can precede dependent smoke, with one decision a
     businessWrites: 0, normalRole: true, modules: f.manifest.selection.modules });
   assert.equal((await promoteRelease(f)).state, 'complete'); assert.equal(applied, 1);
 });
+
+test('Company FX promotion requires history readback and can resume without reapplying the migration', async () => {
+  const f = fixture();
+  f.manifest = createManifest({ candidate: f.manifest.candidate, controllerSha: f.manifest.controllerSha,
+    previous: f.manifest.previous, paths: ['supabase/migrations/20990101000000_fixture.sql'],
+    publicEnvironment: f.manifest.build.publicEnvironment, releaseId: f.manifest.releaseId,
+    prerequisites: { adapter: 'company-fx-history', adapterDigest: h, plan: { historySmoke: true } } });
+  f.approval.manifestHash = digest(f.manifest);
+  const originalSmoke = f.smoke;
+  let historyVerified = false, applications = 0;
+  f.smoke = async ({ afterPrerequisites }) => ({ ...await originalSmoke(),
+    modules: f.manifest.selection.modules, normalRole: true,
+    ...(afterPrerequisites && historyVerified ? { companyFxHistory: { readVerified: true, writeDenied: true } } : {}) });
+  f.prerequisites = async () => { applications++; return { passed: true, manifestHash: digest(f.manifest), backwardCompatible: true }; };
+  await stageRelease(f);
+  await assert.rejects(promoteRelease(f), /SMOKE_COMPANY_FX_HISTORY_REQUIRED/);
+  assert.equal(f.calls.includes('promote'), false);
+  historyVerified = true;
+  assert.equal((await promoteRelease(f)).state, 'complete');
+  assert.equal(applications, 1);
+  assert.equal(f.calls.filter(call => call === 'promote').length, 1);
+});

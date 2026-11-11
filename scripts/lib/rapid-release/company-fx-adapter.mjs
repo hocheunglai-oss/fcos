@@ -5,7 +5,7 @@ import { assertPinnedDatabaseIdentity, openPinnedDatabase } from './database-con
 import { createDatabaseCredentialIntentStore } from './database-intent.mjs';
 import { githubClient } from './providers.mjs';
 
-const expectedPlan = { migrationPath: COMPANY_FX_MIGRATION_PATH, migrationDigest: COMPANY_FX_MIGRATION_DIGEST };
+const expectedPlan = { migrationPath: COMPANY_FX_MIGRATION_PATH, migrationDigest: COMPANY_FX_MIGRATION_DIGEST, historySmoke: true };
 const writerIdentity = "select session_user,current_user,current_database() as database,current_setting('transaction_read_only') as read_only";
 
 async function openWriter({ manifest, controllerDirectory, env }) {
@@ -25,7 +25,8 @@ export async function applyReviewedPrerequisites({ manifest, approval, journal, 
   databaseWriter }, { github = githubClient, connect = openWriter, verifyIdentity = assertPinnedDatabaseIdentity } = {}) {
   const manifestHash = digest(manifest);
   requireCondition(digest(plan) === digest(expectedPlan) && manifest.selection.database === true
-    && manifest.selection.salesforce === false && isSha(manifest.candidate.sha)
+    && manifest.selection.salesforce === false && manifest.selection.normalRole === true && isSha(manifest.candidate.sha)
+    && manifest.paths.includes('api/_companyFxHistoryAdmin.js')
     && digest(manifest.paths.filter(path => path.startsWith('supabase/migrations/'))) === digest([COMPANY_FX_MIGRATION_PATH]),
   'COMPANY_FX_REVIEWED_PLAN_MISMATCH');
   requireCondition(approval?.manifestHash === manifestHash && approval.nativeReviewVerified === true
