@@ -4,7 +4,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import { loadReviewedSalesforcePlan, assertReviewedInputsUnchanged, cliSalesforceProvider } from './deploy-salesforce-reviewed-manifest.mjs';
 import { executeSharedMirror } from './sync-salesforce-shared-repository.mjs';
-import { INVENTORY_BASELINE_MODE, REVIEWED_SALESFORCE_MODE, assertReviewedJobReport, safeProjectFile, verifyReviewedOrgInventory } from './lib/salesforce-reviewed-release.mjs';
+import { INVENTORY_BASELINE_MODE, REVIEWED_SALESFORCE_MODE, verifyReviewedJobPair, reviewedCheckpointInventory, safeProjectFile, verifyReviewedOrgInventory } from './lib/salesforce-reviewed-release.mjs';
 import { salesforcePromotionHash } from './lib/salesforce-promotion-journal.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -19,19 +19,21 @@ export async function reviewedDeveePublicationProof({ plan, state, policy = POLI
     || stage.deployment.fingerprint !== plan.fingerprint || stage.validation.orgId !== environment.orgId || stage.deployment.orgId !== environment.orgId) throw new Error('Publication requires verified DEVEE incremental validation and deployment jobs.');
   await assertUnchanged(); await provider.verifyIdentity(environment);
   const baseline = plan.binding.baselineJobs?.devee;
-  for (const [validation, jobId] of [...(baseline ? [[true, baseline.validationJobId], [false, baseline.deploymentJobId]] : []), [true, stage.validation.jobId], [false, stage.deployment.jobId]]) {
-    assertReviewedJobReport(await provider.report(environment, jobId), { environment, jobId, validation,
-      testPlan: jobId === baseline?.validationJobId || jobId === baseline?.deploymentJobId ? { level: 'RunLocalTests', tests: [], minimumTests: 1 } : plan.binding.testPlan,
-      expectedComponents: jobId === baseline?.validationJobId || jobId === baseline?.deploymentJobId ? [] : plan.manifest });
-  }
-  await verifyReviewedOrgInventory({ provider, environment, plan, expected: plan.finalInventory, now });
+  if (baseline) await verifyReviewedJobPair({ provider, environment, ...baseline,
+    testPlan: { level: 'RunLocalTests', tests: [], minimumTests: 1 } });
+  await verifyReviewedJobPair({ provider, environment, validationJobId: stage.validation.jobId,
+    deploymentJobId: stage.deployment.jobId, testPlan: plan.binding.testPlan, expectedComponents: plan.manifest });
+  const expected = reviewedCheckpointInventory(plan, stage, environment.key);
+  const receipt = await verifyReviewedOrgInventory({ provider, environment, plan, expected, now });
   await assertUnchanged();
   const deveeBaseline = plan.binding.orgBaselines?.devee;
   return { releaseMode: REVIEWED_SALESFORCE_MODE, baselineMode: plan.binding.baselineMode,
     proofKind: plan.binding.baselineMode === INVENTORY_BASELINE_MODE ? 'verified-native-inventory-plus-covered-manifest' : 'verified-complete-baseline-plus-covered-manifest',
     sourceTreeHash: plan.binding.sourceTreeHash, baselineSourceTreeHash: deveeBaseline?.sourceTreeHash || plan.binding.baselineSourceTreeHash,
     baselineInventoryHash: deveeBaseline?.inventoryHash || plan.binding.baselineInventoryHash, manifestSha256: plan.binding.manifestSha256,
-    fingerprint: plan.fingerprint, deploymentJobId: stage.deployment.jobId, verifiedAt: new Date().toISOString() };
+    fingerprint: plan.fingerprint, deploymentJobId: stage.deployment.jobId, verifiedAt: receipt.verifiedAt,
+    ...(expected.nativeExport ? { nativeInventoryHash: receipt.inventoryHash, nativeSourceTreeHash: receipt.nativeSourceTreeHash,
+      nativeEvidenceSha256: receipt.evidenceSha256 } : {}) };
 }
 
 export async function main(argv = process.argv.slice(2), { cwd = ROOT, policy = POLICY } = {}) {

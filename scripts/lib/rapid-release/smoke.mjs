@@ -8,7 +8,7 @@ import { READ_ONLY_CI_HANDLERS, isReadOnlyMarketAction, CI_DENIAL_PROBES } from 
 import { canonicalFcosE2eCandidateUrl } from '../../verify-e2e-candidate.mjs';
 import { candidateAuthenticationState, writePrivateE2eState, removePrivateE2eState } from '../../e2e-private-state.mjs';
 import { candidateProtectionState } from '../../e2e-protection-state.mjs';
-import { digest } from './contract.mjs';
+import { digest, requiresCompanyFxHistorySmoke } from './contract.mjs';
 import { MODULE_READERS as moduleReaders, MODULE_SURFACES, NORMAL_NAVIGATION_READS, moduleReadBody, moduleReaderPayloadVerified as modulePayloadVerified } from './normal-role-readers.mjs';
 
 const issuer = new URL(FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation.issuer).origin;
@@ -292,20 +292,38 @@ async function verifyModuleDesktop({ page, origin, module }) {
     ...(spec.readControl ? { readControl: spec.readControl } : {}) };
 }
 
-async function browserRun({ origin, manifest, credentials, normal, modules, env, browserFactory, diagnostic }) {
+async function verifyCompanyFxHistory(route, origin) {
+  const { response } = await routeRead(route, origin, '/api/functions/companyFxHistoryGet', {});
+  const history = response.data ?? response;
+  requireFact(history.canSave === true && Array.isArray(history.rows) && history.rows.length <= 100
+    && history.rows.some(row => typeof row.rateId === 'string' && row.rateId.length > 0
+      && Number.isSafeInteger(row.revision) && row.revision > 0 && Number.isFinite(Date.parse(row.effectiveAt))
+      && typeof row.usdHkdRate === 'number' && row.usdHkdRate > 0 && row.usdHkdRate <= 100), 'SMOKE_COMPANY_FX_HISTORY_READ_FAILED');
+  const path = '/api/functions/companyFxHistorySave';
+  let denial;
+  try {
+    // The empty body cannot create a rate even if staging admission regresses.
+    denial = await route.fetch({ url: origin + path, method: 'POST', postData: '{}', maxRedirects: 0, maxRetries: 0, timeout: 10000 });
+    requireFact(denial.url() === origin + path && denial.status() === 403
+      && (await denial.json()).code === 'FCOS_DEPLOYMENT_READ_ONLY', 'SMOKE_COMPANY_FX_HISTORY_WRITE_NOT_DENIED');
+  } finally { await denial?.dispose(); }
+  return { readVerified: true, writeDenied: true };
+}
+
+async function browserRun({ origin, manifest, credentials, normal, modules, env, browserFactory, diagnostic, historyRequired }) {
   async function checkModule(module, surface, check) {
-    if (!diagnostic) return check();
     const start = performance.now();
     let receipt, code;
     try { receipt = await check(); }
     catch (error) {
       code = /^SMOKE_[A-Z0-9_]+$/.test(error?.code || '') ? error.code : 'SMOKE_MODULE_SURFACE_FAILED';
+      if (!diagnostic) throw Object.assign(fail(code), { smokeModule: module, smokeSurface: surface });
     }
-    diagnostic.record({ module, surface, passed: Boolean(receipt), elapsedMs: Math.round(performance.now() - start), ...(code ? { code } : {}) });
+    diagnostic?.record({ module, surface, passed: Boolean(receipt), elapsedMs: Math.round(performance.now() - start), ...(code ? { code } : {}) });
     return receipt;
   }
   let phase = 'SETUP';
-  let browser, context, privateEnv, readNormalModules, cleanupFailed = false;
+  let browser, context, privateEnv, readNormalModules, companyFxHistory, cleanupFailed = false;
   let denialReceipts = [], extraReads = [], desktopChecks = [], authProbed = false, probeError, rejectProbe, resolveProbe;
   const probeFailure = new Promise((_, reject) => { rejectProbe = reject; });
   probeFailure.catch(() => {});
@@ -345,6 +363,7 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
             denialReceipts = [{ path: mutation.path, status: 403, code: 'FCOS_DEPLOYMENT_READ_ONLY' }];
           } finally { await denial?.dispose(); }
           readNormalModules = async () => {
+            if (historyRequired) companyFxHistory = await verifyCompanyFxHistory(route, origin);
             for (const module of modules.filter(value => !baselineModules.includes(value))) {
               const reader = moduleReaders[module];
               const receipt = await checkModule(module, 'read', async () => {
@@ -426,9 +445,14 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
     }
     gate.assertHealthy();
     return { role: credentials.role, requiredModules: unique(modules), modules: unique(reads.map(read => read.module)), reads, desktopChecks, denialReceipts,
-      ...gate.summary(), candidateSha: manifest.candidate.sha };
+      ...gate.summary(), candidateSha: manifest.candidate.sha, ...(companyFxHistory ? { companyFxHistory } : {}) };
   } catch (error) {
-    throw fail(probeError?.code || (/^(?:SMOKE_|NORMAL_ROLE_)[A-Z0-9_]+$/.test(error?.code || '') ? error.code : `SMOKE_BROWSER_${phase}_FAILED`));
+    const cause = probeError || error;
+    const failure = fail(/^(?:SMOKE_|NORMAL_ROLE_)[A-Z0-9_]+$/.test(cause?.code || '') ? cause.code : `SMOKE_BROWSER_${phase}_FAILED`);
+    if (Object.hasOwn(moduleReaders, cause?.smokeModule) && ['read', 'desktop'].includes(cause.smokeSurface)) {
+      Object.assign(failure, { smokeModule: cause.smokeModule, smokeSurface: cause.smokeSurface });
+    }
+    throw failure;
   } finally {
     try { await context?.close(); } catch { cleanupFailed = true; }
     try { await browser?.close(); } catch { cleanupFailed = true; }
@@ -477,7 +501,7 @@ export async function diagnoseStagedSmoke(options, { desktop = true, desktopModu
   return { passed: false, outcomes, ...(code ? { code } : {}) };
 }
 
-async function stagedSmoke({ manifest, staged, env = process.env, fetchImpl = fetch, browserFactory } = {}, diagnostic, deferredModules = []) {
+async function stagedSmoke({ manifest, staged, env = process.env, fetchImpl = fetch, browserFactory, afterPrerequisites = false } = {}, diagnostic, deferredModules = []) {
   const origin = binding(manifest, staged);
   const selected = unique(manifest.selection?.modules || []).filter(module => !deferredModules.includes(module));
   const expanded = String(env.FCOS_RAPID_NORMAL_REQUIRED_MODULES || '').split(',').map(value => value.trim())
@@ -499,15 +523,18 @@ async function stagedSmoke({ manifest, staged, env = process.env, fetchImpl = fe
   requireFact([...selected, ...expanded].every(module => baselineModules.includes(module)) || manifest.selection?.normalRole === true, 'NORMAL_ROLE_COVERAGE_MISSING');
   const ci = credentialsFor(env, false);
   const normal = manifest.selection?.normalRole === true ? credentialsFor(env, true) : null;
+  const historyRequired = afterPrerequisites && requiresCompanyFxHistorySmoke(manifest);
+  requireFact(!historyRequired || normal?.role === 'general_manager', 'SMOKE_COMPANY_FX_HISTORY_GM_REQUIRED');
   requireFact(!normalModules.includes('admin') || normal?.role === 'general_manager', 'NORMAL_ROLE_ADMIN_REQUIRES_APPROVED_GM');
   requireFact(!env.FCOS_E2E_VERCEL_BYPASS || /^[a-zA-Z0-9]{32}$/.test(env.FCOS_E2E_VERCEL_BYPASS), 'SMOKE_PROTECTION_CREDENTIAL_INVALID');
   await verifyIdentity(origin, manifest, fetchImpl, env.FCOS_E2E_VERCEL_BYPASS);
   const launch = browserFactory || (async options => (await import('@playwright/test')).chromium.launch(options));
   const restricted = await browserRun({ origin, manifest, credentials: ci, normal: false, modules: baselineModules, env, browserFactory: launch });
-  const ordinary = normal ? await browserRun({ origin, manifest, credentials: normal, normal: true, modules: normalModules, env, browserFactory: launch, diagnostic }) : null;
+  const ordinary = normal ? await browserRun({ origin, manifest, credentials: normal, normal: true, modules: normalModules, env, browserFactory: launch, diagnostic, historyRequired }) : null;
   return { passed: true, deploymentId: staged.id, buildId: staged.buildId, login: true, restrictedAccess: true, businessWrites: 0,
     modules: unique([...restricted.modules, ...(ordinary?.modules || [])]), restrictedEvidence: restricted,
-    ...(ordinary ? { normalRole: true, normalRoleEvidence: ordinary } : {}) };
+    ...(ordinary ? { normalRole: true, normalRoleEvidence: ordinary } : {}),
+    ...(ordinary?.companyFxHistory ? { companyFxHistory: ordinary.companyFxHistory } : {}) };
 }
 
 export async function observeLive({ manifest, staged, durationMs = 300000, fetchImpl = fetch, now = Date.now,

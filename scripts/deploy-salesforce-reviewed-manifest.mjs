@@ -111,6 +111,23 @@ function normalizedMetadataDefinition(xml) {
   return definition(children);
 }
 
+function verifyNativeApexProjection({ root, sourceRoot, plan }) {
+  const canonicalBody = text => text.replace(/\r\n/gu, '\n').replace(/\n$/u, '');
+  for (const component of plan.review.components) {
+    for (const name of component.files) {
+      const source = readFileSync(safeProjectFile(sourceRoot, name));
+      const native = readFileSync(safeProjectFile(root, name));
+      if (salesforcePromotionHash(source) !== plan.finalInventory.files[name]?.sha256) {
+        throw new Error(`Reviewed Apex source changed before native comparison: ${name}`);
+      }
+      const normalize = name.endsWith('.cls') ? canonicalBody : normalizedMetadataDefinition;
+      if (JSON.stringify(normalize(source.toString('utf8'))) !== JSON.stringify(normalize(native.toString('utf8')))) {
+        throw new Error(`Native Apex projection differs from the exact reviewed source: ${name}`);
+      }
+    }
+  }
+}
+
 function assertConvertedPackage(converted, roundTrip, members, files, sourceRoot, apiVersion, operation) {
   const packageBytes = readFileSync(safeProjectFile(converted, 'package.xml'), 'utf8');
   const actualMembers = parseReviewedPackage(packageBytes);
@@ -269,32 +286,64 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
     },
     // Job adoption must be implemented by the release owner's provider-specific readback.
     reconcile: adapter.reconcileSalesforceJob,
-    verifyInventory: adapter.verifySalesforceInventory || function (environment, { plan, expectedInventoryHash, expectedSourceTreeHash, expectedAbsentComponents = [] }) {
+    verifyInventory: adapter.verifySalesforceInventory || function (environment, { plan, expectedInventoryHash, expectedSourceTreeHash,
+      expectedAbsentComponents = [], nativeExport = false, verifyApexProjection = false }) {
       const manifest = plan.review.inventoryManifests?.[expectedInventoryHash];
       if (!manifest) throw new Error('Current Salesforce inventory requires an exact reviewed retrieval manifest.');
       const bytes = readFileSync(safeProjectFile(cwd, manifest.path));
       if (salesforcePromotionHash(bytes) !== manifest.sha256) throw new Error('Salesforce inventory retrieval manifest digest mismatch.');
       const presentComponents = parseReviewedPackage(bytes.toString('utf8'), { inventory: true });
+      let apexBytes;
+      if (nativeExport) {
+        const apex = plan.review.components.filter(({ id }) => !expectedAbsentComponents.includes(id));
+        if (plan.review.components.some(({ id }) => presentComponents.includes(id)) || Boolean(manifest.apex) !== Boolean(apex.length)) {
+          throw new Error('Stable native retrieval must keep the reviewed Apex package separate.');
+        }
+        if (manifest.apex) {
+          apexBytes = readFileSync(safeProjectFile(cwd, manifest.apex.path));
+          const members = parseReviewedPackage(apexBytes.toString('utf8'));
+          if (salesforcePromotionHash(apexBytes) !== manifest.apex.sha256
+            || JSON.stringify(members) !== JSON.stringify(apex.map(({ id }) => id).sort())) {
+            throw new Error('Native Apex retrieval manifest does not match the reviewed checkpoint.');
+          }
+          presentComponents.push(...members);
+        }
+      }
 
       const before = this.verifyIdentity(environment);
       const project = mkdtempSync(path.join(tmpdir(), 'fcos-salesforce-inventory-'));
       try {
         copyFileSync(safeProjectFile(cwd, 'sfdx-project.json'), path.join(project, 'sfdx-project.json'));
         mkdirSync(path.join(project, 'force-app'));
-        mkdirSync(path.join(project, 'retrieved'));
-        const manifestPath = path.join(project, 'inventory.xml');
-        writeFileSync(manifestPath, bytes, { mode: 0o600 });
-        const result = sf(['project', 'retrieve', 'start', '--target-org', environment.alias,
-          '--manifest', manifestPath, '--output-dir', 'retrieved', '--wait', '5', '--json'], project);
-        if (result?.success !== true || result.done !== true || result.status !== 'Succeeded'
-          || !/^09S[A-Za-z0-9]{15}$/u.test(result.id || '') || result.messages?.length) {
-          throw new Error('Salesforce inventory retrieval did not complete successfully without warnings.');
+        const retrieve = (xml, name, directory) => {
+          mkdirSync(path.join(project, directory));
+          const manifestPath = path.join(project, name);
+          writeFileSync(manifestPath, xml, { mode: 0o600 });
+          const result = sf(['project', 'retrieve', 'start', '--target-org', environment.alias,
+            '--manifest', manifestPath, '--output-dir', directory, '--wait', '5', '--json'], project);
+          if (result?.success !== true || result.done !== true || result.status !== 'Succeeded'
+            || !/^09S[A-Za-z0-9]{15}$/u.test(result.id || '') || result.messages?.length) {
+            throw new Error('Salesforce inventory retrieval did not complete successfully without warnings.');
+          }
+          return result.id;
+        };
+        const jobId = retrieve(bytes, 'inventory.xml', 'retrieved');
+        const apexJobId = apexBytes ? retrieve(apexBytes, 'apex.xml', 'apex') : null;
+        const root = path.join(project, 'retrieved');
+        const supplementalRoot = apexJobId ? path.join(project, 'apex') : null;
+        if (supplementalRoot) {
+          const apexPaths = plan.review.components.filter(({ id }) => !expectedAbsentComponents.includes(id)).flatMap(({ files }) => files).sort();
+          const observedApex = readReviewedInventory(supplementalRoot, { nativeExport: true });
+          if (JSON.stringify(Object.keys(observedApex.files)) !== JSON.stringify(apexPaths)) {
+            throw new Error('Native Apex retrieval returned an unexpected path set.');
+          }
         }
-        const observed = readReviewedInventory(path.join(project, 'retrieved'));
+        const observed = readReviewedInventory(root, { nativeExport, supplementalRoot });
         if (observed.inventoryHash !== expectedInventoryHash
           || (expectedSourceTreeHash && observed.sourceTreeHash !== expectedSourceTreeHash)) {
           throw new Error('Native Salesforce retrieval differs from the exact reviewed inventory.');
         }
+        if (verifyApexProjection) verifyNativeApexProjection({ root: supplementalRoot, sourceRoot: path.join(cwd, policy.publication.sourceRoot), plan });
         const absence = expectedAbsentComponents.length ? proveSalesforceInventoryAbsence({ expectedAbsentComponents,
           presentComponents: [...presentComponents, ...(plan.review.inventoryCatalogControls?.[environment.key] || [])],
           listMetadata: type => sf(['org', 'list', 'metadata', '--target-org', environment.alias, '--metadata-type', type, '--json'], project),
@@ -306,10 +355,14 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
           username: after.username, connectedStatus: after.connectedStatus };
         const verifiedAt = new Date().toISOString();
         const sourceTreeHash = expectedSourceTreeHash ? observed.sourceTreeHash : null;
-        const evidenceSha256 = salesforcePromotionHash({ jobId: result.id, manifestSha256: manifest.sha256,
-          identity, verifiedAt, inventoryHash: observed.inventoryHash, sourceTreeHash, ...absence });
+        const evidenceSha256 = salesforcePromotionHash({ jobId, manifestSha256: manifest.sha256,
+          identity, verifiedAt, inventoryHash: observed.inventoryHash, sourceTreeHash,
+          ...(apexJobId ? { apexJobId, apexManifestSha256: manifest.apex.sha256 } : {}),
+          ...(nativeExport ? { nativeSourceTreeHash: observed.sourceTreeHash, apexProjectionVerified: verifyApexProjection } : {}), ...absence });
         return { orgId: identity.orgId, identity, verifiedAt, sourceTreeHash, inventoryHash: observed.inventoryHash,
-          evidenceSha256, observedInventory: observed.files, verificationMethod: 'metadata-api-owned-tree-inventory',
+          evidenceSha256, observedInventory: observed.files,
+          ...(nativeExport ? { nativeSourceTreeHash: observed.sourceTreeHash, apexProjectionVerified: verifyApexProjection } : {}),
+          verificationMethod: nativeExport ? 'metadata-api-reviewed-native-byte-inventory' : 'metadata-api-owned-tree-inventory',
           scope: 'force-app/main/default', ...absence };
       } finally {
         rmSync(project, { recursive: true, force: true });

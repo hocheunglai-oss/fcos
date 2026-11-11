@@ -48,7 +48,7 @@ const readPayloads = {
 
 // Fixtures replace browser/provider transports. They simulate the app-owned
 // bootstrap response and actual response events; they never establish live proof.
-function browserFixture({ badIdentity = false, badRead = false, badDenial = false, unexpected = false, missingModule = false, background = false, optionalRequest = null, badPayload = false, badDesktop = false, deniedModule = null, role = 'manager' } = {}) {
+function browserFixture({ badIdentity = false, badRead = false, badDenial = false, unexpected = false, missingModule = false, background = false, optionalRequest = null, badPayload = false, badDesktop = false, deniedModule = null, role = 'manager', companyFxRows = undefined } = {}) {
   const observations = { launches: [], reads: [], contextsClosed: 0, browsersClosed: 0, nativeAborts: 0 };
   const browserFactory = async options => {
     observations.launches.push(options);
@@ -75,6 +75,7 @@ function browserFixture({ badIdentity = false, badRead = false, badDenial = fals
           const url = overrides.url || request.url();
           observations.reads.push({ url, method: overrides.method || request.method(), body: overrides.postData });
           if (url.endsWith('/authContext')) return apiResponse(url, auth(), 200, request);
+          if (url.endsWith('/companyFxHistoryGet')) return apiResponse(url, { canSave: true, rows: companyFxRows });
           const module = Object.keys(MODULE_READERS).find(key => url.endsWith(MODULE_READERS[key].path));
           if (module) return apiResponse(url, badPayload ? {} : readPayloads[module], module === deniedModule ? 403 : 200);
           return apiResponse(url, { code: 'FCOS_DEPLOYMENT_READ_ONLY' }, badDenial ? 200 : 403);
@@ -406,4 +407,36 @@ test('diagnostic records subsequent module outcomes after a denied read without 
     ['review', 'desktop', true], ['settings', 'desktop', true],
   ]);
   assert.equal(observations.contextsClosed, 2);
+});
+
+test('native smoke identifies the reviewed module and surface that failed', async () => {
+  const { browserFactory, observations } = browserFixture({ deniedModule: 'review' });
+  await assert.rejects(runStagedSmoke({
+    manifest: manifest({ modules: ['review', 'settings'], normalRole: true }),
+    staged, env, fetchImpl: publicFetch(), browserFactory,
+  }), { code: 'SMOKE_AUTHENTICATED_READ_FAILED', smokeModule: 'review', smokeSurface: 'read' });
+  assert.equal(observations.contextsClosed, 2);
+});
+
+
+test('Company FX history smoke runs only after its prerequisite and verifies seeded read and write denial', async () => {
+  const candidate = { ...manifest({ normalRole: true, modules: ['incoming_payments'] }),
+    prerequisites: { adapter: 'company-fx-history', plan: { historySmoke: true } } };
+  const variables = { ...env, FCOS_HOSTED_NORMAL_EXPECTED_ROLE: 'general_manager' };
+  const seeded = [{ rateId: 'synthetic-rate', revision: 4, effectiveAt: '2026-11-10T00:00:00Z', usdHkdRate: 7.84, reason: 'PRIVATE_FIXTURE_REASON' }];
+  const fixture = browserFixture({ role: 'general_manager', companyFxRows: seeded });
+  const options = { manifest: candidate, staged, env: variables, fetchImpl: publicFetch(), browserFactory: fixture.browserFactory };
+  const before = await runStagedSmoke(options);
+  assert.equal(before.companyFxHistory, undefined);
+  assert.equal(fixture.observations.reads.filter(row => row.url.includes('/companyFxHistory')).length, 0);
+  const after = await runStagedSmoke({ ...options, afterPrerequisites: true });
+  assert.deepEqual(after.companyFxHistory, { readVerified: true, writeDenied: true });
+  assert.equal(JSON.stringify(after).includes('PRIVATE_FIXTURE_REASON'), false);
+  assert.deepEqual(fixture.observations.reads.filter(row => row.url.includes('/companyFxHistory'))
+    .map(row => [new URL(row.url).pathname, row.body]), [
+    ['/api/functions/companyFxHistoryGet', '{}'], ['/api/functions/companyFxHistorySave', '{}'],
+  ]);
+  const incomplete = browserFixture({ role: 'general_manager', companyFxRows: [] });
+  await assert.rejects(runStagedSmoke({ ...options, afterPrerequisites: true, browserFactory: incomplete.browserFactory }),
+    { code: 'SMOKE_COMPANY_FX_HISTORY_READ_FAILED' });
 });

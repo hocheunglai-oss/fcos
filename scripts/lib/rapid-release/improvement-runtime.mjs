@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { constants, lstat, mkdir, open, readFile, readdir, realpath, rename } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { MODULE_READERS } from './normal-role-readers.mjs';
 import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier } from '../../../config/fcosConnections.js';
 
 const canonical = value => JSON.stringify(value, (_, item) => item && typeof item === 'object' && !Array.isArray(item)
@@ -22,7 +23,10 @@ const ownedCodes = Object.freeze({
   SMOKE_BROWSER_NETWORK_OR_RUNTIME_FAILURE: 'test_failure', SMOKE_CANDIDATE_NAVIGATION_CHANGED: 'test_failure',
   SMOKE_MODULE_DESKTOP_CONTENT_MISSING: 'test_failure', SMOKE_MODULE_DESKTOP_HEADING_MISSING: 'test_failure',
   SMOKE_MODULE_DESKTOP_INCOMPLETE: 'test_failure', SMOKE_MODULE_PAYLOAD_INCOMPLETE: 'test_failure',
-  SMOKE_MODULE_READ_FAILED: 'test_failure', SMOKE_AUTHENTICATED_READ_FAILED: 'test_failure',
+  SMOKE_MODULE_READ_FAILED: 'test_failure', SMOKE_AUTHENTICATED_READ_FAILED: 'test_failure', SMOKE_MODULE_SURFACE_FAILED: 'test_failure',
+  SMOKE_COMPANY_FX_HISTORY_READ_FAILED: 'test_failure',
+  SMOKE_COMPANY_FX_HISTORY_WRITE_NOT_DENIED: 'test_failure',
+  SMOKE_COMPANY_FX_HISTORY_REQUIRED: 'test_failure',
   SMOKE_LOGIN_NOT_PROVEN: 'test_failure', SMOKE_RESTRICTED_ACCESS_NOT_PROVEN: 'test_failure',
   SMOKE_NORMAL_MUTATION_NOT_DENIED: 'test_failure', SMOKE_NORMAL_READS_NOT_BOUND: 'test_failure',
   SMOKE_BOUND_READ_FAILED: 'test_failure', SMOKE_PROTECTION_BOOTSTRAP_FAILED: 'test_failure',
@@ -35,6 +39,10 @@ const ownedCodes = Object.freeze({
   PROVIDER_ACKNOWLEDGEMENT_MISSING: 'write_uncertain', DEPLOYMENT_ACK_UNCERTAIN: 'write_uncertain', JOURNAL_WRITE_UNCERTAIN: 'write_uncertain',
   PRIOR_OPERATION_FAILED: 'known_job_failed', EXACT_PRODUCTION_AUTHORIZATION_REQUIRED: 'authorization_required',
   NATIVE_PRODUCTION_REVIEW_REQUIRED: 'authorization_required', GOVERNED_CI_CREDENTIALS_MISSING: 'credential_entry_required',
+  SALESFORCE_HOSTED_MIRROR_CREDENTIAL_REQUIRED: 'credential_entry_required',
+  SALESFORCE_HOSTED_CREDENTIAL_REQUIRED_DEVEE: 'credential_entry_required',
+  SALESFORCE_HOSTED_CREDENTIAL_REQUIRED_QAT: 'credential_entry_required',
+  SALESFORCE_HOSTED_CREDENTIAL_REQUIRED_PRODUCTION: 'credential_entry_required',
   NORMAL_ROLE_COVERAGE_MISSING: 'credential_entry_required', PHASE_PERFORMANCE_BUDGET_EXCEEDED: 'slow_phase',
 });
 const steps = new Set(['controls', 'lint', 'typecheck', 'product_tests', 'affected_tests', 'build', 'performance',
@@ -109,8 +117,13 @@ export async function handleReleaseObstacle({ error, phase, manifest, journal, p
   outputFile, completedSteps = [], elapsedMs = 0, providerCalls = 0 }) {
   const module = await import(pathToFileURL(join(controllerDirectory, 'scripts/lib/rapid-release/learning.mjs')).href);
   const code = Object.hasOwn(ownedCodes, error?.code) ? error.code : 'UNCLASSIFIED_RELEASE_OBSTACLE';
+  const inputs = await releaseObstacleInputs({ manifest, controllerDirectory });
+  if (code.startsWith('SMOKE_') && Object.hasOwn(MODULE_READERS, error?.smokeModule)
+    && ['read', 'desktop'].includes(error.smokeSurface)) {
+    Object.assign(inputs, { smokeModule: error.smokeModule, smokeSurface: error.smokeSurface });
+  }
   const incident = module.obstacle({ kind: ownedCodes[code] || 'unknown', phase: safePhase(phase), code,
-    inputs: await releaseObstacleInputs({ manifest, controllerDirectory }), completedSteps: completedSteps.filter(step => steps.has(step)),
+    inputs, completedSteps: completedSteps.filter(step => steps.has(step)),
     elapsedMs: elapsed(elapsedMs), providerCalls: count(providerCalls) });
   const local = await privateStore(outputFile || join(controllerDirectory, 'outputs/rapid-release-obstacles/obstacles.json'));
   const capture = async (event, data) => {

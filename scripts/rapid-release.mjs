@@ -97,7 +97,8 @@ async function rapidReleaseCommand(argv, env, runtime) {
     const incident = read(opts.incident);
     runtime.phase = incident.phase;
     runtime.provider = vercelProvider({ manifest, github, env });
-    return handleReleaseObstacle({ ...runtime, error: { code: incident.code },
+    return handleReleaseObstacle({ ...runtime,
+      error: { code: incident.code, smokeModule: incident.inputs?.smokeModule, smokeSurface: incident.inputs?.smokeSurface },
       registry: read(opts.registry || join(controller, 'config/rapid-release-learning.json')) });
   }
   requireCondition(['stage', 'promote', 'resume'].includes(command), 'CLI_COMMAND_INVALID');
@@ -110,8 +111,12 @@ async function rapidReleaseCommand(argv, env, runtime) {
   const compatibility = await nativeCompatibilityReader({ provider, env })({ manifest });
   requireCondition(compatibility.currentDeploymentId === manifest.previous.deploymentId || staged?.id === compatibility.currentDeploymentId,
     'PRODUCTION_BASELINE_CHANGED');
+  const priorPrerequisite = phaseResult(records, 'prerequisites')?.result;
+  const postSchema = priorPrerequisite?.database?.schemaDigest;
+  const hasPrerequisiteIntent = records.some(record => ['prerequisites.intent', 'prerequisites.passed'].includes(record.payload.event));
   requireCondition(compatibility.configurationDigest === manifest.previous.configurationDigest
-    && (records.some(record => ['prerequisites.intent','prerequisites.passed'].includes(record.payload.event)) || compatibility.schemaDigest === manifest.previous.schemaDigest), 'BASELINE_NATIVE_FINGERPRINT_CHANGED');
+    && (postSchema ? compatibility.schemaDigest === postSchema
+      : hasPrerequisiteIntent || compatibility.schemaDigest === manifest.previous.schemaDigest), 'BASELINE_NATIVE_FINGERPRINT_CHANGED');
   let result;
   if (command === 'stage' || command === 'resume' && !staged) {
     requireCondition(opts.build && opts['artifact-directory'], 'STAGE_ARTIFACT_REQUIRED');

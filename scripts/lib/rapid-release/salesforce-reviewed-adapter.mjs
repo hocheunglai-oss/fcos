@@ -7,7 +7,7 @@ import { runReviewedMirror } from '../../sync-salesforce-reviewed-repository.mjs
 import { preflightSharedMirrorPublication } from '../../sync-salesforce-shared-repository.mjs';
 import { openSalesforcePromotionJournal } from '../salesforce-promotion-journal.mjs';
 import { assertReviewedJobReport, matchesSalesforceCheckpoint, reviewedJobExpectations, runReviewedSalesforceRelease, safeProjectFile } from '../salesforce-reviewed-release.mjs';
-import { authenticateHostedSalesforce } from './salesforce-hosted-auth.mjs';
+import { assertHostedSalesforceRunner, authenticateHostedSalesforce } from './salesforce-hosted-auth.mjs';
 import { digest, git, requireCondition, targets } from './contract.mjs';
 import { runPreBootstrapSmoke } from './smoke.mjs';
 
@@ -29,7 +29,15 @@ export async function reconcileHostedSalesforceJob({ environment, jobId, reviewe
     'SALESFORCE_HOSTED_ORIGINAL_JOB_REQUIRED');
   await provider.verifyIdentity(target);
   const report = await provider.report(target, jobId);
-  const proof = assertReviewedJobReport(report, { environment: target, jobId, ...reviewedJobExpectations(reviewed, target, operation) });
+  let quickValidation;
+  if (operation === 'deployment' && Number(report.numberTestsTotal) === 0) {
+    requireCondition(entries.some(item => item.fingerprint === reviewed.fingerprint && item.stage === target.key
+      && item.operation === 'validation' && item.outcome === 'resolved' && item.job?.id === validationJobId
+      && /^[a-f0-9]{64}$/u.test(item.evidenceDigest || '')), 'SALESFORCE_HOSTED_ORIGINAL_VALIDATION_REQUIRED');
+    quickValidation = { id: validationJobId, report: await provider.report(target, validationJobId) };
+  }
+  const proof = assertReviewedJobReport(report, { environment: target, jobId,
+    ...reviewedJobExpectations(reviewed, target, operation), quickValidation });
   const verifiedAt = now();
   const completed = Date.parse(proof.completedAt);
   requireCondition(completed >= Date.parse(submittedAt) - 30_000 && completed <= verifiedAt.getTime() + 30_000,
@@ -53,15 +61,20 @@ function hostedReviewedPlan(cwd, plan) {
   return reviewed;
 }
 
-export async function verifyPreBootstrapStage({ manifest, staged, plan, salesforceCandidateDirectory: cwd, env }) {
-  requireCondition(manifest.selection.salesforce && !manifest.selection.database && cwd && plan.backwardCompatible === true
-    && plan.deferSchemaDependentSmoke === true, 'SALESFORCE_HOSTED_BOOTSTRAP_PLAN_REQUIRED');
-  const reviewed = hostedReviewedPlan(cwd, plan);
-  requireCondition(reviewed.review.bootstrap && /^[a-f0-9]{64}$/u.test(reviewed.binding.bootstrapSha256 || ''),
+function reviewedBootstrapFingerprint(reviewed, plan) {
+  requireCondition(plan.deferSchemaDependentSmoke === true && reviewed.review.bootstrap
+    && /^[a-f0-9]{64}$/u.test(reviewed.binding.bootstrapSha256 || ''),
     'SALESFORCE_HOSTED_BOOTSTRAP_PLAN_REQUIRED');
   const fingerprint = digest({ salesforceFingerprint: reviewed.fingerprint, bootstrapSha256: reviewed.binding.bootstrapSha256 });
   requireCondition(fingerprint === plan.bootstrapFingerprint, 'SALESFORCE_HOSTED_BOOTSTRAP_PLAN_MISMATCH');
-  return runPreBootstrapSmoke({ manifest, staged, env }, fingerprint);
+  return fingerprint;
+}
+
+export async function verifyPreBootstrapStage({ manifest, staged, plan, salesforceCandidateDirectory: cwd, env }) {
+  requireCondition(manifest.selection.salesforce && !manifest.selection.database && cwd && plan.backwardCompatible === true,
+    'SALESFORCE_HOSTED_BOOTSTRAP_PLAN_REQUIRED');
+  const reviewed = hostedReviewedPlan(cwd, plan);
+  return runPreBootstrapSmoke({ manifest, staged, env }, reviewedBootstrapFingerprint(reviewed, plan));
 }
 
 export async function applyReviewedPrerequisites({ manifest, approval, plan, salesforce, salesforceCandidateDirectory: cwd, env = process.env }) {
@@ -72,13 +85,16 @@ export async function applyReviewedPrerequisites({ manifest, approval, plan, sal
     && approval.nativeReviewVerified === true && approval.reviewer === targets().account,
   'SALESFORCE_HOSTED_REVIEW_REQUIRED');
   const reviewed = hostedReviewedPlan(cwd, plan);
-  requireCondition(!reviewed.review.bootstrap, 'SALESFORCE_HOSTED_BOOTSTRAP_UNQUALIFIED');
+  const schemaBootstrap = Boolean(reviewed.review.bootstrap);
+  if (schemaBootstrap || plan.deferSchemaDependentSmoke) reviewedBootstrapFingerprint(reviewed, plan);
 
+  assertHostedSalesforceRunner(env);
+  const saved = await salesforce.journal.readCheckpoints();
   const directory = mkdtempSync(join(tmpdir(), 'fcos-salesforce-hosted-'));
   const credentials = mkdtempSync(join(tmpdir(), 'fcos-salesforce-credentials-'));
   let finished = false;
   try {
-    const commandEnvironment = authenticateHostedSalesforce({ directory: credentials, cwd, env });
+    const commandEnvironment = authenticateHostedSalesforce({ directory: credentials, cwd, env, requireMirrorCredential: saved.length === 0 });
     const journal = openSalesforcePromotionJournal({ directory, binding: reviewed.binding });
     try {
       const provider = cliSalesforceProvider({ cwd, policy, commandEnvironment });
@@ -107,8 +123,8 @@ export async function applyReviewedPrerequisites({ manifest, approval, plan, sal
         ownership, externalJournal: salesforce.journal,
         authorization: mode === 'apply' ? authorization : null,
         assertUnchanged: () => assertReviewedInputsUnchanged(reviewed, { cwd, policy }) });
-      const saved = await salesforce.journal.readCheckpoints();
-      if (!saved.some(item => item.stage === 'production' && item.operation === 'preparation' && item.preparation?.validationJobId)) {
+      if (!saved.some(item => item.stage === 'production' && item.operation === 'preparation'
+        && (item.preparation?.validationJobId || item.preparation?.status === 'awaiting-authorized-bootstrap'))) {
         requireCondition((await run('prepare')).mode === 'prepared', 'SALESFORCE_HOSTED_PREPARATION_REQUIRED');
       }
       requireCondition((await run('apply')).mode === 'applied', 'SALESFORCE_HOSTED_APPLY_REQUIRED');
@@ -120,6 +136,7 @@ export async function applyReviewedPrerequisites({ manifest, approval, plan, sal
       const completedIds = new Set(completedOperations.map(item => item.operationId));
       requireCondition(completedIds.has('salesforce:shared_mirror:publication') && policy.environments.every(({ key }) =>
         completedIds.has(`salesforce:${key}:validation`) && completedIds.has(`salesforce:${key}:deployment`)
+        && (!schemaBootstrap || completedIds.has(`salesforce:${key}:bootstrap`))
         && reviewed.binding.permissionSets.every(name => completedIds.has(`salesforce:${key}:permission:${name}`))),
       'SALESFORCE_HOSTED_COMPLETION_EVIDENCE_REQUIRED');
       finished = true;

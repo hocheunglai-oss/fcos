@@ -55,6 +55,23 @@ function protectedSalesforceContext({ manifest, approval, staged, journal, provi
   };
 }
 
+function protectedDatabaseContext({ manifest, approval, staged, journal, provider }) {
+  requireCondition(typeof provider?.verifyApproval === 'function' && typeof provider?.assertOwnership === 'function'
+    && typeof provider?.currentProduction === 'function', 'DATABASE_PROTECTED_OWNERSHIP_REQUIRED');
+  return {
+    async assertAuthorized() {
+      assertAuthorization(approval, manifest, staged);
+      await provider.verifyApproval(approval, { manifest, staged });
+      await journal.assertNoUnresolvedOtherRelease();
+      await provider.assertOwnership({ phase: 'prerequisites', manifest, manifestHash: digest(manifest) });
+      const current = await provider.currentProduction();
+      requireCondition(current.id === manifest.previous.deploymentId && current.sha === manifest.previous.sha,
+        'DATABASE_PRODUCTION_BASELINE_CHANGED');
+      assertAuthorization(approval, manifest, staged);
+    },
+  };
+}
+
 // Only adapters reviewed into the trusted controller may receive provider credentials.
 // Candidate files and provider responses are data, never executable repair adapters.
 function verifiedSalesforceCandidate({ manifest, root, env }) {
@@ -72,13 +89,16 @@ export async function runPrerequisites({ manifest, approval, staged, journal, pr
   assertAuthorization(approval, manifest, staged);
   const needed = manifest.selection.salesforce || manifest.selection.database;
   if (!needed) return { passed: true, manifestHash: digest(manifest), backwardCompatible: true, providerCalls: 0 };
-  const { adapter, root, descriptor } = await qualifiedAdapter({ manifest, controllerDirectory, load });
+  const { adapter, entry, root, descriptor } = await qualifiedAdapter({ manifest, controllerDirectory, load });
   requireCondition(typeof adapter.applyReviewedPrerequisites === 'function', 'PREREQUISITE_ADAPTER_CONTRACT_REQUIRED');
   const salesforceCandidateDirectory = verifiedSalesforceCandidate({ manifest, root, env });
   const salesforce = manifest.selection.salesforce
     ? protectedSalesforceContext({ manifest, approval, staged, journal, provider, plan: descriptor.plan })
     : undefined;
-  const result = await adapter.applyReviewedPrerequisites({ manifest, approval, journal, controllerDirectory: root, env, salesforce, salesforceCandidateDirectory,
+  const databaseWriter = entry.databaseWrite === true
+    ? protectedDatabaseContext({ manifest, approval, staged, journal, provider })
+    : undefined;
+  const result = await adapter.applyReviewedPrerequisites({ manifest, approval, journal, controllerDirectory: root, env, salesforce, salesforceCandidateDirectory, databaseWriter,
     plan: descriptor.plan, authorization: { manifestHash: digest(manifest), nativeReview: approval } });
   requireCondition(result?.passed === true && result.manifestHash === digest(manifest)
     && result.backwardCompatible === true && Array.isArray(result.completedOperations)
@@ -86,7 +106,8 @@ export async function runPrerequisites({ manifest, approval, staged, journal, pr
     && (!manifest.selection.salesforce || result.salesforce?.order === 'devee-mirror-qat-production'
       && result.salesforce.mirrorVerified === true && result.salesforce.sourceTreeHash === descriptor.plan.salesforceSourceTreeHash
       && result.salesforce.fingerprint === descriptor.plan.salesforceFingerprint)
-    && (!manifest.selection.database || result.database?.destructiveRollback === false && result.database.readbackVerified === true), 'PREREQUISITE_VERIFICATION_REQUIRED');
+    && (!manifest.selection.database || result.database?.destructiveRollback === false && result.database.readbackVerified === true)
+    && (!databaseWriter || isDigest(result.database?.schemaDigest)), 'PREREQUISITE_VERIFICATION_REQUIRED');
   // Private adapter evidence stays in its private store; publish only typed checkpoint metadata.
   const operations = result.completedOperations.map(operation => {
     requireCondition(/^[A-Za-z0-9][A-Za-z0-9_.:-]{1,119}$/.test(operation.operationId || '')
@@ -95,7 +116,8 @@ export async function runPrerequisites({ manifest, approval, staged, journal, pr
   });
   return { passed: true, manifestHash: digest(manifest), backwardCompatible: true, completedOperations: operations,
     ...(result.salesforce ? { salesforce: { order: result.salesforce.order, mirrorVerified: true, sourceTreeHash: result.salesforce.sourceTreeHash } } : {}),
-    ...(result.database ? { database: { destructiveRollback: false, readbackVerified: true } } : {}) };
+    ...(result.database ? { database: { destructiveRollback: false, readbackVerified: true,
+      ...(databaseWriter ? { schemaDigest: result.database.schemaDigest } : {}) } } : {}) };
 }
 
 // An explicit, qualified schema adapter may defer only the schema-dependent

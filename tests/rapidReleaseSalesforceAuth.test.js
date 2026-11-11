@@ -33,6 +33,8 @@ test('hosted Salesforce validates every credential and the runner before making 
       /SALESFORCE_HOSTED_CREDENTIAL_REQUIRED_PRODUCTION/);
     assert.throws(() => authenticateHostedSalesforce({ ...input, env: { ...env, FCOS_RAPID_SALESFORCE_QAT_PRIVATE_KEY: 'invalid' } }),
       /SALESFORCE_HOSTED_PRIVATE_KEY_INVALID_QAT/);
+    assert.throws(() => authenticateHostedSalesforce({ ...input, env: { ...env, FCOS_RAPID_SALESFORCE_MIRROR_TOKEN: '' } }),
+      /SALESFORCE_HOSTED_MIRROR_CREDENTIAL_REQUIRED/);
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
@@ -64,4 +66,19 @@ test('hosted Salesforce authenticates pinned orgs with private files and stops o
       }
     } finally { rmSync(directory, { recursive: true, force: true }); }
   }
+});
+
+test('hosted Salesforce can reconnect for existing job readback when the mirror token is missing', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'fcos-sf-auth-test-'));
+  let calls = 0;
+  try {
+    authenticateHostedSalesforce({ directory, cwd: directory, env: { ...env, FCOS_RAPID_SALESFORCE_MIRROR_TOKEN: '' },
+      requireMirrorCredential: false, spawn() {
+        const environment = environments[calls++];
+        return { status: 0, stdout: JSON.stringify({ status: 0, result: {
+          orgId: environment.orgId, username: environment.username, instanceUrl: environment.instanceUrl,
+        } }) };
+      } });
+    assert.equal(calls, environments.length);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });
