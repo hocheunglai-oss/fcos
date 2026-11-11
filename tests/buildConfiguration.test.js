@@ -78,3 +78,39 @@ test('Vite checks resolved browser Supabase configuration before bundling', () =
   assert.equal(resolve({ VITE_SUPABASE_URL: 'http://127.0.0.1:54321', VITE_SUPABASE_ANON_KEY: publicKey }, 'serve').status, 0);
   assert.equal(resolve({}).status, 0);
 });
+
+test('the Supabase client uses the publishable key and retains the legacy fallback', () => {
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import assert from 'node:assert/strict';
+    import { createServer } from 'vite';
+    const publishableKey = 'sb_publishable_current_fixture';
+    const legacyKey = 'sb_publishable_legacy_fixture';
+    for (const [current, legacy, expected] of [
+      [publishableKey, '', publishableKey],
+      [publishableKey, legacyKey, publishableKey],
+      ['', legacyKey, legacyKey],
+    ]) {
+      process.env.VITE_SUPABASE_PUBLISHABLE_KEY = current;
+      process.env.VITE_SUPABASE_ANON_KEY = legacy;
+      const server = await createServer({
+        envDir: false, server: { middlewareMode: true, watch: null, ws: false },
+      });
+      try {
+        const client = await server.ssrLoadModule('/src/lib/supabaseClient.js');
+        assert.equal(client.isSupabaseConfigured, true);
+        assert.equal(client.supabase.supabaseKey, expected);
+      } finally {
+        await server.close();
+      }
+    }
+  `], {
+    cwd: fileURLToPath(new URL('..', import.meta.url)),
+    env: {
+      PATH: process.env.PATH, HOME: process.env.HOME,
+      VITE_SUPABASE_URL: `https://${fcosConnectionIdentifier('supabase', 'Project ref')}.supabase.co`,
+    },
+    encoding: 'utf8',
+    timeout: 10000,
+  });
+  assert.equal(result.status, 0, result.error?.message || result.stderr);
+});
