@@ -5,7 +5,7 @@ import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier } from '../config/fcos
 import { APP_MODULES } from '../src/lib/authModules.js';
 import { MODULE_READERS, MODULE_SURFACES, moduleReadBody, moduleReaderPayloadVerified } from '../scripts/lib/rapid-release/normal-role-readers.mjs';
 import { FCOS_READ_ONLY_CI as ci } from '../config/fcosCiIdentity.js';
-import { diagnoseStagedSmoke, runStagedSmoke, observeLive, stagedBrowserRequestAllowed } from '../scripts/lib/rapid-release/smoke.mjs';
+import { diagnoseStagedSmoke, runPreBootstrapSmoke, runStagedSmoke, observeLive, stagedBrowserRequestAllowed } from '../scripts/lib/rapid-release/smoke.mjs';
 
 const origin = 'https://fcos-a1b2c3d4e-hocheunglai-6535s-projects.vercel.app';
 const issuer = new URL(FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation.issuer).origin;
@@ -163,6 +163,24 @@ test('normal-role proof requires a fresh real identity response and selected aut
   assert.equal(fixture.observations.launches.length, 2);
   assert.equal(fixture.observations.contextsClosed, 2);
   assert.deepEqual(proof.restrictedEvidence.modules, ['dashboard', 'markets']);
+});
+
+test('pre-bootstrap smoke runs the guarded browser for every non-deferred module', async () => {
+  const fingerprint = 'c'.repeat(64);
+  const candidate = { ...manifest({ salesforce: true, normalRole: true, modules: ['dashboard', 'markets', 'settings', 'hedge_desk'] }),
+    prerequisites: { plan: { deferSchemaDependentSmoke: true, bootstrapFingerprint: fingerprint, deferredModules: ['hedge_desk'] } } };
+  const fixture = browserFixture({ deniedModule: 'hedge_desk' });
+  const options = { manifest: candidate, staged, env: { ...env, FCOS_RAPID_NORMAL_REQUIRED_MODULES: 'hedge_desk' },
+    fetchImpl: publicFetch(), browserFactory: fixture.browserFactory };
+  await assert.rejects(runPreBootstrapSmoke(options, 'd'.repeat(64)), { code: 'PREBOOTSTRAP_STAGE_PROOF_REQUIRED' });
+  assert.equal(fixture.observations.launches.length, 0);
+  const proof = await runPreBootstrapSmoke(options, fingerprint);
+  assert.equal(proof.mode, 'pre_bootstrap');
+  assert.equal(proof.businessWrites, 0);
+  assert.deepEqual(proof.completedModules, ['dashboard', 'markets', 'settings']);
+  assert.deepEqual(proof.deferredChecks, ['hedge_desk']);
+  assert.equal(fixture.observations.contextsClosed, 2);
+  await assert.rejects(runStagedSmoke(options));
 });
 
 test('missing normal-role credentials and unknown readers fail before any credential-bearing browser starts', async () => {

@@ -45,12 +45,23 @@ export function assertSmokeProof(proof, manifest, staged) {
     && (!manifest.selection.normalRole || proof.normalRole === true), 'STAGED_SMOKE_INCOMPLETE');
 }
 export function assertPreBootstrapProof(proof, manifest, staged) {
-  requireCondition((manifest.selection.salesforce || manifest.selection.database) && manifest.prerequisites?.plan?.deferSchemaDependentSmoke === true
+  const plan = manifest.prerequisites?.plan;
+  const selected = manifest.selection.modules;
+  const deferred = plan?.deferredModules;
+  const completed = proof?.completedModules;
+  const exactModules = (actual, expected) => Array.isArray(actual) && actual.length === expected.length
+    && new Set(actual).size === actual.length && actual.every(module => expected.includes(module));
+  requireCondition((manifest.selection.salesforce || manifest.selection.database) && plan?.deferSchemaDependentSmoke === true
+    && Array.isArray(deferred) && deferred.length > 0 && new Set(deferred).size === deferred.length
+    && deferred.every(module => selected.includes(module) && !['dashboard', 'markets'].includes(module))
     && proof?.passed === true && proof.mode === 'pre_bootstrap' && proof.manifestHash === digest(manifest)
     && proof.deploymentId === staged.id && proof.buildId === manifest.build.buildId && proof.isolationVerified === true
-    && proof.businessWrites === 0 && proof.bootstrapFingerprint === manifest.prerequisites.plan.bootstrapFingerprint
-    && /^[a-f0-9]{64}$/.test(proof.bootstrapFingerprint || '') && proof.deferredChecks?.length > 0
-    && proof.deferredChecks.every(module => manifest.selection.modules.includes(module)), 'PREBOOTSTRAP_STAGE_PROOF_REQUIRED');
+    && (!manifest.selection.normalRole || proof.normalRole === true)
+    && proof.businessWrites === 0 && proof.bootstrapFingerprint === plan.bootstrapFingerprint
+    && /^[a-f0-9]{64}$/.test(proof.bootstrapFingerprint || '') && exactModules(proof.deferredChecks, deferred)
+    && exactModules(completed, selected.filter(module => !deferred.includes(module)))
+    && Array.isArray(proof.completedChecks) && ['runtime_identity', 'authenticated_login', 'authentication_denials', 'request_isolation']
+      .every(check => proof.completedChecks.includes(check)), 'PREBOOTSTRAP_STAGE_PROOF_REQUIRED');
 }
 export async function stageRelease({ manifest, journal, provider, build, smoke, beforeBootstrap }) {
   validateManifest(manifest); assertBuildReceipt(build, manifest);
@@ -70,6 +81,7 @@ export async function stageRelease({ manifest, journal, provider, build, smoke, 
   const deferred = (manifest.selection.salesforce || manifest.selection.database) && manifest.prerequisites?.plan?.deferSchemaDependentSmoke === true;
   const acceptanceEvent = deferred ? 'stage.pre_bootstrap_passed' : 'smoke.passed';
   const existing = events(records).find(event => event.event === acceptanceEvent && event.data.deploymentId === ready.id);
+  if (existing && deferred) assertPreBootstrapProof(existing.data, manifest, ready);
   if (!existing) {
     if (deferred) {
       requireCondition(typeof beforeBootstrap === 'function', 'QUALIFIED_PREBOOTSTRAP_VERIFIER_REQUIRED');
@@ -81,19 +93,23 @@ export async function stageRelease({ manifest, journal, provider, build, smoke, 
       await journal.append(acceptanceEvent, proof);
     }
   }
-  return { state: deferred ? 'awaiting_authorized_bootstrap' : 'ready_for_decision', deferredChecks: deferred ? manifest.selection.modules : [], manifestHash: digest(manifest), staged: ready,
+  return { state: deferred ? 'awaiting_authorized_bootstrap' : 'ready_for_decision', deferredChecks: deferred ? manifest.prerequisites.plan.deferredModules : [], manifestHash: digest(manifest), staged: ready,
     conditionalPrerequisites: manifest.selection.salesforce || manifest.selection.database };
 }
 export async function promoteRelease({ manifest, journal, provider, approval, prerequisites, smoke, observe }) {
   validateManifest(manifest);
   const records = await journal.read(), all = events(records), stagedReference = phaseResult(records, 'stage')?.result;
   const preBootstrap = all.find(event => event.event === 'stage.pre_bootstrap_passed' && event.data.deploymentId === stagedReference?.id)?.data;
+  const build = all.find(event => event.event === 'build.passed')?.data;
   const fullStage = all.some(event => event.event === 'smoke.passed' && event.data.deploymentId === stagedReference?.id);
-  requireCondition(stagedReference && (fullStage || preBootstrap), 'STAGED_ACCEPTANCE_REQUIRED');
-  if (!fullStage) assertPreBootstrapProof(preBootstrap, manifest, stagedReference);
+  const deferred = manifest.prerequisites?.plan?.deferSchemaDependentSmoke === true;
+  requireCondition(stagedReference && (deferred ? preBootstrap : fullStage), 'STAGED_ACCEPTANCE_REQUIRED');
+  if (deferred) assertPreBootstrapProof(preBootstrap, manifest, stagedReference);
+  assertBuildReceipt(build, manifest);
   const staged = await provider.ready(stagedReference.id);
   requireCondition(staged.id === stagedReference.id && staged.state === 'READY' && staged.buildId === manifest.build.buildId
-    && staged.sha === manifest.candidate.sha, 'STAGED_ACCEPTANCE_CHANGED');
+    && staged.sha === manifest.candidate.sha && staged.target === 'production' && staged.artifactDigest === build.artifactDigest,
+  'STAGED_ACCEPTANCE_CHANGED');
   assertAuthorization(approval, manifest, staged);
   await provider.verifyApproval(approval, { manifest, staged });
   if (all.some(event => event.event === 'release.complete')) return { state: 'complete', deploymentId: staged.id, reused: true };
@@ -120,6 +136,9 @@ export async function promoteRelease({ manifest, journal, provider, approval, pr
     if (!events(await journal.read()).some(event => event.event === 'prerequisites.smoke_passed'
       && event.data.prerequisiteDigest === prerequisiteDigest && event.data.deploymentId === staged.id)) {
       const currentStage = await provider.ready(staged.id);
+      requireCondition(currentStage.id === staged.id && currentStage.state === 'READY' && currentStage.buildId === staged.buildId
+        && currentStage.sha === staged.sha && currentStage.target === staged.target && currentStage.artifactDigest === staged.artifactDigest,
+      'STAGED_ACCEPTANCE_CHANGED');
       const acceptance = await smoke({ manifest, staged: currentStage }); assertSmokeProof(acceptance, manifest, currentStage);
       await journal.append('prerequisites.smoke_passed', { ...acceptance, prerequisiteDigest });
     }

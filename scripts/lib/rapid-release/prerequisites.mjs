@@ -1,7 +1,8 @@
 import { readFileSync, realpathSync } from 'node:fs';
 import { resolve, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { assertAuthorization, digest, git, isDigest, requireCondition } from './contract.mjs';
+import { assertAuthorization, digest, git, isDigest, requireCondition, sourceSnapshot } from './contract.mjs';
+import { assertPreBootstrapProof } from './engine.mjs';
 import { FCOS_CONNECTION_POLICY } from '../../../config/fcosConnections.js';
 
 export async function qualifiedAdapter({ manifest, controllerDirectory, load = url => import(url) }) {
@@ -56,16 +57,28 @@ function protectedSalesforceContext({ manifest, approval, staged, journal, provi
 
 // Only adapters reviewed into the trusted controller may receive provider credentials.
 // Candidate files and provider responses are data, never executable repair adapters.
-export async function runPrerequisites({ manifest, approval, staged, journal, provider, controllerDirectory, env, load = url => import(url) }) {
+function verifiedSalesforceCandidate({ manifest, root, env }) {
+  if (!manifest.selection.salesforce) return undefined;
+  requireCondition(env.FCOS_RAPID_SALESFORCE_CANDIDATE, 'SALESFORCE_CANDIDATE_SOURCE_REQUIRED');
+  const directory = realpathSync(env.FCOS_RAPID_SALESFORCE_CANDIDATE);
+  requireCondition(directory !== root, 'SALESFORCE_CANDIDATE_SOURCE_REQUIRED');
+  const actual = sourceSnapshot(directory);
+  requireCondition(actual.sha === manifest.candidate.sha && actual.sourceDigest === manifest.candidate.sourceDigest
+    && actual.lockDigest === manifest.candidate.lockDigest, 'SALESFORCE_CANDIDATE_SOURCE_MISMATCH');
+  return directory;
+}
+
+export async function runPrerequisites({ manifest, approval, staged, journal, provider, controllerDirectory, env = process.env, load = url => import(url) }) {
   assertAuthorization(approval, manifest, staged);
   const needed = manifest.selection.salesforce || manifest.selection.database;
   if (!needed) return { passed: true, manifestHash: digest(manifest), backwardCompatible: true, providerCalls: 0 };
   const { adapter, root, descriptor } = await qualifiedAdapter({ manifest, controllerDirectory, load });
   requireCondition(typeof adapter.applyReviewedPrerequisites === 'function', 'PREREQUISITE_ADAPTER_CONTRACT_REQUIRED');
+  const salesforceCandidateDirectory = verifiedSalesforceCandidate({ manifest, root, env });
   const salesforce = manifest.selection.salesforce
     ? protectedSalesforceContext({ manifest, approval, staged, journal, provider, plan: descriptor.plan })
     : undefined;
-  const result = await adapter.applyReviewedPrerequisites({ manifest, approval, journal, controllerDirectory: root, env, salesforce,
+  const result = await adapter.applyReviewedPrerequisites({ manifest, approval, journal, controllerDirectory: root, env, salesforce, salesforceCandidateDirectory,
     plan: descriptor.plan, authorization: { manifestHash: digest(manifest), nativeReview: approval } });
   requireCondition(result?.passed === true && result.manifestHash === digest(manifest)
     && result.backwardCompatible === true && Array.isArray(result.completedOperations)
@@ -87,19 +100,17 @@ export async function runPrerequisites({ manifest, approval, staged, journal, pr
 
 // An explicit, qualified schema adapter may defer only the schema-dependent
 // checks until the one authorization permits bootstrap. This is NOT full smoke.
-export async function verifyBeforeBootstrap({ manifest, staged, controllerDirectory, env, load }) {
-  const { adapter, entry, descriptor } = await qualifiedAdapter({ manifest, controllerDirectory, load });
+export async function verifyBeforeBootstrap({ manifest, staged, controllerDirectory, env = process.env, load }) {
+  const { adapter, entry, root, descriptor } = await qualifiedAdapter({ manifest, controllerDirectory, load });
   requireCondition(descriptor.plan.deferSchemaDependentSmoke === true && /^[a-f0-9]{64}$/.test(descriptor.plan.bootstrapFingerprint || '')
     && entry.supportsDeferredStage === true && typeof adapter.verifyPreBootstrapStage === 'function', 'QUALIFIED_PREBOOTSTRAP_VERIFIER_REQUIRED');
-  const proof = await adapter.verifyPreBootstrapStage({ manifest, staged, controllerDirectory, env });
-  requireCondition(proof?.passed === true && proof.mode === 'pre_bootstrap' && proof.deploymentId === staged.id
-    && proof.buildId === manifest.build.buildId && proof.manifestHash === digest(manifest)
-    && proof.bootstrapFingerprint === descriptor.plan.bootstrapFingerprint
-    && proof.isolationVerified === true && proof.businessWrites === 0 && Array.isArray(proof.completedChecks)
-    && proof.completedChecks.length > 0 && proof.completedChecks.every(check => /^[a-z][a-z0-9_]{1,80}$/.test(check))
-    && Array.isArray(proof.deferredChecks) && proof.deferredChecks.length > 0
-    && proof.deferredChecks.every(check => manifest.selection.modules.includes(check)), 'PREBOOTSTRAP_STAGE_PROOF_REQUIRED');
+  const salesforceCandidateDirectory = verifiedSalesforceCandidate({ manifest, root, env });
+  const proof = await adapter.verifyPreBootstrapStage({ manifest, staged, plan: descriptor.plan, controllerDirectory: root,
+    salesforceCandidateDirectory, env });
+  assertPreBootstrapProof(proof, manifest, staged);
+  requireCondition(proof.completedChecks.every(check => /^[a-z][a-z0-9_]{1,80}$/.test(check)), 'PREBOOTSTRAP_STAGE_PROOF_REQUIRED');
   return { passed: true, mode: 'pre_bootstrap', deploymentId: proof.deploymentId, buildId: proof.buildId,
     manifestHash: proof.manifestHash, isolationVerified: true, businessWrites: 0,
-    completedChecks: proof.completedChecks, deferredChecks: proof.deferredChecks, bootstrapFingerprint: descriptor.plan.bootstrapFingerprint };
+    completedChecks: proof.completedChecks, completedModules: proof.completedModules, deferredChecks: proof.deferredChecks,
+    bootstrapFingerprint: descriptor.plan.bootstrapFingerprint, ...(proof.normalRole === true ? { normalRole: true } : {}) };
 }
