@@ -67,6 +67,20 @@ export function readReviewedInventory(root, { nativeExport = false, supplemental
   return inventoryFromFiles(files);
 }
 
+const NATIVE_CUSTOM_FIELD_FALSE_FLAGS = new Set(['caseSensitive', 'externalId', 'required', 'trackHistory', 'trackTrending', 'unique']);
+
+function assertNativeCustomFieldSerialization(review, components) {
+  const allowances = review.nativeCustomFieldFalseFlags;
+  if (allowances === undefined) return;
+  const fieldPaths = new Set(components.filter(({ id }) => id.startsWith('CustomField:')).flatMap(({ files }) => files));
+  if (!review.bootstrap || !review.nativeInventories || !allowances || typeof allowances !== 'object'
+    || Array.isArray(allowances) || !Object.keys(allowances).length
+    || Object.entries(allowances).some(([name, flags]) => !fieldPaths.has(name) || !Array.isArray(flags)
+      || !flags.length || new Set(flags).size !== flags.length || flags.some(flag => !NATIVE_CUSTOM_FIELD_FALSE_FLAGS.has(flag)))) {
+    failCoverage('Native CustomField serialization allowances require exact reviewed bootstrap field paths and supported flags.');
+  }
+}
+
 export function projectedNativeInventoryHash(files, projectionPaths) {
   return hash({ files, projectionPaths });
 }
@@ -318,6 +332,7 @@ export function createReviewedSalesforcePlan({ review, manifestBytes, bootstrapB
       || !same(sorted(bootstrap.permissionSets || []), sorted(permissions.filter(name => bootstrap.components.includes(`PermissionSet:${name}`))))) throw new Error('Bootstrap must contain only reviewed schema/permission components from the main manifest.');
     if (testPlan.level !== 'RunLocalTests') throw new Error('A schema bootstrap requires one complete RunLocalTests validation per environment.');
   } else if (bootstrapBytes) throw new Error('Unreviewed bootstrap bytes supplied.');
+  assertNativeCustomFieldSerialization(review, components);
   const nativeInventories = review.bootstrap && review.nativeInventories !== undefined
     ? reviewedNativeBootstrapInventories(review, policy, baselineInventory, orgBaselineInventories, finalInventory, components)
     : reviewedNativeInventories(review, policy, baselineInventory, finalInventory, components, coveredFiles);

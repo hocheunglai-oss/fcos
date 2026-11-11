@@ -1248,6 +1248,13 @@ test('mixed native checkpoints pin exact org paths and preserve untouched bytes 
         pin(complete, [apex.id, field.id, permission.id, rule.id])]) };
     const inputs = { ...f.inputs, review };
     const plan = createReviewedSalesforcePlan(inputs);
+    assert.doesNotThrow(() => createReviewedSalesforcePlan({ ...inputs,
+      review: { ...review, nativeCustomFieldFalseFlags: { [field.files[0]]: ['required'] } } }));
+    for (const allowances of [{ [permission.files[0]]: ['required'] }, { [field.files[0]]: ['defaultValue'] },
+      { [field.files[0]]: ['required', 'required'] }]) {
+      assert.throws(() => createReviewedSalesforcePlan({ ...inputs, review: { ...review, nativeCustomFieldFalseFlags: allowances } }),
+        /exact reviewed bootstrap field paths/);
+    }
     const environment = policy.environments[0];
     const checkpoint = reviewedCheckpointInventory(plan, { bootstrap: { status: 'Succeeded' } }, environment.key);
     assert.equal(checkpoint.inventoryHash, bootstrap.inventoryHash);
@@ -1322,9 +1329,10 @@ test('mixed native readback verifies reviewed definition content even when raw h
   try {
     const environment = policy.environments[0];
     const field = 'objects/Demo__c/fields/Value__c.field-meta.xml';
-    const source = { [field]: Buffer.from('<CustomField><required>false</required></CustomField>\n') };
+    const xml = content => `<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">${content}</CustomField>\n`;
+    const source = { [field]: Buffer.from(xml('<required>false</required>')) };
     const stable = { 'profiles/Example.profile-meta.xml': Buffer.from('<Profile/>\r\n') };
-    let nativeField = Buffer.from('<CustomField>\r\n  <required>false</required>\r\n</CustomField>\r\n');
+    let nativeField = Buffer.from(xml('\r\n  <required>false</required>\r\n').replace(/(?<!\r)\n/gu, '\r\n'));
     const metadata = packageXml(['CustomField:Demo__c.Value__c']);
     const manifest = packageXml(['Profile:Example']);
     const target = path.join(cwd, policy.publication.sourceRoot, field);
@@ -1362,7 +1370,7 @@ test('mixed native readback verifies reviewed definition content even when raw h
     const projectedReceipt = provider.verifyInventory(environment, projected);
     assert.equal(projectedReceipt.inventoryHash, projectedHash);
     assert.equal(projectedReceipt.observedNativeInventoryHash, exact.expectedInventoryHash);
-    nativeField = Buffer.from('<CustomField><required>false</required></CustomField>\n');
+    nativeField = Buffer.from(xml('<required>false</required>'));
     const equivalentReceipt = provider.verifyInventory(environment, projected);
     assert.notEqual(equivalentReceipt.observedNativeInventoryHash, projectedReceipt.observedNativeInventoryHash);
     assert.equal(equivalentReceipt.inventoryHash, projectedHash);
@@ -1370,9 +1378,22 @@ test('mixed native readback verifies reviewed definition content even when raw h
     stable[profile] = Buffer.from('<Profile><custom>true</custom></Profile>');
     assert.throws(() => provider.verifyInventory(environment, projected), /differs from the exact reviewed inventory/);
     stable[profile] = Buffer.from('<Profile/>\r\n');
-    nativeField = Buffer.from('<CustomField><required>true</required></CustomField>\r\n');
+    nativeField = Buffer.from(xml('<required>true</required>'));
     assert.throws(() => provider.verifyInventory(environment, input()), /Native metadata projection differs/);
     assert.throws(() => provider.verifyInventory(environment, projected), /Native metadata projection differs/);
+    const checkWithFlags = flags => {
+      const checkpoint = input();
+      checkpoint.plan.review.nativeCustomFieldFalseFlags = { [field]: flags };
+      return provider.verifyInventory(environment, checkpoint);
+    };
+    nativeField = Buffer.from(xml('<required>false</required><trackHistory>false</trackHistory>'));
+    assert.deepEqual(checkWithFlags(['trackHistory']).verifiedProjectionPaths, [field]);
+    assert.throws(() => checkWithFlags(['required', 'trackHistory']), /Native CustomField serialization differs/);
+    for (const variation of ['<trackHistory>true</trackHistory>', '<trackHistory>false</trackHistory><trackHistory>false</trackHistory>',
+      '<trackHistory>false</trackHistory><defaultValue>false</defaultValue>']) {
+      nativeField = Buffer.from(xml('<required>false</required>' + variation));
+      assert.throws(() => checkWithFlags(['trackHistory']), /Native CustomField serialization differs/);
+    }
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
 

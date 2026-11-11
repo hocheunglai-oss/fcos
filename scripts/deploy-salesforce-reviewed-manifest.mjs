@@ -129,6 +129,30 @@ function verifyNativeApexProjection({ root, sourceRoot, plan }) {
   }
 }
 
+function equivalentNativeCustomField(source, native, flags) {
+  if (/xml:space|<!DOCTYPE|<!ENTITY/iu.test(source + native)) return false;
+  const sourceDocument = parseDocument(source, { xmlMode: true, decodeEntities: true });
+  const nativeDocument = parseDocument(native, { xmlMode: true, decodeEntities: true });
+  const roots = [sourceDocument, nativeDocument].map(document => document.children.filter(node => node.type === 'tag'));
+  if (roots.some(list => list.length !== 1 || list[0].name !== 'CustomField'
+    || list[0].attribs.xmlns !== 'http://soap.sforce.com/2006/04/metadata')) return false;
+  const [[localRoot], [nativeRoot]] = roots;
+  const removable = new Set();
+  for (const flag of flags) {
+    if (localRoot.children.some(node => node.type === 'tag' && node.name === flag)) return false;
+    const entries = nativeRoot.children.filter(node => node.type === 'tag' && node.name === flag);
+    if (entries.length > 1) return false;
+    for (const entry of entries) {
+      if (Object.keys(entry.attribs).length || entry.children.length !== 1
+        || entry.children[0].type !== 'text' || entry.children[0].data !== 'false') return false;
+      removable.add(entry);
+    }
+  }
+  nativeRoot.children = nativeRoot.children.filter(node => !removable.has(node));
+  return JSON.stringify(normalizedMetadataDefinition(source, sourceDocument))
+    === JSON.stringify(normalizedMetadataDefinition(native, nativeDocument));
+}
+
 function verifyNativeMetadataProjection({ root, sourceRoot, plan, projectionPaths, query }) {
   const permissionSets = [];
   for (const name of projectionPaths) {
@@ -141,13 +165,18 @@ function verifyNativeMetadataProjection({ root, sourceRoot, plan, projectionPath
     const local = normalizeLineEndings(source);
     const observed = normalizeLineEndings(native);
     const permission = /^permissionsets\/([A-Za-z][A-Za-z0-9_]*)\.permissionset-meta\.xml$/u.exec(name);
-    if (!permission && source.equals(native)) continue;
+    const falseFlags = plan.review.nativeCustomFieldFalseFlags?.[name];
+    if (!permission && !falseFlags && source.equals(native)) continue;
     if (!Buffer.from(source.toString('utf8')).equals(source) || !Buffer.from(native.toString('utf8')).equals(native)) {
       throw new Error(`Native metadata projection differs from the exact reviewed source: ${name}`);
     }
     if (permission) {
       permissionSets.push(comparePermissionSetDefinition({ name: permission[1], source: local, native: observed, normalize: normalizedMetadataDefinition }));
       continue;
+    }
+    if (falseFlags) {
+      if (equivalentNativeCustomField(local, observed, falseFlags)) continue;
+      throw new Error(`Native CustomField serialization differs from the exact reviewed source: ${name}`);
     }
     if (local === observed) continue;
     if (name.endsWith('.xml') && JSON.stringify(normalizedMetadataDefinition(local)) === JSON.stringify(normalizedMetadataDefinition(observed))) continue;
