@@ -4,7 +4,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { auditHandover, preflightHandoverProviders, applyHandover, performHandover, assertHandoverConnection } from './lib/rapid-release/handover.mjs';
 import { createDatabaseCredentialIntentStore } from './lib/rapid-release/database-intent.mjs';
-import { openPinnedDatabase } from './lib/rapid-release/database-connection.mjs';
+import { DatabaseCredentialOutcomeUnknown, openPinnedDatabase } from './lib/rapid-release/database-connection.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 /** A lease belongs only to one awaited phase; it never spans a provider/build/
@@ -82,4 +82,15 @@ export async function handoverMain(argv, env = process.env) {
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) handoverMain(process.argv.slice(2)).then(result => {
   console.log(JSON.stringify(result, null, 2));
-}).catch(error => { console.error(/^[A-Z][A-Z0-9_]+$/.test(error.code || error.message) ? error.code || error.message : 'HANDOVER_FAILED_CHECKPOINT_PRESERVED'); process.exitCode = 1; });
+}).catch(error => {
+  const code = /^[A-Z][A-Z0-9_]+$/.test(error.code || error.message) ? error.code || error.message : 'HANDOVER_FAILED_CHECKPOINT_PRESERVED';
+  console.error(code);
+  if (error instanceof DatabaseCredentialOutcomeUnknown && /^fcos-db-auth-[a-f0-9-]{36}$/.test(error.intentId)) {
+    const { httpStatus, responseSchema } = error.diagnostics || {};
+    const schemas = ['unobserved', 'issuer_mismatch', 'invalid_json', 'unexpected_keys', 'role_mismatch', 'password_invalid', 'ttl_invalid', 'valid'];
+    console.error(JSON.stringify({ intentId: error.intentId,
+      httpStatus: Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599 ? httpStatus : null,
+      responseSchema: schemas.includes(responseSchema) ? responseSchema : 'unobserved' }));
+  }
+  process.exitCode = 1;
+});
