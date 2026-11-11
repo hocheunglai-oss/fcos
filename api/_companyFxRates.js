@@ -8,12 +8,12 @@ const MAX_DECIMAL_DIGITS = 30;
 const MAX_DECIMAL_SCALE = 12;
 const MAX_RATE_SCALE = 6;
 
-function companyFxError(message, code = 'COMPANY_FX_RATE_UNAVAILABLE') {
+function companyFxError(message, code = 'COMPANY_FX_RATE_UNAVAILABLE', status = 503) {
   const error = new Error(message);
   error.code = code;
-  error.status = 503;
-  error.statusCode = 503;
-  error.expose = false;
+  error.status = status;
+  error.statusCode = status;
+  error.expose = status < 500;
   return error;
 }
 
@@ -104,13 +104,13 @@ function validRevision(value) {
   return revision;
 }
 
-function hkNextMidnight(date) {
+export function hkCompanyFxMidnight(date, days = 0) {
   const source = String(date || '').trim();
   const day = new Date(`${source}T00:00:00.000Z`);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(source) || !Number.isFinite(day.getTime()) || day.toISOString().slice(0, 10) !== source) {
-    throw companyFxError('The FX lookup date is invalid. Use an ISO calendar date.', 'COMPANY_FX_DATE_INVALID');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(source) || !Number.isFinite(day.getTime()) || day.toISOString().slice(0, 10) !== source || source.startsWith('0000-')) {
+    throw companyFxError('The FX lookup date is invalid. Use an ISO calendar date.', 'COMPANY_FX_DATE_INVALID', 400);
   }
-  day.setUTCDate(day.getUTCDate() + 1);
+  day.setUTCDate(day.getUTCDate() + days);
   const nextMidnight = day.getTime();
   const approximate = new Date(nextMidnight - 8 * 3600000);
   const localOffset = hkOffset.formatToParts(approximate).find(part => part.type === 'timeZoneName')?.value;
@@ -203,7 +203,7 @@ export async function loadCurrentCompanyFxRate(client) {
 }
 
 export async function loadCompanyFxRateForDate(client, date) {
-  const cutoff = hkNextMidnight(date);
+  const cutoff = hkCompanyFxMidnight(date, 1);
   const history = requireResult(await client.from('company_fx_rate_history')
     .select('id,pair,rate,settings_revision,effective_at')
     .eq('pair', COMPANY_FX_PAIR)
@@ -214,4 +214,4 @@ export async function loadCompanyFxRateForDate(client, date) {
   return serializeHistoryRate(history);
 }
 
-export const companyFxRateInternals = { COMPANY_FX_PAIR, hkNextMidnight, serializeHistoryRate, decimalsEqual, validRate };
+export const companyFxRateInternals = { COMPANY_FX_PAIR, serializeHistoryRate, decimalsEqual, validRate };

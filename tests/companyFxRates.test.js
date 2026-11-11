@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import {
   companyFxRateInternals,
+  hkCompanyFxMidnight,
   hkdFromUsd,
   loadCompanyFxRateForDate,
   loadCurrentCompanyFxRate,
@@ -71,8 +72,8 @@ test('looks up the latest immutable FX rate through the requested Hong Kong cale
   assert.equal(rate.usdHkdRate, '7.800000');
   assert.ok(client.calls.some((entry) => entry[0] === 'lt' && entry[1] === 'effective_at' && entry[2] === '2026-09-10T16:00:00.000Z'));
   assert.ok(client.calls.some((entry) => entry[0] === 'order' && entry[1] === 'effective_at' && entry[2].ascending === false));
-  assert.equal(companyFxRateInternals.hkNextMidnight('1979-06-01'), '1979-06-01T15:00:00.000Z');
-  assert.equal(companyFxRateInternals.hkNextMidnight('2026-12-31'), '2026-12-31T16:00:00.000Z');
+  assert.equal(hkCompanyFxMidnight('1979-06-01', 1), '1979-06-01T15:00:00.000Z');
+  assert.equal(hkCompanyFxMidnight('2026-12-31', 1), '2026-12-31T16:00:00.000Z');
 });
 
 test('fails closed when an FX rate is missing, malformed, or queried with an invalid date', async () => {
