@@ -4,6 +4,8 @@
 const reader = (handler, fields, coverage = 'module_data_read', body = {}) => Object.freeze({
   path: `/api/functions/${handler}`, fields: Object.freeze(fields), coverage, body: Object.freeze(body),
 });
+const incomingPaymentSignAdvisory = 'Supplier-invoice-linked negative payments are classified as supplier refunds. Confirm if Salesforce uses the opposite sign.';
+const stagedRefreshDenial = 'This verification environment permits read-only operations.';
 export const MODULE_READERS = Object.freeze({
   dashboard: Object.freeze({ ...reader('dashboardSummary', []), route: '/', heading: 'Dashboard' }),
   markets: Object.freeze({ ...reader('marketPulseSnapshot', []), route: '/markets', heading: 'Markets' }),
@@ -42,7 +44,9 @@ export function moduleReaderPayloadVerified(module, payload) {
   const data = payload?.data ?? payload;
   if (!data || typeof data !== 'object' || Array.isArray(data) || data.error || data.cancelled
     || data.status === 'unavailable' || data.available === false || data.complete === false
-    || ['schemaWarnings', 'unavailableSources'].some(key => Array.isArray(data[key]) && data[key].length > 0)) return false;
+    || (Array.isArray(data.unavailableSources) && data.unavailableSources.length > 0)
+    || (Array.isArray(data.schemaWarnings) && data.schemaWarnings.some(warning =>
+      module !== 'incoming_payments' || warning !== incomingPaymentSignAdvisory))) return false;
   if (module === 'dashboard') return data.complete === true && Array.isArray(data.financials);
   if (module === 'markets') return data.complete === true && data.reportCompleteness?.complete === true
     && /^\d{4}-\d{2}-\d{2}$/.test(data.asOfDate || '') && Array.isArray(data.products) && data.products.length === 3
@@ -53,9 +57,13 @@ export function moduleReaderPayloadVerified(module, payload) {
   if (module === 'settings') return Number.isSafeInteger(data.settings?.revision) && data.settings.revision > 0
     && Number.isFinite(data.settings.annualInterestRatePct) && ['UBS', 'DBS'].every(bank => Number.isFinite(data.settings.bankChargesUsd?.[bank]));
   if (module === 'email_router') return typeof data.mailbox?.id === 'string' && Array.isArray(data.destinations) && Array.isArray(data.groups);
-  if (module === 'xero_portal') return typeof data.xero?.configured === 'boolean' && typeof data.xero.connected === 'boolean'
-    && !data.xero.refreshError && Object.keys(data.externalActions || {}).length > 0
-    && Object.values(data.externalActions).every(gate => gate.enabled === false);
+  if (module === 'xero_portal') {
+    const gates = Object.values(data.externalActions || {});
+    return typeof data.xero?.configured === 'boolean' && typeof data.xero.connected === 'boolean'
+      && gates.length > 0 && gates.every(gate => gate?.enabled === false)
+      && (!data.xero.refreshError || (data.xero.refreshError === stagedRefreshDenial
+        && gates.every(gate => gate.control === 'deployment_read_only')));
+  }
   if (module === 'hedge_desk') return ['physicals', 'swaps', 'mops', 'clearing', 'counterparties', 'invoices', 'auditLogs'].every(key => Array.isArray(data[key]))
     && data.capabilities && typeof data.capabilities === 'object' && data.expiryAutomation?.readOnly === true;
   if (module === 'pnl') return Array.isArray(data.rows) && Number.isSafeInteger(data.totals?.count) && data.totals.count === data.rows.length;
@@ -83,16 +91,16 @@ export const MODULE_SURFACES = Object.freeze({
   disputes: { route: '/disputes', heading: /Dispute Workflow/i },
   buyer_invoices: { route: '/payment-collections?tab=collections', heading: /Payment Collections/i },
   unofficial_compensation: { route: '/unofficial-compensation', heading: /Unofficial Compensation|Agreed Compensation/i },
-  incoming_payments: { route: '/payment-collections?tab=incoming', heading: /Payment Collections/i },
+  incoming_payments: { route: '/payment-collections?tab=incoming', heading: /^Incoming Payments$/i },
   cashflow_forecast: { route: '/cashflow-forecast', heading: /Cashflow/i },
-  pnl: { route: '/pnl', heading: /Dashboard and Qlik Validator/i, readControl: 'Run' },
+  pnl: { route: '/pnl', heading: /^(?:Dashboard and )?Qlik Validator(?: Tool)?$/i, readControl: 'Run' },
   brokers: { route: '/brokers', heading: /Broker/i },
   buyers_administrator: { route: '/account-managers', heading: /Account Managers/i },
   master_contracts: { route: '/master-contracts', heading: /Master Contracts/i },
   special_terms: { route: '/special-terms', heading: /Special Terms/i },
   hedge_desk: { route: '/hedge-desk', heading: /Hedge Desk|Position control/i },
   email_router: { route: '/email-router', heading: /Email Router/i },
-  settings: { route: '/settings?section=finance', heading: /Finance settings|Settings/i },
+  settings: { route: '/settings?section=finance', heading: /^(?:Finance|Finance settings|Settings)$/i },
   admin: { route: '/settings?section=people', heading: /People|Settings/i },
   xero_portal: { route: '/xero-portal', heading: /Xero Portal|Salesforce–Xero integrity/i },
 });
