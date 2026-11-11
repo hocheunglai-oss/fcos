@@ -833,6 +833,7 @@ async function loadAuthBootstrapPreferences(client, userId) {
 async function authContext(body, req, accessContext) {
   const { client, authUser, profile } = accessContext || (await requireActiveUser(req));
   const readOnlyCi = isReadOnlyCiProfile(profile);
+  const mutationsAllowed = !readOnlyCi && !isDeploymentReadOnly();
   const preferencesPromise = loadAuthBootstrapPreferences(client, profile.id);
   let permissionValues;
   let capabilityValues;
@@ -857,7 +858,7 @@ async function authContext(body, req, accessContext) {
     moduleAccess,
   });
   const bootstrapPreferences = await preferencesPromise;
-  if (!readOnlyCi) schedulePortalOutboxRetry(client);
+  if (mutationsAllowed) schedulePortalOutboxRetry(client);
 
   return {
     user: {
@@ -878,6 +879,7 @@ async function authContext(body, req, accessContext) {
       [REPORT_ARCHIVE_MODULE_ID]: reportArchiveAccessLevel(permissionValues[REPORT_ARCHIVE_MODULE_ID]),
     },
     capabilities: capabilityValues,
+    deploymentCapabilities: { mutationsAllowed },
     applications,
     navigationPreferences: bootstrapPreferences?.navigationPreferences || null,
     workspacePreferences: bootstrapPreferences?.workspacePreferences || null,
