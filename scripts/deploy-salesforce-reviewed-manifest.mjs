@@ -3,6 +3,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync,
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { parseDocument } from 'htmlparser2';
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import { openSalesforcePromotionJournal, salesforcePromotionHash } from './lib/salesforce-promotion-journal.mjs';
 import { INVENTORY_BASELINE_MODE, createReviewedSalesforcePlan, inventoryFromFiles, parseReviewedPackage, readReviewedInventory, runReviewedSalesforceRelease, safeProjectFile } from './lib/salesforce-reviewed-release.mjs';
@@ -84,7 +85,23 @@ export function assertReviewedInputsUnchanged(plan, { cwd = ROOT, policy = POLIC
     || salesforcePromotionHash(policy) !== plan.binding.configurationSha256) throw new Error('Salesforce source, manifest, review, baseline, or connection policy changed; restart prepare from DEVEE.');
 }
 
-function assertBootstrapPackage(converted, roundTrip, members, files, apiVersion) {
+function normalizedBootstrapDefinition(xml) {
+  if (xml.includes('xml:space')) return [xml];
+  const { children } = parseDocument(xml, { xmlMode: true, decodeEntities: false });
+  function significantText(nodes) {
+    const elementOnly = nodes.some(node => node.type === 'tag')
+      && !nodes.some(node => node.type === 'text' && node.data.trim() !== '');
+    return nodes.flatMap(node => {
+      if (node.children) return significantText(node.children);
+      return node.type === 'text' && !elementOnly ? [node.data] : [];
+    });
+  }
+  // Check the raw markup as well as leaf and mixed-content whitespace. Only
+  // whitespace between structural elements may vary during conversion.
+  return [xml.trim().replace(/>\s+</gu, '><'), significantText(children)];
+}
+
+function assertBootstrapPackage(converted, roundTrip, members, files, sourceRoot, apiVersion) {
   const packageBytes = readFileSync(safeProjectFile(converted, 'package.xml'), 'utf8');
   const actualMembers = parseReviewedPackage(packageBytes);
   const versions = [...packageBytes.matchAll(/<version>\s*(\d+\.0)\s*<\/version>/gu)];
@@ -117,6 +134,13 @@ function assertBootstrapPackage(converted, roundTrip, members, files, apiVersion
     }
   }
   if ([...files].some(file => !roundTripFiles.includes(file))) throw new Error('Converted Salesforce bootstrap is missing reviewed source.');
+  for (const file of files) {
+    const source = readFileSync(safeProjectFile(sourceRoot, file), 'utf8');
+    const restored = readFileSync(safeProjectFile(roundTrip, file), 'utf8');
+    if (source !== restored && JSON.stringify(normalizedBootstrapDefinition(source)) !== JSON.stringify(normalizedBootstrapDefinition(restored))) {
+      throw new Error(`Converted Salesforce bootstrap definition differs from reviewed source: ${file}`);
+    }
+  }
 }
 
 export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = localCommand, adapter = {}, adapterPath, commandEnvironment } = {}) {
@@ -168,7 +192,8 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
         sf(['project', 'convert', 'source', '--manifest', 'bootstrap.xml', '--output-dir', converted,
           '--api-version', apiVersion, '--json'], project);
         sf(['project', 'convert', 'mdapi', '--root-dir', converted, '--output-dir', roundTrip, '--json'], project);
-        assertBootstrapPackage(converted, path.join(roundTrip, 'main/default'), members, files, apiVersion);
+        assertBootstrapPackage(converted, path.join(roundTrip, 'main/default'), members, files,
+          path.join(project, policy.publication.sourceRoot), apiVersion);
         return {
           submit: () => sf(['project', 'deploy', 'start', '--target-org', environment.alias, '--metadata-dir', converted, '--single-package', '--api-version', apiVersion,
             '--test-level', environment.isSandbox ? 'NoTestRun' : 'RunRelevantTests', '--async', '--json'], project),

@@ -621,9 +621,11 @@ test('native bootstrap stages only exact reviewed files in a temporary project',
   const field = 'objects/Demo__c/fields/Value__c.field-meta.xml';
   const permission = 'permissionsets/Reviewed.permissionset-meta.xml';
   const source = path.join(cwd, policy.publication.sourceRoot);
+  const fieldSource = '<CustomField><defaultValue>false</defaultValue><description> </description></CustomField>\n';
+  f.plan.finalInventory.files[field] = { sha256: hash(Buffer.from(fieldSource)), size: Buffer.byteLength(fieldSource) };
   try {
     for (const [name, bytes] of Object.entries({
-      [field]: '<CustomField/>\n',
+      [field]: fieldSource,
       [permission]: '<PermissionSet/>\n',
       'objects/Demo__c/Demo__c.object-meta.xml': '<CustomObject><actionOverrides/></CustomObject>\n',
       [validationRulePath]: '<ValidationRule/>\n',
@@ -636,6 +638,7 @@ test('native bootstrap stages only exact reviewed files in a temporary project',
     const manifest = path.join(cwd, 'manifest/bootstrap.xml');
     writeFileSync(manifest, f.inputs.bootstrapBytes);
     let submittedProject, unexpectedChild = false;
+    let roundTripField = fieldSource.replaceAll('><', '>\n  <');
     const provider = cliSalesforceProvider({ cwd, run(program, args, project) {
       assert.equal(program, 'sf');
       if (args[1] === 'convert') {
@@ -652,7 +655,8 @@ test('native bootstrap stages only exact reviewed files in a temporary project',
           for (const name of [field, permission]) {
             const dest = path.join(root, name);
             mkdirSync(path.dirname(dest), { recursive: true });
-            writeFileSync(dest, readFileSync(path.join(project, policy.publication.sourceRoot, name)));
+            const bytes = readFileSync(path.join(project, policy.publication.sourceRoot, name));
+            writeFileSync(dest, name === field && roundTripField !== undefined ? roundTripField : bytes);
           }
           writeFileSync(path.join(root, 'objects/Demo__c/Demo__c.object-meta.xml'),
             '<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata"></CustomObject>\n');
@@ -672,7 +676,7 @@ test('native bootstrap stages only exact reviewed files in a temporary project',
       const converted = args[args.indexOf('--metadata-dir') + 1];
       assert.deepEqual(readFileSync(path.join(converted, 'package.xml')), f.inputs.bootstrapBytes);
       const staged = path.join(project, policy.publication.sourceRoot);
-      assert.equal(readFileSync(path.join(staged, field), 'utf8'), '<CustomField/>\n');
+      assert.equal(readFileSync(path.join(staged, field), 'utf8'), fieldSource);
       assert.equal(readFileSync(path.join(staged, permission), 'utf8'), '<PermissionSet/>\n');
       assert.throws(() => readFileSync(path.join(staged, 'objects/Demo__c/Demo__c.object-meta.xml')), { code: 'ENOENT' });
       assert.throws(() => readFileSync(path.join(staged, validationRulePath)), { code: 'ENOENT' });
@@ -687,6 +691,11 @@ test('native bootstrap stages only exact reviewed files in a temporary project',
     assert.throws(() => readFileSync(path.join(submittedProject, 'bootstrap.xml')), { code: 'ENOENT' });
     unexpectedChild = true;
     assert.throws(() => provider.prepareBootstrap(policy.environments[0], f.plan), /expanded outside reviewed source/);
+    unexpectedChild = false;
+    roundTripField = fieldSource.replace('false', 'true');
+    assert.throws(() => provider.prepareBootstrap(policy.environments[0], f.plan), /definition differs from reviewed source/);
+    roundTripField = fieldSource.replace('> </description>', '></description>');
+    assert.throws(() => provider.prepareBootstrap(policy.environments[0], f.plan), /definition differs from reviewed source/);
     writeFileSync(path.join(source, field), 'changed');
     assert.throws(() => provider.prepareBootstrap(policy.environments[0], f.plan), /bootstrap source changed/);
     writeFileSync(manifest, 'changed');
