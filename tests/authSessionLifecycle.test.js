@@ -123,3 +123,41 @@ test('executed AuthProvider rejects late auth after logout and after a newer acc
   assert.equal(states[0].id, 'user-b');
   delete globalThis.__authHarness;
 });
+
+test('the login screen withholds sign-in controls when hosted authentication is unavailable', async () => {
+  const source = (await readFile(new URL('../src/pages/Login.jsx', import.meta.url), 'utf8')).replace(/^import .*;\n/gm, '');
+  const harness = `
+    let state;
+    export function render(auth) {
+      state = auth;
+      return Login();
+    }
+    const React = {
+      createElement: (type, props, ...children) => ({ type, props, children }),
+      Fragment: 'fragment',
+    };
+    const useAuth = () => state;
+    const useLocation = () => ({ search: '', hash: '' });
+    const useState = (value) => [typeof value === 'function' ? value() : value, () => {}];
+    const useEffect = () => {};
+    const useRef = (current) => ({ current });
+    const window = { sessionStorage: { getItem: () => null } };
+    const Boxes = 'boxes', Loader2 = 'loader', LockKeyhole = 'lock', TriangleAlert = 'alert';
+    const Navigate = 'navigate';
+  `;
+  const compiled = ts.transpileModule(harness + source, {
+    compilerOptions: { jsx: ts.JsxEmit.React, module: ts.ModuleKind.ESNext },
+  }).outputText;
+  const { render } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`);
+  const defaults = { authChecked: true, fcunoOidcEnabled: true, legacyPasswordLoginEnabled: true };
+  const unavailable = JSON.stringify(render({ ...defaults, authMode: 'unavailable' }));
+  assert.match(unavailable, /FCOS sign-in is unavailable/);
+  assert.doesNotMatch(unavailable, /"type":"(?:button|form|navigate)"|local administrator mode/);
+  const hosted = { ...defaults, authMode: 'supabase', isSupabaseConfigured: true };
+  assert.match(JSON.stringify(render(hosted)), /Opening FCUNO sign-in/);
+  const manual = JSON.stringify(render({ ...hosted, authError: { type: 'user_inactive' } }));
+  assert.match(manual, /"type":"button"/);
+  assert.match(manual, /"type":"form"/);
+  const local = JSON.stringify(render({ ...defaults, authMode: 'local' }));
+  assert.match(local, /"type":"navigate"/);
+});
