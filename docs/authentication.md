@@ -13,7 +13,8 @@ project for hosted configuration. The browser reads `VITE_SUPABASE_URL` and
 `VITE_SUPABASE_ANON_KEY`. The latter accepts a public publishable key or the
 legacy anonymous key. The protected build accepts `VITE_SUPABASE_PUBLISHABLE_KEY`
 as a fallback when `VITE_SUPABASE_ANON_KEY` is absent and validates the project
-and public key before building.
+and public key before building. Vite also checks any configured browser
+Supabase key and URL before serving or bundling the application.
 
 Keep `SUPABASE_SECRET_KEY` or the supported `SUPABASE_SERVICE_ROLE_KEY` server
 only. The server prefers `SUPABASE_URL` and withholds the credential when the
