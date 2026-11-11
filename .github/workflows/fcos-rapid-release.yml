@@ -290,6 +290,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install governed browser for conditional prerequisite smoke
+        if: fromJSON(inputs.manifest_json).selection.salesforce || fromJSON(inputs.manifest_json).selection.database
         run: npx --no-install playwright install --with-deps chromium
       - name: Reuse frozen release manifest
         env:

@@ -84,3 +84,12 @@ test('Company FX writer credentials are limited to the protected exact database 
   for(const key of names)assert.match(step.env[key],/selection\.database && !.*selection\.salesforce && .*prerequisites\.adapter == 'company-fx-history'/);
  }
 });
+
+test('ordinary promotion retains staging browsers and installs go-live browsers only for prerequisite smoke', () => {
+ const stage=workflow.jobs['stage-and-smoke'].steps.find(step=>step.name==='Install governed browser');
+ const promotion=workflow.jobs['go-live'].steps.find(step=>step.name==='Install governed browser for conditional prerequisite smoke');
+ assert.match(stage.run,/playwright install/);
+ assert.equal(stage.if,undefined);
+ assert.match(promotion.run,/playwright install/);
+ assert.equal(promotion.if,'fromJSON(inputs.manifest_json).selection.salesforce || fromJSON(inputs.manifest_json).selection.database');
+});
