@@ -121,6 +121,18 @@ test('all dispatcher mutations, mixed actions and cron routes stop before auth, 
     const mixed = response();
     await dispatcher({ ...request(), url: '/api/functions/hedgeMarkets', body: { action: 'future_write' } }, mixed);
     assert.equal(mixed.statusCode, 403);
+    for (const body of [{}, { sync: true, includePreparation: false }, { sync: false, includePreparation: true }]) {
+      const updates = response();
+      await dispatcher({ ...request(), url: '/api/functions/adminFcosUpdatesList', body }, updates);
+      assert.equal(updates.statusCode, 403, 'staged update sync and recovery stop before authentication');
+      assert.equal(JSON.parse(updates.body).code, denied.code);
+    }
+    const savedUpdates = { url: '/api/functions/adminFcosUpdatesList', body: { sync: false, includePreparation: false } };
+    for (const req of [{ ...request(), ...savedUpdates }, { ...request(canonicalHost), ...savedUpdates, body: {} }]) {
+      const updates = response();
+      await dispatcher(req, updates);
+      assert.equal(updates.statusCode, 401, 'staged saved reads and canonical requests retain authentication');
+    }
     const standalone = response();
     await workNotifications({ ...request(), url: '/api/work-notifications' }, standalone);
     assert.equal(standalone.statusCode, 403);

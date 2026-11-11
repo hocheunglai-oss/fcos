@@ -19489,12 +19489,15 @@ async function handler(req, res) {
         }
         // Fixed mutation/external-action routes, including cron, are rejected
         // before authentication can bind or provision an identity. The mixed
-        // Markets and Hedge Desk endpoints are classified from bounded JSON first.
+        // Markets, Hedge Desk and FCOS Updates reads depend on the request body.
         let classifiedBody;
         if (['hedgeMarkets', 'hedgeDeskEntity'].includes(name) && isDeploymentReadOnly()) {
           classifiedBody = await readBody(req);
           requireDeploymentMutationAllowed(name === 'hedgeDeskEntity'
             ? !isReadOnlyHedgeDeskAction(classifiedBody) : !isReadOnlyMarketAction(classifiedBody));
+        } else if (name === 'adminFcosUpdatesList' && isDeploymentReadOnly()) {
+          classifiedBody = await readBody(req);
+          requireDeploymentMutationAllowed(classifiedBody?.sync !== false || classifiedBody?.includePreparation !== false);
         } else {
           requireDeploymentMutationAllowed(handlerPolicy?.mutation || handlerPolicy?.externalAction);
         }
