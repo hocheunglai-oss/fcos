@@ -49,6 +49,10 @@ const ghEnvironment = {
 };
 delete ghEnvironment.GH_TOKEN;
 delete ghEnvironment.GITHUB_TOKEN;
+delete ghEnvironment.FCOS_RAPID_SALESFORCE_MIRROR_TOKEN;
+const hostedRunner = process.env.GITHUB_ACTIONS === 'true';
+const hostedMirrorToken = hostedRunner && process.env.FCOS_RAPID_SALESFORCE_MIRROR_TOKEN;
+if (hostedMirrorToken) ghEnvironment.GH_TOKEN = hostedMirrorToken;
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -117,9 +121,30 @@ export function assertInventoryUnchanged(inventory, authoritativeRoot = sourceRo
   }
 }
 
+function assertHostedMirrorScope(repository) {
+  const result = json('gh', ['api', 'user/installations'], { env: ghEnvironment });
+  const installation = result?.installations?.[0];
+  const permissions = installation?.permissions;
+  if (result?.total_count !== 1 || result.installations.length !== 1 || !Number.isSafeInteger(installation?.id)
+    || installation.suspended_at !== null || installation.repository_selection !== 'selected'
+    || installation.account?.login !== PUBLICATION.repository.split('/')[0]
+    || permissions?.contents !== 'write' || permissions?.pull_requests !== 'write' || permissions?.metadata !== 'read'
+    || Object.keys(permissions).length !== 3) {
+    throw new Error('Hosted Salesforce mirror GitHub App permissions or installation scope mismatch.');
+  }
+  const accessible = json('gh', ['api', `user/installations/${installation.id}/repositories`], { env: ghEnvironment });
+  if (accessible?.total_count !== 1 || accessible.repositories?.length !== 1
+    || accessible.repositories[0].id !== repository.id || accessible.repositories[0].full_name !== PUBLICATION.repository) {
+    throw new Error('Hosted Salesforce mirror credential must access only the pinned repository.');
+  }
+}
+
 function assertIdentity() {
-  if (!existsSync(path.join(isolatedConfig, 'hosts.yml'))) {
+  if (hostedRunner ? !hostedMirrorToken : !existsSync(path.join(isolatedConfig, 'hosts.yml'))) {
     throw new Error('The isolated shared-repository GitHub authorization is unavailable.');
+  }
+  if (hostedRunner && !hostedMirrorToken.startsWith('ghu_')) {
+    throw new Error('Hosted Salesforce mirror requires a GitHub App user access token.');
   }
   const account = json('gh', ['api', 'user'], { env: ghEnvironment });
   const repository = json('gh', ['api', `repos/${PUBLICATION.repository}`], { env: ghEnvironment });
@@ -131,6 +156,7 @@ function assertIdentity() {
     || repository?.default_branch !== PUBLICATION.defaultBranch) {
     throw new Error('Shared Salesforce repository identity, default branch, or WRITE permission mismatch.');
   }
+  if (hostedRunner) assertHostedMirrorScope(repository);
   return repository;
 }
 
@@ -348,7 +374,8 @@ export function verifyCheckout(checkout, inventory, manifest, authoritativeRoot 
 }
 
 function configurePushIdentity(checkout) {
-  const helper = `!f() { env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR='${isolatedConfig.replaceAll("'", "'\"'\"'")}' gh auth git-credential \"$@\"; }; f`;
+  const unsetTokens = hostedRunner ? '-u GITHUB_TOKEN' : '-u GH_TOKEN -u GITHUB_TOKEN';
+  const helper = `!f() { env ${unsetTokens} GH_CONFIG_DIR='${isolatedConfig.replaceAll("'", "'\"'\"'")}' gh auth git-credential \"$@\"; }; f`;
   run('git', ['config', '--local', 'user.name', PUBLICATION.requiredAccount], { cwd: checkout });
   run('git', ['config', '--local', 'user.email', `${PUBLICATION.requiredAccountId}+${PUBLICATION.requiredAccount}@users.noreply.github.com`], { cwd: checkout });
   spawnSync('git', ['config', '--local', '--unset-all', 'credential.https://github.com.helper'], {
@@ -402,7 +429,7 @@ function verifyImmutableRemoteHead(checkout, pullRequest, inventory, manifest, m
   run('git', [
     'fetch', '--force', 'origin',
     `refs/heads/${pullRequest.headRefName}:refs/remotes/origin/${pullRequest.headRefName}`,
-  ], { cwd: checkout });
+  ], { cwd: checkout, env: ghEnvironment });
   const fetchedHead = run('git', ['rev-parse', `refs/remotes/origin/${pullRequest.headRefName}`], { cwd: checkout });
   validateFetchedPullRequestHead(fetchedHead, pullRequest);
   run('git', ['checkout', '--detach', pullRequest.headRefOid], { cwd: checkout });
@@ -461,7 +488,7 @@ function publish(checkout, branch, expectedRemoteHead, pullRequest, inventory, a
   pushArgs.push('origin', `HEAD:${branch}`);
   assertInventoryUnchanged(inventory, metadataRoot);
   assertPublicationCurrent();
-  run('git', pushArgs, { cwd: checkout });
+  run('git', pushArgs, { cwd: checkout, env: ghEnvironment });
   const commit = run('git', ['rev-parse', 'HEAD'], { cwd: checkout });
   assertCommitAttribution(commit);
   if (!pullRequest) {

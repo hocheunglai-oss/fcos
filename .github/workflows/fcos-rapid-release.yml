@@ -295,6 +295,7 @@ jobs:
           FCOS_RAPID_RELEASE_HANDOVER_ID: ${{ steps.admit-controller.outputs.handover_id }}
           VERCEL_TOKEN: ${{ secrets.FCOS_RELEASE_VERCEL_TOKEN }}
           FCOS_RAPID_SALESFORCE_CANDIDATE: ${{ github.workspace }}/salesforce-candidate
+          FCOS_RAPID_SALESFORCE_MIRROR_TOKEN: ${{ fromJSON(inputs.manifest_json).selection.salesforce && secrets.FCOS_RAPID_SALESFORCE_MIRROR_TOKEN || '' }}
           FCOS_RAPID_DATABASE_URL: ${{ secrets.FCOS_RAPID_READONLY_DATABASE_URL }}
           FCOS_RAPID_DATABASE_CA: ${{ runner.temp }}/rapid-database-ca.pem
           FCOS_AUTH_E2E_ENABLED: 'true'

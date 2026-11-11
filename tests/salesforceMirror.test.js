@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
@@ -179,6 +180,53 @@ test('mirror command refetches and validates the PR before verifying immutable r
   assert.match(source, /checkout', '--detach', pullRequest\.headRefOid/);
 });
 
+test('hosted mirror preflight uses only its dedicated token for the pinned repository', () => {
+  const directory = mkdtempSync(path.join(tmpdir(), 'fcos-mirror-auth-test-'));
+  try {
+    const draft = pullRequest();
+    const { repository, requiredAccount, requiredAccountId, defaultBranch } = publication;
+    const repositoryId = 12345;
+    const responses = {
+      'api user': { login: requiredAccount, id: requiredAccountId },
+      ['api repos/' + repository]: { id: repositoryId, full_name: repository, default_branch: defaultBranch, permissions: { pull: true, push: true } },
+      'api user/installations': { total_count: 1, installations: [{
+        id: 42, suspended_at: null, repository_selection: 'selected', account: { login: repository.split('/')[0] },
+        permissions: { contents: 'write', pull_requests: 'write', metadata: 'read' },
+      }] },
+      'api user/installations/42/repositories': { total_count: 1, repositories: [{ id: repositoryId, full_name: repository }] },
+      'pr list': [draft],
+      ['api repos/' + repository + '/git/ref/' + encodeURIComponent('heads/' + draft.headRefName)]: {
+        ref: 'refs/heads/' + draft.headRefName, object: { sha: draft.headRefOid },
+      },
+    };
+    writeFileSync(path.join(directory, 'gh'), [
+      '#!/usr/bin/env node',
+      'if (process.env.GH_TOKEN !== "ghu_mirror_fixture" || process.env.GITHUB_TOKEN || process.env.FCOS_RAPID_SALESFORCE_MIRROR_TOKEN) process.exit(11);',
+      'const args = process.argv.slice(2);',
+      'const response = ' + JSON.stringify(responses) + '[args.slice(0, 2).join(" ")];',
+      'if (response === undefined) process.exit(12);',
+      'if (process.env.FIXTURE_SCOPE_MISMATCH && args[1] === "user/installations/42/repositories") response.total_count = 2;',
+      'console.log(JSON.stringify(response));',
+    ].join('\n'), { mode: 0o700 });
+    const moduleUrl = new URL('../scripts/sync-salesforce-shared-repository.mjs', import.meta.url).href;
+    const command = ['--input-type=module', '-e', 'import { preflightSharedMirrorPublication } from ' +
+      JSON.stringify(moduleUrl) + '; preflightSharedMirrorPublication();'];
+    const env = { ...process.env, PATH: directory + path.delimiter + process.env.PATH,
+      GITHUB_ACTIONS: 'true', GITHUB_TOKEN: 'workflow-fixture', GH_TOKEN: 'ambient-fixture' };
+    const missing = spawnSync(process.execPath, command, { env: { ...env, FCOS_RAPID_SALESFORCE_MIRROR_TOKEN: '' }, encoding: 'utf8' });
+    assert.notEqual(missing.status, 0);
+    assert.match(missing.stderr, /isolated shared-repository GitHub authorization is unavailable/);
+    const supplied = spawnSync(process.execPath, command, { env: { ...env, FCOS_RAPID_SALESFORCE_MIRROR_TOKEN: 'ghu_mirror_fixture' }, encoding: 'utf8' });
+    assert.equal(supplied.status, 0, supplied.stderr);
+    const broad = spawnSync(process.execPath, command, { env: { ...env, FIXTURE_SCOPE_MISMATCH: 'true',
+      FCOS_RAPID_SALESFORCE_MIRROR_TOKEN: 'ghu_mirror_fixture' }, encoding: 'utf8' });
+    assert.notEqual(broad.status, 0);
+    assert.match(broad.stderr, /must access only the pinned repository/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('hosted Salesforce checks mirror access and draft state before granting its first write receipt', async () => {
   const mirror = await readFile(new URL('../scripts/sync-salesforce-shared-repository.mjs', import.meta.url), 'utf8');
   const preflight = mirror.slice(mirror.indexOf('export function preflightSharedMirrorPublication('), mirror.indexOf('function cloneBranch('));
@@ -302,7 +350,7 @@ test('existing shared publication branches are resumed without corrupting the JS
   const source = await readFile(new URL('../scripts/sync-salesforce-shared-repository.mjs', import.meta.url), 'utf8');
   assert.match(source, /mode === 'publish' && !existsRemotely \? PUBLICATION\.defaultBranch : branch/);
   assert.match(source, /mode === 'publish' && !existsRemotely\) run\('git', \['switch', '-c', branch\]/);
-  assert.match(source, /run\('git', pushArgs, \{ cwd: checkout \}\)/);
+  assert.match(source, /run\('git', pushArgs, \{ cwd: checkout, env: ghEnvironment \}\)/);
   assert.doesNotMatch(source, /run\('git', pushArgs, \{ cwd: checkout, inherit: true \}\)/);
 });
 
