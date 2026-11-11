@@ -16,6 +16,17 @@ const failCoverage = message => { throw new Error(`${message} ${COMPLETE_TREE_FA
 const sorted = values => [...new Set(values)].sort();
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
+export function matchesSalesforceCheckpoint(record, entry) {
+  if (!record || !HASH.test(entry.evidenceDigest || '')) return false;
+  if (digestCheckpoint(record) === entry.evidenceDigest) return true;
+  const permission = entry.permission;
+  return entry.outcome === 'resolved' && record.status === 'Succeeded' && Boolean(permission)
+    && entry.operation === `permission:${permission.name}` && typeof permission.prestate === 'boolean'
+    && record.recoveredEvidenceDigest === entry.evidenceDigest && record.name === permission.name
+    && record.orgId === permission.orgId && record.prestate === permission.prestate
+    && record.addedByRelease === !permission.prestate;
+}
+
 export function safeProjectFile(cwd, relative) {
   if (typeof relative !== 'string' || !relative || relative.includes('\\') || relative.split('/').some(part => part === '..' || !part)) throw new Error('Reviewed Salesforce paths must be safe project-relative paths.');
   const absolute = path.resolve(cwd, relative);
@@ -309,8 +320,10 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
       throw new Error('Recovered Salesforce job readback does not bind the reviewed source, org, operation, and manifest.');
     }
   }
+  const recoveredPermissions = new Set();
   if (typeof externalJournal.readCheckpoints === 'function') {
     const missing = [];
+    const missingPermissions = [];
     let missingMirror, preparationValidationId;
     for (const entry of await externalJournal.readCheckpoints()) {
       if (entry.fingerprint !== plan.fingerprint) throw new Error('Durable Salesforce checkpoint does not match the reviewed fingerprint.');
@@ -327,6 +340,14 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
         continue;
       }
       const environment = policy.environments.find(item => item.key === entry.stage);
+      const permission = entry.permission;
+      if (environment && entry.outcome === 'resolved' && permission
+        && entry.operation === `permission:${permission.name}` && plan.binding.permissionSets.includes(permission.name)
+        && permission.orgId === environment.orgId && typeof permission.prestate === 'boolean'
+        && HASH.test(entry.evidenceDigest || '') && (!local || matchesSalesforceCheckpoint(local, entry))) {
+        missingPermissions.push({ entry, environment, permission, local });
+        continue;
+      }
       const locator = entry.job;
       if (local || !environment || typeof provider.reconcile !== 'function'
         || !['validation', 'deployment', 'bootstrap'].includes(entry.operation) || !JOB_ID.test(locator?.id || '')
@@ -335,6 +356,21 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
         throw new Error('Durable Salesforce operation differs from local state; reconcile the original checkpoint before continuing.');
       }
       missing.push({ entry, environment, locator });
+    }
+    for (const { entry, environment, permission, local } of missingPermissions) {
+      await unchanged();
+      await provider.verifyIdentity(environment);
+      if (await provider.permissionAssigned(environment, permission.name) !== true) {
+        throw new Error('A previously verified permission assignment drifted.');
+      }
+      await unchanged();
+      if (!local) {
+        const { name, orgId, prestate } = permission;
+        journal.update(entry.stage, entry.operation, { name, orgId, prestate, status: 'Succeeded',
+          addedByRelease: !prestate, recoveredEvidenceDigest: entry.evidenceDigest, verifiedAt: timestamp() });
+      }
+      // The original resolved checkpoint remains the durable receipt for this assignment.
+      recoveredPermissions.add(`${entry.stage}:${entry.operation}`);
     }
     for (const { entry, environment, locator } of missing) {
       const record = { fingerprint: plan.fingerprint, orgId: environment.orgId, jobId: locator.id,
@@ -409,7 +445,7 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
       const assigned = await provider.permissionAssigned(environment, name);
       if (record?.status === 'Succeeded') {
         if (!assigned) throw new Error('A previously verified permission assignment drifted.');
-        await checkpoint(environment.key, operation, record);
+        if (!recoveredPermissions.has(`${environment.key}:${operation}`)) await checkpoint(environment.key, operation, record);
         continue;
       }
       if (!assigned && record?.status === 'submitting') {

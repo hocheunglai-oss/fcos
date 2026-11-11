@@ -137,14 +137,17 @@ test('Salesforce checkpoint recovers a lost journal acknowledgement without expo
     throw new Error('Lost acknowledgement');
   } };
   const journal = new DeploymentJournal({ github, releaseId: 'r', manifestHash: h, actorIds: [7] });
-  const record = { status: 'Succeeded', receiptId: 'private-receipt' };
+  const record = { status: 'Succeeded', receiptId: 'private-receipt', name: 'Reviewed',
+    orgId: '00D000000000001AAA', prestate: false, addedByRelease: true };
   const checkpoint = { fingerprint: h, stage: 'devee', operation: 'permission:Reviewed', record };
   assert.equal((await journal.checkpoint(checkpoint)).id, 1);
   assert.equal((await journal.checkpoint(checkpoint)).id, 1);
   assert.equal(writes, 1);
   assert.deepEqual(records[0].payload.data, {
     fingerprint: h, stage: 'devee', operation: 'permission:Reviewed', outcome: 'resolved', evidenceDigest: digest(record),
+    permission: { name: 'Reviewed', orgId: record.orgId, prestate: false },
   });
+  await assert.rejects(journal.checkpoint({ ...checkpoint, record: { ...record, addedByRelease: false } }), /SALESFORCE_CHECKPOINT_PERMISSION_INVALID/);
   await assert.rejects(journal.checkpoint({ ...checkpoint, operation: 'unrecognized' }), /SALESFORCE_CHECKPOINT_INVALID/);
   assert.equal(writes, 1);
 });

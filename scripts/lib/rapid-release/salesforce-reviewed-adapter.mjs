@@ -6,7 +6,7 @@ import { assertReviewedInputsUnchanged, cliSalesforceProvider, loadReviewedSales
 import { runReviewedMirror } from '../../sync-salesforce-reviewed-repository.mjs';
 import { preflightSharedMirrorPublication } from '../../sync-salesforce-shared-repository.mjs';
 import { openSalesforcePromotionJournal } from '../salesforce-promotion-journal.mjs';
-import { assertReviewedJobReport, reviewedJobExpectations, runReviewedSalesforceRelease, safeProjectFile } from '../salesforce-reviewed-release.mjs';
+import { assertReviewedJobReport, matchesSalesforceCheckpoint, reviewedJobExpectations, runReviewedSalesforceRelease, safeProjectFile } from '../salesforce-reviewed-release.mjs';
 import { authenticateHostedSalesforce } from './salesforce-hosted-auth.mjs';
 import { digest, requireCondition, targets } from './contract.mjs';
 
@@ -93,12 +93,13 @@ export async function applyReviewedPrerequisites({ manifest, approval, plan, sal
       requireCondition((await run('apply')).mode === 'applied', 'SALESFORCE_HOSTED_APPLY_REQUIRED');
       const completedOperations = (await salesforce.journal.readCheckpoints()).filter(item => item.outcome === 'resolved'
         && journal.state.stages[item.stage]?.[item.operation]?.status === 'Succeeded'
-        && digest(journal.state.stages[item.stage][item.operation]) === item.evidenceDigest)
+        && matchesSalesforceCheckpoint(journal.state.stages[item.stage][item.operation], item))
         .map(item => ({ operationId: `salesforce:${item.stage}:${item.operation}`, evidenceDigest: item.evidenceDigest,
           verified: true, intentRecorded: true }));
       const completedIds = new Set(completedOperations.map(item => item.operationId));
       requireCondition(completedIds.has('salesforce:shared_mirror:publication') && policy.environments.every(({ key }) =>
-        completedIds.has(`salesforce:${key}:validation`) && completedIds.has(`salesforce:${key}:deployment`)),
+        completedIds.has(`salesforce:${key}:validation`) && completedIds.has(`salesforce:${key}:deployment`)
+        && reviewed.binding.permissionSets.every(name => completedIds.has(`salesforce:${key}:permission:${name}`))),
       'SALESFORCE_HOSTED_COMPLETION_EVIDENCE_REQUIRED');
       finished = true;
       return { passed: true, manifestHash, backwardCompatible: true, completedOperations,

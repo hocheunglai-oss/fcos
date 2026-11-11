@@ -7,7 +7,7 @@ import test from 'node:test';
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import { createSalesforceWorkflowState, updateSalesforceEnvironmentState, SALESFORCE_RELEASE_MODE } from '../scripts/salesforce-workflow-state.mjs';
 import { openSalesforcePromotionJournal, salesforcePromotionHash as hash } from '../scripts/lib/salesforce-promotion-journal.mjs';
-import { INVENTORY_BASELINE_MODE, REVIEWED_SALESFORCE_MODE, createReviewedSalesforcePlan, inventoryFromFiles, parseReviewedPackage, reviewedCheckpointInventory, runReviewedSalesforceRelease, assertReviewedJobReport, assertProductionAuthorization } from '../scripts/lib/salesforce-reviewed-release.mjs';
+import { INVENTORY_BASELINE_MODE, REVIEWED_SALESFORCE_MODE, createReviewedSalesforcePlan, inventoryFromFiles, matchesSalesforceCheckpoint, parseReviewedPackage, reviewedCheckpointInventory, runReviewedSalesforceRelease, assertReviewedJobReport, assertProductionAuthorization } from '../scripts/lib/salesforce-reviewed-release.mjs';
 import { assertReviewedInputsUnchanged, baselineGitInventory, cliSalesforceProvider, loadReviewedSalesforcePlan, reviewedSalesforceOptions } from '../scripts/deploy-salesforce-reviewed-manifest.mjs';
 import { reviewedDeveePublicationProof } from '../scripts/sync-salesforce-reviewed-repository.mjs';
 
@@ -736,6 +736,59 @@ test('hosted recovery refuses a fresh runner with unresolved durable provider hi
   } finally {
     f.cleanup();
   }
+});
+
+test('fresh hosted recovery reads completed permission assignments and preserves their original prestate', async () => {
+  const f = fixture({ bootstrap: true });
+  try {
+    f.assignments.add('qat:Reviewed');
+    await f.run('prepare');
+    const entries = ['devee', 'qat'].map(stage => {
+      const operation = 'permission:Reviewed';
+      const { name, orgId, prestate } = f.journal.state.stages[stage][operation];
+      delete f.journal.state.stages[stage][operation];
+      return { fingerprint: f.plan.fingerprint, stage, operation, outcome: 'resolved',
+        evidenceDigest: 'a'.repeat(64), permission: { name, orgId, prestate } };
+    });
+    f.externalJournal.readCheckpoints = async () => entries;
+    f.calls.length = 0;
+    f.checkpoints.length = 0;
+    await f.run('prepare');
+    assert.deepEqual(entries.map(({ stage, operation }) => {
+      const record = f.journal.state.stages[stage][operation];
+      return [record.prestate, record.addedByRelease];
+    }), [[false, true], [true, false]]);
+    for (const entry of entries) {
+      const record = f.journal.state.stages[entry.stage][entry.operation];
+      assert.equal(matchesSalesforceCheckpoint(record, entry), true);
+      assert.equal(matchesSalesforceCheckpoint(record, { ...entry, evidenceDigest: 'b'.repeat(64) }), false);
+      assert.equal(matchesSalesforceCheckpoint(record, { ...entry, permission: { ...entry.permission, prestate: !record.prestate } }), false);
+    }
+    f.reopen();
+    await f.run('prepare');
+    assert.ok(!f.calls.some(([action]) => ['bootstrap', 'permission-write', 'validate', 'deploy'].includes(action)));
+    assert.ok(!f.checkpoints.some(({ operation }) => operation === 'permission:Reviewed'));
+  } finally { f.cleanup(); }
+});
+
+test('hosted permission recovery fences ambiguous locators and provider drift', async () => {
+  const f = fixture({ bootstrap: true });
+  try {
+    const operation = 'permission:Reviewed';
+    const entry = { fingerprint: f.plan.fingerprint, stage: 'devee', operation,
+      outcome: 'resolved', evidenceDigest: 'a'.repeat(64),
+      permission: { name: 'Reviewed', orgId: f.plan.binding.orgIds.devee, prestate: false } };
+    for (const invalid of [{ ...entry, permission: undefined }, { ...entry, outcome: 'pending' },
+      { ...entry, permission: { ...entry.permission, orgId: f.plan.binding.orgIds.qat } }]) {
+      f.externalJournal.readCheckpoints = async () => [invalid];
+      await assert.rejects(f.run('prepare'), /reconcile the original checkpoint/);
+      assert.deepEqual(f.calls, []);
+    }
+    f.externalJournal.readCheckpoints = async () => [entry];
+    await assert.rejects(f.run('prepare'), /previously verified permission assignment drifted/);
+    assert.deepEqual(f.calls, [['identity', 'devee'], ['permission-read', 'devee', 'Reviewed']]);
+    assert.equal(f.journal.state.stages.devee?.[operation], undefined);
+  } finally { f.cleanup(); }
 });
 
 test('fresh hosted runner verifies and reuses a known durable validation job', async () => {
