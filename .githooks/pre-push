@@ -39,6 +39,23 @@ fi
 GIT_NO_REPLACE_OBJECTS=1
 export GIT_NO_REPLACE_OBJECTS
 
+verify_advertised_commits() {
+  git cat-file --batch-check='%(objectname) %(objecttype)' < "$publication_check/published" > "$publication_check/objects" 2>/dev/null || return 1
+  if awk 'NF != 2 || $2 != "commit" {bad=1} END {exit bad}' "$publication_check/objects"; then
+    return 0
+  fi
+  # A fresh release journal or main update may be advertised before this
+  # checkout has the objects. Fetch only those exact IDs, without updating refs.
+  awk 'NF != 2 || length($1) != 40 || $1 ~ /[^0-9a-f]/ || ($2 != "commit" && $2 != "missing") {bad=1}
+    $2 == "missing" {print $1; missing++} END {exit (bad || missing < 1 || missing > 8)}' \
+    "$publication_check/objects" > "$publication_check/missing" || return 1
+  set --
+  while IFS= read -r object; do set -- "$@" "$object"; done < "$publication_check/missing"
+  git fetch --no-tags --no-write-fetch-head --no-recurse-submodules --no-auto-maintenance "$remote_url" "$@" >/dev/null 2>&1 || return 1
+  git cat-file --batch-check='%(objectname) %(objecttype)' < "$publication_check/published" > "$publication_check/objects" 2>/dev/null \
+    && awk 'NF != 2 || $2 != "commit" {bad=1} END {exit bad}' "$publication_check/objects"
+}
+
 # Fail conservatively unless every revision can be checked against a fresh advertisement
 # from this exact push target. Local tracking refs are never publication evidence.
 salesforce_changed=1
@@ -58,8 +75,7 @@ EOF
       && [ -s "$publication_check/advertised" ] \
       && awk 'NF != 2 || length($1) != 40 || $1 ~ /[^0-9a-f]/ || $2 !~ /^refs\/heads\// {bad=1} END {exit bad}' "$publication_check/advertised"; then
       awk '{print $1}' "$publication_check/advertised" | sort -u > "$publication_check/published"
-      if git cat-file --batch-check='%(objectname) %(objecttype)' < "$publication_check/published" > "$publication_check/objects" 2>/dev/null \
-        && awk 'NF != 2 || $2 != "commit" {bad=1} END {exit bad}' "$publication_check/objects"; then
+      if verify_advertised_commits; then
         cat "$publication_check/tips" > "$publication_check/revisions"
         awk '{print "^" $1}' "$publication_check/published" >> "$publication_check/revisions"
         if git rev-list --stdin < "$publication_check/revisions" > "$publication_check/unpublished" 2>/dev/null; then
