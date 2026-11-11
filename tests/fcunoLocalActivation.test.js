@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { setManagedUserActivation } from '../api/_fcunoManagedActivation.js';
 import { federationDatabase, userId } from './fcunoDatabaseFixture.js';
 
 const source = await readFile(new URL('../api/functions/[name].js', import.meta.url), 'utf8');
@@ -46,6 +47,7 @@ function fixture({ profileClient = null, initialProfile = null, generalManager =
     },
   };
   const dependencies = {
+    setManagedUserActivation,
     appError: (message, status = 500, code) => Object.assign(new Error(message), { status, code }),
     listAccessModel: async () => ({ userTypes: [{ id: 'viewer' }, { id: 'administrator' }, { id: 'general_manager' }], typePermissions: {}, typeCapabilities: {} }),
     isAdministratorUserType: (type) => ['administrator', 'general_manager'].includes(type),
