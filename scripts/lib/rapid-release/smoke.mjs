@@ -293,14 +293,14 @@ async function verifyModuleDesktop({ page, origin, module }) {
 
 async function browserRun({ origin, manifest, credentials, normal, modules, env, browserFactory, diagnostic }) {
   async function checkModule(module, surface, check) {
-    if (!diagnostic) return check();
     const start = performance.now();
     let receipt, code;
     try { receipt = await check(); }
     catch (error) {
       code = /^SMOKE_[A-Z0-9_]+$/.test(error?.code || '') ? error.code : 'SMOKE_MODULE_SURFACE_FAILED';
+      if (!diagnostic) throw Object.assign(fail(code), { smokeModule: module, smokeSurface: surface });
     }
-    diagnostic.record({ module, surface, passed: Boolean(receipt), elapsedMs: Math.round(performance.now() - start), ...(code ? { code } : {}) });
+    diagnostic?.record({ module, surface, passed: Boolean(receipt), elapsedMs: Math.round(performance.now() - start), ...(code ? { code } : {}) });
     return receipt;
   }
   let phase = 'SETUP';
@@ -427,7 +427,12 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
     return { role: credentials.role, requiredModules: unique(modules), modules: unique(reads.map(read => read.module)), reads, desktopChecks, denialReceipts,
       ...gate.summary(), candidateSha: manifest.candidate.sha };
   } catch (error) {
-    throw fail(probeError?.code || (/^(?:SMOKE_|NORMAL_ROLE_)[A-Z0-9_]+$/.test(error?.code || '') ? error.code : `SMOKE_BROWSER_${phase}_FAILED`));
+    const cause = probeError || error;
+    const failure = fail(/^(?:SMOKE_|NORMAL_ROLE_)[A-Z0-9_]+$/.test(cause?.code || '') ? cause.code : `SMOKE_BROWSER_${phase}_FAILED`);
+    if (Object.hasOwn(moduleReaders, cause?.smokeModule) && ['read', 'desktop'].includes(cause.smokeSurface)) {
+      Object.assign(failure, { smokeModule: cause.smokeModule, smokeSurface: cause.smokeSurface });
+    }
+    throw failure;
   } finally {
     try { await context?.close(); } catch { cleanupFailed = true; }
     try { await browser?.close(); } catch { cleanupFailed = true; }

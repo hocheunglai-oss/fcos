@@ -112,3 +112,20 @@ test('learning requires proof, exact input preconditions, authority and a separa
   assert.equal(stored.recipes[0].proof.checkDigest, proof.checkDigest);
   await assert.rejects(recordVerifiedLearning({ registryFile: join(worktree, 'recipes.json'), controllerDirectory: worktree, recipe: known, incident, proof, authority: async () => {} }), { code: 'LEARNING_REQUIRES_SEPARATE_ISOLATED_WORKTREE' });
 }));
+
+test('smoke obstacles keep allowlisted attribution and distinct module signatures', async () => fixture(async ({ outputFile }) => {
+  const log = journal();
+  for (const smokeModule of ['review', 'hedge_desk', 'private-value']) {
+    await call({ outputFile, journal: log, error: { code: 'SMOKE_AUTHENTICATED_READ_FAILED', smokeModule, smokeSurface: 'read' } });
+  }
+  const obstacles = log.records.filter(({ payload }) => payload.event === 'obstacle.detected').map(({ payload }) => payload.data);
+  assert.equal(new Set(obstacles.map(item => item.signature)).size, 3);
+  assert.deepEqual(obstacles.map(item => item.inputs.smokeModule), ['review', 'hedge_desk', undefined]);
+  assert.ok(!JSON.stringify(obstacles).includes('private-value'));
+  const original = obstacles[0];
+  const resumed = await call({ outputFile, journal: log, error: {
+    code: original.code, smokeModule: original.inputs.smokeModule, smokeSurface: original.inputs.smokeSurface,
+  } });
+  assert.equal(resumed.incident.signature, original.signature);
+  assert.equal(log.records.filter(({ payload }) => payload.event === 'obstacle.detected').length, 3);
+}));
