@@ -102,7 +102,9 @@ jobs:
           fs.writeFileSync('handover-plan.json',JSON.stringify(plan));
           NODE
           node scripts/rapid-release-artifact.mjs artifact
-      - run: npx --no-install playwright install --with-deps chromium
+      - name: Install governed browser
+        run: bash scripts/rapid-release-browser.sh
+        timeout-minutes: 4
       - name: Freeze old controller, qualify stage, retire writers and finalize
         run: |
           node --input-type=module -e 'import fs from "node:fs";fs.writeFileSync(process.env.FCOS_HANDOVER_DATABASE_CA,process.env.HANDOVER_CA,{mode:0o600})'

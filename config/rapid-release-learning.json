@@ -4,6 +4,21 @@
   "recipes": [],
   "observations": [
     {
+      "id": "staging-browser-package-mirror-dns",
+      "cause": "FCOS run 43031230905 spent 424 seconds in Playwright system dependency installation and failed to resolve the Ubuntu archive before any stage provider operation.",
+      "correction": "Install the pinned Chromium build and verify a headless desktop render with the runner libraries. Install system dependencies once only when readiness fails. Qualify the same installer on the hosted runner before activation.",
+      "verification": {
+        "controllerTestsPassed": 224,
+        "localBrowserRender": "passed",
+        "localInstallerDecisionPathsPassed": 3,
+        "providerWrites": 0,
+        "regressionDigest": "63e8f63a49f8b1a0d528ee28d24093bc8d05dba42b9cf71cabb6ee2185c962cd"
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Bound the credential-free readiness step, reuse the original quality artifact for a failed pre-deployment staging job and keep authenticated smoke mandatory."
+    },
+    {
       "id": "canonical-cron-fixture-scope",
       "cause": "Direct reminder fixtures omitted the request scope now required on hosted workers.",
       "correction": "Model canonical cron request in fixtures; retain fail-closed unscoped worker.",

@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { load } from 'js-yaml';
 import { handoverDigest } from '../scripts/lib/rapid-release/handover.mjs';
 const workflow = load(readFileSync(new URL('../.github/workflows/fcos-rapid-release.yml', import.meta.url), 'utf8'));
+const handoverWorkflow = load(readFileSync(new URL('../.github/workflows/fcos-rapid-handover.yml', import.meta.url), 'utf8'));
 const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
 function configuredActivation() {
  const saved={enabled:process.env.FCOS_RAPID_RELEASE_ENABLED,pointer:process.env.FCOS_RAPID_RELEASE_HANDOVER_ID};
@@ -88,8 +89,21 @@ test('Company FX writer credentials are limited to the protected exact database 
 test('ordinary promotion retains staging browsers and installs go-live browsers only for prerequisite smoke', () => {
  const stage=workflow.jobs['stage-and-smoke'].steps.find(step=>step.name==='Install governed browser');
  const promotion=workflow.jobs['go-live'].steps.find(step=>step.name==='Install governed browser for conditional prerequisite smoke');
- assert.match(stage.run,/playwright install/);
+ const qualification=workflow.jobs.quality.steps.find(step=>step.name==='Qualify governed browser without deployment credentials');
+ const handover=Object.values(handoverWorkflow.jobs).flatMap(job=>job.steps).find(step=>step.name==='Install governed browser');
+ assert.equal(stage.run,'bash scripts/rapid-release-browser.sh');
+ assert.equal(stage['timeout-minutes'],4);
+ assert.equal(stage['working-directory'],'controller');
  assert.equal(stage.if,undefined);
- assert.match(promotion.run,/playwright install/);
+ assert.equal(promotion.run,stage.run);
+ assert.equal(promotion['timeout-minutes'],stage['timeout-minutes']);
+ assert.equal(promotion['working-directory'],stage['working-directory']);
  assert.equal(promotion.if,'fromJSON(inputs.manifest_json).selection.salesforce || fromJSON(inputs.manifest_json).selection.database');
+ assert.equal(qualification.if,"inputs.mode == 'qualify'");
+ assert.equal(qualification['working-directory'],stage['working-directory']);
+ for(const step of [stage,promotion,qualification,handover]){
+  assert.equal(step.run,stage.run);
+  assert.equal(step['timeout-minutes'],stage['timeout-minutes']);
+  assert.equal(step.env,undefined);
+ }
 });

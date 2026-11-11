@@ -59,6 +59,11 @@ jobs:
       - name: Install trusted tools without deployment credentials
         run: npm ci --ignore-scripts --no-audit --no-fund
         working-directory: controller
+      - name: Qualify governed browser without deployment credentials
+        if: inputs.mode == 'qualify'
+        run: bash scripts/rapid-release-browser.sh
+        timeout-minutes: 4
+        working-directory: controller
       - name: Install pinned Vercel CLI
         run: npm install --global vercel@54.20.1 --ignore-scripts --no-audit --no-fund
       - name: Validate frozen manifest and execute isolated quality/build
@@ -184,7 +189,8 @@ jobs:
       - name: Validate staged artifact before providing deployment credentials
         run: node controller/scripts/rapid-release-artifact.mjs artifact
       - name: Install governed browser
-        run: npx --no-install playwright install --with-deps chromium
+        run: bash scripts/rapid-release-browser.sh
+        timeout-minutes: 4
         working-directory: controller
       - name: Prepare pinned database TLS certificate
         env:
@@ -291,7 +297,9 @@ jobs:
           persist-credentials: false
       - name: Install governed browser for conditional prerequisite smoke
         if: fromJSON(inputs.manifest_json).selection.salesforce || fromJSON(inputs.manifest_json).selection.database
-        run: npx --no-install playwright install --with-deps chromium
+        run: bash scripts/rapid-release-browser.sh
+        timeout-minutes: 4
+        working-directory: controller
       - name: Reuse frozen release manifest
         env:
           FCOS_RAPID_MANIFEST: ${{ inputs.manifest_json }}
