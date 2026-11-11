@@ -95,7 +95,7 @@ test('FX migration makes rate history immutable, service-only, and settings-revi
   assert.match(sql, /unique \(pair, effective_at\)/i);
   assert.match(sql, /settings_revision integer null check \(settings_revision > 0\)/i);
   assert.match(sql, /company_fx_rate_history_immutable/i);
-  assert.match(sql, /revoke all on table public\.company_fx_rate_history from public, anon, authenticated/i);
+  assert.match(sql, /revoke all on table public\.company_fx_rate_history from public, anon, authenticated, service_role;/i);
   assert.match(sql, /grant select, insert on table public\.company_fx_rate_history to service_role/i);
   assert.match(sql, /company_fx_rate_history_capture_settings_update/i);
   const seed = sql.indexOf('Migration seed from current variable charge settings');

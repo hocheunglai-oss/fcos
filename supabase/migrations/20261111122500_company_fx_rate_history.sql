@@ -39,7 +39,8 @@ create unique index company_fx_rate_history_settings_revision_idx
   where settings_revision is not null;
 
 alter table public.company_fx_rate_history enable row level security;
-revoke all on table public.company_fx_rate_history from public, anon, authenticated;
+-- The hosted schema grants table privileges by default, including TRUNCATE.
+revoke all on table public.company_fx_rate_history from public, anon, authenticated, service_role;
 grant select, insert on table public.company_fx_rate_history to service_role;
 
 insert into public.company_fx_rate_history (
