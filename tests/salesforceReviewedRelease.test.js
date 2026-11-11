@@ -24,7 +24,7 @@ const files = { 'classes/Example.cls': Buffer.from('class Example {}\n'), 'class
 const validationRuleId = 'ValidationRule:Trade_Document_Line__c.Exactly_One_Document_Parent';
 const validationRulePath = 'objects/Trade_Document_Line__c/validationRules/Exactly_One_Document_Parent.validationRule-meta.xml';
 
-function fixture({ bootstrap = false, level = 'RunLocalTests', inventoryBaseline = false, validationRule = false, asymmetric = false } = {}) {
+function fixture({ bootstrap = false, level = 'RunLocalTests', inventoryBaseline = false, validationRule = false, asymmetric = false, nativeRaw = false } = {}) {
   const baselineInventory = inventoryFromFiles(files);
   const finalFiles = { ...files, 'classes/Example.cls': Buffer.from('class Example { String value; }\n') };
   const componentIds = ['ApexClass:Example'];
@@ -75,6 +75,16 @@ function fixture({ bootstrap = false, level = 'RunLocalTests', inventoryBaseline
     ...(bootstrap ? { bootstrap: { manifestPath: 'manifest/bootstrap.xml', sha256: hash(bootstrapBytes), components: bootstrapIds, permissionSets: ['Reviewed'] } } : {}),
   };
   if (inventoryBaseline) { review.baselineMode = INVENTORY_BASELINE_MODE; delete review.baselineWorkflowPath; baselineWorkflow = null; }
+  if (nativeRaw) {
+    const raw = source => inventoryFromFiles({ ...source, 'profiles/Example.profile-meta.xml': Buffer.from('<Profile/>\r\n') });
+    const before = raw(files), after = raw(finalFiles);
+    const descriptor = ({ files, inventoryHash }) => ({ files, inventoryHash });
+    review.nativeInventories = Object.fromEntries(policy.environments.map(({ key, orgId }) =>
+      [key, { orgId, baseline: descriptor(before), final: descriptor(after) }]));
+    const retrieval = { path: 'stable.xml', sha256: hash(packageXml(['Profile:Example'])),
+      apex: { path: 'apex.xml', sha256: hash(packageXml(componentIds)) } };
+    review.inventoryManifests = { [before.inventoryHash]: retrieval, [after.inventoryHash]: retrieval };
+  }
   let orgBaselineInventories;
   if (asymmetric) {
     const [field, permission] = bootstrapIds;
@@ -99,14 +109,22 @@ function fixture({ bootstrap = false, level = 'RunLocalTests', inventoryBaseline
     async verifyInventory(environment, expected) { calls.push(['inventory', environment.key, expected.expectedInventoryHash]);
       const actual = orgInventories.get(environment.key);
       return { orgId: environment.orgId, sourceTreeHash: actual.sourceTreeHash || null, inventoryHash: actual.inventoryHash, verifiedAt: fixedNow.toISOString(), evidenceSha256: 'a'.repeat(64),
-        verificationMethod: 'metadata-api-owned-tree-inventory', scope: 'force-app/main/default', observedInventory: structuredClone(actual.files),
+        verificationMethod: actual.nativeExport ? 'metadata-api-reviewed-native-byte-inventory' : 'metadata-api-owned-tree-inventory',
+        scope: 'force-app/main/default', observedInventory: structuredClone(actual.files),
+        ...(actual.nativeExport ? { nativeSourceTreeHash: 'd'.repeat(64), apexProjectionVerified: actual.verifyApexProjection === true } : {}),
         ...(actual.absentComponents ? { absentComponents: actual.absentComponents, absenceVerificationMethod: 'native-metadata-catalog',
           absenceEvidenceSha256: 'b'.repeat(64) } : {}),
         identity: { alias: environment.alias, orgId: environment.orgId, isSandbox: environment.isSandbox, username: environment.username || 'production@example.invalid', connectedStatus: 'Connected' } }; },
     async verifyIdentity(environment) { calls.push(['identity', environment.key]); },
     async report(environment, id) { calls.push(['report', environment.key, id]); return reports.get(id); },
     async validate(environment) { const id = jobId(++sequence); calls.push(['validate', environment.key, id]); reports.set(id, makeReport(id, true)); return { id }; },
-    async deploy(environment, validationId) { const id = jobId(++sequence); calls.push(['deploy', environment.key, validationId, id]); reports.set(id, makeReport(id, false)); orgInventories.set(environment.key, structuredClone(finalInventory)); return { id }; },
+    async deploy(environment, validationId) {
+      const id = jobId(++sequence);
+      calls.push(['deploy', environment.key, validationId, id]);
+      reports.set(id, makeReport(id, false));
+      orgInventories.set(environment.key, structuredClone(reviewedCheckpointInventory(plan, { deployment: { status: 'Succeeded' } }, environment.key)));
+      return { id };
+    },
     async bootstrap(environment) { const id = jobId(++sequence); calls.push(['bootstrap', environment.key, id]);
       const report = makeReport(id, false, { zero: true });
       report.details.componentSuccesses = bootstrapIds.map(id => { const [componentType, fullName] = id.split(':'); return { componentType, fullName, success: true }; });
@@ -663,6 +681,23 @@ test('incremental DEVEE publication rechecks actual baseline and delta jobs with
   } finally { f.cleanup(); }
 });
 
+test('native Apex checkpoints carry through DEVEE publication while the mirror remains bound to LF source', async () => {
+  const f = fixture({ inventoryBaseline: true, nativeRaw: true });
+  try {
+    assert.equal((await f.run('prepare')).productionValidation, 'Succeeded');
+    const input = { plan: f.plan, state: f.journal.state, policy, provider: f.provider, assertUnchanged: async () => {}, now };
+    const proof = await reviewedDeveePublicationProof(input);
+    assert.equal(proof.sourceTreeHash, f.plan.finalInventory.sourceTreeHash);
+    assert.equal(proof.nativeInventoryHash, f.plan.nativeInventories.devee.final.inventoryHash);
+    assert.notEqual(proof.nativeInventoryHash, f.plan.finalInventory.inventoryHash);
+    assert.equal(proof.nativeSourceTreeHash, 'd'.repeat(64));
+    assert.equal(proof.verifiedAt, fixedNow.toISOString());
+    const verify = f.provider.verifyInventory;
+    f.provider.verifyInventory = async (...args) => ({ ...await verify(...args), apexProjectionVerified: false });
+    await assert.rejects(reviewedDeveePublicationProof(input), /requires current native owned-tree file evidence/);
+  } finally { f.cleanup(); }
+});
+
 test('CLI has one explicit reviewed entrypoint and requires an ownership adapter', () => {
   assert.throws(() => reviewedSalesforceOptions([]), /Usage/);
   assert.throws(() => reviewedSalesforceOptions(['prepare', '--manifest', 'manifest/a.xml', '--review', 'review.json']), /--adapter is required/);
@@ -1147,4 +1182,91 @@ test('recovers missing completed preparation only for its exact saved Production
   } finally {
     f.cleanup();
   }
+});
+
+test('native byte checkpoints pin each org and permit only reviewed Apex changes', () => {
+  const f = fixture({ inventoryBaseline: true });
+  try {
+    const extra = 'lwc/Unrelated/Unrelated.js';
+    const reviewed = (apex, outside = 'retained\r\n') => inventoryFromFiles({
+      ...files, 'classes/Example.cls': Buffer.from(apex), [extra]: Buffer.from(outside),
+    });
+    const baseline = reviewed('class Example {}\r\n');
+    const final = reviewed('class Example { String value; }\r\n');
+    const descriptor = inv => ({ files: inv.files, inventoryHash: inv.inventoryHash });
+    const review = { ...f.inputs.review,
+      inventoryManifests: Object.fromEntries([baseline, final].map(inv =>
+        [inv.inventoryHash, { path: 'inventory.xml', sha256: hash(packageXml(['Profile:Example'])),
+          apex: { path: 'apex.xml', sha256: hash(packageXml(['ApexClass:Example'])) } }])),
+      nativeInventories: Object.fromEntries(policy.environments.map(({ key, orgId }) =>
+        [key, { orgId, baseline: descriptor(baseline), final: descriptor(final) }])) };
+    const inputs = { ...f.inputs, review };
+    const plan = createReviewedSalesforcePlan(inputs);
+    assert.equal(plan.binding.sourceTreeHash, f.plan.binding.sourceTreeHash);
+    assert.notEqual(plan.fingerprint, f.plan.fingerprint);
+    assert.equal(reviewedCheckpointInventory(plan, {}, 'devee').inventoryHash, baseline.inventoryHash);
+    const end = reviewedCheckpointInventory(plan, { deployment: { status: 'Succeeded' } }, 'qat');
+    assert.equal(end.inventoryHash, final.inventoryHash);
+    assert.equal(end.nativeExport, true);
+    assert.equal(end.verifyApexProjection, true);
+    assert.equal(end.sourceTreeHash, undefined);
+
+    const altered = structuredClone(review);
+    const drift = reviewed('class Example { String value; }\r\n', 'different\r\n');
+    altered.nativeInventories.qat.final = descriptor(drift);
+    altered.inventoryManifests[drift.inventoryHash] = review.inventoryManifests[final.inventoryHash];
+    assert.throws(() => createReviewedSalesforcePlan({ ...inputs, review: altered }), /outside the reviewed Apex package/);
+    altered.nativeInventories.qat.final = descriptor(final);
+    altered.inventoryManifests[final.inventoryHash].path = 'different.xml';
+    assert.throws(() => createReviewedSalesforcePlan({ ...inputs, review: altered }), /stable native retrieval manifest changes/);
+    altered.inventoryManifests[final.inventoryHash].path = 'inventory.xml';
+    altered.nativeInventories.qat.orgId = policy.environments[0].orgId;
+    assert.throws(() => createReviewedSalesforcePlan({ ...inputs, review: altered }), /wrong pinned org/);
+  } finally { f.cleanup(); }
+});
+
+test('native Apex readback checks exact raw bytes and equivalence to the reviewed LF source', () => {
+  const cwd = mkdtempSync(path.join(tmpdir(), 'fcos-native-apex-fixture-'));
+  try {
+    const environment = policy.environments[0];
+    const manifest = packageXml(['Profile:Example']);
+    const apex = packageXml(['ApexClass:Example']);
+    const sourceRoot = path.join(cwd, policy.publication.sourceRoot);
+    mkdirSync(path.join(sourceRoot, 'classes'), { recursive: true });
+    for (const [name, bytes] of Object.entries(files)) writeFileSync(path.join(sourceRoot, name), bytes);
+    writeFileSync(path.join(cwd, 'inventory.xml'), manifest);
+    writeFileSync(path.join(cwd, 'apex.xml'), apex);
+    writeFileSync(path.join(cwd, 'sfdx-project.json'), '{}');
+    let raw = { ...files, 'classes/Example.cls': Buffer.from('class Example {}\r\n'),
+      'profiles/Example.profile-meta.xml': Buffer.from('<Profile/>\r\n') };
+    const provider = cliSalesforceProvider({ cwd, run(_program, args, project) {
+      if (args[0] === 'org') return { id: environment.orgId, username: environment.username, connectedStatus: 'Connected' };
+      if (args[0] === 'data') return { records: [{ Id: environment.orgId, IsSandbox: environment.isSandbox }] };
+      const directory = args[args.indexOf('--output-dir') + 1];
+      for (const [name, bytes] of Object.entries(raw)) {
+        if (name.startsWith('classes/') !== (directory === 'apex')) continue;
+        const destination = path.join(project, directory, name);
+        mkdirSync(path.dirname(destination), { recursive: true });
+        writeFileSync(destination, bytes);
+      }
+      return { id: '09SHF000002gTFl2AM', status: 'Succeeded', done: true, success: true };
+    } });
+    const input = () => {
+      const inv = inventoryFromFiles(raw);
+      return { plan: { finalInventory: inventoryFromFiles(files), review: {
+        components: [{ id: 'ApexClass:Example', files: Object.keys(files) }],
+        inventoryManifests: { [inv.inventoryHash]: { path: 'inventory.xml', sha256: hash(manifest), apex: { path: 'apex.xml', sha256: hash(apex) } } },
+      } }, expectedInventoryHash: inv.inventoryHash, expectedSourceTreeHash: null, nativeExport: true, verifyApexProjection: true };
+    };
+    const exact = input();
+    const receipt = provider.verifyInventory(environment, exact);
+    assert.equal(receipt.verificationMethod, 'metadata-api-reviewed-native-byte-inventory');
+    assert.equal(receipt.apexProjectionVerified, true);
+    assert.equal(receipt.sourceTreeHash, null);
+    assert.equal(receipt.nativeSourceTreeHash, inventoryFromFiles(raw).sourceTreeHash);
+    assert.throws(() => provider.verifyInventory(environment, { ...exact, nativeExport: false }), /must use LF/);
+    raw = { ...raw, 'classes/Example.cls': Buffer.from('class Example { Integer unreviewed; }\r\n') };
+    assert.throws(() => provider.verifyInventory(environment, exact), /differs from the exact reviewed inventory/);
+    assert.throws(() => provider.verifyInventory(environment, input()), /Native Apex projection differs/);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
