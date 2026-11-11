@@ -53,15 +53,20 @@ function hostedReviewedPlan(cwd, plan) {
   return reviewed;
 }
 
-export async function verifyPreBootstrapStage({ manifest, staged, plan, salesforceCandidateDirectory: cwd, env }) {
-  requireCondition(manifest.selection.salesforce && !manifest.selection.database && cwd && plan.backwardCompatible === true
-    && plan.deferSchemaDependentSmoke === true, 'SALESFORCE_HOSTED_BOOTSTRAP_PLAN_REQUIRED');
-  const reviewed = hostedReviewedPlan(cwd, plan);
-  requireCondition(reviewed.review.bootstrap && /^[a-f0-9]{64}$/u.test(reviewed.binding.bootstrapSha256 || ''),
+function reviewedBootstrapFingerprint(reviewed, plan) {
+  requireCondition(plan.deferSchemaDependentSmoke === true && reviewed.review.bootstrap
+    && /^[a-f0-9]{64}$/u.test(reviewed.binding.bootstrapSha256 || ''),
     'SALESFORCE_HOSTED_BOOTSTRAP_PLAN_REQUIRED');
   const fingerprint = digest({ salesforceFingerprint: reviewed.fingerprint, bootstrapSha256: reviewed.binding.bootstrapSha256 });
   requireCondition(fingerprint === plan.bootstrapFingerprint, 'SALESFORCE_HOSTED_BOOTSTRAP_PLAN_MISMATCH');
-  return runPreBootstrapSmoke({ manifest, staged, env }, fingerprint);
+  return fingerprint;
+}
+
+export async function verifyPreBootstrapStage({ manifest, staged, plan, salesforceCandidateDirectory: cwd, env }) {
+  requireCondition(manifest.selection.salesforce && !manifest.selection.database && cwd && plan.backwardCompatible === true,
+    'SALESFORCE_HOSTED_BOOTSTRAP_PLAN_REQUIRED');
+  const reviewed = hostedReviewedPlan(cwd, plan);
+  return runPreBootstrapSmoke({ manifest, staged, env }, reviewedBootstrapFingerprint(reviewed, plan));
 }
 
 export async function applyReviewedPrerequisites({ manifest, approval, plan, salesforce, salesforceCandidateDirectory: cwd, env = process.env }) {
@@ -72,7 +77,8 @@ export async function applyReviewedPrerequisites({ manifest, approval, plan, sal
     && approval.nativeReviewVerified === true && approval.reviewer === targets().account,
   'SALESFORCE_HOSTED_REVIEW_REQUIRED');
   const reviewed = hostedReviewedPlan(cwd, plan);
-  requireCondition(!reviewed.review.bootstrap, 'SALESFORCE_HOSTED_BOOTSTRAP_UNQUALIFIED');
+  const schemaBootstrap = Boolean(reviewed.review.bootstrap);
+  if (schemaBootstrap || plan.deferSchemaDependentSmoke) reviewedBootstrapFingerprint(reviewed, plan);
 
   const directory = mkdtempSync(join(tmpdir(), 'fcos-salesforce-hosted-'));
   const credentials = mkdtempSync(join(tmpdir(), 'fcos-salesforce-credentials-'));
@@ -108,7 +114,8 @@ export async function applyReviewedPrerequisites({ manifest, approval, plan, sal
         authorization: mode === 'apply' ? authorization : null,
         assertUnchanged: () => assertReviewedInputsUnchanged(reviewed, { cwd, policy }) });
       const saved = await salesforce.journal.readCheckpoints();
-      if (!saved.some(item => item.stage === 'production' && item.operation === 'preparation' && item.preparation?.validationJobId)) {
+      if (!saved.some(item => item.stage === 'production' && item.operation === 'preparation'
+        && (item.preparation?.validationJobId || item.preparation?.status === 'awaiting-authorized-bootstrap'))) {
         requireCondition((await run('prepare')).mode === 'prepared', 'SALESFORCE_HOSTED_PREPARATION_REQUIRED');
       }
       requireCondition((await run('apply')).mode === 'applied', 'SALESFORCE_HOSTED_APPLY_REQUIRED');
@@ -120,6 +127,7 @@ export async function applyReviewedPrerequisites({ manifest, approval, plan, sal
       const completedIds = new Set(completedOperations.map(item => item.operationId));
       requireCondition(completedIds.has('salesforce:shared_mirror:publication') && policy.environments.every(({ key }) =>
         completedIds.has(`salesforce:${key}:validation`) && completedIds.has(`salesforce:${key}:deployment`)
+        && (!schemaBootstrap || completedIds.has(`salesforce:${key}:bootstrap`))
         && reviewed.binding.permissionSets.every(name => completedIds.has(`salesforce:${key}:permission:${name}`))),
       'SALESFORCE_HOSTED_COMPLETION_EVIDENCE_REQUIRED');
       finished = true;
