@@ -7,10 +7,11 @@ const migrationName = 'company_fx_rate_history';
 const readLedger = 'select name, idempotency_key, statements from supabase_migrations.schema_migrations where version=$1';
 const writeLedger = 'insert into supabase_migrations.schema_migrations(version,name,idempotency_key,statements) values($1,$2,$3,$4)';
 
-export async function applyCompanyFxTransaction({ db, migrationBytes, operationDigest, baselineSchemaDigest, assertWriteAuthorized }) {
+export async function applyCompanyFxTransaction({ db, migrationBytes, operationDigest, baselineSchemaDigest, assertConnection, assertWriteAuthorized }) {
   requireCondition(Buffer.isBuffer(migrationBytes) && digest(migrationBytes) === COMPANY_FX_MIGRATION_DIGEST,
     'COMPANY_FX_MIGRATION_BYTES_CHANGED');
-  requireCondition(isDigest(operationDigest) && isDigest(baselineSchemaDigest) && typeof assertWriteAuthorized === 'function',
+  requireCondition(isDigest(operationDigest) && isDigest(baselineSchemaDigest) && typeof assertConnection === 'function'
+    && typeof assertWriteAuthorized === 'function',
     'COMPANY_FX_OPERATION_BINDING_REQUIRED');
   const source = migrationBytes.toString('utf8');
   // The pinned file is also runnable standalone. This caller owns the transaction
@@ -20,6 +21,7 @@ export async function applyCompanyFxTransaction({ db, migrationBytes, operationD
   let commitSubmitted = false;
   await db.query('begin isolation level read committed');
   try {
+    await assertConnection();
     await db.query("set local lock_timeout = '5s'; set local statement_timeout = '45s'; set local idle_in_transaction_session_timeout = '60s'");
     // This conflicts with ledger inserts from other writers and waits for a prior
     // disconnected attempt before reading the original outcome.

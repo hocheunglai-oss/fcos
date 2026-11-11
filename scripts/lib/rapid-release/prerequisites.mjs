@@ -55,6 +55,23 @@ function protectedSalesforceContext({ manifest, approval, staged, journal, provi
   };
 }
 
+function protectedDatabaseContext({ manifest, approval, staged, journal, provider }) {
+  requireCondition(typeof provider?.verifyApproval === 'function' && typeof provider?.assertOwnership === 'function'
+    && typeof provider?.currentProduction === 'function', 'DATABASE_PROTECTED_OWNERSHIP_REQUIRED');
+  return {
+    async assertAuthorized() {
+      assertAuthorization(approval, manifest, staged);
+      await provider.verifyApproval(approval, { manifest, staged });
+      await journal.assertNoUnresolvedOtherRelease();
+      await provider.assertOwnership({ phase: 'prerequisites', manifest, manifestHash: digest(manifest) });
+      const current = await provider.currentProduction();
+      requireCondition(current.id === manifest.previous.deploymentId && current.sha === manifest.previous.sha,
+        'DATABASE_PRODUCTION_BASELINE_CHANGED');
+      assertAuthorization(approval, manifest, staged);
+    },
+  };
+}
+
 // Only adapters reviewed into the trusted controller may receive provider credentials.
 // Candidate files and provider responses are data, never executable repair adapters.
 function verifiedSalesforceCandidate({ manifest, root, env }) {
@@ -72,13 +89,16 @@ export async function runPrerequisites({ manifest, approval, staged, journal, pr
   assertAuthorization(approval, manifest, staged);
   const needed = manifest.selection.salesforce || manifest.selection.database;
   if (!needed) return { passed: true, manifestHash: digest(manifest), backwardCompatible: true, providerCalls: 0 };
-  const { adapter, root, descriptor } = await qualifiedAdapter({ manifest, controllerDirectory, load });
+  const { adapter, entry, root, descriptor } = await qualifiedAdapter({ manifest, controllerDirectory, load });
   requireCondition(typeof adapter.applyReviewedPrerequisites === 'function', 'PREREQUISITE_ADAPTER_CONTRACT_REQUIRED');
   const salesforceCandidateDirectory = verifiedSalesforceCandidate({ manifest, root, env });
   const salesforce = manifest.selection.salesforce
     ? protectedSalesforceContext({ manifest, approval, staged, journal, provider, plan: descriptor.plan })
     : undefined;
-  const result = await adapter.applyReviewedPrerequisites({ manifest, approval, journal, controllerDirectory: root, env, salesforce, salesforceCandidateDirectory,
+  const databaseWriter = entry.databaseWrite === true
+    ? protectedDatabaseContext({ manifest, approval, staged, journal, provider })
+    : undefined;
+  const result = await adapter.applyReviewedPrerequisites({ manifest, approval, journal, controllerDirectory: root, env, salesforce, salesforceCandidateDirectory, databaseWriter,
     plan: descriptor.plan, authorization: { manifestHash: digest(manifest), nativeReview: approval } });
   requireCondition(result?.passed === true && result.manifestHash === digest(manifest)
     && result.backwardCompatible === true && Array.isArray(result.completedOperations)
