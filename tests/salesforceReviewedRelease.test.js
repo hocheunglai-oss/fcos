@@ -7,7 +7,7 @@ import test from 'node:test';
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import { createSalesforceWorkflowState, updateSalesforceEnvironmentState, SALESFORCE_RELEASE_MODE } from '../scripts/salesforce-workflow-state.mjs';
 import { openSalesforcePromotionJournal, salesforcePromotionHash as hash } from '../scripts/lib/salesforce-promotion-journal.mjs';
-import { INVENTORY_BASELINE_MODE, REVIEWED_SALESFORCE_MODE, createReviewedSalesforcePlan, inventoryFromFiles, matchesSalesforceCheckpoint, parseReviewedPackage, reviewedCheckpointInventory, verifyReviewedOrgInventory, runReviewedSalesforceRelease, assertReviewedJobReport, assertProductionAuthorization } from '../scripts/lib/salesforce-reviewed-release.mjs';
+import { INVENTORY_BASELINE_MODE, REVIEWED_SALESFORCE_MODE, createReviewedSalesforcePlan, inventoryFromFiles, matchesSalesforceCheckpoint, parseReviewedPackage, projectedNativeInventoryHash, reviewedCheckpointInventory, verifyReviewedOrgInventory, runReviewedSalesforceRelease, assertReviewedJobReport, assertProductionAuthorization } from '../scripts/lib/salesforce-reviewed-release.mjs';
 import { assertReviewedInputsUnchanged, baselineGitInventory, cliSalesforceProvider, loadReviewedSalesforcePlan, reviewedSalesforceOptions } from '../scripts/deploy-salesforce-reviewed-manifest.mjs';
 import { reviewedDeveePublicationProof } from '../scripts/sync-salesforce-reviewed-repository.mjs';
 import { applyReviewedPrerequisites, verifyPreBootstrapStage } from '../scripts/lib/rapid-release/salesforce-reviewed-adapter.mjs';
@@ -1276,6 +1276,42 @@ test('mixed native checkpoints pin exact org paths and preserve untouched bytes 
     await assert.rejects(verifyReviewedOrgInventory({ provider, environment, plan, expected: checkpoint, now }), /requires current native/);
     projection = checkpoint.projectionPaths;
     await verifyReviewedOrgInventory({ provider, environment, plan, expected: checkpoint, now });
+
+    const afterBootstrap = [...field.files, ...permission.files].sort();
+    const afterFinal = f.inputs.review.components.flatMap(component => component.files).sort();
+    const projected = (entries, paths) => {
+      const pinned = inventoryFromFiles(Object.fromEntries(Object.entries(entries).filter(([name]) => !paths.includes(name)))).files;
+      return { projected: true, files: pinned, inventoryHash: projectedNativeInventoryHash(pinned, paths) };
+    };
+    const projectedBootstrap = projected(intermediate, afterBootstrap), projectedFinal = projected(final, afterFinal);
+    const projectedReview = { ...review,
+      nativeInventories: Object.fromEntries(policy.environments.map(({ key, orgId }) =>
+        [key, { orgId, baseline, bootstrap: projectedBootstrap, final: projectedFinal }])),
+      inventoryManifests: { ...review.inventoryManifests,
+        [projectedBootstrap.inventoryHash]: review.inventoryManifests[bootstrap.inventoryHash],
+        [projectedFinal.inventoryHash]: review.inventoryManifests[complete.inventoryHash] } };
+    const projectedPlan = createReviewedSalesforcePlan({ ...inputs, review: projectedReview });
+    const projectedCheckpoint = reviewedCheckpointInventory(projectedPlan, { bootstrap: { status: 'Succeeded' } }, environment.key);
+    assert.equal(projectedCheckpoint.projectedNativeInventory, true);
+    assert.deepEqual(projectedCheckpoint.files, baseline.files);
+    assert.notEqual(projectedCheckpoint.inventoryHash, bootstrap.inventoryHash);
+    const unprojectedFinal = structuredClone(projectedReview);
+    unprojectedFinal.nativeInventories.qat.final = complete;
+    assert.throws(() => createReviewedSalesforcePlan({ ...inputs, review: unprojectedFinal }), /matching post-write checkpoint modes/);
+    let observedFiles = bootstrap.files;
+    const projectedProvider = { async verifyInventory(org, request) {
+      assert.equal(request.projectedNativeInventory, true);
+      const receipt = await provider.verifyInventory(org, request);
+      return { ...receipt, inventoryHash: projectedCheckpoint.inventoryHash, observedInventory: observedFiles,
+        observedNativeInventoryHash: hash(observedFiles) };
+    } };
+    const checkProjected = () => verifyReviewedOrgInventory({ provider: projectedProvider, environment,
+      plan: projectedPlan, expected: projectedCheckpoint, now });
+    await checkProjected();
+    observedFiles = drift.files;
+    await assert.rejects(checkProjected(), /requires current native/);
+    observedFiles = missing.files;
+    await assert.rejects(checkProjected(), /requires current native/);
   } finally { f.cleanup(); }
 });
 
@@ -1316,8 +1352,25 @@ test('mixed native readback verifies reviewed definition content even when raw h
       } }, expectedInventoryHash: inventoryHash, nativeExport: true, nativeBootstrap: true, projectionPaths: [field] };
     };
     assert.deepEqual(provider.verifyInventory(environment, input()).verifiedProjectionPaths, [field]);
+    const exact = input();
+    const pinned = inventoryFromFiles(stable).files;
+    const projectedHash = projectedNativeInventoryHash(pinned, [field]);
+    const projected = { ...exact, projectedNativeInventory: true, expectedInventory: pinned, expectedInventoryHash: projectedHash };
+    projected.plan.review.inventoryManifests[projectedHash] = exact.plan.review.inventoryManifests[exact.expectedInventoryHash];
+    const projectedReceipt = provider.verifyInventory(environment, projected);
+    assert.equal(projectedReceipt.inventoryHash, projectedHash);
+    assert.equal(projectedReceipt.observedNativeInventoryHash, exact.expectedInventoryHash);
+    nativeField = Buffer.from('<CustomField><required>false</required></CustomField>\n');
+    const equivalentReceipt = provider.verifyInventory(environment, projected);
+    assert.notEqual(equivalentReceipt.observedNativeInventoryHash, projectedReceipt.observedNativeInventoryHash);
+    assert.equal(equivalentReceipt.inventoryHash, projectedHash);
+    const profile = Object.keys(stable)[0];
+    stable[profile] = Buffer.from('<Profile><custom>true</custom></Profile>');
+    assert.throws(() => provider.verifyInventory(environment, projected), /differs from the exact reviewed inventory/);
+    stable[profile] = Buffer.from('<Profile/>\r\n');
     nativeField = Buffer.from('<CustomField><required>true</required></CustomField>\r\n');
     assert.throws(() => provider.verifyInventory(environment, input()), /Native metadata projection differs/);
+    assert.throws(() => provider.verifyInventory(environment, projected), /Native metadata projection differs/);
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
 
