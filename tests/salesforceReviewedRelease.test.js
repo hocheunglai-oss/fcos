@@ -1348,6 +1348,24 @@ test('mixed native checkpoints pin exact org paths and preserve untouched bytes 
     assert.throws(() => createReviewedSalesforcePlan({ ...inputs, review: contextDrift }), /outside the reviewed transition/);
     contextDrift.nativeInventoryContext.qat = [field.files[0]];
     assert.throws(() => createReviewedSalesforcePlan({ ...inputs, review: contextDrift }), /exact unowned object XML paths/);
+
+    const installed = descriptor({ ...initial, [field.files[0]]: Buffer.from(fieldXml) });
+    const preinstalledReview = { ...projectedReview,
+      nativeInventories: { ...projectedReview.nativeInventories, devee: {
+        ...projectedReview.nativeInventories.devee, baseline: installed, presentComponents: [apex.id, field.id],
+      } },
+      inventoryManifests: { ...projectedReview.inventoryManifests, [installed.inventoryHash]: {
+        ...review.inventoryManifests[baseline.inventoryHash], metadata: { path: 'baseline-metadata.xml', sha256: hash(packageXml([apex.id, field.id])) },
+      } } };
+    const installedPlan = createReviewedSalesforcePlan({ ...inputs, review: preinstalledReview });
+    const initialCheckpoint = reviewedCheckpointInventory(installedPlan, {}, 'devee');
+    assert.deepEqual(initialCheckpoint.absentComponents, [permission.id, rule.id].sort());
+    assert.equal(initialCheckpoint.inventoryHash, installed.inventoryHash);
+    assert.ok(!Object.hasOwn(installedPlan.baselineInventory.files, field.files[0]));
+    preinstalledReview.nativeInventories.devee.presentComponents = [field.id];
+    assert.throws(() => createReviewedSalesforcePlan({ ...inputs, review: preinstalledReview }), /omits an already-owned reviewed component/);
+    preinstalledReview.nativeInventories.devee.presentComponents = [apex.id, 'CustomField:Demo__c.Unreviewed__c'];
+    assert.throws(() => createReviewedSalesforcePlan({ ...inputs, review: preinstalledReview }), /exact already-present reviewed components/);
   } finally { f.cleanup(); }
 });
 
@@ -1397,6 +1415,11 @@ test('mixed native readback verifies reviewed definition content even when raw h
     assert.deepEqual(receipt.verifiedProjectionPaths, [field]);
     assert.deepEqual(receipt.supplementalObjectShells, { [shellPath]: { sha256: hash(shell), size: shell.length } });
     assert.equal(receipt.observedInventory[shellPath].sha256, hash(stableObject));
+    stable[field] = nativeField;
+    assert.deepEqual(provider.verifyInventory(environment, input()).supplementalDuplicates, [field]);
+    stable[field] = Buffer.from(xml('<required>true</required>'));
+    assert.throws(() => provider.verifyInventory(environment, input()), /conflicting bytes for reviewed field/);
+    delete stable[field];
     extraMetadata = { [shellPath]: stableObject };
     assert.throws(() => provider.verifyInventory(environment, input()), /unexpected nonempty object descriptor/);
     extraMetadata = { 'objects/Unreviewed__c/Unreviewed__c.object-meta.xml': shell };

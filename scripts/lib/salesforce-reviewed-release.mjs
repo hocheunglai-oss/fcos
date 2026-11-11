@@ -46,25 +46,31 @@ export function inventoryFromFiles(files) {
   return { sourceTreeHash: hash(Buffer.concat(treeParts)), inventoryHash: hash(inventory), files: inventory };
 }
 
-export function readReviewedInventory(root, { nativeExport = false, supplementalRoot = null } = {}) {
+export function readReviewedInventory(root, { nativeExport = false, supplementalRoot = null, matchingSupplementalPaths = null } = {}) {
   const files = Object.create(null);
-  function visit(directory, base) {
+  const supplementalDuplicates = [];
+  function visit(directory, base, supplemental = false) {
     for (const name of readdirSync(directory).sort()) {
       const absolute = path.join(directory, name), stat = lstatSync(absolute);
       if (stat.isSymbolicLink()) throw new Error('Salesforce metadata cannot contain symlinks.');
-      if (stat.isDirectory()) visit(absolute, base);
+      if (stat.isDirectory()) visit(absolute, base, supplemental);
       else {
         const bytes = readFileSync(absolute);
         if (!nativeExport && bytes.includes(Buffer.from('\r\n'))) throw new Error('Salesforce source must use LF line endings.');
         const relative = path.relative(base, absolute).split(path.sep).join('/');
-        if (Object.hasOwn(files, relative)) throw new Error('Salesforce inventory contains an overlapping retrieval path.');
-        files[relative] = bytes;
+        if (Object.hasOwn(files, relative)) {
+          if (!nativeExport || !supplemental || !matchingSupplementalPaths?.has(relative)) {
+            throw new Error('Salesforce inventory contains an overlapping retrieval path.');
+          }
+          if (!files[relative].equals(bytes)) throw new Error(`Salesforce inventory has conflicting bytes for reviewed field: ${relative}`);
+          supplementalDuplicates.push(relative);
+        } else files[relative] = bytes;
       }
     }
   }
   visit(root, root);
-  if (supplementalRoot) visit(supplementalRoot, supplementalRoot);
-  return inventoryFromFiles(files);
+  if (supplementalRoot) visit(supplementalRoot, supplementalRoot, true);
+  return { ...inventoryFromFiles(files), ...(matchingSupplementalPaths ? { supplementalDuplicates: supplementalDuplicates.sort() } : {}) };
 }
 
 const NATIVE_CUSTOM_FIELD_FALSE_FLAGS = new Set(['caseSensitive', 'externalId', 'required', 'trackHistory', 'trackTrending', 'unique']);
@@ -171,7 +177,21 @@ function reviewedNativeBootstrapInventories(review, policy, baselineInventory, o
       failCoverage('Native bootstrap projections require an exact raw baseline and matching post-write checkpoint modes.');
     }
     const contextPaths = context?.[key] || [];
+    const presentAtBaseline = descriptor.presentComponents;
+    const reviewedIds = new Set(components.map(({ id }) => id));
+    if (presentAtBaseline !== undefined && (!Array.isArray(presentAtBaseline)
+      || new Set(presentAtBaseline).size !== presentAtBaseline.length
+      || presentAtBaseline.some(id => !reviewedIds.has(id)))) {
+      failCoverage(`Salesforce ${key} baseline must name exact already-present reviewed components.`);
+    }
     const baselinePaths = [...Object.keys(gitBaseline.files), ...contextPaths];
+    if (presentAtBaseline) {
+      const declared = new Set(presentAtBaseline);
+      if (components.some(({ id, files }) => !declared.has(id) && files.some(name => Object.hasOwn(gitBaseline.files, name)))) {
+        failCoverage(`Salesforce ${key} baseline omits an already-owned reviewed component.`);
+      }
+      baselinePaths.push(...components.filter(({ id }) => declared.has(id)).flatMap(({ files }) => files));
+    }
     const baseline = checkpoint(descriptor.baseline, baselinePaths, []);
     const bootstrap = checkpoint(descriptor.bootstrap, [...baselinePaths, ...bootstrapFiles], bootstrapFiles, projected);
     const final = checkpoint(descriptor.final, [...Object.keys(finalInventory.files), ...contextPaths], releaseFiles, projected);
