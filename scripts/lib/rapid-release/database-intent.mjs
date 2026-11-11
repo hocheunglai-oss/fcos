@@ -11,6 +11,7 @@ const STATE_KIND = 'fcos_native_database_auth_state', REF = 'refs/heads/codex/ra
 const ISSUER = 'https://api.supabase.com', ROLE = 'cli_login_postgres';
 export const DATABASE_SCOPE_EVIDENCE_ENVIRONMENT = 'fcos-database-auth-scope-evidence-v1';
 export const DATABASE_UNSUBMITTED_EVIDENCE_ENVIRONMENT = 'fcos-database-auth-unsubmitted-evidence-v1';
+export const DATABASE_EXPIRED_ISSUANCE_EVIDENCE_ENVIRONMENT = 'fcos-database-auth-expired-evidence-v1';
 // Metadata only. Include every CLI login, including a provider-created unique role.
 export const DATABASE_AUTH_RECONCILIATION_SQL = MANAGED_DATABASE_ROLE_SQL.replace("r.rolname='cli_login_postgres'", "starts_with(r.rolname,'cli_login') order by r.rolname");
 const exact = (value, keys) => value && Object.getPrototypeOf(value) === Object.prototype
@@ -54,7 +55,7 @@ function terminalReceiptValid(receipt, claim) {
   if (!receipt || receipt.intentId!==claim.intentId || receipt.requestDigest!==claim.requestDigest || receipt.issuer!==ISSUER
     || receipt.projectRef!==targets().supabaseProject || !integer(receipt.observedAtMs) || receipt.observedAtMs<claim.claimedAtMs) return false;
   if(receipt.outcome==='rejected') return exact(receipt,[...common,'httpStatus']) && [401,403].includes(receipt.httpStatus);
-  return ['denied_by_scope','unsubmitted'].includes(receipt.outcome)
+  return ['denied_by_scope','unsubmitted','issued_expired'].includes(receipt.outcome)
     && exact(receipt,[...common,'httpOutcome','evidenceDeploymentId','evidenceDigest','roleReadbackDigest','reconciliationSourceSha'])
     && receipt.httpOutcome==='unobserved' && integer(receipt.evidenceDeploymentId) && isDigest(receipt.evidenceDigest)
     && isDigest(receipt.roleReadbackDigest) && isSha(receipt.reconciliationSourceSha);
@@ -85,6 +86,21 @@ function unsubmittedObservationValid(p, claim, claimCommitSha, sourceSha, now) {
     && integer(p.roleExpiresAtMs) && p.roleExpiresAtMs<claim.claimedAtMs
     && Number.isFinite(observed) && new Date(observed).toISOString()===p.observedAt
     && observed>=claim.claimedAtMs && now>=observed && now-observed<=86400000;
+}
+function expiredIssuanceObservationValid(p, claim, claimCommitSha, sourceSha, now) {
+  const keys=['schemaVersion','kind','provenance','intentId','requestDigest','claimCommitSha','claimDigest',
+    'originalSourceSha','reconciliationSourceSha','projectRef','organizationId','observedAt','evidenceDigest',
+    'roleExpiresAtMs','intentDeploymentId','terminalRunId','dispatcherSha'];
+  const observed=Date.parse(p?.observedAt);
+  return exact(p,keys) && p.schemaVersion===1 && p.kind==='fcos_database_auth_expired_issuance_observation'
+    && p.provenance==='owner_attested_native_role_issuance' && claim.purpose==='rapid_controller_handover'
+    && p.intentId===claim.intentId && p.requestDigest===claim.requestDigest && p.claimCommitSha===claimCommitSha
+    && p.claimDigest===digest(claim) && p.originalSourceSha===claim.sourceSha && p.reconciliationSourceSha===sourceSha
+    && p.projectRef===claim.request.projectRef && p.organizationId===claim.request.organizationId && isDigest(p.evidenceDigest)
+    && integer(p.intentDeploymentId) && integer(p.terminalRunId) && isSha(p.dispatcherSha)
+    && integer(p.roleExpiresAtMs) && p.roleExpiresAtMs>claim.claimedAtMs
+    && p.roleExpiresAtMs-claim.claimedAtMs<=3660000 && Number.isFinite(observed)
+    && new Date(observed).toISOString()===p.observedAt && observed>=claim.claimedAtMs && now>=observed && now-observed<=86400000;
 }
 const terminalRecordFields = event => [...recordKeys,'receipt',...(event==='unsubmitted'?['claim']:[])];
 
@@ -140,7 +156,7 @@ export async function createDatabaseCredentialIntentStore({credential,directory,
       && integer(state.receivedDeploymentId) && isDigest(state.recordDigest) && receiptValid(state.receipt,pending)
       && row.parents.length===1 && row.parents[0]?.sha===state.claimCommitSha,'DATABASE_AUTH_NATIVE_STATE_INVALID');
     else check(exact(state,['schemaVersion','kind','phase','pending','claimCommitSha','receipt','recordDigest','record'])
-      && state.schemaVersion===1 && state.kind===STATE_KIND && ['rejected','denied_by_scope','unsubmitted'].includes(state.phase)
+      && state.schemaVersion===1 && state.kind===STATE_KIND && ['rejected','denied_by_scope','unsubmitted','issued_expired'].includes(state.phase)
       && terminalReceiptValid(state.receipt,pending) && state.phase===state.receipt.outcome && isSha(state.claimCommitSha)
       && exact(state.record,terminalRecordFields(state.phase))
       && (state.phase!=='unsubmitted'||same(state.record.claim,pending))
@@ -163,7 +179,7 @@ export async function createDatabaseCredentialIntentStore({credential,directory,
       if(p.event==='intent'){check(!intents.has(p.intentId) && pendingValid(p.claim,actor.id) && same(binding(p),binding(p.claim))
         && digest(p.claim)===p.claimDigest && preflightValid(p.preflight) && digest(p.preflight)===p.claim.preflightDigest
         && p.claim.claimedAtMs>=p.preflight.observedAtMs && p.claim.claimedAtMs-p.preflight.observedAtMs<=60000,'DATABASE_AUTH_JOURNAL_INVALID');intents.set(p.intentId,row);}
-      else{check(['received','rejected','denied_by_scope','unsubmitted'].includes(p.event) && !received.has(p.intentId) && !terminal.has(p.intentId),'DATABASE_AUTH_JOURNAL_INVALID');
+      else{check(['received','rejected','denied_by_scope','unsubmitted','issued_expired'].includes(p.event) && !received.has(p.intentId) && !terminal.has(p.intentId),'DATABASE_AUTH_JOURNAL_INVALID');
         (p.event==='received'?received:terminal).set(p.intentId,row);}}
     for(const [id,row]of [...received,...terminal]){const p=row.payload,original=intents.get(id)?.payload;
       if(p.event==='unsubmitted'){
@@ -225,22 +241,26 @@ export async function createDatabaseCredentialIntentStore({credential,directory,
   };
   const readRecoveryEvidence=async({id,phase,claim,claimCommitSha,recoverySha,at})=>{
     const evidence=await read(`${base}/deployments/${id}`);
-    const unsubmitted=phase==='unsubmitted';
-    const environment=unsubmitted?DATABASE_UNSUBMITTED_EVIDENCE_ENVIRONMENT:DATABASE_SCOPE_EVIDENCE_ENVIRONMENT;
-    const validate=unsubmitted?unsubmittedObservationValid:scopeObservationValid;
+    const evidenceContracts={
+      denied_by_scope:[DATABASE_SCOPE_EVIDENCE_ENVIRONMENT,scopeObservationValid,'DATABASE_AUTH_SCOPE_EVIDENCE_REQUIRED'],
+      unsubmitted:[DATABASE_UNSUBMITTED_EVIDENCE_ENVIRONMENT,unsubmittedObservationValid,'DATABASE_AUTH_UNSUBMITTED_EVIDENCE_REQUIRED'],
+      issued_expired:[DATABASE_EXPIRED_ISSUANCE_EVIDENCE_ENVIRONMENT,expiredIssuanceObservationValid,'DATABASE_AUTH_EXPIRED_EVIDENCE_REQUIRED'],
+    };
+    const [environment,validate,code]=evidenceContracts[phase];
     check(evidence?.id===id && evidence.creator?.id===actor.id && evidence.creator.login===targets().account
       && evidence.environment===environment && evidence.sha===recoverySha
       && validate(evidence.payload,claim,claimCommitSha,recoverySha,at),
-    unsubmitted?'DATABASE_AUTH_UNSUBMITTED_EVIDENCE_REQUIRED':'DATABASE_AUTH_SCOPE_EVIDENCE_REQUIRED');
+    code);
     return evidence.payload;
   };
   const assertTerminalEvidence=async state=>{
-    if(!['denied_by_scope','unsubmitted'].includes(state.phase))return;
+    if(!['denied_by_scope','unsubmitted','issued_expired'].includes(state.phase))return;
     const receipt=state.receipt;
     const payload=await readRecoveryEvidence({id:receipt.evidenceDeploymentId,phase:state.phase,claim:state.pending,
       claimCommitSha:state.claimCommitSha,recoverySha:receipt.reconciliationSourceSha,at:receipt.observedAtMs});
-    check(digest(payload)===receipt.evidenceDigest,state.phase==='unsubmitted'
-      ?'DATABASE_AUTH_UNSUBMITTED_EVIDENCE_REQUIRED':'DATABASE_AUTH_SCOPE_EVIDENCE_REQUIRED');
+    const code=state.phase==='issued_expired'?'DATABASE_AUTH_EXPIRED_EVIDENCE_REQUIRED':state.phase==='unsubmitted'
+      ?'DATABASE_AUTH_UNSUBMITTED_EVIDENCE_REQUIRED':'DATABASE_AUTH_SCOPE_EVIDENCE_REQUIRED';
+    check(digest(payload)===receipt.evidenceDigest,code);
   };
   const resumeTerminal=async(owned,history)=>{
     const state=owned.state,original=history.intents.get(state.pending.intentId);
@@ -357,6 +377,49 @@ export async function createDatabaseCredentialIntentStore({credential,directory,
         roleReadbackDigest:digest(rows),reconciliationSourceSha:source.sha};
       return closeTerminal(receipt,owned);
     },
+    async reconcileExpiredIssuance({intentId,evidenceDeploymentId}){
+      check(!current && idValid(intentId) && integer(evidenceDeploymentId),'DATABASE_AUTH_EXPIRED_RECONCILIATION_REFUSED');
+      const [owned,history]=await Promise.all([head(),journal()]);
+      const claim=owned?.state.phase==='pending'?owned.state:owned?.state.pending;
+      check(claim?.intentId===intentId && claim.purpose===purpose && !history.received.has(intentId),
+        'DATABASE_AUTH_ORIGINAL_OPERATION_UNCERTAIN');
+      if(owned.state.phase==='issued_expired'){
+        check(owned.state.receipt.evidenceDeploymentId===evidenceDeploymentId,'DATABASE_AUTH_EXPIRED_RECONCILIATION_REFUSED');
+        return resumeTerminal(owned,history);
+      }
+      check(owned.state.phase==='pending' && !history.terminal.has(intentId),'DATABASE_AUTH_ORIGINAL_OPERATION_UNCERTAIN');
+      const original=history.intents.get(intentId);
+      check(original && same(original.payload.claim,claim) && original.payload.claimCommitSha===owned.sha,
+        'DATABASE_AUTH_NATIVE_CLOSURE_INVALID');
+      const evidence=await readRecoveryEvidence({id:evidenceDeploymentId,phase:'issued_expired',claim,
+        claimCommitSha:owned.sha,recoverySha:source.sha,at:now()});
+      check(evidence.intentDeploymentId===original.id,'DATABASE_AUTH_EXPIRED_EVIDENCE_REQUIRED');
+      const [run,ancestry]=await Promise.all([
+        read(`${base}/actions/runs/${evidence.terminalRunId}`),
+        read(`${base}/compare/${claim.sourceSha}...${evidence.dispatcherSha}`),
+      ]);
+      check(run?.id===evidence.terminalRunId && run.repository?.full_name===targets().repository && run.actor?.id===actor.id
+        && run.workflow_id===409929247 && run.head_sha===evidence.dispatcherSha && run.head_branch==='main' && run.event==='workflow_dispatch'
+        && run.path?.split('@')[0]==='.github/workflows/fcos-rapid-handover.yml'
+        && run.status==='completed' && run.conclusion==='failure' && Date.parse(run.updated_at)>=claim.claimedAtMs
+        && ['ahead','identical'].includes(ancestry?.status) && ancestry.merge_base_commit?.sha===claim.sourceSha,
+        'DATABASE_AUTH_EXPIRED_NATIVE_RUN_REQUIRED');
+      const {rows,managed}=await readExpiredRoles(claim);
+      const prior=original.payload.preflight.role;
+      const stableRole=role=>Object.fromEntries(Object.entries(role).filter(([key])=>!['server_now_ms','role_valid_until_ms'].includes(key)));
+      const expiry=managed[0].role_valid_until_ms;
+      check(rows.length===1 && Number.isFinite(prior.role_valid_until_ms) && expiry>prior.role_valid_until_ms
+        && Math.floor(expiry)===evidence.roleExpiresAtMs && same(stableRole(managed[0]),stableRole(prior)),
+        'DATABASE_AUTH_EXPIRED_ROLE_READBACK_MISMATCH');
+      const [fresh,currentJournal]=await Promise.all([head(),journal()]);
+      check(fresh?.sha===owned.sha && currentJournal.intents.get(intentId)?.id===original.id
+        && !currentJournal.received.has(intentId) && !currentJournal.terminal.has(intentId),'DATABASE_AUTH_ORIGINAL_OPERATION_UNCERTAIN');
+      current={...binding(claim),claim,claimCommitSha:owned.sha,claimDigest:digest(claim),intentDeployment:original};
+      const receipt={intentId,requestDigest:claim.requestDigest,outcome:'issued_expired',issuer:ISSUER,projectRef:targets().supabaseProject,
+        observedAtMs:now(),httpOutcome:'unobserved',evidenceDeploymentId,evidenceDigest:digest(evidence),
+        roleReadbackDigest:digest(rows),reconciliationSourceSha:source.sha};
+      return closeTerminal(receipt,owned);
+    },
     async complete(receipt){check(current?.claim && receiptValid(receipt,current.claim),'DATABASE_AUTH_RECEIPT_REFUSED');
       const owned=await head();check(owned?.sha===current.claimCommitSha && same(owned.state,current.claim),'DATABASE_AUTH_ORIGINAL_OPERATION_UNCERTAIN');
       const row=current.receivedDeployment || await received(receipt);
@@ -386,4 +449,10 @@ export async function reconcileDatabaseCredentialDeniedByScope({intentId,evidenc
 /** Closes only an owner-attested terminal claim that never published an issuer intent. */
 export async function reconcileUnsubmittedDatabaseCredential({intentId,evidenceDeploymentId,...context}) {
   return (await createDatabaseCredentialIntentStore(context)).reconcileUnsubmitted({intentId,evidenceDeploymentId});
+}
+
+
+/** Reconciles a proved expired issuance while preserving the unobserved HTTP outcome. */
+export async function reconcileExpiredDatabaseCredentialIssuance({intentId,evidenceDeploymentId,...context}) {
+  return (await createDatabaseCredentialIntentStore(context)).reconcileExpiredIssuance({intentId,evidenceDeploymentId});
 }
