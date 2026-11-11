@@ -27,26 +27,32 @@ export async function applyCompanyFxTransaction({ db, migrationBytes, operationD
     // disconnected attempt before reading the original outcome.
     await db.query('lock table supabase_migrations.schema_migrations in share row exclusive mode');
     const existing = (await db.query(readLedger, [migrationVersion])).rows[0];
-    const baseline = existing ? null : (await db.query(SCHEMA_FINGERPRINT_SQL)).rows[0]?.digest;
+    const originalSearchPath = (await db.query('show search_path')).rows[0]?.search_path;
+    const initialSchema = (await db.query(SCHEMA_FINGERPRINT_SQL)).rows[0]?.digest;
+    requireCondition(typeof originalSearchPath === 'string' && isDigest(initialSchema), 'COMPANY_FX_SCHEMA_FINGERPRINT_REQUIRED');
     const before = classifyCompanyFxCatalog((await readCompanyFxCatalog(db)).catalog);
-    let state;
+    let state, schemaDigest;
     if (existing) {
-      requireCondition(existing.name === migrationName && existing.idempotency_key === operationDigest
+      requireCondition(existing.name === migrationName && existing.idempotency_key === `${operationDigest}:${initialSchema}`
         && Array.isArray(existing.statements) && existing.statements.length === 1 && existing.statements[0] === sql
         && before.state === 'migrated', 'COMPANY_FX_ORIGINAL_OPERATION_MISMATCH');
       state = before;
+      schemaDigest = initialSchema;
     } else {
-      requireCondition(baseline === baselineSchemaDigest && before.state === 'baseline', 'COMPANY_FX_BASELINE_SCHEMA_CHANGED');
+      requireCondition(initialSchema === baselineSchemaDigest && before.state === 'baseline', 'COMPANY_FX_BASELINE_SCHEMA_CHANGED');
       await assertWriteAuthorized();
       await db.query(sql);
       state = classifyCompanyFxCatalog((await readCompanyFxCatalog(db)).catalog);
       requireCondition(state.state === 'migrated', 'COMPANY_FX_MIGRATED_SCHEMA_REQUIRED');
-      await db.query(writeLedger, [migrationVersion, migrationName, operationDigest, [sql]]);
+      await db.query("select set_config('search_path',$1,true)", [originalSearchPath]);
+      schemaDigest = (await db.query(SCHEMA_FINGERPRINT_SQL)).rows[0]?.digest;
+      requireCondition(isDigest(schemaDigest) && schemaDigest !== initialSchema, 'COMPANY_FX_SCHEMA_FINGERPRINT_REQUIRED');
+      await db.query(writeLedger, [migrationVersion, migrationName, `${operationDigest}:${schemaDigest}`, [sql]]);
     }
     commitSubmitted = true;
     const committed = await db.query('commit');
     requireCondition(committed.command === 'COMMIT', 'COMPANY_FX_COMMIT_ACKNOWLEDGEMENT_INVALID');
-    return { state: existing ? 'recovered' : 'applied', evidenceDigest: digest({ operationDigest,
+    return { state: existing ? 'recovered' : 'applied', schemaDigest, evidenceDigest: digest({ operationDigest,
       path: COMPANY_FX_MIGRATION_PATH, migrationDigest: COMPANY_FX_MIGRATION_DIGEST, catalogDigest: state.evidenceDigest }) };
   } catch (error) {
     if (commitSubmitted) {

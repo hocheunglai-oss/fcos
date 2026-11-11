@@ -110,8 +110,12 @@ async function rapidReleaseCommand(argv, env, runtime) {
   const compatibility = await nativeCompatibilityReader({ provider, env })({ manifest });
   requireCondition(compatibility.currentDeploymentId === manifest.previous.deploymentId || staged?.id === compatibility.currentDeploymentId,
     'PRODUCTION_BASELINE_CHANGED');
+  const priorPrerequisite = phaseResult(records, 'prerequisites')?.result;
+  const postSchema = priorPrerequisite?.database?.schemaDigest;
+  const hasPrerequisiteIntent = records.some(record => ['prerequisites.intent', 'prerequisites.passed'].includes(record.payload.event));
   requireCondition(compatibility.configurationDigest === manifest.previous.configurationDigest
-    && (records.some(record => ['prerequisites.intent','prerequisites.passed'].includes(record.payload.event)) || compatibility.schemaDigest === manifest.previous.schemaDigest), 'BASELINE_NATIVE_FINGERPRINT_CHANGED');
+    && (postSchema ? compatibility.schemaDigest === postSchema
+      : hasPrerequisiteIntent || compatibility.schemaDigest === manifest.previous.schemaDigest), 'BASELINE_NATIVE_FINGERPRINT_CHANGED');
   let result;
   if (command === 'stage' || command === 'resume' && !staged) {
     requireCondition(opts.build && opts['artifact-directory'], 'STAGE_ARTIFACT_REQUIRED');

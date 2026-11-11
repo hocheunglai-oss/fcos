@@ -58,7 +58,7 @@ export async function applyReviewedPrerequisites({ manifest, approval, journal, 
       } });
     return { passed: true, manifestHash, backwardCompatible: true,
       completedOperations: [{ operationId, evidenceDigest: result.evidenceDigest, verified: true, intentRecorded: true }],
-      database: { destructiveRollback: false, readbackVerified: true } };
+      database: { destructiveRollback: false, readbackVerified: true, schemaDigest: result.schemaDigest } };
   } finally {
     await db.end();
   }

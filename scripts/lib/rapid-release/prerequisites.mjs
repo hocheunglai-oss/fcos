@@ -106,7 +106,8 @@ export async function runPrerequisites({ manifest, approval, staged, journal, pr
     && (!manifest.selection.salesforce || result.salesforce?.order === 'devee-mirror-qat-production'
       && result.salesforce.mirrorVerified === true && result.salesforce.sourceTreeHash === descriptor.plan.salesforceSourceTreeHash
       && result.salesforce.fingerprint === descriptor.plan.salesforceFingerprint)
-    && (!manifest.selection.database || result.database?.destructiveRollback === false && result.database.readbackVerified === true), 'PREREQUISITE_VERIFICATION_REQUIRED');
+    && (!manifest.selection.database || result.database?.destructiveRollback === false && result.database.readbackVerified === true)
+    && (!databaseWriter || isDigest(result.database?.schemaDigest)), 'PREREQUISITE_VERIFICATION_REQUIRED');
   // Private adapter evidence stays in its private store; publish only typed checkpoint metadata.
   const operations = result.completedOperations.map(operation => {
     requireCondition(/^[A-Za-z0-9][A-Za-z0-9_.:-]{1,119}$/.test(operation.operationId || '')
@@ -115,7 +116,8 @@ export async function runPrerequisites({ manifest, approval, staged, journal, pr
   });
   return { passed: true, manifestHash: digest(manifest), backwardCompatible: true, completedOperations: operations,
     ...(result.salesforce ? { salesforce: { order: result.salesforce.order, mirrorVerified: true, sourceTreeHash: result.salesforce.sourceTreeHash } } : {}),
-    ...(result.database ? { database: { destructiveRollback: false, readbackVerified: true } } : {}) };
+    ...(result.database ? { database: { destructiveRollback: false, readbackVerified: true,
+      ...(databaseWriter ? { schemaDigest: result.database.schemaDigest } : {}) } } : {}) };
 }
 
 // An explicit, qualified schema adapter may defer only the schema-dependent
