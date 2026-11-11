@@ -29,6 +29,12 @@ if [ "$1" = ls-remote ]; then
   if [ -n "$FCOS_TEST_ADVERTISEMENT" ]; then cat "$FCOS_TEST_ADVERTISEMENT"; exit 0; fi
   exec "$FCOS_TEST_REAL_GIT" ls-remote --heads "$FCOS_TEST_REMOTE"
 fi
+if [ "$1" = fetch ]; then
+  [ "$2" = --no-tags ] && [ "$3" = --no-write-fetch-head ] && [ "$4" = --no-recurse-submodules ] \
+    && [ "$5" = --no-auto-maintenance ] && [ "$6" = "https://github.com/hocheunglai-oss/fcos.git" ] || exit 128
+  shift 6
+  exec "$FCOS_TEST_REAL_GIT" fetch --no-tags --no-write-fetch-head --no-recurse-submodules --no-auto-maintenance "$FCOS_TEST_REMOTE" "$@"
+fi
 exec "$FCOS_TEST_REAL_GIT" "$@"
 `,
     gh: `#!/bin/sh
@@ -76,6 +82,29 @@ test('new Salesforce commit requires mirror even when a later commit reverts its
   const result = f.run(); assert.equal(result.status, 1); assert.equal(result.mirrorCalls, 1); assert.match(result.stderr, /byte-for-byte/);
 });
 
+test('pre-push fetches an advertised commit absent locally without updating refs', t => {
+  const f = fixture(t);
+  const remoteGit = (...args) => {
+    const result = spawnSync(realGit, ['--git-dir', f.remote, '-c', 'user.name=Offline Fixture',
+      '-c', 'user.email=fixture@example.invalid', ...args], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  const remoteOnly = remoteGit('commit-tree', f.base + '^{tree}', '-p', f.base, '-m', 'remote-only journal update');
+  remoteGit('update-ref', 'refs/heads/rapid-journal', remoteOnly);
+  assert.equal(f.git(['cat-file', '--batch-check', '--batch-all-objects']).includes(remoteOnly), false);
+  f.commit('src/frontend.js', 'export const desktop = true;\n');
+  const refsBefore = f.git(['show-ref']);
+  const result = f.run();
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.mirrorCalls, 0);
+  assert.equal(result.gitCalls.filter(command => command === 'fetch').length, 1);
+  assert.equal(f.git(['cat-file', '-t', remoteOnly]), 'commit');
+  assert.equal(f.git(['show-ref']), refsBefore);
+  assert.equal(existsSync(path.join(f.repo, '.git', 'FETCH_HEAD')), false);
+  t.diagnostic(`recovered in ${Math.round(result.elapsedMs)} ms with one exact Git fetch and zero mirror calls`);
+});
+
 test('unadvertised local refs cannot attest an unpublished Salesforce commit', t => {
   const f = fixture(t), tip = f.commit('force-app/main/default/classes/Example.cls', 'class Example { String spoofed; }\n');
   f.git(['update-ref', 'refs/remotes/origin/already-published', tip]);
@@ -106,6 +135,13 @@ test('remote failure or unknown advertised object conservatively requires mirror
   const unavailable = f.run({ remoteFailure: true }); assert.equal(unavailable.status, 1); assert.equal(unavailable.mirrorCalls, 1);
   const advertisement = path.join(f.root, 'unknown-advertisement'); writeFileSync(advertisement, `${'f'.repeat(40)}\trefs/heads/unavailable\n`);
   const unknown = f.run({ advertisement }); assert.equal(unknown.status, 1); assert.equal(unknown.mirrorCalls, 1);
+  assert.equal(unknown.gitCalls.filter(command => command === 'fetch').length, 1);
+  writeFileSync(advertisement, Array.from({ length: 9 }, (_, index) =>
+    `${'f'.repeat(39)}${index}\trefs/heads/unavailable-${index}\n`).join(''));
+  const excessive = f.run({ advertisement });
+  assert.equal(excessive.status, 1);
+  assert.equal(excessive.mirrorCalls, 1);
+  assert.equal(excessive.gitCalls.includes('fetch'), false);
 });
 
 test('wrong isolated account blocks before remote reads or mirror calls', t => {
