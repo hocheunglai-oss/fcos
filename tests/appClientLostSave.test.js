@@ -15,6 +15,40 @@ const { appClient } = await import(`data:text/javascript;base64,${Buffer.from(tr
 const response = (json) => ({ ok: true, status: 200, headers: new Headers({ 'content-type': 'application/json', 'x-fcos-request-id': 'fixture-request', 'x-fcos-handler-mutation': '0' }), json });
 test.beforeEach(() => { setClientSessionOwner('fixture-user'); appClient.functions.clearCache(); });
 test.after(() => { setClientSessionOwner(null); delete globalThis.__responseAuth; });
+
+test('malformed successful JSON retains request identity and never populates the read cache', async () => {
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return response(async () => { throw new SyntaxError('private malformed body'); });
+  };
+  const result = await appClient.functions.invoke('snapshot', {}, { cache: true });
+  assert.equal(result.data.code, 'FCOS_RESPONSE_INVALID');
+  assert.match(result.data.error, /saved result/i);
+  assert.doesNotMatch(result.data.error, /private malformed body/);
+  assert.equal(result.meta.requestId, 'fixture-request');
+  assert.equal(result.meta.cacheStatus, 'UNAVAILABLE');
+  await appClient.functions.invoke('snapshot', {}, { cache: true });
+  assert.equal(calls, 2);
+});
+
+test('an aborted mutation response stays cancelled and invalidates the previous snapshot', async () => {
+  let saved = 'old';
+  globalThis.fetch = async (url) => {
+    if (url.endsWith('/snapshot')) return response(async () => ({ saved }));
+    saved = 'new';
+    const result = response(async () => { throw new DOMException('body aborted', 'AbortError'); });
+    result.headers.set('x-fcos-handler-mutation', '1');
+    return result;
+  };
+  assert.equal((await appClient.functions.invoke('snapshot', {}, { cache: true })).data.saved, 'old');
+  const result = await appClient.functions.invoke('save');
+  assert.equal(result.data.cancelled, true);
+  assert.equal(result.meta.cacheStatus, 'CANCELLED');
+  assert.equal(result.meta.requestId, 'fixture-request');
+  assert.equal((await appClient.functions.invoke('snapshot', {}, { cache: true })).data.saved, 'new');
+});
+
 test('lost save responses invalidate snapshots even when fetch itself fails or aborts', async () => {
   const previousWindow = globalThis.window, previousEvent = globalThis.CustomEvent;
   globalThis.window = { dispatchEvent: () => {} };
