@@ -16,7 +16,6 @@ import {
   sanitizeConnectionProviderReport,
 } from '../src/lib/connectionChecklist.js';
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
-import { probeSupabaseProjectAccess, shouldProbeScopedSupabaseProject } from './lib/supabase-project-access.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const LOCAL_STATE_ROOT = path.join(REPO_ROOT, CONNECTION_LOCAL_STATE_DIRECTORY);
@@ -71,13 +70,14 @@ function commonGitDirectory(repoRoot = REPO_ROOT) {
   return directory ? path.resolve(repoRoot, directory) : '';
 }
 
-export function githubConfigDirectory({ repoRoot = REPO_ROOT, commonDirectory = commonGitDirectory(repoRoot), configPath = target('github').configPath } = {}) {
-  // Git local config is shared by linked worktrees. Keep its credential helper
-  // pinned to the primary checkout's isolated GH store, rather than rewriting
-  // the helper to whichever worktree most recently ran the verifier.
-  return commonDirectory
-    ? path.join(path.dirname(commonDirectory), configPath)
-    : path.join(repoRoot, configPath);
+export function githubConfigDirectory({ repoRoot = REPO_ROOT, commonDirectory = commonGitDirectory(repoRoot),
+  configPath = target('github').configPath } = {}) {
+  const mirrorConfigPath = FCOS_CONNECTION_POLICY.providers.find(({ id }) => id === 'salesforce').publication.configPath;
+  if (![target('github').configPath, mirrorConfigPath].includes(configPath)) {
+    throw new Error('GitHub configuration must use a pinned FCOS profile.');
+  }
+  // Keep both isolated profiles anchored in the primary checkout of linked worktrees.
+  return path.join(commonDirectory ? path.dirname(commonDirectory) : repoRoot, configPath);
 }
 
 function ensureStateDirectories() {
@@ -650,32 +650,21 @@ async function verifySupabase(version, metadata, startedAt) {
   if (!version.available) return finalizeReport(report, startedAt);
   const runtime = providerRuntime('supabase');
   if (!runtime.credentialAvailable) return finalizeReport({ ...report, identityStatus: 'authentication_blocked' }, startedAt);
-  const expectedRef = identifier('supabase', 'Project ref');
-  const expectedName = identifier('supabase', 'Project name');
-  const exactLink = readSupabasePin() === expectedRef;
   const projects = await runCaptured('supabase', ['projects', 'list', '--output-format', 'json']);
-  let identityStatus;
-  if (projects.ok) {
-    const parsed = safeJson(projects.stdout);
-    const availableProjects = Array.isArray(parsed) ? parsed : parsed?.projects;
-    const project = Array.isArray(availableProjects)
-      ? availableProjects.find((entry) => entry.id === expectedRef || entry.ref === expectedRef)
-      : null;
-    const exact = project?.name === expectedName
-      && (!project.id || project.id === expectedRef) && (!project.ref || project.ref === expectedRef);
-    identityStatus = exact ? 'verified' : 'mismatch';
-  } else if (shouldProbeScopedSupabaseProject(projects, runtime.env.SUPABASE_ACCESS_TOKEN)) {
-    const probe = await probeSupabaseProjectAccess({ accessToken: runtime.env.SUPABASE_ACCESS_TOKEN });
-    identityStatus = probe.identityStatus;
-  } else {
-    identityStatus = classifyFailedIdentity(projects);
-  }
-  const exactIdentity = identityStatus === 'verified';
+  if (!projects.ok) return finalizeReport({ ...report, identityStatus: classifyFailedIdentity(projects) }, startedAt);
+  const parsed = safeJson(projects.stdout);
+  const availableProjects = Array.isArray(parsed) ? parsed : parsed?.projects;
+  const expectedRef = identifier('supabase', 'Project ref');
+  const project = Array.isArray(availableProjects)
+    ? availableProjects.find((entry) => entry.id === expectedRef || entry.ref === expectedRef)
+    : null;
+  const exactIdentity = project?.name === identifier('supabase', 'Project name');
+  const exactLink = readSupabasePin() === expectedRef;
   const permissions = exactIdentity ? ['project.read'] : [];
   if (exactLink) permissions.push('project.link');
   return finalizeReport({
     ...report,
-    identityStatus,
+    identityStatus: exactIdentity ? 'verified' : 'mismatch',
     identityVerified: exactIdentity,
     targetPin: exactLink ? 'verified' : 'missing',
     permissionStatus: permissions.length === target('supabase').requiredPermissions.length ? 'verified' : 'missing',

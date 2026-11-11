@@ -32,7 +32,9 @@ export function validateChain(records, manifestHash, releaseId) {
   return chain;
 }
 export class DeploymentJournal {
-  constructor({ github, releaseId, manifestHash, actorIds }) { Object.assign(this, { github, releaseId, manifestHash, actorIds }); }
+  constructor({ github, releaseId, manifestHash, actorIds, otherReleaseActorIds = actorIds }) {
+    Object.assign(this, { github, releaseId, manifestHash, actorIds, otherReleaseActorIds });
+  }
   async read() {
     const records = await this.github.pages(`/repos/${targets().repository}/deployments?environment=fcos-release-journal-v1&sha=${this.github.candidateSha}&per_page=100`);
     const own = records.filter(record => record.payload?.releaseId === this.releaseId);
@@ -58,13 +60,82 @@ export class DeploymentJournal {
     const written = (await this.read()).filter(record => record.payload.recordHash === payload.recordHash);
     requireCondition(written.length === 1, 'JOURNAL_WRITE_UNCERTAIN'); return written[0];
   }
+  async checkpoint({ fingerprint, stage, operation, record }) {
+    requireCondition(/^[a-f0-9]{64}$/.test(fingerprint || '')
+      && ['devee', 'shared_mirror', 'qat', 'production'].includes(stage)
+      && /^(?:validation|deployment|bootstrap|publication|inventory-checkpoint|preparation|restoration-checkpoint|permission:[A-Za-z][A-Za-z0-9_]*)$/.test(operation || '')
+      && record && typeof record === 'object' && !Array.isArray(record), 'SALESFORCE_CHECKPOINT_INVALID');
+    const providerOperation = /^(?:validation|deployment|bootstrap|publication|permission:)/.test(operation);
+    const status = record.status;
+    const outcome = !providerOperation || !status || ['observed', 'ready', 'awaiting-authorized-bootstrap', 'review-required'].includes(status)
+      ? 'evidence'
+      : status === 'Succeeded' || (operation === 'validation' && ['Failed', 'Canceled', 'Expired'].includes(status))
+        ? 'resolved'
+        : 'pending';
+    const data = { fingerprint, stage, operation, outcome, evidenceDigest: digest(record) };
+    if (['validation', 'deployment', 'bootstrap'].includes(operation) && Object.hasOwn(record, 'jobId')) {
+      const validJob = value => typeof value === 'string' && /^0Af[A-Za-z0-9]{12}(?:[A-Za-z0-9]{3})?$/u.test(value);
+      const { jobId, validationJobId, submittedAt } = record;
+      const submitted = Date.parse(submittedAt);
+      requireCondition((validJob(jobId) || (jobId === null && status === 'submitting'))
+        && (validJob(validationJobId) || validationJobId === null)
+        && Number.isFinite(submitted) && new Date(submitted).toISOString() === submittedAt,
+      'SALESFORCE_CHECKPOINT_JOB_INVALID');
+      data.job = { id: jobId, validationId: validationJobId, submittedAt };
+      if (Object.hasOwn(record, 'packageSha256')) {
+        requireCondition(/^[a-f0-9]{64}$/u.test(record.packageSha256 || '') && operation !== 'deployment',
+          'SALESFORCE_CHECKPOINT_JOB_INVALID');
+        data.job.packageSha256 = record.packageSha256;
+      }
+    }
+    if (operation.startsWith('permission:') && status === 'Succeeded') {
+      const { name, orgId, prestate, addedByRelease } = record;
+      requireCondition(stage !== 'shared_mirror' && operation === `permission:${name}`
+        && /^00D[A-Za-z0-9]{15}$/u.test(orgId || '') && typeof prestate === 'boolean'
+        && addedByRelease === !prestate, 'SALESFORCE_CHECKPOINT_PERMISSION_INVALID');
+      data.permission = { name, orgId, prestate };
+    }
+    if (stage === 'shared_mirror' && operation === 'publication' && status === 'Succeeded' && record.result) {
+      const { commit, pullRequest } = record.result;
+      requireCondition(/^[a-f0-9]{40}$/u.test(commit || '') && Number.isSafeInteger(pullRequest?.number)
+        && pullRequest.number > 0 && pullRequest.headRefOid === commit, 'SALESFORCE_CHECKPOINT_MIRROR_INVALID');
+      data.mirror = { commit, pullRequest: pullRequest.number };
+    }
+    if (stage === 'production' && operation === 'preparation' && status === 'ready') {
+      requireCondition(/^0Af[A-Za-z0-9]{12}(?:[A-Za-z0-9]{3})?$/u.test(record.validationJobId || ''),
+        'SALESFORCE_CHECKPOINT_PREPARATION_INVALID');
+      data.preparation = { validationJobId: record.validationJobId };
+    }
+    const find = chain => chain.find(entry => entry.payload.event === 'salesforce.checkpoint'
+      && canonical(entry.payload.data) === canonical(data));
+    const chain = await this.read();
+    const saved = find(chain);
+    if (saved) return saved;
+    try {
+      return await this.append('salesforce.checkpoint', data, { expectedPreviousHash: chain.at(-1)?.payload.recordHash || null });
+    } catch (error) {
+      // Read back the same checkpoint after a lost acknowledgement.
+      const recovered = find(await this.read());
+      if (recovered) return recovered;
+      throw error;
+    }
+  }
+  async readSalesforceCheckpoints(fingerprint) {
+    requireCondition(/^[a-f0-9]{64}$/u.test(fingerprint || ''), 'SALESFORCE_CHECKPOINT_INVALID');
+    const latest = new Map();
+    for (const { payload: { event, data } } of await this.read()) {
+      if (event !== 'salesforce.checkpoint' || data.fingerprint !== fingerprint) continue;
+      latest.set(`${data.stage}:${data.operation}`, data);
+    }
+    return [...latest.values()];
+  }
   async assertNoUnresolvedOtherRelease() {
     const records = await this.github.pages(`/repos/${targets().repository}/deployments?environment=fcos-release-journal-v1&per_page=100`);
     const releases = new Map();
     for (const record of records) {
       const p = record.payload;
       if (p?.kind !== 'fcos_rapid_release_event' || p.releaseId === this.releaseId) continue;
-      requireCondition(this.actorIds.includes(record.creator?.id), 'JOURNAL_ACTOR_MISMATCH');
+      requireCondition(this.otherReleaseActorIds.includes(record.creator?.id), 'JOURNAL_ACTOR_MISMATCH');
       const group = releases.get(p.releaseId) || []; group.push(record); releases.set(p.releaseId, group);
     }
     for (const [id, group] of releases) {
@@ -78,6 +149,11 @@ export function pendingOperations(chain) {
   for (const { payload: { event, data } } of chain) {
     if (event.endsWith('.intent')) pending.set(data.operationId, { event, data });
     if (event.endsWith('.result')) pending.delete(data.operationId);
+    if (event === 'salesforce.checkpoint') {
+      const key = `salesforce:${data.fingerprint}:${data.stage}:${data.operation}`;
+      if (data.outcome === 'pending') pending.set(key, { event, data });
+      if (data.outcome === 'resolved') pending.delete(key);
+    }
   }
   return [...pending.values()];
 }

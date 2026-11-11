@@ -49,6 +49,10 @@ const ghEnvironment = {
 };
 delete ghEnvironment.GH_TOKEN;
 delete ghEnvironment.GITHUB_TOKEN;
+delete ghEnvironment.FCOS_RAPID_SALESFORCE_MIRROR_TOKEN;
+const hostedRunner = process.env.GITHUB_ACTIONS === 'true';
+const hostedMirrorToken = hostedRunner && process.env.FCOS_RAPID_SALESFORCE_MIRROR_TOKEN;
+if (hostedMirrorToken) ghEnvironment.GH_TOKEN = hostedMirrorToken;
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -117,9 +121,30 @@ export function assertInventoryUnchanged(inventory, authoritativeRoot = sourceRo
   }
 }
 
+function assertHostedMirrorScope(repository) {
+  const result = json('gh', ['api', 'user/installations'], { env: ghEnvironment });
+  const installation = result?.installations?.[0];
+  const permissions = installation?.permissions;
+  if (result?.total_count !== 1 || result.installations.length !== 1 || !Number.isSafeInteger(installation?.id)
+    || installation.suspended_at !== null || installation.repository_selection !== 'selected'
+    || installation.account?.login !== PUBLICATION.repository.split('/')[0]
+    || permissions?.contents !== 'write' || permissions?.pull_requests !== 'write' || permissions?.metadata !== 'read'
+    || Object.keys(permissions).length !== 3) {
+    throw new Error('Hosted Salesforce mirror GitHub App permissions or installation scope mismatch.');
+  }
+  const accessible = json('gh', ['api', `user/installations/${installation.id}/repositories`], { env: ghEnvironment });
+  if (accessible?.total_count !== 1 || accessible.repositories?.length !== 1
+    || accessible.repositories[0].id !== repository.id || accessible.repositories[0].full_name !== PUBLICATION.repository) {
+    throw new Error('Hosted Salesforce mirror credential must access only the pinned repository.');
+  }
+}
+
 function assertIdentity() {
-  if (!existsSync(path.join(isolatedConfig, 'hosts.yml'))) {
+  if (hostedRunner ? !hostedMirrorToken : !existsSync(path.join(isolatedConfig, 'hosts.yml'))) {
     throw new Error('The isolated shared-repository GitHub authorization is unavailable.');
+  }
+  if (hostedRunner && !hostedMirrorToken.startsWith('ghu_')) {
+    throw new Error('Hosted Salesforce mirror requires a GitHub App user access token.');
   }
   const account = json('gh', ['api', 'user'], { env: ghEnvironment });
   const repository = json('gh', ['api', `repos/${PUBLICATION.repository}`], { env: ghEnvironment });
@@ -131,6 +156,7 @@ function assertIdentity() {
     || repository?.default_branch !== PUBLICATION.defaultBranch) {
     throw new Error('Shared Salesforce repository identity, default branch, or WRITE permission mismatch.');
   }
+  if (hostedRunner) assertHostedMirrorScope(repository);
   return repository;
 }
 
@@ -201,11 +227,17 @@ function assertDeveeDeploymentProof(inventory) {
 
 function remoteBranchHead(branch) {
   const ref = encodeURIComponent(`heads/${branch}`);
+  let result;
   try {
-    return json('gh', ['api', `repos/${PUBLICATION.repository}/git/ref/${ref}`], { env: ghEnvironment })?.object?.sha || '';
-  } catch {
-    return '';
+    result = json('gh', ['api', `repos/${PUBLICATION.repository}/git/ref/${ref}`], { env: ghEnvironment });
+  } catch (error) {
+    if (/^gh: Not Found \(HTTP 404\)$/u.test(error.message)) return '';
+    throw error;
   }
+  if (result?.ref !== `refs/heads/${branch}` || !/^[a-f0-9]{40}$/u.test(result?.object?.sha || '')) {
+    throw new Error('Shared Salesforce publication branch readback is invalid.');
+  }
+  return result.object.sha;
 }
 
 function openPullRequests() {
@@ -259,17 +291,27 @@ export function selectPublicationTarget(
   return { branch: `${publication.branchPrefix}-${suffix}`, pullRequest: null };
 }
 
-function publicationBranch() {
-  return selectPublicationTarget(openPullRequests());
+function publicationBranch(mode) {
+  return selectPublicationTarget(openPullRequests(), { mode });
 }
 
-function cloneBranch(destination, branch, existsRemotely) {
+// Read-only check before starting a release that must publish the DEVEE tree.
+export function preflightSharedMirrorPublication() {
+  assertIdentity();
+  const selected = publicationBranch('publish');
+  const remoteHead = remoteBranchHead(selected.branch);
+  if (selected.pullRequest ? selected.pullRequest.headRefOid !== remoteHead : remoteHead) {
+    throw new Error('Shared Salesforce publication branch does not match the selected draft state.');
+  }
+}
+
+function cloneBranch(destination, branch, existsRemotely, mode) {
   const cloneArgs = ['repo', 'clone', PUBLICATION.repository, destination, '--'];
-  const cloneSourceBranch = MODE === 'publish' && !existsRemotely ? PUBLICATION.defaultBranch : branch;
+  const cloneSourceBranch = mode === 'publish' && !existsRemotely ? PUBLICATION.defaultBranch : branch;
   cloneArgs.push('--branch', cloneSourceBranch, '--single-branch');
   run('gh', cloneArgs, { env: ghEnvironment });
   configurePushIdentity(destination);
-  if (MODE === 'publish' && !existsRemotely) run('git', ['switch', '-c', branch], { cwd: destination });
+  if (mode === 'publish' && !existsRemotely) run('git', ['switch', '-c', branch], { cwd: destination });
 }
 
 function readOwnedFiles(checkout) {
@@ -332,7 +374,8 @@ export function verifyCheckout(checkout, inventory, manifest, authoritativeRoot 
 }
 
 function configurePushIdentity(checkout) {
-  const helper = `!f() { env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR='${isolatedConfig.replaceAll("'", "'\"'\"'")}' gh auth git-credential \"$@\"; }; f`;
+  const unsetTokens = hostedRunner ? '-u GITHUB_TOKEN' : '-u GH_TOKEN -u GITHUB_TOKEN';
+  const helper = `!f() { env ${unsetTokens} GH_CONFIG_DIR='${isolatedConfig.replaceAll("'", "'\"'\"'")}' gh auth git-credential \"$@\"; }; f`;
   run('git', ['config', '--local', 'user.name', PUBLICATION.requiredAccount], { cwd: checkout });
   run('git', ['config', '--local', 'user.email', `${PUBLICATION.requiredAccountId}+${PUBLICATION.requiredAccount}@users.noreply.github.com`], { cwd: checkout });
   spawnSync('git', ['config', '--local', '--unset-all', 'credential.https://github.com.helper'], {
@@ -382,15 +425,15 @@ export function validateFetchedPullRequestHead(fetchedHead, pullRequest) {
   return true;
 }
 
-function verifyImmutableRemoteHead(checkout, pullRequest, inventory, manifest) {
+function verifyImmutableRemoteHead(checkout, pullRequest, inventory, manifest, metadataRoot) {
   run('git', [
     'fetch', '--force', 'origin',
     `refs/heads/${pullRequest.headRefName}:refs/remotes/origin/${pullRequest.headRefName}`,
-  ], { cwd: checkout });
+  ], { cwd: checkout, env: ghEnvironment });
   const fetchedHead = run('git', ['rev-parse', `refs/remotes/origin/${pullRequest.headRefName}`], { cwd: checkout });
   validateFetchedPullRequestHead(fetchedHead, pullRequest);
   run('git', ['checkout', '--detach', pullRequest.headRefOid], { cwd: checkout });
-  verifyCheckout(checkout, inventory, manifest);
+  verifyCheckout(checkout, inventory, manifest, metadataRoot);
 }
 
 export function publicationReport({ inventory, deveeDeployment, publication, pullRequest, mode = MODE }) {
@@ -424,7 +467,7 @@ export function publicationReport({ inventory, deveeDeployment, publication, pul
   };
 }
 
-function publish(checkout, branch, expectedRemoteHead, pullRequest, inventory) {
+function publish(checkout, branch, expectedRemoteHead, pullRequest, inventory, assertPublicationCurrent, metadataRoot) {
   const paths = [PUBLICATION.targetRoot, PUBLICATION.manifestPath];
   configurePushIdentity(checkout);
   run('git', ['add', '--', ...paths], { cwd: checkout });
@@ -443,8 +486,9 @@ function publish(checkout, branch, expectedRemoteHead, pullRequest, inventory) {
   const pushArgs = ['push', '--set-upstream'];
   if (expectedRemoteHead) pushArgs.push(`--force-with-lease=refs/heads/${branch}:${expectedRemoteHead}`);
   pushArgs.push('origin', `HEAD:${branch}`);
-  assertInventoryUnchanged(inventory);
-  run('git', pushArgs, { cwd: checkout });
+  assertInventoryUnchanged(inventory, metadataRoot);
+  assertPublicationCurrent();
+  run('git', pushArgs, { cwd: checkout, env: ghEnvironment });
   const commit = run('git', ['rev-parse', 'HEAD'], { cwd: checkout });
   assertCommitAttribution(commit);
   if (!pullRequest) {
@@ -453,6 +497,7 @@ function publish(checkout, branch, expectedRemoteHead, pullRequest, inventory) {
       '',
       'The complete owned `src/` inventory is recorded in `.fcos-salesforce-mirror.json` and verified byte-for-byte before publication.',
     ].join('\n');
+    assertPublicationCurrent();
     const url = run('gh', [
       'pr', 'create', '--repo', PUBLICATION.repository, '--draft',
       '--base', PUBLICATION.defaultBranch, '--head', branch,
@@ -463,15 +508,15 @@ function publish(checkout, branch, expectedRemoteHead, pullRequest, inventory) {
   return { changed: true, branch, commit, pullRequest };
 }
 
-export function main({ proofResolver = assertDeveeDeploymentProof } = {}) {
-  if (!MODE || (process.argv.includes('--publish') && process.argv.includes('--check'))) {
+export function executeSharedMirror({ mode, metadataRoot = sourceRoot, proofResolver, assertPublicationCurrent = () => {} }) {
+  if (!['check', 'publish'].includes(mode)) {
     throw new Error('Choose exactly one mode: --check or --publish.');
   }
   assertIdentity();
-  const inventory = sourceInventory();
+  const inventory = sourceInventory(metadataRoot);
   const deveeDeployment = proofResolver(inventory);
   const manifest = expectedManifest(inventory);
-  const selected = publicationBranch();
+  const selected = publicationBranch(mode);
   const initialRemoteHead = remoteBranchHead(selected.branch);
   if (selected.pullRequest && selected.pullRequest.headRefOid !== initialRemoteHead) {
     throw new Error('The shared Salesforce draft pull request head changed before publication verification.');
@@ -482,25 +527,32 @@ export function main({ proofResolver = assertDeveeDeploymentProof } = {}) {
   const temporary = mkdtempSync(path.join(tmpdir(), 'fcos-salesforce-mirror-'));
   const checkout = path.join(temporary, 'repository');
   try {
-    cloneBranch(checkout, selected.branch, Boolean(initialRemoteHead));
-    if (MODE === 'publish') syncCheckout(checkout, inventory, manifest);
-    verifyCheckout(checkout, inventory, manifest);
-    const publication = MODE === 'publish'
-      ? publish(checkout, selected.branch, initialRemoteHead, selected.pullRequest, inventory)
+    cloneBranch(checkout, selected.branch, Boolean(initialRemoteHead), mode);
+    if (mode === 'publish') syncCheckout(checkout, inventory, manifest, metadataRoot);
+    verifyCheckout(checkout, inventory, manifest, metadataRoot);
+    const publication = mode === 'publish'
+      ? publish(checkout, selected.branch, initialRemoteHead, selected.pullRequest, inventory, assertPublicationCurrent, metadataRoot)
       : { changed: false, branch: selected.branch, commit: run('git', ['rev-parse', 'HEAD'], { cwd: checkout }), pullRequest: selected.pullRequest };
     const pullRequest = refetchPullRequest(publication.pullRequest, publication.branch);
     validatePublicationPullRequest(pullRequest, { branch: publication.branch, headOid: publication.commit });
     assertCommitAttribution(publication.commit);
-    verifyImmutableRemoteHead(checkout, pullRequest, inventory, manifest);
-    process.stdout.write(`${JSON.stringify(publicationReport({
+    verifyImmutableRemoteHead(checkout, pullRequest, inventory, manifest, metadataRoot);
+    return publicationReport({
+      mode,
       inventory,
       deveeDeployment,
       publication,
       pullRequest,
-    }), null, 2)}\n`);
+    });
   } finally {
     rmSync(temporary, { recursive: true, force: true });
   }
+}
+
+export function main({ proofResolver = assertDeveeDeploymentProof, assertPublicationCurrent = () => {} } = {}) {
+  const mode = process.argv.includes('--publish') && process.argv.includes('--check') ? '' : MODE;
+  const report = executeSharedMirror({ mode, proofResolver, assertPublicationCurrent });
+  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();
