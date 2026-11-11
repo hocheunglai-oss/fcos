@@ -9,7 +9,7 @@ import { EventEmitter } from 'node:events';
 import { TLSSocket } from 'node:tls';
 import { digest,targets } from '../scripts/lib/rapid-release/contract.mjs';
 import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
-import { createDatabaseCredentialIntentStore,DATABASE_SCOPE_EVIDENCE_ENVIRONMENT,DATABASE_AUTH_RECONCILIATION_SQL } from '../scripts/lib/rapid-release/database-intent.mjs';
+import { createDatabaseCredentialIntentStore,DATABASE_SCOPE_EVIDENCE_ENVIRONMENT,DATABASE_UNSUBMITTED_EVIDENCE_ENVIRONMENT,DATABASE_AUTH_RECONCILIATION_SQL } from '../scripts/lib/rapid-release/database-intent.mjs';
 import { MANAGED_DATABASE_ROLE_SQL } from '../scripts/lib/rapid-release/database-connection.mjs';
 import { openPinnedDatabase,isManagedDatabaseRole,DELEGATED_DATABASE_IDENTITY_SQL } from '../scripts/lib/rapid-release/database-connection.mjs';
 import { PUBLIC_CA } from './helpers/rapidDatabaseDelegationFixture.mjs';
@@ -264,4 +264,81 @@ test('native 401 or 403 rejection is distinct from scope reconstruction and clos
   await store.rejected({intentId:intent.intentId,requestDigest:intent.requestDigest,outcome:'rejected',issuer:'https://api.supabase.com',projectRef:targets().supabaseProject,httpStatus:status,observedAtMs:Date.now()});
   assert.equal(f.state().phase,'rejected');assert.equal(f.state().receipt.httpStatus,status);assert.equal((await (await f.store()).begin(f.request)).state,'fresh');}
  const f=fixture(t),store=await f.store(),intent=await store.begin(f.request);await assert.rejects(store.rejected({intentId:intent.intentId,requestDigest:intent.requestDigest,outcome:'rejected',issuer:'https://api.supabase.com',projectRef:targets().supabaseProject,httpStatus:400,observedAtMs:Date.now()}),/RECEIPT_REFUSED/);
+});
+
+
+async function claimWithoutIntent(t, { publishIntent=false } = {}) {
+ const f=fixture(t),store=await f.store(),first=await store.begin(f.request);
+ const receipt=f.receipt(first);
+ receipt.ttlSeconds=1;
+ receipt.expiresAtMs=receipt.issuedAtMs+1000;
+ await store.complete(receipt);
+ f.role.role_valid_until_ms=receipt.expiresAtMs;
+ const later=receipt.expiresAtMs+2000;
+ f.role.server_now_ms=later;
+ f.input.now=()=>later;
+ const next=await f.store();
+ if(publishIntent)await next.begin(f.request);
+ else{
+  f.exactRefReadbacks=['e'.repeat(40)];
+  await assert.rejects(next.begin(f.request),/CLAIM_ACK_UNKNOWN/);
+ }
+ const claim=f.state(),claimSha=f.head;
+ const payload={schemaVersion:1,kind:'fcos_database_auth_unsubmitted_observation',
+  provenance:'owner_attested_terminal_before_intent',intentId:claim.intentId,requestDigest:claim.requestDigest,
+  claimCommitSha:claimSha,claimDigest:digest(claim),originalSourceSha:claim.sourceSha,reconciliationSourceSha:f.source.sha,
+  projectRef:claim.request.projectRef,organizationId:claim.request.organizationId,observedAt:new Date(later).toISOString(),
+  evidenceDigest:'a'.repeat(64),roleExpiresAtMs:f.role.role_valid_until_ms};
+ const evidence={id:900,environment:DATABASE_UNSUBMITTED_EVIDENCE_ENVIRONMENT,sha:f.source.sha,creator:clone(f.actor),payload};
+ f.observations.set(evidence.id,evidence);
+ return {f,claim,claimSha,evidence,args:{intentId:claim.intentId,evidenceDeploymentId:evidence.id}};
+}
+
+test('unsubmitted claim closes as a native child and permits a fresh independently checked operation',async t=>{
+ const {f,claim,claimSha,args}=await claimWithoutIntent(t);
+ const result=await (await f.store()).reconcileUnsubmitted(args);
+ assert.equal(result.state,'unsubmitted');
+ assert.equal(f.state().phase,'unsubmitted');
+ assert.deepEqual(f.state().pending,claim);
+ assert.equal(f.commits.get(f.head).parents[0].sha,claimSha);
+ assert.deepEqual(f.deployments.map(row=>row.payload.event),['intent','received','unsubmitted']);
+ assert.equal(f.issuerPosts,0);
+ const writes=f.writes.length;
+ assert.equal((await (await f.store()).reconcileUnsubmitted(args)).reused,true);
+ assert.equal(f.writes.length,writes);
+ const next=await (await f.store()).begin(f.request);
+ assert.notEqual(next.intentId,claim.intentId);
+ assert.equal(f.issuerPosts,0);
+});
+
+test('unsubmitted recovery refuses any published intent, mismatched attestation, or changed login expiry',async t=>{
+ const issued=await claimWithoutIntent(t,{publishIntent:true});
+ const before=issued.f.writes.length;
+ await assert.rejects((await issued.f.store()).reconcileUnsubmitted(issued.args),/ORIGINAL_OPERATION_UNCERTAIN/);
+ assert.equal(issued.f.writes.length,before);
+ for(const change of [
+  (f,evidence)=>{evidence.creator.id++;},
+  (f,evidence)=>{evidence.payload.claimCommitSha='f'.repeat(40);},
+  f=>{f.role.role_valid_until_ms=f.role.server_now_ms-10;},
+  f=>{f.reconcileRows=[f.role,{...f.role,login_role:'cli_login_other'}];},
+ ]){
+  const {f,evidence,args}=await claimWithoutIntent(t);
+  change(f,evidence);
+  const writes=f.writes.length;
+  await assert.rejects((await f.store()).reconcileUnsubmitted(args),/UNSUBMITTED_EVIDENCE_REQUIRED|ORIGINAL_ROLE_CHANGED/);
+  assert.equal(f.writes.length,writes);
+  assert.equal(f.issuerPosts,0);
+ }
+});
+
+test('unsubmitted recovery reserves one terminal child even if the original journal publication is uncertain',async t=>{
+ const {f,args}=await claimWithoutIntent(t);
+ f.deploymentNotApplied=true;
+ await assert.rejects((await f.store()).reconcileUnsubmitted(args),/ACK_UNKNOWN/);
+ assert.equal(f.state().phase,'unsubmitted');
+ const writes=f.writes.length;
+ await assert.rejects((await f.store()).reconcileUnsubmitted(args),/TERMINAL_PUBLICATION_UNCERTAIN/);
+ await assert.rejects((await f.store()).begin(f.request),/NATIVE_CLOSURE_INVALID/);
+ assert.equal(f.writes.length,writes);
+ assert.equal(f.issuerPosts,0);
 });
