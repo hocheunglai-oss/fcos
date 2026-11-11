@@ -293,8 +293,21 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
       const bytes = readFileSync(safeProjectFile(cwd, manifest.path));
       if (salesforcePromotionHash(bytes) !== manifest.sha256) throw new Error('Salesforce inventory retrieval manifest digest mismatch.');
       const presentComponents = parseReviewedPackage(bytes.toString('utf8'), { inventory: true });
-      if (nativeExport && plan.review.components.some(({ id }) => presentComponents.includes(id) === expectedAbsentComponents.includes(id))) {
-        throw new Error('Native retrieval manifest coverage does not match the reviewed Apex checkpoint.');
+      let apexBytes;
+      if (nativeExport) {
+        const apex = plan.review.components.filter(({ id }) => !expectedAbsentComponents.includes(id));
+        if (plan.review.components.some(({ id }) => presentComponents.includes(id)) || Boolean(manifest.apex) !== Boolean(apex.length)) {
+          throw new Error('Stable native retrieval must keep the reviewed Apex package separate.');
+        }
+        if (manifest.apex) {
+          apexBytes = readFileSync(safeProjectFile(cwd, manifest.apex.path));
+          const members = parseReviewedPackage(apexBytes.toString('utf8'));
+          if (salesforcePromotionHash(apexBytes) !== manifest.apex.sha256
+            || JSON.stringify(members) !== JSON.stringify(apex.map(({ id }) => id).sort())) {
+            throw new Error('Native Apex retrieval manifest does not match the reviewed checkpoint.');
+          }
+          presentComponents.push(...members);
+        }
       }
 
       const before = this.verifyIdentity(environment);
@@ -302,22 +315,35 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
       try {
         copyFileSync(safeProjectFile(cwd, 'sfdx-project.json'), path.join(project, 'sfdx-project.json'));
         mkdirSync(path.join(project, 'force-app'));
-        mkdirSync(path.join(project, 'retrieved'));
-        const manifestPath = path.join(project, 'inventory.xml');
-        writeFileSync(manifestPath, bytes, { mode: 0o600 });
-        const result = sf(['project', 'retrieve', 'start', '--target-org', environment.alias,
-          '--manifest', manifestPath, '--output-dir', 'retrieved', '--wait', '5', '--json'], project);
-        if (result?.success !== true || result.done !== true || result.status !== 'Succeeded'
-          || !/^09S[A-Za-z0-9]{15}$/u.test(result.id || '') || result.messages?.length) {
-          throw new Error('Salesforce inventory retrieval did not complete successfully without warnings.');
-        }
+        const retrieve = (xml, name, directory) => {
+          mkdirSync(path.join(project, directory));
+          const manifestPath = path.join(project, name);
+          writeFileSync(manifestPath, xml, { mode: 0o600 });
+          const result = sf(['project', 'retrieve', 'start', '--target-org', environment.alias,
+            '--manifest', manifestPath, '--output-dir', directory, '--wait', '5', '--json'], project);
+          if (result?.success !== true || result.done !== true || result.status !== 'Succeeded'
+            || !/^09S[A-Za-z0-9]{15}$/u.test(result.id || '') || result.messages?.length) {
+            throw new Error('Salesforce inventory retrieval did not complete successfully without warnings.');
+          }
+          return result.id;
+        };
+        const jobId = retrieve(bytes, 'inventory.xml', 'retrieved');
+        const apexJobId = apexBytes ? retrieve(apexBytes, 'apex.xml', 'apex') : null;
         const root = path.join(project, 'retrieved');
-        const observed = readReviewedInventory(root, { nativeExport });
+        const supplementalRoot = apexJobId ? path.join(project, 'apex') : null;
+        if (supplementalRoot) {
+          const apexPaths = plan.review.components.filter(({ id }) => !expectedAbsentComponents.includes(id)).flatMap(({ files }) => files).sort();
+          const observedApex = readReviewedInventory(supplementalRoot, { nativeExport: true });
+          if (JSON.stringify(Object.keys(observedApex.files)) !== JSON.stringify(apexPaths)) {
+            throw new Error('Native Apex retrieval returned an unexpected path set.');
+          }
+        }
+        const observed = readReviewedInventory(root, { nativeExport, supplementalRoot });
         if (observed.inventoryHash !== expectedInventoryHash
           || (expectedSourceTreeHash && observed.sourceTreeHash !== expectedSourceTreeHash)) {
           throw new Error('Native Salesforce retrieval differs from the exact reviewed inventory.');
         }
-        if (verifyApexProjection) verifyNativeApexProjection({ root, sourceRoot: path.join(cwd, policy.publication.sourceRoot), plan });
+        if (verifyApexProjection) verifyNativeApexProjection({ root: supplementalRoot, sourceRoot: path.join(cwd, policy.publication.sourceRoot), plan });
         const absence = expectedAbsentComponents.length ? proveSalesforceInventoryAbsence({ expectedAbsentComponents,
           presentComponents: [...presentComponents, ...(plan.review.inventoryCatalogControls?.[environment.key] || [])],
           listMetadata: type => sf(['org', 'list', 'metadata', '--target-org', environment.alias, '--metadata-type', type, '--json'], project),
@@ -329,8 +355,9 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
           username: after.username, connectedStatus: after.connectedStatus };
         const verifiedAt = new Date().toISOString();
         const sourceTreeHash = expectedSourceTreeHash ? observed.sourceTreeHash : null;
-        const evidenceSha256 = salesforcePromotionHash({ jobId: result.id, manifestSha256: manifest.sha256,
+        const evidenceSha256 = salesforcePromotionHash({ jobId, manifestSha256: manifest.sha256,
           identity, verifiedAt, inventoryHash: observed.inventoryHash, sourceTreeHash,
+          ...(apexJobId ? { apexJobId, apexManifestSha256: manifest.apex.sha256 } : {}),
           ...(nativeExport ? { nativeSourceTreeHash: observed.sourceTreeHash, apexProjectionVerified: verifyApexProjection } : {}), ...absence });
         return { orgId: identity.orgId, identity, verifiedAt, sourceTreeHash, inventoryHash: observed.inventoryHash,
           evidenceSha256, observedInventory: observed.files,

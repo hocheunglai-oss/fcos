@@ -46,21 +46,24 @@ export function inventoryFromFiles(files) {
   return { sourceTreeHash: hash(Buffer.concat(treeParts)), inventoryHash: hash(inventory), files: inventory };
 }
 
-export function readReviewedInventory(root, { nativeExport = false } = {}) {
-  const files = {};
-  function visit(directory) {
+export function readReviewedInventory(root, { nativeExport = false, supplementalRoot = null } = {}) {
+  const files = Object.create(null);
+  function visit(directory, base) {
     for (const name of readdirSync(directory).sort()) {
       const absolute = path.join(directory, name), stat = lstatSync(absolute);
       if (stat.isSymbolicLink()) throw new Error('Salesforce metadata cannot contain symlinks.');
-      if (stat.isDirectory()) visit(absolute);
+      if (stat.isDirectory()) visit(absolute, base);
       else {
         const bytes = readFileSync(absolute);
         if (!nativeExport && bytes.includes(Buffer.from('\r\n'))) throw new Error('Salesforce source must use LF line endings.');
-        files[path.relative(root, absolute).split(path.sep).join('/')] = bytes;
+        const relative = path.relative(base, absolute).split(path.sep).join('/');
+        if (Object.hasOwn(files, relative)) throw new Error('Salesforce inventory contains an overlapping retrieval path.');
+        files[relative] = bytes;
       }
     }
   }
-  visit(root);
+  visit(root, root);
+  if (supplementalRoot) visit(supplementalRoot, supplementalRoot);
   return inventoryFromFiles(files);
 }
 
@@ -83,7 +86,11 @@ function reviewedNativeInventories(review, policy, baselineInventory, finalInven
     }
     const ordered = Object.fromEntries(Object.keys(files).sort().map(name => [name, { sha256: files[name].sha256, size: files[name].size }]));
     const inventoryHash = hash(ordered);
-    if (descriptor.inventoryHash !== inventoryHash || !review.inventoryManifests?.[inventoryHash]
+    const manifest = review.inventoryManifests?.[inventoryHash];
+    const present = components.filter(({ files }) => files.every(name => Object.hasOwn(ordered, name)));
+    const validManifest = entry => typeof entry?.path === 'string' && Boolean(entry.path) && HASH.test(entry.sha256 || '');
+    if (descriptor.inventoryHash !== inventoryHash || !validManifest(manifest)
+      || (present.length ? !validManifest(manifest.apex) : manifest.apex !== undefined)
       || Object.keys(gitInventory.files).some(name => !Object.hasOwn(ordered, name))) {
       failCoverage(`Salesforce ${key} native inventory lacks exact owned path coverage or its retrieval manifest.`);
     }
@@ -98,6 +105,11 @@ function reviewedNativeInventories(review, policy, baselineInventory, finalInven
     if (reviewedId !== orgId) failCoverage(`Salesforce ${key} native inventory has the wrong pinned org.`);
     const before = checkpoint(baseline, baselineInventory, key);
     const after = checkpoint(final, finalInventory, key);
+    const beforeManifest = review.inventoryManifests[before.inventoryHash];
+    const afterManifest = review.inventoryManifests[after.inventoryHash];
+    if (beforeManifest.path !== afterManifest.path || beforeManifest.sha256 !== afterManifest.sha256) {
+      failCoverage(`Salesforce ${key} stable native retrieval manifest changes between checkpoints.`);
+    }
     if (Object.keys(before.files).some(name => !after.files[name])
       || Object.keys(after.files).some(name => !same(before.files[name], after.files[name]) && !coveredFiles.has(name))) {
       failCoverage(`Salesforce ${key} native checkpoints differ outside the reviewed Apex package.`);

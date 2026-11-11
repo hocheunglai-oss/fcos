@@ -1161,7 +1161,8 @@ test('native byte checkpoints pin each org and permit only reviewed Apex changes
     const descriptor = inv => ({ files: inv.files, inventoryHash: inv.inventoryHash });
     const review = { ...f.inputs.review,
       inventoryManifests: Object.fromEntries([baseline, final].map(inv =>
-        [inv.inventoryHash, { path: 'inventory.xml', sha256: hash(packageXml(['ApexClass:Example'])) }])),
+        [inv.inventoryHash, { path: 'inventory.xml', sha256: hash(packageXml(['Profile:Example'])),
+          apex: { path: 'apex.xml', sha256: hash(packageXml(['ApexClass:Example'])) } }])),
       nativeInventories: Object.fromEntries(policy.environments.map(({ key, orgId }) =>
         [key, { orgId, baseline: descriptor(baseline), final: descriptor(final) }])) };
     const inputs = { ...f.inputs, review };
@@ -1180,6 +1181,10 @@ test('native byte checkpoints pin each org and permit only reviewed Apex changes
     altered.nativeInventories.qat.final = descriptor(drift);
     altered.inventoryManifests[drift.inventoryHash] = review.inventoryManifests[final.inventoryHash];
     assert.throws(() => createReviewedSalesforcePlan({ ...inputs, review: altered }), /outside the reviewed Apex package/);
+    altered.nativeInventories.qat.final = descriptor(final);
+    altered.inventoryManifests[final.inventoryHash].path = 'different.xml';
+    assert.throws(() => createReviewedSalesforcePlan({ ...inputs, review: altered }), /stable native retrieval manifest changes/);
+    altered.inventoryManifests[final.inventoryHash].path = 'inventory.xml';
     altered.nativeInventories.qat.orgId = policy.environments[0].orgId;
     assert.throws(() => createReviewedSalesforcePlan({ ...inputs, review: altered }), /wrong pinned org/);
   } finally { f.cleanup(); }
@@ -1189,25 +1194,33 @@ test('native Apex readback checks exact raw bytes and equivalence to the reviewe
   const cwd = mkdtempSync(path.join(tmpdir(), 'fcos-native-apex-fixture-'));
   try {
     const environment = policy.environments[0];
-    const manifest = packageXml(['ApexClass:Example']);
+    const manifest = packageXml(['Profile:Example']);
+    const apex = packageXml(['ApexClass:Example']);
     const sourceRoot = path.join(cwd, policy.publication.sourceRoot);
     mkdirSync(path.join(sourceRoot, 'classes'), { recursive: true });
     for (const [name, bytes] of Object.entries(files)) writeFileSync(path.join(sourceRoot, name), bytes);
     writeFileSync(path.join(cwd, 'inventory.xml'), manifest);
+    writeFileSync(path.join(cwd, 'apex.xml'), apex);
     writeFileSync(path.join(cwd, 'sfdx-project.json'), '{}');
-    let raw = { ...files, 'classes/Example.cls': Buffer.from('class Example {}\r\n') };
+    let raw = { ...files, 'classes/Example.cls': Buffer.from('class Example {}\r\n'),
+      'profiles/Example.profile-meta.xml': Buffer.from('<Profile/>\r\n') };
     const provider = cliSalesforceProvider({ cwd, run(_program, args, project) {
       if (args[0] === 'org') return { id: environment.orgId, username: environment.username, connectedStatus: 'Connected' };
       if (args[0] === 'data') return { records: [{ Id: environment.orgId, IsSandbox: environment.isSandbox }] };
-      mkdirSync(path.join(project, 'retrieved/classes'));
-      for (const [name, bytes] of Object.entries(raw)) writeFileSync(path.join(project, 'retrieved', name), bytes);
+      const directory = args[args.indexOf('--output-dir') + 1];
+      for (const [name, bytes] of Object.entries(raw)) {
+        if (name.startsWith('classes/') !== (directory === 'apex')) continue;
+        const destination = path.join(project, directory, name);
+        mkdirSync(path.dirname(destination), { recursive: true });
+        writeFileSync(destination, bytes);
+      }
       return { id: '09SHF000002gTFl2AM', status: 'Succeeded', done: true, success: true };
     } });
     const input = () => {
       const inv = inventoryFromFiles(raw);
       return { plan: { finalInventory: inventoryFromFiles(files), review: {
         components: [{ id: 'ApexClass:Example', files: Object.keys(files) }],
-        inventoryManifests: { [inv.inventoryHash]: { path: 'inventory.xml', sha256: hash(manifest) } },
+        inventoryManifests: { [inv.inventoryHash]: { path: 'inventory.xml', sha256: hash(manifest), apex: { path: 'apex.xml', sha256: hash(apex) } } },
       } }, expectedInventoryHash: inv.inventoryHash, expectedSourceTreeHash: null, nativeExport: true, verifyApexProjection: true };
     };
     const exact = input();
