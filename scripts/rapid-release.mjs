@@ -97,7 +97,8 @@ async function rapidReleaseCommand(argv, env, runtime) {
     const incident = read(opts.incident);
     runtime.phase = incident.phase;
     runtime.provider = vercelProvider({ manifest, github, env });
-    return handleReleaseObstacle({ ...runtime, error: { code: incident.code },
+    return handleReleaseObstacle({ ...runtime,
+      error: { code: incident.code, smokeModule: incident.inputs?.smokeModule, smokeSurface: incident.inputs?.smokeSurface },
       registry: read(opts.registry || join(controller, 'config/rapid-release-learning.json')) });
   }
   requireCondition(['stage', 'promote', 'resume'].includes(command), 'CLI_COMMAND_INVALID');
@@ -126,7 +127,7 @@ async function rapidReleaseCommand(argv, env, runtime) {
     const approval = await nativeApproval({ github, manifest, staged, env });
     result = await promoteRelease({ manifest, journal, provider, approval, smoke,
       observe: values => observeLive({ ...values, env }),
-      prerequisites: values => runPrerequisites({ ...values, staged, journal, controllerDirectory: controller, env }) });
+      prerequisites: values => runPrerequisites({ ...values, staged, journal, provider, controllerDirectory: controller, env }) });
   }
   if (opts.output) write(opts.output, result);
   return result;

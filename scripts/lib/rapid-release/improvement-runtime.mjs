@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { constants, lstat, mkdir, open, readFile, readdir, realpath, rename } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { MODULE_READERS } from './normal-role-readers.mjs';
 import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier } from '../../../config/fcosConnections.js';
 
 const canonical = value => JSON.stringify(value, (_, item) => item && typeof item === 'object' && !Array.isArray(item)
@@ -16,6 +17,18 @@ const ownedCodes = Object.freeze({
   QUALITY_COMPATIBILITY_FAILED: 'test_failure', QUALITY_GRAPH_ONLY_FAILED: 'test_failure', QUALITY_FCUNO_CONTRACT_FAILED: 'test_failure',
   SOURCE_BYTES_CHANGED: 'source_mismatch', SOURCE_NOT_CLEAN: 'source_mismatch', MANIFEST_CHANGED: 'source_mismatch',
   SOURCE_SHA_INVALID: 'source_mismatch', BUILD_RECEIPT_MISMATCH: 'stale_evidence', STAGED_BUILD_NOT_READY: 'stale_evidence',
+  SMOKE_BROWSER_BASELINE_DASHBOARD_FAILED: 'test_failure', SMOKE_BROWSER_BASELINE_MARKETS_FAILED: 'test_failure',
+  SMOKE_BROWSER_ISSUER_NAVIGATION_FAILED: 'test_failure', SMOKE_BROWSER_SIGN_IN_FAILED: 'test_failure',
+  SMOKE_BROWSER_NORMAL_MODULE_READS_FAILED: 'test_failure', SMOKE_BROWSER_RESTRICTED_ACCESS_FAILED: 'test_failure',
+  SMOKE_BROWSER_NETWORK_OR_RUNTIME_FAILURE: 'test_failure', SMOKE_CANDIDATE_NAVIGATION_CHANGED: 'test_failure',
+  SMOKE_MODULE_DESKTOP_CONTENT_MISSING: 'test_failure', SMOKE_MODULE_DESKTOP_HEADING_MISSING: 'test_failure',
+  SMOKE_MODULE_DESKTOP_INCOMPLETE: 'test_failure', SMOKE_MODULE_PAYLOAD_INCOMPLETE: 'test_failure',
+  SMOKE_MODULE_READ_FAILED: 'test_failure', SMOKE_AUTHENTICATED_READ_FAILED: 'test_failure', SMOKE_MODULE_SURFACE_FAILED: 'test_failure',
+  SMOKE_LOGIN_NOT_PROVEN: 'test_failure', SMOKE_RESTRICTED_ACCESS_NOT_PROVEN: 'test_failure',
+  SMOKE_NORMAL_MUTATION_NOT_DENIED: 'test_failure', SMOKE_NORMAL_READS_NOT_BOUND: 'test_failure',
+  SMOKE_BOUND_READ_FAILED: 'test_failure', SMOKE_PROTECTION_BOOTSTRAP_FAILED: 'test_failure',
+  SMOKE_AUTHORIZATION_IDENTITY_MISMATCH: 'test_failure', SMOKE_CI_SCOPE_MISMATCH: 'test_failure',
+  SMOKE_DEPLOYMENT_BINDING_MISMATCH: 'stale_evidence', SMOKE_STATIC_RUNTIME_IDENTITY_MISMATCH: 'stale_evidence',
   SMOKE_RUNTIME_IDENTITY_MISMATCH: 'stale_evidence', STAGED_SMOKE_INCOMPLETE: 'test_failure', QUALITY_CHECK_FAILED: 'test_failure',
   QUALITY_FAILED: 'test_failure', PRODUCT_TESTS_FAILED: 'test_failure', BUILD_FAILED: 'build_failure',
   VERCEL_REQUEST_REFUSED: 'provider_unavailable', GITHUB_REQUEST_REFUSED: 'provider_unavailable',
@@ -97,8 +110,13 @@ export async function handleReleaseObstacle({ error, phase, manifest, journal, p
   outputFile, completedSteps = [], elapsedMs = 0, providerCalls = 0 }) {
   const module = await import(pathToFileURL(join(controllerDirectory, 'scripts/lib/rapid-release/learning.mjs')).href);
   const code = Object.hasOwn(ownedCodes, error?.code) ? error.code : 'UNCLASSIFIED_RELEASE_OBSTACLE';
+  const inputs = await releaseObstacleInputs({ manifest, controllerDirectory });
+  if (code.startsWith('SMOKE_') && Object.hasOwn(MODULE_READERS, error?.smokeModule)
+    && ['read', 'desktop'].includes(error.smokeSurface)) {
+    Object.assign(inputs, { smokeModule: error.smokeModule, smokeSurface: error.smokeSurface });
+  }
   const incident = module.obstacle({ kind: ownedCodes[code] || 'unknown', phase: safePhase(phase), code,
-    inputs: await releaseObstacleInputs({ manifest, controllerDirectory }), completedSteps: completedSteps.filter(step => steps.has(step)),
+    inputs, completedSteps: completedSteps.filter(step => steps.has(step)),
     elapsedMs: elapsed(elapsedMs), providerCalls: count(providerCalls) });
   const local = await privateStore(outputFile || join(controllerDirectory, 'outputs/rapid-release-obstacles/obstacles.json'));
   const capture = async (event, data) => {

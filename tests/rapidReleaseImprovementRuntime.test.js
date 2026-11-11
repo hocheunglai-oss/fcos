@@ -39,6 +39,15 @@ test('unknown failures are captured once with no raw provider message, stack, cr
   assert.doesNotMatch(stored, /PRIVATE_|MALICIOUS|Bearer/);
 }));
 
+test('fixed browser failures retain their diagnostic code without accepting unknown smoke codes', async () => fixture(async ({ outputFile }) => {
+  const known = await call({ error: { code: 'SMOKE_BROWSER_BASELINE_DASHBOARD_FAILED', message: 'PRIVATE_DETAILS' }, outputFile });
+  const unknown = await call({ error: { code: 'SMOKE_PRIVATE_PROVIDER_DETAIL', message: 'PRIVATE_DETAILS' }, outputFile });
+  assert.equal(known.incident.code, 'SMOKE_BROWSER_BASELINE_DASHBOARD_FAILED');
+  assert.equal(known.incident.kind, 'test_failure');
+  assert.equal(unknown.incident.code, 'UNCLASSIFIED_RELEASE_OBSTACLE');
+  assert.doesNotMatch(await readFile(outputFile, 'utf8'), /PRIVATE_DETAILS|PRIVATE_PROVIDER_DETAIL/);
+}));
+
 test('real original-operation discovery records only a matching applied native result and never submits', async () => fixture(async ({ outputFile }) => {
   const j = journal(), request = { buildId: manifest.build.buildId, candidateSha: manifest.candidate.sha, artifactDigest: 'd'.repeat(64) };
   await j.append('stage.intent', { operationId: `${manifest.releaseId}-stage`, request, requestHash: digest(request) });
@@ -102,4 +111,21 @@ test('learning requires proof, exact input preconditions, authority and a separa
   const stored = JSON.parse(await readFile(join(worktree, 'recipes.json'), 'utf8'));
   assert.equal(stored.recipes[0].proof.checkDigest, proof.checkDigest);
   await assert.rejects(recordVerifiedLearning({ registryFile: join(worktree, 'recipes.json'), controllerDirectory: worktree, recipe: known, incident, proof, authority: async () => {} }), { code: 'LEARNING_REQUIRES_SEPARATE_ISOLATED_WORKTREE' });
+}));
+
+test('smoke obstacles keep allowlisted attribution and distinct module signatures', async () => fixture(async ({ outputFile }) => {
+  const log = journal();
+  for (const smokeModule of ['review', 'hedge_desk', 'private-value']) {
+    await call({ outputFile, journal: log, error: { code: 'SMOKE_AUTHENTICATED_READ_FAILED', smokeModule, smokeSurface: 'read' } });
+  }
+  const obstacles = log.records.filter(({ payload }) => payload.event === 'obstacle.detected').map(({ payload }) => payload.data);
+  assert.equal(new Set(obstacles.map(item => item.signature)).size, 3);
+  assert.deepEqual(obstacles.map(item => item.inputs.smokeModule), ['review', 'hedge_desk', undefined]);
+  assert.ok(!JSON.stringify(obstacles).includes('private-value'));
+  const original = obstacles[0];
+  const resumed = await call({ outputFile, journal: log, error: {
+    code: original.code, smokeModule: original.inputs.smokeModule, smokeSurface: original.inputs.smokeSurface,
+  } });
+  assert.equal(resumed.incident.signature, original.signature);
+  assert.equal(log.records.filter(({ payload }) => payload.event === 'obstacle.detected').length, 3);
 }));

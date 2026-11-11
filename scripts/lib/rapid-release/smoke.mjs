@@ -1,13 +1,13 @@
+import { isReadOnlyHedgeDeskAction } from '../../../api/_deploymentReadActions.js';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier } from '../../../config/fcosConnections.js';
 import { FCOS_READ_ONLY_CI } from '../../../config/fcosCiIdentity.js';
-import { READ_ONLY_CI_HANDLERS, isReadOnlyMarketAction } from '../../../api/_readOnlyCiAccess.js';
+import { READ_ONLY_CI_HANDLERS, isReadOnlyMarketAction, CI_DENIAL_PROBES } from './smoke-policy.mjs';
 import { canonicalFcosE2eCandidateUrl } from '../../verify-e2e-candidate.mjs';
 import { candidateAuthenticationState, writePrivateE2eState, removePrivateE2eState } from '../../e2e-private-state.mjs';
 import { candidateProtectionState } from '../../e2e-protection-state.mjs';
-import { CI_DENIAL_PROBES } from '../../e2e-api-denials.mjs';
 import { MODULE_READERS as moduleReaders, MODULE_SURFACES, NORMAL_NAVIGATION_READS, moduleReadBody, moduleReaderPayloadVerified as modulePayloadVerified } from './normal-role-readers.mjs';
 
 const issuer = new URL(FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation.issuer).origin;
@@ -63,6 +63,24 @@ function safeBody(value, depth = 0) {
     && !unsafeControl.test(key.replace(/[^a-z0-9]/gi, '')) && safeBody(item, depth + 1));
 }
 function bodyOf(request) { try { return JSON.parse(request.postData() || '{}'); } catch { return null; } }
+function optionalReadExclusion(url, request) {
+  if (request.method() !== 'GET' || url.protocol !== 'https:' || url.username || url.password) return null;
+  const type = request.resourceType();
+  if (url.origin === issuer) {
+    if (type === 'image' && url.pathname === '/_next/image'
+      && ['q,url,w', 'dpl,q,url,w'].includes([...url.searchParams.keys()].sort().join(','))) return 'issuer_images';
+    if (['fetch', 'xhr'].includes(type) && ['/', '/admin'].includes(url.pathname)
+      && /^\?_rsc=[A-Za-z0-9_-]+$/.test(url.search)) return 'issuer_prefetch';
+    if (['fetch', 'xhr'].includes(type) && url.pathname === '/api/parser-reports'
+      && [...url.searchParams.keys()].length === 3) return 'issuer_parser_reports';
+    if (['fetch', 'xhr'].includes(type) && url.pathname === '/api/admin/dashboard-swatches'
+      && !url.search) return 'issuer_dashboard_swatches';
+  }
+  if (url.origin === 'https://s3.tradingview.com' && type === 'script'
+    && url.pathname === '/external-embedding/embed-widget-market-overview.js'
+    && !url.search) return 'market_overview_embed';
+  return null;
+}
 // Protected harness policy is independent of candidate dispatch metadata. The
 // two issuer auth routes are the pinned FCUNO source's existing login contract.
 export function stagedBrowserRequestAllowed(request, { origin, credentials, normal = false }) {
@@ -73,7 +91,13 @@ export function stagedBrowserRequestAllowed(request, { origin, credentials, norm
     if (url.origin === origin) {
       if (url.pathname.startsWith('/api/functions/')) {
         const name = url.pathname.split('/').pop(), body = bodyOf(request);
-        if (name === 'hedgeDeskEntity') return normal && method === 'POST' && !url.search && exactKeys(body, ['action']) && body.action === 'snapshot';
+        if (name === 'hedgeDeskEntity') return normal && method === 'POST' && !url.search && isReadOnlyHedgeDeskAction(body) && (body.action === 'snapshot'
+            || body.action === 'list' && body.entity === 'AppConfig' && body.sort === '-created_date' && body.limit === 1000);
+        if (name === 'masterContractDetail') return normal && method === 'POST' && !url.search
+          && exactKeys(body, ['contractId', 'includeLive', 'force'])
+          && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(body.contractId)
+          && body.includeLive === true && body.force === false;
+        if (name === 'xeroFinancialSyncLatest') return normal && method === 'POST' && !url.search && exactKeys(body, []);
         if (normal && name === 'xeroPortalStatus' && exactKeys(body, ['forceRefresh'])) return method === 'POST' && !url.search && body.forceRefresh === false;
         return method === 'POST' && !url.search && safeBody(body)
           && ((normal ? normalReadHandlers : readHandlers).has(name) || name === 'hedgeMarkets' && isReadOnlyMarketAction(body));
@@ -86,6 +110,8 @@ export function stagedBrowserRequestAllowed(request, { origin, credentials, norm
           && body.state === 'active' && body.source === 'all';
       }
       if (url.pathname.startsWith('/api/')) return method === 'GET' && url.pathname === '/api/release-identity' && !url.search;
+      if (url.pathname === '/app-version.json' && ['fetch', 'xhr'].includes(type)
+        && /^\?t=\d{13}$/.test(url.search)) return method === 'GET';
       const loginQuery = url.pathname === '/login' && url.search === '?federated=1';
       if (normal && type === 'document' && Object.values(MODULE_SURFACES).some(surface => `${url.pathname}${url.search}` === surface.route)) return method === 'GET';
       return method === 'GET' && (!url.search || loginQuery) && (type === 'document' && ['/', '/login', '/markets', '/settings', '/email-router'].includes(url.pathname)
@@ -147,13 +173,27 @@ const cleanLaunchEnvironment = env => Object.fromEntries(['PATH', 'HOME', 'TMPDI
   .filter(key => typeof env[key] === 'string').map(key => [key, env[key]]));
 
 async function installGate(context, policy, onAuthRequest) {
-  let page, gateFailed = false, blocked = 0, excludedTelemetry = 0, excludedBackgroundSync = 0;
+  let page, gateFailed = false, blocked = 0, excludedTelemetry = 0, excludedBackgroundSync = 0, excludedAutoReconciliation = 0, excludedExternalMappings = 0;
+  const excludedOptionalReads = new Set();
   const allowed = request => {
     try {
       const url = new URL(request.url());
       if (url.origin === policy.origin && url.pathname === '/_vercel/speed-insights/script.js' && request.method() === 'GET') { excludedTelemetry++; return false; }
       if (policy.normal && url.origin === policy.origin && url.pathname === '/api/email-router-background-sync' && !url.search
         && request.method() === 'POST' && exactKeys(bodyOf(request), [])) { excludedBackgroundSync++; return false; }
+      if (policy.normal && url.origin === policy.origin && url.pathname === '/api/functions/paymentCollectionsReconcile'
+        && !url.search && request.method() === 'POST') {
+        const body = bodyOf(request);
+        if (exactKeys(body, ['force']) && body.force === false) { excludedAutoReconciliation++; return false; }
+      }
+      // This desktop initializer can refresh the Xero credential. Keep it off
+      // the network even though its handler is registered as a read.
+      if (policy.normal && url.origin === policy.origin && url.pathname === '/api/functions/xeroFinancialMappingsGet'
+        && !url.search && request.method() === 'POST' && exactKeys(bodyOf(request), [])) {
+        excludedExternalMappings++; return false;
+      }
+      const exclusion = optionalReadExclusion(url, request);
+      if (exclusion) { excludedOptionalReads.add(exclusion); return false; }
       if (stagedBrowserRequestAllowed(request, policy)) return true;
     } catch { /* Only fixed failure labels leave the harness. */ }
     blocked++; return false;
@@ -178,8 +218,8 @@ async function installGate(context, policy, onAuthRequest) {
   });
   await native.send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] });
   return { page, assertHealthy: () => requireFact(!gateFailed && blocked === 0, 'SMOKE_BROWSER_NETWORK_OR_RUNTIME_FAILURE'),
-    summary: () => ({ blockedRequests: blocked, excludedTelemetry, excludedBackgroundSync,
-      excludedFeatures: ['speed_insights', ...(excludedBackgroundSync ? ['automatic_mailbox_sync'] : [])] }) };
+    summary: () => ({ blockedRequests: blocked, excludedTelemetry, excludedBackgroundSync, excludedAutoReconciliation, excludedExternalMappings,
+      excludedFeatures: ['speed_insights', ...(excludedBackgroundSync ? ['automatic_mailbox_sync'] : []), ...(excludedAutoReconciliation ? ['automatic_payment_reconciliation'] : []), ...(excludedExternalMappings ? ['external_xero_mapping_options'] : []), ...[...excludedOptionalReads].sort()] }) };
 }
 async function routeRead(route, origin, path, body, expectedStatus = 200) {
   let response;
@@ -213,7 +253,9 @@ async function verifyModuleDesktop({ page, origin, module }) {
   requireFact(spec, 'MODULE_DESKTOP_COVERAGE_MISSING');
   await page.goto(`${origin}${spec.route}`, { waitUntil: 'domcontentloaded', timeout: 45000 });
   requireFact(page.url() === `${origin}${spec.route}`, 'SMOKE_CANDIDATE_NAVIGATION_CHANGED');
-  await page.getByRole('heading', { name: spec.heading }).first().waitFor({ state: 'visible', timeout: 30000 });
+  try {
+    await page.getByRole('heading', { name: spec.heading }).first().waitFor({ state: 'visible', timeout: 30000 });
+  } catch { throw fail('SMOKE_MODULE_DESKTOP_HEADING_MISSING'); }
   if (spec.readControl) {
     const [response] = await Promise.all([
       page.waitForResponse(value => value.url() === `${origin}${moduleReaders[module].path}` && value.request().method() === 'POST', { timeout: 45000 }),
@@ -222,30 +264,51 @@ async function verifyModuleDesktop({ page, origin, module }) {
     requireFact(response.status() === 200 && await response.finished() === null
       && modulePayloadVerified(module, await response.json()), 'SMOKE_MODULE_READ_FAILED');
   }
-  await page.waitForLoadState('networkidle', { timeout: 30000 });
-  await page.waitForFunction(() => !/\b(?:loading|fetching|preparing)\b/i.test(document.body.innerText), undefined, { timeout: 30000 });
-  if (module === 'settings') await page.getByLabel(/Annual interest rate/i).waitFor({ state: 'visible', timeout: 30000 });
-  else if (module === 'xero_portal') await page.locator('dl dd').first().waitFor({ state: 'visible', timeout: 30000 });
-  else {
-    const surface = page.locator('table, [role="table"], [role="grid"]');
-    // No heading-only success: require an actual table/grid or an explicit
-    // business empty state. A loading/default uninitialized panel is not proof.
-    if (!await surface.count()) {
-      await page.getByText(/No (?:records|rows|items|invoices|payments|receipts|messages|contracts|terms|trades|positions|data|STEMs|matching|Accounts|Dispute Workflow|forecast rows)(?:\b)/i).first()
-        .waitFor({ state: 'visible', timeout: 30000 });
-    } else await surface.first().waitFor({ state: 'visible', timeout: 30000 });
-  }
+  try {
+    if (module === 'settings') await page.getByLabel(/Annual financing rate/i).waitFor({ state: 'visible', timeout: 30000 });
+    else if (module === 'xero_portal') {
+      await page.getByRole('tab', { name: 'Receipts', exact: true }).click();
+      await page.locator('[aria-label="Receipt audit"] tbody tr').first().waitFor({ state: 'visible', timeout: 30000 });
+    }
+    else if (module === 'email_router') {
+      await page.locator('button:has(time), :text-is("Inbox is clear")').first().waitFor({ state: 'visible', timeout: 30000 });
+    }
+    else if (module === 'admin') {
+      await page.locator('[aria-label="Group details"]').first().waitFor({ state: 'visible', timeout: 30000 });
+      await page.getByText('Group name', { exact: true }).first().waitFor({ state: 'visible', timeout: 30000 });
+    }
+    else {
+      // Wait for populated rows or an explicit business empty state, including
+      // when the table is mounted after the first React render.
+      const surface = page.locator('table tbody tr, [role="rowgroup"] [role="row"]');
+      const empty = page.getByText(/No (?:records|rows|items|invoices|payments|receipts|messages|contracts|terms|trades|positions|data|STEMs|matching|Accounts|Dispute Workflow|forecast rows)(?:\b)/i);
+      await surface.or(empty).first().waitFor({ state: 'visible', timeout: 30000 });
+    }
+  } catch { throw fail('SMOKE_MODULE_DESKTOP_CONTENT_MISSING'); }
   const body = await page.locator('body').innerText();
   requireFact(!/Access denied|Something went wrong|temporarily unavailable|could not (?:load|read|verify)|No validator data loaded|Loading Hedge Desk/i.test(body), 'SMOKE_MODULE_DESKTOP_INCOMPLETE');
   return { module, route: spec.route, rendered: true, dataSource: moduleReaders[module].path, businessSurface: true,
     ...(spec.readControl ? { readControl: spec.readControl } : {}) };
 }
 
-async function browserRun({ origin, manifest, credentials, normal, modules, env, browserFactory }) {
-  let browser, context, privateEnv, cleanupFailed = false;
-  let denialReceipts = [], extraReads = [], desktopChecks = [], authProbed = false, probeError, rejectProbe;
+async function browserRun({ origin, manifest, credentials, normal, modules, env, browserFactory, diagnostic }) {
+  async function checkModule(module, surface, check) {
+    const start = performance.now();
+    let receipt, code;
+    try { receipt = await check(); }
+    catch (error) {
+      code = /^SMOKE_[A-Z0-9_]+$/.test(error?.code || '') ? error.code : 'SMOKE_MODULE_SURFACE_FAILED';
+      if (!diagnostic) throw Object.assign(fail(code), { smokeModule: module, smokeSurface: surface });
+    }
+    diagnostic?.record({ module, surface, passed: Boolean(receipt), elapsedMs: Math.round(performance.now() - start), ...(code ? { code } : {}) });
+    return receipt;
+  }
+  let phase = 'SETUP';
+  let browser, context, privateEnv, readNormalModules, cleanupFailed = false;
+  let denialReceipts = [], extraReads = [], desktopChecks = [], authProbed = false, probeError, rejectProbe, resolveProbe;
   const probeFailure = new Promise((_, reject) => { rejectProbe = reject; });
   probeFailure.catch(() => {});
+  const probeSettled = new Promise(resolve => { resolveProbe = resolve; });
   try {
     const directory = await mkdtemp(join(env.RUNNER_TEMP || tmpdir(), 'fcos-rapid-smoke-'));
     privateEnv = { FCOS_E2E_STATE_DIR: directory, FCOS_E2E_STORAGE_STATE: join(directory, 'auth.json'), FCOS_E2E_PROTECTION_STATE: join(directory, 'protection.json') };
@@ -280,19 +343,29 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
             requireFact(denial.url() === `${origin}${mutation.path}` && denial.status() === 403 && (await denial.json()).code === 'FCOS_DEPLOYMENT_READ_ONLY', 'SMOKE_NORMAL_MUTATION_NOT_DENIED');
             denialReceipts = [{ path: mutation.path, status: 403, code: 'FCOS_DEPLOYMENT_READ_ONLY' }];
           } finally { await denial?.dispose(); }
-          for (const module of modules.filter(value => !baselineModules.includes(value))) {
-            const reader = moduleReaders[module];
-            const result = await routeRead(route, origin, reader.path, moduleReadBody(module, manifest));
-            requireFact(modulePayloadVerified(module, result.response), 'SMOKE_MODULE_PAYLOAD_INCOMPLETE');
-            extraReads.push({ module, ...result.receipt, dataVerified: true, surface: 'authenticated_read_api', coverage: reader.coverage });
-          }
+          readNormalModules = async () => {
+            for (const module of modules.filter(value => !baselineModules.includes(value))) {
+              const reader = moduleReaders[module];
+              const receipt = await checkModule(module, 'read', async () => {
+                const result = await routeRead(route, origin, reader.path, moduleReadBody(module, manifest));
+                requireFact(modulePayloadVerified(module, result.response), 'SMOKE_MODULE_PAYLOAD_INCOMPLETE');
+                return { module, ...result.receipt, dataVerified: true, surface: 'authenticated_read_api', coverage: reader.coverage };
+              });
+              if (receipt) extraReads.push(receipt);
+            }
+          };
         }
         await route.fulfill({ response: actual });
       } catch (error) { probeError = error; rejectProbe(error); await route.abort('blockedbyclient'); }
-      finally { await actual?.dispose(); }
+      finally {
+        try { await actual?.dispose(); }
+        catch { rejectProbe(fail('SMOKE_AUTH_RESPONSE_CLEANUP_FAILED')); }
+        finally { resolveProbe(); }
+      }
       return true;
     });
     const page = gate.page;
+    phase = 'ISSUER_NAVIGATION';
     await page.goto(`${origin}/login`, { waitUntil: 'domcontentloaded', timeout: 45000 });
     if (new URL(page.url()).origin !== issuer) {
       const button = page.getByRole('button', { name: 'Continue with FCUNO', exact: true });
@@ -306,16 +379,24 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
     atIssuer(); await page.getByLabel('Username', { exact: true }).fill(credentials.email);
     atIssuer(); await page.getByLabel('Password', { exact: true }).fill(credentials.password);
     atIssuer();
+    phase = 'SIGN_IN';
     const [authResponse] = await Promise.all([
       Promise.race([page.waitForResponse(response => response.url() === `${origin}/api/functions/authContext` && response.request().method() === 'POST', { timeout: 90000 }), probeFailure]),
       page.getByRole('button', { name: 'Login', exact: true }).click(),
     ]);
+    await Promise.race([probeSettled, probeFailure]);
     await page.waitForURL(url => url.origin === origin && url.pathname !== '/login', { timeout: 30000 });
     requireFact(authResponse.status() === 200 && authProbed && !probeError, probeError?.code || 'SMOKE_LOGIN_NOT_PROVEN');
     assertIdentity(await authResponse.json(), credentials, normal, modules);
     await writePrivateE2eState({ env: privateEnv, path: privateEnv.FCOS_E2E_STORAGE_STATE, state: candidateAuthenticationState(await context.storageState(), origin) });
+    if (normal) {
+      requireFact(readNormalModules, 'SMOKE_NORMAL_READS_NOT_BOUND');
+      phase = 'NORMAL_MODULE_READS';
+      await readNormalModules();
+    }
     const reads = [...extraReads];
     for (const module of baselineModules) {
+      phase = `BASELINE_${module.toUpperCase()}`;
       const reader = moduleReaders[module];
       const [response] = await Promise.all([
         page.waitForResponse(value => value.url() === `${origin}${reader.path}` && value.request().method() === 'POST', { timeout: 45000 }),
@@ -328,10 +409,14 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
       requireFact(new URL(page.url()).origin === origin, 'SMOKE_CANDIDATE_NAVIGATION_CHANGED');
       reads.push({ module, path: reader.path, status: 200, authenticated: true, dataVerified: true, surface: 'browser' });
     }
-    if (normal) for (const module of modules.filter(value => !baselineModules.includes(value))) {
-      desktopChecks.push(await verifyModuleDesktop({ page, origin, module }));
+    if (normal && diagnostic?.desktop !== false) for (const module of modules.filter(value => !baselineModules.includes(value)
+      && (!diagnostic?.desktopModules || diagnostic.desktopModules.includes(value)))) {
+      phase = `DESKTOP_${module.toUpperCase()}`;
+      const receipt = await checkModule(module, 'desktop', () => verifyModuleDesktop({ page, origin, module }));
+      if (receipt) desktopChecks.push(receipt);
     }
     if (!normal) {
+      phase = 'RESTRICTED_ACCESS';
       for (const route of ['/settings', '/email-router']) {
         await page.goto(`${origin}${route}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
         await page.getByRole('heading', { name: /^Access denied$/i }).waitFor({ state: 'visible', timeout: 10000 });
@@ -342,7 +427,12 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
     return { role: credentials.role, requiredModules: unique(modules), modules: unique(reads.map(read => read.module)), reads, desktopChecks, denialReceipts,
       ...gate.summary(), candidateSha: manifest.candidate.sha };
   } catch (error) {
-    throw fail(probeError?.code || (/^(?:SMOKE_|NORMAL_ROLE_)[A-Z0-9_]+$/.test(error?.code || '') ? error.code : 'SMOKE_BROWSER_VERIFICATION_FAILED'));
+    const cause = probeError || error;
+    const failure = fail(/^(?:SMOKE_|NORMAL_ROLE_)[A-Z0-9_]+$/.test(cause?.code || '') ? cause.code : `SMOKE_BROWSER_${phase}_FAILED`);
+    if (Object.hasOwn(moduleReaders, cause?.smokeModule) && ['read', 'desktop'].includes(cause.smokeSurface)) {
+      Object.assign(failure, { smokeModule: cause.smokeModule, smokeSurface: cause.smokeSurface });
+    }
+    throw failure;
   } finally {
     try { await context?.close(); } catch { cleanupFailed = true; }
     try { await browser?.close(); } catch { cleanupFailed = true; }
@@ -351,7 +441,28 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
   }
 }
 
-export async function runStagedSmoke({ manifest, staged, env = process.env, fetchImpl = fetch, browserFactory } = {}) {
+export function runStagedSmoke(options) {
+  return stagedSmoke(options);
+}
+
+// Diagnostics share the request guard and identity checks, but never produce
+// release evidence, even when every module succeeds.
+export async function diagnoseStagedSmoke(options, { desktop = true, desktopModules, onOutcome } = {}) {
+  const outcomes = [];
+  let code;
+  try {
+    await stagedSmoke(options, {
+      record(outcome) { outcomes.push(outcome); onOutcome?.(outcome); },
+      desktop, desktopModules,
+    });
+  }
+  catch (error) {
+    code = /^(?:SMOKE_|NORMAL_ROLE_|MODULE_)[A-Z0-9_]+$/.test(error?.code || '') ? error.code : 'SMOKE_DIAGNOSTIC_FAILED';
+  }
+  return { passed: false, outcomes, ...(code ? { code } : {}) };
+}
+
+async function stagedSmoke({ manifest, staged, env = process.env, fetchImpl = fetch, browserFactory } = {}, diagnostic) {
   const origin = binding(manifest, staged);
   const selected = unique(manifest.selection?.modules || []);
   const expanded = String(env.FCOS_RAPID_NORMAL_REQUIRED_MODULES || '').split(',').map(value => value.trim()).filter(Boolean);
@@ -377,7 +488,7 @@ export async function runStagedSmoke({ manifest, staged, env = process.env, fetc
   await verifyIdentity(origin, manifest, fetchImpl, env.FCOS_E2E_VERCEL_BYPASS);
   const launch = browserFactory || (async options => (await import('@playwright/test')).chromium.launch(options));
   const restricted = await browserRun({ origin, manifest, credentials: ci, normal: false, modules: baselineModules, env, browserFactory: launch });
-  const ordinary = normal ? await browserRun({ origin, manifest, credentials: normal, normal: true, modules: normalModules, env, browserFactory: launch }) : null;
+  const ordinary = normal ? await browserRun({ origin, manifest, credentials: normal, normal: true, modules: normalModules, env, browserFactory: launch, diagnostic }) : null;
   return { passed: true, deploymentId: staged.id, buildId: staged.buildId, login: true, restrictedAccess: true, businessWrites: 0,
     modules: unique([...restricted.modules, ...(ordinary?.modules || [])]), restrictedEvidence: restricted,
     ...(ordinary ? { normalRole: true, normalRoleEvidence: ordinary } : {}) };
