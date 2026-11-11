@@ -18188,6 +18188,7 @@ async function salesforceBrokerRegisterUncached(body, req = null, accessContext 
   const rawRows = [];
   const financialWarnings = new Set();
   for (const item of lineItems) {
+    if (item.Cancelled__c === true) continue;
     const stem = stemMap[item.STEM__c];
     if (!stem) continue;
     const paymentReliability = paymentDataReliabilityState(stem);
@@ -18199,7 +18200,7 @@ async function salesforceBrokerRegisterUncached(body, req = null, accessContext 
     const qty = nativeQuantity.quantity;
     const quantityUnit = nativeQuantity.unitOfMeasure || 'UOM not set';
     if (nativeQuantity.warning) financialWarnings.add(`${stem.Name || 'STEM'} · ${item.Name || item.Id}: ${nativeQuantity.warning}`);
-    const supplierAmount = item.Cancelled__c ? 0 : brokerAmount(item.Suppliers_Brokers_Commission_Per_Unit__c, qty);
+    const supplierAmount = brokerAmount(item.Suppliers_Brokers_Commission_Per_Unit__c, qty);
     if (item.Supplier_Broker__c && supplierAmount !== 0) {
       rawRows.push({
         id: `supplier-${item.Id}`,
@@ -18297,7 +18298,7 @@ async function salesforceBrokerRegisterUncached(body, req = null, accessContext 
 async function salesforceBrokerRegisterFull(body, req = null, accessContext = null) {
   const limit = Math.min(Number(body.limit) || 2000, 3000);
   const cached = await cachedSalesforceValue({
-    namespace: 'salesforce-broker-register',
+    namespace: 'salesforce-broker-register-v2-active-lines',
     ttlSeconds: 60,
     payload: { limit, paymentDataReliableFrom: PAYMENT_DATA_RELIABLE_FROM },
     tags: ['salesforce:broker-register', 'salesforce:stem', 'salesforce:account'],
