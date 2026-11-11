@@ -103,6 +103,7 @@ export const AuthProvider = ({ children }) => {
   const authRequest = useRef(0);
   const accessSnapshot = useRef(null);
   const loggingOut = useRef(false);
+  const signOutFailed = useRef(false);
   const [user, setUser] = useState(null);
   const [moduleAccess, setModuleAccess] = useState({});
   const [moduleAccessLevels, setModuleAccessLevels] = useState({});
@@ -133,7 +134,7 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   const checkUserAuth = useCallback(async ({ showLoader = true } = {}) => {
-    if (loggingOut.current) return { user: null, stale: true };
+    if (loggingOut.current || signOutFailed.current) return { user: null, stale: true };
     const request = ++authRequest.current;
     const session = clientSessionState();
     if (showLoader) setIsLoadingAuth(true);
@@ -192,7 +193,7 @@ export const AuthProvider = ({ children }) => {
     if (!isSupabaseConfigured) return undefined;
     let pendingCheck;
     const { data } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'INITIAL_SESSION' || loggingOut.current) return;
+      if (event === 'INITIAL_SESSION' || loggingOut.current || signOutFailed.current) return;
       window.clearTimeout(pendingCheck);
       appClient.functions.clearCache();
       authRequest.current += 1;
@@ -242,6 +243,7 @@ export const AuthProvider = ({ children }) => {
     }
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) throw error;
+    signOutFailed.current = false;
     const result = await checkUserAuth({ showLoader: true });
     if (!result?.user) throw new Error(loginFailureMessage(result?.error));
   };
@@ -319,6 +321,7 @@ export const AuthProvider = ({ children }) => {
     setAuthChecked(false);
     setClientSessionOwner(null);
     setUser(null);
+    setGroupAccess({ permissionGroups: [], accessRevision: null, grantSources: {} });
     setIsAuthenticated(false);
     setAuthError({ type: 'auth_required' });
     appClient.functions.clearCache();
@@ -334,19 +337,25 @@ export const AuthProvider = ({ children }) => {
           message: error.message || 'Application sessions could not be revoked.',
         }];
       }
+    }
+    if (isSupabaseConfigured) {
+      try {
+        const result = await supabase.auth.signOut({ scope: 'local' });
+        if (result?.error) throw result.error;
+        signOutFailed.current = false;
+      } catch {
+        signOutFailed.current = true;
+        window.sessionStorage.setItem(FCUNO_FORCE_REAUTH_KEY, 'true');
+        portalFailures = [...portalFailures, {
+          applicationId: 'fcos',
+          message: 'The server-side FCOS session could not be revoked.',
+        }];
+      }
       if (portalFailures.length) {
         window.sessionStorage.setItem('fcos:portal-logout-warning', JSON.stringify(portalFailures));
       } else {
         window.sessionStorage.removeItem('fcos:portal-logout-warning');
       }
-    }
-    if (isSupabaseConfigured) {
-      await supabase.auth.signOut({ scope: 'local' }).catch(() => {
-        window.sessionStorage.setItem('fcos:portal-logout-warning', JSON.stringify([
-          ...portalFailures,
-          { applicationId: 'fcos', message: 'The server-side FCOS session could not be revoked.' },
-        ]));
-      });
     }
     setUser(null);
     setModuleAccess({});

@@ -102,5 +102,24 @@ test('executed AuthProvider rejects late auth after logout and after a newer acc
   assert.deepEqual(states[1], {});
   assert.equal(states[9].type, 'auth_required');
   assert.equal(sessionStorage.get('fcos:fcuno-force-reauth'), 'true');
+  const failedSignOut = async () => ({ error: new Error('provider sign-out failed') });
+  supabase.auth.signOut = failedSignOut;
+  const failedLogout = await auth.logout();
+  assert.deepEqual(failedLogout.failures.map(({ applicationId }) => applicationId), ['fcos']);
+  assert.equal(JSON.parse(sessionStorage.get('fcos:portal-logout-warning'))[0].applicationId, 'fcos');
+  assert.equal(clientSessionState().ownerId, null);
+  assert.deepEqual(await auth.checkUserAuth(), { user: null, stale: true });
+  authEvent('TOKEN_REFRESHED', { user: { id: 'user-b' } });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(pending.length, 7);
+  assert.equal(states[0], null);
+
+  supabase.auth.signInWithPassword = async () => ({ error: null });
+  const newSignIn = auth.login('test@example.invalid', 'fixture-only');
+  await Promise.resolve();
+  await Promise.resolve();
+  pending[7]({ data: { user: { id: 'user-b', active: true } } });
+  await newSignIn;
+  assert.equal(states[0].id, 'user-b');
   delete globalThis.__authHarness;
 });
