@@ -27,8 +27,12 @@ test('executed AuthProvider rejects late auth after logout and after a newer acc
     access_token: `header.${Buffer.from(JSON.stringify({ session_id: id, iat })).toString('base64url')}.fixture`,
   });
   let browserSession = fakeSession(previousSessionId, 1);
+  let sessionReads = 0;
   const supabase = { auth: {
-    getSession: async () => ({ data: { session: browserSession } }),
+    getSession: async () => {
+      sessionReads += 1;
+      return { data: { session: browserSession } };
+    },
     signOut: async () => { authEvent?.('SIGNED_OUT', null); },
     onAuthStateChange: (fn) => { authEvent = fn; return { data: { subscription: { unsubscribe() {} } } }; },
   } };
@@ -73,8 +77,10 @@ test('executed AuthProvider rejects late auth after logout and after a newer acc
   assert.equal(states[7], true, 'transition loader prevents automatic FCUNO navigation during sign-out');
   assert.equal(states[10], false, 'logout is not yet complete');
   assert.equal((await auth.checkUserAuth()).stale, true);
+  assert.equal(sessionStorage.get('fcos:failed-sign-out-session'), previousSessionId, 'Reload protection is persisted before provider acknowledgement');
   finishSignOut();
   await logout;
+  assert.equal(sessionStorage.has('fcos:failed-sign-out-session'), false);
   assert.equal(states[7], false);
   pending[2]({ data: { user: { id: 'user-a' } } });
   assert.equal((await beforeLogout).stale, true);
@@ -111,7 +117,9 @@ test('executed AuthProvider rejects late auth after logout and after a newer acc
   assert.equal(sessionStorage.get('fcos:fcuno-force-reauth'), 'true');
   const failedSignOut = async () => ({ error: new Error('provider sign-out failed') });
   supabase.auth.signOut = failedSignOut;
+  const beforeFailedLogout = sessionReads;
   const failedLogout = await auth.logout();
+  assert.equal(sessionReads, beforeFailedLogout, 'Failed sign-out must not attempt a session refresh');
   assert.deepEqual(failedLogout.failures.map(({ applicationId }) => applicationId), ['fcos']);
   assert.equal(JSON.parse(sessionStorage.get('fcos:portal-logout-warning'))[0].applicationId, 'fcos');
   assert.equal(clientSessionState().ownerId, null);
@@ -153,7 +161,9 @@ test('executed AuthProvider rejects late auth after logout and after a newer acc
   // Explicit password sign-in can recover when the old session could not
   // be identified, and still runs normal server verification.
   browserSession = { user: { id: 'user-b' }, access_token: 'malformed' };
-  await reloaded.logout();
+  stateIndex = 0;
+  const unverified = AuthProvider({ children: null }).props.value;
+  await unverified.logout();
   assert.equal(sessionStorage.get('fcos:failed-sign-out-session'), 'unknown');
   browserSession = fakeSession(previousSessionId, 4);
   stateIndex = 0;

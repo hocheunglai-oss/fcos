@@ -78,17 +78,15 @@ async function loadSupabaseUser() {
     error: { type: 'auth_required' },
   };
 
+  const sessionId = browserSessionId(sessionData.session);
   const blockedSession = window.sessionStorage.getItem(FAILED_SIGN_OUT_SESSION_KEY);
-  if (blockedSession) {
-    const current = browserSessionId(sessionData.session);
-    if (!current || blockedSession === 'unknown' || current === blockedSession) {
-      return {
-        user: null,
-        forceReauthentication: true,
-        blockedSessionId: blockedSession === 'unknown' ? current : null,
-        error: { type: 'auth_required' },
-      };
-    }
+  if (blockedSession && (!sessionId || blockedSession === 'unknown' || sessionId === blockedSession)) {
+    return {
+      user: null,
+      forceReauthentication: true,
+      blockedSessionId: blockedSession === 'unknown' ? sessionId : null,
+      error: { type: 'auth_required' },
+    };
   }
 
   const { data } = await appClient.functions.invoke('authContext', {}, { force: true });
@@ -114,6 +112,7 @@ async function loadSupabaseUser() {
   }
   return {
     user: data.user,
+    sessionId,
     access: data.moduleAccess || {},
     permissionGroups: data.permissionGroups || [],
     accessRevision: data.accessRevision ?? null,
@@ -132,6 +131,7 @@ export const AuthProvider = ({ children }) => {
   const accessSnapshot = useRef(null);
   const loggingOut = useRef(false);
   const signOutFailed = useRef(false);
+  const verifiedSessionId = useRef(null);
   const [user, setUser] = useState(null);
   const [moduleAccess, setModuleAccess] = useState({});
   const [moduleAccessLevels, setModuleAccessLevels] = useState({});
@@ -182,6 +182,7 @@ export const AuthProvider = ({ children }) => {
       else if (result.user) {
         window.sessionStorage.removeItem(FCUNO_FORCE_REAUTH_KEY);
         window.sessionStorage.removeItem(FAILED_SIGN_OUT_SESSION_KEY);
+        verifiedSessionId.current = result.sessionId;
       }
       const nextAccessSnapshot = JSON.stringify([result.user?.id, result.user?.user_type, result.access, result.accessLevels, result.capabilities]);
       if (accessSnapshot.current !== nextAccessSnapshot) appClient.functions.clearCache();
@@ -352,6 +353,11 @@ export const AuthProvider = ({ children }) => {
   const logout = async () => {
     loggingOut.current = true;
     authRequest.current += 1;
+    if (isSupabaseConfigured) {
+      const previous = verifiedSessionId.current || window.sessionStorage.getItem(FAILED_SIGN_OUT_SESSION_KEY);
+      window.sessionStorage.setItem(FAILED_SIGN_OUT_SESSION_KEY, previous || 'unknown');
+      verifiedSessionId.current = null;
+    }
     setIsLoadingAuth(true);
     setAuthChecked(false);
     setClientSessionOwner(null);
@@ -382,9 +388,6 @@ export const AuthProvider = ({ children }) => {
       } catch {
         signOutFailed.current = true;
         window.sessionStorage.setItem(FCUNO_FORCE_REAUTH_KEY, 'true');
-        const current = await supabase.auth.getSession().catch(() => null);
-        const blockedSession = !current?.error && browserSessionId(current?.data?.session);
-        window.sessionStorage.setItem(FAILED_SIGN_OUT_SESSION_KEY, blockedSession || 'unknown');
         portalFailures = [...portalFailures, {
           applicationId: 'fcos',
           message: 'The server-side FCOS session could not be revoked.',
