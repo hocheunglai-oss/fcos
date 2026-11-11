@@ -9,7 +9,7 @@ import { EventEmitter } from 'node:events';
 import { TLSSocket } from 'node:tls';
 import { digest,targets } from '../scripts/lib/rapid-release/contract.mjs';
 import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
-import { createDatabaseCredentialIntentStore,DATABASE_SCOPE_EVIDENCE_ENVIRONMENT,DATABASE_UNSUBMITTED_EVIDENCE_ENVIRONMENT,DATABASE_AUTH_RECONCILIATION_SQL } from '../scripts/lib/rapid-release/database-intent.mjs';
+import { createDatabaseCredentialIntentStore,DATABASE_SCOPE_EVIDENCE_ENVIRONMENT,DATABASE_UNSUBMITTED_EVIDENCE_ENVIRONMENT,DATABASE_EXPIRED_ISSUANCE_EVIDENCE_ENVIRONMENT,DATABASE_AUTH_RECONCILIATION_SQL } from '../scripts/lib/rapid-release/database-intent.mjs';
 import { MANAGED_DATABASE_ROLE_SQL } from '../scripts/lib/rapid-release/database-connection.mjs';
 import { openPinnedDatabase,isManagedDatabaseRole,DELEGATED_DATABASE_IDENTITY_SQL } from '../scripts/lib/rapid-release/database-connection.mjs';
 import { PUBLIC_CA } from './helpers/rapidDatabaseDelegationFixture.mjs';
@@ -40,6 +40,8 @@ function fixture(t){
     return {ref:REF,object:{type:'commit',sha:observed}};
    }
    if(path.includes('/deployments/'))return clone(f.observations.get(Number(path.split('/').at(-1))));
+   if(path.includes('/actions/runs/')&&f.terminalRun)return clone(f.terminalRun);
+   if(path.includes('/compare/')&&f.ancestry)return clone(f.ancestry);
    const sha=path.split('/').at(-1);if(path.includes('/git/commits/')&&commits.has(sha))return clone(commits.get(sha));throw Error(SECRET);},
   async pages(path){if(path.includes('/git/matching-refs/')){
     const snapshot=f.head?[{ref:REF,object:{type:'commit',sha:f.head}}]:[];
@@ -343,4 +345,67 @@ test('unsubmitted recovery reserves one terminal child even if the original jour
  await assert.rejects((await f.store()).begin(f.request),/NATIVE_CLOSURE_INVALID/);
  assert.equal(f.writes.length,writes);
  assert.equal(f.issuerPosts,0);
+});
+
+
+async function issuedWithoutAcknowledgement(t) {
+ const f=fixture(t);
+ f.input.purpose='rapid_controller_handover';
+ const intent=await (await f.store()).begin(f.request);
+ const claim=f.state(),claimSha=f.head;
+ const priorExpiry=f.role.role_valid_until_ms;
+ const expiry=claim.claimedAtMs+300000+0.02;
+ const later=Math.ceil(expiry)+2000;
+ f.role.role_valid_until_ms=expiry;
+ f.role.server_now_ms=later;
+ f.input.now=()=>later;
+ f.terminalRun={id:601,repository:{full_name:targets().repository},actor:f.actor,head_sha:'e'.repeat(40),head_branch:'main',
+  workflow_id:409929247,event:'workflow_dispatch',path:'.github/workflows/fcos-rapid-handover.yml',status:'completed',conclusion:'failure',
+  updated_at:new Date(claim.claimedAtMs+5000).toISOString()};
+ f.ancestry={status:'ahead',merge_base_commit:{sha:f.source.sha}};
+ const payload={schemaVersion:1,kind:'fcos_database_auth_expired_issuance_observation',
+  provenance:'owner_attested_native_role_issuance',intentId:intent.intentId,requestDigest:intent.requestDigest,
+  claimCommitSha:claimSha,claimDigest:digest(claim),originalSourceSha:claim.sourceSha,reconciliationSourceSha:f.source.sha,
+  projectRef:claim.request.projectRef,organizationId:claim.request.organizationId,observedAt:new Date(later).toISOString(),
+  evidenceDigest:'b'.repeat(64),roleExpiresAtMs:Math.floor(expiry),intentDeploymentId:f.deployments[0].id,
+  terminalRunId:f.terminalRun.id,dispatcherSha:f.terminalRun.head_sha};
+ const evidence={id:901,environment:DATABASE_EXPIRED_ISSUANCE_EVIDENCE_ENVIRONMENT,sha:f.source.sha,creator:clone(f.actor),payload};
+ f.observations.set(evidence.id,evidence);
+ return {f,claim,claimSha,evidence,priorExpiry,args:{intentId:intent.intentId,evidenceDeploymentId:evidence.id}};
+}
+
+test('native advanced expiry closes an expired issuance without inventing HTTP acknowledgement or reissuing',async t=>{
+ const {f,claim,claimSha,args}=await issuedWithoutAcknowledgement(t);
+ const result=await (await f.store()).reconcileExpiredIssuance(args);
+ assert.equal(result.state,'issued_expired');
+ assert.equal(f.state().phase,'issued_expired');
+ assert.deepEqual(f.state().pending,claim);
+ assert.equal(f.commits.get(f.head).parents[0].sha,claimSha);
+ assert.deepEqual(f.deployments.map(row=>row.payload.event),['intent','issued_expired']);
+ assert.equal(f.deployments.at(-1).payload.receipt.httpOutcome,'unobserved');
+ assert.equal(f.issuerPosts,0);
+ const writes=f.writes.length;
+ assert.equal((await (await f.store()).reconcileExpiredIssuance(args)).reused,true);
+ assert.equal(f.writes.length,writes);
+ assert.notEqual((await (await f.store()).begin(f.request)).intentId,claim.intentId);
+});
+
+test('expired issuance recovery refuses a live role, unchanged expiry, changed roles, or an unrelated terminal run',async t=>{
+ for(const mutate of [
+  ({f})=>{f.role.server_now_ms=f.role.role_valid_until_ms-1;},
+  ({f,priorExpiry})=>{f.role.role_valid_until_ms=priorExpiry;},
+  ({f})=>{f.reconcileRows=[f.role,{...f.role,login_role:'cli_login_other'}];},
+  ({f})=>{f.terminalRun.actor={...f.actor,id:f.actor.id+1};},
+  ({f})=>{f.ancestry.merge_base_commit.sha='f'.repeat(40);},
+  ({evidence})=>{evidence.payload.intentDeploymentId=500;},
+ ]){
+  const context=await issuedWithoutAcknowledgement(t);
+  mutate(context);
+  const {f,args}=context,writes=f.writes.length;
+  await assert.rejects((await f.store()).reconcileExpiredIssuance(args),
+   /ACTIVE_OR_UNKNOWN_LOGIN_ROLE|EXPIRED_ROLE_READBACK_MISMATCH|EXPIRED_NATIVE_RUN_REQUIRED|EXPIRED_EVIDENCE_REQUIRED/);
+  assert.equal(f.state().phase,'pending');
+  assert.equal(f.writes.length,writes);
+  assert.equal(f.issuerPosts,0);
+ }
 });
