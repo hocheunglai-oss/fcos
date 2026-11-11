@@ -9,7 +9,7 @@ import { EventEmitter } from 'node:events';
 import { TLSSocket } from 'node:tls';
 import { digest,targets } from '../scripts/lib/rapid-release/contract.mjs';
 import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
-import { createDatabaseCredentialIntentStore,DATABASE_SCOPE_EVIDENCE_ENVIRONMENT,DATABASE_AUTH_RECONCILIATION_SQL } from '../scripts/lib/rapid-release/database-intent.mjs';
+import { createDatabaseCredentialIntentStore,DATABASE_SCOPE_EVIDENCE_ENVIRONMENT,DATABASE_UNSUBMITTED_EVIDENCE_ENVIRONMENT,DATABASE_EXPIRED_ISSUANCE_EVIDENCE_ENVIRONMENT,DATABASE_AUTH_RECONCILIATION_SQL } from '../scripts/lib/rapid-release/database-intent.mjs';
 import { MANAGED_DATABASE_ROLE_SQL } from '../scripts/lib/rapid-release/database-connection.mjs';
 import { openPinnedDatabase,isManagedDatabaseRole,DELEGATED_DATABASE_IDENTITY_SQL } from '../scripts/lib/rapid-release/database-connection.mjs';
 import { PUBLIC_CA } from './helpers/rapidDatabaseDelegationFixture.mjs';
@@ -34,7 +34,14 @@ function fixture(t){
  f.armRace=()=>{let release;gate={seen:0,promise:new Promise(resolve=>{release=resolve;}),release};};
  const github={
   async read(path){if(path==='/user')return clone(f.actor);if(path===`/repos/${targets().repository}`)return clone(f.repository);
+   if(path===`/repos/${targets().repository}/git/ref/${REF.slice(5)}`){
+    const observed=f.exactRefReadbacks?.length?f.exactRefReadbacks.shift():f.head;
+    if(!observed)throw Error(SECRET);
+    return {ref:REF,object:{type:'commit',sha:observed}};
+   }
    if(path.includes('/deployments/'))return clone(f.observations.get(Number(path.split('/').at(-1))));
+   if(path.includes('/actions/runs/')&&f.terminalRun)return clone(f.terminalRun);
+   if(path.includes('/compare/')&&f.ancestry)return clone(f.ancestry);
    const sha=path.split('/').at(-1);if(path.includes('/git/commits/')&&commits.has(sha))return clone(commits.get(sha));throw Error(SECRET);},
   async pages(path){if(path.includes('/git/matching-refs/')){
     const snapshot=f.head?[{ref:REF,object:{type:'commit',sha:f.head}}]:[];
@@ -119,6 +126,27 @@ test('lost applied claim/journal/close ACKs use exact readback without resubmiss
  assert.equal(f.writes.filter(x=>x.path.endsWith('/git/refs')).length,1);
  assert.equal(f.writes.filter(x=>x.method==='PATCH').length,1);
  assert.equal(f.writes.filter(x=>x.path.endsWith('/deployments')).length,2);
+});
+
+test('delayed exact ref visibility rechecks the original write without resubmitting',async t=>{
+ const f=fixture(t),store=await f.store();
+ f.exactRefReadbacks=[null];
+ const intent=await store.begin(f.request),claim=f.head;
+ f.exactRefReadbacks=[claim];
+ await store.complete(f.receipt(intent));
+ assert.equal(f.state().phase,'received');
+ assert.equal(f.writes.filter(x=>x.path.endsWith('/git/refs')).length,1);
+ assert.equal(f.writes.filter(x=>x.method==='PATCH').length,1);
+ assert.equal(f.deployments.length,2);
+});
+
+test('an unexpected journal ref cannot acknowledge a different claim',async t=>{
+ const f=fixture(t),store=await f.store();
+ f.exactRefReadbacks=['e'.repeat(40)];
+ await assert.rejects(store.begin(f.request),/CLAIM_ACK_UNKNOWN/);
+ assert.equal(f.writes.filter(x=>x.path.endsWith('/git/refs')).length,1);
+ assert.equal(f.deployments.length,0);
+ assert.equal(f.issuerPosts,0);
 });
 
 test('unknown commit creation stops before ref claim or credential issuance',async t=>{
@@ -238,4 +266,146 @@ test('native 401 or 403 rejection is distinct from scope reconstruction and clos
   await store.rejected({intentId:intent.intentId,requestDigest:intent.requestDigest,outcome:'rejected',issuer:'https://api.supabase.com',projectRef:targets().supabaseProject,httpStatus:status,observedAtMs:Date.now()});
   assert.equal(f.state().phase,'rejected');assert.equal(f.state().receipt.httpStatus,status);assert.equal((await (await f.store()).begin(f.request)).state,'fresh');}
  const f=fixture(t),store=await f.store(),intent=await store.begin(f.request);await assert.rejects(store.rejected({intentId:intent.intentId,requestDigest:intent.requestDigest,outcome:'rejected',issuer:'https://api.supabase.com',projectRef:targets().supabaseProject,httpStatus:400,observedAtMs:Date.now()}),/RECEIPT_REFUSED/);
+});
+
+
+async function claimWithoutIntent(t, { publishIntent=false } = {}) {
+ const f=fixture(t),store=await f.store(),first=await store.begin(f.request);
+ const receipt=f.receipt(first);
+ receipt.ttlSeconds=1;
+ receipt.expiresAtMs=receipt.issuedAtMs+1000;
+ await store.complete(receipt);
+ f.role.role_valid_until_ms=receipt.expiresAtMs;
+ const later=receipt.expiresAtMs+2000;
+ f.role.server_now_ms=later;
+ f.input.now=()=>later;
+ const next=await f.store();
+ if(publishIntent)await next.begin(f.request);
+ else{
+  f.exactRefReadbacks=['e'.repeat(40)];
+  await assert.rejects(next.begin(f.request),/CLAIM_ACK_UNKNOWN/);
+ }
+ const claim=f.state(),claimSha=f.head;
+ const payload={schemaVersion:1,kind:'fcos_database_auth_unsubmitted_observation',
+  provenance:'owner_attested_terminal_before_intent',intentId:claim.intentId,requestDigest:claim.requestDigest,
+  claimCommitSha:claimSha,claimDigest:digest(claim),originalSourceSha:claim.sourceSha,reconciliationSourceSha:f.source.sha,
+  projectRef:claim.request.projectRef,organizationId:claim.request.organizationId,observedAt:new Date(later).toISOString(),
+  evidenceDigest:'a'.repeat(64),roleExpiresAtMs:f.role.role_valid_until_ms};
+ const evidence={id:900,environment:DATABASE_UNSUBMITTED_EVIDENCE_ENVIRONMENT,sha:f.source.sha,creator:clone(f.actor),payload};
+ f.observations.set(evidence.id,evidence);
+ return {f,claim,claimSha,evidence,args:{intentId:claim.intentId,evidenceDeploymentId:evidence.id}};
+}
+
+test('unsubmitted claim closes as a native child and permits a fresh independently checked operation',async t=>{
+ const {f,claim,claimSha,args}=await claimWithoutIntent(t);
+ // PostgreSQL returns an epoch with submillisecond precision.
+ f.role.role_valid_until_ms+=0.02;
+ const result=await (await f.store()).reconcileUnsubmitted(args);
+ assert.equal(result.state,'unsubmitted');
+ assert.equal(f.state().phase,'unsubmitted');
+ assert.deepEqual(f.state().pending,claim);
+ assert.equal(f.commits.get(f.head).parents[0].sha,claimSha);
+ assert.deepEqual(f.deployments.map(row=>row.payload.event),['intent','received','unsubmitted']);
+ assert.equal(f.issuerPosts,0);
+ const writes=f.writes.length;
+ assert.equal((await (await f.store()).reconcileUnsubmitted(args)).reused,true);
+ assert.equal(f.writes.length,writes);
+ const next=await (await f.store()).begin(f.request);
+ assert.notEqual(next.intentId,claim.intentId);
+ assert.equal(f.issuerPosts,0);
+});
+
+test('unsubmitted recovery refuses any published intent, mismatched attestation, or changed login expiry',async t=>{
+ const issued=await claimWithoutIntent(t,{publishIntent:true});
+ const before=issued.f.writes.length;
+ await assert.rejects((await issued.f.store()).reconcileUnsubmitted(issued.args),/ORIGINAL_OPERATION_UNCERTAIN/);
+ assert.equal(issued.f.writes.length,before);
+ for(const change of [
+  (f,evidence)=>{evidence.creator.id++;},
+  (f,evidence)=>{evidence.payload.claimCommitSha='f'.repeat(40);},
+  f=>{f.role.role_valid_until_ms=f.role.server_now_ms-10;},
+  f=>{f.reconcileRows=[f.role,{...f.role,login_role:'cli_login_other'}];},
+ ]){
+  const {f,evidence,args}=await claimWithoutIntent(t);
+  change(f,evidence);
+  const writes=f.writes.length;
+  await assert.rejects((await f.store()).reconcileUnsubmitted(args),/UNSUBMITTED_EVIDENCE_REQUIRED|ORIGINAL_ROLE_CHANGED/);
+  assert.equal(f.writes.length,writes);
+  assert.equal(f.issuerPosts,0);
+ }
+});
+
+test('unsubmitted recovery reserves one terminal child even if the original journal publication is uncertain',async t=>{
+ const {f,args}=await claimWithoutIntent(t);
+ f.deploymentNotApplied=true;
+ await assert.rejects((await f.store()).reconcileUnsubmitted(args),/ACK_UNKNOWN/);
+ assert.equal(f.state().phase,'unsubmitted');
+ const writes=f.writes.length;
+ await assert.rejects((await f.store()).reconcileUnsubmitted(args),/TERMINAL_PUBLICATION_UNCERTAIN/);
+ await assert.rejects((await f.store()).begin(f.request),/NATIVE_CLOSURE_INVALID/);
+ assert.equal(f.writes.length,writes);
+ assert.equal(f.issuerPosts,0);
+});
+
+
+async function issuedWithoutAcknowledgement(t) {
+ const f=fixture(t);
+ f.input.purpose='rapid_controller_handover';
+ const intent=await (await f.store()).begin(f.request);
+ const claim=f.state(),claimSha=f.head;
+ const priorExpiry=f.role.role_valid_until_ms;
+ const expiry=claim.claimedAtMs+300000+0.02;
+ const later=Math.ceil(expiry)+2000;
+ f.role.role_valid_until_ms=expiry;
+ f.role.server_now_ms=later;
+ f.input.now=()=>later;
+ f.terminalRun={id:601,repository:{full_name:targets().repository},actor:f.actor,head_sha:'e'.repeat(40),head_branch:'main',
+  workflow_id:409929247,event:'workflow_dispatch',path:'.github/workflows/fcos-rapid-handover.yml',status:'completed',conclusion:'failure',
+  updated_at:new Date(claim.claimedAtMs+5000).toISOString()};
+ f.ancestry={status:'ahead',merge_base_commit:{sha:f.source.sha}};
+ const payload={schemaVersion:1,kind:'fcos_database_auth_expired_issuance_observation',
+  provenance:'owner_attested_native_role_issuance',intentId:intent.intentId,requestDigest:intent.requestDigest,
+  claimCommitSha:claimSha,claimDigest:digest(claim),originalSourceSha:claim.sourceSha,reconciliationSourceSha:f.source.sha,
+  projectRef:claim.request.projectRef,organizationId:claim.request.organizationId,observedAt:new Date(later).toISOString(),
+  evidenceDigest:'b'.repeat(64),roleExpiresAtMs:Math.floor(expiry),intentDeploymentId:f.deployments[0].id,
+  terminalRunId:f.terminalRun.id,dispatcherSha:f.terminalRun.head_sha};
+ const evidence={id:901,environment:DATABASE_EXPIRED_ISSUANCE_EVIDENCE_ENVIRONMENT,sha:f.source.sha,creator:clone(f.actor),payload};
+ f.observations.set(evidence.id,evidence);
+ return {f,claim,claimSha,evidence,priorExpiry,args:{intentId:intent.intentId,evidenceDeploymentId:evidence.id}};
+}
+
+test('native advanced expiry closes an expired issuance without inventing HTTP acknowledgement or reissuing',async t=>{
+ const {f,claim,claimSha,args}=await issuedWithoutAcknowledgement(t);
+ const result=await (await f.store()).reconcileExpiredIssuance(args);
+ assert.equal(result.state,'issued_expired');
+ assert.equal(f.state().phase,'issued_expired');
+ assert.deepEqual(f.state().pending,claim);
+ assert.equal(f.commits.get(f.head).parents[0].sha,claimSha);
+ assert.deepEqual(f.deployments.map(row=>row.payload.event),['intent','issued_expired']);
+ assert.equal(f.deployments.at(-1).payload.receipt.httpOutcome,'unobserved');
+ assert.equal(f.issuerPosts,0);
+ const writes=f.writes.length;
+ assert.equal((await (await f.store()).reconcileExpiredIssuance(args)).reused,true);
+ assert.equal(f.writes.length,writes);
+ assert.notEqual((await (await f.store()).begin(f.request)).intentId,claim.intentId);
+});
+
+test('expired issuance recovery refuses a live role, unchanged expiry, changed roles, or an unrelated terminal run',async t=>{
+ for(const mutate of [
+  ({f})=>{f.role.server_now_ms=f.role.role_valid_until_ms-1;},
+  ({f,priorExpiry})=>{f.role.role_valid_until_ms=priorExpiry;},
+  ({f})=>{f.reconcileRows=[f.role,{...f.role,login_role:'cli_login_other'}];},
+  ({f})=>{f.terminalRun.actor={...f.actor,id:f.actor.id+1};},
+  ({f})=>{f.ancestry.merge_base_commit.sha='f'.repeat(40);},
+  ({evidence})=>{evidence.payload.intentDeploymentId=500;},
+ ]){
+  const context=await issuedWithoutAcknowledgement(t);
+  mutate(context);
+  const {f,args}=context,writes=f.writes.length;
+  await assert.rejects((await f.store()).reconcileExpiredIssuance(args),
+   /ACTIVE_OR_UNKNOWN_LOGIN_ROLE|EXPIRED_ROLE_READBACK_MISMATCH|EXPIRED_NATIVE_RUN_REQUIRED|EXPIRED_EVIDENCE_REQUIRED/);
+  assert.equal(f.state().phase,'pending');
+  assert.equal(f.writes.length,writes);
+  assert.equal(f.issuerPosts,0);
+ }
 });

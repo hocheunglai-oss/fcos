@@ -3,9 +3,11 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync,
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { parseDocument } from 'htmlparser2';
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import { openSalesforcePromotionJournal, salesforcePromotionHash } from './lib/salesforce-promotion-journal.mjs';
 import { INVENTORY_BASELINE_MODE, createReviewedSalesforcePlan, inventoryFromFiles, parseReviewedPackage, readReviewedInventory, runReviewedSalesforceRelease, safeProjectFile } from './lib/salesforce-reviewed-release.mjs';
+import { proveSalesforceInventoryAbsence } from './lib/salesforce-inventory-absence.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const POLICY = FCOS_CONNECTION_POLICY.providers.find(({ id }) => id === 'salesforce');
@@ -38,7 +40,7 @@ function localCommand(program, args, cwd, { json = true, env = process.env, bina
 export function baselineGitInventory(cwd, commit, run = localCommand) {
   if (!/^[a-f0-9]{40}$/u.test(commit || '')) throw new Error('Baseline must be an exact Git commit.');
   const prefix = 'force-app/main/default/';
-  const listing = run('git', ['ls-tree', '-rz', commit, '--', prefix], cwd, { json: false });
+  const listing = run('git', ['ls-tree', '-rz', `${commit}^{commit}`, '--', prefix], cwd, { json: false });
   const entries = listing.split('\0').filter(Boolean).map(line => {
     const match = /^(100644|100755) blob ([a-f0-9]{40})\t(.+)$/u.exec(line);
     if (!match || !match[3].startsWith(prefix)) throw new Error('Baseline metadata contains unsupported file types.');
@@ -68,8 +70,17 @@ export function loadReviewedSalesforcePlan({ cwd = ROOT, manifestPath, reviewPat
   const baselineWorkflow = baselineWorkflowAbsolute ? JSON.parse(readFileSync(baselineWorkflowAbsolute, 'utf8')) : null;
   const sourceRoot = path.join(cwd, policy.publication.sourceRoot);
   const bootstrapAbsolute = review.bootstrap ? safeProjectFile(cwd, review.bootstrap.manifestPath) : null;
+  const baselines = new Map();
+  const inventoryAt = commit => {
+    if (!baselines.has(commit)) baselines.set(commit, baselineGitInventory(cwd, commit));
+    return baselines.get(commit);
+  };
+  const baselineInventory = inventoryAt(review.baselineCommit);
+  const orgBaselineInventories = review.orgBaselines
+    ? Object.fromEntries(Object.entries(review.orgBaselines).map(([key, descriptor]) => [key, inventoryAt(descriptor?.commit)]))
+    : undefined;
   const inputs = { review, manifestBytes: readFileSync(manifestAbsolute), bootstrapBytes: bootstrapAbsolute ? readFileSync(bootstrapAbsolute) : null,
-    baselineWorkflow, baselineInventory: baselineGitInventory(cwd, review.baselineCommit), finalInventory: readReviewedInventory(sourceRoot), policy };
+    baselineWorkflow, baselineInventory, orgBaselineInventories, finalInventory: readReviewedInventory(sourceRoot), policy };
   const plan = createReviewedSalesforcePlan(inputs);
   return { ...plan, manifestPath, reviewPath, manifestAbsolute, reviewAbsolute, baselineWorkflowAbsolute, bootstrapAbsolute,
     inputDigests: { review: salesforcePromotionHash(readFileSync(reviewAbsolute)), baseline: baselineWorkflowAbsolute ? salesforcePromotionHash(readFileSync(baselineWorkflowAbsolute)) : null } };
@@ -84,8 +95,154 @@ export function assertReviewedInputsUnchanged(plan, { cwd = ROOT, policy = POLIC
     || salesforcePromotionHash(policy) !== plan.binding.configurationSha256) throw new Error('Salesforce source, manifest, review, baseline, or connection policy changed; restart prepare from DEVEE.');
 }
 
-export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = localCommand, adapter = {}, adapterPath } = {}) {
-  const sf = args => run('sf', args, cwd);
+function normalizedMetadataDefinition(xml) {
+  if (/xml:space|<!DOCTYPE|<!ENTITY/iu.test(xml)) return [xml];
+  const { children } = parseDocument(xml, { xmlMode: true, decodeEntities: true });
+  function definition(nodes) {
+    const elementOnly = nodes.some(node => node.type === 'tag')
+      && !nodes.some(node => node.type === 'cdata' || (node.type === 'text' && node.data.trim() !== ''));
+    return nodes.filter(node => node.type !== 'text' || !elementOnly || node.data.trim())
+      .map(node => [node.type, node.name || null, node.data ?? null,
+        node.attribs ? Object.entries(node.attribs).sort(([left], [right]) => left.localeCompare(right)) : null,
+        node.children ? definition(node.children) : null]);
+  }
+  // The converter can escape literal apostrophes. Preserve decoded text,
+  // element order and leaf/mixed-content whitespace while ignoring indentation.
+  return definition(children);
+}
+
+function verifyNativeApexProjection({ root, sourceRoot, plan }) {
+  const canonicalBody = text => text.replace(/\r\n/gu, '\n').replace(/\n$/u, '');
+  for (const component of plan.review.components) {
+    for (const name of component.files) {
+      const source = readFileSync(safeProjectFile(sourceRoot, name));
+      const native = readFileSync(safeProjectFile(root, name));
+      if (salesforcePromotionHash(source) !== plan.finalInventory.files[name]?.sha256) {
+        throw new Error(`Reviewed Apex source changed before native comparison: ${name}`);
+      }
+      const normalize = name.endsWith('.cls') ? canonicalBody : normalizedMetadataDefinition;
+      if (JSON.stringify(normalize(source.toString('utf8'))) !== JSON.stringify(normalize(native.toString('utf8')))) {
+        throw new Error(`Native Apex projection differs from the exact reviewed source: ${name}`);
+      }
+    }
+  }
+}
+
+function assertConvertedPackage(converted, roundTrip, members, files, sourceRoot, apiVersion, operation) {
+  const packageBytes = readFileSync(safeProjectFile(converted, 'package.xml'), 'utf8');
+  const actualMembers = parseReviewedPackage(packageBytes);
+  const versions = [...packageBytes.matchAll(/<version>\s*(\d+\.0)\s*<\/version>/gu)];
+  if (JSON.stringify(actualMembers) !== JSON.stringify([...members].sort())
+    || versions.length !== 1 || versions[0][1] !== apiVersion) {
+    throw new Error(`Converted Salesforce ${operation} manifest differs from the reviewed package.`);
+  }
+  const expectedPackageFiles = new Set(['package.xml']);
+  const allowedShells = new Set();
+  for (const file of files) {
+    const [directory, object] = file.split('/');
+    if (directory === 'objects') {
+      expectedPackageFiles.add(`objects/${object}.object`);
+      if (!members.has(`CustomObject:${object}`)) allowedShells.add(`objects/${object}/${object}.object-meta.xml`);
+    } else {
+      const mdapiSuffix = ['customPermissions', 'layouts', 'permissionsets', 'quickActions'].includes(directory);
+      expectedPackageFiles.add(mdapiSuffix ? file.replace(/-meta\.xml$/u, '') : file);
+    }
+  }
+  const actualPackageFiles = Object.keys(readReviewedInventory(converted).files);
+  if (JSON.stringify(actualPackageFiles.sort()) !== JSON.stringify([...expectedPackageFiles].sort())) {
+    throw new Error(`Converted Salesforce ${operation} contains unexpected or missing package files.`);
+  }
+  const embedded = [];
+  for (const file of actualPackageFiles.filter(name => name.startsWith('objects/'))) {
+    const object = file.slice('objects/'.length, -'.object'.length);
+    const xml = readFileSync(safeProjectFile(converted, file), 'utf8');
+    const roots = parseDocument(xml, { xmlMode: true, decodeEntities: true }).children.filter(node => node.type === 'tag');
+    if (roots.length !== 1 || roots[0].name !== 'CustomObject') throw new Error(`Converted Salesforce ${operation} object metadata is invalid: ${file}`);
+    for (const child of roots[0].children.filter(node => node.type === 'tag')) {
+      if (child.name === 'fields' || child.name === 'validationRules') {
+        const fullName = child.children.find(node => node.type === 'tag' && node.name === 'fullName');
+        const name = fullName?.children.map(node => node.data).join('');
+        embedded.push(`${child.name === 'fields' ? 'CustomField' : 'ValidationRule'}:${object}.${name}`);
+      } else if (!members.has(`CustomObject:${object}`)) {
+        throw new Error(`Converted Salesforce ${operation} expanded outside reviewed source: ${file}`);
+      }
+    }
+  }
+  const expectedEmbedded = [...members].filter(id => /^(?:CustomField|ValidationRule):/u.test(id)).sort();
+  if (JSON.stringify(embedded.sort()) !== JSON.stringify(expectedEmbedded)) {
+    throw new Error(`Converted Salesforce ${operation} object components differ from the reviewed package.`);
+  }
+  const roundTripFiles = Object.keys(readReviewedInventory(roundTrip).files);
+  for (const file of roundTripFiles) {
+    if (files.has(file)) continue;
+    const shell = allowedShells.has(file) && readFileSync(safeProjectFile(roundTrip, file), 'utf8')
+      .replace(/^<\?xml[^?]*\?>\s*/u, '').trim();
+    if (!shell || !/^<CustomObject xmlns="http:\/\/soap\.sforce\.com\/2006\/04\/metadata"(?:\s*\/>|>\s*<\/CustomObject>)$/u.test(shell)) {
+      throw new Error(`Converted Salesforce ${operation} expanded outside reviewed source: ${file}`);
+    }
+  }
+  if ([...files].some(file => !roundTripFiles.includes(file))) throw new Error(`Converted Salesforce ${operation} is missing reviewed source.`);
+  for (const file of files) {
+    const source = readFileSync(safeProjectFile(sourceRoot, file));
+    const restored = readFileSync(safeProjectFile(roundTrip, file));
+    if (!source.equals(restored) && (!file.endsWith('-meta.xml')
+      || JSON.stringify(normalizedMetadataDefinition(source.toString('utf8'))) !== JSON.stringify(normalizedMetadataDefinition(restored.toString('utf8'))))) {
+      throw new Error(`Converted Salesforce ${operation} definition differs from reviewed source: ${file}`);
+    }
+  }
+}
+
+export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = localCommand, adapter = {}, adapterPath, commandEnvironment } = {}) {
+  const sf = (args, directory = cwd) => run('sf', args, directory, { env: commandEnvironment });
+  function preparePackage(plan, { operation, manifestPath, manifestSha256, components, command }) {
+    const manifest = readFileSync(safeProjectFile(cwd, manifestPath));
+    if (salesforcePromotionHash(manifest) !== manifestSha256) throw new Error(`Salesforce ${operation} manifest changed.`);
+    const versions = [...manifest.toString('utf8').matchAll(/<version>\s*(\d+\.0)\s*<\/version>/gu)];
+    if (versions.length !== 1) throw new Error(`Salesforce ${operation} requires one explicit metadata API version.`);
+    const members = new Set(components);
+    const files = new Set(plan.review.components.filter(({ id }) => members.has(id)).flatMap(({ files }) => files));
+    const project = mkdtempSync(path.join(tmpdir(), `fcos-salesforce-${operation}-`));
+    const cleanup = () => rmSync(project, { recursive: true, force: true });
+    try {
+      writeFileSync(path.join(project, 'sfdx-project.json'), JSON.stringify({
+        packageDirectories: [{ path: 'force-app', default: true }], namespace: '', sourceApiVersion: versions[0][1],
+      }));
+      writeFileSync(path.join(project, `${operation}.xml`), manifest, { mode: 0o600 });
+      // A source-format manifest can otherwise pull in unreviewed parent and child metadata.
+      for (const name of files) {
+        const relative = `${policy.publication.sourceRoot}/${name}`;
+        const bytes = readFileSync(safeProjectFile(cwd, relative));
+        if (salesforcePromotionHash(bytes) !== plan.finalInventory.files[name]?.sha256) {
+          throw new Error(`Salesforce ${operation} source changed: ${name}`);
+        }
+        const destination = path.join(project, relative);
+        mkdirSync(path.dirname(destination), { recursive: true });
+        writeFileSync(destination, bytes, { mode: 0o600 });
+      }
+      const converted = path.join(project, 'converted');
+      const roundTrip = path.join(project, 'round-trip');
+      const apiVersion = versions[0][1];
+      sf(['project', 'convert', 'source', '--manifest', `${operation}.xml`, '--output-dir', converted,
+        '--api-version', apiVersion, '--json'], project);
+      sf(['project', 'convert', 'mdapi', '--root-dir', converted, '--output-dir', roundTrip, '--json'], project);
+      assertConvertedPackage(converted, path.join(roundTrip, 'main/default'), members, files,
+        path.join(project, policy.publication.sourceRoot), apiVersion, operation);
+      const packageSha256 = readReviewedInventory(converted).sourceTreeHash;
+      return {
+        packageSha256,
+        submit() {
+          if (readReviewedInventory(converted).sourceTreeHash !== packageSha256) {
+            throw new Error(`Verified Salesforce ${operation} package changed before submission.`);
+          }
+          return sf([...command, '--metadata-dir', converted, '--single-package', '--api-version', apiVersion, '--async', '--json'], project);
+        },
+        cleanup,
+      };
+    } catch (error) {
+      cleanup();
+      throw error;
+    }
+  }
   return {
     verifyIdentity(environment) {
       const display = sf(['org', 'display', '--target-org', environment.alias, '--json']);
@@ -95,14 +252,25 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
       return display;
     },
     report(environment, jobId) { return sf(['project', 'deploy', 'report', '--target-org', environment.alias, '--job-id', jobId, '--wait', '60', '--json']); },
+    prepareValidation(environment, plan) {
+      const command = ['project', 'deploy', 'validate', '--target-org', environment.alias, '--test-level', plan.binding.testPlan.level];
+      if (plan.binding.testPlan.level === 'RunSpecifiedTests') for (const name of plan.binding.testPlan.tests) command.push('--tests', name);
+      return preparePackage(plan, { operation: 'validation', manifestPath: plan.manifestPath,
+        manifestSha256: plan.binding.manifestSha256, components: plan.manifest, command });
+    },
     validate(environment, plan) {
-      const args = ['project', 'deploy', 'validate', '--target-org', environment.alias, '--manifest', plan.manifestPath, '--test-level', plan.binding.testPlan.level, '--async', '--json'];
-      if (plan.binding.testPlan.level === 'RunSpecifiedTests') for (const name of plan.binding.testPlan.tests) args.push('--tests', name);
-      return sf(args);
+      const prepared = this.prepareValidation(environment, plan);
+      try { return prepared.submit(); }
+      finally { prepared.cleanup(); }
     },
     deploy(environment, validationJobId) { return sf(['project', 'deploy', 'quick', '--target-org', environment.alias, '--job-id', validationJobId, '--async', '--json']); },
-    bootstrap(environment, plan) { return sf(['project', 'deploy', 'start', '--target-org', environment.alias, '--manifest', plan.review.bootstrap.manifestPath,
-      '--test-level', environment.isSandbox ? 'NoTestRun' : 'RunRelevantTests', '--async', '--json']); },
+    prepareBootstrap(environment, plan) {
+      const bootstrap = plan.review.bootstrap;
+      return preparePackage(plan, { operation: 'bootstrap', manifestPath: bootstrap.manifestPath,
+        manifestSha256: plan.binding.bootstrapSha256, components: bootstrap.components,
+        command: ['project', 'deploy', 'start', '--target-org', environment.alias,
+          '--test-level', environment.isSandbox ? 'NoTestRun' : 'RunRelevantTests'] });
+    },
     permissionAssigned(environment, name) {
       const username = environment.username || this.verifyIdentity(environment).username;
       if (!/^[A-Za-z0-9@._+\-]+$/u.test(username || '') || !/^[A-Za-z][A-Za-z0-9_]*$/u.test(name)) throw new Error('Invalid permission assignment identity.');
@@ -118,43 +286,84 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
     },
     // Job adoption must be implemented by the release owner's provider-specific readback.
     reconcile: adapter.reconcileSalesforceJob,
-    verifyInventory: adapter.verifySalesforceInventory || function (environment, { plan, expectedInventoryHash, expectedSourceTreeHash }) {
+    verifyInventory: adapter.verifySalesforceInventory || function (environment, { plan, expectedInventoryHash, expectedSourceTreeHash,
+      expectedAbsentComponents = [], nativeExport = false, verifyApexProjection = false }) {
       const manifest = plan.review.inventoryManifests?.[expectedInventoryHash];
       if (!manifest) throw new Error('Current Salesforce inventory requires an exact reviewed retrieval manifest.');
       const bytes = readFileSync(safeProjectFile(cwd, manifest.path));
       if (salesforcePromotionHash(bytes) !== manifest.sha256) throw new Error('Salesforce inventory retrieval manifest digest mismatch.');
-      parseReviewedPackage(bytes.toString('utf8'), { inventory: true });
+      const presentComponents = parseReviewedPackage(bytes.toString('utf8'), { inventory: true });
+      let apexBytes;
+      if (nativeExport) {
+        const apex = plan.review.components.filter(({ id }) => !expectedAbsentComponents.includes(id));
+        if (plan.review.components.some(({ id }) => presentComponents.includes(id)) || Boolean(manifest.apex) !== Boolean(apex.length)) {
+          throw new Error('Stable native retrieval must keep the reviewed Apex package separate.');
+        }
+        if (manifest.apex) {
+          apexBytes = readFileSync(safeProjectFile(cwd, manifest.apex.path));
+          const members = parseReviewedPackage(apexBytes.toString('utf8'));
+          if (salesforcePromotionHash(apexBytes) !== manifest.apex.sha256
+            || JSON.stringify(members) !== JSON.stringify(apex.map(({ id }) => id).sort())) {
+            throw new Error('Native Apex retrieval manifest does not match the reviewed checkpoint.');
+          }
+          presentComponents.push(...members);
+        }
+      }
 
       const before = this.verifyIdentity(environment);
       const project = mkdtempSync(path.join(tmpdir(), 'fcos-salesforce-inventory-'));
       try {
         copyFileSync(safeProjectFile(cwd, 'sfdx-project.json'), path.join(project, 'sfdx-project.json'));
         mkdirSync(path.join(project, 'force-app'));
-        mkdirSync(path.join(project, 'retrieved'));
-        const manifestPath = path.join(project, 'inventory.xml');
-        writeFileSync(manifestPath, bytes, { mode: 0o600 });
-        const result = run('sf', ['project', 'retrieve', 'start', '--target-org', environment.alias,
-          '--manifest', manifestPath, '--output-dir', 'retrieved', '--wait', '5', '--json'], project);
-        if (result?.success !== true || result.done !== true || result.status !== 'Succeeded'
-          || !/^09S[A-Za-z0-9]{15}$/u.test(result.id || '') || result.messages?.length) {
-          throw new Error('Salesforce inventory retrieval did not complete successfully without warnings.');
+        const retrieve = (xml, name, directory) => {
+          mkdirSync(path.join(project, directory));
+          const manifestPath = path.join(project, name);
+          writeFileSync(manifestPath, xml, { mode: 0o600 });
+          const result = sf(['project', 'retrieve', 'start', '--target-org', environment.alias,
+            '--manifest', manifestPath, '--output-dir', directory, '--wait', '5', '--json'], project);
+          if (result?.success !== true || result.done !== true || result.status !== 'Succeeded'
+            || !/^09S[A-Za-z0-9]{15}$/u.test(result.id || '') || result.messages?.length) {
+            throw new Error('Salesforce inventory retrieval did not complete successfully without warnings.');
+          }
+          return result.id;
+        };
+        const jobId = retrieve(bytes, 'inventory.xml', 'retrieved');
+        const apexJobId = apexBytes ? retrieve(apexBytes, 'apex.xml', 'apex') : null;
+        const root = path.join(project, 'retrieved');
+        const supplementalRoot = apexJobId ? path.join(project, 'apex') : null;
+        if (supplementalRoot) {
+          const apexPaths = plan.review.components.filter(({ id }) => !expectedAbsentComponents.includes(id)).flatMap(({ files }) => files).sort();
+          const observedApex = readReviewedInventory(supplementalRoot, { nativeExport: true });
+          if (JSON.stringify(Object.keys(observedApex.files)) !== JSON.stringify(apexPaths)) {
+            throw new Error('Native Apex retrieval returned an unexpected path set.');
+          }
         }
-        const after = this.verifyIdentity(environment);
-        if (!before.username || before.username !== after.username) throw new Error('Salesforce inventory identity changed during retrieval.');
-        const observed = readReviewedInventory(path.join(project, 'retrieved'));
+        const observed = readReviewedInventory(root, { nativeExport, supplementalRoot });
         if (observed.inventoryHash !== expectedInventoryHash
           || (expectedSourceTreeHash && observed.sourceTreeHash !== expectedSourceTreeHash)) {
           throw new Error('Native Salesforce retrieval differs from the exact reviewed inventory.');
         }
+        if (verifyApexProjection) verifyNativeApexProjection({ root: supplementalRoot, sourceRoot: path.join(cwd, policy.publication.sourceRoot), plan });
+        const absence = expectedAbsentComponents.length ? proveSalesforceInventoryAbsence({ expectedAbsentComponents,
+          presentComponents: [...presentComponents, ...(plan.review.inventoryCatalogControls?.[environment.key] || [])],
+          listMetadata: type => sf(['org', 'list', 'metadata', '--target-org', environment.alias, '--metadata-type', type, '--json'], project),
+          query: (soql, tooling) => sf(['data', 'query', ...(tooling ? ['--use-tooling-api'] : []),
+            '--target-org', environment.alias, '--query', soql, '--json'], project) }) : null;
+        const after = this.verifyIdentity(environment);
+        if (!before.username || before.username !== after.username) throw new Error('Salesforce inventory identity changed during retrieval.');
         const identity = { alias: environment.alias, orgId: after.id, isSandbox: environment.isSandbox,
           username: after.username, connectedStatus: after.connectedStatus };
         const verifiedAt = new Date().toISOString();
         const sourceTreeHash = expectedSourceTreeHash ? observed.sourceTreeHash : null;
-        const evidenceSha256 = salesforcePromotionHash({ jobId: result.id, manifestSha256: manifest.sha256,
-          identity, verifiedAt, inventoryHash: observed.inventoryHash, sourceTreeHash });
+        const evidenceSha256 = salesforcePromotionHash({ jobId, manifestSha256: manifest.sha256,
+          identity, verifiedAt, inventoryHash: observed.inventoryHash, sourceTreeHash,
+          ...(apexJobId ? { apexJobId, apexManifestSha256: manifest.apex.sha256 } : {}),
+          ...(nativeExport ? { nativeSourceTreeHash: observed.sourceTreeHash, apexProjectionVerified: verifyApexProjection } : {}), ...absence });
         return { orgId: identity.orgId, identity, verifiedAt, sourceTreeHash, inventoryHash: observed.inventoryHash,
-          evidenceSha256, observedInventory: observed.files, verificationMethod: 'metadata-api-owned-tree-inventory',
-          scope: 'force-app/main/default' };
+          evidenceSha256, observedInventory: observed.files,
+          ...(nativeExport ? { nativeSourceTreeHash: observed.sourceTreeHash, apexProjectionVerified: verifyApexProjection } : {}),
+          verificationMethod: nativeExport ? 'metadata-api-reviewed-native-byte-inventory' : 'metadata-api-owned-tree-inventory',
+          scope: 'force-app/main/default', ...absence };
       } finally {
         rmSync(project, { recursive: true, force: true });
       }

@@ -137,14 +137,17 @@ test('Salesforce checkpoint recovers a lost journal acknowledgement without expo
     throw new Error('Lost acknowledgement');
   } };
   const journal = new DeploymentJournal({ github, releaseId: 'r', manifestHash: h, actorIds: [7] });
-  const record = { status: 'Succeeded', receiptId: 'private-receipt' };
+  const record = { status: 'Succeeded', receiptId: 'private-receipt', name: 'Reviewed',
+    orgId: '00D000000000001AAA', prestate: false, addedByRelease: true };
   const checkpoint = { fingerprint: h, stage: 'devee', operation: 'permission:Reviewed', record };
   assert.equal((await journal.checkpoint(checkpoint)).id, 1);
   assert.equal((await journal.checkpoint(checkpoint)).id, 1);
   assert.equal(writes, 1);
   assert.deepEqual(records[0].payload.data, {
     fingerprint: h, stage: 'devee', operation: 'permission:Reviewed', outcome: 'resolved', evidenceDigest: digest(record),
+    permission: { name: 'Reviewed', orgId: record.orgId, prestate: false },
   });
+  await assert.rejects(journal.checkpoint({ ...checkpoint, record: { ...record, addedByRelease: false } }), /SALESFORCE_CHECKPOINT_PERMISSION_INVALID/);
   await assert.rejects(journal.checkpoint({ ...checkpoint, operation: 'unrecognized' }), /SALESFORCE_CHECKPOINT_INVALID/);
   assert.equal(writes, 1);
 });
@@ -178,6 +181,20 @@ test('Salesforce checkpoints retain the original job locator without copying pro
   assert.equal((await resumed.readSalesforceCheckpoints(otherFingerprint))[0].job.id, null);
   await assert.rejects(journal.checkpoint({ ...checkpoint, record: { ...record, jobId: 'invalid' } }), /SALESFORCE_CHECKPOINT_JOB_INVALID/);
   assert.equal(records.length, 3);
+  const validation = { fingerprint: h, stage: 'devee', operation: 'validation' };
+  const packageRecord = { ...record, validationJobId: null, packageSha256: 'a'.repeat(64) };
+  await journal.checkpoint({ ...validation, record: packageRecord });
+  const packageCheckpoint = (await resumed.readSalesforceCheckpoints(h)).find(entry => entry.operation === 'validation');
+  assert.equal(packageCheckpoint.job.packageSha256, packageRecord.packageSha256);
+  await assert.rejects(journal.checkpoint({ ...validation, record: { ...packageRecord, packageSha256: 'invalid' } }), /SALESFORCE_CHECKPOINT_JOB_INVALID/);
+  const preparation = { fingerprint: h, stage: 'production', operation: 'preparation' };
+  const deferred = { status: 'awaiting-authorized-bootstrap', fingerprint: h, bootstrapSha256: 'd'.repeat(64), recordedAt: submittedAt };
+  await journal.checkpoint({ ...preparation, record: deferred });
+  const savedPreparation = (await resumed.readSalesforceCheckpoints(h)).find(entry => entry.operation === 'preparation');
+  assert.equal(savedPreparation.evidenceDigest, digest(deferred));
+  assert.deepEqual(savedPreparation.preparation, { status: deferred.status, bootstrapSha256: deferred.bootstrapSha256, recordedAt: submittedAt });
+  await assert.rejects(journal.checkpoint({ ...preparation, record: { ...deferred, validationJobId } }),
+    /SALESFORCE_CHECKPOINT_PREPARATION_INVALID/);
 });
 
 test('Salesforce journal keeps ambiguous provider operations pending across release chains', async () => {
@@ -222,14 +239,24 @@ test('reviewed schema bootstrap can precede dependent smoke, with one decision a
   const f = fixture();
   f.manifest = createManifest({ candidate: f.manifest.candidate, controllerSha: f.manifest.controllerSha, previous: f.manifest.previous,
     paths: ['supabase/migrations/20990101000000_fixture.sql'], publicEnvironment: f.manifest.build.publicEnvironment, releaseId: f.manifest.releaseId,
-    prerequisites: { adapter: 'schema-fixture', adapterDigest: h, plan: { deferSchemaDependentSmoke: true, bootstrapFingerprint: h } } });
+    prerequisites: { adapter: 'schema-fixture', adapterDigest: h,
+      plan: { deferSchemaDependentSmoke: true, bootstrapFingerprint: h, deferredModules: ['hedge_desk'] } } });
   f.approval.manifestHash = digest(f.manifest); let applied = 0, fullChecks = 0;
   f.beforeBootstrap = async () => ({ passed: true, mode: 'pre_bootstrap', manifestHash: digest(f.manifest), deploymentId: f.staged.id,
-    buildId: f.build.buildId, isolationVerified: true, businessWrites: 0, bootstrapFingerprint: h, deferredChecks: f.manifest.selection.modules });
+    buildId: f.build.buildId, isolationVerified: true, businessWrites: 0, normalRole: true, bootstrapFingerprint: h, deferredChecks: ['hedge_desk'],
+    completedChecks: ['runtime_identity', 'authenticated_login', 'authentication_denials', 'request_isolation'],
+    completedModules: f.manifest.selection.modules.filter(module => module !== 'hedge_desk') });
   f.smoke = async () => { fullChecks++; throw Error('SCHEMA_DEPENDENT_CHECK_FAILED'); };
-  assert.equal((await stageRelease(f)).state, 'awaiting_authorized_bootstrap'); assert.equal(fullChecks, 0);
+  const stage = await stageRelease(f);
+  assert.equal(stage.state, 'awaiting_authorized_bootstrap'); assert.deepEqual(stage.deferredChecks, ['hedge_desk']);
+  assert.equal(fullChecks, 0);
   assert.equal(f.journal.records.some(row => row.payload.event === 'smoke.passed'), false);
   f.prerequisites = async () => { applied++; return { passed: true, manifestHash: digest(f.manifest), backwardCompatible: true }; };
+  const ready = f.provider.ready;
+  f.provider.ready = async () => ({ ...f.staged, artifactDigest: '0'.repeat(64) });
+  await assert.rejects(promoteRelease(f), /STAGED_ACCEPTANCE_CHANGED/);
+  assert.equal(applied, 0);
+  f.provider.ready = ready;
   await assert.rejects(promoteRelease(f), /SCHEMA_DEPENDENT_CHECK_FAILED/);
   assert.equal(applied, 1); assert.equal(f.calls.includes('promote'), false);
   f.smoke = async () => ({ passed: true, deploymentId: f.staged.id, buildId: f.build.buildId, login: true, restrictedAccess: true,

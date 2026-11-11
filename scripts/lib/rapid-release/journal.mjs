@@ -82,6 +82,18 @@ export class DeploymentJournal {
         && Number.isFinite(submitted) && new Date(submitted).toISOString() === submittedAt,
       'SALESFORCE_CHECKPOINT_JOB_INVALID');
       data.job = { id: jobId, validationId: validationJobId, submittedAt };
+      if (Object.hasOwn(record, 'packageSha256')) {
+        requireCondition(/^[a-f0-9]{64}$/u.test(record.packageSha256 || '') && operation !== 'deployment',
+          'SALESFORCE_CHECKPOINT_JOB_INVALID');
+        data.job.packageSha256 = record.packageSha256;
+      }
+    }
+    if (operation.startsWith('permission:') && status === 'Succeeded') {
+      const { name, orgId, prestate, addedByRelease } = record;
+      requireCondition(stage !== 'shared_mirror' && operation === `permission:${name}`
+        && /^00D[A-Za-z0-9]{15}$/u.test(orgId || '') && typeof prestate === 'boolean'
+        && addedByRelease === !prestate, 'SALESFORCE_CHECKPOINT_PERMISSION_INVALID');
+      data.permission = { name, orgId, prestate };
     }
     if (stage === 'shared_mirror' && operation === 'publication' && status === 'Succeeded' && record.result) {
       const { commit, pullRequest } = record.result;
@@ -93,6 +105,13 @@ export class DeploymentJournal {
       requireCondition(/^0Af[A-Za-z0-9]{12}(?:[A-Za-z0-9]{3})?$/u.test(record.validationJobId || ''),
         'SALESFORCE_CHECKPOINT_PREPARATION_INVALID');
       data.preparation = { validationJobId: record.validationJobId };
+    }
+    if (stage === 'production' && operation === 'preparation' && status === 'awaiting-authorized-bootstrap') {
+      const time = Date.parse(record.recordedAt);
+      requireCondition(record.fingerprint === fingerprint && /^[a-f0-9]{64}$/u.test(record.bootstrapSha256 || '')
+        && Number.isFinite(time) && new Date(time).toISOString() === record.recordedAt
+        && !Object.hasOwn(record, 'validationJobId'), 'SALESFORCE_CHECKPOINT_PREPARATION_INVALID');
+      data.preparation = { status, bootstrapSha256: record.bootstrapSha256, recordedAt: record.recordedAt };
     }
     const find = chain => chain.find(entry => entry.payload.event === 'salesforce.checkpoint'
       && canonical(entry.payload.data) === canonical(data));

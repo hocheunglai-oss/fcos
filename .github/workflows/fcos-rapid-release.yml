@@ -163,6 +163,14 @@ jobs:
           path: controller
           ref: ${{ steps.admit-controller.outputs.controller_sha }}
           persist-credentials: false
+      - name: Check out exact Salesforce metadata for deferred staging
+        if: fromJSON(inputs.manifest_json).selection.salesforce && fromJSON(inputs.manifest_json).prerequisites.plan.deferSchemaDependentSmoke == true
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ fromJSON(inputs.manifest_json).candidate.sha }}
+          path: salesforce-candidate
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 24.18.0
@@ -189,6 +197,7 @@ jobs:
           FCOS_RAPID_RELEASE_ENABLED: ${{ vars.FCOS_RAPID_RELEASE_ENABLED }}
           FCOS_RAPID_RELEASE_HANDOVER_ID: ${{ steps.admit-controller.outputs.handover_id }}
           VERCEL_TOKEN: ${{ secrets.FCOS_RAPID_VERCEL_STAGE_TOKEN || secrets.FCOS_HOSTED_VERCEL_TOKEN }}
+          FCOS_RAPID_SALESFORCE_CANDIDATE: ${{ github.workspace }}/salesforce-candidate
           FCOS_RAPID_DATABASE_URL: ${{ secrets.FCOS_RAPID_READONLY_DATABASE_URL }}
           FCOS_RAPID_DATABASE_CA: ${{ runner.temp }}/rapid-database-ca.pem
           FCOS_E2E_VERCEL_BYPASS: ${{ secrets.FCOS_E2E_VERCEL_BYPASS }}
@@ -269,6 +278,17 @@ jobs:
           node-version: 24.18.0
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: npm install --global vercel@54.20.1 --ignore-scripts --no-audit --no-fund
+      - name: Install pinned Salesforce CLI for reviewed prerequisites
+        if: fromJSON(inputs.manifest_json).selection.salesforce
+        run: npm install --global @salesforce/cli@2.145.6 --ignore-scripts --no-audit --no-fund
+      - name: Check out exact Salesforce metadata as release data
+        if: fromJSON(inputs.manifest_json).selection.salesforce
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ fromJSON(inputs.manifest_json).candidate.sha }}
+          path: salesforce-candidate
+          fetch-depth: 0
+          persist-credentials: false
       - name: Install governed browser for conditional prerequisite smoke
         run: npx --no-install playwright install --with-deps chromium
       - name: Reuse frozen release manifest
@@ -286,6 +306,14 @@ jobs:
           FCOS_RAPID_RELEASE_ENABLED: ${{ vars.FCOS_RAPID_RELEASE_ENABLED }}
           FCOS_RAPID_RELEASE_HANDOVER_ID: ${{ steps.admit-controller.outputs.handover_id }}
           VERCEL_TOKEN: ${{ secrets.FCOS_RELEASE_VERCEL_TOKEN }}
+          FCOS_RAPID_SALESFORCE_CANDIDATE: ${{ github.workspace }}/salesforce-candidate
+          FCOS_RAPID_SALESFORCE_MIRROR_TOKEN: ${{ fromJSON(inputs.manifest_json).selection.salesforce && secrets.FCOS_RAPID_SALESFORCE_MIRROR_TOKEN || '' }}
+          FCOS_RAPID_SALESFORCE_PRODUCTION_PRIVATE_KEY: ${{ fromJSON(inputs.manifest_json).selection.salesforce && secrets.FCOS_RAPID_SALESFORCE_PRODUCTION_PRIVATE_KEY || '' }}
+          FCOS_RAPID_SALESFORCE_PRODUCTION_CLIENT_ID: ${{ fromJSON(inputs.manifest_json).selection.salesforce && secrets.FCOS_RAPID_SALESFORCE_PRODUCTION_CLIENT_ID || '' }}
+          FCOS_RAPID_SALESFORCE_QAT_PRIVATE_KEY: ${{ fromJSON(inputs.manifest_json).selection.salesforce && secrets.FCOS_RAPID_SALESFORCE_QAT_PRIVATE_KEY || '' }}
+          FCOS_RAPID_SALESFORCE_QAT_CLIENT_ID: ${{ fromJSON(inputs.manifest_json).selection.salesforce && secrets.FCOS_RAPID_SALESFORCE_QAT_CLIENT_ID || '' }}
+          FCOS_RAPID_SALESFORCE_DEVEE_PRIVATE_KEY: ${{ fromJSON(inputs.manifest_json).selection.salesforce && secrets.FCOS_RAPID_SALESFORCE_DEVEE_PRIVATE_KEY || '' }}
+          FCOS_RAPID_SALESFORCE_DEVEE_CLIENT_ID: ${{ fromJSON(inputs.manifest_json).selection.salesforce && secrets.FCOS_RAPID_SALESFORCE_DEVEE_CLIENT_ID || '' }}
           FCOS_RAPID_DATABASE_URL: ${{ secrets.FCOS_RAPID_READONLY_DATABASE_URL }}
           FCOS_RAPID_DATABASE_CA: ${{ runner.temp }}/rapid-database-ca.pem
           FCOS_AUTH_E2E_ENABLED: 'true'

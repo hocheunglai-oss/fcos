@@ -3,8 +3,8 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import { loadReviewedSalesforcePlan, assertReviewedInputsUnchanged, cliSalesforceProvider } from './deploy-salesforce-reviewed-manifest.mjs';
-import { main as syncSharedRepository } from './sync-salesforce-shared-repository.mjs';
-import { INVENTORY_BASELINE_MODE, REVIEWED_SALESFORCE_MODE, assertReviewedJobReport, safeProjectFile, verifyReviewedOrgInventory } from './lib/salesforce-reviewed-release.mjs';
+import { executeSharedMirror } from './sync-salesforce-shared-repository.mjs';
+import { INVENTORY_BASELINE_MODE, REVIEWED_SALESFORCE_MODE, assertReviewedJobReport, reviewedCheckpointInventory, safeProjectFile, verifyReviewedOrgInventory } from './lib/salesforce-reviewed-release.mjs';
 import { salesforcePromotionHash } from './lib/salesforce-promotion-journal.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -24,13 +24,17 @@ export async function reviewedDeveePublicationProof({ plan, state, policy = POLI
       testPlan: jobId === baseline?.validationJobId || jobId === baseline?.deploymentJobId ? { level: 'RunLocalTests', tests: [], minimumTests: 1 } : plan.binding.testPlan,
       expectedComponents: jobId === baseline?.validationJobId || jobId === baseline?.deploymentJobId ? [] : plan.manifest });
   }
-  await verifyReviewedOrgInventory({ provider, environment, plan, expected: plan.finalInventory, now });
+  const expected = reviewedCheckpointInventory(plan, stage, environment.key);
+  const receipt = await verifyReviewedOrgInventory({ provider, environment, plan, expected, now });
   await assertUnchanged();
+  const deveeBaseline = plan.binding.orgBaselines?.devee;
   return { releaseMode: REVIEWED_SALESFORCE_MODE, baselineMode: plan.binding.baselineMode,
     proofKind: plan.binding.baselineMode === INVENTORY_BASELINE_MODE ? 'verified-native-inventory-plus-covered-manifest' : 'verified-complete-baseline-plus-covered-manifest',
-    sourceTreeHash: plan.binding.sourceTreeHash, baselineSourceTreeHash: plan.binding.baselineSourceTreeHash,
-    baselineInventoryHash: plan.binding.baselineInventoryHash, manifestSha256: plan.binding.manifestSha256,
-    fingerprint: plan.fingerprint, deploymentJobId: stage.deployment.jobId, verifiedAt: new Date().toISOString() };
+    sourceTreeHash: plan.binding.sourceTreeHash, baselineSourceTreeHash: deveeBaseline?.sourceTreeHash || plan.binding.baselineSourceTreeHash,
+    baselineInventoryHash: deveeBaseline?.inventoryHash || plan.binding.baselineInventoryHash, manifestSha256: plan.binding.manifestSha256,
+    fingerprint: plan.fingerprint, deploymentJobId: stage.deployment.jobId, verifiedAt: receipt.verifiedAt,
+    ...(expected.nativeExport ? { nativeInventoryHash: receipt.inventoryHash, nativeSourceTreeHash: receipt.nativeSourceTreeHash,
+      nativeEvidenceSha256: receipt.evidenceSha256 } : {}) };
 }
 
 export async function main(argv = process.argv.slice(2), { cwd = ROOT, policy = POLICY } = {}) {
@@ -47,12 +51,19 @@ export async function main(argv = process.argv.slice(2), { cwd = ROOT, policy = 
   const module = await import(pathToFileURL(safeProjectFile(cwd, values['--adapter'])).href);
   const adapter = await module.createSalesforceAdapter({ cwd, plan, policy });
   const provider = cliSalesforceProvider({ cwd, policy, adapter });
+  const report = await runReviewedMirror({ mode: modes[0].slice(2), cwd, plan, state, policy, provider, ownership: adapter.ownership });
+  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  return report;
+}
+
+export async function runReviewedMirror({ mode, cwd, plan, state, policy = POLICY, provider, ownership }) {
+  if (!['check', 'publish'].includes(mode)) throw new Error('Reviewed mirror mode is invalid.');
   const proof = await reviewedDeveePublicationProof({ plan, state, policy, provider, assertUnchanged: () => assertReviewedInputsUnchanged(plan, { cwd, policy }) });
   let assertPublicationCurrent;
-  if (modes[0] === '--publish') {
+  if (mode === 'publish') {
     const intent = state.stages?.shared_mirror?.publication;
     const orgId = policy.environments[0].orgId;
-    const receipt = await adapter?.ownership?.assert?.({ fingerprint: plan.fingerprint, stage: 'devee', orgId, operation: 'shared-publication' });
+    const receipt = await ownership?.assert?.({ fingerprint: plan.fingerprint, stage: 'devee', orgId, operation: 'shared-publication' });
     assertPublicationCurrent = () => {
       if (intent?.status !== 'submitting' || !intent.receiptId || receipt?.receiptId !== intent.receiptId
         || receipt.fingerprint !== plan.fingerprint || receipt.orgId !== orgId || receipt.stage !== 'devee' || receipt.operation !== 'shared-publication'
@@ -64,7 +75,7 @@ export async function main(argv = process.argv.slice(2), { cwd = ROOT, policy = 
     assertPublicationCurrent();
   }
   assertReviewedInputsUnchanged(plan, { cwd, policy });
-  return syncSharedRepository({ assertPublicationCurrent, proofResolver(inventory) {
+  return executeSharedMirror({ mode, metadataRoot: path.join(cwd, policy.publication.sourceRoot), assertPublicationCurrent, proofResolver(inventory) {
     assertReviewedInputsUnchanged(plan, { cwd, policy });
     if (inventory.sourceTreeHash !== proof.sourceTreeHash) throw new Error('Derived DEVEE source changed before byte-for-byte publication.');
     return proof;
