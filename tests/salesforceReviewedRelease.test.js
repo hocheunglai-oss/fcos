@@ -10,6 +10,8 @@ import { openSalesforcePromotionJournal, salesforcePromotionHash as hash } from 
 import { INVENTORY_BASELINE_MODE, REVIEWED_SALESFORCE_MODE, createReviewedSalesforcePlan, inventoryFromFiles, matchesSalesforceCheckpoint, parseReviewedPackage, reviewedCheckpointInventory, runReviewedSalesforceRelease, assertReviewedJobReport, assertProductionAuthorization } from '../scripts/lib/salesforce-reviewed-release.mjs';
 import { assertReviewedInputsUnchanged, baselineGitInventory, cliSalesforceProvider, loadReviewedSalesforcePlan, reviewedSalesforceOptions } from '../scripts/deploy-salesforce-reviewed-manifest.mjs';
 import { reviewedDeveePublicationProof } from '../scripts/sync-salesforce-reviewed-repository.mjs';
+import { verifyPreBootstrapStage } from '../scripts/lib/rapid-release/salesforce-reviewed-adapter.mjs';
+import { digest, targets } from '../scripts/lib/rapid-release/contract.mjs';
 
 const policy = FCOS_CONNECTION_POLICY.providers.find(({ id }) => id === 'salesforce');
 const fixedNow = new Date('2026-11-06T10:00:00.000Z');
@@ -563,6 +565,53 @@ test('inventory baseline loads from the exact Git tree without a deployment-proo
     assert.equal(loaded.baselineWorkflowAbsolute, null);
     assertReviewedInputsUnchanged(loaded, { cwd: directory, policy });
   } finally { f.cleanup(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('hosted stage derives its bootstrap binding from the reviewed tracked candidate files before opening a browser', async () => {
+  const f = fixture({ bootstrap: true, inventoryBaseline: true });
+  const cwd = mkdtempSync(path.join(tmpdir(), 'fcos-stage-bootstrap-'));
+  const run = args => {
+    const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  const write = (name, bytes) => {
+    const file = path.join(cwd, name);
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, bytes);
+  };
+  const commit = message => {
+    run(['add', '.']);
+    run(['-c', 'user.name=Offline Test', '-c', 'user.email=offline@example.invalid', 'commit', '-qm', message]);
+  };
+  try {
+    run(['init', '--quiet']);
+    for (const [name, bytes] of Object.entries(files)) write(`force-app/main/default/${name}`, bytes);
+    commit('baseline');
+    const review = { ...f.inputs.review, baselineCommit: run(['rev-parse', 'HEAD']) };
+    write('sfdx-project.json', JSON.stringify({ namespace: '', packageDirectories: [{ path: 'force-app', default: true }] }));
+    write('force-app/main/default/classes/Example.cls', 'class Example { String value; }\n');
+    write('force-app/main/default/objects/Demo__c/fields/Value__c.field-meta.xml', '<CustomField/>\n');
+    write('force-app/main/default/permissionsets/Reviewed.permissionset-meta.xml', '<PermissionSet/>\n');
+    write('manifest/release.xml', f.inputs.manifestBytes);
+    write('manifest/bootstrap.xml', f.inputs.bootstrapBytes);
+    write('manifest/review.json', JSON.stringify(review));
+    commit('candidate');
+    const reviewed = loadReviewedSalesforcePlan({ cwd, manifestPath: 'manifest/release.xml', reviewPath: 'manifest/review.json', policy });
+    const plan = { backwardCompatible: true, deferSchemaDependentSmoke: true, deferredModules: ['hedge_desk'],
+      salesforceManifestPath: 'manifest/release.xml', salesforceReviewPath: 'manifest/review.json',
+      salesforceFingerprint: reviewed.fingerprint, salesforceSourceTreeHash: reviewed.binding.sourceTreeHash,
+      bootstrapFingerprint: digest({ salesforceFingerprint: reviewed.fingerprint, bootstrapSha256: reviewed.binding.bootstrapSha256 }) };
+    const input = { plan, salesforceCandidateDirectory: cwd, staged: {},
+      manifest: { targets: targets(), selection: { salesforce: true, modules: ['hedge_desk'] }, prerequisites: { plan } } };
+    await assert.rejects(verifyPreBootstrapStage({ ...input, plan: { ...plan, bootstrapFingerprint: 'f'.repeat(64) } }), /SALESFORCE_HOSTED_BOOTSTRAP_PLAN_MISMATCH/);
+    await assert.rejects(verifyPreBootstrapStage(input), /SMOKE_DEPLOYMENT_BINDING_MISMATCH/);
+    run(['rm', '--cached', 'manifest/bootstrap.xml']);
+    await assert.rejects(verifyPreBootstrapStage(input), /ls-files/);
+  } finally {
+    f.cleanup();
+    rmSync(cwd, { recursive: true, force: true });
+  }
 });
 
 test('native inventory retrieval binds manifest, org, and observed bytes and removes temporary source', () => {

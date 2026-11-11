@@ -1,6 +1,6 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { FCOS_CONNECTION_POLICY } from '../../../config/fcosConnections.js';
 import { assertReviewedInputsUnchanged, cliSalesforceProvider, loadReviewedSalesforcePlan } from '../../deploy-salesforce-reviewed-manifest.mjs';
 import { runReviewedMirror } from '../../sync-salesforce-reviewed-repository.mjs';
@@ -8,7 +8,8 @@ import { preflightSharedMirrorPublication } from '../../sync-salesforce-shared-r
 import { openSalesforcePromotionJournal } from '../salesforce-promotion-journal.mjs';
 import { assertReviewedJobReport, matchesSalesforceCheckpoint, reviewedJobExpectations, runReviewedSalesforceRelease, safeProjectFile } from '../salesforce-reviewed-release.mjs';
 import { authenticateHostedSalesforce } from './salesforce-hosted-auth.mjs';
-import { digest, requireCondition, targets } from './contract.mjs';
+import { digest, git, requireCondition, targets } from './contract.mjs';
+import { runPreBootstrapSmoke } from './smoke.mjs';
 
 const policy = FCOS_CONNECTION_POLICY.providers.find(item => item.id === 'salesforce');
 
@@ -37,13 +38,7 @@ export async function reconcileHostedSalesforceJob({ environment, jobId, reviewe
     evidenceSha256: digest({ original, reportSha256: proof.reportSha256 }), verifiedAt: verifiedAt.toISOString() };
 }
 
-export async function applyReviewedPrerequisites({ manifest, approval, plan, salesforce, salesforceCandidateDirectory: cwd, env = process.env }) {
-  const manifestHash = digest(manifest);
-  requireCondition(manifest.selection.salesforce && !manifest.selection.database && plan.backwardCompatible === true
-    && cwd && typeof salesforce?.journal?.readCheckpoints === 'function'
-    && typeof salesforce?.ownership?.assert === 'function' && approval?.manifestHash === manifestHash
-    && approval.nativeReviewVerified === true && approval.reviewer === targets().account,
-  'SALESFORCE_HOSTED_REVIEW_REQUIRED');
+function hostedReviewedPlan(cwd, plan) {
   const project = JSON.parse(readFileSync(safeProjectFile(cwd, 'sfdx-project.json'), 'utf8'));
   requireCondition(project.namespace === '' && project.packageDirectories?.length === 1
     && project.packageDirectories[0].path === 'force-app' && project.packageDirectories[0].default === true,
@@ -51,6 +46,31 @@ export async function applyReviewedPrerequisites({ manifest, approval, plan, sal
   const reviewed = loadReviewedSalesforcePlan({ cwd, policy, manifestPath: plan.salesforceManifestPath, reviewPath: plan.salesforceReviewPath });
   requireCondition(reviewed.fingerprint === plan.salesforceFingerprint
     && reviewed.binding.sourceTreeHash === plan.salesforceSourceTreeHash, 'SALESFORCE_HOSTED_PLAN_MISMATCH');
+  const inputs = [reviewed.reviewAbsolute, reviewed.manifestAbsolute, reviewed.baselineWorkflowAbsolute, reviewed.bootstrapAbsolute]
+    .filter(Boolean).map(file => relative(cwd, file));
+  git(cwd, ['--literal-pathspecs', 'ls-files', '--error-unmatch', '--', 'sfdx-project.json', ...inputs]);
+  return reviewed;
+}
+
+export async function verifyPreBootstrapStage({ manifest, staged, plan, salesforceCandidateDirectory: cwd, env }) {
+  requireCondition(manifest.selection.salesforce && !manifest.selection.database && cwd && plan.backwardCompatible === true
+    && plan.deferSchemaDependentSmoke === true, 'SALESFORCE_HOSTED_BOOTSTRAP_PLAN_REQUIRED');
+  const reviewed = hostedReviewedPlan(cwd, plan);
+  requireCondition(reviewed.review.bootstrap && /^[a-f0-9]{64}$/u.test(reviewed.binding.bootstrapSha256 || ''),
+    'SALESFORCE_HOSTED_BOOTSTRAP_PLAN_REQUIRED');
+  const fingerprint = digest({ salesforceFingerprint: reviewed.fingerprint, bootstrapSha256: reviewed.binding.bootstrapSha256 });
+  requireCondition(fingerprint === plan.bootstrapFingerprint, 'SALESFORCE_HOSTED_BOOTSTRAP_PLAN_MISMATCH');
+  return runPreBootstrapSmoke({ manifest, staged, env }, fingerprint);
+}
+
+export async function applyReviewedPrerequisites({ manifest, approval, plan, salesforce, salesforceCandidateDirectory: cwd, env = process.env }) {
+  const manifestHash = digest(manifest);
+  requireCondition(manifest.selection.salesforce && !manifest.selection.database && plan.backwardCompatible === true
+    && cwd && typeof salesforce?.journal?.readCheckpoints === 'function'
+    && typeof salesforce?.ownership?.assert === 'function' && approval?.manifestHash === manifestHash
+    && approval.nativeReviewVerified === true && approval.reviewer === targets().account,
+  'SALESFORCE_HOSTED_REVIEW_REQUIRED');
+  const reviewed = hostedReviewedPlan(cwd, plan);
   requireCondition(!reviewed.review.bootstrap, 'SALESFORCE_HOSTED_BOOTSTRAP_UNQUALIFIED');
 
   const directory = mkdtempSync(join(tmpdir(), 'fcos-salesforce-hosted-'));

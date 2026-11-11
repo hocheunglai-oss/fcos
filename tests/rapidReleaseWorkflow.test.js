@@ -39,6 +39,19 @@ test('three ordinary jobs keep credential-free preparation independent and seria
  }
  assert.match(workflow.jobs.quality.steps.find(step=>step.with?.path==='controller').with.ref,/controllerSha/);
 });
+test('deferred Salesforce staging reads the exact candidate without installing Salesforce CLI or granting Salesforce credentials',()=>{
+ const steps=workflow.jobs['stage-and-smoke'].steps;
+ const index=steps.findIndex(step=>step.with?.path==='salesforce-candidate');
+ const checkout=steps[index],stage=steps.find(step=>step.env?.VERCEL_TOKEN);
+ assert.ok(index>steps.findIndex(step=>step.id==='admit-controller')&&index<steps.indexOf(stage));
+ assert.match(checkout.if,/selection\.salesforce.*deferSchemaDependentSmoke/);
+ assert.match(checkout.with.ref,/candidate\.sha/);
+ assert.equal(checkout.with['persist-credentials'],false);
+ assert.equal(checkout.with['fetch-depth'],0);
+ assert.match(stage.env.FCOS_RAPID_SALESFORCE_CANDIDATE,/salesforce-candidate/);
+ assert.ok(!steps.some(step=>String(step.run).includes('@salesforce/cli')||
+  Object.keys(step.env||{}).some(name=>/^FCOS_RAPID_SALESFORCE_.*(?:KEY|CLIENT_ID|TOKEN)$/.test(name))));
+});
 test('GitHub-only admission accepts an unchanged frozen workflow on a newer application dispatcher',async()=>{
  const fixture=setup(),step=workflow.jobs['stage-and-smoke'].steps.find(step=>step.id==='admit-controller'),outputs={};
  const restore=configuredActivation();const original=process.env.RELEASE_MANIFEST;process.env.RELEASE_MANIFEST=JSON.stringify(fixture.manifest);
