@@ -55,7 +55,7 @@ function fixture({ bootstrap = false, level = 'RunLocalTests', inventoryBaseline
       validation: { ...common, jobId: validationId, checkOnly: true },
       deployment: { ...common, jobId: deploymentId, validationJobId: validationId, checkOnly: false },
     });
-    reports.set(validationId, makeReport(validationId, true)); reports.set(deploymentId, makeReport(deploymentId, false));
+    reports.set(validationId, makeReport(validationId, true)); reports.set(deploymentId, makeReport(deploymentId, false, { zero: true }));
   }
   const bootstrapIds = componentIds.filter(id => !id.startsWith('Apex') && id !== validationRuleId);
   const bootstrapBytes = bootstrap ? packageXml(bootstrapIds) : null;
@@ -121,7 +121,7 @@ function fixture({ bootstrap = false, level = 'RunLocalTests', inventoryBaseline
     async deploy(environment, validationId) {
       const id = jobId(++sequence);
       calls.push(['deploy', environment.key, validationId, id]);
-      reports.set(id, makeReport(id, false));
+      reports.set(id, makeReport(id, false, { zero: true }));
       orgInventories.set(environment.key, structuredClone(reviewedCheckpointInventory(plan, { deployment: { status: 'Succeeded' } }, environment.key)));
       return { id };
     },
@@ -1269,4 +1269,25 @@ test('native Apex readback checks exact raw bytes and equivalence to the reviewe
     assert.throws(() => provider.verifyInventory(environment, exact), /differs from the exact reviewed inventory/);
     assert.throws(() => provider.verifyInventory(environment, input()), /Native Apex projection differs/);
   } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+
+test('zero-test quick deploy requires native positive validation for the exact linked package', () => {
+  const f = fixture({ level: 'RunSpecifiedTests' });
+  try {
+    const id = jobId(10), validationId = jobId(9), environment = policy.environments[0];
+    const testPlan = f.plan.binding.testPlan, expectedComponents = f.plan.manifest;
+    const deployment = f.makeReport(id, false, { zero: true });
+    const check = quickValidation => assertReviewedJobReport(deployment, { environment, jobId: id, testPlan, expectedComponents, quickValidation });
+    assert.throws(() => check(), /exact successful validation/);
+    assert.throws(() => check({ id: validationId, report: f.makeReport(jobId(8), true) }), /all-or-none/);
+    assert.throws(() => check({ id: validationId, report: f.makeReport(validationId, true, { zero: true }) }), /positive test execution/);
+    assert.throws(() => check({ id: validationId, report: f.makeReport(validationId, true, { date: '2026-11-07T10:00:00Z' }) }), /predates/);
+    const nativeValidation = f.makeReport(validationId, true);
+    const proof = check({ id: validationId, report: nativeValidation });
+    assert.equal(proof.tests, '0/0');
+    assert.equal(proof.apexTestProof, true);
+    assert.equal(proof.validationJobId, validationId);
+    assert.equal(proof.validationReportSha256, hash(nativeValidation));
+  } finally { f.cleanup(); }
 });

@@ -7,9 +7,13 @@ import { requireCondition } from './contract.mjs';
 
 const { environments } = FCOS_CONNECTION_POLICY.providers.find(item => item.id === 'salesforce');
 
-export function authenticateHostedSalesforce({ directory, cwd, env = process.env, spawn = spawnSync }) {
+export function assertHostedSalesforceRunner(env) {
   requireCondition(env.GITHUB_ACTIONS === 'true' && env.RUNNER_ENVIRONMENT === 'github-hosted',
     'SALESFORCE_HOSTED_RUNNER_REQUIRED');
+}
+
+export function authenticateHostedSalesforce({ directory, cwd, env = process.env, spawn = spawnSync, requireMirrorCredential = true }) {
+  assertHostedSalesforceRunner(env);
   const credentials = environments.map(environment => {
     const prefix = 'FCOS_RAPID_SALESFORCE_' + environment.key.toUpperCase();
     const clientId = env[prefix + '_CLIENT_ID']?.trim();
@@ -23,6 +27,8 @@ export function authenticateHostedSalesforce({ directory, cwd, env = process.env
       'SALESFORCE_HOSTED_PRIVATE_KEY_INVALID_' + environment.key.toUpperCase());
     return { environment, clientId, privateKey };
   });
+  requireCondition(!requireMirrorCredential || Boolean(env.FCOS_RAPID_SALESFORCE_MIRROR_TOKEN?.trim()),
+    'SALESFORCE_HOSTED_MIRROR_CREDENTIAL_REQUIRED');
   const commandEnvironment = {
     PATH: env.PATH,
     HOME: env.HOME,

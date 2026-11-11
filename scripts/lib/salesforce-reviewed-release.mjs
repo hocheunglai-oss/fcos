@@ -279,7 +279,7 @@ export function reviewedJobExpectations(plan, environment, operation) {
   };
 }
 
-export function assertReviewedJobReport(report, { environment, jobId, validation = false, testPlan, bootstrap = false, expectedComponents = [] }) {
+export function assertReviewedJobReport(report, { environment, jobId, validation = false, testPlan, bootstrap = false, expectedComponents = [], quickValidation }) {
   const proof = assertSuccessfulSalesforceReport(report, { environment, jobId, validation });
   if (!JOB_ID.test(jobId) || Number(report.numberComponentsDeployed) !== Number(report.numberComponentsTotal) || Number(report.numberComponentsTotal) < 1) throw new Error('Salesforce report did not prove all reviewed components deployed.');
   if (expectedComponents.length) {
@@ -289,6 +289,18 @@ export function assertReviewedJobReport(report, { environment, jobId, validation
     if (expectedComponents.some(id => !actual.has(id))) throw new Error('Actual Salesforce report is missing reviewed manifest component coverage.');
   }
   const total = Number(report.numberTestsTotal), completed = Number(report.numberTestsCompleted);
+  if (!validation && !bootstrap && total === 0 && completed === 0) {
+    if (report.details?.runTestResult?.codeCoverageWarnings?.length) throw new Error('Salesforce coverage warnings require review before promotion.');
+    const validationId = quickValidation?.id;
+    if (!JOB_ID.test(validationId || '') || validationId === jobId) throw new Error('Zero-test quick deployment requires its exact successful validation.');
+    const linked = assertReviewedJobReport(quickValidation.report, {
+      environment, jobId: validationId, validation: true, testPlan, expectedComponents,
+    });
+    if (!(Date.parse(linked.completedAt) <= Date.parse(report.completedDate))) throw new Error('Quick deployment predates its validation.');
+    return { ...proof, testPlan, apexTestProof: true, testExecution: 'verified-linked-apex-tests',
+      validationJobId: validationId, validationReportSha256: linked.reportSha256,
+      reportSha256: hash(report), completedAt: report.completedDate };
+  }
   const schemaBootstrap = bootstrap && !validation && expectedComponents.length > 0
     && expectedComponents.every(id => /^(CustomObject|CustomField|PermissionSet):/u.test(id))
     && testPlan.level === (environment.isSandbox ? 'NoTestRun' : 'RunRelevantTests');
@@ -309,6 +321,15 @@ export function assertReviewedJobReport(report, { environment, jobId, validation
   }
   return { ...proof, testPlan, apexTestProof: !schemaBootstrap, testExecution: schemaBootstrap ? 'schema-only-bootstrap' : 'verified-positive-apex-tests',
     reportSha256: hash(report), completedAt: report.completedDate || null };
+}
+
+export async function verifyReviewedJobPair({ provider, environment, validationJobId, deploymentJobId, testPlan, expectedComponents }) {
+  const validationReport = await provider.report(environment, validationJobId);
+  assertReviewedJobReport(validationReport, { environment, jobId: validationJobId, validation: true, testPlan, expectedComponents });
+  return assertReviewedJobReport(await provider.report(environment, deploymentJobId), {
+    environment, jobId: deploymentJobId, testPlan, expectedComponents,
+    quickValidation: { id: validationJobId, report: validationReport },
+  });
 }
 
 export async function verifyReviewedOrgInventory({ provider, environment, plan, expected, now = () => new Date() }) {
@@ -407,6 +428,7 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
       || receipt.stage !== environment.key || receipt.operation !== operation || !(Date.parse(receipt.expiresAt) > now().getTime())) throw new Error('External Salesforce release ownership receipt is absent, expired, or mismatched.');
     return { receiptId: receipt.receiptId, receiptExpiresAt: receipt.expiresAt, authorizationSha256: authHash };
   };
+  const validatedReports = new Map();
   const reportJob = async (environment, operation, record) => {
     await unchanged(); await provider.verifyIdentity(environment);
     const report = await provider.report(environment, record.jobId);
@@ -415,9 +437,20 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
       await persist(environment.key, operation, { ...record, status, verifiedAt: timestamp(), actualReportSha256: hash(report) });
       throw new Error(`${environment.label} ${operation} is ${status}; saved job must be reconciled before progression.`);
     }
+    let quickValidation;
+    if (operation === 'deployment' && Number(report.numberTestsTotal) === 0) {
+      const validation = get(environment.key, 'validation');
+      if (!validation || validation.jobId !== record.validationJobId || validation.status !== 'Succeeded'
+        || validation.fingerprint !== plan.fingerprint || validation.orgId !== environment.orgId) {
+        throw new Error('Quick deployment lacks its bound successful validation checkpoint.');
+      }
+      quickValidation = { id: validation.jobId,
+        report: validatedReports.get(`${environment.orgId}:${validation.jobId}`) || await provider.report(environment, validation.jobId) };
+    }
     const proof = assertReviewedJobReport(report, {
-      environment, jobId: record.jobId, ...reviewedJobExpectations(plan, environment, operation),
+      environment, jobId: record.jobId, ...reviewedJobExpectations(plan, environment, operation), quickValidation,
     });
+    if (operation === 'validation') validatedReports.set(`${environment.orgId}:${record.jobId}`, report);
     await unchanged();
     return persist(environment.key, operation, { ...record, ...proof, status: 'Succeeded',
       completedAt: record.completedAt || proof.completedAt || timestamp(), verifiedAt: timestamp() });
@@ -620,9 +653,8 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
       await provider.verifyIdentity(environment);
       const baseline = plan.binding.baselineJobs?.[environment.key];
       if (!baseline) continue;
-      for (const [operation, id] of [['validation', baseline.validationJobId], ['deployment', baseline.deploymentJobId]]) {
-        assertReviewedJobReport(await provider.report(environment, id), { environment, jobId: id, validation: operation === 'validation', testPlan: { level: 'RunLocalTests', tests: [], minimumTests: 1 } });
-      }
+      const testPlan = { level: 'RunLocalTests', tests: [], minimumTests: 1 };
+      await verifyReviewedJobPair({ provider, environment, ...baseline, testPlan });
     }
     if (plan.binding.baselineMode === INVENTORY_BASELINE_MODE) {
       // Verify EVERY org's actual current checkpoint before the first metadata/permission write.
