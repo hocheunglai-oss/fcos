@@ -24,6 +24,7 @@ export function createTradingFxPrerequisiteAdapter({
     requireCondition(manifest.selection.salesforce === true && manifest.selection.database === true
       && manifest.selection.normalRole === true && manifest.selection.modules.includes('xero_portal')
       && plan.backwardCompatible === true && plan.deferSchemaDependentSmoke === true
+      && Array.isArray(plan.deferredModules) && !plan.deferredModules.includes('xero_portal')
       && isDigest(plan.bootstrapFingerprint) && isDigest(plan.salesforceFingerprint)
       && isDigest(plan.salesforceSourceTreeHash) && digest(plan.migrations) === migrationDigest
       && workflowPaths.every(path => manifest.paths.includes(path))

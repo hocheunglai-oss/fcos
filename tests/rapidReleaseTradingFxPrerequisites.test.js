@@ -12,11 +12,12 @@ function fixture({ qualification = {}, databaseReadback = true, malformedSalesfo
   let failSalesforce = false;
   const manifest = {
     candidate: { sha: 'a'.repeat(40), sourceDigest: hash },
-    selection: { salesforce: true, database: true, normalRole: true, modules: ['xero_portal'] },
+    selection: { salesforce: true, database: true, normalRole: true, modules: ['xero_portal', 'buyer_invoices'] },
     paths: ['api/_xeroNativeDocumentActions.js', 'api/_xeroPaymentPosting.js', ...TRADING_FX_MIGRATIONS.map(row => row.path)],
   };
   const plan = { migrations: TRADING_FX_MIGRATIONS, salesforceFingerprint: hash, salesforceSourceTreeHash: hash,
-    bootstrapFingerprint: hash, backwardCompatible: true, deferSchemaDependentSmoke: true, xeroQualificationDigest: hash };
+    bootstrapFingerprint: hash, backwardCompatible: true, deferSchemaDependentSmoke: true,
+    deferredModules: ['buyer_invoices'], xeroQualificationDigest: hash };
   const input = { manifest, plan, approval: { nativeReviewVerified: true } };
   const receipt = operationId => ({ operationId, verified: true, intentRecorded: true, evidenceDigest: hash });
   const bound = { passed: true, manifestHash: digest(manifest), backwardCompatible: true };
