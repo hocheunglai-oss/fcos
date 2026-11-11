@@ -111,6 +111,14 @@ function reviewedNativeBootstrapInventories(review, policy, baselineInventory, o
     || !reviewed || !same(sorted(Object.keys(reviewed)), sorted(ENVIRONMENTS))) {
     failCoverage('Native bootstrap checkpoints require an exact inventory review for every org.');
   }
+  const context = review.nativeInventoryContext;
+  if (context !== undefined && (!context || typeof context !== 'object' || Array.isArray(context)
+    || !same(sorted(Object.keys(context)), sorted(ENVIRONMENTS))
+    || Object.values(context).some(paths => !Array.isArray(paths) || new Set(paths).size !== paths.length
+      || paths.some(name => typeof name !== 'string' || !/^objects\/[A-Za-z0-9_.$/ -]+\.xml$/u.test(name)
+        || name.split('/').some(part => !part || part === '.' || part === '..') || Object.hasOwn(finalInventory.files, name))))) {
+    failCoverage('Native bootstrap context must name exact unowned object XML paths for every org.');
+  }
   const bootstrapComponents = new Set(review.bootstrap.components);
   const bootstrapFiles = new Set(components.filter(({ id }) => bootstrapComponents.has(id)).flatMap(({ files }) => files));
   const releaseFiles = new Set(components.flatMap(({ files }) => files));
@@ -162,9 +170,11 @@ function reviewedNativeBootstrapInventories(review, policy, baselineInventory, o
         : descriptor.bootstrap?.projected !== undefined || descriptor.final?.projected !== undefined)) {
       failCoverage('Native bootstrap projections require an exact raw baseline and matching post-write checkpoint modes.');
     }
-    const baseline = checkpoint(descriptor.baseline, Object.keys(gitBaseline.files), []);
-    const bootstrap = checkpoint(descriptor.bootstrap, [...Object.keys(gitBaseline.files), ...bootstrapFiles], bootstrapFiles, projected);
-    const final = checkpoint(descriptor.final, Object.keys(finalInventory.files), releaseFiles, projected);
+    const contextPaths = context?.[key] || [];
+    const baselinePaths = [...Object.keys(gitBaseline.files), ...contextPaths];
+    const baseline = checkpoint(descriptor.baseline, baselinePaths, []);
+    const bootstrap = checkpoint(descriptor.bootstrap, [...baselinePaths, ...bootstrapFiles], bootstrapFiles, projected);
+    const final = checkpoint(descriptor.final, [...Object.keys(finalInventory.files), ...contextPaths], releaseFiles, projected);
     assertTransition(baseline, bootstrap, bootstrapFiles);
     assertTransition(bootstrap, final, releaseFiles);
     return [key, { baseline, bootstrap, final }];
@@ -347,6 +357,9 @@ export function createReviewedSalesforcePlan({ review, manifestBytes, bootstrapB
     if (testPlan.level !== 'RunLocalTests') throw new Error('A schema bootstrap requires one complete RunLocalTests validation per environment.');
   } else if (bootstrapBytes) throw new Error('Unreviewed bootstrap bytes supplied.');
   assertNativeSerializationAllowances(review, components);
+  if (review.nativeInventoryContext !== undefined && (!review.bootstrap || review.nativeInventories === undefined)) {
+    failCoverage('Native inventory context requires reviewed bootstrap checkpoints.');
+  }
   const nativeInventories = review.bootstrap && review.nativeInventories !== undefined
     ? reviewedNativeBootstrapInventories(review, policy, baselineInventory, orgBaselineInventories, finalInventory, components)
     : reviewedNativeInventories(review, policy, baselineInventory, finalInventory, components, coveredFiles);

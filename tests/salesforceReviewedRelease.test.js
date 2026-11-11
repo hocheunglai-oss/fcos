@@ -1323,6 +1323,31 @@ test('mixed native checkpoints pin exact org paths and preserve untouched bytes 
     await assert.rejects(checkProjected(), /requires current native/);
     observedFiles = missing.files;
     await assert.rejects(checkProjected(), /requires current native/);
+
+    const contextFile = 'objects/Demo__c/fields/Unowned__c.field-meta.xml';
+    const contextBytes = Buffer.from('<CustomField/>');
+    const contextBaseline = descriptor({ ...initial, [contextFile]: contextBytes });
+    const contextBootstrap = projected({ ...intermediate, [contextFile]: contextBytes }, afterBootstrap);
+    const contextFinal = projected({ ...final, [contextFile]: contextBytes }, afterFinal);
+    const contextReview = { ...projectedReview,
+      nativeInventoryContext: Object.fromEntries(policy.environments.map(({ key }) => [key, [contextFile]])),
+      nativeInventories: Object.fromEntries(policy.environments.map(({ key, orgId }) =>
+        [key, { orgId, baseline: contextBaseline, bootstrap: contextBootstrap, final: contextFinal }])),
+      inventoryManifests: { ...projectedReview.inventoryManifests,
+        [contextBaseline.inventoryHash]: review.inventoryManifests[baseline.inventoryHash],
+        [contextBootstrap.inventoryHash]: review.inventoryManifests[bootstrap.inventoryHash],
+        [contextFinal.inventoryHash]: review.inventoryManifests[complete.inventoryHash] } };
+    const contextPlan = createReviewedSalesforcePlan({ ...inputs, review: contextReview });
+    const contextEnd = reviewedCheckpointInventory(contextPlan, { deployment: { status: 'Succeeded' } }, environment.key);
+    assert.deepEqual(contextEnd.files[contextFile], contextBaseline.files[contextFile]);
+    assert.ok(!contextEnd.projectionPaths.includes(contextFile));
+    const changedContext = projected({ ...final, [contextFile]: Buffer.from('<CustomField><required>true</required></CustomField>') }, afterFinal);
+    const contextDrift = structuredClone(contextReview);
+    contextDrift.nativeInventories.qat.final = changedContext;
+    contextDrift.inventoryManifests[changedContext.inventoryHash] = review.inventoryManifests[complete.inventoryHash];
+    assert.throws(() => createReviewedSalesforcePlan({ ...inputs, review: contextDrift }), /outside the reviewed transition/);
+    contextDrift.nativeInventoryContext.qat = [field.files[0]];
+    assert.throws(() => createReviewedSalesforcePlan({ ...inputs, review: contextDrift }), /exact unowned object XML paths/);
   } finally { f.cleanup(); }
 });
 
