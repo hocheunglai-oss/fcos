@@ -84,6 +84,41 @@ export function assertReviewedInputsUnchanged(plan, { cwd = ROOT, policy = POLIC
     || salesforcePromotionHash(policy) !== plan.binding.configurationSha256) throw new Error('Salesforce source, manifest, review, baseline, or connection policy changed; restart prepare from DEVEE.');
 }
 
+function assertBootstrapPackage(converted, roundTrip, members, files, apiVersion) {
+  const packageBytes = readFileSync(safeProjectFile(converted, 'package.xml'), 'utf8');
+  const actualMembers = parseReviewedPackage(packageBytes);
+  const versions = [...packageBytes.matchAll(/<version>\s*(\d+\.0)\s*<\/version>/gu)];
+  if (JSON.stringify(actualMembers) !== JSON.stringify([...members].sort())
+    || versions.length !== 1 || versions[0][1] !== apiVersion) {
+    throw new Error('Converted Salesforce bootstrap manifest differs from the reviewed package.');
+  }
+  const expectedPackageFiles = new Set(['package.xml']);
+  const allowedShells = new Set();
+  for (const id of members) {
+    const [type, name] = id.split(':');
+    if (type === 'PermissionSet') expectedPackageFiles.add(`permissionsets/${name}.permissionset`);
+    else {
+      const object = name.split('.')[0];
+      expectedPackageFiles.add(`objects/${object}.object`);
+      if (!members.has(`CustomObject:${object}`)) allowedShells.add(`objects/${object}/${object}.object-meta.xml`);
+    }
+  }
+  const actualPackageFiles = Object.keys(readReviewedInventory(converted).files);
+  if (JSON.stringify(actualPackageFiles.sort()) !== JSON.stringify([...expectedPackageFiles].sort())) {
+    throw new Error('Converted Salesforce bootstrap contains unexpected or missing package files.');
+  }
+  const roundTripFiles = Object.keys(readReviewedInventory(roundTrip).files);
+  for (const file of roundTripFiles) {
+    if (files.has(file)) continue;
+    const shell = allowedShells.has(file) && readFileSync(safeProjectFile(roundTrip, file), 'utf8')
+      .replace(/^<\?xml[^?]*\?>\s*/u, '').trim();
+    if (!shell || !/^<CustomObject xmlns="http:\/\/soap\.sforce\.com\/2006\/04\/metadata"(?:\s*\/>|>\s*<\/CustomObject>)$/u.test(shell)) {
+      throw new Error(`Converted Salesforce bootstrap expanded outside reviewed source: ${file}`);
+    }
+  }
+  if ([...files].some(file => !roundTripFiles.includes(file))) throw new Error('Converted Salesforce bootstrap is missing reviewed source.');
+}
+
 export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = localCommand, adapter = {}, adapterPath, commandEnvironment } = {}) {
   const sf = (args, directory = cwd) => run('sf', args, directory, { env: commandEnvironment });
   return {
@@ -127,8 +162,15 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
           mkdirSync(path.dirname(destination), { recursive: true });
           writeFileSync(destination, bytes, { mode: 0o600 });
         }
+        const converted = path.join(project, 'converted');
+        const roundTrip = path.join(project, 'round-trip');
+        const apiVersion = versions[0][1];
+        sf(['project', 'convert', 'source', '--manifest', 'bootstrap.xml', '--output-dir', converted,
+          '--api-version', apiVersion, '--json'], project);
+        sf(['project', 'convert', 'mdapi', '--root-dir', converted, '--output-dir', roundTrip, '--json'], project);
+        assertBootstrapPackage(converted, path.join(roundTrip, 'main/default'), members, files, apiVersion);
         return {
-          submit: () => sf(['project', 'deploy', 'start', '--target-org', environment.alias, '--manifest', 'bootstrap.xml',
+          submit: () => sf(['project', 'deploy', 'start', '--target-org', environment.alias, '--metadata-dir', converted, '--single-package', '--api-version', apiVersion,
             '--test-level', environment.isSandbox ? 'NoTestRun' : 'RunRelevantTests', '--async', '--json'], project),
           cleanup,
         };

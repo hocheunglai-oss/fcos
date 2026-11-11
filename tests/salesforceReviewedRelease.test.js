@@ -635,14 +635,42 @@ test('native bootstrap stages only exact reviewed files in a temporary project',
     mkdirSync(path.join(cwd, 'manifest'));
     const manifest = path.join(cwd, 'manifest/bootstrap.xml');
     writeFileSync(manifest, f.inputs.bootstrapBytes);
-    let submittedProject;
+    let submittedProject, unexpectedChild = false;
     const provider = cliSalesforceProvider({ cwd, run(program, args, project) {
       assert.equal(program, 'sf');
+      if (args[1] === 'convert') {
+        const output = args[args.indexOf('--output-dir') + 1];
+        if (args[2] === 'source') {
+          mkdirSync(path.join(output, 'objects'), { recursive: true });
+          mkdirSync(path.join(output, 'permissionsets'));
+          writeFileSync(path.join(output, 'package.xml'), f.inputs.bootstrapBytes);
+          writeFileSync(path.join(output, 'objects/Demo__c.object'), '<CustomObject/>\n');
+          writeFileSync(path.join(output, 'permissionsets/Reviewed.permissionset'), '<PermissionSet/>\n');
+        } else {
+          assert.equal(args[2], 'mdapi');
+          const root = path.join(output, 'main/default');
+          for (const name of [field, permission]) {
+            const dest = path.join(root, name);
+            mkdirSync(path.dirname(dest), { recursive: true });
+            writeFileSync(dest, readFileSync(path.join(project, policy.publication.sourceRoot, name)));
+          }
+          writeFileSync(path.join(root, 'objects/Demo__c/Demo__c.object-meta.xml'),
+            '<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata"></CustomObject>\n');
+          if (unexpectedChild) {
+            const dest = path.join(root, 'objects/Demo__c/validationRules/Unreviewed.validationRule-meta.xml');
+            mkdirSync(path.dirname(dest), { recursive: true });
+            writeFileSync(dest, '<ValidationRule/>\n');
+          }
+        }
+        return {};
+      }
       assert.deepEqual(args.slice(0, 3), ['project', 'deploy', 'start']);
       assert.equal(args[args.indexOf('--test-level') + 1], 'NoTestRun');
       assert.equal(args[args.indexOf('--target-org') + 1], policy.environments[0].alias);
       assert.notEqual(project, cwd);
-      assert.deepEqual(readFileSync(path.join(project, args[args.indexOf('--manifest') + 1])), f.inputs.bootstrapBytes);
+      assert.ok(args.includes('--single-package'));
+      const converted = args[args.indexOf('--metadata-dir') + 1];
+      assert.deepEqual(readFileSync(path.join(converted, 'package.xml')), f.inputs.bootstrapBytes);
       const staged = path.join(project, policy.publication.sourceRoot);
       assert.equal(readFileSync(path.join(staged, field), 'utf8'), '<CustomField/>\n');
       assert.equal(readFileSync(path.join(staged, permission), 'utf8'), '<PermissionSet/>\n');
@@ -657,6 +685,8 @@ test('native bootstrap stages only exact reviewed files in a temporary project',
       assert.deepEqual(prepared.submit(), { id: jobId(99) });
     } finally { prepared.cleanup(); }
     assert.throws(() => readFileSync(path.join(submittedProject, 'bootstrap.xml')), { code: 'ENOENT' });
+    unexpectedChild = true;
+    assert.throws(() => provider.prepareBootstrap(policy.environments[0], f.plan), /expanded outside reviewed source/);
     writeFileSync(path.join(source, field), 'changed');
     assert.throws(() => provider.prepareBootstrap(policy.environments[0], f.plan), /bootstrap source changed/);
     writeFileSync(manifest, 'changed');
