@@ -88,6 +88,11 @@ function componentFiles(id, inventory) {
     if (parts.length !== 2) failCoverage('CustomField members must name Object.Field.');
     result = [`objects/${parts[0]}/fields/${parts[1]}.field-meta.xml`];
   }
+  if (type === 'ValidationRule') {
+    const rule = /^([A-Za-z][A-Za-z0-9_]*)\.([A-Za-z][A-Za-z0-9_]*)$/u.exec(member);
+    if (!rule) failCoverage('ValidationRule members must name Object.Rule.');
+    result = [`objects/${rule[1]}/validationRules/${rule[2]}.validationRule-meta.xml`];
+  }
   const directory = { LightningComponentBundle: 'lwc', AuraDefinitionBundle: 'aura' }[type];
   if (directory) result = Object.keys(inventory.files).filter(name => name.startsWith(`${directory}/${member}/`));
   if (!result?.length || result.some(name => !inventory.files[name])) failCoverage(`Unsupported or missing Salesforce component ${id}.`);

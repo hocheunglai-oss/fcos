@@ -19,8 +19,10 @@ const packageXml = ids => Buffer.from(`<?xml version="1.0"?><Package xmlns="http
   const [type, member] = id.split(':'); return `<types><members>${member}</members><name>${type}</name></types>`;
 }).join('')}<version>65.0</version></Package>`);
 const files = { 'classes/Example.cls': Buffer.from('class Example {}\n'), 'classes/Example.cls-meta.xml': Buffer.from('<ApexClass/>\n') };
+const validationRuleId = 'ValidationRule:Trade_Document_Line__c.Exactly_One_Document_Parent';
+const validationRulePath = 'objects/Trade_Document_Line__c/validationRules/Exactly_One_Document_Parent.validationRule-meta.xml';
 
-function fixture({ bootstrap = false, level = 'RunLocalTests', inventoryBaseline = false } = {}) {
+function fixture({ bootstrap = false, level = 'RunLocalTests', inventoryBaseline = false, validationRule = false } = {}) {
   const baselineInventory = inventoryFromFiles(files);
   const finalFiles = { ...files, 'classes/Example.cls': Buffer.from('class Example { String value; }\n') };
   const componentIds = ['ApexClass:Example'];
@@ -28,6 +30,10 @@ function fixture({ bootstrap = false, level = 'RunLocalTests', inventoryBaseline
     finalFiles['objects/Demo__c/fields/Value__c.field-meta.xml'] = Buffer.from('<CustomField/>\n');
     finalFiles['permissionsets/Reviewed.permissionset-meta.xml'] = Buffer.from('<PermissionSet/>\n');
     componentIds.push('CustomField:Demo__c.Value__c', 'PermissionSet:Reviewed');
+  }
+  if (validationRule) {
+    finalFiles[validationRulePath] = Buffer.from('<ValidationRule/>\n');
+    componentIds.push(validationRuleId);
   }
   const finalInventory = inventoryFromFiles(finalFiles), manifestBytes = packageXml(componentIds);
   let baselineWorkflow = createSalesforceWorkflowState({ sourceTreeHash: baselineInventory.sourceTreeHash, now: fixedNow });
@@ -49,12 +55,18 @@ function fixture({ bootstrap = false, level = 'RunLocalTests', inventoryBaseline
     });
     reports.set(validationId, makeReport(validationId, true)); reports.set(deploymentId, makeReport(deploymentId, false));
   }
-  const bootstrapIds = componentIds.filter(id => !id.startsWith('Apex'));
+  const bootstrapIds = componentIds.filter(id => !id.startsWith('Apex') && id !== validationRuleId);
   const bootstrapBytes = bootstrap ? packageXml(bootstrapIds) : null;
+  const componentPaths = {
+    'ApexClass:Example': Object.keys(files),
+    'CustomField:Demo__c.Value__c': ['objects/Demo__c/fields/Value__c.field-meta.xml'],
+    'PermissionSet:Reviewed': ['permissionsets/Reviewed.permissionset-meta.xml'],
+    [validationRuleId]: [validationRulePath],
+  };
   const review = { schemaVersion: 1, releaseMode: REVIEWED_SALESFORCE_MODE, sourceTreeHash: finalInventory.sourceTreeHash,
     manifestSha256: hash(manifestBytes), baselineCommit: 'a'.repeat(40), baselineSourceTreeHash: baselineInventory.sourceTreeHash,
     baselineInventoryHash: baselineInventory.inventoryHash, baselineWorkflowPath: 'proof/baseline.json',
-    components: componentIds.map(id => ({ id, files: id === 'ApexClass:Example' ? Object.keys(files) : id.startsWith('CustomField:') ? ['objects/Demo__c/fields/Value__c.field-meta.xml'] : ['permissionsets/Reviewed.permissionset-meta.xml'], dependsOn: [] })),
+    components: componentIds.map(id => ({ id, files: componentPaths[id], dependsOn: [] })),
     dependencyReview: { complete: true, reviewer: 'reviewer', evidence: 'reviewed source dependency inventory' },
     testPlan: { level, tests: level === 'RunSpecifiedTests' ? ['ExampleTest'] : [], minimumTests: 1 },
     permissionSets: bootstrap ? ['Reviewed'] : [],
@@ -119,6 +131,31 @@ test('reviewed manifest binds actual baseline inventory, delta component/depende
     assert.throws(corrupt(x => { x.baselineInventory.files['classes/Deleted.cls'] = { sha256: 'd'.repeat(64), size: 1 }; }), /Destructive/);
     assert.equal(f.plan.binding.releaseMode, REVIEWED_SALESFORCE_MODE);
     assert.notEqual(f.plan.binding.releaseMode, SALESFORCE_RELEASE_MODE);
+  } finally { f.cleanup(); }
+});
+
+test('reviewed validation rules require exact source and positive test proof in the full package', () => {
+  const f = fixture({ bootstrap: true, validationRule: true });
+  try {
+    assert.ok(f.plan.manifest.includes(validationRuleId));
+    assert.ok(f.plan.changedFiles.includes(validationRulePath));
+    assert.ok(!f.plan.review.bootstrap.components.includes(validationRuleId));
+    const mismatched = { ...f.inputs, review: structuredClone(f.inputs.review) };
+    mismatched.review.components.find(({ id }) => id === validationRuleId).files = ['classes/Example.cls'];
+    assert.throws(() => createReviewedSalesforcePlan(mismatched), /Incorrect component file\/dependency coverage/);
+    const bootstrapComponents = [...f.plan.review.bootstrap.components, validationRuleId];
+    const bootstrapBytes = packageXml(bootstrapComponents);
+    const review = { ...f.inputs.review, bootstrap: {
+      ...f.inputs.review.bootstrap, components: bootstrapComponents, sha256: hash(bootstrapBytes),
+    } };
+    assert.throws(() => createReviewedSalesforcePlan({ ...f.inputs, review, bootstrapBytes }), /only reviewed schema\/permission/);
+    const environment = policy.environments[0], id = jobId(99);
+    const report = f.makeReport(id, true);
+    const intent = { environment, jobId: id, validation: true, testPlan: f.plan.binding.testPlan, expectedComponents: f.plan.manifest };
+    assert.equal(assertReviewedJobReport(report, intent).apexTestProof, true);
+    report.details.componentSuccesses = report.details.componentSuccesses.filter(({ componentType }) => componentType !== 'ValidationRule');
+    assert.throws(() => assertReviewedJobReport(report, intent), /missing reviewed manifest component coverage/);
+    assert.equal(f.calls.length, 0);
   } finally { f.cleanup(); }
 });
 
