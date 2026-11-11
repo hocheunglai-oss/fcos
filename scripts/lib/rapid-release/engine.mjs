@@ -1,4 +1,4 @@
-import { assertAuthorization, digest, requireCondition, validateManifest } from './contract.mjs';
+import { requiresCompanyFxHistorySmoke, assertAuthorization, digest, requireCondition, validateManifest } from './contract.mjs';
 
 const events = records => records.map(record => record.payload);
 export function phaseResult(records, phase) { return events(records).filter(event => event.event === `${phase}.result`).at(-1)?.data; }
@@ -133,13 +133,18 @@ export async function promoteRelease({ manifest, journal, provider, approval, pr
       prerequisite = result;
     }
     const prerequisiteDigest = digest(prerequisite);
+    const historyRequired = requiresCompanyFxHistorySmoke(manifest);
     if (!events(await journal.read()).some(event => event.event === 'prerequisites.smoke_passed'
-      && event.data.prerequisiteDigest === prerequisiteDigest && event.data.deploymentId === staged.id)) {
+      && event.data.prerequisiteDigest === prerequisiteDigest && event.data.deploymentId === staged.id
+      && (!historyRequired || event.data.companyFxHistory?.readVerified === true && event.data.companyFxHistory?.writeDenied === true))) {
       const currentStage = await provider.ready(staged.id);
       requireCondition(currentStage.id === staged.id && currentStage.state === 'READY' && currentStage.buildId === staged.buildId
         && currentStage.sha === staged.sha && currentStage.target === staged.target && currentStage.artifactDigest === staged.artifactDigest,
       'STAGED_ACCEPTANCE_CHANGED');
-      const acceptance = await smoke({ manifest, staged: currentStage }); assertSmokeProof(acceptance, manifest, currentStage);
+      const acceptance = await smoke({ manifest, staged: currentStage, afterPrerequisites: true });
+      assertSmokeProof(acceptance, manifest, currentStage);
+      requireCondition(!historyRequired || acceptance.companyFxHistory?.readVerified === true
+        && acceptance.companyFxHistory?.writeDenied === true, 'SMOKE_COMPANY_FX_HISTORY_REQUIRED');
       await journal.append('prerequisites.smoke_passed', { ...acceptance, prerequisiteDigest });
     }
   }

@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { load } from 'js-yaml';
 import { handoverDigest } from '../scripts/lib/rapid-release/handover.mjs';
 const workflow = load(readFileSync(new URL('../.github/workflows/fcos-rapid-release.yml', import.meta.url), 'utf8'));
+const handoverWorkflow = load(readFileSync(new URL('../.github/workflows/fcos-rapid-handover.yml', import.meta.url), 'utf8'));
 const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
 function configuredActivation() {
  const saved={enabled:process.env.FCOS_RAPID_RELEASE_ENABLED,pointer:process.env.FCOS_RAPID_RELEASE_HANDOVER_ID};
@@ -69,4 +70,40 @@ test('forged source under an old plan hash, changed dispatcher, and failed quali
    assert.equal(outputs,0);
   }
  }finally{restore();if(original===undefined)delete process.env.RELEASE_MANIFEST;else process.env.RELEASE_MANIFEST=original;}
+});
+
+test('Company FX writer credentials are limited to the protected exact database adapter', () => {
+ const names=['FCOS_RAPID_COMPANY_FX_DB_ACCESS_TOKEN','FCOS_RAPID_COMPANY_FX_GH_OWNER_TOKEN'];
+ for(const [name,job] of Object.entries(workflow.jobs)){
+  const matches=job.steps.filter(step=>names.some(key=>Object.hasOwn(step.env||{},key)));
+  if(name!=='go-live'){assert.equal(matches.length,0);continue;}
+  assert.equal(job.environment.name,'fcos-production-release');
+  assert.equal(matches.length,1);
+  const [step]=matches;
+  assert.match(step.run,/scripts\/rapid-release\.mjs promote/);
+  assert.ok(job.steps.indexOf(step)>job.steps.findIndex(item=>item.id==='admit-controller'));
+  for(const key of names)assert.match(step.env[key],/selection\.database && !.*selection\.salesforce && .*prerequisites\.adapter == 'company-fx-history'/);
+ }
+});
+
+test('ordinary promotion retains staging browsers and installs go-live browsers only for prerequisite smoke', () => {
+ const stage=workflow.jobs['stage-and-smoke'].steps.find(step=>step.name==='Install governed browser');
+ const promotion=workflow.jobs['go-live'].steps.find(step=>step.name==='Install governed browser for conditional prerequisite smoke');
+ const qualification=workflow.jobs.quality.steps.find(step=>step.name==='Qualify governed browser without deployment credentials');
+ const handover=Object.values(handoverWorkflow.jobs).flatMap(job=>job.steps).find(step=>step.name==='Install governed browser');
+ assert.equal(stage.run,'bash scripts/rapid-release-browser.sh');
+ assert.equal(stage['timeout-minutes'],4);
+ assert.equal(stage['working-directory'],'controller');
+ assert.equal(stage.if,undefined);
+ assert.equal(promotion.run,stage.run);
+ assert.equal(promotion['timeout-minutes'],stage['timeout-minutes']);
+ assert.equal(promotion['working-directory'],stage['working-directory']);
+ assert.equal(promotion.if,'fromJSON(inputs.manifest_json).selection.salesforce || fromJSON(inputs.manifest_json).selection.database');
+ assert.equal(qualification.if,"inputs.mode == 'qualify'");
+ assert.equal(qualification['working-directory'],stage['working-directory']);
+ for(const step of [stage,promotion,qualification,handover]){
+  assert.equal(step.run,stage.run);
+  assert.equal(step['timeout-minutes'],stage['timeout-minutes']);
+  assert.equal(step.env,undefined);
+ }
 });
