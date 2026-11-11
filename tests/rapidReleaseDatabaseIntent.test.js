@@ -34,6 +34,11 @@ function fixture(t){
  f.armRace=()=>{let release;gate={seen:0,promise:new Promise(resolve=>{release=resolve;}),release};};
  const github={
   async read(path){if(path==='/user')return clone(f.actor);if(path===`/repos/${targets().repository}`)return clone(f.repository);
+   if(path===`/repos/${targets().repository}/git/ref/${REF.slice(5)}`){
+    const observed=f.exactRefReadbacks?.length?f.exactRefReadbacks.shift():f.head;
+    if(!observed)throw Error(SECRET);
+    return {ref:REF,object:{type:'commit',sha:observed}};
+   }
    if(path.includes('/deployments/'))return clone(f.observations.get(Number(path.split('/').at(-1))));
    const sha=path.split('/').at(-1);if(path.includes('/git/commits/')&&commits.has(sha))return clone(commits.get(sha));throw Error(SECRET);},
   async pages(path){if(path.includes('/git/matching-refs/')){
@@ -119,6 +124,27 @@ test('lost applied claim/journal/close ACKs use exact readback without resubmiss
  assert.equal(f.writes.filter(x=>x.path.endsWith('/git/refs')).length,1);
  assert.equal(f.writes.filter(x=>x.method==='PATCH').length,1);
  assert.equal(f.writes.filter(x=>x.path.endsWith('/deployments')).length,2);
+});
+
+test('delayed exact ref visibility rechecks the original write without resubmitting',async t=>{
+ const f=fixture(t),store=await f.store();
+ f.exactRefReadbacks=[null];
+ const intent=await store.begin(f.request),claim=f.head;
+ f.exactRefReadbacks=[claim];
+ await store.complete(f.receipt(intent));
+ assert.equal(f.state().phase,'received');
+ assert.equal(f.writes.filter(x=>x.path.endsWith('/git/refs')).length,1);
+ assert.equal(f.writes.filter(x=>x.method==='PATCH').length,1);
+ assert.equal(f.deployments.length,2);
+});
+
+test('an unexpected journal ref cannot acknowledge a different claim',async t=>{
+ const f=fixture(t),store=await f.store();
+ f.exactRefReadbacks=['e'.repeat(40)];
+ await assert.rejects(store.begin(f.request),/CLAIM_ACK_UNKNOWN/);
+ assert.equal(f.writes.filter(x=>x.path.endsWith('/git/refs')).length,1);
+ assert.equal(f.deployments.length,0);
+ assert.equal(f.issuerPosts,0);
 });
 
 test('unknown commit creation stops before ref claim or credential issuance',async t=>{

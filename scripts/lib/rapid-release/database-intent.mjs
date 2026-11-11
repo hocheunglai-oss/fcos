@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import { mkdirSync, openSync, writeSync, fsyncSync, closeSync, constants } from 'node:fs';
 import { join } from 'node:path';
 import { canonical, digest, git, isSha, isDigest, requireCondition as check, targets } from './contract.mjs';
@@ -163,9 +164,24 @@ export async function createDatabaseCredentialIntentStore({credential,directory,
     check(isSha(row?.sha),'DATABASE_AUTH_COMMIT_ACK_UNKNOWN');const native=await commit(row.sha);
     check(messageText(native)===canonical(state) && native.parents.length===1 && native.parents[0]?.sha===parentSha
       && native.tree.sha===(state.phase==='pending'?state.treeSha:state.pending.treeSha),'DATABASE_AUTH_NATIVE_COMMIT_INVALID');return row.sha;};
-  const moveRef=async(sha,previous)=>{try{if(previous)await github.patch(refPath,{sha,force:false});
-    else await github.write(`${base}/git/refs`,{ref:REF,sha});}catch{/* Never retry a ref write. */}
-    const actual=await head();check(actual?.sha===sha,'DATABASE_AUTH_CLAIM_ACK_UNKNOWN');return actual;};
+  const moveRef=async(sha,previous)=>{
+    try {
+      if(previous)await github.patch(refPath,{sha,force:false});
+      else await github.write(`${base}/git/refs`,{ref:REF,sha});
+    } catch { /* Never retry a ref write. */ }
+    const exactPath=`${base}/git/ref/${REF.slice(5)}`;
+    // The commit has already been read back by hash. Here only the exact ref
+    // needs acknowledgement, and the list endpoint can lag the mutation.
+    for(const wait of [0,150,400]){
+      if(wait)await delay(wait);
+      let actual;
+      try { actual=await read(exactPath); } catch { continue; }
+      check(actual?.ref===REF && actual.object?.type==='commit' && isSha(actual.object.sha),'DATABASE_AUTH_NATIVE_REF_INVALID');
+      if(actual.object.sha===sha)return;
+      if(actual.object.sha!==previous?.sha)break;
+    }
+    throw Error('DATABASE_AUTH_CLAIM_ACK_UNKNOWN');
+  };
   const received=async receipt=>{
     check(current?.claim && receiptValid(receipt,current.claim),'DATABASE_AUTH_RECEIPT_REFUSED');
     const owned=await head();check(owned?.sha===current.claimCommitSha && same(owned.state,current.claim),'DATABASE_AUTH_ORIGINAL_OPERATION_UNCERTAIN');
