@@ -259,7 +259,7 @@ export async function verifyReviewedOrgInventory({ provider, environment, plan, 
       || !observed
       || !same(observed, expected.files) || hash(observed) !== expected.inventoryHash) throw new Error('Inventory baseline requires current native owned-tree file evidence and the pinned org identity; hashes or caller booleans alone are insufficient.');
     if (expected.absentComponents?.length && (!same(receipt.absentComponents, expected.absentComponents)
-      || receipt.absenceVerificationMethod !== 'native-metadata-catalog')) {
+      || receipt.absenceVerificationMethod !== 'native-metadata-catalog' || !HASH.test(receipt.absenceEvidenceSha256 || ''))) {
       throw new Error('Current Salesforce inventory lacks native evidence for the exact absent reviewed components.');
     }
   }

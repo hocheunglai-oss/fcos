@@ -100,7 +100,8 @@ function fixture({ bootstrap = false, level = 'RunLocalTests', inventoryBaseline
       const actual = orgInventories.get(environment.key);
       return { orgId: environment.orgId, sourceTreeHash: actual.sourceTreeHash || null, inventoryHash: actual.inventoryHash, verifiedAt: fixedNow.toISOString(), evidenceSha256: 'a'.repeat(64),
         verificationMethod: 'metadata-api-owned-tree-inventory', scope: 'force-app/main/default', observedInventory: structuredClone(actual.files),
-        ...(actual.absentComponents ? { absentComponents: actual.absentComponents, absenceVerificationMethod: 'native-metadata-catalog' } : {}),
+        ...(actual.absentComponents ? { absentComponents: actual.absentComponents, absenceVerificationMethod: 'native-metadata-catalog',
+          absenceEvidenceSha256: 'b'.repeat(64) } : {}),
         identity: { alias: environment.alias, orgId: environment.orgId, isSandbox: environment.isSandbox, username: environment.username || 'production@example.invalid', connectedStatus: 'Connected' } }; },
     async verifyIdentity(environment) { calls.push(['identity', environment.key]); },
     async report(environment, id) { calls.push(['report', environment.key, id]); return reports.get(id); },
@@ -701,8 +702,9 @@ test('native inventory retrieval binds manifest, org, and observed bytes and rem
     writeFileSync(path.join(cwd, 'sfdx-project.json'), '{}');
     const descriptor = { path: 'inventory.xml', sha256: hash(manifest) };
     const input = { plan: { review: { inventoryManifests: { [expected.inventoryHash]: descriptor } } },
-      expectedInventoryHash: expected.inventoryHash, expectedSourceTreeHash: expected.sourceTreeHash };
-    let retrievedProject, changed = false, retrieves = 0, displayCalls = 0;
+      expectedInventoryHash: expected.inventoryHash, expectedSourceTreeHash: expected.sourceTreeHash,
+      expectedAbsentComponents: ['ApexClass:Missing'] };
+    let retrievedProject, changed = false, retrieves = 0, displayCalls = 0, catalogCalls = 0;
     const provider = cliSalesforceProvider({ cwd, run(program, args, project) {
       assert.equal(program, 'sf');
       assert.equal(args[args.indexOf('--target-org') + 1], environment.alias);
@@ -710,7 +712,14 @@ test('native inventory retrieval binds manifest, org, and observed bytes and rem
         displayCalls++;
         return { id: environment.orgId, username: environment.username, connectedStatus: 'Connected' };
       }
-      if (args[0] === 'data') return { records: [{ Id: environment.orgId, IsSandbox: environment.isSandbox }] };
+      if (args[0] === 'data') {
+        const query = args[args.indexOf('--query') + 1];
+        if (query.includes('FROM Organization')) return { records: [{ Id: environment.orgId, IsSandbox: environment.isSandbox }] };
+        assert.ok(args.includes('--use-tooling-api'));
+        assert.match(query, /FROM ApexClass.*'Example','Missing'/u);
+        catalogCalls++;
+        return { totalSize: 1, done: true, records: [{ Name: 'Example' }] };
+      }
       assert.deepEqual(args.slice(0, 3), ['project', 'retrieve', 'start']);
       assert.notEqual(project, cwd);
       assert.deepEqual(readFileSync(args[args.indexOf('--manifest') + 1]), manifest);
@@ -727,6 +736,9 @@ test('native inventory retrieval binds manifest, org, and observed bytes and rem
     assert.equal(receipt.sourceTreeHash, expected.sourceTreeHash);
     assert.deepEqual(receipt.observedInventory, expected.files);
     assert.equal(receipt.identity.orgId, environment.orgId);
+    assert.deepEqual(receipt.absentComponents, input.expectedAbsentComponents);
+    assert.match(receipt.absenceEvidenceSha256, /^[a-f0-9]{64}$/u);
+    assert.equal(catalogCalls, 1);
     assert.equal(displayCalls, 2);
     assert.throws(() => readFileSync(path.join(retrievedProject, 'inventory.xml')), { code: 'ENOENT' });
 
@@ -736,6 +748,7 @@ test('native inventory retrieval binds manifest, org, and observed bytes and rem
     descriptor.sha256 = '0'.repeat(64);
     assert.throws(() => provider.verifyInventory(environment, input), /manifest digest mismatch/);
     assert.equal(retrieves, 2);
+    assert.equal(catalogCalls, 1);
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }

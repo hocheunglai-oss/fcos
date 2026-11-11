@@ -7,6 +7,7 @@ import { parseDocument } from 'htmlparser2';
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import { openSalesforcePromotionJournal, salesforcePromotionHash } from './lib/salesforce-promotion-journal.mjs';
 import { INVENTORY_BASELINE_MODE, createReviewedSalesforcePlan, inventoryFromFiles, parseReviewedPackage, readReviewedInventory, runReviewedSalesforceRelease, safeProjectFile } from './lib/salesforce-reviewed-release.mjs';
+import { proveSalesforceInventoryAbsence } from './lib/salesforce-inventory-absence.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const POLICY = FCOS_CONNECTION_POLICY.providers.find(({ id }) => id === 'salesforce');
@@ -228,12 +229,12 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
     },
     // Job adoption must be implemented by the release owner's provider-specific readback.
     reconcile: adapter.reconcileSalesforceJob,
-    verifyInventory: adapter.verifySalesforceInventory || function (environment, { plan, expectedInventoryHash, expectedSourceTreeHash }) {
+    verifyInventory: adapter.verifySalesforceInventory || function (environment, { plan, expectedInventoryHash, expectedSourceTreeHash, expectedAbsentComponents = [] }) {
       const manifest = plan.review.inventoryManifests?.[expectedInventoryHash];
       if (!manifest) throw new Error('Current Salesforce inventory requires an exact reviewed retrieval manifest.');
       const bytes = readFileSync(safeProjectFile(cwd, manifest.path));
       if (salesforcePromotionHash(bytes) !== manifest.sha256) throw new Error('Salesforce inventory retrieval manifest digest mismatch.');
-      parseReviewedPackage(bytes.toString('utf8'), { inventory: true });
+      const presentComponents = parseReviewedPackage(bytes.toString('utf8'), { inventory: true });
 
       const before = this.verifyIdentity(environment);
       const project = mkdtempSync(path.join(tmpdir(), 'fcos-salesforce-inventory-'));
@@ -249,22 +250,25 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
           || !/^09S[A-Za-z0-9]{15}$/u.test(result.id || '') || result.messages?.length) {
           throw new Error('Salesforce inventory retrieval did not complete successfully without warnings.');
         }
-        const after = this.verifyIdentity(environment);
-        if (!before.username || before.username !== after.username) throw new Error('Salesforce inventory identity changed during retrieval.');
         const observed = readReviewedInventory(path.join(project, 'retrieved'));
         if (observed.inventoryHash !== expectedInventoryHash
           || (expectedSourceTreeHash && observed.sourceTreeHash !== expectedSourceTreeHash)) {
           throw new Error('Native Salesforce retrieval differs from the exact reviewed inventory.');
         }
+        const absence = expectedAbsentComponents.length ? proveSalesforceInventoryAbsence({ expectedAbsentComponents, presentComponents,
+          query: (soql, tooling) => sf(['data', 'query', ...(tooling ? ['--use-tooling-api'] : []),
+            '--target-org', environment.alias, '--query', soql, '--json'], project) }) : null;
+        const after = this.verifyIdentity(environment);
+        if (!before.username || before.username !== after.username) throw new Error('Salesforce inventory identity changed during retrieval.');
         const identity = { alias: environment.alias, orgId: after.id, isSandbox: environment.isSandbox,
           username: after.username, connectedStatus: after.connectedStatus };
         const verifiedAt = new Date().toISOString();
         const sourceTreeHash = expectedSourceTreeHash ? observed.sourceTreeHash : null;
         const evidenceSha256 = salesforcePromotionHash({ jobId: result.id, manifestSha256: manifest.sha256,
-          identity, verifiedAt, inventoryHash: observed.inventoryHash, sourceTreeHash });
+          identity, verifiedAt, inventoryHash: observed.inventoryHash, sourceTreeHash, ...absence });
         return { orgId: identity.orgId, identity, verifiedAt, sourceTreeHash, inventoryHash: observed.inventoryHash,
           evidenceSha256, observedInventory: observed.files, verificationMethod: 'metadata-api-owned-tree-inventory',
-          scope: 'force-app/main/default' };
+          scope: 'force-app/main/default', ...absence };
       } finally {
         rmSync(project, { recursive: true, force: true });
       }
