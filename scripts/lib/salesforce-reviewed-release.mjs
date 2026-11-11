@@ -67,6 +67,110 @@ export function readReviewedInventory(root, { nativeExport = false, supplemental
   return inventoryFromFiles(files);
 }
 
+const NATIVE_CUSTOM_FIELD_FALSE_FLAGS = new Set(['caseSensitive', 'externalId', 'required', 'trackHistory', 'trackTrending', 'unique']);
+export const NATIVE_CUSTOM_OBJECT_DEFAULTS = Object.freeze({
+  actionOverrides: 'standard-actions',
+  allowInChatterGroups: 'false',
+  compactLayoutAssignment: 'SYSTEM',
+  enableFeeds: 'false',
+  enableLicensing: 'false',
+  'nameField.trackHistory': 'false',
+  searchLayouts: 'empty',
+});
+
+function assertNativeSerializationAllowances(review, components) {
+  const specs = [
+    { allowances: review.nativeCustomFieldFalseFlags, type: 'CustomField', allowed: NATIVE_CUSTOM_FIELD_FALSE_FLAGS },
+    { allowances: review.nativeCustomObjectDefaults, type: 'CustomObject', allowed: new Set(Object.keys(NATIVE_CUSTOM_OBJECT_DEFAULTS)) },
+  ];
+  for (const { allowances, type, allowed } of specs) {
+    if (allowances === undefined) continue;
+    const paths = new Set(components.filter(({ id }) => id.startsWith(type + ':')).flatMap(({ files }) => files));
+    if (!review.bootstrap || !review.nativeInventories || !allowances || typeof allowances !== 'object'
+      || Array.isArray(allowances) || !Object.keys(allowances).length
+      || Object.entries(allowances).some(([name, flags]) => !paths.has(name) || !Array.isArray(flags)
+        || !flags.length || new Set(flags).size !== flags.length || flags.some(flag => !allowed.has(flag)))) {
+      failCoverage(`Native ${type} serialization allowances require exact reviewed bootstrap ${type === 'CustomField' ? 'field' : 'object'} paths and supported flags.`);
+    }
+  }
+}
+
+export function projectedNativeInventoryHash(files, projectionPaths) {
+  return hash({ files, projectionPaths });
+}
+
+export function matchesProjectedNativeInventory(observed, pinned, projectionPaths) {
+  return Boolean(observed) && same(sorted(Object.keys(observed)), sorted([...Object.keys(pinned), ...projectionPaths]))
+    && Object.entries(observed).every(([name, pin]) => HASH.test(pin?.sha256 || '') && Number.isSafeInteger(pin.size) && pin.size >= 0
+      && (!Object.hasOwn(pinned, name) || same(pin, pinned[name])));
+}
+
+function reviewedNativeBootstrapInventories(review, policy, baselineInventory, orgBaselineInventories, finalInventory, components) {
+  const reviewed = review.nativeInventories;
+  if (review.baselineMode !== INVENTORY_BASELINE_MODE
+    || !reviewed || !same(sorted(Object.keys(reviewed)), sorted(ENVIRONMENTS))) {
+    failCoverage('Native bootstrap checkpoints require an exact inventory review for every org.');
+  }
+  const bootstrapComponents = new Set(review.bootstrap.components);
+  const bootstrapFiles = new Set(components.filter(({ id }) => bootstrapComponents.has(id)).flatMap(({ files }) => files));
+  const releaseFiles = new Set(components.flatMap(({ files }) => files));
+  const validManifest = entry => typeof entry?.path === 'string' && Boolean(entry.path) && HASH.test(entry.sha256 || '');
+  const manifestIdentity = entry => [entry.path, entry.sha256];
+  const checkpoint = (descriptor, expectedPaths, projectionPaths, projected = false) => {
+    const files = descriptor?.files;
+    const paths = new Set(expectedPaths);
+    const rawPaths = [...paths].filter(name => !projected || !projectionPaths.has(name));
+    const projectedPaths = sorted(projectionPaths);
+    if (!files || typeof files !== 'object' || Array.isArray(files)
+      || !same(sorted(Object.keys(files)), sorted(rawPaths))
+      || Object.values(files).some(pin => !HASH.test(pin?.sha256 || '') || !Number.isSafeInteger(pin.size)
+        || pin.size < 0 || !same(sorted(Object.keys(pin)), ['sha256', 'size']))) {
+      failCoverage('Native bootstrap checkpoint must pin the exact owned paths and bytes.');
+    }
+    const ordered = Object.fromEntries(Object.keys(files).sort().map(name => [name, { sha256: files[name].sha256, size: files[name].size }]));
+    const inventoryHash = projected ? projectedNativeInventoryHash(ordered, projectedPaths) : hash(ordered);
+    const retrieval = review.inventoryManifests?.[inventoryHash];
+    const present = components.filter(component => component.files.every(name => paths.has(name)));
+    if (components.some(component => component.files.some(name => paths.has(name)) && !present.includes(component))) {
+      failCoverage('Native bootstrap checkpoint contains a partially present component.');
+    }
+    if (descriptor.inventoryHash !== inventoryHash || !validManifest(retrieval) || retrieval.apex !== undefined
+      || (present.length ? !validManifest(retrieval.metadata) : retrieval.metadata !== undefined)) {
+      failCoverage('Native bootstrap checkpoint lacks its exact split retrieval manifest.');
+    }
+    return { files: ordered, inventoryHash, nativeExport: true, nativeBootstrap: true,
+      ...(projected ? { projectedNativeInventory: true } : {}),
+      projectionPaths: projectedPaths, absentComponents: sorted(components.filter(component => !present.includes(component)).map(({ id }) => id)) };
+  };
+  const assertTransition = (before, after, allowedPaths) => {
+    const afterPaths = new Set([...Object.keys(after.files), ...(after.projectedNativeInventory ? after.projectionPaths : [])]);
+    if (Object.keys(before.files).some(name => !afterPaths.has(name)
+      || (!allowedPaths.has(name) && !same(before.files[name], after.files[name])))
+      || Object.keys(after.files).some(name => !same(before.files[name], after.files[name]) && !allowedPaths.has(name))
+      || !same(manifestIdentity(review.inventoryManifests[before.inventoryHash]),
+        manifestIdentity(review.inventoryManifests[after.inventoryHash]))) {
+      failCoverage('Native bootstrap checkpoints change files or retrieval scope outside the reviewed transition.');
+    }
+  };
+  return Object.fromEntries(policy.environments.map(({ key, orgId }) => {
+    const descriptor = reviewed[key];
+    if (descriptor?.orgId !== orgId) failCoverage(`Salesforce ${key} native bootstrap checkpoint has the wrong pinned org.`);
+    const gitBaseline = orgBaselineInventories?.[key] || baselineInventory;
+    const projected = descriptor.bootstrap?.projected === true;
+    if (descriptor.baseline?.projected !== undefined
+      || (projected ? descriptor.final?.projected !== true
+        : descriptor.bootstrap?.projected !== undefined || descriptor.final?.projected !== undefined)) {
+      failCoverage('Native bootstrap projections require an exact raw baseline and matching post-write checkpoint modes.');
+    }
+    const baseline = checkpoint(descriptor.baseline, Object.keys(gitBaseline.files), []);
+    const bootstrap = checkpoint(descriptor.bootstrap, [...Object.keys(gitBaseline.files), ...bootstrapFiles], bootstrapFiles, projected);
+    const final = checkpoint(descriptor.final, Object.keys(finalInventory.files), releaseFiles, projected);
+    assertTransition(baseline, bootstrap, bootstrapFiles);
+    assertTransition(bootstrap, final, releaseFiles);
+    return [key, { baseline, bootstrap, final }];
+  }));
+}
+
 function reviewedNativeInventories(review, policy, baselineInventory, finalInventory, components, coveredFiles) {
   if (review.nativeInventories === undefined) return undefined;
   const reviewed = review.nativeInventories;
@@ -242,7 +346,10 @@ export function createReviewedSalesforcePlan({ review, manifestBytes, bootstrapB
       || !same(sorted(bootstrap.permissionSets || []), sorted(permissions.filter(name => bootstrap.components.includes(`PermissionSet:${name}`))))) throw new Error('Bootstrap must contain only reviewed schema/permission components from the main manifest.');
     if (testPlan.level !== 'RunLocalTests') throw new Error('A schema bootstrap requires one complete RunLocalTests validation per environment.');
   } else if (bootstrapBytes) throw new Error('Unreviewed bootstrap bytes supplied.');
-  const nativeInventories = reviewedNativeInventories(review, policy, baselineInventory, finalInventory, components, coveredFiles);
+  assertNativeSerializationAllowances(review, components);
+  const nativeInventories = review.bootstrap && review.nativeInventories !== undefined
+    ? reviewedNativeBootstrapInventories(review, policy, baselineInventory, orgBaselineInventories, finalInventory, components)
+    : reviewedNativeInventories(review, policy, baselineInventory, finalInventory, components, coveredFiles);
   const baselineJobs = baselineMode === COMPLETE_DEPLOYMENT_BASELINE_MODE ? {} : null;
   for (const environment of baselineJobs ? policy.environments : []) {
     const record = baselineWorkflow.environments?.[environment.key];
@@ -337,7 +444,9 @@ export async function verifyReviewedOrgInventory({ provider, environment, plan, 
   const receipt = await provider.verifyInventory(environment, { plan, expectedInventory: expected.files,
     expectedSourceTreeHash: expected.sourceTreeHash || null, expectedInventoryHash: expected.inventoryHash,
     expectedAbsentComponents: expected.absentComponents || [],
-    ...(expected.nativeExport ? { nativeExport: true, verifyApexProjection: expected.verifyApexProjection === true } : {}) });
+    ...(expected.nativeExport ? { nativeExport: true, verifyApexProjection: expected.verifyApexProjection === true } : {}),
+    ...(expected.nativeBootstrap ? { nativeBootstrap: true, projectionPaths: expected.projectionPaths,
+      ...(expected.projectedNativeInventory ? { projectedNativeInventory: true } : {}) } : {}) });
   const verifiedAt = Date.parse(receipt?.verifiedAt);
   if (receipt?.orgId !== environment.orgId || receipt?.sourceTreeHash !== (expected.sourceTreeHash || null)
     || receipt?.inventoryHash !== expected.inventoryHash || !HASH.test(receipt?.evidenceSha256 || '')
@@ -347,13 +456,24 @@ export async function verifyReviewedOrgInventory({ provider, environment, plan, 
     const observed = files && typeof files === 'object' && !Array.isArray(files) ? Object.fromEntries(Object.entries(files).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
       .map(([name, value]) => [name, { sha256: value?.sha256, size: value?.size }])) : null;
     const method = expected.nativeExport ? 'metadata-api-reviewed-native-byte-inventory' : 'metadata-api-owned-tree-inventory';
+    const permissionSets = (expected.projectionPaths || []).flatMap(name => {
+      const permission = /^permissionsets\/([A-Za-z][A-Za-z0-9_]*)\.permissionset-meta\.xml$/u.exec(name);
+      return permission ? [permission[1]] : [];
+    }).sort();
+    const inventoryMatches = expected.projectedNativeInventory
+      ? matchesProjectedNativeInventory(observed, expected.files, expected.projectionPaths)
+        && receipt.observedNativeInventoryHash === hash(observed)
+      : Boolean(observed) && same(observed, expected.files) && hash(observed) === expected.inventoryHash;
     if (receipt.verificationMethod !== method || receipt.scope !== 'force-app/main/default'
       || (expected.nativeExport && !HASH.test(receipt.nativeSourceTreeHash || ''))
       || (expected.verifyApexProjection && receipt.apexProjectionVerified !== true)
+      || (expected.nativeBootstrap && !same(receipt.verifiedProjectionPaths, expected.projectionPaths))
       || identity?.alias !== environment.alias || identity?.orgId !== environment.orgId || identity?.isSandbox !== environment.isSandbox
       || identity?.connectedStatus !== 'Connected' || !String(identity?.username || '').trim() || (environment.username && identity.username !== environment.username)
-      || !observed
-      || !same(observed, expected.files) || hash(observed) !== expected.inventoryHash) throw new Error('Inventory baseline requires current native owned-tree file evidence and the pinned org identity; hashes or caller booleans alone are insufficient.');
+      || !inventoryMatches) throw new Error('Inventory baseline requires current native owned-tree file evidence and the pinned org identity; hashes or caller booleans alone are insufficient.');
+    if (permissionSets.length && (!same(receipt.permissionSets, permissionSets) || !HASH.test(receipt.permissionGrantEvidenceSha256 || ''))) {
+      throw new Error('Current Salesforce inventory lacks exact native PermissionSet grant evidence.');
+    }
     if (expected.absentComponents?.length && (!same(receipt.absentComponents, expected.absentComponents)
       || receipt.absenceVerificationMethod !== 'native-metadata-catalog' || !HASH.test(receipt.absenceEvidenceSha256 || ''))) {
       throw new Error('Current Salesforce inventory lacks native evidence for the exact absent reviewed components.');
@@ -364,7 +484,11 @@ export async function verifyReviewedOrgInventory({ provider, environment, plan, 
 
 export function reviewedCheckpointInventory(plan, stage = {}, environmentKey) {
   const native = plan.nativeInventories?.[environmentKey];
-  if (native) return stage.deployment?.status === 'Succeeded' ? native.final : native.baseline;
+  if (native) {
+    if (stage.deployment?.status === 'Succeeded') return native.final;
+    if (stage.bootstrap?.status === 'Succeeded' && native.bootstrap) return native.bootstrap;
+    return native.baseline;
+  }
   if (stage.deployment?.status === 'Succeeded') return plan.finalInventory;
   const baseline = plan.orgBaselineInventories ? plan.orgBaselineInventories[environmentKey] : plan.baselineInventory;
   if (!baseline) throw new Error('Salesforce inventory checkpoint requires the pinned org baseline.');
@@ -669,7 +793,9 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
         await persist(environment.key, 'inventory-checkpoint', { baselineMode: INVENTORY_BASELINE_MODE, orgId: environment.orgId,
           inventoryHash: receipt.inventoryHash, sourceTreeHash: receipt.sourceTreeHash, verifiedAt: receipt.verifiedAt,
           evidenceSha256: receipt.evidenceSha256, ...(expected.nativeExport ? { nativeSourceTreeHash: receipt.nativeSourceTreeHash,
-            verificationMethod: receipt.verificationMethod, apexProjectionVerified: receipt.apexProjectionVerified } : {}) });
+            verificationMethod: receipt.verificationMethod, apexProjectionVerified: receipt.apexProjectionVerified,
+            ...(expected.nativeBootstrap ? { verifiedProjectionPaths: receipt.verifiedProjectionPaths } : {}),
+            ...(expected.projectedNativeInventory ? { observedNativeInventoryHash: receipt.observedNativeInventoryHash } : {}) } : {}) });
       }
     }
     for (const environment of policy.environments) {

@@ -7,8 +7,8 @@ import test from 'node:test';
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import { createSalesforceWorkflowState, updateSalesforceEnvironmentState, SALESFORCE_RELEASE_MODE } from '../scripts/salesforce-workflow-state.mjs';
 import { openSalesforcePromotionJournal, salesforcePromotionHash as hash } from '../scripts/lib/salesforce-promotion-journal.mjs';
-import { INVENTORY_BASELINE_MODE, REVIEWED_SALESFORCE_MODE, createReviewedSalesforcePlan, inventoryFromFiles, matchesSalesforceCheckpoint, parseReviewedPackage, reviewedCheckpointInventory, runReviewedSalesforceRelease, assertReviewedJobReport, assertProductionAuthorization } from '../scripts/lib/salesforce-reviewed-release.mjs';
-import { assertReviewedInputsUnchanged, baselineGitInventory, cliSalesforceProvider, loadReviewedSalesforcePlan, reviewedSalesforceOptions } from '../scripts/deploy-salesforce-reviewed-manifest.mjs';
+import { INVENTORY_BASELINE_MODE, REVIEWED_SALESFORCE_MODE, createReviewedSalesforcePlan, inventoryFromFiles, matchesSalesforceCheckpoint, parseReviewedPackage, projectedNativeInventoryHash, reviewedCheckpointInventory, verifyReviewedOrgInventory, runReviewedSalesforceRelease, assertReviewedJobReport, assertProductionAuthorization } from '../scripts/lib/salesforce-reviewed-release.mjs';
+import { assertReviewedInputsUnchanged, baselineGitInventory, cliSalesforceProvider, equivalentNativeSerialization, loadReviewedSalesforcePlan, reviewedSalesforceOptions } from '../scripts/deploy-salesforce-reviewed-manifest.mjs';
 import { reviewedDeveePublicationProof } from '../scripts/sync-salesforce-reviewed-repository.mjs';
 import { applyReviewedPrerequisites, verifyPreBootstrapStage } from '../scripts/lib/rapid-release/salesforce-reviewed-adapter.mjs';
 import { digest, targets } from '../scripts/lib/rapid-release/contract.mjs';
@@ -1223,6 +1223,280 @@ test('native byte checkpoints pin each org and permit only reviewed Apex changes
     altered.nativeInventories.qat.orgId = policy.environments[0].orgId;
     assert.throws(() => createReviewedSalesforcePlan({ ...inputs, review: altered }), /wrong pinned org/);
   } finally { f.cleanup(); }
+});
+
+test('mixed native checkpoints pin exact org paths and preserve untouched bytes across bootstrap and final', async () => {
+  const f = fixture({ bootstrap: true, inventoryBaseline: true, validationRule: true });
+  try {
+    const [apex, field, permission, rule] = f.inputs.review.components;
+    const fieldXml = '<CustomField><required>false</required></CustomField>\n';
+    const initial = { ...files, 'classes/Example.cls': Buffer.from('class Example {}\r\n') };
+    const intermediate = { ...initial, [field.files[0]]: Buffer.from(fieldXml),
+      [permission.files[0]]: Buffer.from('<PermissionSet/>\r\n') };
+    const final = { ...intermediate, 'classes/Example.cls': Buffer.from('class Example { String value; }\r\n'),
+      [rule.files[0]]: Buffer.from('<ValidationRule/>\r\n') };
+    const descriptor = entries => {
+      const { files, inventoryHash } = inventoryFromFiles(entries);
+      return { files, inventoryHash };
+    };
+    const baseline = descriptor(initial), bootstrap = descriptor(intermediate), complete = descriptor(final);
+    const pin = (entry, ids) => [entry.inventoryHash, { path: 'inventory.xml', sha256: hash(packageXml(['Profile:Example'])),
+      metadata: { path: 'components.xml', sha256: hash(packageXml(ids)) } }];
+    const review = { ...f.inputs.review,
+      nativeInventories: Object.fromEntries(policy.environments.map(({ key, orgId }) => [key, { orgId, baseline, bootstrap, final: complete }])),
+      inventoryManifests: Object.fromEntries([pin(baseline, [apex.id]), pin(bootstrap, [apex.id, field.id, permission.id]),
+        pin(complete, [apex.id, field.id, permission.id, rule.id])]) };
+    const inputs = { ...f.inputs, review };
+    const plan = createReviewedSalesforcePlan(inputs);
+    assert.doesNotThrow(() => createReviewedSalesforcePlan({ ...inputs,
+      review: { ...review, nativeCustomFieldFalseFlags: { [field.files[0]]: ['required'] } } }));
+    assert.throws(() => createReviewedSalesforcePlan({ ...inputs,
+      review: { ...review, nativeCustomObjectDefaults: { [field.files[0]]: ['enableFeeds'] } } }), /exact reviewed bootstrap object paths/);
+    for (const allowances of [{ [permission.files[0]]: ['required'] }, { [field.files[0]]: ['defaultValue'] },
+      { [field.files[0]]: ['required', 'required'] }]) {
+      assert.throws(() => createReviewedSalesforcePlan({ ...inputs, review: { ...review, nativeCustomFieldFalseFlags: allowances } }),
+        /exact reviewed bootstrap field paths/);
+    }
+    const environment = policy.environments[0];
+    const checkpoint = reviewedCheckpointInventory(plan, { bootstrap: { status: 'Succeeded' } }, environment.key);
+    assert.equal(checkpoint.inventoryHash, bootstrap.inventoryHash);
+    assert.deepEqual(checkpoint.projectionPaths, [...field.files, ...permission.files].sort());
+    assert.deepEqual(checkpoint.absentComponents, [rule.id]);
+    assert.equal(reviewedCheckpointInventory(plan, { deployment: { status: 'Succeeded' } }, environment.key).inventoryHash, complete.inventoryHash);
+    const drift = descriptor({ ...intermediate, 'classes/Example.cls': Buffer.from('class Example { Integer unintended; }') });
+    const changed = { ...review, nativeInventories: { ...review.nativeInventories,
+      qat: { ...review.nativeInventories.qat, bootstrap: drift } },
+      inventoryManifests: { ...review.inventoryManifests, [drift.inventoryHash]: review.inventoryManifests[bootstrap.inventoryHash] } };
+    assert.throws(() => createReviewedSalesforcePlan({ ...inputs, review: changed }), /outside the reviewed transition/);
+    const missing = descriptor({ ...initial, [field.files[0]]: Buffer.from(fieldXml) });
+    changed.nativeInventories.qat.bootstrap = missing;
+    assert.throws(() => createReviewedSalesforcePlan({ ...inputs, review: changed }), /exact owned paths/);
+    let projection, permissionGrantEvidenceSha256;
+    const provider = { verifyInventory(_environment, request) {
+      assert.deepEqual(request.projectionPaths, checkpoint.projectionPaths);
+      return { orgId: environment.orgId, identity: { alias: environment.alias, orgId: environment.orgId,
+        isSandbox: environment.isSandbox, username: environment.username, connectedStatus: 'Connected' },
+        sourceTreeHash: null, inventoryHash: checkpoint.inventoryHash, verifiedAt: now().toISOString(), evidenceSha256: 'a'.repeat(64),
+        nativeSourceTreeHash: 'b'.repeat(64), observedInventory: checkpoint.files,
+        verificationMethod: 'metadata-api-reviewed-native-byte-inventory', scope: 'force-app/main/default',
+        verifiedProjectionPaths: projection, permissionSets: ['Reviewed'], permissionGrantEvidenceSha256, absentComponents: [rule.id], absenceVerificationMethod: 'native-metadata-catalog',
+        absenceEvidenceSha256: 'c'.repeat(64) };
+    } };
+    await assert.rejects(verifyReviewedOrgInventory({ provider, environment, plan, expected: checkpoint, now }), /requires current native/);
+    projection = checkpoint.projectionPaths;
+    await assert.rejects(verifyReviewedOrgInventory({ provider, environment, plan, expected: checkpoint, now }), /lacks exact native PermissionSet grant evidence/);
+    permissionGrantEvidenceSha256 = 'd'.repeat(64);
+    await verifyReviewedOrgInventory({ provider, environment, plan, expected: checkpoint, now });
+
+    const afterBootstrap = [...field.files, ...permission.files].sort();
+    const afterFinal = f.inputs.review.components.flatMap(component => component.files).sort();
+    const projected = (entries, paths) => {
+      const pinned = inventoryFromFiles(Object.fromEntries(Object.entries(entries).filter(([name]) => !paths.includes(name)))).files;
+      return { projected: true, files: pinned, inventoryHash: projectedNativeInventoryHash(pinned, paths) };
+    };
+    const projectedBootstrap = projected(intermediate, afterBootstrap), projectedFinal = projected(final, afterFinal);
+    const projectedReview = { ...review,
+      nativeInventories: Object.fromEntries(policy.environments.map(({ key, orgId }) =>
+        [key, { orgId, baseline, bootstrap: projectedBootstrap, final: projectedFinal }])),
+      inventoryManifests: { ...review.inventoryManifests,
+        [projectedBootstrap.inventoryHash]: review.inventoryManifests[bootstrap.inventoryHash],
+        [projectedFinal.inventoryHash]: review.inventoryManifests[complete.inventoryHash] } };
+    const projectedPlan = createReviewedSalesforcePlan({ ...inputs, review: projectedReview });
+    const projectedCheckpoint = reviewedCheckpointInventory(projectedPlan, { bootstrap: { status: 'Succeeded' } }, environment.key);
+    assert.equal(projectedCheckpoint.projectedNativeInventory, true);
+    assert.deepEqual(projectedCheckpoint.files, baseline.files);
+    assert.notEqual(projectedCheckpoint.inventoryHash, bootstrap.inventoryHash);
+    const unprojectedFinal = structuredClone(projectedReview);
+    unprojectedFinal.nativeInventories.qat.final = complete;
+    assert.throws(() => createReviewedSalesforcePlan({ ...inputs, review: unprojectedFinal }), /matching post-write checkpoint modes/);
+    let observedFiles = bootstrap.files;
+    const projectedProvider = { async verifyInventory(org, request) {
+      assert.equal(request.projectedNativeInventory, true);
+      const receipt = await provider.verifyInventory(org, request);
+      return { ...receipt, inventoryHash: projectedCheckpoint.inventoryHash, observedInventory: observedFiles,
+        observedNativeInventoryHash: hash(observedFiles) };
+    } };
+    const checkProjected = () => verifyReviewedOrgInventory({ provider: projectedProvider, environment,
+      plan: projectedPlan, expected: projectedCheckpoint, now });
+    await checkProjected();
+    observedFiles = drift.files;
+    await assert.rejects(checkProjected(), /requires current native/);
+    observedFiles = missing.files;
+    await assert.rejects(checkProjected(), /requires current native/);
+  } finally { f.cleanup(); }
+});
+
+test('mixed native readback verifies reviewed definition content even when raw hashes match', () => {
+  const cwd = mkdtempSync(path.join(tmpdir(), 'fcos-native-metadata-fixture-'));
+  try {
+    const environment = policy.environments[0];
+    const field = 'objects/Demo__c/fields/Value__c.field-meta.xml';
+    const xml = content => `<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">${content}</CustomField>\n`;
+    const source = { [field]: Buffer.from(xml('<required>false</required>')) };
+    const stable = { 'profiles/Example.profile-meta.xml': Buffer.from('<Profile/>\r\n') };
+    let nativeField = Buffer.from(xml('\r\n  <required>false</required>\r\n').replace(/(?<!\r)\n/gu, '\r\n'));
+    const metadata = packageXml(['CustomField:Demo__c.Value__c']);
+    const manifest = packageXml(['Profile:Example']);
+    const target = path.join(cwd, policy.publication.sourceRoot, field);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, source[field]);
+    writeFileSync(path.join(cwd, 'inventory.xml'), manifest);
+    writeFileSync(path.join(cwd, 'metadata.xml'), metadata);
+    writeFileSync(path.join(cwd, 'sfdx-project.json'), '{}');
+    const provider = cliSalesforceProvider({ cwd, run(_program, args, project) {
+      if (args[0] === 'org') return { id: environment.orgId, username: environment.username, connectedStatus: 'Connected' };
+      if (args[0] === 'data') return { records: [{ Id: environment.orgId, IsSandbox: environment.isSandbox }] };
+      const directory = args[args.indexOf('--output-dir') + 1];
+      const returned = directory === 'metadata' ? { [field]: nativeField } : stable;
+      for (const [name, bytes] of Object.entries(returned)) {
+        const destination = path.join(project, directory, name);
+        mkdirSync(path.dirname(destination), { recursive: true });
+        writeFileSync(destination, bytes);
+      }
+      return { id: '09SHF000002gTFl2AM', status: 'Succeeded', done: true, success: true };
+    } });
+    const input = () => {
+      const { inventoryHash } = inventoryFromFiles({ ...stable, [field]: nativeField });
+      return { plan: { finalInventory: inventoryFromFiles(source), review: {
+        components: [{ id: 'CustomField:Demo__c.Value__c', files: [field] }],
+        inventoryManifests: { [inventoryHash]: { path: 'inventory.xml', sha256: hash(manifest),
+          metadata: { path: 'metadata.xml', sha256: hash(metadata) } } },
+      } }, expectedInventoryHash: inventoryHash, nativeExport: true, nativeBootstrap: true, projectionPaths: [field] };
+    };
+    assert.deepEqual(provider.verifyInventory(environment, input()).verifiedProjectionPaths, [field]);
+    const exact = input();
+    const pinned = inventoryFromFiles(stable).files;
+    const projectedHash = projectedNativeInventoryHash(pinned, [field]);
+    const projected = { ...exact, projectedNativeInventory: true, expectedInventory: pinned, expectedInventoryHash: projectedHash };
+    projected.plan.review.inventoryManifests[projectedHash] = exact.plan.review.inventoryManifests[exact.expectedInventoryHash];
+    const projectedReceipt = provider.verifyInventory(environment, projected);
+    assert.equal(projectedReceipt.inventoryHash, projectedHash);
+    assert.equal(projectedReceipt.observedNativeInventoryHash, exact.expectedInventoryHash);
+    nativeField = Buffer.from(xml('<required>false</required>'));
+    const equivalentReceipt = provider.verifyInventory(environment, projected);
+    assert.notEqual(equivalentReceipt.observedNativeInventoryHash, projectedReceipt.observedNativeInventoryHash);
+    assert.equal(equivalentReceipt.inventoryHash, projectedHash);
+    const profile = Object.keys(stable)[0];
+    stable[profile] = Buffer.from('<Profile><custom>true</custom></Profile>');
+    assert.throws(() => provider.verifyInventory(environment, projected), /differs from the exact reviewed inventory/);
+    stable[profile] = Buffer.from('<Profile/>\r\n');
+    nativeField = Buffer.from(xml('<required>true</required>'));
+    assert.throws(() => provider.verifyInventory(environment, input()), /Native metadata projection differs/);
+    assert.throws(() => provider.verifyInventory(environment, projected), /Native metadata projection differs/);
+    const checkWithFlags = flags => {
+      const checkpoint = input();
+      checkpoint.plan.review.nativeCustomFieldFalseFlags = { [field]: flags };
+      return provider.verifyInventory(environment, checkpoint);
+    };
+    nativeField = Buffer.from(xml('<required>false</required><trackHistory>false</trackHistory>'));
+    assert.deepEqual(checkWithFlags(['trackHistory']).verifiedProjectionPaths, [field]);
+    assert.throws(() => checkWithFlags(['required', 'trackHistory']), /Native CustomField serialization differs/);
+    for (const variation of ['<trackHistory>true</trackHistory>', '<trackHistory>false</trackHistory><trackHistory>false</trackHistory>',
+      '<trackHistory>false</trackHistory><defaultValue>false</defaultValue>']) {
+      nativeField = Buffer.from(xml('<required>false</required>' + variation));
+      assert.throws(() => checkWithFlags(['trackHistory']), /Native CustomField serialization differs/);
+    }
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('native CustomObject serialization compares only reviewed default values and preserves the name field', () => {
+  const xml = content => `<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">${content}</CustomObject>`;
+  const name = '<displayFormat>FX-{000000}</displayFormat><label>FX Number</label><type>AutoNumber</type>';
+  const source = xml(`<nameField>${name}</nameField><sharingModel>Private</sharingModel>`);
+  const observed = xml(`<compactLayoutAssignment>SYSTEM</compactLayoutAssignment><nameField>${name}<trackHistory>false</trackHistory></nameField><sharingModel>Private</sharingModel>`);
+  const defaults = [['compactLayoutAssignment', 'SYSTEM'], ['nameField.trackHistory', 'false']];
+  const check = (native, expected = source) => equivalentNativeSerialization(expected, native, 'CustomObject', defaults);
+  assert.equal(check(observed), true);
+  assert.equal(check(source), true);
+  assert.equal(check(observed.replace('SYSTEM', 'CustomLayout')), false);
+  assert.equal(check(observed.replace('<trackHistory>false', '<trackHistory>true')), false);
+  assert.equal(check(observed.replace('<nameField>', '<nameField><trackHistory>false</trackHistory>')), false);
+  assert.equal(check(observed.replace('FX-{000000}', 'OTHER-{000000}')), false);
+  assert.equal(check(observed.replace('Private', 'ReadWrite')), false);
+  assert.equal(check(observed.replace('FX Number', 'Renamed')), false);
+  assert.equal(check(observed, source.replace('<nameField>', '<nameField><trackHistory>false</trackHistory>')), false);
+  const actions = ['Accept', 'CancelEdit', 'Clone', 'Delete', 'Edit', 'List', 'New', 'SaveEdit', 'Tab', 'View'];
+  const defaultActions = actions.flatMap(action => ['', 'Large', 'Small'].map(factor =>
+    `<actionOverrides><actionName>${action}</actionName>${factor ? `<formFactor>${factor}</formFactor>` : ''}<type>Default</type></actionOverrides>`));
+  const withActions = (entries, layouts = '<searchLayouts/>') =>
+    observed.replace('<nameField>', entries.join('') + layouts + '<nameField>');
+  const checkDefaults = native => equivalentNativeSerialization(source, native, 'CustomObject',
+    [...defaults, ['actionOverrides', 'standard-actions'], ['searchLayouts', 'empty']]);
+  assert.equal(checkDefaults(withActions(defaultActions)), true);
+  assert.equal(checkDefaults(withActions(defaultActions.slice(1))), false);
+  assert.equal(checkDefaults(withActions([...defaultActions.slice(1), defaultActions[1]])), false);
+  assert.equal(checkDefaults(withActions(defaultActions).replace('<type>Default', '<type>LightningComponent')), false);
+  assert.equal(checkDefaults(withActions(defaultActions, '<searchLayouts><searchResultsAdditionalFields>Name</searchResultsAdditionalFields></searchLayouts>')), false);
+});
+
+test('native PermissionSet projection requires the full grants even when its XML export is scoped', () => {
+  const cwd = mkdtempSync(path.join(tmpdir(), 'fcos-native-permission-fixture-'));
+  try {
+    const environment = policy.environments[0];
+    const name = 'Reviewed';
+    const file = `permissionsets/${name}.permissionset-meta.xml`;
+    const root = content => `<PermissionSet xmlns="http://soap.sforce.com/2006/04/metadata"><label>Reviewed</label>${content}</PermissionSet>`;
+    const source = root('<fieldPermissions><editable>false</editable><field>Account.Example__c</field><readable>true</readable></fieldPermissions>');
+    let native = root('');
+    const target = path.join(cwd, policy.publication.sourceRoot, file);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, source);
+    const metadata = packageXml(['PermissionSet:Reviewed']);
+    const manifest = packageXml(['Profile:Example']);
+    writeFileSync(path.join(cwd, 'inventory.xml'), manifest);
+    writeFileSync(path.join(cwd, 'metadata.xml'), metadata);
+    writeFileSync(path.join(cwd, 'sfdx-project.json'), '{}');
+    const parentId = '0PS000000000001AAA';
+    const expectedGrant = { ParentId: parentId, SobjectType: 'Account', Field: 'Account.Example__c', PermissionsEdit: false, PermissionsRead: true };
+    let fieldRows = [expectedGrant];
+    let incomplete = false;
+    let catalogReads = 0;
+    const provider = cliSalesforceProvider({ cwd, run(_program, args, project) {
+      if (args[0] === 'org') return { id: environment.orgId, username: environment.username, connectedStatus: 'Connected' };
+      if (args[0] === 'data') {
+        const query = args[args.indexOf('--query') + 1];
+        if (query.includes(' FROM Organization ')) return { records: [{ Id: environment.orgId, IsSandbox: environment.isSandbox }] };
+        assert.equal(args[args.indexOf('--api-version') + 1], '67.0');
+        catalogReads++;
+        let records = [];
+        if (query.includes(' FROM PermissionSet ')) records = [{ Id: parentId, Name: name, IsOwnedByProfile: false, NamespacePrefix: null }];
+        if (query.includes(' FROM FieldPermissions ')) records = fieldRows;
+        return { records, totalSize: records.length, done: !incomplete };
+      }
+      const directory = args[args.indexOf('--output-dir') + 1];
+      const destination = path.join(project, directory, directory === 'metadata' ? file : 'profiles/Example.profile-meta.xml');
+      mkdirSync(path.dirname(destination), { recursive: true });
+      writeFileSync(destination, directory === 'metadata' ? native : '<Profile/>');
+      return { id: '09SHF000002gTFl2AM', status: 'Succeeded', done: true, success: true };
+    } });
+    const input = () => {
+      const { inventoryHash } = inventoryFromFiles({ [file]: Buffer.from(native), 'profiles/Example.profile-meta.xml': Buffer.from('<Profile/>') });
+      return { plan: { finalInventory: inventoryFromFiles({ [file]: Buffer.from(source) }), review: {
+        components: [{ id: 'PermissionSet:Reviewed', files: [file] }],
+        inventoryManifests: { [inventoryHash]: { path: 'inventory.xml', sha256: hash(manifest),
+          metadata: { path: 'metadata.xml', sha256: hash(metadata) } } },
+      } }, expectedInventoryHash: inventoryHash, nativeExport: true, nativeBootstrap: true, projectionPaths: [file] };
+    };
+    const verify = () => provider.verifyInventory(environment, input());
+    const receipt = verify();
+    assert.deepEqual(receipt.permissionSets, [name]);
+    assert.match(receipt.permissionGrantEvidenceSha256, /^[a-f0-9]{64}$/u);
+    assert.equal(catalogReads, 3);
+    fieldRows = [];
+    assert.throws(verify, /catalog differs.*Account.Example__c/);
+    fieldRows = [expectedGrant, { ...expectedGrant, Field: 'Account.Unreviewed__c' }];
+    assert.throws(verify, /catalog differs.*Account.Unreviewed__c/);
+    fieldRows = [{ ...expectedGrant, PermissionsEdit: true }];
+    assert.throws(verify, /catalog differs.*Account.Example__c/);
+    fieldRows = [expectedGrant];
+    incomplete = true;
+    assert.throws(verify, /catalog response is incomplete/);
+    incomplete = false;
+    native = root('<userPermissions><enabled>true</enabled><name>ModifyAllData</name></userPermissions>');
+    assert.throws(verify, /differs from the reviewed non-grant definition/);
+    native = root('<fieldPermissions><editable>true</editable><field>Account.Example__c</field><readable>true</readable></fieldPermissions>');
+    assert.throws(verify, /unexpected exported fieldPermissions/);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
 
 test('native Apex readback checks exact raw bytes and equivalence to the reviewed LF source', () => {

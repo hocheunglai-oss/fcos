@@ -6,8 +6,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseDocument } from 'htmlparser2';
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import { openSalesforcePromotionJournal, salesforcePromotionHash } from './lib/salesforce-promotion-journal.mjs';
-import { INVENTORY_BASELINE_MODE, createReviewedSalesforcePlan, inventoryFromFiles, parseReviewedPackage, readReviewedInventory, runReviewedSalesforceRelease, safeProjectFile } from './lib/salesforce-reviewed-release.mjs';
+import { INVENTORY_BASELINE_MODE, NATIVE_CUSTOM_OBJECT_DEFAULTS, createReviewedSalesforcePlan, inventoryFromFiles, matchesProjectedNativeInventory, parseReviewedPackage, projectedNativeInventoryHash, readReviewedInventory, runReviewedSalesforceRelease, safeProjectFile } from './lib/salesforce-reviewed-release.mjs';
 import { proveSalesforceInventoryAbsence } from './lib/salesforce-inventory-absence.mjs';
+import { comparePermissionSetDefinition, verifyPermissionSetCatalog } from './lib/salesforce-permission-projection.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const POLICY = FCOS_CONNECTION_POLICY.providers.find(({ id }) => id === 'salesforce');
@@ -95,9 +96,9 @@ export function assertReviewedInputsUnchanged(plan, { cwd = ROOT, policy = POLIC
     || salesforcePromotionHash(policy) !== plan.binding.configurationSha256) throw new Error('Salesforce source, manifest, review, baseline, or connection policy changed; restart prepare from DEVEE.');
 }
 
-function normalizedMetadataDefinition(xml) {
+function normalizedMetadataDefinition(xml, document) {
   if (/xml:space|<!DOCTYPE|<!ENTITY/iu.test(xml)) return [xml];
-  const { children } = parseDocument(xml, { xmlMode: true, decodeEntities: true });
+  const { children } = document || parseDocument(xml, { xmlMode: true, decodeEntities: true });
   function definition(nodes) {
     const elementOnly = nodes.some(node => node.type === 'tag')
       && !nodes.some(node => node.type === 'cdata' || (node.type === 'text' && node.data.trim() !== ''));
@@ -126,6 +127,100 @@ function verifyNativeApexProjection({ root, sourceRoot, plan }) {
       }
     }
   }
+}
+
+const STANDARD_OBJECT_ACTIONS = ['Accept', 'CancelEdit', 'Clone', 'Delete', 'Edit', 'List', 'New', 'SaveEdit', 'Tab', 'View'];
+const STANDARD_OBJECT_ACTION_OVERRIDES = new Set(STANDARD_OBJECT_ACTIONS.flatMap(action =>
+  ['', 'Large', 'Small'].map(formFactor => JSON.stringify(formFactor
+    ? [['actionName', action], ['formFactor', formFactor], ['type', 'Default']]
+    : [['actionName', action], ['type', 'Default']]))));
+const plainTextNode = node => !Object.keys(node.attribs).length && node.children.length === 1
+  && node.children[0].type === 'text';
+const whitespaceOnly = node => node.type === 'text' && !node.data.trim();
+
+function matchesStandardActionOverrides(entries) {
+  if (!entries.length) return true;
+  const actual = new Set();
+  for (const entry of entries) {
+    const children = entry.children.filter(node => !whitespaceOnly(node));
+    if (Object.keys(entry.attribs).length || children.some(node => node.type !== 'tag' || !plainTextNode(node))) return false;
+    actual.add(JSON.stringify(children.map(node => [node.name, node.children[0].data])));
+  }
+  return entries.length === STANDARD_OBJECT_ACTION_OVERRIDES.size && actual.size === entries.length
+    && [...actual].every(row => STANDARD_OBJECT_ACTION_OVERRIDES.has(row));
+}
+
+export function equivalentNativeSerialization(source, native, type, defaults) {
+  if (/xml:space|<!DOCTYPE|<!ENTITY/iu.test(source + native)) return false;
+  const sourceDocument = parseDocument(source, { xmlMode: true, decodeEntities: true });
+  const nativeDocument = parseDocument(native, { xmlMode: true, decodeEntities: true });
+  const roots = [sourceDocument, nativeDocument].map(document => document.children.filter(node => node.type === 'tag'));
+  if (roots.some(list => list.length !== 1 || list[0].name !== type
+    || list[0].attribs.xmlns !== 'http://soap.sforce.com/2006/04/metadata')) return false;
+  const [[localRoot], [nativeRoot]] = roots;
+  const matching = (node, name) => node.children.filter(child => child.type === 'tag' && child.name === name);
+  for (const [path, value] of defaults) {
+    const [rootName, childName] = path.split('.');
+    const localParents = childName ? matching(localRoot, rootName) : [localRoot];
+    const nativeParents = childName ? matching(nativeRoot, rootName) : [nativeRoot];
+    if (localParents.length !== 1 || nativeParents.length !== 1) return false;
+    const leaf = childName || rootName;
+    if (matching(localParents[0], leaf).length) return false;
+    const entries = matching(nativeParents[0], leaf);
+    if (!entries.length) continue;
+    if (value === 'standard-actions') {
+      if (!matchesStandardActionOverrides(entries)) return false;
+    } else {
+      const [entry] = entries;
+      if (entries.length !== 1) return false;
+      if (value === 'empty') {
+        if (Object.keys(entry.attribs).length || entry.children.some(node => !whitespaceOnly(node))) return false;
+      } else if (!plainTextNode(entry) || entry.children[0].data !== value) return false;
+    }
+    const removable = new Set(entries);
+    nativeParents[0].children = nativeParents[0].children.filter(child => !removable.has(child));
+  }
+  return JSON.stringify(normalizedMetadataDefinition(source, sourceDocument))
+    === JSON.stringify(normalizedMetadataDefinition(native, nativeDocument));
+}
+
+function verifyNativeMetadataProjection({ root, sourceRoot, plan, projectionPaths, query }) {
+  const permissionSets = [];
+  for (const name of projectionPaths) {
+    const source = readFileSync(safeProjectFile(sourceRoot, name));
+    const native = readFileSync(safeProjectFile(root, name));
+    if (salesforcePromotionHash(source) !== plan.finalInventory.files[name]?.sha256) {
+      throw new Error(`Reviewed Salesforce source changed before native comparison: ${name}`);
+    }
+    const normalizeLineEndings = bytes => bytes.toString('utf8').replace(/\r\n/gu, '\n');
+    const local = normalizeLineEndings(source);
+    const observed = normalizeLineEndings(native);
+    const permission = /^permissionsets\/([A-Za-z][A-Za-z0-9_]*)\.permissionset-meta\.xml$/u.exec(name);
+    const falseFlags = plan.review.nativeCustomFieldFalseFlags?.[name];
+    const objectDefaults = plan.review.nativeCustomObjectDefaults?.[name];
+    if (!permission && !falseFlags && !objectDefaults && source.equals(native)) continue;
+    if (!Buffer.from(source.toString('utf8')).equals(source) || !Buffer.from(native.toString('utf8')).equals(native)) {
+      throw new Error(`Native metadata projection differs from the exact reviewed source: ${name}`);
+    }
+    if (permission) {
+      permissionSets.push(comparePermissionSetDefinition({ name: permission[1], source: local, native: observed, normalize: normalizedMetadataDefinition }));
+      continue;
+    }
+    if (falseFlags) {
+      if (equivalentNativeSerialization(local, observed, 'CustomField', falseFlags.map(flag => [flag, 'false']))) continue;
+      throw new Error(`Native CustomField serialization differs from the exact reviewed source: ${name}`);
+    }
+    if (objectDefaults) {
+      const defaults = objectDefaults.map(flag => [flag, NATIVE_CUSTOM_OBJECT_DEFAULTS[flag]]);
+      if (equivalentNativeSerialization(local, observed, 'CustomObject', defaults)) continue;
+      throw new Error(`Native CustomObject serialization differs from the exact reviewed source: ${name}`);
+    }
+    if (local === observed) continue;
+    if (name.endsWith('.xml') && JSON.stringify(normalizedMetadataDefinition(local)) === JSON.stringify(normalizedMetadataDefinition(observed))) continue;
+    if ((name.endsWith('.cls') || name.endsWith('.trigger')) && local.replace(/\n$/u, '') === observed.replace(/\n$/u, '')) continue;
+    throw new Error(`Native metadata projection differs from the exact reviewed source: ${name}`);
+  }
+  return permissionSets.length ? verifyPermissionSetCatalog(permissionSets, query) : null;
 }
 
 function assertConvertedPackage(converted, roundTrip, members, files, sourceRoot, apiVersion, operation) {
@@ -286,25 +381,29 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
     },
     // Job adoption must be implemented by the release owner's provider-specific readback.
     reconcile: adapter.reconcileSalesforceJob,
-    verifyInventory: adapter.verifySalesforceInventory || function (environment, { plan, expectedInventoryHash, expectedSourceTreeHash,
-      expectedAbsentComponents = [], nativeExport = false, verifyApexProjection = false }) {
+    verifyInventory: adapter.verifySalesforceInventory || function (environment, { plan, expectedInventory, expectedInventoryHash, expectedSourceTreeHash,
+      expectedAbsentComponents = [], nativeExport = false, verifyApexProjection = false,
+      nativeBootstrap = false, projectionPaths = [], projectedNativeInventory = false }) {
       const manifest = plan.review.inventoryManifests?.[expectedInventoryHash];
       if (!manifest) throw new Error('Current Salesforce inventory requires an exact reviewed retrieval manifest.');
       const bytes = readFileSync(safeProjectFile(cwd, manifest.path));
       if (salesforcePromotionHash(bytes) !== manifest.sha256) throw new Error('Salesforce inventory retrieval manifest digest mismatch.');
       const presentComponents = parseReviewedPackage(bytes.toString('utf8'), { inventory: true });
-      let apexBytes;
+      const supplementalManifest = nativeBootstrap ? manifest.metadata : manifest.apex;
+      const presentReviewed = nativeExport
+        ? plan.review.components.filter(({ id }) => !expectedAbsentComponents.includes(id)) : [];
+      let supplementalBytes;
       if (nativeExport) {
-        const apex = plan.review.components.filter(({ id }) => !expectedAbsentComponents.includes(id));
-        if (plan.review.components.some(({ id }) => presentComponents.includes(id)) || Boolean(manifest.apex) !== Boolean(apex.length)) {
-          throw new Error('Stable native retrieval must keep the reviewed Apex package separate.');
+        const supplementalLabel = nativeBootstrap ? 'metadata' : 'Apex';
+        if (plan.review.components.some(({ id }) => presentComponents.includes(id)) || Boolean(supplementalManifest) !== Boolean(presentReviewed.length)) {
+          throw new Error(`Stable native retrieval must keep the reviewed ${supplementalLabel} package separate.`);
         }
-        if (manifest.apex) {
-          apexBytes = readFileSync(safeProjectFile(cwd, manifest.apex.path));
-          const members = parseReviewedPackage(apexBytes.toString('utf8'));
-          if (salesforcePromotionHash(apexBytes) !== manifest.apex.sha256
-            || JSON.stringify(members) !== JSON.stringify(apex.map(({ id }) => id).sort())) {
-            throw new Error('Native Apex retrieval manifest does not match the reviewed checkpoint.');
+        if (supplementalManifest) {
+          supplementalBytes = readFileSync(safeProjectFile(cwd, supplementalManifest.path));
+          const members = parseReviewedPackage(supplementalBytes.toString('utf8'));
+          if (salesforcePromotionHash(supplementalBytes) !== supplementalManifest.sha256
+            || JSON.stringify(members) !== JSON.stringify(presentReviewed.map(({ id }) => id).sort())) {
+            throw new Error(`Native ${supplementalLabel} retrieval manifest does not match the reviewed checkpoint.`);
           }
           presentComponents.push(...members);
         }
@@ -328,22 +427,31 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
           return result.id;
         };
         const jobId = retrieve(bytes, 'inventory.xml', 'retrieved');
-        const apexJobId = apexBytes ? retrieve(apexBytes, 'apex.xml', 'apex') : null;
+        const supplementalName = nativeBootstrap ? 'metadata' : 'apex';
+        const supplementalJobId = supplementalBytes ? retrieve(supplementalBytes, `${supplementalName}.xml`, supplementalName) : null;
         const root = path.join(project, 'retrieved');
-        const supplementalRoot = apexJobId ? path.join(project, 'apex') : null;
+        const supplementalRoot = supplementalJobId ? path.join(project, supplementalName) : null;
         if (supplementalRoot) {
-          const apexPaths = plan.review.components.filter(({ id }) => !expectedAbsentComponents.includes(id)).flatMap(({ files }) => files).sort();
-          const observedApex = readReviewedInventory(supplementalRoot, { nativeExport: true });
-          if (JSON.stringify(Object.keys(observedApex.files)) !== JSON.stringify(apexPaths)) {
-            throw new Error('Native Apex retrieval returned an unexpected path set.');
+          const expectedPaths = presentReviewed.flatMap(({ files }) => files).sort();
+          const supplementalInventory = readReviewedInventory(supplementalRoot, { nativeExport: true });
+          if (JSON.stringify(Object.keys(supplementalInventory.files)) !== JSON.stringify(expectedPaths)) {
+            throw new Error(`Native ${nativeBootstrap ? 'metadata' : 'Apex'} retrieval returned an unexpected path set.`);
           }
         }
         const observed = readReviewedInventory(root, { nativeExport, supplementalRoot });
-        if (observed.inventoryHash !== expectedInventoryHash
-          || (expectedSourceTreeHash && observed.sourceTreeHash !== expectedSourceTreeHash)) {
+        const inventoryMatches = projectedNativeInventory
+          ? nativeBootstrap && projectionPaths.length > 0
+            && matchesProjectedNativeInventory(observed.files, expectedInventory, projectionPaths)
+            && projectedNativeInventoryHash(expectedInventory, projectionPaths) === expectedInventoryHash
+          : observed.inventoryHash === expectedInventoryHash;
+        if (!inventoryMatches || (expectedSourceTreeHash && observed.sourceTreeHash !== expectedSourceTreeHash)) {
           throw new Error('Native Salesforce retrieval differs from the exact reviewed inventory.');
         }
         if (verifyApexProjection) verifyNativeApexProjection({ root: supplementalRoot, sourceRoot: path.join(cwd, policy.publication.sourceRoot), plan });
+        const permissionEvidence = nativeBootstrap && projectionPaths.length
+          ? verifyNativeMetadataProjection({ root: supplementalRoot, sourceRoot: path.join(cwd, policy.publication.sourceRoot),
+            plan, projectionPaths, query: soql => sf(['data', 'query', '--target-org', environment.alias, '--api-version', '67.0',
+              '--query', soql, '--json'], project) }) : null;
         const absence = expectedAbsentComponents.length ? proveSalesforceInventoryAbsence({ expectedAbsentComponents,
           presentComponents: [...presentComponents, ...(plan.review.inventoryCatalogControls?.[environment.key] || [])],
           listMetadata: type => sf(['org', 'list', 'metadata', '--target-org', environment.alias, '--metadata-type', type, '--json'], project),
@@ -356,12 +464,17 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
         const verifiedAt = new Date().toISOString();
         const sourceTreeHash = expectedSourceTreeHash ? observed.sourceTreeHash : null;
         const evidenceSha256 = salesforcePromotionHash({ jobId, manifestSha256: manifest.sha256,
-          identity, verifiedAt, inventoryHash: observed.inventoryHash, sourceTreeHash,
-          ...(apexJobId ? { apexJobId, apexManifestSha256: manifest.apex.sha256 } : {}),
+          identity, verifiedAt, inventoryHash: expectedInventoryHash, sourceTreeHash,
+          ...(projectedNativeInventory ? { observedNativeInventoryHash: observed.inventoryHash } : {}),
+          ...(supplementalJobId ? (nativeBootstrap ? { metadataJobId: supplementalJobId, metadataManifestSha256: supplementalManifest.sha256 }
+            : { apexJobId: supplementalJobId, apexManifestSha256: supplementalManifest.sha256 }) : {}),
+          ...(nativeBootstrap ? { verifiedProjectionPaths: projectionPaths } : {}), ...permissionEvidence,
           ...(nativeExport ? { nativeSourceTreeHash: observed.sourceTreeHash, apexProjectionVerified: verifyApexProjection } : {}), ...absence });
-        return { orgId: identity.orgId, identity, verifiedAt, sourceTreeHash, inventoryHash: observed.inventoryHash,
+        return { orgId: identity.orgId, identity, verifiedAt, sourceTreeHash, inventoryHash: expectedInventoryHash,
+          ...(projectedNativeInventory ? { observedNativeInventoryHash: observed.inventoryHash } : {}),
           evidenceSha256, observedInventory: observed.files,
           ...(nativeExport ? { nativeSourceTreeHash: observed.sourceTreeHash, apexProjectionVerified: verifyApexProjection } : {}),
+          ...(nativeBootstrap ? { verifiedProjectionPaths: projectionPaths } : {}), ...permissionEvidence,
           verificationMethod: nativeExport ? 'metadata-api-reviewed-native-byte-inventory' : 'metadata-api-owned-tree-inventory',
           scope: 'force-app/main/default', ...absence };
       } finally {
