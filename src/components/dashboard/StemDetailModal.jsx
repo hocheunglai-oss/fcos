@@ -13,6 +13,7 @@ import { AuthenticatedDocumentDownloadButton, AuthenticatedDocumentPreview } fro
 import { readDocumentSettings } from '@/lib/documentSettings';
 import PaymentDataReliabilityBadge from '@/components/common/PaymentDataReliabilityBadge';
 import { LEGACY_PAYMENT_DATA_LABEL } from '@/lib/paymentDataReliability';
+import { activeStemLineItems } from '@/lib/stemLineVisibility';
 
 const FINANCIAL_HEADER_RIGHT = "sticky top-0 z-10 bg-card text-right py-2.5 px-3 font-semibold text-muted-foreground";
 const FINANCIAL_HEADER_LEFT = "sticky top-0 z-10 bg-card text-left py-2.5 px-3 font-semibold text-muted-foreground";
@@ -658,7 +659,7 @@ export default function StemDetailModal({ stemId, open, onClose, embedded = fals
       else {
         setError(null);
         setRecord(res.data.record);
-        setLineItems(res.data.lineItems || []);
+        setLineItems(activeStemLineItems(res.data.lineItems));
         setExtraCosts(res.data.extraCosts || []);
         setBuyerBrokers(res.data.buyerBrokers || []);
         setSupplierInvoicePayments(res.data.supplierInvoicePayments || []);

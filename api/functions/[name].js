@@ -1,6 +1,7 @@
 import { setManagedUserActivation } from '../_fcunoManagedActivation.js';
 import { deploymentSafeSupabaseFetch } from '../_deploymentReadOnlyFetch.js';
 import { withDeploymentRequestSafety } from '../_deploymentReadOnly.js';
+import { activeStemLineItems } from '../../src/lib/stemLineVisibility.js';
 import { loadEffectiveGroupAccess, readAllAccessRows, serializeGroupUser, accessOperationError } from '../_accessGroups.js';
 import { AUTO_AI_MODEL, AI_MODEL_SELECTIONS, AI_ROUTING_VERSION, isAllowedAiSelection, automaticRoutingFor, resolveAiModel } from '../_aiModelRouting.js';
 import { createStemWorkspaceActivity } from '../_stemWorkspaceActivity.js';
@@ -17803,7 +17804,9 @@ async function salesforceStemDetailUncached(body, req = null, accessContext = nu
     })),
   );
 
-  const supplierBrokerIds = [...new Set(lineItems.map((li) => li.Supplier_Broker__c).filter(Boolean))];
+  // The raw lines above still anchor historical invoice and payment lookups.
+  const visibleLineItems = activeStemLineItems(lineItems);
+  const supplierBrokerIds = [...new Set(visibleLineItems.map((li) => li.Supplier_Broker__c).filter(Boolean))];
   const supplierBrokerNameMap = {};
   await Promise.all(
     supplierBrokerIds.map(async (id) => {
@@ -17811,7 +17814,7 @@ async function salesforceStemDetailUncached(body, req = null, accessContext = nu
     }),
   );
 
-  const lineItemsWithNames = lineItems.map((li) => {
+  const lineItemsWithNames = visibleLineItems.map((li) => {
     const calculatedQuantity = financialQuantity(li, stemHasDelivery);
     const calculatedSell = lineSellAmount(li, stemHasDelivery);
     const calculatedBuy = lineBuyAmount(li, stemHasDelivery);
@@ -17903,7 +17906,7 @@ async function salesforceStemDetailFull(body, req = null, accessContext = null) 
   assertStemReadRequest(body);
   const stemId = String(body?.stemId || '').trim();
   const cached = await cachedSalesforceValue({
-    namespace: 'salesforce-stem-detail-v2',
+    namespace: 'salesforce-stem-detail-v3-active-lines',
     ttlSeconds: 15,
     payload: { stemId },
     tags: ['salesforce:stem', `salesforce:stem:${stemId}`],
@@ -18187,8 +18190,7 @@ async function salesforceBrokerRegisterUncached(body, req = null, accessContext 
 
   const rawRows = [];
   const financialWarnings = new Set();
-  for (const item of lineItems) {
-    if (item.Cancelled__c === true) continue;
+  for (const item of activeStemLineItems(lineItems)) {
     const stem = stemMap[item.STEM__c];
     if (!stem) continue;
     const paymentReliability = paymentDataReliabilityState(stem);
