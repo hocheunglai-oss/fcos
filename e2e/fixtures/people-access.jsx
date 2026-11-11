@@ -46,7 +46,17 @@ appClient.functions.invoke = async (name, body = {}) => {
     return { data: { userId: person.id, groupIds: person.group_ids, accessRevision: person.access_revision } };
   }
   if (name === 'adminPermissionGroupDelete') { fixture.groups = fixture.groups.filter((group) => group.id !== body.id); return { data: { deleted: true, id: body.id } }; }
-  if (name === 'adminUserSave') { let person = fixture.users.find((item) => item.id === body.id); if (!person) { person = { id: 'new-person', group_ids: [], access_revision: 0 }; fixture.users.push(person); } Object.assign(person, { email: body.email, full_name: body.full_name, active: body.active, user_type: body.user_type }); return { data: { user: person } }; }
+  if (name === 'adminUserSave') {
+    let person = fixture.users.find((item) => item.id === body.id);
+    if (body.activationOnly === true) {
+      if (!person) throw new Error('Activation fixture requires an existing person');
+      person.active = body.active;
+    } else {
+      if (!person) { person = { id: 'new-person', group_ids: [], access_revision: 0 }; fixture.users.push(person); }
+      Object.assign(person, { email: body.email, full_name: body.full_name, active: body.active, user_type: body.user_type });
+    }
+    return { data: { user: person } };
+  }
   if (name === 'adminUserDelete') { fixture.users = fixture.users.filter((person) => person.id !== body.id); return { data: { deleted: true } }; }
   throw new Error(`Unexpected isolated fixture request: ${name}`);
 };
