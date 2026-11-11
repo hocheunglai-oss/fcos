@@ -102,5 +102,62 @@ test('executed AuthProvider rejects late auth after logout and after a newer acc
   assert.deepEqual(states[1], {});
   assert.equal(states[9].type, 'auth_required');
   assert.equal(sessionStorage.get('fcos:fcuno-force-reauth'), 'true');
+  const failedSignOut = async () => ({ error: new Error('provider sign-out failed') });
+  supabase.auth.signOut = failedSignOut;
+  const failedLogout = await auth.logout();
+  assert.deepEqual(failedLogout.failures.map(({ applicationId }) => applicationId), ['fcos']);
+  assert.equal(JSON.parse(sessionStorage.get('fcos:portal-logout-warning'))[0].applicationId, 'fcos');
+  assert.equal(clientSessionState().ownerId, null);
+  assert.deepEqual(await auth.checkUserAuth(), { user: null, stale: true });
+  authEvent('TOKEN_REFRESHED', { user: { id: 'user-b' } });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(pending.length, 7);
+  assert.equal(states[0], null);
+
+  supabase.auth.signInWithPassword = async () => ({ error: null });
+  const newSignIn = auth.login('test@example.invalid', 'fixture-only');
+  await Promise.resolve();
+  await Promise.resolve();
+  pending[7]({ data: { user: { id: 'user-b', active: true } } });
+  await newSignIn;
+  assert.equal(states[0].id, 'user-b');
   delete globalThis.__authHarness;
+});
+
+test('the login screen withholds sign-in controls when hosted authentication is unavailable', async () => {
+  const source = (await readFile(new URL('../src/pages/Login.jsx', import.meta.url), 'utf8')).replace(/^import .*;\n/gm, '');
+  const harness = `
+    let state;
+    export function render(auth) {
+      state = auth;
+      return Login();
+    }
+    const React = {
+      createElement: (type, props, ...children) => ({ type, props, children }),
+      Fragment: 'fragment',
+    };
+    const useAuth = () => state;
+    const useLocation = () => ({ search: '', hash: '' });
+    const useState = (value) => [typeof value === 'function' ? value() : value, () => {}];
+    const useEffect = () => {};
+    const useRef = (current) => ({ current });
+    const window = { sessionStorage: { getItem: () => null } };
+    const Boxes = 'boxes', Loader2 = 'loader', LockKeyhole = 'lock', TriangleAlert = 'alert';
+    const Navigate = 'navigate';
+  `;
+  const compiled = ts.transpileModule(harness + source, {
+    compilerOptions: { jsx: ts.JsxEmit.React, module: ts.ModuleKind.ESNext },
+  }).outputText;
+  const { render } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`);
+  const defaults = { authChecked: true, fcunoOidcEnabled: true, legacyPasswordLoginEnabled: true };
+  const unavailable = JSON.stringify(render({ ...defaults, authMode: 'unavailable' }));
+  assert.match(unavailable, /FCOS sign-in is unavailable/);
+  assert.doesNotMatch(unavailable, /"type":"(?:button|form|navigate)"|local administrator mode/);
+  const hosted = { ...defaults, authMode: 'supabase', isSupabaseConfigured: true };
+  assert.match(JSON.stringify(render(hosted)), /Opening FCUNO sign-in/);
+  const manual = JSON.stringify(render({ ...hosted, authError: { type: 'user_inactive' } }));
+  assert.match(manual, /"type":"button"/);
+  assert.match(manual, /"type":"form"/);
+  const local = JSON.stringify(render({ ...defaults, authMode: 'local' }));
+  assert.match(local, /"type":"navigate"/);
 });

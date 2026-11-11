@@ -214,8 +214,16 @@ export default function AdminControl({ methodologyAction = null }) {
     if (generalManagerTransferPending && !confirmRoleTransfer) { setError('Confirm the General Manager transfer before saving.'); return; }
     setSaving(true); setError('');
     try {
-      await invoke('adminUserSave', { id: rolePerson.id, email: rolePerson.email, full_name: rolePerson.full_name, ...(data.identityAuthority !== 'fcuno' || localActivationChanged ? { active: roleActive } : {}), user_type: roleValue, confirmGeneralManagerTransfer: generalManagerTransferPending });
-      notifyAccessChanged(); setRolePerson(null); await load(true); setMessage('Organizational role saved.'); if (afterSave) afterSave();
+      const activationOnly = localActivationChanged && roleValue === rolePerson.user_type;
+      const payload = activationOnly
+        ? { id: rolePerson.id, active: roleActive, activationOnly: true }
+        : { id: rolePerson.id, email: rolePerson.email, full_name: rolePerson.full_name,
+            ...(data.identityAuthority !== 'fcuno' || localActivationChanged ? { active: roleActive } : {}),
+            user_type: roleValue, confirmGeneralManagerTransfer: generalManagerTransferPending };
+      await invoke('adminUserSave', payload);
+      notifyAccessChanged(); setRolePerson(null); await load(true);
+      setMessage(activationOnly ? 'FCOS application access saved.' : 'Organizational role saved.');
+      if (afterSave) afterSave();
     } catch (failure) { setError(failure.message); }
     finally { setSaving(false); }
   };

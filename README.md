@@ -24,7 +24,12 @@ never use that fallback; incomplete or unapproved authentication configuration
 shows an error. Public configuration accepts a publishable or legacy anonymous
 key, never a secret/service-role key. Server authorization remains mandatory.
 
-Authenticated browser checks are fail-closed. For a pull request, the workflow
+The [authentication guide](docs/authentication.md) describes the current
+consumer contract. When rapid release is active, hosted acceptance runs on the
+exact staged artifact through the [protected workflow](docs/rapid-release.md).
+
+Authenticated browser checks are fail-closed. For a pull request under the
+historical release path, the workflow
 requires a governed renewable FCUNO test identity (`FCOS_E2E_EMAIL` and
 `FCOS_E2E_PASSWORD`) and `FCOS_AUTH_E2E_ENABLED=true`. Using read-only GitHub
 deployment evidence, it discovers the newest Vercel Preview for the exact

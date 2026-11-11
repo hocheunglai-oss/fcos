@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
 
 const readSource = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 
@@ -48,4 +51,30 @@ test('removed packages are absent from direct dependencies', async () => {
     'three',
   ];
   for (const dependency of removed) assert.equal(packageJson.dependencies?.[dependency], undefined);
+});
+
+test('Vite checks resolved browser Supabase configuration before bundling', () => {
+  const url = `https://${fcosConnectionIdentifier('supabase', 'Project ref')}.supabase.co`;
+  const secret = 'sb_secret_synthetic_fixture';
+  const publicKey = 'sb_publishable_synthetic_fixture';
+  const resolve = (env, command = 'build') => spawnSync(process.execPath, ['--input-type=module', '-e',
+    `import { resolveConfig } from 'vite'; await resolveConfig({}, '${command}', '${command === 'build' ? 'production' : 'development'}');`], {
+    cwd: fileURLToPath(new URL('..', import.meta.url)),
+    env: { PATH: process.env.PATH, HOME: process.env.HOME, ...env },
+    encoding: 'utf8',
+    timeout: 10000,
+  });
+  for (const env of [
+    { VITE_SUPABASE_URL: url, VITE_SUPABASE_ANON_KEY: secret },
+    { VITE_SUPABASE_URL: url, VITE_SUPABASE_ANON_KEY: publicKey, VITE_SUPABASE_PUBLISHABLE_KEY: secret },
+    { VITE_SUPABASE_URL: 'https://other.supabase.co', VITE_SUPABASE_ANON_KEY: publicKey },
+  ]) {
+    const result = resolve(env);
+    assert.equal(result.status, 1, result.error?.message);
+    assert.match(result.stderr, /Invalid FCOS browser configuration/);
+    assert.ok(!result.stderr.includes(secret));
+  }
+  assert.equal(resolve({ VITE_SUPABASE_URL: url, VITE_SUPABASE_ANON_KEY: publicKey }).status, 0);
+  assert.equal(resolve({ VITE_SUPABASE_URL: 'http://127.0.0.1:54321', VITE_SUPABASE_ANON_KEY: publicKey }, 'serve').status, 0);
+  assert.equal(resolve({}).status, 0);
 });

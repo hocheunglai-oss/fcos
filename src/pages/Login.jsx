@@ -150,7 +150,9 @@ export default function Login() {
             </div>
           </div>
           <h1 className="text-xl font-semibold text-foreground">Sign in</h1>
-          <p className="mt-1 text-sm text-muted-foreground">{fcunoOidcEnabled ? 'Continue with your FCUNO identity.' : 'Use your existing FCOS account.'}</p>
+          {supabaseReady && (
+            <p className="mt-1 text-sm text-muted-foreground">{fcunoOidcEnabled ? 'Continue with your FCUNO identity.' : 'Use your existing FCOS account.'}</p>
+          )}
         </div>
 
         {logoutWarning && (
@@ -160,17 +162,17 @@ export default function Login() {
           </div>
         )}
 
-        {!supabaseReady && (
-          <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800">
-            Supabase is not configured yet. The app is currently running in local administrator mode.
+        {!supabaseReady && authMode !== 'local' && (
+          <div role="alert" className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800">
+            FCOS sign-in is unavailable. Contact an administrator to restore authentication configuration.
           </div>
         )}
 
-        {visibleError && <div className="mb-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{visibleError}</div>}
+        {supabaseReady && visibleError && <div className="mb-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{visibleError}</div>}
 
         {authMode === 'local' ? (
           <Navigate to="/" replace />
-        ) : (
+        ) : supabaseReady && (
           <>
             {fcunoOidcEnabled && (
               <button

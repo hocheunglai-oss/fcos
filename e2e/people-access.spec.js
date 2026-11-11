@@ -48,6 +48,25 @@ test('person membership preview combines grants, tracks sources, and saves group
   expect(saved.request.body.expectedRevision).toBe(4); expect(saved.request.body).not.toHaveProperty('user_type');
 });
 
+test('FCUNO activation sends only the activation intent when the loaded role becomes stale', async ({ page }) => {
+  await open(page);
+  await page.getByRole('button', { name: 'People', exact: true }).click();
+  await page.getByRole('button', { name: 'Manage groups for Carol Example' }).click();
+  await page.getByRole('button', { name: 'Manage role', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByLabel('Organizational role')).toHaveValue('finance');
+  await page.evaluate(() => { window.peopleAccessFixture.users.find(person => person.id === 'carol').user_type = 'administrator'; });
+  await dialog.getByLabel('FCOS application access').check();
+  await dialog.getByRole('button', { name: 'Save role' }).click();
+  await expect(page.getByRole('status')).toHaveText('FCOS application access saved.');
+  const saved = await page.evaluate(() => ({
+    request: window.peopleAccessFixture.requests.find(request => request.name === 'adminUserSave').body,
+    person: window.peopleAccessFixture.users.find(person => person.id === 'carol'),
+  }));
+  expect(saved.request).toEqual({ id: 'carol', active: true, activationOnly: true });
+  expect(saved.person).toMatchObject({ active: true, user_type: 'administrator', group_ids: ['finance'] });
+});
+
 test('unsaved switching offers Stay, Discard, and Save with impact review', async ({ page }) => {
   await open(page);
   await page.getByLabel('Group description').fill('Updated delivery responsibilities');
