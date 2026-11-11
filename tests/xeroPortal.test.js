@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { fixtureSharedControl } from './helpers/xeroSharedControl.js';
+import { runWithDeploymentRequestSafety } from '../api/_deploymentReadOnly.js';
 import {
   buildContactLifecycleRows,
   signXeroOAuthState,
@@ -92,6 +93,34 @@ test('Xero Portal status refreshes a stale access token before reporting expiry'
   assert.equal(client.connection.token_version, 5);
   assert.deepEqual(client.controlCalls, ['xero_refresh_claim', 'xero_refresh_finish']);
   assert.deepEqual(requests.map((url) => new URL(url).pathname), ['/connect/token']);
+});
+
+test('staged Xero status skips the extra token-renewal read', async (t) => {
+  const scenarios = [
+    { name: 'expired access', expiresAt: '2026-08-27T00:00:00.000Z', forceRefresh: false },
+    { name: 'forced refresh with valid access', expiresAt: '2099-01-01T00:00:00.000Z', forceRefresh: true },
+  ];
+  for (const { name, expiresAt, forceRefresh } of scenarios) {
+    await t.test(name, async () => {
+      const client = fakePortalStatusClient({
+        tenant_id: 'tenant-1', access_token: 'fixture-access', refresh_token: 'fixture-refresh',
+        expires_at: expiresAt, token_version: 4,
+      });
+      const env = { VERCEL_ENV: 'production' };
+      const request = { headers: { host: 'fcos-staged.vercel.app' } };
+      const response = await runWithDeploymentRequestSafety(request, () => xeroPortalStatus({ forceRefresh }, {
+        client, env, fetchImpl: () => assert.fail('Staged status contacted Xero'),
+      }), env);
+
+      assert.equal(response.xero.connected, true);
+      assert.equal(response.xero.expiresAt, expiresAt);
+      assert.equal(response.xero.refreshError, null);
+      // Connection status and the separate usage cache summary each read once.
+      assert.equal(client.connectionReads, 2);
+      assert.deepEqual(client.controlCalls, []);
+      assert.equal(client.connection.token_version, 4);
+    });
+  }
 });
 
 test('contact lifecycle keeps matched Salesforce contacts and ignores ContactNumber matching', () => {
@@ -200,6 +229,7 @@ function fakePortalStatusClient(initialConnection) {
     connection: { ...initialConnection },
     refreshLease: null,
     controlCalls: [],
+    connectionReads: 0,
   };
   const control = fixtureSharedControl({
     claimRefresh: async ({ tenantId, tokenVersion, leaseId }) => {
@@ -226,6 +256,9 @@ function fakePortalStatusClient(initialConnection) {
   });
   const client = {
     controlCalls: state.controlCalls,
+    get connectionReads() {
+      return state.connectionReads;
+    },
     get connection() {
       return state.connection;
     },
@@ -269,6 +302,7 @@ class FakeQuery {
 
   async maybeSingle() {
     if (this.table === 'xero_contact_sync_connections') {
+      this.state.connectionReads += 1;
       if (this.selected === 'token_version') return { data: { token_version: this.state.connection.token_version || 0 }, error: null };
       return { data: this.state.connection, error: null };
     }
