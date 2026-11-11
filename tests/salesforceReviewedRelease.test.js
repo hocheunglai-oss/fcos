@@ -615,6 +615,69 @@ test('native inventory retrieval binds manifest, org, and observed bytes and rem
   }
 });
 
+test('native bootstrap stages only exact reviewed files in a temporary project', () => {
+  const f = fixture({ bootstrap: true, validationRule: true });
+  const cwd = mkdtempSync(path.join(tmpdir(), 'fcos-bootstrap-fixture-'));
+  const field = 'objects/Demo__c/fields/Value__c.field-meta.xml';
+  const permission = 'permissionsets/Reviewed.permissionset-meta.xml';
+  const source = path.join(cwd, policy.publication.sourceRoot);
+  try {
+    for (const [name, bytes] of Object.entries({
+      [field]: '<CustomField/>\n',
+      [permission]: '<PermissionSet/>\n',
+      'objects/Demo__c/Demo__c.object-meta.xml': '<CustomObject><actionOverrides/></CustomObject>\n',
+      [validationRulePath]: '<ValidationRule/>\n',
+    })) {
+      const file = path.join(source, name);
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, bytes);
+    }
+    mkdirSync(path.join(cwd, 'manifest'));
+    const manifest = path.join(cwd, 'manifest/bootstrap.xml');
+    writeFileSync(manifest, f.inputs.bootstrapBytes);
+    let submittedProject;
+    const provider = cliSalesforceProvider({ cwd, run(program, args, project) {
+      assert.equal(program, 'sf');
+      assert.deepEqual(args.slice(0, 3), ['project', 'deploy', 'start']);
+      assert.equal(args[args.indexOf('--test-level') + 1], 'NoTestRun');
+      assert.equal(args[args.indexOf('--target-org') + 1], policy.environments[0].alias);
+      assert.notEqual(project, cwd);
+      assert.deepEqual(readFileSync(path.join(project, args[args.indexOf('--manifest') + 1])), f.inputs.bootstrapBytes);
+      const staged = path.join(project, policy.publication.sourceRoot);
+      assert.equal(readFileSync(path.join(staged, field), 'utf8'), '<CustomField/>\n');
+      assert.equal(readFileSync(path.join(staged, permission), 'utf8'), '<PermissionSet/>\n');
+      assert.throws(() => readFileSync(path.join(staged, 'objects/Demo__c/Demo__c.object-meta.xml')), { code: 'ENOENT' });
+      assert.throws(() => readFileSync(path.join(staged, validationRulePath)), { code: 'ENOENT' });
+      submittedProject = project;
+      return { id: jobId(99) };
+    } });
+    const prepared = provider.prepareBootstrap(policy.environments[0], f.plan);
+    try {
+      assert.equal(submittedProject, undefined);
+      assert.deepEqual(prepared.submit(), { id: jobId(99) });
+    } finally { prepared.cleanup(); }
+    assert.throws(() => readFileSync(path.join(submittedProject, 'bootstrap.xml')), { code: 'ENOENT' });
+    writeFileSync(path.join(source, field), 'changed');
+    assert.throws(() => provider.prepareBootstrap(policy.environments[0], f.plan), /bootstrap source changed/);
+    writeFileSync(manifest, 'changed');
+    assert.throws(() => provider.prepareBootstrap(policy.environments[0], f.plan), /bootstrap manifest changed/);
+  } finally {
+    f.cleanup();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('failed local bootstrap preparation leaves no uncertain provider intent', async () => {
+  const f = fixture({ bootstrap: true });
+  try {
+    f.provider.prepareBootstrap = () => { throw new Error('Invalid local bootstrap package'); };
+    await assert.rejects(f.run('prepare'), /Invalid local bootstrap package/);
+    assert.equal(f.journal.state.stages.devee?.bootstrap, undefined);
+    assert.ok(!f.checkpoints.some(({ operation }) => operation === 'bootstrap'));
+    assert.ok(!f.calls.some(([operation]) => operation === 'bootstrap'));
+  } finally { f.cleanup(); }
+});
+
 test('read-only inventory allows exact layout and profile names with spaces', () => {
   const members = ['Layout:Invoice__c-Invoice Layout', 'Profile:Sales Support'];
   const manifest = packageXml(members).toString('utf8');

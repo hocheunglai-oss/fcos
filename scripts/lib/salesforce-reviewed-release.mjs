@@ -352,7 +352,7 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
   if (mode === 'apply' && (preparation?.fingerprint !== plan.fingerprint || !['ready', 'awaiting-authorized-bootstrap'].includes(preparation?.status))) {
     throw new Error('Apply requires a successful prepare checkpoint for this exact unchanged reviewed fingerprint.');
   }
-  async function job(environment, operation, submit, { validationJobId = null } = {}) {
+  async function job(environment, operation, submit, { validationJobId = null, prepare } = {}) {
     await unchanged();
     let record = get(environment.key, operation);
     if (record?.status === 'submitting' && !record.jobId) {
@@ -375,18 +375,23 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
         await persist(environment.key, operation, { ...record, status: expiredSuccess ? 'Expired' : actual.status, verifiedAt: timestamp(), actualReportSha256: hash(actual) });
       } else return reportJob(environment, operation, record);
     }
-    const gate = await writeGate(environment, operation);
-    const previous = get(environment.key, operation);
-    const attempts = previous ? [...(previous.attempts || []), { ...previous, attempts: undefined }] : [];
-    record = await persist(environment.key, operation, { fingerprint: plan.fingerprint, orgId: environment.orgId,
-      status: 'submitting', jobId: null, validationJobId, submittedAt: timestamp(), attempts, ...gate });
-    await unchanged();
-    if (!(Date.parse(gate.receiptExpiresAt) > now().getTime())) throw new Error('Salesforce ownership expired while saving intent; reconcile the saved intent before retry.');
-    if (environment.key === 'production' && operation !== 'validation') assertProductionAuthorization(authorization, plan, now());
-    // Persist intent before calling the provider. A thrown/invalid response stays uncertain.
-    const submitted = await submit();
-    if (!JOB_ID.test(submitted?.id || '')) throw new Error('Salesforce submission returned no reusable job ID; owner readback/reconciliation is required.');
-    record = await persist(environment.key, operation, { ...record, jobId: submitted.id, status: ACTIVE.has(submitted.status) ? submitted.status : 'Submitted' });
+    const prepared = await prepare?.();
+    try {
+      const gate = await writeGate(environment, operation);
+      const previous = get(environment.key, operation);
+      const attempts = previous ? [...(previous.attempts || []), { ...previous, attempts: undefined }] : [];
+      record = await persist(environment.key, operation, { fingerprint: plan.fingerprint, orgId: environment.orgId,
+        status: 'submitting', jobId: null, validationJobId, submittedAt: timestamp(), attempts, ...gate });
+      await unchanged();
+      if (!(Date.parse(gate.receiptExpiresAt) > now().getTime())) throw new Error('Salesforce ownership expired while saving intent; reconcile the saved intent before retry.');
+      if (environment.key === 'production' && operation !== 'validation') assertProductionAuthorization(authorization, plan, now());
+      // Persist intent before calling the provider. A thrown/invalid response stays uncertain.
+      const submitted = await (prepared ? prepared.submit() : submit());
+      if (!JOB_ID.test(submitted?.id || '')) throw new Error('Salesforce submission returned no reusable job ID; owner readback/reconciliation is required.');
+      record = await persist(environment.key, operation, { ...record, jobId: submitted.id, status: ACTIVE.has(submitted.status) ? submitted.status : 'Submitted' });
+    } finally {
+      await prepared?.cleanup();
+    }
     return reportJob(environment, operation, record);
   }
   async function permissions(environment, names) {
@@ -478,7 +483,9 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
       let predeploymentInventory = plan.baselineInventory;
       if (plan.review.bootstrap) {
         if (!stage.bootstrap) await verifyReviewedOrgInventory({ provider, environment, plan, expected: plan.baselineInventory, now });
-        await job(environment, 'bootstrap', () => provider.bootstrap(environment, plan));
+        await job(environment, 'bootstrap', () => provider.bootstrap(environment, plan), {
+          prepare: provider.prepareBootstrap ? () => provider.prepareBootstrap(environment, plan) : undefined,
+        });
         predeploymentInventory = reviewedCheckpointInventory(plan, journal.state.stages[environment.key]);
         await verifyReviewedOrgInventory({ provider, environment, plan, expected: predeploymentInventory, now });
         await permissions(environment, plan.review.bootstrap.permissionSets || []);

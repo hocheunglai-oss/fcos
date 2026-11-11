@@ -101,8 +101,42 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
       return sf(args);
     },
     deploy(environment, validationJobId) { return sf(['project', 'deploy', 'quick', '--target-org', environment.alias, '--job-id', validationJobId, '--async', '--json']); },
-    bootstrap(environment, plan) { return sf(['project', 'deploy', 'start', '--target-org', environment.alias, '--manifest', plan.review.bootstrap.manifestPath,
-      '--test-level', environment.isSandbox ? 'NoTestRun' : 'RunRelevantTests', '--async', '--json']); },
+    prepareBootstrap(environment, plan) {
+      const bootstrap = plan.review.bootstrap;
+      const manifest = readFileSync(safeProjectFile(cwd, bootstrap.manifestPath));
+      if (salesforcePromotionHash(manifest) !== plan.binding.bootstrapSha256) throw new Error('Salesforce bootstrap manifest changed.');
+      const versions = [...manifest.toString('utf8').matchAll(/<version>\s*(\d+\.0)\s*<\/version>/gu)];
+      if (versions.length !== 1) throw new Error('Salesforce bootstrap requires one explicit metadata API version.');
+      const members = new Set(bootstrap.components);
+      const files = new Set(plan.review.components.filter(({ id }) => members.has(id)).flatMap(({ files }) => files));
+      const project = mkdtempSync(path.join(tmpdir(), 'fcos-salesforce-bootstrap-'));
+      const cleanup = () => rmSync(project, { recursive: true, force: true });
+      try {
+        writeFileSync(path.join(project, 'sfdx-project.json'), JSON.stringify({
+          packageDirectories: [{ path: 'force-app', default: true }], namespace: '', sourceApiVersion: versions[0][1],
+        }));
+        writeFileSync(path.join(project, 'bootstrap.xml'), manifest, { mode: 0o600 });
+        // A source-format manifest can otherwise pull in unreviewed parent and child metadata.
+        for (const name of files) {
+          const relative = `${policy.publication.sourceRoot}/${name}`;
+          const bytes = readFileSync(safeProjectFile(cwd, relative));
+          if (salesforcePromotionHash(bytes) !== plan.finalInventory.files[name]?.sha256) {
+            throw new Error(`Salesforce bootstrap source changed: ${name}`);
+          }
+          const destination = path.join(project, relative);
+          mkdirSync(path.dirname(destination), { recursive: true });
+          writeFileSync(destination, bytes, { mode: 0o600 });
+        }
+        return {
+          submit: () => sf(['project', 'deploy', 'start', '--target-org', environment.alias, '--manifest', 'bootstrap.xml',
+            '--test-level', environment.isSandbox ? 'NoTestRun' : 'RunRelevantTests', '--async', '--json'], project),
+          cleanup,
+        };
+      } catch (error) {
+        cleanup();
+        throw error;
+      }
+    },
     permissionAssigned(environment, name) {
       const username = environment.username || this.verifyIdentity(environment).username;
       if (!/^[A-Za-z0-9@._+\-]+$/u.test(username || '') || !/^[A-Za-z][A-Za-z0-9_]*$/u.test(name)) throw new Error('Invalid permission assignment identity.');
