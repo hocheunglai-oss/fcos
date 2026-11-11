@@ -35,7 +35,6 @@ const PUBLICATION = SALESFORCE_POLICY?.publication;
 const SOURCE_REPOSITORY = FCOS_CONNECTION_POLICY.providers
   .find(({ id }) => id === 'github')
   ?.identifiers.find(({ label }) => label === 'Repository')?.value;
-const MODE = process.argv.includes('--publish') ? 'publish' : process.argv.includes('--check') ? 'check' : '';
 
 if (!PUBLICATION || !SOURCE_REPOSITORY) throw new Error('Salesforce shared publication policy is unavailable.');
 
@@ -550,7 +549,8 @@ export function executeSharedMirror({ mode, metadataRoot = sourceRoot, proofReso
 }
 
 export function main({ proofResolver = assertDeveeDeploymentProof, assertPublicationCurrent = () => {} } = {}) {
-  const mode = process.argv.includes('--publish') && process.argv.includes('--check') ? '' : MODE;
+  const args = process.argv.slice(2);
+  const mode = args.length === 1 && ['--check', '--publish'].includes(args[0]) ? args[0].slice(2) : '';
   const report = executeSharedMirror({ mode, proofResolver, assertPublicationCurrent });
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 }
