@@ -427,6 +427,10 @@ export async function verifyReviewedOrgInventory({ provider, environment, plan, 
     const observed = files && typeof files === 'object' && !Array.isArray(files) ? Object.fromEntries(Object.entries(files).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
       .map(([name, value]) => [name, { sha256: value?.sha256, size: value?.size }])) : null;
     const method = expected.nativeExport ? 'metadata-api-reviewed-native-byte-inventory' : 'metadata-api-owned-tree-inventory';
+    const permissionSets = (expected.projectionPaths || []).flatMap(name => {
+      const permission = /^permissionsets\/([A-Za-z][A-Za-z0-9_]*)\.permissionset-meta\.xml$/u.exec(name);
+      return permission ? [permission[1]] : [];
+    }).sort();
     const inventoryMatches = expected.projectedNativeInventory
       ? matchesProjectedNativeInventory(observed, expected.files, expected.projectionPaths)
         && receipt.observedNativeInventoryHash === hash(observed)
@@ -438,6 +442,9 @@ export async function verifyReviewedOrgInventory({ provider, environment, plan, 
       || identity?.alias !== environment.alias || identity?.orgId !== environment.orgId || identity?.isSandbox !== environment.isSandbox
       || identity?.connectedStatus !== 'Connected' || !String(identity?.username || '').trim() || (environment.username && identity.username !== environment.username)
       || !inventoryMatches) throw new Error('Inventory baseline requires current native owned-tree file evidence and the pinned org identity; hashes or caller booleans alone are insufficient.');
+    if (permissionSets.length && (!same(receipt.permissionSets, permissionSets) || !HASH.test(receipt.permissionGrantEvidenceSha256 || ''))) {
+      throw new Error('Current Salesforce inventory lacks exact native PermissionSet grant evidence.');
+    }
     if (expected.absentComponents?.length && (!same(receipt.absentComponents, expected.absentComponents)
       || receipt.absenceVerificationMethod !== 'native-metadata-catalog' || !HASH.test(receipt.absenceEvidenceSha256 || ''))) {
       throw new Error('Current Salesforce inventory lacks native evidence for the exact absent reviewed components.');

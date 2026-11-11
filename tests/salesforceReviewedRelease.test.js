@@ -1262,7 +1262,7 @@ test('mixed native checkpoints pin exact org paths and preserve untouched bytes 
     const missing = descriptor({ ...initial, [field.files[0]]: Buffer.from(fieldXml) });
     changed.nativeInventories.qat.bootstrap = missing;
     assert.throws(() => createReviewedSalesforcePlan({ ...inputs, review: changed }), /exact owned paths/);
-    let projection;
+    let projection, permissionGrantEvidenceSha256;
     const provider = { verifyInventory(_environment, request) {
       assert.deepEqual(request.projectionPaths, checkpoint.projectionPaths);
       return { orgId: environment.orgId, identity: { alias: environment.alias, orgId: environment.orgId,
@@ -1270,11 +1270,13 @@ test('mixed native checkpoints pin exact org paths and preserve untouched bytes 
         sourceTreeHash: null, inventoryHash: checkpoint.inventoryHash, verifiedAt: now().toISOString(), evidenceSha256: 'a'.repeat(64),
         nativeSourceTreeHash: 'b'.repeat(64), observedInventory: checkpoint.files,
         verificationMethod: 'metadata-api-reviewed-native-byte-inventory', scope: 'force-app/main/default',
-        verifiedProjectionPaths: projection, absentComponents: [rule.id], absenceVerificationMethod: 'native-metadata-catalog',
+        verifiedProjectionPaths: projection, permissionSets: ['Reviewed'], permissionGrantEvidenceSha256, absentComponents: [rule.id], absenceVerificationMethod: 'native-metadata-catalog',
         absenceEvidenceSha256: 'c'.repeat(64) };
     } };
     await assert.rejects(verifyReviewedOrgInventory({ provider, environment, plan, expected: checkpoint, now }), /requires current native/);
     projection = checkpoint.projectionPaths;
+    await assert.rejects(verifyReviewedOrgInventory({ provider, environment, plan, expected: checkpoint, now }), /lacks exact native PermissionSet grant evidence/);
+    permissionGrantEvidenceSha256 = 'd'.repeat(64);
     await verifyReviewedOrgInventory({ provider, environment, plan, expected: checkpoint, now });
 
     const afterBootstrap = [...field.files, ...permission.files].sort();
@@ -1371,6 +1373,76 @@ test('mixed native readback verifies reviewed definition content even when raw h
     nativeField = Buffer.from('<CustomField><required>true</required></CustomField>\r\n');
     assert.throws(() => provider.verifyInventory(environment, input()), /Native metadata projection differs/);
     assert.throws(() => provider.verifyInventory(environment, projected), /Native metadata projection differs/);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('native PermissionSet projection requires the full grants even when its XML export is scoped', () => {
+  const cwd = mkdtempSync(path.join(tmpdir(), 'fcos-native-permission-fixture-'));
+  try {
+    const environment = policy.environments[0];
+    const name = 'Reviewed';
+    const file = `permissionsets/${name}.permissionset-meta.xml`;
+    const root = content => `<PermissionSet xmlns="http://soap.sforce.com/2006/04/metadata"><label>Reviewed</label>${content}</PermissionSet>`;
+    const source = root('<fieldPermissions><editable>false</editable><field>Account.Example__c</field><readable>true</readable></fieldPermissions>');
+    let native = root('');
+    const target = path.join(cwd, policy.publication.sourceRoot, file);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, source);
+    const metadata = packageXml(['PermissionSet:Reviewed']);
+    const manifest = packageXml(['Profile:Example']);
+    writeFileSync(path.join(cwd, 'inventory.xml'), manifest);
+    writeFileSync(path.join(cwd, 'metadata.xml'), metadata);
+    writeFileSync(path.join(cwd, 'sfdx-project.json'), '{}');
+    const parentId = '0PS000000000001AAA';
+    const expectedGrant = { ParentId: parentId, SobjectType: 'Account', Field: 'Account.Example__c', PermissionsEdit: false, PermissionsRead: true };
+    let fieldRows = [expectedGrant];
+    let incomplete = false;
+    let catalogReads = 0;
+    const provider = cliSalesforceProvider({ cwd, run(_program, args, project) {
+      if (args[0] === 'org') return { id: environment.orgId, username: environment.username, connectedStatus: 'Connected' };
+      if (args[0] === 'data') {
+        const query = args[args.indexOf('--query') + 1];
+        if (query.includes(' FROM Organization ')) return { records: [{ Id: environment.orgId, IsSandbox: environment.isSandbox }] };
+        assert.equal(args[args.indexOf('--api-version') + 1], '67.0');
+        catalogReads++;
+        let records = [];
+        if (query.includes(' FROM PermissionSet ')) records = [{ Id: parentId, Name: name, IsOwnedByProfile: false, NamespacePrefix: null }];
+        if (query.includes(' FROM FieldPermissions ')) records = fieldRows;
+        return { records, totalSize: records.length, done: !incomplete };
+      }
+      const directory = args[args.indexOf('--output-dir') + 1];
+      const destination = path.join(project, directory, directory === 'metadata' ? file : 'profiles/Example.profile-meta.xml');
+      mkdirSync(path.dirname(destination), { recursive: true });
+      writeFileSync(destination, directory === 'metadata' ? native : '<Profile/>');
+      return { id: '09SHF000002gTFl2AM', status: 'Succeeded', done: true, success: true };
+    } });
+    const input = () => {
+      const { inventoryHash } = inventoryFromFiles({ [file]: Buffer.from(native), 'profiles/Example.profile-meta.xml': Buffer.from('<Profile/>') });
+      return { plan: { finalInventory: inventoryFromFiles({ [file]: Buffer.from(source) }), review: {
+        components: [{ id: 'PermissionSet:Reviewed', files: [file] }],
+        inventoryManifests: { [inventoryHash]: { path: 'inventory.xml', sha256: hash(manifest),
+          metadata: { path: 'metadata.xml', sha256: hash(metadata) } } },
+      } }, expectedInventoryHash: inventoryHash, nativeExport: true, nativeBootstrap: true, projectionPaths: [file] };
+    };
+    const verify = () => provider.verifyInventory(environment, input());
+    const receipt = verify();
+    assert.deepEqual(receipt.permissionSets, [name]);
+    assert.match(receipt.permissionGrantEvidenceSha256, /^[a-f0-9]{64}$/u);
+    assert.equal(catalogReads, 3);
+    fieldRows = [];
+    assert.throws(verify, /catalog differs.*Account.Example__c/);
+    fieldRows = [expectedGrant, { ...expectedGrant, Field: 'Account.Unreviewed__c' }];
+    assert.throws(verify, /catalog differs.*Account.Unreviewed__c/);
+    fieldRows = [{ ...expectedGrant, PermissionsEdit: true }];
+    assert.throws(verify, /catalog differs.*Account.Example__c/);
+    fieldRows = [expectedGrant];
+    incomplete = true;
+    assert.throws(verify, /catalog response is incomplete/);
+    incomplete = false;
+    native = root('<userPermissions><enabled>true</enabled><name>ModifyAllData</name></userPermissions>');
+    assert.throws(verify, /differs from the reviewed non-grant definition/);
+    native = root('<fieldPermissions><editable>true</editable><field>Account.Example__c</field><readable>true</readable></fieldPermissions>');
+    assert.throws(verify, /unexpected exported fieldPermissions/);
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
 
