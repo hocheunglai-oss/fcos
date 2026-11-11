@@ -48,7 +48,7 @@ const readPayloads = {
 
 // Fixtures replace browser/provider transports. They simulate the app-owned
 // bootstrap response and actual response events; they never establish live proof.
-function browserFixture({ badIdentity = false, badRead = false, badDenial = false, unexpected = false, missingModule = false, background = false, optionalRequest = null, badPayload = false, badDesktop = false, deniedModule = null, role = 'manager', companyFxRows = undefined, supplierBoundaryRegression = null } = {}) {
+function browserFixture({ badIdentity = false, badRead = false, badDenial = false, unexpected = false, missingModule = false, background = false, optionalRequest = null, badPayload = false, badDesktop = false, deniedModule = null, role = 'manager', companyFxRows = undefined, supplierBoundaryRegression = null, groupedBoundaryRegression = false, groupedDesktopMissing = false } = {}) {
   const observations = { launches: [], reads: [], contextsClosed: 0, browsersClosed: 0, nativeAborts: 0 };
   const browserFactory = async options => {
     observations.launches.push(options);
@@ -76,6 +76,7 @@ function browserFixture({ badIdentity = false, badRead = false, badDenial = fals
           observations.reads.push({ url, method: overrides.method || request.method(), body: overrides.postData });
           if (url.endsWith('/authContext')) return apiResponse(url, auth(), 200, request);
           if (url.endsWith('/companyFxHistoryGet')) return apiResponse(url, { canSave: true, rows: companyFxRows });
+          if (groupedBoundaryRegression && url.endsWith('/xeroFinancialDocumentPreservationRun')) return apiResponse(url, {});
           const supplierAction = /\/xeroSupplierFinancialBucket(Read|Preview|Apply)$/.exec(url)?.[1];
           if (supplierAction) {
             const restricted = email === ci.email;
@@ -94,7 +95,9 @@ function browserFixture({ badIdentity = false, badRead = false, badDenial = fals
     };
     const locator = (role, name) => ({
       first() { return this; },
-      waitFor: async () => {},
+      waitFor: async () => {
+        if (groupedDesktopMissing && name === 'Preserve verified documents') throw Error('MISSING_PRESERVATION_CONTROL');
+      },
       fill: async value => { if (name === 'Username') email = value; if (name === 'Password') password = value; },
       click: async () => {
         if (name === 'Receipts') return;
@@ -469,4 +472,23 @@ test('supplier bucket smoke covers both identities with empty bodies before and 
   }
   await assert.rejects(runStagedSmoke({ ...options, manifest: { ...candidate, selection: { ...candidate.selection, normalRole: false,
     modules: ['dashboard'] } } }), { code: 'SMOKE_SUPPLIER_BUCKET_NORMAL_ROLE_REQUIRED' });
+});
+
+test('grouped petroleum requires both staged write denials and the desktop preservation control', async () => {
+  const candidate = { ...manifest({ normalRole: true, modules: ['xero_portal'] }),
+    prerequisites: { adapter: 'grouped-petroleum-migration' } };
+  const fixture = browserFixture();
+  const options = { manifest: candidate, staged, env, fetchImpl: publicFetch(), browserFactory: fixture.browserFactory };
+  for (const afterPrerequisites of [false, true]) {
+    const result = await runStagedSmoke({ ...options, afterPrerequisites });
+    assert.deepEqual(result.groupedPetroleum, { restrictedVerified: true, normalVerified: true, desktopVerified: true });
+    assert.equal(result.businessWrites, 0);
+  }
+  const calls = fixture.observations.reads.filter(row => row.url.includes('/xeroFinancialDocumentPreservation'));
+  assert.equal(calls.length, 8);
+  assert.ok(calls.every(({ body, method }) => body === '{}' && method === 'POST'));
+  await assert.rejects(runStagedSmoke({ ...options, browserFactory: browserFixture({ groupedBoundaryRegression: true }).browserFactory }),
+    { code: 'SMOKE_GROUPED_PETROLEUM_WRITE_NOT_DENIED' });
+  await assert.rejects(runStagedSmoke({ ...options, browserFactory: browserFixture({ groupedDesktopMissing: true }).browserFactory }),
+    { code: 'SMOKE_GROUPED_PETROLEUM_DESKTOP_MISSING' });
 });
