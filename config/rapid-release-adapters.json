@@ -37,8 +37,17 @@
     {
       "id": "supplier-bucket-migrations",
       "status": "qualified",
-      "sourceDigest": "17e2888d1a157bbd3f777903ad1f249fa97c5fc346474968d3c3f39777d78f08",
+      "sourceDigest": "1228a9970741e65b1e6dd18d11b202bf445787a7444047dca620d095501af837",
       "path": "scripts/lib/rapid-release/supplier-bucket-adapter.mjs",
+      "salesforce": false,
+      "database": true,
+      "databaseWrite": true
+    },
+    {
+      "id": "grouped-petroleum-migration",
+      "status": "qualified",
+      "sourceDigest": "df5a8f60c0887cb2e12f633b7a7c8e7ee682bf3250fe05212862f43411526af7",
+      "path": "scripts/lib/rapid-release/grouped-petroleum-adapter.mjs",
       "salesforce": false,
       "database": true,
       "databaseWrite": true

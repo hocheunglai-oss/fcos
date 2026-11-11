@@ -105,6 +105,10 @@ export function requiresSupplierBucketSmoke(manifest) {
   return manifest.prerequisites?.adapter === 'supplier-bucket-migrations';
 }
 
+export function requiresGroupedPetroleumSmoke(manifest) {
+  return manifest.prerequisites?.adapter === 'grouped-petroleum-migration';
+}
+
 export function createManifest({ candidate, controllerSha, previous, paths, publicEnvironment, releaseId, prerequisites = null, moduleInventory = DEFAULT_MODULE_INVENTORY, now = new Date().toISOString() }) {
   requireCondition(isSha(controllerSha) && isSha(candidate?.sha) && isDigest(candidate.sourceDigest) && isDigest(candidate.lockDigest), 'MANIFEST_SOURCE_INVALID');
   requireCondition(/^dpl_[A-Za-z0-9]+$/.test(previous?.deploymentId || '') && isSha(previous.sha)
