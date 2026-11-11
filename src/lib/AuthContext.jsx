@@ -20,6 +20,7 @@ const LOCAL_ADMIN_USER = {
 const REPORT_ARCHIVE_MODULE_ID = 'report_archive';
 const FCUNO_OIDC_PROVIDER = 'custom:fcuno';
 const FCUNO_FORCE_REAUTH_KEY = 'fcos:fcuno-force-reauth';
+const FAILED_SIGN_OUT_SESSION_KEY = 'fcos:failed-sign-out-session';
 const fcunoOidcEnabled = import.meta.env.VITE_FCOS_ENABLE_FCUNO_OIDC === 'true';
 const legacyPasswordLoginEnabled = import.meta.env.VITE_FCOS_ENABLE_FCUNO_LEGACY_PASSWORD_LOGIN === 'true';
 const LOCAL_APPLICATIONS = [
@@ -51,6 +52,20 @@ function fullAccessLevels() {
   return { [REPORT_ARCHIVE_MODULE_ID]: 'full' };
 }
 
+// This identifier can only block restoring the browser session. The server
+// still verifies and authorizes any replacement session.
+function browserSessionId(session) {
+  try {
+    const payload = session.access_token.split('.')[1];
+    const { session_id: id } = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')));
+    return typeof id === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(id)
+      ? id.toLowerCase()
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 async function loadSupabaseUser() {
   const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
   if (sessionError) throw sessionError;
@@ -62,6 +77,19 @@ async function loadSupabaseUser() {
     capabilities: {},
     error: { type: 'auth_required' },
   };
+
+  const blockedSession = window.sessionStorage.getItem(FAILED_SIGN_OUT_SESSION_KEY);
+  if (blockedSession) {
+    const current = browserSessionId(sessionData.session);
+    if (!current || blockedSession === 'unknown' || current === blockedSession) {
+      return {
+        user: null,
+        forceReauthentication: true,
+        blockedSessionId: blockedSession === 'unknown' ? current : null,
+        error: { type: 'auth_required' },
+      };
+    }
+  }
 
   const { data } = await appClient.functions.invoke('authContext', {}, { force: true });
   if (data?.error) {
@@ -147,8 +175,14 @@ export const AuthProvider = ({ children }) => {
       const result = await loadSupabaseUser();
       if (request !== authRequest.current || !isCurrentClientSession(session)) return { user: null, stale: true };
       setClientSessionOwner(result.user?.id);
+      if (result.blockedSessionId && window.sessionStorage.getItem(FAILED_SIGN_OUT_SESSION_KEY) === 'unknown') {
+        window.sessionStorage.setItem(FAILED_SIGN_OUT_SESSION_KEY, result.blockedSessionId);
+      }
       if (result.forceReauthentication) window.sessionStorage.setItem(FCUNO_FORCE_REAUTH_KEY, 'true');
-      else if (result.user) window.sessionStorage.removeItem(FCUNO_FORCE_REAUTH_KEY);
+      else if (result.user) {
+        window.sessionStorage.removeItem(FCUNO_FORCE_REAUTH_KEY);
+        window.sessionStorage.removeItem(FAILED_SIGN_OUT_SESSION_KEY);
+      }
       const nextAccessSnapshot = JSON.stringify([result.user?.id, result.user?.user_type, result.access, result.accessLevels, result.capabilities]);
       if (accessSnapshot.current !== nextAccessSnapshot) appClient.functions.clearCache();
       accessSnapshot.current = nextAccessSnapshot;
@@ -244,6 +278,7 @@ export const AuthProvider = ({ children }) => {
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) throw error;
     signOutFailed.current = false;
+    window.sessionStorage.removeItem(FAILED_SIGN_OUT_SESSION_KEY);
     const result = await checkUserAuth({ showLoader: true });
     if (!result?.user) throw new Error(loginFailureMessage(result?.error));
   };
@@ -343,9 +378,13 @@ export const AuthProvider = ({ children }) => {
         const result = await supabase.auth.signOut({ scope: 'local' });
         if (result?.error) throw result.error;
         signOutFailed.current = false;
+        window.sessionStorage.removeItem(FAILED_SIGN_OUT_SESSION_KEY);
       } catch {
         signOutFailed.current = true;
         window.sessionStorage.setItem(FCUNO_FORCE_REAUTH_KEY, 'true');
+        const current = await supabase.auth.getSession().catch(() => null);
+        const blockedSession = !current?.error && browserSessionId(current?.data?.session);
+        window.sessionStorage.setItem(FAILED_SIGN_OUT_SESSION_KEY, blockedSession || 'unknown');
         portalFailures = [...portalFailures, {
           applicationId: 'fcos',
           message: 'The server-side FCOS session could not be revoked.',

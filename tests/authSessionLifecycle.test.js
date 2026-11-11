@@ -20,14 +20,21 @@ test('executed AuthProvider rejects late auth after logout and after a newer acc
     useState: (initial) => { const i = stateIndex++; states[i] = initial; return [initial, (value) => { states[i] = value; }]; },
   };
   let authEvent;
+  const previousSessionId = '0d3b6c21-922d-4797-8685-09f42d151537';
+  const replacementSessionId = '9dffbefb-61cb-4a69-a5ea-5e46da6d42c4';
+  const fakeSession = (id, iat) => ({
+    user: { id: 'user-b' },
+    access_token: `header.${Buffer.from(JSON.stringify({ session_id: id, iat })).toString('base64url')}.fixture`,
+  });
+  let browserSession = fakeSession(previousSessionId, 1);
   const supabase = { auth: {
-    getSession: async () => ({ data: { session: { user: { id: 'user-b' } } } }),
+    getSession: async () => ({ data: { session: browserSession } }),
     signOut: async () => { authEvent?.('SIGNED_OUT', null); },
     onAuthStateChange: (fn) => { authEvent = fn; return { data: { subscription: { unsubscribe() {} } } }; },
   } };
   const client = { functions: { clearCache() {}, invoke: () => new Promise((resolve) => pending.push(resolve)) } };
   const sessionStorage = new Map();
-  globalThis.window = { sessionStorage: { removeItem: (key) => sessionStorage.delete(key), setItem: (key, value) => sessionStorage.set(key, value) }, localStorage: {}, setTimeout, clearTimeout };
+  globalThis.window = { sessionStorage: { getItem: (key) => sessionStorage.get(key) ?? null, removeItem: (key) => sessionStorage.delete(key), setItem: (key, value) => sessionStorage.set(key, value) }, localStorage: {}, setTimeout, clearTimeout };
   globalThis.__authHarness = { react, supabase, client };
   let source = await readFile(new URL('../src/lib/AuthContext.jsx', import.meta.url), 'utf8');
   source = source.replace(/^import .*;\n/gm, '').replaceAll('import.meta.env.', 'testEnv.');
@@ -114,13 +121,59 @@ test('executed AuthProvider rejects late auth after logout and after a newer acc
   assert.equal(pending.length, 7);
   assert.equal(states[0], null);
 
-  supabase.auth.signInWithPassword = async () => ({ error: null });
-  const newSignIn = auth.login('test@example.invalid', 'fixture-only');
+  // A full reload remounts the provider, while this tab and its stored
+  // Supabase session survive the failed sign-out.
+  assert.equal(sessionStorage.get('fcos:failed-sign-out-session'), previousSessionId);
+  browserSession = fakeSession(previousSessionId, 2);
+  stateIndex = 0;
+  const reloaded = AuthProvider({ children: null }).props.value;
+  const invoke = client.functions.invoke;
+  let reloadChecks = 0;
+  client.functions.invoke = async () => {
+    reloadChecks += 1;
+    return { data: { user: { id: 'user-b', active: true } } };
+  };
+  const afterReload = await reloaded.checkUserAuth();
+  assert.equal(afterReload.user, null, 'Reload must not revive the prior session after failed sign-out');
+  assert.equal(reloadChecks, 0, 'The retained session must not reach authorization');
+  assert.equal(states[7], false);
+  assert.equal(states[10], true);
+
+  // A different session is still subject to the normal server verification.
+  browserSession = fakeSession(replacementSessionId, 3);
+  client.functions.invoke = async () => ({ data: {
+    code: 'FCUNO_IDENTITY_SESSION_REVOKED', error: 'The replacement is not authorized.',
+  } });
+  assert.equal((await reloaded.checkUserAuth()).user, null);
+  assert.equal(sessionStorage.get('fcos:failed-sign-out-session'), previousSessionId);
+  client.functions.invoke = async () => ({ data: { user: { id: 'user-b', active: true } } });
+  assert.equal((await reloaded.checkUserAuth()).user.id, 'user-b');
+  assert.equal(sessionStorage.has('fcos:failed-sign-out-session'), false);
+
+  // Explicit password sign-in can recover when the old session could not
+  // be identified, and still runs normal server verification.
+  browserSession = { user: { id: 'user-b' }, access_token: 'malformed' };
+  await reloaded.logout();
+  assert.equal(sessionStorage.get('fcos:failed-sign-out-session'), 'unknown');
+  browserSession = fakeSession(previousSessionId, 4);
+  stateIndex = 0;
+  const recovery = AuthProvider({ children: null }).props.value;
+  client.functions.invoke = () => assert.fail('Unknown prior session must stay blocked');
+  assert.equal((await recovery.checkUserAuth()).user, null);
+  assert.equal(sessionStorage.get('fcos:failed-sign-out-session'), previousSessionId);
+
+  client.functions.invoke = invoke;
+  supabase.auth.signInWithPassword = async () => {
+    browserSession = fakeSession(replacementSessionId, 5);
+    return { error: null };
+  };
+  const newSignIn = recovery.login('test@example.invalid', 'fixture-only');
   await Promise.resolve();
   await Promise.resolve();
   pending[7]({ data: { user: { id: 'user-b', active: true } } });
   await newSignIn;
   assert.equal(states[0].id, 'user-b');
+  assert.equal(sessionStorage.has('fcos:failed-sign-out-session'), false);
   delete globalThis.__authHarness;
 });
 
