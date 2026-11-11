@@ -46,7 +46,7 @@ export function inventoryFromFiles(files) {
   return { sourceTreeHash: hash(Buffer.concat(treeParts)), inventoryHash: hash(inventory), files: inventory };
 }
 
-export function readReviewedInventory(root) {
+export function readReviewedInventory(root, { nativeExport = false } = {}) {
   const files = {};
   function visit(directory) {
     for (const name of readdirSync(directory).sort()) {
@@ -55,13 +55,55 @@ export function readReviewedInventory(root) {
       if (stat.isDirectory()) visit(absolute);
       else {
         const bytes = readFileSync(absolute);
-        if (bytes.includes(Buffer.from('\r\n'))) throw new Error('Salesforce source must use LF line endings.');
+        if (!nativeExport && bytes.includes(Buffer.from('\r\n'))) throw new Error('Salesforce source must use LF line endings.');
         files[path.relative(root, absolute).split(path.sep).join('/')] = bytes;
       }
     }
   }
   visit(root);
   return inventoryFromFiles(files);
+}
+
+function reviewedNativeInventories(review, policy, baselineInventory, finalInventory, components, coveredFiles) {
+  if (review.nativeInventories === undefined) return undefined;
+  const reviewed = review.nativeInventories;
+  if (review.baselineMode !== INVENTORY_BASELINE_MODE || review.bootstrap || review.orgBaselines
+    || components.some(({ id }) => !id.startsWith('ApexClass:'))
+    || !reviewed || !same(sorted(Object.keys(reviewed)), sorted(ENVIRONMENTS))) {
+    failCoverage('Raw native inventory checkpoints require an exact, non-bootstrap Apex class review for every org.');
+  }
+  const checkpoint = (descriptor, gitInventory, key) => {
+    const files = descriptor?.files;
+    if (!files || Array.isArray(files) || typeof files !== 'object'
+      || Object.entries(files).some(([name, value]) => !/^[A-Za-z0-9_ .$()@+\-/]+$/u.test(name)
+        || name.split('/').some(part => !part || part === '.' || part === '..')
+        || !HASH.test(value?.sha256 || '') || !Number.isSafeInteger(value?.size) || value.size < 0
+        || !same(sorted(Object.keys(value)), ['sha256', 'size']))) {
+      failCoverage(`Salesforce ${key} native inventory has an invalid file pin.`);
+    }
+    const ordered = Object.fromEntries(Object.keys(files).sort().map(name => [name, { sha256: files[name].sha256, size: files[name].size }]));
+    const inventoryHash = hash(ordered);
+    if (descriptor.inventoryHash !== inventoryHash || !review.inventoryManifests?.[inventoryHash]
+      || Object.keys(gitInventory.files).some(name => !Object.hasOwn(ordered, name))) {
+      failCoverage(`Salesforce ${key} native inventory lacks exact owned path coverage or its retrieval manifest.`);
+    }
+    if (components.some(({ files }) => files.some(name => ordered[name]) && files.some(name => !ordered[name]))) {
+      failCoverage(`Salesforce ${key} native inventory contains a partially present class.`);
+    }
+    return { files: ordered, inventoryHash, nativeExport: true,
+      absentComponents: sorted(components.filter(({ files }) => files.every(name => !ordered[name])).map(({ id }) => id)) };
+  };
+  return Object.fromEntries(policy.environments.map(({ key, orgId }) => {
+    const { baseline, final, orgId: reviewedId } = reviewed[key] || {};
+    if (reviewedId !== orgId) failCoverage(`Salesforce ${key} native inventory has the wrong pinned org.`);
+    const before = checkpoint(baseline, baselineInventory, key);
+    const after = checkpoint(final, finalInventory, key);
+    if (Object.keys(before.files).some(name => !after.files[name])
+      || Object.keys(after.files).some(name => !same(before.files[name], after.files[name]) && !coveredFiles.has(name))) {
+      failCoverage(`Salesforce ${key} native checkpoints differ outside the reviewed Apex package.`);
+    }
+    return [key, { baseline: before, final: { ...after, verifyApexProjection: true } }];
+  }));
 }
 
 export function parseReviewedPackage(xml, { inventory = false } = {}) {
@@ -188,6 +230,7 @@ export function createReviewedSalesforcePlan({ review, manifestBytes, bootstrapB
       || !same(sorted(bootstrap.permissionSets || []), sorted(permissions.filter(name => bootstrap.components.includes(`PermissionSet:${name}`))))) throw new Error('Bootstrap must contain only reviewed schema/permission components from the main manifest.');
     if (testPlan.level !== 'RunLocalTests') throw new Error('A schema bootstrap requires one complete RunLocalTests validation per environment.');
   } else if (bootstrapBytes) throw new Error('Unreviewed bootstrap bytes supplied.');
+  const nativeInventories = reviewedNativeInventories(review, policy, baselineInventory, finalInventory, components, coveredFiles);
   const baselineJobs = baselineMode === COMPLETE_DEPLOYMENT_BASELINE_MODE ? {} : null;
   for (const environment of baselineJobs ? policy.environments : []) {
     const record = baselineWorkflow.environments?.[environment.key];
@@ -212,7 +255,7 @@ export function createReviewedSalesforcePlan({ review, manifestBytes, bootstrapB
     ...(orgBaselines ? { orgBaselines } : {}),
   };
   return { fingerprint: hash(binding), binding, review, manifest, changedFiles: changed, finalInventory,
-    baselineInventory, orgBaselineInventories, baselineWorkflow };
+    baselineInventory, orgBaselineInventories, nativeInventories, baselineWorkflow };
 }
 
 export function reviewedJobExpectations(plan, environment, operation) {
@@ -260,7 +303,8 @@ export async function verifyReviewedOrgInventory({ provider, environment, plan, 
   if (typeof provider.verifyInventory !== 'function') throw new Error('Current Salesforce org inventory verification is required; a historical successful deployment is not current baseline proof.');
   const receipt = await provider.verifyInventory(environment, { plan, expectedInventory: expected.files,
     expectedSourceTreeHash: expected.sourceTreeHash || null, expectedInventoryHash: expected.inventoryHash,
-    expectedAbsentComponents: expected.absentComponents || [] });
+    expectedAbsentComponents: expected.absentComponents || [],
+    ...(expected.nativeExport ? { nativeExport: true, verifyApexProjection: expected.verifyApexProjection === true } : {}) });
   const verifiedAt = Date.parse(receipt?.verifiedAt);
   if (receipt?.orgId !== environment.orgId || receipt?.sourceTreeHash !== (expected.sourceTreeHash || null)
     || receipt?.inventoryHash !== expected.inventoryHash || !HASH.test(receipt?.evidenceSha256 || '')
@@ -269,7 +313,10 @@ export async function verifyReviewedOrgInventory({ provider, environment, plan, 
     const identity = receipt.identity, files = receipt.observedInventory;
     const observed = files && typeof files === 'object' && !Array.isArray(files) ? Object.fromEntries(Object.entries(files).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
       .map(([name, value]) => [name, { sha256: value?.sha256, size: value?.size }])) : null;
-    if (receipt.verificationMethod !== 'metadata-api-owned-tree-inventory' || receipt.scope !== 'force-app/main/default'
+    const method = expected.nativeExport ? 'metadata-api-reviewed-native-byte-inventory' : 'metadata-api-owned-tree-inventory';
+    if (receipt.verificationMethod !== method || receipt.scope !== 'force-app/main/default'
+      || (expected.nativeExport && !HASH.test(receipt.nativeSourceTreeHash || ''))
+      || (expected.verifyApexProjection && receipt.apexProjectionVerified !== true)
       || identity?.alias !== environment.alias || identity?.orgId !== environment.orgId || identity?.isSandbox !== environment.isSandbox
       || identity?.connectedStatus !== 'Connected' || !String(identity?.username || '').trim() || (environment.username && identity.username !== environment.username)
       || !observed
@@ -283,6 +330,8 @@ export async function verifyReviewedOrgInventory({ provider, environment, plan, 
 }
 
 export function reviewedCheckpointInventory(plan, stage = {}, environmentKey) {
+  const native = plan.nativeInventories?.[environmentKey];
+  if (native) return stage.deployment?.status === 'Succeeded' ? native.final : native.baseline;
   if (stage.deployment?.status === 'Succeeded') return plan.finalInventory;
   const baseline = plan.orgBaselineInventories ? plan.orgBaselineInventories[environmentKey] : plan.baselineInventory;
   if (!baseline) throw new Error('Salesforce inventory checkpoint requires the pinned org baseline.');
@@ -574,7 +623,9 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
         const expected = reviewedCheckpointInventory(plan, journal.state.stages[environment.key], environment.key);
         const receipt = await verifyReviewedOrgInventory({ provider, environment, plan, expected, now });
         await persist(environment.key, 'inventory-checkpoint', { baselineMode: INVENTORY_BASELINE_MODE, orgId: environment.orgId,
-          inventoryHash: receipt.inventoryHash, sourceTreeHash: receipt.sourceTreeHash, verifiedAt: receipt.verifiedAt, evidenceSha256: receipt.evidenceSha256 });
+          inventoryHash: receipt.inventoryHash, sourceTreeHash: receipt.sourceTreeHash, verifiedAt: receipt.verifiedAt,
+          evidenceSha256: receipt.evidenceSha256, ...(expected.nativeExport ? { nativeSourceTreeHash: receipt.nativeSourceTreeHash,
+            verificationMethod: receipt.verificationMethod, apexProjectionVerified: receipt.apexProjectionVerified } : {}) });
       }
     }
     for (const environment of policy.environments) {
@@ -586,7 +637,8 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
         if (!stage.validation) throw new Error('Deployment lacks its saved successful validation.');
         const validation = await runValidation(environment);
         await job(environment, 'deployment', () => provider.deploy(environment, validation.jobId, plan), { validationJobId: validation.jobId });
-        await verifyReviewedOrgInventory({ provider, environment, plan, expected: plan.finalInventory, now });
+        await verifyReviewedOrgInventory({ provider, environment, plan,
+          expected: reviewedCheckpointInventory(plan, { deployment: { status: 'Succeeded' } }, environment.key), now });
         await permissions(environment, plan.binding.permissionSets);
         continue;
       }
@@ -614,7 +666,8 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
       // Validation may run for hours; refresh unchanged metadata before consuming its job.
       await verifyReviewedOrgInventory({ provider, environment, plan, expected: predeploymentInventory, now });
       await job(environment, 'deployment', () => provider.deploy(environment, validation.jobId, plan), { validationJobId: validation.jobId });
-      await verifyReviewedOrgInventory({ provider, environment, plan, expected: plan.finalInventory, now });
+      await verifyReviewedOrgInventory({ provider, environment, plan,
+        expected: reviewedCheckpointInventory(plan, { deployment: { status: 'Succeeded' } }, environment.key), now });
       await permissions(environment, plan.binding.permissionSets);
     }
     await mirror();
