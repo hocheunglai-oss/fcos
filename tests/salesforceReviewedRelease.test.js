@@ -8,7 +8,7 @@ import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import { createSalesforceWorkflowState, updateSalesforceEnvironmentState, SALESFORCE_RELEASE_MODE } from '../scripts/salesforce-workflow-state.mjs';
 import { openSalesforcePromotionJournal, salesforcePromotionHash as hash } from '../scripts/lib/salesforce-promotion-journal.mjs';
 import { INVENTORY_BASELINE_MODE, REVIEWED_SALESFORCE_MODE, createReviewedSalesforcePlan, inventoryFromFiles, matchesSalesforceCheckpoint, parseReviewedPackage, projectedNativeInventoryHash, reviewedCheckpointInventory, verifyReviewedOrgInventory, runReviewedSalesforceRelease, assertReviewedJobReport, assertProductionAuthorization } from '../scripts/lib/salesforce-reviewed-release.mjs';
-import { assertReviewedInputsUnchanged, baselineGitInventory, cliSalesforceProvider, loadReviewedSalesforcePlan, reviewedSalesforceOptions } from '../scripts/deploy-salesforce-reviewed-manifest.mjs';
+import { assertReviewedInputsUnchanged, baselineGitInventory, cliSalesforceProvider, equivalentNativeSerialization, loadReviewedSalesforcePlan, reviewedSalesforceOptions } from '../scripts/deploy-salesforce-reviewed-manifest.mjs';
 import { reviewedDeveePublicationProof } from '../scripts/sync-salesforce-reviewed-repository.mjs';
 import { applyReviewedPrerequisites, verifyPreBootstrapStage } from '../scripts/lib/rapid-release/salesforce-reviewed-adapter.mjs';
 import { digest, targets } from '../scripts/lib/rapid-release/contract.mjs';
@@ -1250,6 +1250,8 @@ test('mixed native checkpoints pin exact org paths and preserve untouched bytes 
     const plan = createReviewedSalesforcePlan(inputs);
     assert.doesNotThrow(() => createReviewedSalesforcePlan({ ...inputs,
       review: { ...review, nativeCustomFieldFalseFlags: { [field.files[0]]: ['required'] } } }));
+    assert.throws(() => createReviewedSalesforcePlan({ ...inputs,
+      review: { ...review, nativeCustomObjectDefaults: { [field.files[0]]: ['enableFeeds'] } } }), /exact reviewed bootstrap object paths/);
     for (const allowances of [{ [permission.files[0]]: ['required'] }, { [field.files[0]]: ['defaultValue'] },
       { [field.files[0]]: ['required', 'required'] }]) {
       assert.throws(() => createReviewedSalesforcePlan({ ...inputs, review: { ...review, nativeCustomFieldFalseFlags: allowances } }),
@@ -1395,6 +1397,36 @@ test('mixed native readback verifies reviewed definition content even when raw h
       assert.throws(() => checkWithFlags(['trackHistory']), /Native CustomField serialization differs/);
     }
   } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('native CustomObject serialization compares only reviewed default values and preserves the name field', () => {
+  const xml = content => `<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">${content}</CustomObject>`;
+  const name = '<displayFormat>FX-{000000}</displayFormat><label>FX Number</label><type>AutoNumber</type>';
+  const source = xml(`<nameField>${name}</nameField><sharingModel>Private</sharingModel>`);
+  const observed = xml(`<compactLayoutAssignment>SYSTEM</compactLayoutAssignment><nameField>${name}<trackHistory>false</trackHistory></nameField><sharingModel>Private</sharingModel>`);
+  const defaults = [['compactLayoutAssignment', 'SYSTEM'], ['nameField.trackHistory', 'false']];
+  const check = (native, expected = source) => equivalentNativeSerialization(expected, native, 'CustomObject', defaults);
+  assert.equal(check(observed), true);
+  assert.equal(check(source), true);
+  assert.equal(check(observed.replace('SYSTEM', 'CustomLayout')), false);
+  assert.equal(check(observed.replace('<trackHistory>false', '<trackHistory>true')), false);
+  assert.equal(check(observed.replace('<nameField>', '<nameField><trackHistory>false</trackHistory>')), false);
+  assert.equal(check(observed.replace('FX-{000000}', 'OTHER-{000000}')), false);
+  assert.equal(check(observed.replace('Private', 'ReadWrite')), false);
+  assert.equal(check(observed.replace('FX Number', 'Renamed')), false);
+  assert.equal(check(observed, source.replace('<nameField>', '<nameField><trackHistory>false</trackHistory>')), false);
+  const actions = ['Accept', 'CancelEdit', 'Clone', 'Delete', 'Edit', 'List', 'New', 'SaveEdit', 'Tab', 'View'];
+  const defaultActions = actions.flatMap(action => ['', 'Large', 'Small'].map(factor =>
+    `<actionOverrides><actionName>${action}</actionName>${factor ? `<formFactor>${factor}</formFactor>` : ''}<type>Default</type></actionOverrides>`));
+  const withActions = (entries, layouts = '<searchLayouts/>') =>
+    observed.replace('<nameField>', entries.join('') + layouts + '<nameField>');
+  const checkDefaults = native => equivalentNativeSerialization(source, native, 'CustomObject',
+    [...defaults, ['actionOverrides', 'standard-actions'], ['searchLayouts', 'empty']]);
+  assert.equal(checkDefaults(withActions(defaultActions)), true);
+  assert.equal(checkDefaults(withActions(defaultActions.slice(1))), false);
+  assert.equal(checkDefaults(withActions([...defaultActions.slice(1), defaultActions[1]])), false);
+  assert.equal(checkDefaults(withActions(defaultActions).replace('<type>Default', '<type>LightningComponent')), false);
+  assert.equal(checkDefaults(withActions(defaultActions, '<searchLayouts><searchResultsAdditionalFields>Name</searchResultsAdditionalFields></searchLayouts>')), false);
 });
 
 test('native PermissionSet projection requires the full grants even when its XML export is scoped', () => {

@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseDocument } from 'htmlparser2';
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import { openSalesforcePromotionJournal, salesforcePromotionHash } from './lib/salesforce-promotion-journal.mjs';
-import { INVENTORY_BASELINE_MODE, createReviewedSalesforcePlan, inventoryFromFiles, matchesProjectedNativeInventory, parseReviewedPackage, projectedNativeInventoryHash, readReviewedInventory, runReviewedSalesforceRelease, safeProjectFile } from './lib/salesforce-reviewed-release.mjs';
+import { INVENTORY_BASELINE_MODE, NATIVE_CUSTOM_OBJECT_DEFAULTS, createReviewedSalesforcePlan, inventoryFromFiles, matchesProjectedNativeInventory, parseReviewedPackage, projectedNativeInventoryHash, readReviewedInventory, runReviewedSalesforceRelease, safeProjectFile } from './lib/salesforce-reviewed-release.mjs';
 import { proveSalesforceInventoryAbsence } from './lib/salesforce-inventory-absence.mjs';
 import { comparePermissionSetDefinition, verifyPermissionSetCatalog } from './lib/salesforce-permission-projection.mjs';
 
@@ -129,26 +129,57 @@ function verifyNativeApexProjection({ root, sourceRoot, plan }) {
   }
 }
 
-function equivalentNativeCustomField(source, native, flags) {
+const STANDARD_OBJECT_ACTIONS = ['Accept', 'CancelEdit', 'Clone', 'Delete', 'Edit', 'List', 'New', 'SaveEdit', 'Tab', 'View'];
+const STANDARD_OBJECT_ACTION_OVERRIDES = new Set(STANDARD_OBJECT_ACTIONS.flatMap(action =>
+  ['', 'Large', 'Small'].map(formFactor => JSON.stringify(formFactor
+    ? [['actionName', action], ['formFactor', formFactor], ['type', 'Default']]
+    : [['actionName', action], ['type', 'Default']]))));
+const plainTextNode = node => !Object.keys(node.attribs).length && node.children.length === 1
+  && node.children[0].type === 'text';
+const whitespaceOnly = node => node.type === 'text' && !node.data.trim();
+
+function matchesStandardActionOverrides(entries) {
+  if (!entries.length) return true;
+  const actual = new Set();
+  for (const entry of entries) {
+    const children = entry.children.filter(node => !whitespaceOnly(node));
+    if (Object.keys(entry.attribs).length || children.some(node => node.type !== 'tag' || !plainTextNode(node))) return false;
+    actual.add(JSON.stringify(children.map(node => [node.name, node.children[0].data])));
+  }
+  return entries.length === STANDARD_OBJECT_ACTION_OVERRIDES.size && actual.size === entries.length
+    && [...actual].every(row => STANDARD_OBJECT_ACTION_OVERRIDES.has(row));
+}
+
+export function equivalentNativeSerialization(source, native, type, defaults) {
   if (/xml:space|<!DOCTYPE|<!ENTITY/iu.test(source + native)) return false;
   const sourceDocument = parseDocument(source, { xmlMode: true, decodeEntities: true });
   const nativeDocument = parseDocument(native, { xmlMode: true, decodeEntities: true });
   const roots = [sourceDocument, nativeDocument].map(document => document.children.filter(node => node.type === 'tag'));
-  if (roots.some(list => list.length !== 1 || list[0].name !== 'CustomField'
+  if (roots.some(list => list.length !== 1 || list[0].name !== type
     || list[0].attribs.xmlns !== 'http://soap.sforce.com/2006/04/metadata')) return false;
   const [[localRoot], [nativeRoot]] = roots;
-  const removable = new Set();
-  for (const flag of flags) {
-    if (localRoot.children.some(node => node.type === 'tag' && node.name === flag)) return false;
-    const entries = nativeRoot.children.filter(node => node.type === 'tag' && node.name === flag);
-    if (entries.length > 1) return false;
-    for (const entry of entries) {
-      if (Object.keys(entry.attribs).length || entry.children.length !== 1
-        || entry.children[0].type !== 'text' || entry.children[0].data !== 'false') return false;
-      removable.add(entry);
+  const matching = (node, name) => node.children.filter(child => child.type === 'tag' && child.name === name);
+  for (const [path, value] of defaults) {
+    const [rootName, childName] = path.split('.');
+    const localParents = childName ? matching(localRoot, rootName) : [localRoot];
+    const nativeParents = childName ? matching(nativeRoot, rootName) : [nativeRoot];
+    if (localParents.length !== 1 || nativeParents.length !== 1) return false;
+    const leaf = childName || rootName;
+    if (matching(localParents[0], leaf).length) return false;
+    const entries = matching(nativeParents[0], leaf);
+    if (!entries.length) continue;
+    if (value === 'standard-actions') {
+      if (!matchesStandardActionOverrides(entries)) return false;
+    } else {
+      const [entry] = entries;
+      if (entries.length !== 1) return false;
+      if (value === 'empty') {
+        if (Object.keys(entry.attribs).length || entry.children.some(node => !whitespaceOnly(node))) return false;
+      } else if (!plainTextNode(entry) || entry.children[0].data !== value) return false;
     }
+    const removable = new Set(entries);
+    nativeParents[0].children = nativeParents[0].children.filter(child => !removable.has(child));
   }
-  nativeRoot.children = nativeRoot.children.filter(node => !removable.has(node));
   return JSON.stringify(normalizedMetadataDefinition(source, sourceDocument))
     === JSON.stringify(normalizedMetadataDefinition(native, nativeDocument));
 }
@@ -166,7 +197,8 @@ function verifyNativeMetadataProjection({ root, sourceRoot, plan, projectionPath
     const observed = normalizeLineEndings(native);
     const permission = /^permissionsets\/([A-Za-z][A-Za-z0-9_]*)\.permissionset-meta\.xml$/u.exec(name);
     const falseFlags = plan.review.nativeCustomFieldFalseFlags?.[name];
-    if (!permission && !falseFlags && source.equals(native)) continue;
+    const objectDefaults = plan.review.nativeCustomObjectDefaults?.[name];
+    if (!permission && !falseFlags && !objectDefaults && source.equals(native)) continue;
     if (!Buffer.from(source.toString('utf8')).equals(source) || !Buffer.from(native.toString('utf8')).equals(native)) {
       throw new Error(`Native metadata projection differs from the exact reviewed source: ${name}`);
     }
@@ -175,8 +207,13 @@ function verifyNativeMetadataProjection({ root, sourceRoot, plan, projectionPath
       continue;
     }
     if (falseFlags) {
-      if (equivalentNativeCustomField(local, observed, falseFlags)) continue;
+      if (equivalentNativeSerialization(local, observed, 'CustomField', falseFlags.map(flag => [flag, 'false']))) continue;
       throw new Error(`Native CustomField serialization differs from the exact reviewed source: ${name}`);
+    }
+    if (objectDefaults) {
+      const defaults = objectDefaults.map(flag => [flag, NATIVE_CUSTOM_OBJECT_DEFAULTS[flag]]);
+      if (equivalentNativeSerialization(local, observed, 'CustomObject', defaults)) continue;
+      throw new Error(`Native CustomObject serialization differs from the exact reviewed source: ${name}`);
     }
     if (local === observed) continue;
     if (name.endsWith('.xml') && JSON.stringify(normalizedMetadataDefinition(local)) === JSON.stringify(normalizedMetadataDefinition(observed))) continue;

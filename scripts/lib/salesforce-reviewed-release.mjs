@@ -68,16 +68,30 @@ export function readReviewedInventory(root, { nativeExport = false, supplemental
 }
 
 const NATIVE_CUSTOM_FIELD_FALSE_FLAGS = new Set(['caseSensitive', 'externalId', 'required', 'trackHistory', 'trackTrending', 'unique']);
+export const NATIVE_CUSTOM_OBJECT_DEFAULTS = Object.freeze({
+  actionOverrides: 'standard-actions',
+  allowInChatterGroups: 'false',
+  compactLayoutAssignment: 'SYSTEM',
+  enableFeeds: 'false',
+  enableLicensing: 'false',
+  'nameField.trackHistory': 'false',
+  searchLayouts: 'empty',
+});
 
-function assertNativeCustomFieldSerialization(review, components) {
-  const allowances = review.nativeCustomFieldFalseFlags;
-  if (allowances === undefined) return;
-  const fieldPaths = new Set(components.filter(({ id }) => id.startsWith('CustomField:')).flatMap(({ files }) => files));
-  if (!review.bootstrap || !review.nativeInventories || !allowances || typeof allowances !== 'object'
-    || Array.isArray(allowances) || !Object.keys(allowances).length
-    || Object.entries(allowances).some(([name, flags]) => !fieldPaths.has(name) || !Array.isArray(flags)
-      || !flags.length || new Set(flags).size !== flags.length || flags.some(flag => !NATIVE_CUSTOM_FIELD_FALSE_FLAGS.has(flag)))) {
-    failCoverage('Native CustomField serialization allowances require exact reviewed bootstrap field paths and supported flags.');
+function assertNativeSerializationAllowances(review, components) {
+  const specs = [
+    { allowances: review.nativeCustomFieldFalseFlags, type: 'CustomField', allowed: NATIVE_CUSTOM_FIELD_FALSE_FLAGS },
+    { allowances: review.nativeCustomObjectDefaults, type: 'CustomObject', allowed: new Set(Object.keys(NATIVE_CUSTOM_OBJECT_DEFAULTS)) },
+  ];
+  for (const { allowances, type, allowed } of specs) {
+    if (allowances === undefined) continue;
+    const paths = new Set(components.filter(({ id }) => id.startsWith(type + ':')).flatMap(({ files }) => files));
+    if (!review.bootstrap || !review.nativeInventories || !allowances || typeof allowances !== 'object'
+      || Array.isArray(allowances) || !Object.keys(allowances).length
+      || Object.entries(allowances).some(([name, flags]) => !paths.has(name) || !Array.isArray(flags)
+        || !flags.length || new Set(flags).size !== flags.length || flags.some(flag => !allowed.has(flag)))) {
+      failCoverage(`Native ${type} serialization allowances require exact reviewed bootstrap ${type === 'CustomField' ? 'field' : 'object'} paths and supported flags.`);
+    }
   }
 }
 
@@ -332,7 +346,7 @@ export function createReviewedSalesforcePlan({ review, manifestBytes, bootstrapB
       || !same(sorted(bootstrap.permissionSets || []), sorted(permissions.filter(name => bootstrap.components.includes(`PermissionSet:${name}`))))) throw new Error('Bootstrap must contain only reviewed schema/permission components from the main manifest.');
     if (testPlan.level !== 'RunLocalTests') throw new Error('A schema bootstrap requires one complete RunLocalTests validation per environment.');
   } else if (bootstrapBytes) throw new Error('Unreviewed bootstrap bytes supplied.');
-  assertNativeCustomFieldSerialization(review, components);
+  assertNativeSerializationAllowances(review, components);
   const nativeInventories = review.bootstrap && review.nativeInventories !== undefined
     ? reviewedNativeBootstrapInventories(review, policy, baselineInventory, orgBaselineInventories, finalInventory, components)
     : reviewedNativeInventories(review, policy, baselineInventory, finalInventory, components, coveredFiles);
