@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { digest } from '../scripts/lib/rapid-release/contract.mjs';
 import { REVIEWED_SALESFORCE_MODE } from '../scripts/lib/salesforce-reviewed-release.mjs';
-import { awaitLocalMirrorReceipt, createLocalMirrorReceipt, createLocalMirrorRequest, LOCAL_MIRROR_ENVIRONMENT, recordLocalMirrorDeployment, usesLocalCollaboratorMirror, verifyLocalMirrorReceipt }
+import { awaitLocalMirrorReceipt, createLocalMirrorReceipt, createLocalMirrorRequest, LOCAL_MIRROR_ENVIRONMENT, readLocalMirrorStage, recordLocalMirrorDeployment, usesLocalCollaboratorMirror, verifyLocalMirrorReceipt }
   from '../scripts/lib/rapid-release/local-mirror-handoff.mjs';
 
 const now = Date.parse('2026-11-12T16:30:00.000Z');
@@ -25,6 +25,23 @@ test('local publication admits the reviewed Salesforce-only and Trading FX combi
   assert.equal(route('trading-fx-prerequisites', true, false), false);
   assert.equal(route('company-fx-history', true), false);
   assert.equal(route('trading-fx-prerequisites', true, true, 'hosted'), false);
+});
+
+test('the local worker accepts owner-created staging only for the exact protected handover artifact', () => {
+  const candidate = manifest.candidate.sha, buildId = 'c'.repeat(64), artifactDigest = 'd'.repeat(64);
+  const release = { ...manifest, build: { buildId } };
+  const manifestHash = digest(release);
+  const result = { id: 'dpl_fixture', sha: candidate, buildId, artifactDigest, manifestHash };
+  const record = { creator: { id: 265701760 }, payload: { event: 'stage.result', manifestHash, data: { outcome: 'applied', result } } };
+  const handover = { candidateSha: candidate, qualificationDeploymentId: result.id, buildId, artifactDigest };
+  const input = { manifest: release, handover, workflowActorId: 41898282 };
+  assert.equal(readLocalMirrorStage(record, input), result);
+  assert.equal(readLocalMirrorStage({ ...record, creator: { id: input.workflowActorId } }, { ...input, handover: null }), result);
+  for (const change of [{ candidateSha: 'e'.repeat(40) }, { qualificationDeploymentId: 'dpl_other' }, { artifactDigest: 'e'.repeat(64) }]) {
+    assert.throws(() => readLocalMirrorStage(record, { ...input, handover: { ...handover, ...change } }), /STAGE_RECEIPT_REQUIRED/);
+  }
+  assert.throws(() => readLocalMirrorStage({ ...record, creator: { id: 100 } }, input), /STAGE_RECEIPT_REQUIRED/);
+  assert.throws(() => readLocalMirrorStage(undefined, input), /STAGE_RECEIPT_REQUIRED/);
 });
 
 test('mirror request binds the approved run attempt, DEVEE job pair and exact source', () => {

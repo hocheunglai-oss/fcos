@@ -8,7 +8,7 @@ import { runReviewedMirror } from './sync-salesforce-reviewed-repository.mjs';
 import { assertAuthorization, digest, git, requireCondition, sourceSnapshot, targets, validateManifest } from './lib/rapid-release/contract.mjs';
 import { DeploymentJournal } from './lib/rapid-release/journal.mjs';
 import { assertFrozenWorkflow, assertPermanentHandover, nativeWorkflowPath } from './lib/rapid-release/providers.mjs';
-import { createLocalMirrorReceipt, recordLocalMirrorDeployment, usesLocalCollaboratorMirror, verifyLocalMirrorRequest } from './lib/rapid-release/local-mirror-handoff.mjs';
+import { createLocalMirrorReceipt, readLocalMirrorStage, recordLocalMirrorDeployment, usesLocalCollaboratorMirror, verifyLocalMirrorRequest } from './lib/rapid-release/local-mirror-handoff.mjs';
 
 const policy = FCOS_CONNECTION_POLICY.providers.find(provider => provider.id === 'salesforce');
 const { publication } = policy;
@@ -84,11 +84,12 @@ async function main() {
       && review.environments?.some(item => item.id === environment.id && item.name === environment.name)),
   'LOCAL_MIRROR_PROTECTED_REVIEW_REQUIRED');
   await assertFrozenWorkflow({ github, controllerSha: manifest.controllerSha, dispatcherSha: run.head_sha });
-  assertPermanentHandover(await github.read(`${base}/deployments/${pointer.value}`), manifest, operator.id);
+  const handover = assertPermanentHandover(await github.read(`${base}/deployments/${pointer.value}`), manifest, operator.id);
 
   const chain = await journal.read();
   const event = name => chain.find(record => record.creator?.id === bot.id && record.payload.event === name)?.payload.data;
-  const staged = event('stage.result')?.result;
+  const stageRecord = chain.find(record => record.payload.event === 'stage.result');
+  const staged = readLocalMirrorStage(stageRecord, { manifest, handover, workflowActorId: bot.id });
   const approval = assertAuthorization(event('approval.accepted'), manifest, staged);
   requireCondition(approval.runId === request.runId && event('prerequisites.intent'), 'LOCAL_MIRROR_RELEASE_JOURNAL_REQUIRED');
   await journal.assertNoUnresolvedOtherRelease();
