@@ -352,6 +352,30 @@
       "measuredTimeSavedMs": null,
       "measuredCallsSaved": null,
       "prevention": "Real native-role lifecycle fixtures, actual bootstrap guard plus final receipt recovery, strict unknown acknowledgement tests, precredential stale workflow gate, and unchanged historical PR plan golden hashes."
+    },
+    {
+      "id": "bounded-cashflow-staging-read-timeout",
+      "cause": "Protected Cashflow Forecast reads repeatedly stopped staging. A prior governed run reproduced a 20.004-second transport timeout. The Nomination native failure code did not expose the transport subtype, and the same staged read later returned valid rows in 16.905 seconds.",
+      "correction": "Permit one identical bounded Cashflow Forecast read only if the first request times out before a response. Retain the original deadline per request, both authenticated roles, payload validation and mutation denial.",
+      "preconditions": {
+        "controllerBase": "2ab9590ee926da9811f74b4bfb93a249ce3641e3",
+        "nominationRunId": 43212522620,
+        "stageReceiptId": 7736585694,
+        "module": "cashflow_forecast",
+        "surface": "read"
+      },
+      "verification": {
+        "baselineRegressionReproduced": true,
+        "releaseTestsPassed": 239,
+        "skipped": 0,
+        "matchingReadAttempts": 2,
+        "invalidResponseRetried": false,
+        "otherModuleTimeoutRetried": false,
+        "fixtureBusinessWrites": 0
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "The native runner can recover a matching fetch timeout in the same job. The second timeout and any received HTTP or payload failure remain terminal. The new controller must qualify before activation."
     }
   ]
 }

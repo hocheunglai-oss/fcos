@@ -5,7 +5,7 @@ import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier } from '../config/fcos
 import { APP_MODULES } from '../src/lib/authModules.js';
 import { MODULE_READERS, MODULE_SURFACES, moduleReadBody, moduleReaderPayloadVerified } from '../scripts/lib/rapid-release/normal-role-readers.mjs';
 import { FCOS_READ_ONLY_CI as ci } from '../config/fcosCiIdentity.js';
-import { diagnoseStagedSmoke, runPreBootstrapSmoke, runStagedSmoke, observeLive, stagedBrowserRequestAllowed } from '../scripts/lib/rapid-release/smoke.mjs';
+import { diagnoseStagedSmoke, runPreBootstrapSmoke, runStagedSmoke, observeLive, stagedBrowserRequestAllowed, TRADING_FX_STAGED_DENIAL_HANDLERS } from '../scripts/lib/rapid-release/smoke.mjs';
 
 const origin = 'https://fcos-a1b2c3d4e-hocheunglai-6535s-projects.vercel.app';
 const issuer = new URL(FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation.issuer).origin;
@@ -48,8 +48,9 @@ const readPayloads = {
 
 // Fixtures replace browser/provider transports. They simulate the app-owned
 // bootstrap response and actual response events; they never establish live proof.
-function browserFixture({ badIdentity = false, badRead = false, badDenial = false, unexpected = false, missingModule = false, background = false, optionalRequest = null, badPayload = false, badDesktop = false, deniedModule = null, role = 'manager', companyFxRows = undefined, supplierBoundaryRegression = null, groupedBoundaryRegression = false, groupedDesktopMissing = false, marketReadTimeouts = 0, marketResponseStatus = 200 } = {}) {
+function browserFixture({ badIdentity = false, badRead = false, badDenial = false, unexpected = false, missingModule = false, background = false, optionalRequest = null, badPayload = false, badDesktop = false, deniedModule = null, role = 'manager', companyFxRows = undefined, supplierBoundaryRegression = null, groupedBoundaryRegression = false, groupedDesktopMissing = false, tradingFxRouteRegression = false, tradingFxActionVisible = false, marketReadTimeouts = 0, marketResponseStatus = 200, moduleReadTimeouts = {} } = {}) {
   const observations = { launches: [], reads: [], contextsClosed: 0, browsersClosed: 0, nativeAborts: 0 };
+  const remainingTimeouts = { ...moduleReadTimeouts };
   const browserFactory = async options => {
     observations.launches.push(options);
     let routeHandler, pausedHandler, websocketHandler, location = 'about:blank', email = '', password = '';
@@ -77,6 +78,7 @@ function browserFixture({ badIdentity = false, badRead = false, badDenial = fals
           if (url.endsWith('/authContext')) return apiResponse(url, auth(), 200, request);
           if (url.endsWith('/companyFxHistoryGet')) return apiResponse(url, { canSave: true, rows: companyFxRows });
           if (groupedBoundaryRegression && url.endsWith('/xeroFinancialDocumentPreservationRun')) return apiResponse(url, {});
+          if (tradingFxRouteRegression && email !== ci.email && url.endsWith('/xeroNativeDocumentApply')) return apiResponse(url, {});
           const supplierAction = /\/xeroSupplierFinancialBucket(Read|Preview|Apply)$/.exec(url)?.[1];
           if (supplierAction) {
             const restricted = email === ci.email;
@@ -87,6 +89,10 @@ function browserFixture({ badIdentity = false, badRead = false, badDenial = fals
             return apiResponse(url, { code: 'FCOS_DEPLOYMENT_READ_ONLY' }, 403);
           }
           const module = Object.keys(MODULE_READERS).find(key => url.endsWith(MODULE_READERS[key].path));
+          if (module && remainingTimeouts[module] > 0) {
+            remainingTimeouts[module]--;
+            throw Object.assign(Error('PRIVATE_FIXTURE_TIMEOUT'), { name: 'TimeoutError' });
+          }
           if (module) return apiResponse(url, badPayload ? {} : readPayloads[module], module === deniedModule ? 403 : 200);
           return apiResponse(url, { code: 'FCOS_DEPLOYMENT_READ_ONLY' }, badDenial ? 200 : 403);
         },
@@ -95,12 +101,13 @@ function browserFixture({ badIdentity = false, badRead = false, badDenial = fals
     };
     const locator = (role, name) => ({
       first() { return this; },
+      getByRole: () => ({ count: async () => tradingFxActionVisible ? 1 : 0 }),
       waitFor: async () => {
         if (groupedDesktopMissing && name === 'Preserve verified documents') throw Error('MISSING_PRESERVATION_CONTROL');
       },
       fill: async value => { if (name === 'Username') email = value; if (name === 'Password') password = value; },
       click: async () => {
-        if (name === 'Receipts') return;
+        if (name === 'Receipts' || name === 'Accounting') return;
         if (name === 'Run') { emit(apiResponse(`${origin}/api/functions/stemPnl`, readPayloads.pnl)); return; }
         if (name === 'Continue with FCUNO') { changeLocation(`${issuer}/admin`); return; }
         assert.equal(name, 'Login');
@@ -459,6 +466,30 @@ test('native smoke identifies the reviewed module and surface that failed', asyn
   assert.equal(observations.contextsClosed, 2);
 });
 
+test('Cashflow Forecast replays only a fetch timeout and retains the same authenticated read', async () => {
+  const run = (module, fixture) => runStagedSmoke({
+    manifest: manifest({ modules: [module], normalRole: true }),
+    staged, env, fetchImpl: publicFetch(), browserFactory: fixture.browserFactory,
+  });
+  const reads = (module, fixture) => fixture.observations.reads.filter(item => item.url.endsWith(MODULE_READERS[module].path));
+  const transient = browserFixture({ moduleReadTimeouts: { cashflow_forecast: 1 } });
+  const proof = await run('cashflow_forecast', transient);
+  const attempts = reads('cashflow_forecast', transient);
+  assert.equal(attempts.length, 2);
+  assert.deepEqual(attempts[0], attempts[1]);
+  assert.equal(proof.normalRoleEvidence.reads.find(item => item.module === 'cashflow_forecast').transportRetries, 1);
+  assert.equal(proof.businessWrites, 0);
+  for (const [module, options, count] of [
+    ['cashflow_forecast', { moduleReadTimeouts: { cashflow_forecast: 2 } }, 2],
+    ['cashflow_forecast', { deniedModule: 'cashflow_forecast' }, 1],
+    ['review', { moduleReadTimeouts: { review: 1 } }, 1],
+  ]) {
+    const fixture = browserFixture(options);
+    await assert.rejects(run(module, fixture), { code: 'SMOKE_AUTHENTICATED_READ_FAILED', smokeModule: module, smokeSurface: 'read' });
+    assert.equal(reads(module, fixture).length, count);
+  }
+});
+
 
 test('Company FX history smoke runs only after its prerequisite and verifies seeded read and write denial', async () => {
   const candidate = { ...manifest({ normalRole: true, modules: ['incoming_payments'] }),
@@ -520,4 +551,27 @@ test('grouped petroleum requires both staged write denials and the desktop prese
     { code: 'SMOKE_GROUPED_PETROLEUM_WRITE_NOT_DENIED' });
   await assert.rejects(runStagedSmoke({ ...options, browserFactory: browserFixture({ groupedDesktopMissing: true }).browserFactory }),
     { code: 'SMOKE_GROUPED_PETROLEUM_DESKTOP_MISSING' });
+});
+
+test('Trading FX verifies fixed Finance route denials and the inactive desktop panel before and after prerequisites', async () => {
+  const bootstrapFingerprint = 'c'.repeat(64);
+  const candidate = { ...manifest({ normalRole: true, modules: ['xero_portal', 'buyer_invoices'], database: true, salesforce: true }),
+    prerequisites: { adapter: 'trading-fx-prerequisites', plan: {
+      deferSchemaDependentSmoke: true, deferredModules: ['buyer_invoices'], bootstrapFingerprint,
+    } } };
+  const fixture = browserFixture();
+  const options = { manifest: candidate, staged, env, fetchImpl: publicFetch(), browserFactory: fixture.browserFactory };
+  const before = await runPreBootstrapSmoke(options, bootstrapFingerprint);
+  const after = await runStagedSmoke({ ...options, afterPrerequisites: true });
+  const proof = { restrictedVerified: true, normalVerified: true, desktopVerified: true };
+  assert.deepEqual(before.tradingFx, proof);
+  assert.deepEqual(after.tradingFx, proof);
+  assert.equal(after.businessWrites, 0);
+  const calls = fixture.observations.reads.filter(({ url }) => TRADING_FX_STAGED_DENIAL_HANDLERS.includes(url.split('/').at(-1)));
+  assert.equal(calls.length, 4 * TRADING_FX_STAGED_DENIAL_HANDLERS.length);
+  assert.ok(calls.every(({ body, method }) => body === '{}' && method === 'POST'));
+  await assert.rejects(runPreBootstrapSmoke({ ...options, browserFactory: browserFixture({ tradingFxRouteRegression: true }).browserFactory },
+    bootstrapFingerprint), { code: 'SMOKE_TRADING_FX_ROUTE_NOT_DENIED' });
+  await assert.rejects(runStagedSmoke({ ...options, browserFactory: browserFixture({ tradingFxActionVisible: true }).browserFactory }),
+    { code: 'SMOKE_TRADING_FX_DESKTOP_ACTION_VISIBLE' });
 });
