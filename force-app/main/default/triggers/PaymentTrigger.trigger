@@ -1,8 +1,13 @@
 trigger PaymentTrigger on Payment__c (before insert, before update, after insert, after update, before delete, after delete) {
+    if (Trigger.isBefore && Trigger.isDelete) FcosTradePaymentService.guardDelete(Trigger.old);
+    if (Trigger.isBefore && (Trigger.isInsert || Trigger.isUpdate)) {
+        FcosTradePaymentService.guard(Trigger.new,Trigger.isUpdate ? Trigger.oldMap : null);
+    }
+
     if (ContextManager.skipTriggers) return;
     if(!ContextManager.avoidPaymentFiring){
         if(Trigger.isAfter && (Trigger.isUpdate || Trigger.isInsert)){
-            PaymentTriggerHandler.updatePayableBalance(Trigger.newMap);
+            PaymentTriggerHandler.updatePayableBalance(Trigger.newMap, Trigger.isUpdate ? Trigger.oldMap : null);
             //PaymentTriggerHandler.updateCashflows(Trigger.new);
             PaymentTriggerHandler.recalculateRemittanceAmount(Trigger.new);
             PaymentTriggerHandler.calculateCommissionPaidAmount(Trigger.new, Trigger.oldMap, Trigger.operationType);

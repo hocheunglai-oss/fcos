@@ -51,9 +51,30 @@ test('complete source loader includes prior-year linked invoices and children wi
   for (const request of requests.slice(1, 5)) assert.doesNotMatch(request.soql, /(?:Invoice_Date__c|CreatedDate|Delivery_Date__c)\s*(?:>=|>|=)/);
   assert.match(requests[1].soql, /\bDelivery_Date__c\b/); assert.match(requests[1].soql, /STEM__r\.Vessel__r\.Name/);
   assert.match(requests[2].soql, /STEM__r\.RefCode__c/);
+  assert.ok(requests.slice(1, 3).every(request => !request.soql.includes('Document_Currency__c')));
   const result = buildFinancialClassifications(snapshot, f.xero, f.stored);
   assert.equal(result.rows.length, 2); assert.ok(result.rows.every((row) => row.status === 'eligible'));
   assert.ok(result.rows.every((row) => row.proposedPayload.Date === '2026-01-27'));
+});
+
+test('the source loader selects native currency for both invoice types and blocks HKD accounting payloads', async () => {
+  const f = fixture();
+  for (const [object, row] of [['Invoice__c', f.buyer], ['Supplier_Invoice__c', f.supplier]]) {
+    f.salesforce.safetyContext.fields[object].push('Document_Currency__c');
+    row.Document_Currency__c = 'HKD';
+  }
+  const batches = [[], f.salesforce.buyers, f.salesforce.suppliers, f.salesforce.lines, f.salesforce.extras, f.accounts];
+  const snapshot = await loadSalesforceFinancialSnapshot('2026-01-01', async queries => {
+    for (const request of queries.slice(1, 3)) assert.match(request.soql, /\bDocument_Currency__c\b/);
+    return batches.map(records => ({ records: copy(records), totalSize: records.length }));
+  }, f.salesforce.safetyContext);
+  const { rows } = buildFinancialClassifications(snapshot, f.xero, f.stored);
+  assert.equal(rows.length, 2);
+  for (const row of rows) {
+    assert.equal(row.status, 'blocked');
+    assert.equal(row.proposedPayload, null);
+    assert.match(row.blockers.join(' '), /explicit FX workflow/i);
+  }
 });
 
 test('source snapshot truncation, missing populations and provider errors fail closed across every required query', async () => {

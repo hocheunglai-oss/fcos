@@ -42,6 +42,12 @@ function savedNomination(inputs = [{ id: 'saved-payment', label: 'PAYMENT', valu
   });
 }
 
+function nativeReceipt(request) {
+  return { ...request, currencyCode: 'HKD', contentFingerprint: 'prepared-content',
+    savedInputs: JSON.stringify([{ label: 'PRICE', value: 'HKD 7,123.45600000/MT' }]),
+    savedRemarks: JSON.stringify({ label: 'REMARKS', value: 'VERIFIED SERVER REMARKS' }) };
+}
+
 function build(lineItems = [product()], paymentTermKey = '30 I', paymentTerms = terms) {
   return buildSupplierPaymentTerm({ lineItems, supplierId: 'supplier-id', paymentTermKey, paymentTerms });
 }
@@ -50,12 +56,15 @@ async function loadForm(overrides = {}) {
   let code = await readFile(formUrl, 'utf8');
   code = code.replace(/^import .*;\r?$/gmu, '').replace(/@wire\([^)]*\)/gu, '').replaceAll('@api', '').replaceAll('@track', '')
     .replace('export default class FcbSupplierNominationForm', 'class FcbSupplierNominationForm').concat('\nreturn new FcbSupplierNominationForm();');
-  const calls = { sources: [], terms: [], remarks: [], updates: [], documents: [], previews: [], events: [] };
+  const calls = { sources: [], terms: [], remarks: [], updates: [], documents: [], nativePreviews: [], previews: [], events: [] };
   const mocks = {
     LightningElement: class { dispatchEvent(event) { calls.events.push(event); } },
     ShowToastEvent: class { constructor(detail) { Object.assign(this, detail); } },
     buildSupplierPaymentTerm, getIncludedSupplierLines, SUPPLIER_BALANCE_TERM_ERROR, SUPPLIER_PARTIAL_CIA_FORM_ERROR,
     getStemSupplierInfo: async (request) => { calls.sources.push(request); return source(); },
+    getTradeDocument: async () => ({ currencyCode: 'USD' }),
+    readNativeDocument: async () => null,
+    prepareNativeDocument: async (request) => { calls.nativePreviews.push(request); return nativeReceipt(request); },
     getSupplierPaymentTerms: async (request) => { calls.terms.push(request); return terms; },
     getNominationSpecialTerms: async (request) => { calls.remarks.push(request); return ['approved remarks']; },
     updateRecord: async (request) => { calls.updates.push(request); },
@@ -293,6 +302,73 @@ test('pending preview or generate saves cannot use or mutate a later nomination'
   }
 });
 
+test('HKD nomination preview and generation save the canonical server payload and bind the reviewed fingerprint', async () => {
+  const { component, calls } = await loadForm({
+    getStemSupplierInfo: async () => source({ STEM_Line_Items__r: [product({ Partial_CIA__c: false })] }),
+    getTradeDocument: async () => ({ currencyCode: 'HKD', fingerprint: 'nomination-fingerprint',
+      lines: [{ id: 'product-1', nativeUnitPrice: 7123.456 }] }),
+  });
+  await component.openModal(nomination(), false);
+  assert.equal(component.displayInputs.every(input => input.isRemovalDisabled), true);
+  await component.handlePreviewPDF();
+  assert.deepEqual(calls.updates, []);
+  assert.deepEqual(calls.nativePreviews, [{ nominationId: 'nomination-id', reviewedFxFingerprint: 'nomination-fingerprint',
+    reviewedRemarks: JSON.stringify({ label: 'REMARKS', value: 'APPROVED REMARKS' }) }]);
+  assert.equal(component.inputs[0].value, 'HKD 7,123.45600000/MT');
+  await component.handleGeneratePDF();
+  assert.equal(calls.documents[0].reviewedFxFingerprint, 'nomination-fingerprint');
+  assert.equal(calls.updates.length, 1);
+  assert.equal(calls.nativePreviews[1].reviewedRemarks, null);
+  assert.equal(calls.updates[0].fields.Last_Saved_Inputs__c, nativeReceipt(calls.nativePreviews[0]).savedInputs);
+  assert.equal(calls.updates[0].fields.Last_Saved_Remarks__c, nativeReceipt(calls.nativePreviews[0]).savedRemarks);
+});
+
+test('reopening an HKD nomination replaces stale cached rows with the read-only verified snapshot', async () => {
+  const { component, calls } = await loadForm({
+    getTradeDocument: async () => ({ currencyCode: 'HKD', fingerprint: 'current-fingerprint' }),
+    readNativeDocument: async request => nativeReceipt(request),
+  });
+  await component.openModal(savedNomination([{ id: 'stale', label: 'PRICE', value: 'USD 600.00/MT' }]), true);
+  assert.deepEqual(component.inputs.map(row => row.value), ['HKD 7,123.45600000/MT']);
+  assert.equal(component.specialTerms.value, 'VERIFIED SERVER REMARKS');
+  component.handleChangeSpecialTermValue({ detail: { value: 'unverified edit' } });
+  assert.equal(component.specialTerms.value, 'VERIFIED SERVER REMARKS');
+  assert.deepEqual(calls.updates, []);
+  assert.deepEqual(calls.nativePreviews, []);
+});
+
+test('a stale HKD preview cannot open a window or change a later nomination', async () => {
+  const prepared = deferred();
+  const nativePreviews = [];
+  const { component, calls } = await loadForm({
+    getTradeDocument: async ({ nominationId }) => nominationId === 'old'
+      ? { currencyCode: 'HKD', fingerprint: 'old-fingerprint', lines: [{ id: 'product-1', nativeUnitPrice: 7100 }] } : { currencyCode: 'USD' },
+    prepareNativeDocument: request => { nativePreviews.push(request); return prepared.promise; },
+  });
+  await component.openModal(nomination({ Id: 'old' }), false);
+  const preview = component.handlePreviewPDF();
+  await new Promise(resolve => setImmediate(resolve));
+  await component.openModal(nomination({ Id: 'new' }), false);
+  prepared.resolve(nativeReceipt(nativePreviews[0]));
+  await preview;
+  assert.deepEqual(nativePreviews, [{ nominationId: 'old', reviewedFxFingerprint: 'old-fingerprint',
+    reviewedRemarks: JSON.stringify({ label: 'REMARKS', value: 'APPROVED REMARKS' }) }]);
+  assert.equal(calls.previews.length, 0);
+  assert.equal(component.nomination.Id, 'new');
+  assert.equal(component.documentCurrencyCode, 'USD');
+});
+
+test('an absent HKD pricing line cannot use the USD source price or permit a document write', async () => {
+  const { component, calls } = await loadForm({
+    getTradeDocument: async () => ({ currencyCode: 'HKD', fingerprint: 'nomination-fingerprint', lines: [] }),
+  });
+  await component.openModal(nomination(), false);
+  assert.equal(component.isDocumentActionDisabled, true);
+  assert.ok(!component.inputs.some(input => input.value === 'HKD 600.00/MT'));
+  await component.handleGeneratePDF();
+  assert.deepEqual(calls.updates, []);
+});
+
 test('a document already generating finishes bookkeeping for its captured nomination without closing or changing the later form', async () => {
   const pendingDocument = deferred();
   const documents = [];
@@ -310,7 +386,7 @@ test('a document already generating finishes bookkeeping for its captured nomina
   component.specialTerms.value = 'LATER EDIT';
   pendingDocument.resolve();
   await operation;
-  assert.deepEqual(documents[0], { nominationId: 'original-id', fileUrl: 'ORIGINAL URL', fileName: 'ORIGINAL STEM - NOM' });
+  assert.deepEqual(documents[0], { nominationId: 'original-id', fileUrl: 'ORIGINAL URL', fileName: 'ORIGINAL STEM - NOM', reviewedFxFingerprint: null });
   assert.equal(updates[1].fields.Id, 'original-id');
   assert.equal(JSON.parse(updates[1].fields.Last_Saved_Remarks__c).value, 'APPROVED REMARKS');
   assert.equal(JSON.parse(updates[1].fields.Last_Saved_Inputs__c).find(input => input.label === 'PAYMENT').value, expected);

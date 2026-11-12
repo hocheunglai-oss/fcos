@@ -109,7 +109,7 @@ test('all dispatcher mutations, mixed actions and cron routes stop before auth, 
   const previous = process.env.VERCEL_ENV;
   process.env.VERCEL_ENV = 'production';
   try {
-    for (const name of ['adminUserSave', 'missingNomBReminderCron', 'marketReportDriveSyncCron', 'outstandingBuyerInvoicesEmailCron', 'emailRouterMaintenanceCron']) {
+    for (const name of ['adminUserSave', 'missingNomBReminderCron', 'marketReportDriveSyncCron', 'outstandingBuyerInvoicesEmailCron', 'emailRouterMaintenanceCron', 'xeroPrepaymentPolicyGet', 'xeroPrepaymentPolicySave', 'xeroPrepaymentQueue', 'xeroPrepaymentContacts', 'xeroPrepaymentPreview', 'xeroPrepaymentApply', 'xeroPrepaymentReconcile', 'xeroCreditAllocationPreview', 'xeroCreditAllocationApply', 'xeroCreditAllocationReconcile', 'xeroCreditAllocationRecoveryQueue', 'xeroNativeDocumentApply', 'xeroNativeDocumentReconcile', 'xeroNativeDocumentRecoveryQueue']) {
       let bodyReads = 0;
       const req = { ...request(), url: `/api/functions/${name}`, get body() { bodyReads++; throw Error('body must not be parsed'); } };
       const res = response();

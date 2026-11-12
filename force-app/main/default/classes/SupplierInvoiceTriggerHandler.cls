@@ -1,4 +1,6 @@
 public class SupplierInvoiceTriggerHandler {
+    private static Boolean planningDeposit=false;
+    public static Boolean isPlanningDeposit() {return planningDeposit;}
     
     public static void setRefcodeIndex(List<Supplier_Invoice__c> supplierInvoices){
         String chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -91,7 +93,7 @@ public class SupplierInvoiceTriggerHandler {
         if(!supplierInvoiceIds.isEmpty()){
             Map<Id, List<Payment__c>> supplierInvoiceToPaymentsMap = new Map<Id, List<Payment__c>>();
             for (Payment__c payment : [
-                SELECT Id, Amount__c, Is_Last__c, Supplier_Invoice__c
+                SELECT Id, Amount__c, Carrying_Adjustment_USD__c, Is_Last__c, Supplier_Invoice__c
                 FROM Payment__c
                 WHERE Supplier_Invoice__c IN :supplierInvoiceIds AND RecordTypeId =: payableRecordTypeId
                 ORDER BY Date__c ASC
@@ -111,7 +113,7 @@ public class SupplierInvoiceTriggerHandler {
     
                     for (Payment__c payment : supplierInvoiceToPaymentsMap.get(supplierInvoice.Id)) {
                         if (!lastSet) {
-                            runningTotal += payment.Amount__c;
+                            runningTotal += PaymentTriggerHandler.carryingAmount(payment);
     
                             if (runningTotal >= balance - fixedAmountForLastPayment) {
                                 payment.Is_Last__c = true;  
@@ -151,7 +153,7 @@ public class SupplierInvoiceTriggerHandler {
                                                    FROM STEM_Extra_Cost__c WHERE Supplier__c In: supplierIds AND STEM__c In: stemIds AND Cancelled__c = false];
         Map<Id, Supplier_Invoice__c> currentSupplierInvoices = new Map<Id, Supplier_Invoice__c>(
             [SELECT Id,
-             (SELECT Id, Is_Volume_Discount__c, Amount__c, Volume_Discount__c FROM Payments__r WHERE RecordTypeId =: payableRecordTypeId)
+             (SELECT Id, Is_Volume_Discount__c, Amount__c, Carrying_Adjustment_USD__c, Volume_Discount__c FROM Payments__r WHERE RecordTypeId =: payableRecordTypeId)
               FROM Supplier_Invoice__c WHERE Supplier__c In :supplierIds AND STEM__c IN :stemIds]);
         //Setting value for PSPRS 
         for(Supplier_Invoice__c supplierInvoice: supplierInvoices){
@@ -186,7 +188,7 @@ public class SupplierInvoiceTriggerHandler {
             if(!currentSupplierInvoices.isEmpty()){
                 if(currentSupplierInvoices.get(supplierInvoice.Id) != null){
                     for(Payment__c payment: currentSupplierInvoices.get(supplierInvoice.Id).Payments__r){
-            			supplierInvoice.Payable_Balance__c -= payment.Amount__c;
+                supplierInvoice.Payable_Balance__c -= PaymentTriggerHandler.carryingAmount(payment);
                         if(payment.Volume_Discount__c != null){
                             supplierInvoice.Volume_Discount_Amount__c += payment.Amount__c;
                         }
@@ -201,7 +203,7 @@ public class SupplierInvoiceTriggerHandler {
         Set<Id> supplierIds = new Set<Id>();
         Map<String, List<Supplier_Invoice__c>> supplierInvoiceMap = new Map<String, List<Supplier_Invoice__c>>();
         for(Supplier_Invoice__c supplierInvoice: supplierInvoices){
-            if(supplierInvoice.Payment_Term__c == 'Deposit'){
+            if(supplierInvoice.Payment_Term__c == 'Deposit' && supplierInvoice.Proforma__c != true && !FcosTradeDocumentService.isManagedDocument(supplierInvoice)){
                 stemIds.add(supplierInvoice.STEM__c);
             	supplierIds.add(supplierInvoice.Supplier__c);
                 if(supplierInvoiceMap.get(supplierInvoice.STEM__c + '_' + supplierInvoice.Supplier__c) == null){
@@ -215,7 +217,7 @@ public class SupplierInvoiceTriggerHandler {
         	List<Payment__c> payments = [SELECT Id, Date__c, Amount__c, Account__c, STEM__c, Supplier_Invoice__c, Maximum_Amount__c
                                      	FROM Payment__c 
                                      	WHERE RecordTypeId =: payableRecordTypeId AND STEM__c IN: stemIds AND Account__c IN: supplierIds
-                                        AND Supplier_Invoice__c = null AND Is_Deposit__c = true AND Volume_Discount__c = null];
+                                        AND Supplier_Invoice__c = null AND Is_Deposit__c = true AND Cash_Event__c = null AND Volume_Discount__c = null];
             Map<String, Payment__c> paymentMap = new Map<String, Payment__c>();
             for(Payment__c payment: payments){
                 paymentMap.put(payment.STEM__c + '_' + payment.Account__c, payment);
@@ -230,7 +232,7 @@ public class SupplierInvoiceTriggerHandler {
                                                             Date__c = Date.today(),
                                                             Amount__c = supplierInvoice.Invoice_Amount__c - discount, 
                                                             Maximum_Amount__c = supplierInvoice.Invoice_Amount__c - discount, 
-                                                            Is_Deposit__c = true,
+                                                            Is_Deposit__c = true, Auto_Planned_Deposit__c = true,
                                                           	Supplier_Invoice__c = supplierInvoice.Id));  
                     } else{
                         paymentMap.get(key).Supplier_Invoice__c = supplierInvoice.Id;
@@ -239,7 +241,7 @@ public class SupplierInvoiceTriggerHandler {
                     }    
                 }
             }
-        	upsert paymentMap.values();
+            planningDeposit=true;try {upsert paymentMap.values();} finally {planningDeposit=false;}
         }    
     }
     
@@ -249,7 +251,7 @@ public class SupplierInvoiceTriggerHandler {
         Map<String, Supplier_Invoice__c> supplierInvoiceMap = new Map<String, Supplier_Invoice__c>();
         for(Supplier_Invoice__c supplierInvoice: supplierInvoices){
             system.debug(supplierInvoice.Volume_Discount_Amount__c + ' - ' + oldSupplierInvoiceMap.get(supplierInvoice.Id).Volume_Discount_Amount__c);
-            if(supplierInvoice.Payment_Term__c == 'Deposit' 
+            if(supplierInvoice.Payment_Term__c == 'Deposit' && supplierInvoice.Proforma__c != true && !FcosTradeDocumentService.isManagedDocument(supplierInvoice)
                && (supplierInvoice.Invoice_Amount__c != oldSupplierInvoiceMap.get(supplierInvoice.Id).Invoice_Amount__c 
                    || supplierInvoice.Volume_Discount_Amount__c != oldSupplierInvoiceMap.get(supplierInvoice.Id).Volume_Discount_Amount__c 
                    || supplierInvoice.Supplier__c != oldSupplierInvoiceMap.get(supplierInvoice.Id).Supplier__c)){
@@ -263,7 +265,7 @@ public class SupplierInvoiceTriggerHandler {
             Map<String, Payment__c> paymentMap = new Map<String, Payment__c>();
             for(Payment__c payment: [SELECT Id, Date__c, Amount__c, Account__c, STEM__c, Supplier_Invoice__c, Maximum_Amount__c
                                      FROM Payment__c 
-                                     WHERE RecordTypeId =: payableRecordTypeId AND Supplier_Invoice__c IN: supplierInvoiceMap.keySet() AND Is_Deposit__c = true AND Volume_Discount__c = null]){
+                                     WHERE RecordTypeId =: payableRecordTypeId AND Supplier_Invoice__c IN: supplierInvoiceMap.keySet() AND Is_Deposit__c = true AND Cash_Event__c = null AND Volume_Discount__c = null]){
                 paymentMap.put(payment.Supplier_Invoice__c, payment);
             }
             for(String supplierInvoiceId: paymentMap.keySet()){
@@ -289,6 +291,7 @@ public class SupplierInvoiceTriggerHandler {
         String payableRecordTypeId = Schema.SObjectType.STEM_Payment_Overview__c.getRecordTypeInfosByName().get('Payable').getRecordTypeId();
         List<STEM_Payment_Overview__c> paymentOverviews = new List<STEM_Payment_Overview__c>();
         for(Supplier_Invoice__c supplierInvoice: supplierInvoices){
+            if(supplierInvoice.Proforma__c==true) continue;
             paymentOverviews.add(new STEM_Payment_Overview__c(RecordTypeId = payableRecordTypeId, Supplier_Invoice__c = supplierInvoice.Id, STEM__c = supplierInvoice.STEM__c, Account__c = supplierInvoice.Supplier__c));
         }
         insert paymentOverviews;
@@ -408,14 +411,14 @@ public class SupplierInvoiceTriggerHandler {
         Set<Id> stemIds = new Set<Id>();
         Set<Id> supplierIds = new Set<Id>();
          for(Supplier_Invoice__c supplierInvoice: supplierInvoiceMap.values()){
-            if(supplierInvoice.Payment_Term__c == 'Deposit'){
+            if(supplierInvoice.Payment_Term__c == 'Deposit' && supplierInvoice.Proforma__c != true && !FcosTradeDocumentService.isManagedDocument(supplierInvoice)){
 				stemIds.add(supplierInvoice.STEM__c);
                 supplierIds.add(supplierInvoice.Supplier__c);
             }
         }
         if(!stemIds.isEmpty()){
             List<Payment__c> payments = [SELECT Id, Account__c, STEM__c, Supplier_Invoice__c FROM Payment__c
-                                     WHERE STEM__c IN: stemIds AND Is_Deposit__c = true AND Account__c IN: supplierIds];
+                                     WHERE STEM__c IN: stemIds AND Is_Deposit__c = true AND Cash_Event__c = null AND Account__c IN: supplierIds];
             if(!payments.IsEmpty()){
                 Map<String, List<Payment__c>> paymentMap = new Map<String, List<Payment__c>>();
                 for(Payment__c payment: payments){

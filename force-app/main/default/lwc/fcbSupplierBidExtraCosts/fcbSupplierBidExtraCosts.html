@@ -49,8 +49,13 @@
             </td>
             <!--Unit Cost (Buy At)-->
             <td>
-              <lightning-input class="price-input" name="Supplier_Unit_Price__c" type="number" value={supplierBid.Supplier_Unit_Price__c} formatter="currency" step=".01"
-                onchange={handleChangePrice} variant="label-hidden" data-id={supplierBid.Id} required></lightning-input>
+              <template if:true={supplierBid.showUsdPrice}>
+                <lightning-input class="price-input" name="Supplier_Unit_Price__c" type="number" value={supplierBid.Supplier_Unit_Price__c} formatter="currency" step=".01"
+                  onchange={handleChangePrice} variant="label-hidden" data-id={supplierBid.Id} required></lightning-input>
+              </template>
+              <template if:false={supplierBid.showUsdPrice}>
+                <span class="slds-text-body_small">HKD price is managed in Trading currency.</span>
+              </template>
             </td>
             <td>
               <lightning-input type="number" name="Supplier_Broker_Commission__c" value={supplierBid.Supplier_Broker_Commission__c} formatter="currency" step=".01"
@@ -100,10 +105,13 @@
               </td>
               <!--Unit Cost (Buy At)-->
               <td>
-                <input type="number" name="unitCost" placeholder="Unit Cost (Buy At)"
+                <input type="number" name="unitCost" placeholder={supplierBid.transportationExtraCost.unitCostPlaceholder}
                   class={supplierBid.transportationExtraCost.unitCost.className} min="1" step="0.01"
                   disabled={supplierBid.transportationExtraCost.unitCost.disabled} value={supplierBid.transportationExtraCost.unitCost.value}
                   data-supplier-bid-id={supplierBid.Id} onchange={handleTransportationExtraCostChange} />
+                <template if:true={supplierBid.transportationExtraCost.isHkdPricing}>
+                  <p class="native-price-evidence">HKD native · USD {supplierBid.transportationExtraCost.usdUnitEquivalent} equivalent<br/>{supplierBid.transportationExtraCost.rateStatus}</p>
+                </template>
               </td>
               <!-- Broker Commission -->
               <td></td>
@@ -119,17 +127,23 @@
               </td>
               <!--Minimum (Buy At)-->
               <td>
-                <input type="number" name="minimumBuyAt" placeholder="Minimum (Buy At)"
+                <input type="number" name="minimumBuyAt" placeholder={supplierBid.transportationExtraCost.minimumPlaceholder}
                   class={supplierBid.transportationExtraCost.minimumBuyAt.className} min="1" step="0.01"
                   disabled={supplierBid.transportationExtraCost.minimumBuyAt.disabled}
                   data-supplier-bid-id={supplierBid.Id} value={supplierBid.transportationExtraCost.minimumBuyAt.value} onchange={handleTransportationExtraCostChange} />
+                <template if:true={supplierBid.transportationExtraCost.isHkdPricing}>
+                  <p class="native-price-evidence">USD {supplierBid.transportationExtraCost.usdMinimumEquivalent} equivalent</p>
+                </template>
               </td>
               <!--Lumpsum Cost (Buy At)-->
               <td>
                 <input type="number" name="lumpsumCostBuyAt" value={supplierBid.transportationExtraCost.lumpsumCostBuyAt.value}
-                  disabled={supplierBid.transportationExtraCost.isFixedCostDisabled} placeholder="Lumpsum Cost (Buy At)"
+                  disabled={supplierBid.transportationExtraCost.isFixedCostDisabled} placeholder={supplierBid.transportationExtraCost.lumpsumPlaceholder}
                   class={supplierBid.transportationExtraCost.lumpsumCostBuyAt.className} min="1" step="0.01"
                   data-supplier-bid-id={supplierBid.Id} onchange={handleTransportationExtraCostChange} />
+                <template if:true={supplierBid.transportationExtraCost.isHkdPricing}>
+                  <p class="native-price-evidence">USD {supplierBid.transportationExtraCost.usdLumpsumEquivalent} equivalent</p>
+                </template>
               </td>
             </tr>
           </template>
@@ -166,9 +180,12 @@
               </td>
               <!--Unit Cost (Buy At)-->
               <td>
-                <input type="number" name="unitCost" placeholder="Unit Cost (Buy At)" min="1"
+                <input type="number" name="unitCost" placeholder={extraCost.unitCostPlaceholder} min="1"
                   step="0.01" disabled={extraCost.fixedCost} value={extraCost.unitCost.value} data-id={extraCost.uniqueIndex} class={extraCost.unitCost.className}
                   onchange={handleChange} data-supplier-bid-id={supplierBid.Id}/>
+                <template if:true={extraCost.isHkdPricing}>
+                  <p class="native-price-evidence">HKD native · USD {extraCost.usdUnitEquivalent} equivalent<br/>{extraCost.rateStatus}</p>
+                </template>
               </td>
               <!-- Broker Commission -->
               <td></td>
@@ -186,15 +203,21 @@
               </td>
               <!--Minimum (Buy At)-->
               <td>
-                <input type="number" name="minimumBuyAt" placeholder="Minimum (Buy At)"
+                <input type="number" name="minimumBuyAt" placeholder={extraCost.minimumPlaceholder}
                   class={extraCost.minimumBuyAt.className} min="1" step="0.01" disabled={extraCost.fixedCost}
                   value={extraCost.minimumBuyAt.value} data-id={extraCost.uniqueIndex} onchange={handleChange} data-supplier-bid-id={supplierBid.Id}/>
+                <template if:true={extraCost.isHkdPricing}>
+                  <p class="native-price-evidence">USD {extraCost.usdMinimumEquivalent} equivalent</p>
+                </template>
               </td>
               <!--Lumpsum Cost (Buy At)-->
               <td>
                 <input type="number" name="lumpsumCostBuyAt" value={extraCost.lumpsumCostBuyAt.value}
-                  data-id={extraCost.uniqueIndex} onchange={handleChange} placeholder="Lumpsum Cost (Buy At)"
+                  data-id={extraCost.uniqueIndex} onchange={handleChange} placeholder={extraCost.lumpsumPlaceholder}
                   class={extraCost.lumpsumCostBuyAt.className} min="1" step="0.01" disabled={extraCost.isFixedCostDisabled} data-supplier-bid-id={supplierBid.Id}/>
+                <template if:true={extraCost.isHkdPricing}>
+                  <p class="native-price-evidence">USD {extraCost.usdLumpsumEquivalent} equivalent</p>
+                </template>
               </td>
               <td>
                 <lightning-button onclick={removeExtraCostLine} data-id={extraCost.uniqueIndex} data-supplier-bid-id={supplierBid.Id} variant="base"
@@ -258,9 +281,12 @@
               </td>
               <!--Unit Cost (Buy At)-->
               <td>
-                <input type="number" name="unitCost" placeholder="Unit Cost (Buy At)" min="1"
+                <input type="number" name="unitCost" placeholder={stemCharge.unitCostPlaceholder} min="1"
                   step="0.01" disabled={stemCharge.fixedCost} value={stemCharge.unitCost.value} data-id={stemCharge.uniqueIndex} class={stemCharge.unitCost.className}
                   onchange={handleChange} />
+                <template if:true={stemCharge.isHkdPricing}>
+                  <p class="native-price-evidence">HKD native · USD {stemCharge.usdUnitEquivalent} equivalent<br/>{stemCharge.rateStatus}</p>
+                </template>
               </td>
               <!--Unit of Measure-->
               <td>
@@ -276,15 +302,21 @@
               </td>
               <!--Minimum (Buy At)-->
               <td>
-                <input type="number" name="minimumBuyAt" placeholder="Minimum (Buy At)"
+                <input type="number" name="minimumBuyAt" placeholder={stemCharge.minimumPlaceholder}
                   class={stemCharge.minimumBuyAt.className} min="1" step="0.01" disabled={stemCharge.fixedCost}
                   value={stemCharge.minimumBuyAt.value} data-id={stemCharge.uniqueIndex} onchange={handleChange} />
+                <template if:true={stemCharge.isHkdPricing}>
+                  <p class="native-price-evidence">USD {stemCharge.usdMinimumEquivalent} equivalent</p>
+                </template>
               </td>
               <!--Lumpsum Cost (Buy At)-->
               <td>
                 <input type="number" name="lumpsumCostBuyAt" value={stemCharge.lumpsumCostBuyAt.value}
-                  data-id={stemCharge.uniqueIndex} onchange={handleChange} placeholder="Lumpsum Cost (Buy At)"
+                  data-id={stemCharge.uniqueIndex} onchange={handleChange} placeholder={stemCharge.lumpsumPlaceholder}
                   class={stemCharge.lumpsumCostBuyAt.className} min="1" step="0.01" disabled={stemCharge.isFixedCostDisabled}/>
+                <template if:true={stemCharge.isHkdPricing}>
+                  <p class="native-price-evidence">USD {stemCharge.usdLumpsumEquivalent} equivalent</p>
+                </template>
               </td>
               <td>
                 <lightning-button onclick={removeExtraCostLine} data-id={stemCharge.uniqueIndex} variant="base"

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Final_Of_Proforma__c</fullName>
+    <deleteConstraint>SetNull</deleteConstraint>
+    <label>Final Of Proforma</label>
+    <referenceTo>Invoice__c</referenceTo>
+    <relationshipLabel>Final Invoices</relationshipLabel>
+    <relationshipName>FinalInvoices</relationshipName>
+    <type>Lookup</type>
+</CustomField>

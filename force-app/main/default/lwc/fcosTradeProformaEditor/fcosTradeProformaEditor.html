@@ -1,0 +1,28 @@
+<template>
+    <lightning-quick-action-panel header="Native proforma and finalization">
+        <template if:true={error}><div class="slds-notify slds-notify_alert slds-alert_error slds-m-bottom_small" role="alert">{error}</div></template>
+        <template if:true={isCreate}>
+            <lightning-combobox label="Document side" value={direction} options={directionOptions} onchange={handleDirection} disabled={busy}></lightning-combobox>
+            <template if:true={isBuy}><lightning-record-picker label="Supplier" object-api-name="Account" value={supplierId} onchange={handleSupplier} disabled={busy}></lightning-record-picker></template>
+            <template if:true={hasLines}><lightning-checkbox-group label="Confirmed source lines" options={lineOptions} value={selectedLineIds} onchange={handleLines} disabled={busy}></lightning-checkbox-group></template>
+        </template>
+        <lightning-input name="reference" label="Document reference" value={reference} onchange={handleInput} required disabled={busy}></lightning-input>
+        <lightning-input name="documentDate" type="date" label="Document date" value={documentDate} onchange={handleInput} required disabled={busy}></lightning-input>
+        <lightning-input name="deliveryDate" type="date" label="Delivery date" value={deliveryDate} onchange={handleInput} required disabled={busy}></lightning-input>
+        <lightning-input name="dueDate" type="date" label="Final due date" value={dueDate} onchange={handleInput} required disabled={busy}></lightning-input>
+        <template if:true={isCreate}>
+            <lightning-input name="depositNative" type="number" step="0.01" min="0.01" label="Deposit requested in settlement currency" value={depositNative} onchange={handleInput} required disabled={busy}></lightning-input>
+            <lightning-input name="depositDueDate" type="date" label="Deposit due date" value={depositDueDate} onchange={handleInput} required disabled={busy}></lightning-input>
+        </template>
+        <template if:true={review}>
+            <article class="slds-box slds-m-top_medium"><h3 class="slds-text-heading_small">{reviewTitle}</h3><p>Gross: {grossText}</p><p>Deposit request: {depositText}</p><p>Confirmed source lines: {lineCount}</p><p>Cash receipts and allocations are recorded separately.</p></article>
+        </template>
+        <template if:true={pdfUrl}><p class="slds-m-top_medium"><a href={pdfUrl} target="_blank">Open generated document</a></p></template>
+        <div slot="footer">
+            <lightning-button label="Close" onclick={handleDone}></lightning-button>
+            <lightning-button class="slds-m-left_small" variant="neutral" label="Review" onclick={handleReview} disabled={reviewDisabled}></lightning-button>
+            <lightning-button class="slds-m-left_small" variant="brand" label="Record" onclick={handleRecord} disabled={recordDisabled}></lightning-button>
+            <lightning-button class="slds-m-left_small" variant="brand-outline" label="Generate PDF" onclick={handleGenerate} disabled={generateDisabled}></lightning-button>
+        </div>
+    </lightning-quick-action-panel>
+</template>

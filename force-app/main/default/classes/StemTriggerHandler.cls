@@ -412,7 +412,7 @@ public class StemTriggerHandler {
             }
         }
         if(!stemIds.isEmpty()){
-            List<Payment__c> payments = [SELECT Id, Amount__c, Date__c, RecordType.Name, STEM__c FROM Payment__c WHERE RecordType.Name = 'Receivable' AND STEM__c IN: stemIds];
+            List<Payment__c> payments = [SELECT Id, Amount__c, Carrying_Adjustment_USD__c, Date__c, RecordType.Name, STEM__c FROM Payment__c WHERE RecordType.Name = 'Receivable' AND STEM__c IN: stemIds];
 
             for(STEM__c stem: stemList){
                 if(stem.RecordTypeId == originatedRecordTypeId){
@@ -420,7 +420,8 @@ public class StemTriggerHandler {
                         stem.Payment_Delay__c = 0;
                         for(Payment__c payment: payments){
                             if(stem.Total_Invoice_Amount__c != 0 && stem.Invoice_Due_Date__c != null && payment.STEM__c == stem.Id) {
-                              stem.Payment_Delay__c += (payment.Amount__c / stem.Total_Invoice_Amount__c) * payment.Date__c.daysBetween(stem.Invoice_Due_Date__c);
+                              stem.Payment_Delay__c += (PaymentTriggerHandler.carryingAmount(payment)
+                                  / stem.Total_Invoice_Amount__c) * payment.Date__c.daysBetween(stem.Invoice_Due_Date__c);
                             }
                         }
                     } else{
@@ -502,7 +503,7 @@ public class StemTriggerHandler {
         if(!stemIds.isEmpty()){
             Map<Id, List<Payment__c>> stemToPaymentsMap = new Map<Id, List<Payment__c>>();
             for (Payment__c payment : [
-                SELECT Id, Amount__c, Is_Last__c, STEM__c, RecordTypeId, Account__c
+                SELECT Id, Amount__c, Carrying_Adjustment_USD__c, Is_Last__c, STEM__c, RecordTypeId, Account__c
                 FROM Payment__c
                 WHERE STEM__c IN :stemIds AND (RecordTypeId =: receivableRecordTypeId OR RecordTypeId =: bankChargeRecordTypeId OR RecordTypeId =: writeOffRecordTypeId)
                 ORDER BY Date__c ASC
@@ -524,7 +525,7 @@ public class StemTriggerHandler {
                     for (Payment__c payment : stemToPaymentsMap.get(stem.Id)) {
                         payment.Account__c = stem.Account__c;
                         if (!lastSet) {
-                            runningTotal += payment.Amount__c;
+                            runningTotal += PaymentTriggerHandler.carryingAmount(payment);
 
                             if (runningTotal >= balance - fixedAmountForLastPayment) {
                                 if (payment.RecordTypeId == bankChargeRecordTypeId && lastReceivablePayment != null) {

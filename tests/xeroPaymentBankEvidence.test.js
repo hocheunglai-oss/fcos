@@ -163,3 +163,24 @@ test('loader uses all-sibling query without cutoff and resolves only an exact co
     assert.doesNotMatch(soql, /2026-01-01/);
   }
 });
+
+test('payment and invoice dependency reads preserve native currency and cash blockers', async () => {
+  const safety = { singleCurrency: false, fields: {
+    Payment__c: ['CurrencyIsoCode', 'Payment_Currency__c', 'Cash_Event__c'],
+    Invoice__c: ['CurrencyIsoCode', 'Document_Currency__c'],
+  } };
+  const managed = child(2, { Bank__c: 'DBS', Payment_Currency__c: 'HKD', Cash_Event__c: id(999) });
+  const loaded = await loadSalesforcePayments('2026-01-01', safety, async soql => {
+    if (soql.includes('FROM Invoice__c')) {
+      assert.match(soql, /\bDocument_Currency__c\b/);
+      const result = invoiceResult();
+      result.records[0].Document_Currency__c = 'HKD';
+      return result;
+    }
+    assert.match(soql, /\bPayment_Currency__c\b/);
+    assert.match(soql, /\bCash_Event__c\b/);
+    return { records: [managed], totalSize: 1 };
+  });
+  assert.match(loaded[0]._currency.blockers.join(' '), /reviewed allocation workflow/i);
+  assert.equal(loaded[0]._buyerDocumentEvidence.eligibleInvoiceId, null);
+});

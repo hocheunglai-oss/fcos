@@ -26,6 +26,11 @@
                             <a class="slds-m-left_small" href={variableChargeFcosUrl} target="_blank" rel="noopener">Open FCOS task</a>
                         </div>
                     </template>
+                    <template if:true={tradeDocumentError}>
+                        <div class="slds-notify slds-notify_alert slds-alert_error slds-m-bottom_small" role="alert">
+                            <span>{tradeDocumentError}</span>
+                        </div>
+                    </template>
                     <div class="slds-grid slds-gutters slds-wrap">
                         <lightning-input class="slds-col slds-size_1-of-2" value={vesselText} label="Vessel Text" onchange={handleChangeVesselText}></lightning-input>
                         <lightning-input class="slds-col slds-size_1-of-2" value={invoiceNumber} label={invoiceNumberLabel} onchange={handleChangeInvoiceNumber}></lightning-input>
@@ -58,10 +63,10 @@
                             <template if:false={input.isHidden}>
                                 <div class="slds-grid slds-gutters" key={input.id} draggable="true" ondragstart={handleDragProductStart} ondragover={handleDragProductOver} ondrop={handleProductDrop} data-id={input.id}>
                                     <lightning-input class="slds-col slds-size_3-of-12" value={input.name} onchange={handleChangeProductName} data-id={input.id}></lightning-input>
-                                    <lightning-input class="slds-col slds-size_2-of-12" value={input.quantity} onchange={handleChangeProductQuantity} data-id={input.id}></lightning-input>
-                                    <lightning-input class="slds-col slds-size_2-of-12" type="number" step=".01" value={input.unitPrice} onchange={handleChangeProductUnitPrice} data-id={input.id}></lightning-input>
-                                    <lightning-input class="slds-col slds-size_2-of-12" type="number" step=".01" value={input.amount} onchange={handleChangeProductAmount} data-id={input.id}></lightning-input>
-                                    <lightning-button onclick={removeProductInput} data-id={input.id}
+                                    <lightning-input class="slds-col slds-size_2-of-12" value={input.quantity} onchange={handleChangeProductQuantity} data-id={input.id} disabled={isManagedDocument}></lightning-input>
+                                    <lightning-input class="slds-col slds-size_2-of-12" label={unitPriceHeading} type="number" step=".01" value={input.unitPrice} onchange={handleChangeProductUnitPrice} data-id={input.id} disabled={isManagedDocument}></lightning-input>
+                                    <lightning-input class="slds-col slds-size_2-of-12" label={amountHeading} type="number" step=".01" value={input.amount} onchange={handleChangeProductAmount} data-id={input.id} disabled={isManagedDocument}></lightning-input>
+                                    <lightning-button onclick={removeProductInput} data-id={input.id} disabled={isManagedDocument}
                                                     variant="base" title="Remove Product" icon-name="utility:close"
                                                     class="slds-col slds-size_1-of-12 slds-m-top_x-small slds-m-left_small">
                                     </lightning-button>
@@ -70,7 +75,7 @@
                         </template>
                     </template>
                     <div class="slds-m-top_small">
-                        <lightning-button-icon size="x-small" icon-name="utility:add" variant="brand"
+                        <lightning-button-icon size="x-small" icon-name="utility:add" variant="brand" disabled={isManagedDocument}
                                             alternative-text="Add Product" onclick={addNewProduct}>
                         </lightning-button-icon>
                     </div>
@@ -79,7 +84,7 @@
                         <lightning-input class="slds-col slds-size_3-of-12" value={total.name} onchange={handleChangeTotalName}></lightning-input>
                         <lightning-input class="slds-col slds-size_2-of-12" disabled></lightning-input>
                         <lightning-input class="slds-col slds-size_2-of-12" disabled></lightning-input>
-                        <lightning-input class="slds-col slds-size_2-of-12" type="number" step=".01" value={total.amount} onchange={handleChangeTotalAmount}></lightning-input>
+                        <lightning-input class="slds-col slds-size_2-of-12" label={amountHeading} type="number" step=".01" value={total.amount} onchange={handleChangeTotalAmount} disabled={isManagedDocument}></lightning-input>
                     </div>
                     <template if:true={showBalanceRows}>
                         <template if:true={balance} for:each={balance} for:item="balanceRow" for:index="index">
@@ -87,7 +92,7 @@
                                 <lightning-input class="slds-col slds-size_3-of-12" value={balanceRow.name} data-id={balanceRow.id} onchange={handleChangeBalanceName}></lightning-input>
                                 <lightning-input class="slds-col slds-size_2-of-12" disabled></lightning-input>
                                 <lightning-input class="slds-col slds-size_2-of-12" disabled></lightning-input>
-                                <lightning-input class="slds-col slds-size_2-of-12" type="number" step=".01" value={balanceRow.amount} data-id={balanceRow.id} onchange={handleChangeBalanceAmount}></lightning-input>
+                                <lightning-input class="slds-col slds-size_2-of-12" label={balanceRow.amountHeading} type="number" step=".01" value={balanceRow.amount} data-id={balanceRow.id} onchange={handleChangeBalanceAmount} disabled={isManagedDocument}></lightning-input>
                             </div>
                         </template>
 

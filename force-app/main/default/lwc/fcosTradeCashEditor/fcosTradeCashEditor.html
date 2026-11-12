@@ -1,0 +1,250 @@
+<template>
+    <lightning-quick-action-panel header="Native Cash">
+        <template lwc:if={isLoading}>
+            <lightning-spinner alternative-text="Loading native cash review" size="small"></lightning-spinner>
+        </template>
+
+        <template lwc:if={error}>
+            <div class="slds-notify slds-notify_alert slds-alert_error slds-m-bottom_small" role="alert">
+                <span>{error}</span>
+            </div>
+        </template>
+
+        <lightning-combobox
+            label="Cash action"
+            value={mode}
+            options={modeOptions}
+            onchange={handleModeChange}
+            disabled={controlsDisabled}>
+        </lightning-combobox>
+
+        <template lwc:if={showCashForm}>
+            <div class="slds-m-top_medium">
+                <template lwc:if={showPayment}>
+                    <div class="slds-box slds-theme_shade slds-m-bottom_small">
+                        <p class="slds-text-title_bold">Record an actual bank cash event</p>
+                        <p class="slds-text-body_small slds-m-top_x-small">
+                            This records cash independently of invoices and proformas. Planned deposit amounts are not treated as paid.
+                        </p>
+                    </div>
+                    <lightning-combobox
+                        class="cash-input"
+                        label="Confirmed trading side"
+                        value={selectedSideId}
+                        options={sideOptions}
+                        required
+                        onchange={handleSideChange}
+                        disabled={controlsDisabled}>
+                    </lightning-combobox>
+                    <template lwc:if={showPosition}>
+                        <section class="review-card slds-box slds-m-top_small" aria-label="Original cash available for refund">
+                            <p class="slds-text-title_bold">Original cash available for refund</p>
+                            <dl class="slds-list_horizontal slds-wrap slds-m-top_x-small">
+                                <dt class="slds-item_label">Direction and currency</dt><dd class="slds-item_detail">{selectedCashEvent.Direction__c} · {selectedCashEvent.Currency__c}</dd>
+                                <dt class="slds-item_label">Original native amount</dt><dd class="slds-item_detail">{selectedEventNative}</dd>
+                                <dt class="slds-item_label">Original cash USD basis</dt><dd class="slds-item_detail">{selectedEventUsd}</dd>
+                                <dt class="slds-item_label">Original payment-date rate</dt><dd class="slds-item_detail wrap-value">{selectedEventRate}</dd>
+                                <dt class="slds-item_label">Original bank evidence</dt><dd class="slds-item_detail wrap-value">{selectedCashEvent.Bank__c} · {selectedCashEvent.Bank_Currency__c} {selectedCashEvent.Bank_Native_Amount__c} · {selectedCashEvent.Bank_Evidence__c}</dd>
+                                <dt class="slds-item_label">Unallocated native</dt><dd class="slds-item_detail">{positionNative}</dd>
+                                <dt class="slds-item_label">Unallocated original USD basis</dt><dd class="slds-item_detail">{positionUsd}</dd>
+                                <dt class="slds-item_label">Unallocated original bank evidence</dt><dd class="slds-item_detail">{positionBank}</dd>
+                            </dl>
+                        </section>
+                    </template>
+                </template>
+
+                <template lwc:if={showRefund}>
+                    <div class="slds-box slds-theme_shade slds-m-bottom_small">
+                        <p class="slds-text-title_bold">Refund unallocated actual cash</p>
+                        <p class="slds-text-body_small slds-m-top_x-small">
+                            Select the original cash event. Its trade direction and native currency are retained. Applied cash must be reversed before it can be refunded.
+                        </p>
+                    </div>
+                    <lightning-combobox
+                        class="cash-input"
+                        label="Original cash event"
+                        value={selectedCashId}
+                        options={cashOptions}
+                        required
+                        onchange={handleCashChange}
+                        disabled={controlsDisabled}>
+                    </lightning-combobox>
+                </template>
+
+                <div class="slds-grid slds-wrap slds-gutters_small slds-m-top_x-small">
+                    <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-2">
+                        <lightning-input class="cash-input" type="number" label={cashNativeLabel} value={nativeAmount}
+                            step="0.01" min="0.01" required onchange={handleNativeChange} disabled={controlsDisabled}>
+                        </lightning-input>
+                    </div>
+                    <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-2">
+                        <lightning-input class="cash-input" type="date" label="Actual bank date (Hong Kong)" value={paymentDate}
+                            max={context.hongKongDate} required onchange={handlePaymentDateChange} disabled={controlsDisabled}>
+                        </lightning-input>
+                    </div>
+                    <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-2">
+                        <lightning-combobox class="cash-input" label="Bank" value={bankName} options={bankOptions}
+                            required onchange={handleBankChange} disabled={controlsDisabled}>
+                        </lightning-combobox>
+                    </div>
+                    <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-2">
+                        <lightning-combobox class="cash-input" label="Bank currency" value={bankCurrencyCode}
+                            options={bankCurrencyOptions} required onchange={handleBankCurrencyChange} disabled={controlsDisabled}>
+                        </lightning-combobox>
+                    </div>
+                    <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-2">
+                        <lightning-input class="cash-input" type="number" label="Actual bank statement amount"
+                            value={bankNativeAmount} step="0.01" min="0.01" required onchange={handleBankAmountChange}
+                            disabled={controlsDisabled}>
+                        </lightning-input>
+                    </div>
+                    <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-2">
+                        <lightning-input class="cash-input" type="text" label="Bank evidence reference"
+                            value={bankEvidence} maxlength="255" required onchange={handleBankEvidenceChange}
+                            disabled={controlsDisabled}>
+                        </lightning-input>
+                    </div>
+                </div>
+                <lightning-input class="cash-input slds-m-top_x-small" type="text" label="Reference"
+                    value={reference} maxlength="255" onchange={handleReferenceChange} disabled={controlsDisabled}>
+                </lightning-input>
+
+                <div class="slds-m-top_small">
+                    <lightning-button variant="neutral" label="Review cash event" onclick={handlePreviewCash}
+                        disabled={controlsDisabled}>
+                    </lightning-button>
+                </div>
+
+                <template lwc:if={showCashReview}>
+                    <section class="review-card slds-box slds-m-top_small" aria-label="Reviewed cash evidence">
+                        <p class="slds-text-title_bold">Reviewed cash evidence</p>
+                        <dl class="slds-list_horizontal slds-wrap slds-m-top_x-small">
+                            <dt class="slds-item_label">Direction and kind</dt><dd class="slds-item_detail">{cashReview.direction} · {cashReview.kind}</dd>
+                            <dt class="slds-item_label">Currency and native amount</dt><dd class="slds-item_detail">{cashReviewNative}</dd>
+                            <dt class="slds-item_label">Cash USD basis</dt><dd class="slds-item_detail">{cashReviewUsd}</dd>
+                            <dt class="slds-item_label">Original carrying USD</dt><dd class="slds-item_detail">{cashReviewOriginalUsd}</dd>
+                            <dt class="slds-item_label">Payment-date rate</dt><dd class="slds-item_detail wrap-value">{cashReviewRate}</dd>
+                            <dt class="slds-item_label">Actual bank date</dt><dd class="slds-item_detail">{paymentDate}</dd>
+                            <dt class="slds-item_label">Actual bank evidence</dt><dd class="slds-item_detail wrap-value">{bankName} · {bankCurrencyCode} {bankNativeAmount} · {bankEvidence}</dd>
+                            <dt class="slds-item_label">Settlement FX USD</dt><dd class="slds-item_detail">{cashReviewSettlementFx}</dd>
+                        </dl>
+                        <lightning-button class="slds-m-top_small" variant="brand" label="Record reviewed cash"
+                            onclick={handleRecordCash} disabled={cashCommitDisabled}>
+                        </lightning-button>
+                    </section>
+                </template>
+            </div>
+        </template>
+
+        <template lwc:if={showAllocation}>
+            <div class="slds-m-top_medium">
+                <div class="slds-box slds-theme_shade slds-m-bottom_small">
+                    <p class="slds-text-title_bold">Apply actual cash to a final invoice</p>
+                    <p class="slds-text-body_small slds-m-top_x-small">
+                        Applications do not create another bank transaction. Proformas and credit notes are not allocation targets.
+                    </p>
+                </div>
+                <lightning-combobox class="allocation-input" label="Original cash event" value={selectedCashId}
+                    options={cashOptions} required onchange={handleCashChange} disabled={controlsDisabled}>
+                </lightning-combobox>
+
+                <template lwc:if={showPosition}>
+                    <section class="review-card slds-box slds-m-top_small" aria-label="Original cash and remaining position">
+                        <p class="slds-text-title_bold">Original cash and available balance</p>
+                        <dl class="slds-list_horizontal slds-wrap slds-m-top_x-small">
+                            <dt class="slds-item_label">Direction and currency</dt><dd class="slds-item_detail">{selectedCashEvent.Direction__c} · {selectedCashEvent.Currency__c}</dd>
+                            <dt class="slds-item_label">Original native amount</dt><dd class="slds-item_detail">{selectedEventNative}</dd>
+                            <dt class="slds-item_label">Original cash USD basis</dt><dd class="slds-item_detail">{selectedEventUsd}</dd>
+                            <dt class="slds-item_label">Original payment-date rate</dt><dd class="slds-item_detail wrap-value">{selectedEventRate}</dd>
+                            <dt class="slds-item_label">Actual bank date</dt><dd class="slds-item_detail">{selectedCashEvent.Payment_Date__c}</dd>
+                            <dt class="slds-item_label">Actual bank evidence</dt><dd class="slds-item_detail wrap-value">{selectedCashEvent.Bank__c} · {selectedCashEvent.Bank_Currency__c} {selectedCashEvent.Bank_Native_Amount__c} · {selectedCashEvent.Bank_Evidence__c}</dd>
+                            <dt class="slds-item_label">Remaining native</dt><dd class="slds-item_detail">{positionNative}</dd>
+                            <dt class="slds-item_label">Remaining cash USD basis</dt><dd class="slds-item_detail">{positionUsd}</dd>
+                            <dt class="slds-item_label">Remaining bank evidence</dt><dd class="slds-item_detail">{positionBank}</dd>
+                        </dl>
+                    </section>
+
+                    <div class="slds-grid slds-wrap slds-gutters_small slds-m-top_small">
+                        <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-2">
+                            <lightning-combobox class="allocation-input" label="Final invoice" value={selectedInvoiceId}
+                                options={invoiceOptions} required onchange={handleInvoiceChange} disabled={controlsDisabled}>
+                            </lightning-combobox>
+                        </div>
+                        <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-2">
+                            <lightning-input class="allocation-input" type="number" label={allocationNativeLabel}
+                                value={nativeAmount} step="0.01" min="0.01" required onchange={handleNativeChange}
+                                disabled={controlsDisabled}>
+                            </lightning-input>
+                        </div>
+                    </div>
+                    <lightning-button class="slds-m-top_small" variant="neutral" label="Review application"
+                        onclick={handlePreviewAllocation} disabled={controlsDisabled}>
+                    </lightning-button>
+
+                    <template lwc:if={showAllocationReview}>
+                        <section class="review-card slds-box slds-m-top_small" aria-label="Reviewed cash application">
+                            <p class="slds-text-title_bold">Reviewed cash application</p>
+                            <dl class="slds-list_horizontal slds-wrap slds-m-top_x-small">
+                                <dt class="slds-item_label">Currency and native amount</dt><dd class="slds-item_detail">{allocationNativeReviewed}</dd>
+                                <dt class="slds-item_label">Cash available before application</dt><dd class="slds-item_detail">{allocationAvailableCash}</dd>
+                                <dt class="slds-item_label">Invoice balance before application</dt><dd class="slds-item_detail">{allocationInvoiceRemaining}</dd>
+                                <dt class="slds-item_label">Original cash USD basis</dt><dd class="slds-item_detail">{allocationCashUsd}</dd>
+                                <dt class="slds-item_label">Invoice carrying USD</dt><dd class="slds-item_detail">{allocationCarryingUsd}</dd>
+                                <dt class="slds-item_label">Allocated bank evidence</dt><dd class="slds-item_detail">{allocationBankAmount}</dd>
+                                <dt class="slds-item_label">Settlement FX USD</dt><dd class="slds-item_detail">{allocationSettlementFx}</dd>
+                            </dl>
+                            <lightning-button class="slds-m-top_small" variant="brand" label="Apply reviewed cash"
+                                onclick={handleAllocate} disabled={allocationCommitDisabled}>
+                            </lightning-button>
+                        </section>
+                    </template>
+
+                    <template lwc:if={hasAllocationRows}>
+                        <section class="slds-m-top_large" aria-label="Cash application history">
+                            <p class="slds-text-title_bold">Application history</p>
+                            <template for:each={allocationRows} for:item="row">
+                                <article key={row.id} class="history-row slds-box slds-m-top_x-small">
+                                    <p><strong>{row.kind}</strong> · {row.amount} · {row.invoice} · {row.date}</p>
+                                    <p class="slds-text-body_small">Cash basis {row.cashUsd} · invoice carrying {row.carryingUsd} · settlement FX {row.settlementFx}</p>
+                                    <template lwc:if={row.canReverse}>
+                                        <lightning-button class="slds-m-top_x-small" label="Review application reversal"
+                                            data-id={row.id} onclick={handlePreviewReversal} disabled={controlsDisabled}>
+                                        </lightning-button>
+                                    </template>
+                                </article>
+                            </template>
+                        </section>
+                    </template>
+
+                    <template lwc:if={showReversalReview}>
+                        <section class="reversal-card slds-box slds-m-top_small" aria-label="Reviewed application reversal">
+                            <p class="slds-text-title_bold">Reverse application of {reversalAmount}</p>
+                            <p class="slds-m-top_x-small">
+                                This reversal restores cash to the on-account balance. It is not a bank refund and does not create a new cash event.
+                            </p>
+                            <lightning-button class="slds-m-top_small" variant="destructive" label="Reverse reviewed application"
+                                onclick={handleReverseAllocation} disabled={reversalCommitDisabled}>
+                            </lightning-button>
+                        </section>
+                    </template>
+
+                    <template lwc:if={hasRefundRows}>
+                        <section class="slds-m-top_large" aria-label="Cash refund history">
+                            <p class="slds-text-title_bold">Actual bank refund history</p>
+                            <template for:each={refundRows} for:item="row">
+                                <article key={row.id} class="history-row slds-box slds-m-top_x-small">
+                                    <p>{row.amount} on {row.date} · {row.bank} {row.bankAmount}</p>
+                                    <p class="slds-text-body_small">Refund-date cash basis {row.cashUsd} · settlement FX {row.settlementFx}</p>
+                                </article>
+                            </template>
+                        </section>
+                    </template>
+                </template>
+            </div>
+        </template>
+
+        <div slot="footer">
+            <lightning-button label="Close" onclick={handleClose} disabled={isSaving}></lightning-button>
+        </div>
+    </lightning-quick-action-panel>
+</template>

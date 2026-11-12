@@ -34,6 +34,34 @@ function canonicalBatches(value) {
     .sort((left, right) => left.key.localeCompare(right.key));
 }
 
+export function paymentReminderPreparationFingerprint({ candidates, preparedGroups, settingsRevision }) {
+  return createHash('sha256').update(JSON.stringify({
+    candidates: candidates.map((row) => ({
+      stemId: row.stemId,
+      lastModifiedAt: row.lastModifiedAt || null,
+      eligible: row.paymentReminderEligible === true,
+      ruleRevision: Number(row.reminderRuleRevision || 0),
+      ruleUpdatedAt: row.reminderRuleUpdatedAt || null,
+      ...(row.nativeCurrencyEvidence ? {
+        nativeCurrency: row.currency || null,
+        invoiceAmount: row.invoiceAmount,
+        receivableBalance: row.receivableBalance,
+        accountingInvoiceUsd: row.accountingInvoiceUsd,
+        accountingReceivableUsd: row.accountingReceivableUsd,
+        evidence: row.nativeCurrencyEvidence,
+      } : {}),
+    })).sort((left, right) => left.stemId.localeCompare(right.stemId)),
+    groups: preparedGroups.map((group) => ({
+      key: group.key,
+      stemIds: [...group.stemIds].sort(),
+      to: canonicalEmails(group.to),
+      cc: canonicalEmails(group.cc),
+      bcc: canonicalEmails(group.bcc),
+    })).sort((left, right) => left.key.localeCompare(right.key)),
+    settingsRevision,
+  })).digest('hex');
+}
+
 export function paymentReminderRequestHash(input = {}) {
   return createHash('sha256').update(JSON.stringify({
     anchorStemId: String(input.anchorStemId || input.stemId || '').trim(),

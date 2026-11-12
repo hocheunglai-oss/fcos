@@ -1,4 +1,14 @@
 public class ReconfirmProcessing {
+    private static Set<Id> supplierEvidenceResetIds=new Set<Id>();
+    // Authorization exists only around this controller's validated, timestamp-checked save.
+    public static Boolean isResettingSupplierEvidence(STEM_Variable_Charge_Supplier__c row,STEM_Variable_Charge_Supplier__c previous,String field) {
+        return row!=null && previous!=null && supplierEvidenceResetIds.contains(row.Id)
+            && new Set<String>{'Supplier_Status__c','Verified_At__c','Verified_By_Email__c','Reviewed_Source_Fingerprint__c'}.contains(field)
+            && row.Manual_Review_Required__c!=previous.Manual_Review_Required__c
+            && row.Supplier_Status__c=='Pending' && row.Verified_At__c==null
+            && row.Verified_By_Email__c==null && row.Reviewed_Source_Fingerprint__c==null;
+    }
+
 	private static final Datetime VARIABLE_CHARGE_CUTOFF = Datetime.newInstanceGmt(2026, 1, 1, 0, 0, 0);
 
 	@AuraEnabled
@@ -322,6 +332,7 @@ public class ReconfirmProcessing {
         }
         List<STEM_Variable_Charge_Supplier__c> writes = new List<STEM_Variable_Charge_Supplier__c>();
         Set<Id> invalidateStems = new Set<Id>();
+        Set<Id> validatedResetIds = new Set<Id>();
         for (VariableChargeRequirementInput change : changes) {
             String key = variableChargeKey(change.stemId, change.supplierId);
             STEM__c stem = stems.get(change.stemId);
@@ -348,6 +359,7 @@ public class ReconfirmProcessing {
             if (stage == null) stage = new STEM_Variable_Charge_Supplier__c(STEM__c = change.stemId, Supplier__c = change.supplierId, External_Key__c = key);
             stage.Manual_Review_Required__c = nextManual;
             if (priorManual != nextManual) {
+                if(stage.Id!=null) validatedResetIds.add(stage.Id);
                 stage.Supplier_Status__c = 'Pending';
                 stage.Verified_At__c = null;
                 stage.Verified_By_Email__c = null;
@@ -356,7 +368,10 @@ public class ReconfirmProcessing {
             }
             writes.add(stage);
         }
-        upsert writes External_Key__c;
+        Set<Id> previousResetIds=supplierEvidenceResetIds;
+        supplierEvidenceResetIds=validatedResetIds;
+        try { upsert writes External_Key__c; }
+        finally { supplierEvidenceResetIds=previousResetIds; }
         if (!invalidateStems.isEmpty()) {
             List<STEM__c> updates = new List<STEM__c>();
             for (Id stemId : invalidateStems) if (stems.get(stemId).Variable_Charges_Confirmed__c == true) updates.add(new STEM__c(Id = stemId, Variable_Charges_Confirmed__c = false));

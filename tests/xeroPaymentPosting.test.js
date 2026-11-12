@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { PGlite } from '@electric-sql/pglite';
-import { confirmedPaymentValues, matchPaymentResponses, paymentConfirmationErrors } from '../api/_xeroPaymentIdentity.js';
+import { nativeHkdPaymentPostingPlan, confirmedPaymentValues, matchPaymentResponses, paymentConfirmationErrors } from '../api/_xeroPaymentIdentity.js';
 import { loadPaymentPostingClaims, paymentClaimEvidenceIds, paymentPostingKey, postReviewedPaymentBatch, resolvePaymentPostingClaim, reviewPaymentPostingClaim } from '../api/_xeroPaymentPosting.js';
 import { xeroFinancialPaymentApply } from '../api/_xeroFinancialSync.js';
 
@@ -184,4 +184,120 @@ test('actual financial-run schema enforces immutable cross-request tenant/paymen
   assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
   assert.equal(results.find((result) => result.status === 'rejected').reason.code, '23505');
   await insert(actor.id); assert.equal((await db.query('select count(*)::int n from xero_financial_sync_runs')).rows[0].n, 2);
+});
+
+test('HKD posting is held before claiming intent or calling the provider', async () => {
+  const f = fixture([{ ...reviewed(), currency: 'HKD' }]);
+  await assert.rejects(postReviewedPaymentBatch(f.rows, f.dependencies), { code: 'XERO_PAYMENT_FX_PERSISTENCE_REQUIRED' });
+  assert.deepEqual(f.client.calls, []);
+  assert.deepEqual(f.writes, []);
+});
+
+test('HKD recovery cannot close an original claim before evidence persistence is available', async () => {
+  const row = { ...reviewed(), currency: 'HKD' };
+  const client = database();
+  const claim = { control_totals: { paymentPosting: { state: 'uncertain', reviewed: row } } };
+  await assert.rejects(resolvePaymentPostingClaim(client, claim, confirmed(row), actor), {
+    code: 'XERO_PAYMENT_FX_PERSISTENCE_REQUIRED',
+  });
+  assert.deepEqual(client.calls, []);
+  assert.equal(claim.control_totals.paymentPosting.state, 'uncertain');
+});
+
+test('verified native HKD recovery uses only the original claim transaction and never closes on lost acknowledgement', async () => {
+  const row = { ...reviewed(), currency: 'HKD', xeroDocumentId: invoiceId, bankAccountId: bankId,
+    amount: 780, nativeHkdMapping: { bankCurrency: 'USD', expectedBankAmount: 97.5, expectedXeroRate: 8,
+      companyFxRevision: 'fixture-rate', currencyEvidence: { documentCurrency: 'HKD', nativeAmount: 780, rateRevision: 'fixture-rate' } } };
+  row.proposedPayment.Amount = 780;
+  const claimId = '77777777-7777-4777-8777-777777777777';
+  const mappingId = '88888888-8888-4888-8888-888888888888';
+  const claim = { id: claimId, reviewed_by: actor.id, reviewed_by_email: actor.email,
+    idempotency_key: paymentPostingKey(tenant, row.salesforcePaymentId), source_fingerprint: row.sourceFingerprint,
+    control_totals: { paymentPosting: { tenantId: tenant, paymentId: row.salesforcePaymentId.slice(0, 15),
+      state: 'uncertain', reviewed: row } } };
+  const actual = { ...confirmed(row), BankAmount: 97.5, CurrencyRate: 8, Account: { AccountID: bankId, CurrencyCode: 'USD' } };
+  const calls = [];
+  let response;
+  const client = { async rpc(name, args) { calls.push({ name, args }); return response; } };
+  for (const bad of [{ ...actual, BankAmount: 98 }, { ...actual, CurrencyRate: 7.9 }, { ...actual, Reference: 'other' }]) {
+    await assert.rejects(resolvePaymentPostingClaim(client, claim, bad, actor), { code: 'XERO_PAYMENT_CONFIRMATION_UNCERTAIN' });
+  }
+  await assert.rejects(resolvePaymentPostingClaim(client, claim, actual, { ...actor, email: 'wrong@example.invalid' }),
+    { code: 'XERO_PAYMENT_CONFIRMATION_UNCERTAIN' });
+  assert.deepEqual(calls, []);
+  await assert.rejects(resolvePaymentPostingClaim(client, claim, actual, actor), { code: 'XERO_PAYMENT_POSTING_STORAGE_FAILED' });
+  assert.equal(claim.control_totals.paymentPosting.state, 'uncertain');
+  response = { data: { mappingId, reused: true } };
+  assert.deepEqual(await resolvePaymentPostingClaim(client, claim, actual, actor), response.data);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[0], calls[1]);
+  assert.equal(calls[1].name, 'finish_xero_native_hkd_payment_v1');
+  assert.equal(calls[1].args.p_claim_id, claimId);
+  assert.deepEqual(calls[1].args.p_confirmation, {
+    paymentId: actual.PaymentID, invoiceId, bankAccountId: bankId, currency: 'HKD',
+    date: row.paymentDate, amount: 780, bankAmount: 97.5, currencyRate: 8, reference: actual.Reference,
+  });
+});
+
+test('server-issued native HKD posting confirms the original claim and refuses a duplicate POST', async () => {
+  const row = reviewed();
+  const source = { Id: row.salesforcePaymentId, Name: row.salesforcePaymentName, RecordType: { DeveloperName: 'Payable' },
+    Supplier_Invoice__c: 'a06000000000101AAA', Payment_Currency__c: 'HKD', Payment_HKD_Amount__c: 780,
+    Amount__c: 97.5, Date__c: row.paymentDate, Payment_FX_Rate__c: 8, Payment_FX_Revision__c: 'rate',
+    Payment_FX_Effective_At__c: '2026-09-05T12:00:00Z', Invoice_Carrying_USD__c: 100, Settlement_FX_USD__c: 2.5,
+    Bank_Currency__c: 'USD', Bank_Native_Amount__c: 97.5, Bank_FX_Evidence__c: 'synthetic receipt',
+    Payment_Operation_Id__c: '99999999-9999-4999-8999-999999999999', Payment_Request_Fingerprint__c: 'a'.repeat(64) };
+  const plan = nativeHkdPaymentPostingPlan(source, { xeroDocumentId: invoiceId, bankAccountId: bankId }, 'USD', 'USD');
+  const native = { ...row, ...plan, xeroDocumentId: invoiceId, bankAccountId: bankId };
+  const claimId = '77777777-7777-4777-8777-777777777777';
+  const mappingId = '88888888-8888-4888-8888-888888888888';
+  const trace = [];
+  let claimed = false;
+  let failClaim = true;
+  let failFinish = true;
+  const client = { async rpc(name, args) {
+    trace.push(name);
+    if (name === 'claim_xero_native_hkd_payment_v1') {
+      if (failClaim) return {};
+      if (claimed) return { data: { alreadyClaimed: true, claim: null } };
+      assert.equal(args.p_row, native);
+      claimed = true;
+      return { data: { alreadyClaimed: false, claim: {
+        id: claimId, status: 'processing', reviewed_by: actor.id, reviewed_by_email: actor.email,
+        idempotency_key: paymentPostingKey(tenant, native.salesforcePaymentId), source_fingerprint: native.sourceFingerprint,
+        control_totals: { paymentPosting: { tenantId: tenant, paymentId: native.salesforcePaymentId.slice(0, 15),
+          reviewed: structuredClone(native), state: 'intent' } },
+      } } };
+    }
+    assert.equal(name, 'finish_xero_native_hkd_payment_v1');
+    assert.equal(args.p_claim_id, claimId);
+    assert.equal(args.p_confirmation.bankAmount, 97.5);
+    return failFinish ? {} : { data: { mappingId, reused: false } };
+  } };
+  const accountingFetch = async (_connection, path, options) => {
+    assert.equal(claimed, true);
+    trace.push('mock POST');
+    assert.equal(path, '/Payments?summarizeErrors=false');
+    assert.equal(options.retryOnRateLimit, false);
+    assert.deepEqual(options.body, { Payments: [plan.proposedPayment] });
+    return { Payments: [{ ...confirmed(native), BankAmount: 97.5, CurrencyRate: 8,
+      Account: { AccountID: bankId, CurrencyCode: 'USD' } }] };
+  };
+  const deps = { client, connection: { tenantId: tenant }, actor, accountingFetch };
+  for (const untrusted of [structuredClone(native), { ...native, salesforcePaymentId: 'a0P000000000002AAA' },
+    { ...native, proposedPayment: { ...native.proposedPayment, Reference: 'changed' } }]) {
+    await assert.rejects(postReviewedPaymentBatch([untrusted], deps), { code: 'XERO_PAYMENT_FX_PERSISTENCE_REQUIRED' });
+  }
+  assert.deepEqual(trace, []);
+  await assert.rejects(postReviewedPaymentBatch([native], deps), { code: 'XERO_PAYMENT_POSTING_STORAGE_FAILED' });
+  assert.deepEqual(trace, ['claim_xero_native_hkd_payment_v1']);
+  failClaim = false;
+  await assert.rejects(postReviewedPaymentBatch([native], deps), { code: 'XERO_PAYMENT_POSTING_STORAGE_FAILED' });
+  assert.equal((await postReviewedPaymentBatch([native], deps))[0].reviewRequired, true);
+  assert.equal(trace.filter(event => event === 'mock POST').length, 1);
+  failFinish = false;
+  claimed = false;
+  trace.length = 0;
+  assert.equal((await postReviewedPaymentBatch([native], deps))[0].status, 'applied');
+  assert.deepEqual(trace, ['claim_xero_native_hkd_payment_v1', 'mock POST', 'finish_xero_native_hkd_payment_v1']);
 });

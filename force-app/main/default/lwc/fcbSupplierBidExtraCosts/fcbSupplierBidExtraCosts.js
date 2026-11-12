@@ -4,6 +4,7 @@ import getUnitOfMeasurePickListValues
     from '@salesforce/apex/SupplierBidManagerController.getUnitOfMeasurePickListValues';
 import upsertProductExtraCosts from '@salesforce/apex/SupplierBidManagerController.upsertProductExtraCosts';
 import getSTEMCharges from '@salesforce/apex/SupplierBidManagerController.getSTEMCharges';
+import loadContexts from '@salesforce/apex/FcosTradeCurrencyExtraCostController.loadContexts';
 import SUPPLIER_BID_EXTRA_COST from '@salesforce/schema/Supplier_Bid_Extra_Cost__c';
 import {deleteRecord} from 'lightning/uiRecordApi';
 
@@ -24,6 +25,88 @@ export default class FcbSupplierBidExtraCosts extends LightningElement {
     @track transportationOptions;
     @track stemCharges = [];
     @api supplierBids;
+    bidContextsById = new Map();
+    extraContextsById = new Map();
+
+    async refreshCurrencyContexts() {
+        const ids = (this._supplierBids || []).map(bid => bid.Id).filter(id => id && String(id).length >= 15);
+        if (!ids.length) return;
+        try {
+            this.applyCurrencyContexts(await loadContexts({supplierBidIds: ids}));
+        } catch (error) {
+            // Keep the established USD editor usable when currency context cannot be read.
+            console.error(error);
+        }
+    }
+
+    applyCurrencyContexts(result) {
+        this.bidContextsById = new Map((result?.bids || []).map(context => [context.supplierBidId, context]));
+        this.extraContextsById = new Map((result?.extraCosts || []).map(context => [context.extraCostId, context]));
+        (this._supplierBids || []).forEach(supplierBid => {
+            const context = this.bidContextsById.get(supplierBid.Id);
+            const isHkd = context?.currencyCode === 'HKD';
+            supplierBid.extraCostCurrency = isHkd ? 'HKD' : 'USD';
+            supplierBid.extraCostRate = isHkd ? context.fxRate : null;
+            supplierBid.extraCostRateStatus = isHkd
+                ? `${context.fxRate} HKD per USD${context.confirmedAt ? ' (confirmed)' : ' (draft)'}`
+                : '';
+            this.applyCurrencyContextToRow(supplierBid.transportationExtraCost, isHkd, context, this.extraContextsById);
+            (supplierBid.extraCosts || []).forEach(row => this.applyCurrencyContextToRow(row, isHkd, context, this.extraContextsById));
+        });
+        (this.stemCharges || []).forEach(row => {
+            const extra = this.extraContextsById.get(row.id);
+            const context = this.bidContextsById.get(extra?.supplierBidId || row.supplierBidId);
+            this.applyCurrencyContextToRow(row, context?.currencyCode === 'HKD', context, this.extraContextsById);
+        });
+        this._supplierBids = [...this._supplierBids];
+        this.stemCharges = [...this.stemCharges];
+    }
+
+    applyCurrencyContextToRow(row, isHkd, bidContext, extraContexts) {
+        if (!row) return;
+        row.isHkdPricing = isHkd;
+        row.priceCurrency = isHkd ? 'HKD' : 'USD';
+        row.fxRate = isHkd ? bidContext?.fxRate : null;
+        row.rateStatus = isHkd
+            ? `${bidContext?.fxRate} HKD per USD${bidContext?.confirmedAt ? ' · confirmed parent side' : ' · draft parent side'}`
+            : '';
+        row.unitCostPlaceholder = `${row.priceCurrency} Unit Cost (Buy At)`;
+        row.minimumPlaceholder = `${row.priceCurrency} Minimum (Buy At)`;
+        row.lumpsumPlaceholder = `${row.priceCurrency} Lumpsum (Buy At)`;
+        const saved = extraContexts.get(row.id);
+        if (isHkd && saved) {
+            if (saved.nativeUnitPrice != null) row.unitCost.value = saved.nativeUnitPrice;
+            if (saved.nativeMinimum != null) row.minimumBuyAt.value = saved.nativeMinimum;
+            if (saved.nativeLumpsum != null) row.lumpsumCostBuyAt.value = saved.nativeLumpsum;
+        }
+        this.updateUsdEquivalents(row);
+    }
+
+    updateUsdEquivalents(row) {
+        if (!row) return;
+        row.usdUnitEquivalent = this.usdEquivalent(row.unitCost?.value, row.fxRate);
+        row.usdMinimumEquivalent = this.usdEquivalent(row.minimumBuyAt?.value, row.fxRate);
+        row.usdLumpsumEquivalent = this.usdEquivalent(row.lumpsumCostBuyAt?.value, row.fxRate);
+    }
+
+    usdEquivalent(value, rate) {
+        const native = Number(value);
+        const lockedRate = Number(rate);
+        if (!Number.isFinite(native) || !Number.isFinite(lockedRate) || lockedRate <= 0) return '';
+        return (native / lockedRate).toFixed(2);
+    }
+
+    setPriceFields(fields, value) {
+        if (value.isHkdPricing) {
+            fields['Buy_HKD_Unit_Price__c'] = value.unitCost.value;
+            fields['Buy_HKD_Minimum__c'] = value.minimumBuyAt.value;
+            fields['Buy_HKD_Lumpsum__c'] = value.lumpsumCostBuyAt.value;
+            return;
+        }
+        fields['Unit_Cost__c'] = value.unitCost.value;
+        fields['Minimum__c'] = value.minimumBuyAt.value;
+        fields['Lumpsum_Cost__c'] = value.lumpsumCostBuyAt.value;
+    }
 
     // get supplierBids() {
     //     if (!this._supplierBids) {
@@ -84,6 +167,7 @@ export default class FcbSupplierBidExtraCosts extends LightningElement {
                 }
                 this.updateAndRepopulateExtraCostValues(supplierBid);
             })
+            this.refreshCurrencyContexts();
         } catch (error) {
             console.error(error)
         }
@@ -126,6 +210,13 @@ export default class FcbSupplierBidExtraCosts extends LightningElement {
                 className: 'slds-input',
                 disabled: product?.Name?.includes('Included')
             },
+            isHkdPricing: false,
+            priceCurrency: 'USD',
+            fxRate: null,
+            rateStatus: '',
+            unitCostPlaceholder: 'USD Unit Cost (Buy At)',
+            minimumPlaceholder: 'USD Minimum (Buy At)',
+            lumpsumPlaceholder: 'USD Lumpsum (Buy At)',
             updateAndRepopulateValues() {
                 this.repopulateValuesIfQuantityRange();
                 this.repopulateValuesIfFixedCost(record);
@@ -333,6 +424,7 @@ export default class FcbSupplierBidExtraCosts extends LightningElement {
                     supplierBid.transportationExtraCost[attribute] = value;
                     break;
             }
+            this.updateUsdEquivalents(supplierBid.transportationExtraCost);
         } catch (error) {
             console.error(error)
         }
@@ -476,14 +568,14 @@ export default class FcbSupplierBidExtraCosts extends LightningElement {
                     });
                     if(this._supplierBids.length > 0){
                         if(this._supplierBids[0].Supplier__c){
-                            getSTEMCharges({ quoteId: this.quoteId, supplierId: this._supplierBids[0].Supplier__c }).then((stemCharges) => {
+                            return getSTEMCharges({ quoteId: this.quoteId, supplierId: this._supplierBids[0].Supplier__c }).then((stemCharges) => {
                                 stemCharges.forEach(stemExtraCharge => {
                                     this.addExtraCostLine(stemExtraCharge, null, true);
                                 })
                             })
                         }
                     }
-                });
+                }).then(() => this.refreshCurrencyContexts());
             });
         } catch (error) {
             console.error(error)
@@ -549,6 +641,7 @@ export default class FcbSupplierBidExtraCosts extends LightningElement {
                         cost[attribute] = value;
                         break;
                 }
+                this.updateUsdEquivalents(cost);
             }
         });
     }
@@ -578,12 +671,17 @@ export default class FcbSupplierBidExtraCosts extends LightningElement {
     }
 
     addNewStemCharge(){
-        this.addExtraCostLine(null, null, true);
+        const row = this.addExtraCostLine(null, null, true);
+        row.supplierBidId = this._supplierBids?.[0]?.Id;
+        const context = this.bidContextsById.get(row.supplierBidId);
+        this.applyCurrencyContextToRow(row, context?.currencyCode === 'HKD', context, this.extraContextsById);
     }
 
     addNewTableLine(event) {
         let supplierBid = this._supplierBids.find(bid => bid.Id === event.target.dataset.supplierBidId);
-        this.addExtraCostLine(null, supplierBid, false);
+        const row = this.addExtraCostLine(null, supplierBid, false);
+        const context = this.bidContextsById.get(supplierBid.Id);
+        this.applyCurrencyContextToRow(row, context?.currencyCode === 'HKD', context, this.extraContextsById);
     }
 
     addExtraCostLine(record, supplierBid, isExtraCharge) {
@@ -621,6 +719,13 @@ export default class FcbSupplierBidExtraCosts extends LightningElement {
                     value: record?.Lumpsum_Cost__c,
                     className: 'slds-input'
                 },
+                isHkdPricing: false,
+                priceCurrency: 'USD',
+                fxRate: null,
+                rateStatus: '',
+                unitCostPlaceholder: 'USD Unit Cost (Buy At)',
+                minimumPlaceholder: 'USD Minimum (Buy At)',
+                lumpsumPlaceholder: 'USD Lumpsum (Buy At)',
                 stemCharge: isExtraCharge,
                 updateAndRepopulateValues() {
                     this.repopulateValuesIfQuantityRange();
@@ -764,9 +869,7 @@ export default class FcbSupplierBidExtraCosts extends LightningElement {
             fields['Quantity__c'] = value.quantity.value;
             fields['Is_Quantity_Range__c'] = Boolean(value.quantityMaximum.value);
             fields['Quantity_Range_Maximum__c'] = value.quantityMaximum.value;
-            fields['Unit_Cost__c'] = value.unitCost.value;
-            fields['Minimum__c'] = value.minimumBuyAt.value;
-            fields['Lumpsum_Cost__c'] = value.lumpsumCostBuyAt.value;
+            this.setPriceFields(fields, value);
             fields['Fixed__c'] = value.fixedCost;
             fields['Unit_of_Measure__c'] = value.unitOfMeasure;
             fields['Supplier_Bid__c'] = savedSupplierBids.find(bid => savedSupplierBids.find(bid => this.supplierBids[0].Product__c === bid.Product__c).Product__c === bid.Product__c).Id;
@@ -787,9 +890,7 @@ export default class FcbSupplierBidExtraCosts extends LightningElement {
                 fields['Quantity__c'] = value.quantity.value;
                 fields['Is_Quantity_Range__c'] = value.isQuantityRange;
                 fields['Quantity_Range_Maximum__c'] = value.quantityMaximum.value;
-                fields['Unit_Cost__c'] = value.unitCost.value;
-                fields['Minimum__c'] = value.minimumBuyAt.value;
-                fields['Lumpsum_Cost__c'] = value.lumpsumCostBuyAt.value;
+                this.setPriceFields(fields, value);
                 fields['Fixed__c'] = value.fixedCost;
                 fields['Unit_of_Measure__c'] = value.unitOfMeasure;
                 fields['Supplier_Bid__c'] = supplierBid.Id.length >= 15 ? supplierBid.Id: savedSupplierBids.find(bid => supplierBid.Product__c === bid.Product__c).Id;
@@ -809,9 +910,7 @@ export default class FcbSupplierBidExtraCosts extends LightningElement {
             fields['Quantity__c'] = supplierBid.transportationExtraCost.quantity.value;
             fields['Is_Quantity_Range__c'] = supplierBid.transportationExtraCost.isQuantityRange;
             fields['Quantity_Range_Maximum__c'] = supplierBid.transportationExtraCost.quantityMaximum.value;
-            fields['Unit_Cost__c'] = supplierBid.transportationExtraCost.unitCost.value;
-            fields['Minimum__c'] = supplierBid.transportationExtraCost.minimumBuyAt.value;
-            fields['Lumpsum_Cost__c'] = supplierBid.transportationExtraCost.lumpsumCostBuyAt.value;
+            this.setPriceFields(fields, supplierBid.transportationExtraCost);
             fields['Fixed__c'] = supplierBid.transportationExtraCost.fixedCost;
             fields['Unit_of_Measure__c'] = supplierBid.transportationExtraCost.unitOfMeasure;
             fields['Supplier_Bid__c'] = supplierBid.Id.length >= 15 ? supplierBid.Id: savedSupplierBids.find(bid => supplierBid.Product__c === bid.Product__c).Id;

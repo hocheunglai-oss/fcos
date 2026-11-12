@@ -184,6 +184,126 @@ export function paymentAssociationBlockers({ payment, documentMapping, bankAccou
   return [...new Set(blockers)];
 }
 
+export const HKD_PAYMENT_WRITE_HOLD = 'HKD payment posting and linking require verified FX evidence persistence.';
+
+// Salesforce stores the cash amount in accounting USD even when the allocation is native HKD.
+export function nativeHkdPaymentSnapshot(payment) {
+  if (payment.Payment_Currency__c !== 'HKD') return null;
+  const moneyCents = (value) => {
+    if (typeof value !== 'number' && (typeof value !== 'string' || !/^-?\d+(?:\.\d+)?$/.test(value))) return null;
+    const amount = Number(value);
+    const cents = Math.round(amount * 100);
+    return Number.isSafeInteger(cents) && Math.abs(amount - cents / 100) < 1e-8 ? cents : null;
+  };
+  const nativeCents = moneyCents(payment.Payment_HKD_Amount__c);
+  const cashCents = moneyCents(payment.Amount__c);
+  const carryingCents = moneyCents(payment.Invoice_Carrying_USD__c);
+  const settlementCents = moneyCents(payment.Settlement_FX_USD__c);
+  const bankCents = moneyCents(payment.Bank_Native_Amount__c);
+  const rate = String(payment.Payment_FX_Rate__c ?? '');
+  const rateUnits = /^\d+(?:\.\d{1,6})?$/.test(rate) ? Math.round(Number(rate) * 1e6) : 0;
+  const day = paymentDate(payment.Date__c);
+  const effective = Date.parse(payment.Payment_FX_Effective_At__c);
+  const revision = payment.Payment_FX_Revision__c;
+  const type = payment.RecordType?.DeveloperName;
+  const invoiceId = type === 'Payable' ? payment.Supplier_Invoice__c : payment.Buyer_Invoice__c;
+  if (!['Payable', 'Receivable'].includes(type) || !/^[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?$/.test(invoiceId || '')
+    || nativeCents === null || nativeCents <= 0 || cashCents === null || cashCents <= 0
+    || carryingCents === null || carryingCents <= 0 || settlementCents === null || bankCents === null || bankCents <= 0
+    || rateUnits <= 0 || rateUnits > 100e6 || !day || !Number.isFinite(effective)
+    || effective >= Date.parse(day + 'T00:00:00+08:00') + 86_400_000
+    || typeof revision !== 'string' || !revision.trim() || revision.length > 80
+    || !paymentUuid(payment.Payment_Operation_Id__c) || !/^[a-f0-9]{64}$/i.test(payment.Payment_Request_Fingerprint__c || '')
+    || !['HKD', 'USD'].includes(payment.Bank_Currency__c) || typeof payment.Bank_FX_Evidence__c !== 'string'
+    || !payment.Bank_FX_Evidence__c.trim() || (payment.Bank_Currency__c === 'HKD' && bankCents !== nativeCents)) return null;
+  const scaled = BigInt(nativeCents) * 1_000_000n;
+  const rateInteger = BigInt(rateUnits);
+  if ((scaled * 2n + rateInteger) / (2n * rateInteger) !== BigInt(cashCents)
+    || settlementCents !== (type === 'Payable' ? carryingCents - cashCents : cashCents - carryingCents)) return null;
+  return { invoiceId, nativeCents, cashCents, carryingCents, settlementCents, bankCents, rateUnits,
+    paymentDate: day, effectiveAt: new Date(effective).toISOString(), revision, bankCurrency: payment.Bank_Currency__c,
+    operationId: payment.Payment_Operation_Id__c, requestFingerprint: payment.Payment_Request_Fingerprint__c };
+}
+
+const issuedNativeHkdPlans = new WeakMap();
+
+export function nativeHkdPaymentHasFamilyEvidence(payment) {
+  return Boolean(payment.Cash_Event__c || payment.Remittance__c || payment._groupBankEvidence
+    || payment._groupBankEvidenceBlocker || payment._ordinaryRemittanceFamily || payment._remittanceSummary
+    || payment._remittanceSummaryBlocker);
+}
+
+export function nativeHkdPaymentPostingPlan(payment, row, baseCurrency, bankCurrency) {
+  const snapshot = nativeHkdPaymentSnapshot(payment);
+  const reference = String(payment.Reference__c || payment.Name || '');
+  const oppositeInvoice = payment.RecordType?.DeveloperName === 'Payable' ? payment.Buyer_Invoice__c : payment.Supplier_Invoice__c;
+  if (!snapshot || nativeHkdPaymentHasFamilyEvidence(payment) || oppositeInvoice
+    || !['USD', 'HKD'].includes(baseCurrency) || bankCurrency !== snapshot.bankCurrency
+    || !paymentUuid(row.xeroDocumentId) || !paymentUuid(row.bankAccountId) || !reference.trim()
+    || (bankCurrency === 'USD' && snapshot.bankCents !== snapshot.cashCents)) return null;
+  const amount = snapshot.nativeCents / 100;
+  const bankAmount = snapshot.bankCents / 100;
+  const companyRate = snapshot.rateUnits / 1e6;
+  const rate = bankCurrency === 'USD' ? (baseCurrency === 'USD' ? amount / bankAmount : bankAmount / amount)
+    : (baseCurrency === 'USD' ? companyRate : 1);
+  const expectedXeroRate = Number(rate.toFixed(12));
+  if (!Number.isFinite(expectedXeroRate) || expectedXeroRate <= 0 || expectedXeroRate >= 1e16) return null;
+  const plan = {
+    type: payment.RecordType.DeveloperName,
+    currency: 'HKD',
+    amount,
+    paymentDate: snapshot.paymentDate,
+    proposedPayment: { Invoice: { InvoiceID: row.xeroDocumentId }, Account: { AccountID: row.bankAccountId },
+      Amount: amount, Date: snapshot.paymentDate, Reference: reference,
+      ...(bankCurrency === 'USD' ? { BankAmount: bankAmount } : baseCurrency === 'USD' ? { CurrencyRate: companyRate } : {}),
+    },
+    nativeHkdMapping: {
+      bankCurrency, baseCurrency, expectedBankAmount: bankAmount, expectedXeroRate, salesforceInvoiceId: snapshot.invoiceId,
+      accountingUsd: snapshot.cashCents / 100, invoiceCarryingUsd: snapshot.carryingCents / 100,
+      settlementFxUsd: snapshot.settlementCents / 100, companyFxRate: companyRate, companyFxRevision: snapshot.revision,
+      currencyEvidence: { documentCurrency: 'HKD', nativeAmount: amount, rateRevision: snapshot.revision,
+        effectiveAt: snapshot.effectiveAt, operationId: snapshot.operationId, requestFingerprint: snapshot.requestFingerprint },
+    },
+  };
+  Object.freeze(plan.proposedPayment.Invoice);
+  Object.freeze(plan.proposedPayment.Account);
+  Object.freeze(plan.proposedPayment);
+  Object.freeze(plan.nativeHkdMapping.currencyEvidence);
+  Object.freeze(plan.nativeHkdMapping);
+  issuedNativeHkdPlans.set(plan.nativeHkdMapping, { sourceId: payment.Id, plan: Object.freeze(plan) });
+  return plan;
+}
+
+export function isIssuedNativeHkdPostingRow(row) {
+  const issued = issuedNativeHkdPlans.get(row.nativeHkdMapping);
+  if (!issued || !issued.sourceId || issued.sourceId !== row.salesforcePaymentId) return false;
+  const { plan } = issued;
+  return row.action === 'payment_apply' && row.status === 'eligible' && Array.isArray(row.blockers) && !row.blockers.length
+    && row.proposedPayment === plan.proposedPayment && row.xeroDocumentId === plan.proposedPayment.Invoice.InvoiceID
+    && row.bankAccountId === plan.proposedPayment.Account.AccountID && row.type === plan.type && row.amount === plan.amount
+    && row.currency === plan.currency && row.paymentDate === plan.paymentDate && !Object.hasOwn(row, 'bankSourceEvidence')
+    && !Object.hasOwn(row, 'ordinaryRemittanceCashEvidence');
+}
+
+export function confirmedNativeHkdPaymentFields(payment, row, result, baseCurrency, bankCurrency) {
+  const plan = nativeHkdPaymentPostingPlan(payment, row, baseCurrency, bankCurrency);
+  if (!plan || !paymentUuid(row.xeroPaymentId)) return null;
+  const evidence = plan.nativeHkdMapping;
+  if (result?.CurrencyRate !== evidence.expectedXeroRate || paymentConfirmationErrors(plan, result, row.xeroPaymentId, {
+    bankAmount: evidence.expectedBankAmount, bankCurrency: evidence.bankCurrency, expectedRate: evidence.expectedXeroRate,
+  }).length) return null;
+  return {
+    accounting_usd: evidence.accountingUsd,
+    invoice_carrying_usd: evidence.invoiceCarryingUsd,
+    settlement_fx_usd: evidence.settlementFxUsd,
+    company_fx_rate: evidence.companyFxRate,
+    company_fx_revision: evidence.companyFxRevision,
+    currency_evidence: evidence.currencyEvidence,
+    xero_currency_rate: result.CurrencyRate,
+    xero_bank_amount: evidence.expectedBankAmount,
+  };
+}
+
 export function paymentCurrency(payment) {
   const value = payment?.CurrencyIsoCode ?? payment?._currency?.currency;
   return typeof value === 'string' && /^[A-Z]{3}$/.test(value) ? value : null;
@@ -193,7 +313,7 @@ const paymentUuid = (value) => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-
 const exactAmount = (actual, expected) => typeof actual === 'number' && typeof expected === 'number'
   && Number.isFinite(actual) && Number.isFinite(expected) && actual > 0 && expected > 0 && Math.abs(actual - expected) < 0.0000001;
 
-export function paymentConfirmationErrors(row, result, expectedPaymentId = null) {
+export function paymentConfirmationErrors(row, result, expectedPaymentId = null, nativeFx = null) {
   const errors = []; const proposed = row.proposedPayment || {};
   const type = row.type === 'Payable' ? 'ACCPAY' : row.type === 'Receivable' ? 'ACCREC' : null;
   if (!paymentUuid(result.PaymentID) || (expectedPaymentId && result.PaymentID !== expectedPaymentId)) errors.push('Xero did not confirm the exact payment identity.');
@@ -202,10 +322,14 @@ export function paymentConfirmationErrors(row, result, expectedPaymentId = null)
   if (!type || result.Invoice?.Type !== type || result.PaymentType !== `${type}PAYMENT`) errors.push('Xero did not confirm the reviewed payment and invoice types.');
   if (result.Status !== 'AUTHORISED') errors.push('Xero did not confirm an authorised payment.');
   if (!exactAmount(result.Amount, proposed.Amount)) errors.push('Xero did not confirm the exact reviewed payment amount.');
-  if (!exactAmount(result.BankAmount, proposed.Amount)) errors.push('Xero did not confirm the exact same-currency bank amount.');
+  if (!exactAmount(result.BankAmount, nativeFx?.bankAmount ?? proposed.Amount)) errors.push('Xero did not confirm the exact reviewed bank amount.');
+  const bankCurrency = nativeFx?.bankCurrency ?? row.currency;
+  const invalidRate = nativeFx
+    ? typeof result.CurrencyRate !== 'number' || !Number.isFinite(result.CurrencyRate) || Math.abs(result.CurrencyRate - nativeFx.expectedRate) > 0.000001
+    : result.CurrencyRate !== undefined && result.CurrencyRate !== 1;
   if (!/^[A-Z]{3}$/.test(row.currency || '') || result.Invoice?.CurrencyCode !== row.currency
-    || (result.Account?.CurrencyCode !== undefined && result.Account.CurrencyCode !== row.currency)
-    || (result.CurrencyRate !== undefined && result.CurrencyRate !== 1)) errors.push('Xero did not confirm the reviewed currency without FX.');
+    || (result.Account?.CurrencyCode !== undefined && result.Account.CurrencyCode !== bankCurrency)
+    || invalidRate) errors.push('Xero did not confirm the reviewed payment currency and rate.');
   if (!paymentDate(result.Date) || paymentDate(result.Date) !== paymentDate(proposed.Date)) errors.push('Xero did not confirm the reviewed payment date.');
   if (typeof result.Reference !== 'string' || !proposed.Reference || result.Reference !== proposed.Reference) errors.push('Xero did not confirm the reviewed payment reference.');
   if (result.HasValidationErrors === true || result.HasErrors === true || (result.ValidationErrors !== undefined

@@ -2,18 +2,22 @@
 <CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
     <fullName>Total_Sell_At__c</fullName>
     <formula>IF(
-    Fixed__c,
+    AND(ISPICKVAL(Sell_Currency__c, "HKD"), BLANKVALUE(Sell_FX_Rate__c, 0) &lt;= 0),
+    NULL,
+    IF(
+        Fixed__c,
 
-    BLANKVALUE(Lumpsum_Sell_At__c, 0),
+        BLANKVALUE(IF(ISPICKVAL(Sell_Currency__c, "HKD"), BLANKVALUE(Sell_HKD_Lumpsum__c, 0) / Sell_FX_Rate__c, BLANKVALUE(Lumpsum_Sell_At__c, 0)), 0),
 
-        IF(
-            ISBLANK(Minimum_Sell_At__c) ||
-            (Quantity * UnitPrice &gt; Minimum_Sell_At__c),
-            Quantity * UnitPrice,
-            Minimum_Sell_At__c
-        )
+            IF(
+                ISBLANK(IF(ISPICKVAL(Sell_Currency__c, "HKD"), BLANKVALUE(Sell_HKD_Minimum__c, 0) / Sell_FX_Rate__c, BLANKVALUE(Minimum_Sell_At__c, 0))) ||
+                (BLANKVALUE(Quantity, 0) * IF(ISPICKVAL(Sell_Currency__c, "HKD"), BLANKVALUE(Sell_HKD_Unit_Price__c, 0) / Sell_FX_Rate__c, BLANKVALUE(Sell_USD_Unit_Price_Precise__c, BLANKVALUE(UnitPrice, 0))) &gt; IF(ISPICKVAL(Sell_Currency__c, "HKD"), BLANKVALUE(Sell_HKD_Minimum__c, 0) / Sell_FX_Rate__c, BLANKVALUE(Minimum_Sell_At__c, 0))),
+                BLANKVALUE(Quantity, 0) * IF(ISPICKVAL(Sell_Currency__c, "HKD"), BLANKVALUE(Sell_HKD_Unit_Price__c, 0) / Sell_FX_Rate__c, BLANKVALUE(Sell_USD_Unit_Price_Precise__c, BLANKVALUE(UnitPrice, 0))),
+                IF(ISPICKVAL(Sell_Currency__c, "HKD"), BLANKVALUE(Sell_HKD_Minimum__c, 0) / Sell_FX_Rate__c, BLANKVALUE(Minimum_Sell_At__c, 0))
+            )
+    )
 )</formula>
-    <formulaTreatBlanksAs>BlankAsZero</formulaTreatBlanksAs>
+    <formulaTreatBlanksAs>BlankAsBlank</formulaTreatBlanksAs>
     <label>Total Sell At</label>
     <precision>18</precision>
     <required>false</required>

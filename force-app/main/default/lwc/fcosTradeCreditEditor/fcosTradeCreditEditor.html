@@ -1,0 +1,55 @@
+<template>
+    <lightning-quick-action-panel header="Record full native credit">
+        <template if:true={isLoading}>
+            <lightning-spinner alternative-text="Loading native credit review" size="small"></lightning-spinner>
+        </template>
+        <template if:true={recordError}>
+            <div class="slds-notify slds-notify_alert slds-alert_error" role="alert">{recordError}</div>
+        </template>
+        <template if:true={error}>
+            <div class="slds-notify slds-notify_alert slds-alert_error slds-m-bottom_small" role="alert">{error}</div>
+        </template>
+        <template if:true={showReview}>
+            <div class="slds-box slds-theme_shade slds-m-bottom_small">
+                <p class="slds-text-title_bold">Full reversal of {review.originalReference}</p>
+                <p class="slds-text-body_small slds-m-top_x-small">This action creates one full reversal in the original document currency. Partial credits are not available here.</p>
+                <dl class="slds-list_horizontal slds-wrap slds-m-top_small">
+                    <dt class="slds-item_label slds-truncate" title="Document currency">Document currency</dt><dd class="slds-item_detail slds-truncate">{review.currencyCode}</dd>
+                    <dt class="slds-item_label slds-truncate" title="Native credit total">Native credit total</dt><dd class="slds-item_detail slds-truncate">{review.nativeTotal} {review.currencyCode}</dd>
+                    <dt class="slds-item_label slds-truncate" title="USD credit total">USD credit total</dt><dd class="slds-item_detail slds-truncate">{review.usdTotal} USD</dd>
+                    <template if:true={isHkd}>
+                        <dt class="slds-item_label slds-truncate" title="Original confirmed rate">Original confirmed rate</dt><dd class="slds-item_detail slds-truncate">{review.rate} HKD per USD</dd>
+                        <dt class="slds-item_label slds-truncate" title="Rate confirmation">Rate confirmation</dt><dd class="slds-item_detail slds-truncate">{review.rateId} · {review.confirmedAt}</dd>
+                    </template>
+                </dl>
+            </div>
+            <table class="slds-table slds-table_cell-buffer slds-table_bordered slds-m-bottom_small" aria-label="Full credit lines">
+                <thead><tr><th scope="col">Line</th><th scope="col">Quantity</th><th scope="col">Original native unit price</th><th scope="col">Native credit amount</th></tr></thead>
+                <tbody>
+                    <template for:each={lines} for:item="line">
+                        <tr key={line.key}><td>{line.name}</td><td>{line.quantity}</td><td>{line.nativeUnitPrice} {review.currencyCode}</td><td>{line.nativeAmount} {review.currencyCode}</td></tr>
+                    </template>
+                </tbody>
+            </table>
+            <template if:false={isRecorded}>
+                <lightning-input data-id="record-input" type="date" label="Credit date" value={creditDate} required onchange={handleCreditDateChange} disabled={controlsDisabled}></lightning-input>
+                <lightning-textarea data-id="record-input" label="Credit reason" value={reason} required onchange={handleReasonChange} disabled={controlsDisabled}></lightning-textarea>
+            </template>
+            <template if:true={isRecorded}>
+                <div class="slds-box slds-theme_success slds-m-bottom_small">Credit {creditId} is recorded. Generate its PDF separately; retrying the PDF does not create another credit.</div>
+                <template if:true={pdfUrl}><p class="slds-m-bottom_small"><a href={pdfUrl} target="_blank" rel="noopener">Open generated credit PDF</a></p></template>
+                <template if:true={releaseResult}><div class="slds-box slds-theme_success slds-m-bottom_small">{releaseResult.releasedLineCount} {releaseResult.direction} side line(s) were released for a separately reviewed reissue. The original and credit remain immutable.</div></template>
+            </template>
+        </template>
+        <div slot="footer">
+            <template if:false={isRecorded}>
+                <lightning-button variant="brand" label="Record full reviewed credit" onclick={handleRecordCredit} disabled={recordDisabled}></lightning-button>
+            </template>
+            <template if:true={isRecorded}>
+                <lightning-button variant="brand" label={pdfButtonLabel} onclick={handleGeneratePdf} disabled={pdfDisabled}></lightning-button>
+                <lightning-button class="slds-m-left_small" variant="neutral" label={releaseButtonLabel} onclick={handleReleaseForReissue} disabled={releaseDisabled}></lightning-button>
+                <lightning-button class="slds-m-left_small" variant="neutral" label="Done" onclick={handleDone} disabled={controlsDisabled}></lightning-button>
+            </template>
+        </div>
+    </lightning-quick-action-panel>
+</template>

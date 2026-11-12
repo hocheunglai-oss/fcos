@@ -4,6 +4,7 @@ import { requireExternalActionGate } from './_externalActionGates.js';
 import { getApiVersion, getInstanceUrl, sfCompositeQueries, sfQuery, sfRequest } from './_salesforce.js';
 import { getOrLoadRuntimeCache } from './_runtimeCache.js';
 import {
+  buyerInvoiceApprovalFxFields,
   buyerInvoiceSnapshotComparison,
   isFinalBuyerInvoice,
   isIssuedFinalBuyerInvoice,
@@ -356,9 +357,27 @@ function finalInvoice(invoice) {
   return isFinalBuyerInvoice(invoice);
 }
 
+const TRADING_FX_SIDES = ['Buy', 'Sell'];
+const TRADING_FX_FINGERPRINT_FIELDS = [
+  'Currency', 'HKD_Unit_Price', 'HKD_Minimum', 'HKD_Lumpsum', 'USD_Unit_Price_Precise',
+  'FX_Rate', 'FX_Revision', 'FX_Confirmed_At', 'FX_Side',
+];
+
+function tradingFxFingerprint(row, sides = TRADING_FX_SIDES) {
+  const evidence = {};
+  for (const side of sides) {
+    if (row[`${side}_Currency__c`] !== 'HKD' && row[`${side}_USD_Unit_Price_Precise__c`] == null) continue;
+    evidence[side] = Object.fromEntries(TRADING_FX_FINGERPRINT_FIELDS.map(field => [
+      field, row[`${side}_${field}__c`] ?? null,
+    ]));
+  }
+  return Object.keys(evidence).length ? { tradeFx: evidence } : {};
+}
+
 function lineFingerprint(row) {
   return {
     kind: 'line_item', id: row.Id, supplierId: row.Original_Supplier__c,
+    ...tradingFxFingerprint(row),
     cancelled: row.Cancelled__c === true, productId: row.Product__c || null,
     quantity: row.Quantity__c ?? null, deliveredQuantity: row.Quantity_Delivered_Per_BDN__c ?? null,
     quantityMax: row.Quantity_Max__c ?? null,
@@ -373,6 +392,7 @@ function lineFingerprint(row) {
 function extraFingerprint(row) {
   return {
     kind: 'extra_cost', id: row.Id, supplierId: row.Supplier__c,
+    ...tradingFxFingerprint(row),
     cancelled: row.Cancelled__c === true, productId: row.Product2Id__c || null,
     description: row.Description__c || null,
     quantity: row.Quantity__c ?? null, deliveredQuantity: row.Quantity_Delivered_Per_BDN__c ?? null,
@@ -485,6 +505,7 @@ function supplierLiveFingerprint(liveCase, supplierId) {
     })),
     lineItems: liveCase.lineItems.filter((row) => row.Original_Supplier__c === supplierId).map((row) => ({
       kind: 'line_item', id: row.Id, supplierId: row.Original_Supplier__c,
+      ...tradingFxFingerprint(row, ['Buy']),
       cancelled: row.Cancelled__c === true, productId: row.Product__c || null,
       quantity: row.Quantity__c ?? null, deliveredQuantity: row.Quantity_Delivered_Per_BDN__c ?? null,
       quantityMax: row.Quantity_Max__c ?? null, uom: row.Unit_of_Measure__c || null,
@@ -494,6 +515,7 @@ function supplierLiveFingerprint(liveCase, supplierId) {
     })).sort((a, b) => a.id.localeCompare(b.id)),
     extraCosts: liveCase.extraCosts.filter((row) => row.Supplier__c === supplierId).map((row) => ({
       kind: 'extra_cost', id: row.Id, supplierId: row.Supplier__c,
+      ...tradingFxFingerprint(row, ['Buy']),
       cancelled: row.Cancelled__c === true, productId: row.Product2Id__c || null,
       description: row.Description__c || null, stemLineItemId: row.STEM_Line_Item__c || null,
       quantity: row.Quantity__c ?? null, deliveredQuantity: row.Quantity_Delivered_Per_BDN__c ?? null,
@@ -530,6 +552,7 @@ function buyerChargeLiveFingerprint(liveCase, supplierId) {
     })),
     lineItems: liveCase.lineItems.filter((row) => row.Original_Supplier__c === supplierId).map((row) => ({
       kind: 'line_item', id: row.Id, supplierId: row.Original_Supplier__c,
+      ...tradingFxFingerprint(row, ['Sell']),
       cancelled: row.Cancelled__c === true, productId: row.Product__c || null,
       quantity: row.Quantity__c ?? null, deliveredQuantity: row.Quantity_Delivered_Per_BDN__c ?? null,
       quantityMax: row.Quantity_Max__c ?? null, uom: row.Unit_of_Measure__c || null,
@@ -538,6 +561,7 @@ function buyerChargeLiveFingerprint(liveCase, supplierId) {
     })).sort((a, b) => a.id.localeCompare(b.id)),
     extraCosts: liveCase.extraCosts.filter((row) => row.Supplier__c === supplierId).map((row) => ({
       kind: 'extra_cost', id: row.Id, supplierId: row.Supplier__c,
+      ...tradingFxFingerprint(row, ['Sell']),
       cancelled: row.Cancelled__c === true, productId: row.Product2Id__c || null,
       description: row.Description__c || null, stemLineItemId: row.STEM_Line_Item__c || null,
       quantity: row.Quantity__c ?? null, deliveredQuantity: row.Quantity_Delivered_Per_BDN__c ?? null,
@@ -742,10 +766,15 @@ function optionalBuyerInvoiceCurrencyField(currencySupport, objectName) {
   return currencySupport?.[objectName] ? ', CurrencyIsoCode' : '';
 }
 
-async function loadBuyerInvoiceCurrencySupport() {
+function optionalTradingFxFields(describe, fields = TRADING_FX_SIDES.flatMap(side => TRADING_FX_FINGERPRINT_FIELDS.map(field => `${side}_${field}__c`))) {
+  const available = new Set((describe?.fields || []).map(field => field?.name));
+  return fields.filter(field => available.has(field)).map(field => `, ${field}`).join('');
+}
+
+async function loadVariableChargeSourceSchema() {
   const cached = await getOrLoadRuntimeCache({
     namespace: 'salesforce-variable-charge-invoice-currency-schema',
-    version: '1',
+    version: '3',
     accessScope: 'schema',
     apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
     payload: { objects: BUYER_INVOICE_CURRENCY_OBJECTS },
@@ -756,7 +785,13 @@ async function loadBuyerInvoiceCurrencySupport() {
         objectName,
         await sfRequest(`/sobjects/${encodeURIComponent(objectName)}/describe/`, { readOnly: true }),
       ]));
-      return buyerInvoiceCurrencySupport(Object.fromEntries(entries));
+      const describes = Object.fromEntries(entries);
+      return {
+        currencySupport: buyerInvoiceCurrencySupport(describes),
+        invoiceFxFields: optionalTradingFxFields(describes.Invoice__c, buyerInvoiceApprovalFxFields.invoice),
+        lineFxFields: optionalTradingFxFields(describes.STEM_Line_Item__c),
+        extraFxFields: optionalTradingFxFields(describes.STEM_Extra_Cost__c),
+      };
     },
   });
   return cached.value;
@@ -765,10 +800,10 @@ async function loadBuyerInvoiceCurrencySupport() {
 async function loadLiveCases({ client, stemIds = null, stemAccessCondition = null }) {
   const requested = stemIds ? [...new Set(stemIds.filter((id) => SALESFORCE_ID.test(String(id || ''))))] : null;
   if (stemIds && requested.length !== stemIds.length) throw httpError('A valid Salesforce STEM is required.', 400, 'INVALID_STEM_ID');
-  const currencySupport = await loadBuyerInvoiceCurrencySupport();
+  const { currencySupport, invoiceFxFields, lineFxFields, extraFxFields } = await loadVariableChargeSourceSchema();
   const [allLineItems, allExtraCosts] = await Promise.all([
-    queryAll(`SELECT Id, STEM__c, Original_Supplier__c, Product__c, Product__r.Name, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Max__c, Unit_of_Measure__c, Unit_Sell_At__c, Unit_Buy_At__c, Total_Cost__c, Total_Price__c${optionalBuyerInvoiceCurrencyField(currencySupport, 'STEM_Line_Item__c')}, Commission_Cost__c, Payment_Term__c, Buyer_Invoice__c, Supplier_Invoice__c, Cancelled__c, LastModifiedDate FROM STEM_Line_Item__c WHERE Cancelled__c = false AND STEM__r.CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${candidateWhere(requested)}`),
-    queryAll(`SELECT Id, STEM__c, STEM_Line_Item__c, Supplier__c, Supplier_Invoice__c, Product2Id__c, Product2Id__r.Name, Product2Id__r.IsActive, Description__c, RecordTypeId, RecordType.Name, Fixed__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Range_Max__c, Unit_of_Measure__c, Unit_Cost__c, Unit_Price__c, Lumpsum_Cost__c, Lumpsum_Price__c, Line_Total_Buy__c, Line_Total__c${optionalBuyerInvoiceCurrencyField(currencySupport, 'STEM_Extra_Cost__c')}, Payment_Term__c, Buyer_Invoice__c, Cancelled__c, Supplier_Cost_Input_Currency__c, Supplier_Cost_Input_Value__c, Supplier_Cost_USD_HKD_Rate__c, Supplier_Cost_FX_Settings_Revision__c, Anchorage_Arrival__c, Anchorage_Departure__c, Anchorage_Location__c, Anchorage_Dues_Allocation_HKD__c, Anchorage_NRT_Snapshot__c, Anchorage_USD_HKD_Rate__c, Anchorage_FX_Settings_Revision__c, Anchorage_Calculation_Version__c, Anchorage_Buyer_Default_USD__c, Anchorage_Buyer_Rate_USD__c, Anchorage_Buyer_Calc_Version__c, Light_Dues_Entry_Date__c, Light_Dues_Category__c, Light_Dues_NRT_Snapshot__c, Light_Dues_Rate_HKD__c, Light_Dues_Amount_HKD__c, Light_Dues_USD_HKD_Rate__c, Light_Dues_FX_Settings_Revision__c, Light_Dues_Calculation_Version__c, Hong_Kong_Bundle_Key__c, Hong_Kong_Bundle_Managed__c, Hong_Kong_Bundle_Sequence__c, Hong_Kong_Bundle_Source__c, Port_Clearance_Rate_HKD__c, Port_Clearance_Calculation_Version__c, LastModifiedDate FROM STEM_Extra_Cost__c WHERE Cancelled__c = false AND STEM__r.CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${candidateWhere(requested)}`),
+    queryAll(`SELECT Id, STEM__c, Original_Supplier__c, Product__c, Product__r.Name, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Max__c, Unit_of_Measure__c, Unit_Sell_At__c, Unit_Buy_At__c, Total_Cost__c, Total_Price__c${optionalBuyerInvoiceCurrencyField(currencySupport, 'STEM_Line_Item__c')}${lineFxFields}, Commission_Cost__c, Payment_Term__c, Buyer_Invoice__c, Supplier_Invoice__c, Cancelled__c, LastModifiedDate FROM STEM_Line_Item__c WHERE Cancelled__c = false AND STEM__r.CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${candidateWhere(requested)}`),
+    queryAll(`SELECT Id, STEM__c, STEM_Line_Item__c, Supplier__c, Supplier_Invoice__c, Product2Id__c, Product2Id__r.Name, Product2Id__r.IsActive, Description__c, RecordTypeId, RecordType.Name, Fixed__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Range_Max__c, Unit_of_Measure__c, Unit_Cost__c, Unit_Price__c, Lumpsum_Cost__c, Lumpsum_Price__c, Line_Total_Buy__c, Line_Total__c${optionalBuyerInvoiceCurrencyField(currencySupport, 'STEM_Extra_Cost__c')}${extraFxFields}, Payment_Term__c, Buyer_Invoice__c, Cancelled__c, Supplier_Cost_Input_Currency__c, Supplier_Cost_Input_Value__c, Supplier_Cost_USD_HKD_Rate__c, Supplier_Cost_FX_Settings_Revision__c, Anchorage_Arrival__c, Anchorage_Departure__c, Anchorage_Location__c, Anchorage_Dues_Allocation_HKD__c, Anchorage_NRT_Snapshot__c, Anchorage_USD_HKD_Rate__c, Anchorage_FX_Settings_Revision__c, Anchorage_Calculation_Version__c, Anchorage_Buyer_Default_USD__c, Anchorage_Buyer_Rate_USD__c, Anchorage_Buyer_Calc_Version__c, Light_Dues_Entry_Date__c, Light_Dues_Category__c, Light_Dues_NRT_Snapshot__c, Light_Dues_Rate_HKD__c, Light_Dues_Amount_HKD__c, Light_Dues_USD_HKD_Rate__c, Light_Dues_FX_Settings_Revision__c, Light_Dues_Calculation_Version__c, Hong_Kong_Bundle_Key__c, Hong_Kong_Bundle_Managed__c, Hong_Kong_Bundle_Sequence__c, Hong_Kong_Bundle_Source__c, Port_Clearance_Rate_HKD__c, Port_Clearance_Calculation_Version__c, LastModifiedDate FROM STEM_Extra_Cost__c WHERE Cancelled__c = false AND STEM__r.CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${candidateWhere(requested)}`),
   ]);
   const supplierStages = await queryAll(`SELECT Id, STEM__c, Supplier__c, Manual_Review_Required__c, Supplier_Status__c, Verified_At__c, Verified_By_Email__c, Reviewed_Source_Fingerprint__c, Revision__c, Buyer_Charge_Status__c, Buyer_Charge_Reviewed_Source_Fingerprint__c, Buyer_Charge_Confirmed_At__c, Buyer_Charge_Confirmed_By_Email__c, Buyer_Charge_Revision__c, LastModifiedDate FROM STEM_Variable_Charge_Supplier__c WHERE STEM__r.CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${candidateWhere(requested)}`);
   const supplierIds = [...new Set([
@@ -793,7 +828,7 @@ async function loadLiveCases({ client, stemIds = null, stemAccessCondition = nul
   const [nominations, supplierNominations, invoices, supplierInvoices] = await Promise.all([
     accessibleStemIds.size ? queryAll(`SELECT Id, STEM__c, Buyer_Supplier_Trader__c, BT_ST_Email_Address__c, Buyer_Confirmation__c, LastModifiedDate FROM Nomination__c WHERE STEM__c IN (${quotedIds([...accessibleStemIds])}) AND Deprecated__c = false AND RecordType.DeveloperName = 'Buyer'`) : [],
     accessibleStemIds.size ? queryAll(`SELECT Id, STEM__c, Account__c, Buyer_Supplier_Trader__c, BT_ST_Email_Address__c, LastModifiedDate FROM Nomination__c WHERE STEM__c IN (${quotedIds([...accessibleStemIds])}) AND Deprecated__c = false AND RecordType.DeveloperName = 'Supplier'`) : [],
-    accessibleStemIds.size ? queryAll(`SELECT Id, Name, STEM__c${optionalBuyerInvoiceCurrencyField(currencySupport, 'Invoice__c')}, Amount__c, Invoice_Date__c, Delivery_Date__c, Invoice_Due_Date__c, Proforma__c, Deprecated__c, Sent__c, File__c, Buyer_Charge_Snapshot__c, LastModifiedDate FROM Invoice__c WHERE STEM__c IN (${quotedIds([...accessibleStemIds])})`) : [],
+    accessibleStemIds.size ? queryAll(`SELECT Id, Name, STEM__c${optionalBuyerInvoiceCurrencyField(currencySupport, 'Invoice__c')}${invoiceFxFields}, Amount__c, Invoice_Date__c, Delivery_Date__c, Invoice_Due_Date__c, Proforma__c, Deprecated__c, Sent__c, File__c, Buyer_Charge_Snapshot__c, LastModifiedDate FROM Invoice__c WHERE STEM__c IN (${quotedIds([...accessibleStemIds])})`) : [],
     accessibleStemIds.size ? queryAll(`SELECT Id, STEM__c, Supplier__c, LastModifiedDate FROM Supplier_Invoice__c WHERE STEM__c IN (${quotedIds([...accessibleStemIds])})`) : [],
   ]);
   const documentIds = [...new Set(invoices
@@ -3703,6 +3738,7 @@ export const variableChargeInternals = {
   supplierDualCurrencySummary,
   buyerInvoiceCurrencySupport,
   optionalBuyerInvoiceCurrencyField,
+  optionalTradingFxFields,
   separateInvoiceSource,
   SHIP_AGENT_STEM_CREATED_FROM: VARIABLE_CHARGE_STEM_CREATED_FROM,
   VARIABLE_CHARGE_STEM_CREATED_FROM,

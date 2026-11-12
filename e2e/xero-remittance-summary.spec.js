@@ -105,8 +105,9 @@ test.describe('offline remittance summary presentation', () => {
 
   test('summary headers preserve child attention, classified counts and completion denominator without mobile page overflow', async ({ page }, testInfo) => {
     const observations = await openFixture(page);
-    const completion = page.getByText('Verified completion', { exact: true }).locator('..');
+    const completion = page.getByText('Document and payment completion', { exact: true }).locator('..');
     await expect(completion).toContainText('40%');
+    await expect(page.getByText(/Review credit allocations and prepayments in their own panels/)).toBeVisible();
     await expect(page.getByText('Salesforce records', { exact: true }).locator('..')).toContainText('7');
     await expect(page.getByText('Exceptions', { exact: true }).locator('..')).toContainText('3');
     await expect(page.getByText('6 classified · 0 exact allocations eligible.', { exact: true })).toBeVisible();

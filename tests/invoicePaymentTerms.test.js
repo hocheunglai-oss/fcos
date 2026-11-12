@@ -57,11 +57,13 @@ async function loadForm(overrides = {}) {
     LightningElement: class {}, buildInvoicePaymentTerm, PARTIAL_CIA_BALANCE_TERM_ERROR, PARTIAL_CIA_FORM_TERM_ERROR,
     buildInvoiceVesselText, normalizeInvoiceVesselText,
     getStemInfo: async () => stem(),
+    getTradeDocument: async () => ({ currencyCode: 'USD' }),
     getPaymentTerm: async (request) => { calls.paymentTerms.push(request); return balanceTerm; },
     getDBSInfo: async () => bank, getUBSInfo: async () => bank,
     getVariableChargeInvoiceReadiness: async () => ({ ready: true, requiresVariableChargeReview: false }),
     loadScript: async () => {}, jsPDF: 'jsPDF', jspdfAutotable: 'autotable', pdfLib: 'pdfLib',
     createInvoice: async (request) => { calls.invoices.push(request); return { Id: 'new-invoice', Name: 'NEW INVOICE' }; },
+    createReviewedInvoice: async (request) => { calls.invoices.push(request); return { Id: 'new-invoice', Name: 'NEW INVOICE' }; },
     generateInvoicePDF: async (request) => { calls.pdfs.push(request); },
     upsertLastInvoiceForm: async (request) => { calls.savedForms.push(request); },
     fireEvent: () => {}, window: { jspdf: { jsPDF: Pdf } },
@@ -233,6 +235,84 @@ test('late responses from a closed form cannot restore the old STEM, terms or re
   assert.equal(component.inputs.find(input => input.label === 'PAYMENT TERM').value, 'USD 500.00 BASIS CASH IN ADVANCE, BALANCE ON 30 DAYS AFTER DELIVERY');
   assert.equal(component.variableChargeReadiness.ready, true);
   assert.equal(component.isGenerateDisabled, false);
+});
+
+test('invoice FX preview gates generation and a late HKD response cannot replace a newer USD form', async () => {
+  const oldPreview = deferred();
+  const { component } = await loadForm({
+    getTradeDocument: ({ stemId }) => stemId === 'old' ? oldPreview.promise : Promise.resolve({ currencyCode: 'USD' }),
+  });
+  const pending = component.openModal('old', products, true, true, savedForm());
+  await flush();
+  assert.equal(component.isGenerateDisabled, true);
+  component.closeModal();
+  await component.openModal('current', products, true, true, savedForm());
+  oldPreview.resolve({ currencyCode: 'HKD', fingerprint: 'old-fingerprint' });
+  await pending;
+  assert.equal(component.documentCurrencyCode, 'USD');
+  assert.equal(component.tradeDocumentError, undefined);
+  assert.equal(component.isGenerateDisabled, false);
+});
+
+test('HKD invoice generation binds the reviewed fingerprint and native price', async () => {
+  const { component, calls } = await loadForm({
+    getStemInfo: async () => stem({ Partial_CIA__c: false }),
+    getTradeDocument: async () => ({ currencyCode: 'HKD', fingerprint: 'invoice-fingerprint', nativeTotal: 4000,
+      lines: [{ id: products[0].id, quantity: 400, unit: 'MT', nativeUnitPrice: 10, nativeAmount: 4000 }] }),
+  });
+  await component.openModal('stem-id', products, false, true, savedForm());
+  assert.equal(component.documentCurrencyCode, 'HKD');
+  assert.equal(component.productInputs[0].amount, '4000.00');
+  component.handleGeneratePDF();
+  await flush();
+  assert.equal(calls.invoices[0].reviewedFxFingerprint, 'invoice-fingerprint');
+  assert.deepEqual(calls.invoices[0].extraIds, [products[0].id]);
+  assert.equal(calls.pdfs[0].reviewedFxFingerprint, 'invoice-fingerprint');
+});
+
+test('a stale creation response blocks PDF generation and tells the operator to reopen the invoice', async () => {
+  const attempts = [];
+  const { component, calls } = await loadForm({
+    getStemInfo: async () => stem({ Partial_CIA__c: false }),
+    getTradeDocument: async () => ({ currencyCode: 'USD', sideId: 'confirmed-side', confirmedAt: '2026-11-11T00:00:00Z',
+      fingerprint: 'reviewed-usd-fingerprint', nativeTotal: 4000,
+      lines: [{ id: products[0].id, quantity: 400, unit: 'MT', nativeUnitPrice: 10, nativeAmount: 4000 }] }),
+    createReviewedInvoice: async request => {
+      attempts.push(request);
+      throw { body: { message: 'The selected native invoice lines or FX changed. Reopen the invoice to review them.' } };
+    },
+  });
+  await component.openModal('stem-id', products, false, true, savedForm());
+  assert.equal(component.isManagedDocument, true);
+  component.handleGeneratePDF();
+  await flush();
+  assert.equal(attempts[0].reviewedFxFingerprint, 'reviewed-usd-fingerprint');
+  assert.match(component.invoiceFormError, /FX changed/u);
+  assert.equal(component.isGenerateDisabled, true);
+  assert.deepEqual(calls.pdfs, []);
+});
+
+test('a saved invoice missing a reviewed line cannot start creation', async () => {
+  const { component, calls } = await loadForm({
+    getStemInfo: async () => stem({ Partial_CIA__c: false }),
+    getTradeDocument: async () => ({ currencyCode: 'HKD', fingerprint: 'invoice-fingerprint', nativeTotal: 4000,
+      lines: [{ id: products[0].id, quantity: 400, unit: 'MT', nativeUnitPrice: 10, nativeAmount: 4000 },
+        { id: 'other-reviewed-line', quantity: 100, unit: 'MT', nativeUnitPrice: 8, nativeAmount: 800 }] }),
+  });
+  await component.openModal('stem-id', products, false, true, savedForm());
+  assert.match(component.invoiceFormError, /every financial row must match/u);
+  component.handleGeneratePDF();
+  assert.deepEqual(calls.invoices, []);
+});
+
+test('unreconciled native cash-in-advance refusal blocks invoice generation', async () => {
+  const { component, calls } = await loadForm({
+    getTradeDocument: async () => { throw { body: { message: 'Review the native cash-in-advance terms before generating an HKD document.' } }; },
+  });
+  await component.openModal('stem-id', products, true, true, savedForm());
+  assert.match(component.invoiceFormError, /native cash-in-advance/u);
+  component.handleGeneratePDF();
+  assert.deepEqual(calls.invoices, []);
 });
 
 test('non-partial reused forms and credit notes retain their edited terms without new balance validation', async () => {

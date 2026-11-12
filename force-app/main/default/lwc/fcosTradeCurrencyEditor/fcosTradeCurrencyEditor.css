@@ -1,0 +1,9 @@
+:host {
+    display: block;
+}
+
+.equivalent {
+    display: block;
+    margin-top: 1.55rem;
+    font-weight: 600;
+}

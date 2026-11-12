@@ -1,8 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
     <fullName>Our_Cost__c</fullName>
-    <formula>Supplier_Unit_Price__c + Supplier_Broker_Commission__c +  Unit_Transportation_Cost__c</formula>
-    <formulaTreatBlanksAs>BlankAsZero</formulaTreatBlanksAs>
+    <formula>IF(
+    AND(ISPICKVAL(Buy_Currency__c, "HKD"), BLANKVALUE(Buy_FX_Rate__c, 0) &lt;= 0),
+    NULL,
+    IF(ISPICKVAL(Buy_Currency__c, "HKD"), BLANKVALUE(Buy_HKD_Unit_Price__c, 0) / Buy_FX_Rate__c, BLANKVALUE(Buy_USD_Unit_Price_Precise__c, BLANKVALUE(Supplier_Unit_Price__c, 0))) + BLANKVALUE(Supplier_Broker_Commission__c, 0) +  BLANKVALUE(Unit_Transportation_Cost__c, 0)
+)</formula>
+    <formulaTreatBlanksAs>BlankAsBlank</formulaTreatBlanksAs>
     <label>Our Cost</label>
     <precision>18</precision>
     <required>false</required>

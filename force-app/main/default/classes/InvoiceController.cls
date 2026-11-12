@@ -55,6 +55,34 @@ public class InvoiceController {
 
     @AuraEnabled
     public static Invoice__c createInvoice(String stemId, List<String> extraIds, Boolean createProforma, Boolean isCreditNote, Date invoiceDate, Date deliveryDate, Date invoiceDueDate){
+        return createInvoiceFromSelection(stemId,extraIds,createProforma,isCreditNote,invoiceDate,deliveryDate,invoiceDueDate,null);
+    }
+
+    @AuraEnabled
+    public static Invoice__c createReviewedInvoice(String stemId, List<String> extraIds, Boolean createProforma, Boolean isCreditNote, Date invoiceDate, Date deliveryDate, Date invoiceDueDate, String reviewedFxFingerprint){
+        if(String.isBlank(reviewedFxFingerprint)) throw new AuraHandledException('Review the exact native invoice lines before creating the invoice.');
+        return createInvoiceFromSelection(stemId,extraIds,createProforma,isCreditNote,invoiceDate,deliveryDate,invoiceDueDate,reviewedFxFingerprint);
+    }
+
+    private static Invoice__c createInvoiceFromSelection(String stemId, List<String> extraIds, Boolean createProforma, Boolean isCreditNote, Date invoiceDate, Date deliveryDate, Date invoiceDueDate, String reviewedFxFingerprint){
+        Id sourceStemId=Id.valueOf(stemId);
+        STEM__c lockedStem=[SELECT Id FROM STEM__c WHERE Id=:sourceStemId FOR UPDATE];
+        Boolean managedSelection=FcosTradeDocumentService.buyerSideIsManaged(lockedStem.Id)
+            || FcosTradeDocumentService.hasReissueSelection(lockedStem.Id,'Sell',extraIds);
+        if(createProforma==true && managedSelection)
+            throw new AuraHandledException('Native proforma finalization is not enabled. Use the confirmed native invoice workflow.');
+        FcosTradeDocumentService.DocumentReview nativeReview;
+        if(managedSelection) {
+            if(isCreditNote==true) throw new AuraHandledException('Select the original HKD invoice in the native credit workflow so its original rate is retained.');
+            if(String.isBlank(reviewedFxFingerprint) || extraIds==null || extraIds.isEmpty())
+                throw new AuraHandledException('Review the exact native invoice lines before creating the invoice.');
+            List<Id> selectedFxLines=new List<Id>();
+            for(String lineId:extraIds) selectedFxLines.add(Id.valueOf(lineId));
+            nativeReview=FcosTradeDocumentService.preview(lockedStem.Id,'Sell',null,selectedFxLines);
+            assertNativeCreateReview(nativeReview,reviewedFxFingerprint,selectedFxLines);
+        } else if(String.isNotBlank(reviewedFxFingerprint)) {
+            throw new AuraHandledException('The selected lines are no longer a managed invoice. Reopen the invoice to review its currency.');
+        }
         MasterContractInvoiceReadinessService.assertBuyerAllowed(Id.valueOf(stemId));
         if (createProforma != true && isCreditNote != true) {
             VariableChargeInvoiceReadinessService.assertFinalBuyerInvoiceAllowed(Id.valueOf(stemId));
@@ -162,9 +190,32 @@ public class InvoiceController {
                                             Invoice_Due_Date__c = invoiceDueDate,
                                             Refcode_Index__c = refcodeIndex
                                            );
+        if(nativeReview!=null) {
+            invoice.Amount__c=nativeReview.usdTotal;
+            Map<String,Object> presentation=(Map<String,Object>)JSON.deserializeUntyped(FcosNativeInvoiceController.capturePresentation(Id.valueOf(stemId)));
+            presentation.put('customerPo',refcodeIndex+' '+String.valueOf(presentation.get('vessel')));
+            invoice.Document_Presentation_JSON__c=JSON.serialize(presentation);
+            FcosTradeDocumentService.applySnapshot(invoice,nativeReview);
+        }
         insert invoice;
+        if(nativeReview!=null) FcosTradeDocumentLineService.persist(invoice,nativeReview);
         createAcknowledgeReceiptTask(stem, invoice);
         return invoice;
+    }
+
+    @TestVisible private static void assertNativeCreateReview(FcosTradeDocumentService.DocumentReview review,String fingerprint,List<Id> selectedIds) {
+        Set<Id> expectedIds=new Set<Id>(selectedIds);
+        Set<Id> reviewedIds=new Set<Id>();
+        if(review!=null && review.lines!=null) {
+            for(FcosTradeDocumentService.Line line:review.lines) if(line!=null && line.id!=null) reviewedIds.add(line.id);
+        }
+        Boolean managedReview=review!=null && (review.currencyCode=='HKD' || review.reissueOfId!=null
+            || (review.currencyCode=='USD' && review.sideId!=null && review.confirmedAt!=null));
+        if(!managedReview || String.isBlank(fingerprint)
+            || review.fingerprint!=fingerprint || expectedIds.isEmpty() || expectedIds.size()!=selectedIds.size()
+            || review.lines==null || reviewedIds.size()!=review.lines.size()
+            || expectedIds.size()!=reviewedIds.size() || !expectedIds.containsAll(reviewedIds))
+            throw new AuraHandledException('The selected native invoice lines or FX changed. Reopen the invoice to review them.');
     }
 
     private static void createAcknowledgeReceiptTask(STEM__c stem, Invoice__c invoice){
@@ -213,14 +264,40 @@ public class InvoiceController {
         set;
     }
 
+    public static void generateInvoicePDF(String invoiceId, String invoiceVersionName, List<String> extraIds, String body, Boolean createProforma) {
+        generateInvoicePDF(invoiceId,invoiceVersionName,extraIds,body,createProforma,null);
+    }
     @AuraEnabled
-    public static void generateInvoicePDF(String invoiceId, String invoiceVersionName, List<String> extraIds, String body, Boolean createProforma){
+    public static void generateInvoicePDF(String invoiceId, String invoiceVersionName, List<String> extraIds, String body, Boolean createProforma, String reviewedFxFingerprint){
+        Invoice__c sourceInvoice=[SELECT Id,STEM__c,Document_Currency__c,Document_FX_Fingerprint__c,Document_FX_Side__c,Document_FX_Confirmed_At__c,Reissue_Of_Invoice__c,Original_Invoice__c,Final_Of_Proforma__c,Proforma__c,File__c FROM Invoice__c WHERE Id=:invoiceId];
+        Boolean managedDocument=FcosTradeDocumentService.isManagedDocument(sourceInvoice);
+        Blob documentBody;
+        if(managedDocument) {
+            if(!String.isBlank(sourceInvoice.File__c)) return;
+            PageReference nativePage=Page.FcosNativeInvoice;nativePage.getParameters().put('id',invoiceId);
+            documentBody=Test.isRunningTest()?Blob.valueOf('Native invoice test PDF'):nativePage.getContentAsPDF();
+        } else documentBody=EncodingUtil.base64Decode(body);
+        Id invoiceStemId=sourceInvoice.STEM__c;
+        FcosTradeDocumentService.DocumentReview fxReview;
+        // Serialize generation with currency confirmation. The rollout switch
+        // cannot erase an existing confirmed side or selected reissue evidence.
+        List<STEM__c> lockedStems=[SELECT Id FROM STEM__c WHERE Id=:invoiceStemId FOR UPDATE];
+        List<Id> fxLineIds=new List<Id>();for(String lineId:extraIds) fxLineIds.add((Id)lineId);
+        if(managedDocument) fxReview=FcosTradeDocumentService.preview(invoiceStemId,'Sell',null,fxLineIds);
+        else if(FcosTradeDocumentService.buyerSideIsManaged(invoiceStemId)
+            || FcosTradeDocumentService.hasReissueSelection(invoiceStemId,'Sell',extraIds))
+            throw new AuraHandledException('Use the reviewed native invoice workflow for a confirmed currency side or reissue.');
+        if(managedDocument) {
+            Invoice__c lockedInvoice=[SELECT File__c,Document_FX_Fingerprint__c,Proforma__c FROM Invoice__c WHERE Id=:invoiceId FOR UPDATE];
+            if(!String.isBlank(lockedInvoice.File__c)) return;
+            assertNativeGenerationReview(sourceInvoice,lockedInvoice,fxReview,reviewedFxFingerprint,createProforma);
+        }
         MasterContractInvoiceReadinessService.assertPersistedInvoicesAllowed(new Set<Id>{Id.valueOf(invoiceId)});
         VariableChargeInvoiceReadinessService.assertPersistedInvoicesAllowed(new Set<Id>{Id.valueOf(invoiceId)});
         ContentVersion contentVersion = new ContentVersion();
         contentVersion.PathOnClient = '/' + invoiceVersionName + '.pdf';
         contentVersion.Title = invoiceVersionName + '.pdf';
-        contentVersion.VersionData = EncodingUtil.base64Decode(body);
+        contentVersion.VersionData = documentBody;
         contentVersion.FirstPublishLocationId = invoiceId;
         insert contentVersion;
         ContentDocumentLink cdl = [SELECT Id, LinkedEntityId, ContentDocumentId FROM ContentDocumentLink where LinkedEntityId =: invoiceId];
@@ -233,7 +310,23 @@ public class InvoiceController {
         //Setting File refference for Invoice record
         Decimal totalAmount = updateStemLineItemandExtraCosts(extraIds, invoiceId, createProforma);
         Invoice__c invoice = new Invoice__c(Id = invoiceId, File__c = Url.getOrgDomainURL().toExternalForm() + '/' + cdl.ContentDocumentId, Amount__c = totalAmount);
+        if (managedDocument) {
+            invoice.Amount__c=fxReview.usdTotal;
+            FcosTradeDocumentService.applySnapshot(invoice,fxReview);
+        }
         update invoice;
+        if(managedDocument) FcosTradeDocumentLineService.persist(invoice,fxReview);
+    }
+
+    @TestVisible private static void assertNativeGenerationReview(Invoice__c sourceInvoice, Invoice__c lockedInvoice,
+        FcosTradeDocumentService.DocumentReview fxReview, String reviewedFxFingerprint, Boolean createProforma) {
+            if(sourceInvoice==null || lockedInvoice==null || fxReview==null || String.isBlank(reviewedFxFingerprint)
+                || String.isBlank(sourceInvoice.Document_FX_Fingerprint__c)
+                || !FcosTradeDocumentService.isManagedDocument(sourceInvoice) || fxReview.currencyCode!=sourceInvoice.Document_Currency__c || fxReview.fingerprint!=reviewedFxFingerprint
+                || fxReview.fingerprint!=sourceInvoice.Document_FX_Fingerprint__c
+                || lockedInvoice.Document_FX_Fingerprint__c!=sourceInvoice.Document_FX_Fingerprint__c
+                || lockedInvoice.Proforma__c!=createProforma)
+                throw new AuraHandledException('The saved native invoice no longer matches the reviewed lines and document type. Refresh the document workflow before generating.');
     }
 
     public static Decimal updateStemLineItemandExtraCosts(List<String> extraId, String invoiceId, Boolean createProforma){

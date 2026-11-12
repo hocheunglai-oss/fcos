@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ValidationRule xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Exactly_One_Document_Parent</fullName>
+    <active>true</active>
+    <description>Each immutable document-line snapshot belongs to exactly one buyer invoice, supplier invoice, or nomination.</description>
+    <errorConditionFormula>(IF(ISBLANK(Buyer_Invoice__c), 0, 1) + IF(ISBLANK(Supplier_Invoice__c), 0, 1) + IF(ISBLANK(Nomination__c), 0, 1)) &lt;&gt; 1</errorConditionFormula>
+    <errorMessage>Set exactly one document parent: Buyer Invoice, Supplier Invoice, or Nomination.</errorMessage>
+</ValidationRule>

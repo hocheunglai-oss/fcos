@@ -11,10 +11,12 @@ import getPaymentTerm from "@salesforce/apex/InvoiceController.getPaymentTerm";
 import getDBSInfo from "@salesforce/apex/InvoiceController.getDBSInfo";
 import getUBSInfo from "@salesforce/apex/InvoiceController.getUBSInfo";
 import createInvoice from "@salesforce/apex/InvoiceController.createInvoice";
+import createReviewedInvoice from "@salesforce/apex/InvoiceController.createReviewedInvoice";
 import generateInvoicePDF from "@salesforce/apex/InvoiceController.generateInvoicePDF";
 import upsertLastInvoiceForm from "@salesforce/apex/InvoiceController.upsertLastInvoiceForm";
 import getBDNBase64Strings from "@salesforce/apex/InvoiceController.getBDNBase64Strings";
 import getVariableChargeInvoiceReadiness from "@salesforce/apex/InvoiceController.getVariableChargeInvoiceReadiness";
+import getTradeDocument from "@salesforce/apex/FcosTradeDocumentService.preview";
 import pdfLib from '@salesforce/resourceUrl/pdfLib';
 import { fireEvent } from 'c/pubsub';
 import { buildInvoiceVesselText, normalizeInvoiceVesselText } from './invoiceVesselText';
@@ -61,6 +63,8 @@ export default class FcbInvoiceForm extends LightningElement {
     pdfLibraryError;
     pdfLibraryLoadPromise;
     invoiceFormLoadSequence = 0;
+    tradeDocument;
+    @track tradeDocumentError;
 
     @wire(CurrentPageReference) pageRef;
 
@@ -88,6 +92,8 @@ export default class FcbInvoiceForm extends LightningElement {
             this.proforma = proforma;
             this.isCreditNote = false;
             this.formLoadError = null;
+            this.tradeDocument = undefined;
+            this.tradeDocumentError = undefined;
             this.stem = null;
             this.paymentTerm = null;
             this.partialCiaPaymentTermInputId = null;
@@ -126,6 +132,8 @@ export default class FcbInvoiceForm extends LightningElement {
                 this.ubs = ubs;
                 this.prefillInputs(this.paymentTerm, products);
             }
+            this.actionExecuted = false;
+            await this.loadTradeDocument(stemId, products, loadSequence);
         } catch (error) {
             if (loadSequence !== this.invoiceFormLoadSequence) return;
             this.formLoadError = loadingPaymentTerm && this.hasPartialCiaPaymentTerm
@@ -181,7 +189,7 @@ export default class FcbInvoiceForm extends LightningElement {
     }
 
     get invoiceFormError() {
-        return this.formLoadError || this.pdfLibraryError || this.partialCiaPaymentTermValidationError;
+        return this.formLoadError || this.tradeDocumentError || this.pdfLibraryError || this.partialCiaPaymentTermValidationError;
     }
 
     get partialCiaPaymentTermValidationError() {
@@ -211,6 +219,87 @@ export default class FcbInvoiceForm extends LightningElement {
 
     get isExtraCostOnly() {
         return this.isProductLineItemExisting === false;
+    }
+
+    get isHkdDocument() {
+        return this.tradeDocument?.currencyCode === 'HKD';
+    }
+
+    get isManagedDocument() {
+        return this.isHkdDocument || Boolean(this.tradeDocument?.reissueOfId
+            || (this.tradeDocument?.currencyCode === 'USD' && this.tradeDocument.sideId && this.tradeDocument.confirmedAt));
+    }
+
+    get documentCurrencyCode() {
+        return this.isHkdDocument ? 'HKD' : 'USD';
+    }
+
+    get unitPriceHeading() {
+        return this.isHkdDocument ? 'UNIT PRICE (HKD)' : 'UNIT PRICE';
+    }
+
+    get amountHeading() {
+        return this.isHkdDocument ? 'AMOUNT (HKD)' : 'AMOUNT';
+    }
+
+    async loadTradeDocument(stemId, products, loadSequence) {
+        const lineIds = (products || [])
+            .map(product => product.id)
+            .filter(id => typeof id === 'string' && id.length > 7);
+        try {
+            const review = await getTradeDocument({ stemId, direction: 'Sell', supplierId: null, lineIds });
+            if (loadSequence !== this.invoiceFormLoadSequence) return;
+            this.applyTradeDocument(review);
+        } catch (error) {
+            if (loadSequence !== this.invoiceFormLoadSequence) return;
+            this.tradeDocumentError = error?.body?.message || error?.message
+                || 'The agreed document currency could not be loaded. Refresh the form and try again.';
+        }
+    }
+
+    applyTradeDocument(review) {
+        this.tradeDocument = review;
+        if (!this.isManagedDocument) return;
+
+        const linesById = new Map((review.lines || []).map(line => [line.id, line]));
+        const formIds = new Set(this.productInputs.map(input => input.id));
+        if (!review.fingerprint || !linesById.size || linesById.size !== review.lines.length || formIds.size !== this.productInputs.length
+            || linesById.size !== formIds.size || [...formIds].some(id => !linesById.has(id))) {
+            throw new Error('Refresh the invoice: every financial row must match the reviewed trading lines.');
+        }
+        this.productInputs = this.productInputs.map(input => {
+            const line = linesById.get(input.id);
+            if (!line) throw new Error('Refresh the invoice: every financial row must match the reviewed trading lines.');
+            return {
+                ...input,
+                unitPrice: this.formatNativePrice(line.nativeUnitPrice),
+                quantity: `${line.quantity ?? ''} ${line.unit || ''}`.trim(),
+                amount: this.formatNativeAmount(line.nativeAmount)
+            };
+        });
+        this.selectedProductInputs = JSON.parse(JSON.stringify(this.productInputs));
+        this.total = {
+            ...this.total,
+            amount: this.formatNativeAmount(review.nativeTotal)
+        };
+
+        // Payments from the existing invoice query are USD-only. Keep their unit explicit
+        // until the server provides each payment's stored historical FX snapshot.
+        if (this.balance) {
+            this.balance = this.balance.map(row => row.usdPayment
+                ? row
+                : { ...row, name: `${row.name} (USD)`, amountHeading: 'AMOUNT (USD)', usdPayment: true });
+        }
+    }
+
+    formatNativePrice(value) {
+        if (value === null || value === undefined) return '';
+        return Number(value).toLocaleString('en-US', { useGrouping: false, minimumFractionDigits: 2, maximumFractionDigits: 8 });
+    }
+
+    formatNativeAmount(value) {
+        if (value === null || value === undefined) return '';
+        return Number(value).toFixed(2);
     }
 
     fillLastForm(products){
@@ -299,9 +388,9 @@ export default class FcbInvoiceForm extends LightningElement {
             let paymentAmount = 0;
             this.stem.Payments__r.forEach(payment => {
                 paymentAmount += payment.Amount__c;
-                this.balance.push({id: this.makeId(7), name: "CASH IN ADVANCE PAID ON " + new Date(payment.Date__c).toLocaleDateString('en-GB'), quantity: '', unitPrice: '', amount: - payment.Amount__c.toFixed(2)})
+                this.balance.push({id: this.makeId(7), name: "CASH IN ADVANCE PAID ON " + new Date(payment.Date__c).toLocaleDateString('en-GB'), quantity: '', unitPrice: '', amount: - payment.Amount__c.toFixed(2), amountHeading: 'AMOUNT'})
             })
-            this.balance.push({id: this.makeId(7), name: "BALANCE", quantity: '', unitPrice: '', amount: (Math.abs(totalAmount) - paymentAmount).toFixed(2)});
+            this.balance.push({id: this.makeId(7), name: "BALANCE", quantity: '', unitPrice: '', amount: (Math.abs(totalAmount) - paymentAmount).toFixed(2), amountHeading: 'AMOUNT'});
             console.log(this.balance);
 
         }
@@ -488,6 +577,11 @@ export default class FcbInvoiceForm extends LightningElement {
         try {
             if (this.isGenerateDisabled) return;
             this.vesselText = normalizeInvoiceVesselText(this.vesselText);
+            const operationSequence = this.invoiceFormLoadSequence;
+            const reviewedFxFingerprint = this.isManagedDocument ? this.tradeDocument.fingerprint : null;
+            const createProforma = this.proforma;
+            const includeDeliveryNotes = this.stem.Mailing_Requirement__c?.includes('-7');
+            const deliveryNoteEntityIds = this.products.map(product => product.id);
             this.actionExecuted = false;
             const { jsPDF } = window.jspdf;
             let doc = new jsPDF('p', 'pt', 'a4', true);
@@ -542,12 +636,12 @@ export default class FcbInvoiceForm extends LightningElement {
             }
             doc.text(this.attn.label + ': ' + this.attn.value, 40, doc.lastAutoTable.finalY + 30);
             doc.text(this.infoText, 40, doc.lastAutoTable.finalY + 50)
-            let tableRows = [['', '', 'USD', 'USD']];
+            let tableRows = [['', '', this.documentCurrencyCode, this.documentCurrencyCode]];
             tableRows = tableRows.concat(
                 this.productInputs.map(input => [
                     input.name,
                     input.quantity,
-                    input.unitPrice ? this.numberWithCommas(Number(input.unitPrice).toFixed(2)) : '',
+                    input.unitPrice ? this.numberWithCommas(this.isManagedDocument ? this.formatNativePrice(input.unitPrice) : Number(input.unitPrice).toFixed(2)) : '',
                     input.amount ? this.numberWithCommas(Number(input.amount).toFixed(2)) : ''
                 ])
             );
@@ -572,7 +666,7 @@ export default class FcbInvoiceForm extends LightningElement {
                 } else {
                     pageHeight = 50;
                     doc.autoTable({
-                        head: [['DESCRIPTION', 'QUANTITY', 'UNIT PRICE', 'AMOUNT']],
+                        head: [['DESCRIPTION', 'QUANTITY', this.unitPriceHeading, this.amountHeading]],
                         body: currentRows,
                         tableWidth: 'auto',
                         margin: { top: marginTop },
@@ -605,7 +699,7 @@ export default class FcbInvoiceForm extends LightningElement {
                 }
             })
             doc.autoTable({
-                head: [['DESCRIPTION', 'QUANTITY', 'UNIT PRICE', 'AMOUNT']],
+                head: [['DESCRIPTION', 'QUANTITY', this.unitPriceHeading, this.amountHeading]],
                 body: currentRows,
                 tableWidth: 'auto',
                 pageBreak: 'auto',
@@ -681,13 +775,13 @@ export default class FcbInvoiceForm extends LightningElement {
             this.addFooters(doc);
             const base64String = doc.output('datauristring').split(',')[1];
             let fields = this.mapLastInvoiceFormFields();
-            let selectedProducts = this.selectedProductInputs.map(product => {
-                if(product.id.length > 7) return product.id;
-            })
-            createInvoice({
+            const selectedProducts = this.selectedProductInputs.map(product => product.id)
+                .filter(id => typeof id === 'string' && id.length > 7);
+            const create = reviewedFxFingerprint ? createReviewedInvoice : createInvoice;
+            create({
                 stemId: this.stemId,
                 extraIds: selectedProducts,
-                createProforma: this.proforma,
+                createProforma,
                 isCreditNote: this.isCreditNote,
                 invoiceDate: this.stem.Mailing_Requirement__c?.includes('-3')
                     ? this._convertDate(new Date(this.stem.Delivery_Date__c))
@@ -698,9 +792,10 @@ export default class FcbInvoiceForm extends LightningElement {
                     ? this._convertDate(new Date(this.stem.Delivery_Date__c))
                     : null,
                 invoiceDueDate: this._convertDate(new Date(this.stem.Invoice_Due_Date__c)),
+                ...(reviewedFxFingerprint ? { reviewedFxFingerprint } : {}),
             }).then((result) => {
-                if (this.stem.Mailing_Requirement__c?.includes('-7')) {
-                    getBDNBase64Strings({ entityIds: this.products.map(product => product.id) }).then(async (bdn64Strings) => {
+                if (includeDeliveryNotes) {
+                    getBDNBase64Strings({ entityIds: deliveryNoteEntityIds }).then(async (bdn64Strings) => {
                         try {
                             const { PDFDocument } = window['pdfLib'] || window['PDFLib'];
                             const mergedPdf = await PDFDocument.create();
@@ -732,10 +827,11 @@ export default class FcbInvoiceForm extends LightningElement {
                                 invoiceVersionName: result.Name,
                                 extraIds: selectedProducts,
                                 body: combinedBase64String,
-                                createProforma: this.proforma,
+                                createProforma,
+                                reviewedFxFingerprint
                             }).then(() => {
                                 upsertLastInvoiceForm({ lastInvoiceForm: fields }).then(() => {
-                                    this.closeModal();
+                                    if (operationSequence === this.invoiceFormLoadSequence) this.closeModal();
                                     fireEvent(this.pageRef, "refreshInvoices", true);
                                 });
                             });
@@ -749,14 +845,19 @@ export default class FcbInvoiceForm extends LightningElement {
                         invoiceVersionName: result.Name,
                         extraIds: selectedProducts,
                         body: base64String,
-                        createProforma: this.proforma,
+                        createProforma,
+                        reviewedFxFingerprint
                     }).then(() => {
                         upsertLastInvoiceForm({ lastInvoiceForm: fields }).then(() => {
-                            this.closeModal();
+                            if (operationSequence === this.invoiceFormLoadSequence) this.closeModal();
                             fireEvent(this.pageRef, "refreshInvoices", true);
                         });
                     });
                 }
+            }, error => {
+                if (operationSequence !== this.invoiceFormLoadSequence) return;
+                this.formLoadError = error?.body?.message || error?.message || 'The invoice could not be created. Reopen it to review the source.';
+                this.actionExecuted = true;
             })
         } catch (error) {
             console.error(error);
@@ -845,6 +946,8 @@ export default class FcbInvoiceForm extends LightningElement {
         this.productInputs = [];
         this.isModalOpen = false;
         this.actionExecuted = true;
+        this.tradeDocument = undefined;
+        this.tradeDocumentError = undefined;
     }
 
     makeId(length) {

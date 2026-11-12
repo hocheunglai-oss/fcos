@@ -344,10 +344,10 @@ const EN = {
     "reconnect": "Reconnect Xero once to grant accounting.settings.read and the write-capable accounting.payments scope.",
     "reconciliationTitle": "Salesforce → Xero reconciliation",
     "fixedScope": "Fixed scope: from 1 Jan 2026",
-    "reconciliationDescription": "Compare scoped Salesforce invoices, bills, credits and payments with Xero. Missing dates or unsupported/incomplete payments remain exceptions.",
+    "reconciliationDescription": "Compare scoped Salesforce invoices, bills, credits and payments with Xero. Review credit allocations and prepayments in their own panels. Missing dates or unsupported payments remain exceptions.",
     "checkEverything": "Check everything",
     "checkingEverything": "Checking documents and payments…",
-    "completion": "Verified completion",
+    "completion": "Document and payment completion",
     "salesforceRecords": "Salesforce records",
     "correctInXero": "Correct in Xero",
     "awaitingSync": "Awaiting sync",
@@ -359,14 +359,14 @@ const EN = {
       "incomplete_check": "Check incomplete",
       "attention_required": "Action required",
       "sync_required": "Ready for reviewed sync",
-      "reconciled": "100% reconciled"
+      "reconciled": "Documents and payments reconciled"
     },
     "reconciliationDescriptions": {
       "not_checked": "Run Check everything to compare Salesforce and Xero.",
       "incomplete_check": "Completion requires document and payment checks.",
       "attention_required": "Resolve exceptions; preserve Xero history and differences for Finance review.",
       "sync_required": "Review, approve and run pending actions. FCOS then rechecks Xero.",
-      "reconciled": "All transactions match or have accepted legacy differences; no blockers remain. Retained differences stay visible."
+      "reconciled": "Checked documents and payments match or have accepted legacy differences. Retained differences stay visible."
     },
     "mappingTitle": "Finance-approved Product mappings",
     "mappingDescription": "Tax defaults to NONE; map buyer sales and supplier costs separately. Legacy suggestions require approval.",
@@ -401,6 +401,8 @@ const EN = {
     "applyPayments": "Apply exact payments",
     "reviewPaymentReference": "Review retained reference",
     "paymentReferenceTitle": "Review retained Xero payment reference",
+    "nativeHkdRecoveryTitle": "Confirm existing HKD payment",
+    "nativeHkdRecoveryDescription": "Review the original claim and confirmed Xero payment. Approval records the matching payment in FCOS.",
     "paymentReferenceDescription": "Salesforce has no payment reference. Verify invoice, bank, date, amount and currency, then link the existing Xero payment. Only the FCOS mapping changes.",
     "sourceReference": "Salesforce explicit reference",
     "sourceFallbackReference": "Salesforce payment name fallback",

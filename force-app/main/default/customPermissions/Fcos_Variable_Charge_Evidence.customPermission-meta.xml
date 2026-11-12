@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomPermission xmlns="http://soap.sforce.com/2006/04/metadata">
+    <description>Allows the FCOS variable-charge service to persist reviewed approval evidence. Trader profiles cannot override this server guard through Edit Read Only Fields.</description>
+    <isLicensed>false</isLicensed>
+    <label>FCOS Variable Charge Approval Evidence</label>
+</CustomPermission>

@@ -63,6 +63,8 @@ export default class FcbEditStemLineItemModal extends LightningElement {
     @track stemBuyerBrokers;
 
     @track isDisabledPartialCIA;
+    buyCurrencyCode = 'USD';
+    sellCurrencyCode = 'USD';
 
     @wire(getPaymentTermOptions, {recordTypeName: '$supplierPaymentTermRecordType'})
     wiredPaymentTerms(value) {
@@ -190,6 +192,52 @@ export default class FcbEditStemLineItemModal extends LightningElement {
     _reassignObject() {
       this._currentStemLineItem['transportationChanged'] = false
       this._currentStemLineItem = { ...this._currentStemLineItem };
+    }
+
+    get showBuyUsdPrice() {
+      return this.buyCurrencyCode !== 'HKD';
+    }
+
+    get showSellUsdPrice() {
+      return this.sellCurrencyCode !== 'HKD';
+    }
+
+    handleCurrencyReview(event) {
+      this.applyCurrencyReview(event.detail);
+    }
+
+    handleCurrencyChange(event) {
+      this.applyCurrencyReview(event.detail);
+    }
+
+    applyCurrencyReview(detail) {
+      if (detail?.recordId !== this.currentStemLineItem?.Id || !detail?.review) return;
+      const { direction, review } = detail;
+      if (direction !== 'Buy' && direction !== 'Sell') return;
+      const priceField = direction === 'Buy' ? 'Unit_Buy_At__c' : 'Unit_Sell_At__c';
+      const currencyField = `${direction}_Currency__c`;
+      const nativeField = `${direction}_HKD_Unit_Price__c`;
+      this._currentStemLineItem[priceField] = review.usdUnitPrice;
+      this._currentStemLineItem[currencyField] = review.currencyCode;
+      this._currentStemLineItem[nativeField] = review.currencyCode === 'HKD' ? review.nativeUnitPrice : null;
+      if (direction === 'Buy') {
+        this._unitBuyAt = Number(review.usdUnitPrice);
+        this.buyCurrencyCode = review.currencyCode;
+      } else {
+        this._unitSellAt = Number(review.usdUnitPrice);
+        this.sellCurrencyCode = review.currencyCode;
+      }
+      this._reassignObject();
+    }
+
+    stripManagedFxFields(fields) {
+      ['Buy', 'Sell'].forEach(direction => {
+        ['Currency__c', 'HKD_Unit_Price__c', 'HKD_Minimum__c', 'HKD_Lumpsum__c', 'FX_Rate__c', 'FX_Revision__c', 'FX_Effective_At__c', 'FX_Confirmed_At__c', 'FX_Side__c'].forEach(suffix => {
+          delete fields[`${direction}_${suffix}`];
+        });
+      });
+      if (this.buyCurrencyCode === 'HKD') delete fields.Unit_Buy_At__c;
+      if (this.sellCurrencyCode === 'HKD') delete fields.Unit_Sell_At__c;
     }
   
     _convertDate(date) {
@@ -346,6 +394,7 @@ export default class FcbEditStemLineItemModal extends LightningElement {
           fields.Unit_Buy_At__c = this.unitBuyAt;
           fields.Unit_Sell_At__c = this.unitSellAt;
           fields = { ...fields, ...this._currentStemLineItem };
+          this.stripManagedFxFields(fields);
           this.template.querySelector('lightning-record-edit-form').submit(fields); 
         }
       } else{

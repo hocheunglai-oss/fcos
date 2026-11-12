@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Buyer_Proforma__c</fullName>
+    <deleteConstraint>Restrict</deleteConstraint>
+    <label>Buyer Proforma</label>
+    <referenceTo>Invoice__c</referenceTo>
+    <relationshipLabel>Buyer Proforma Cash Events</relationshipLabel>
+    <relationshipName>BuyerProformaCashEvents</relationshipName>
+    <type>Lookup</type>
+</CustomField>

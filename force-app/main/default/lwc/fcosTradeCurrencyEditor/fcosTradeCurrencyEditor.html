@@ -1,0 +1,106 @@
+<template>
+    <template if:true={showEditor}>
+        <lightning-card title="Trading currency" icon-name="utility:currency">
+            <div class="slds-p-horizontal_small slds-p-bottom_small">
+                <p class="slds-text-title_caps slds-m-bottom_small">{sideLabel}</p>
+                <template if:true={isLoading}>
+                    <lightning-spinner alternative-text="Refreshing trading currency review" size="small"></lightning-spinner>
+                </template>
+                <template if:true={error}>
+                    <div class="slds-notify slds-notify_alert slds-alert_error slds-m-bottom_small" role="alert" aria-live="assertive">
+                        <span>{error}</span>
+                    </div>
+                </template>
+                <div class="slds-grid slds-wrap slds-gutters_small">
+                    <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-4">
+                        <lightning-combobox
+                            name="tradeCurrency"
+                            label="Currency"
+                            value={currency}
+                            options={currencyOptions}
+                            disabled={currencyDisabled}
+                            onchange={handleCurrencyChange}>
+                        </lightning-combobox>
+                    </div>
+                    <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-4">
+                        <lightning-input
+                            data-id="native-price"
+                            name="nativeUnitPrice"
+                            type="number"
+                            label={nativePriceLabel}
+                            value={nativeUnitPrice}
+                            step=".00000001"
+                            min="0"
+                            required
+                            disabled={controlsDisabled}
+                            onchange={handleNativePriceChange}>
+                        </lightning-input>
+                    </div>
+                    <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-4">
+                        <lightning-formatted-number
+                            class="equivalent"
+                            value={review.usdUnitPrice}
+                            format-style="currency"
+                            currency-code="USD"
+                            minimum-fraction-digits="2"
+                            maximum-fraction-digits="8">
+                        </lightning-formatted-number>
+                        <p class="slds-text-body_small">Reviewed USD equivalent</p>
+                    </div>
+                    <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-4">
+                        <p class="slds-text-heading_small">{rateLabel}</p>
+                        <p class="slds-text-body_small">{rateStatus}</p>
+                    </div>
+                </div>
+                <div class="slds-m-top_small slds-grid slds-gutters_small">
+                    <div class="slds-col">
+                        <lightning-button
+                            variant="neutral"
+                            label="Save price"
+                            onclick={handleSaveDraft}
+                            disabled={controlsDisabled}>
+                        </lightning-button>
+                    </div>
+                    <template if:true={requiresConfirmation}>
+                        <div class="slds-col">
+                            <lightning-button
+                                variant="brand"
+                                label="Confirm side"
+                                onclick={handleConfirm}
+                                disabled={controlsDisabled}>
+                            </lightning-button>
+                        </div>
+                    </template>
+                </div>
+                <template if:true={canAmend}>
+                    <template if:false={amendmentVisible}>
+                        <div class="slds-m-top_small">
+                            <lightning-button variant="destructive-text" label="Amend confirmed side" onclick={handleStartAmendment} disabled={controlsDisabled}></lightning-button>
+                        </div>
+                    </template>
+                    <template if:true={amendmentVisible}>
+                        <div class="slds-box slds-theme_shade slds-m-top_small">
+                            <p class="slds-text-title_bold slds-m-bottom_small">Amend confirmed side</p>
+                            <p class="slds-text-body_small slds-m-bottom_small">The current amendment rate is {amendmentRateLabel}. Saving creates a new draft version that must be confirmed separately.</p>
+                            <div class="slds-grid slds-wrap slds-gutters_small">
+                                <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-3">
+                                    <lightning-combobox name="amendmentCurrency" label="Proposed currency" value={amendmentCurrency} options={currencyOptions} onchange={handleAmendmentCurrencyChange} disabled={amendmentControlsDisabled}></lightning-combobox>
+                                </div>
+                                <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-3">
+                                    <lightning-input data-id="amendment-native-price" name="amendmentNativeUnitPrice" type="number" label={amendmentNativePriceLabel} value={amendmentNativeUnitPrice} step=".00000001" min="0" required onchange={handleAmendmentNativePriceChange} disabled={amendmentControlsDisabled}></lightning-input>
+                                </div>
+                                <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-3">
+                                    <lightning-textarea label="Amendment reason" value={amendmentReason} onchange={handleAmendmentReasonChange} required disabled={amendmentControlsDisabled}></lightning-textarea>
+                                </div>
+                            </div>
+                            <div class="slds-m-top_small slds-grid slds-gutters_small">
+                                <lightning-button class="slds-col" variant="brand" label="Save amendment draft" onclick={handleSaveAmendment} disabled={amendmentControlsDisabled}></lightning-button>
+                                <lightning-button class="slds-col" variant="neutral" label="Cancel amendment" onclick={cancelAmendment} disabled={controlsDisabled}></lightning-button>
+                            </div>
+                        </div>
+                    </template>
+                </template>
+            </div>
+        </lightning-card>
+    </template>
+</template>

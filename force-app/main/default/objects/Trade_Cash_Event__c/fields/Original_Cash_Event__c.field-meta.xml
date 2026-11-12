@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Original_Cash_Event__c</fullName>
+    <deleteConstraint>SetNull</deleteConstraint>
+    <label>Original Cash Event</label>
+    <referenceTo>Trade_Cash_Event__c</referenceTo>
+    <relationshipLabel>Refund Cash Events</relationshipLabel>
+    <relationshipName>RefundCashEvents</relationshipName>
+    <type>Lookup</type>
+</CustomField>

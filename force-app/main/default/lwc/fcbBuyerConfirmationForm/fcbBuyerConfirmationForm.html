@@ -22,7 +22,7 @@
                                     <div class="slds-col slds-size_11-of-12">
                                         <hr></hr>
                                     </div>
-                                    <lightning-button onclick={removeInput} data-id={input.id}
+                                    <lightning-button disabled={isHkdDocument} onclick={removeInput} data-id={input.id}
                                         variant="base" title="Remove Input" icon-name="utility:close"
                                         class="slds-col slds-size_1-of-12 slds-m-top_x-small slds-m-left_small"></lightning-button>
                                  </div>
@@ -35,15 +35,15 @@
                                     <div class={input.rowClass}>
                                         <div class="slds-grid slds-gutters row-content">
                                             <lightning-input class="slds-col slds-size_4-of-12"
-                                                value={input.label} onchange={handleChangeLabel} data-id={input.id}></lightning-input>
+                                                value={input.label} disabled={isHkdDocument} onchange={handleChangeLabel} data-id={input.id}></lightning-input>
                                             <lightning-input class="slds-col slds-size_6-of-12"
-                                                value={input.value} onchange={handleChangeValue} data-id={input.id}></lightning-input>
+                                                value={input.value} disabled={isHkdDocument} onchange={handleChangeValue} data-id={input.id}></lightning-input>
                                             <lightning-icon icon-name="utility:move" size="x-small" draggable="true"
                                                 class="drag-handle slds-col slds-size_1-of-12 slds-m-top_large" data-id={input.id}
                                                 ondragstart={handleDragStart} ondragover={handleDragOver} ondrop={handleDrop}></lightning-icon>
                                             <lightning-button icon-name="utility:close" variant="base"
                                                 class="slds-col slds-size_1-of-12 slds-m-top_medium"
-                                                onclick={removeInput} data-id={input.id}></lightning-button>
+                                                disabled={isHkdDocument} onclick={removeInput} data-id={input.id}></lightning-button>
                                         </div>
                                     </div>
 

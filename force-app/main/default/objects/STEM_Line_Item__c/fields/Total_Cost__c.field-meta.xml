@@ -1,8 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
     <fullName>Total_Cost__c</fullName>
-    <formula>IF(OR(ISBLANK(Quantity_Delivered_Per_BDN__c), Quantity_Delivered_Per_BDN__c = 0), Quantity__c  *   Unit_Buy_At__c, Quantity_Delivered_Per_BDN__c * Unit_Buy_At__c)</formula>
-    <formulaTreatBlanksAs>BlankAsZero</formulaTreatBlanksAs>
+    <formula>IF(
+    AND(ISPICKVAL(Buy_Currency__c, "HKD"), BLANKVALUE(Buy_FX_Rate__c, 0) &lt;= 0),
+    NULL,
+    IF(OR(ISBLANK(BLANKVALUE(Quantity_Delivered_Per_BDN__c, 0)), BLANKVALUE(Quantity_Delivered_Per_BDN__c, 0) = 0), BLANKVALUE(Quantity__c, 0)  *   IF(ISPICKVAL(Buy_Currency__c, "HKD"), BLANKVALUE(Buy_HKD_Unit_Price__c, 0) / Buy_FX_Rate__c, BLANKVALUE(Buy_USD_Unit_Price_Precise__c, BLANKVALUE(Unit_Buy_At__c, 0))), BLANKVALUE(Quantity_Delivered_Per_BDN__c, 0) * IF(ISPICKVAL(Buy_Currency__c, "HKD"), BLANKVALUE(Buy_HKD_Unit_Price__c, 0) / Buy_FX_Rate__c, BLANKVALUE(Buy_USD_Unit_Price_Precise__c, BLANKVALUE(Unit_Buy_At__c, 0))))
+)</formula>
+    <formulaTreatBlanksAs>BlankAsBlank</formulaTreatBlanksAs>
     <label>Total Cost</label>
     <precision>18</precision>
     <required>false</required>

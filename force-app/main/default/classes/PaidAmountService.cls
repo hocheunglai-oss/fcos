@@ -8,8 +8,9 @@ public class PaidAmountService {
                                                  FROM STEM_Line_Item__c WHERE Buyer_Invoice__c IN: invoiceIds AND Cancelled__c = false];
         List<STEM_Extra_Cost__c> stemExtraCosts = [SELECT Id, STEM__c, STEM__r.Total__c, Line_Total__c, Buyer_Invoice__c
                                                    FROM STEM_Extra_Cost__c WHERE Buyer_Invoice__c IN: invoiceIds AND Cancelled__c = false];
-        Map<Id, Invoice__c> invoiceMap = new Map<Id, Invoice__c>([SELECT Id, Amount__c, Exported__c, Is_CSV_Info_Changed__c FROM Invoice__c WHERE Id IN: invoiceIds]);
+        Map<Id, Invoice__c> invoiceMap = new Map<Id, Invoice__c>([SELECT Id, Document_Currency__c, Document_FX_Side__c, Document_FX_Confirmed_At__c, Document_FX_Fingerprint__c, Final_Of_Proforma__c, Reissue_Of_Invoice__c, Original_Invoice__c, Amount__c, Exported__c, Is_CSV_Info_Changed__c FROM Invoice__c WHERE Id IN: invoiceIds]);
         for(Invoice__c invoice: invoiceMap.values()){
+            if(FcosTradeDocumentService.isManagedDocument(invoice)) continue; // Native document totals are immutable and rounded at issuance.
             Decimal oldInvoiceAmount = invoice.Amount__c;
             invoice.Amount__c = 0;
             for(STEM_Line_Item__c stemLineItem: stemLineItems){

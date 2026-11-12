@@ -1,4 +1,11 @@
-trigger SupplierBidTrigger on Supplier_Bid__c (before insert, after insert,after update) {
+trigger SupplierBidTrigger on Supplier_Bid__c (before insert, before update, before delete, after insert,after update) {
+    if (Trigger.isBefore && (Trigger.isInsert || Trigger.isUpdate)) {
+        Map<Id,SObject> previousFxRows = new Map<Id,SObject>();
+        if (Trigger.isUpdate) for (SObject previousFxRow : Trigger.old) previousFxRows.put(previousFxRow.Id,previousFxRow);
+        FcosTradeCurrencyGuard.beforeSave(Trigger.new,previousFxRows,new List<String>{'Buy'});
+    }
+    if (Trigger.isBefore && Trigger.isDelete) FcosTradeCurrencyGuard.beforeDelete(Trigger.old, new List<String>{'Buy'});
+
   if (ContextManager.skipTriggers) return;
 
   if(Trigger.isBefore && Trigger.isInsert){

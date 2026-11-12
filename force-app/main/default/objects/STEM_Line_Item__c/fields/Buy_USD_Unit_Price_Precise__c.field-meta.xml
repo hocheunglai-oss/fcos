@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Buy_USD_Unit_Price_Precise__c</fullName>
+    <description>Reviewed USD unit price retained to eight decimals after currency selection. Null preserves the legacy USD price field. Server managed.</description>
+    <label>Buy USD Unit Price Precise</label><precision>18</precision><scale>8</scale><type>Number</type>
+</CustomField>

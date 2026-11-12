@@ -126,21 +126,41 @@ function controlClient(tables, corrupt = null) {
   } };
 }
 
-async function scoped(f) {
+async function scoped(f, context = safetyContext) {
   const reader = salesforceReader(f.tables);
-  const salesforce = await loadSalesforceDocumentLinkSnapshot(cutoff, f.links, { querySalesforce: reader.query, safetyContext, xeroSnapshot: f.xero });
+  const salesforce = await loadSalesforceDocumentLinkSnapshot(cutoff, f.links, { querySalesforce: reader.query, safetyContext: context, xeroSnapshot: f.xero });
   const client = controlClient(f.tables);
   const controls = await loadStoredDocumentLinkControls(client, { salesforce, xeroSnapshot: f.xero, documentLinks: f.links });
   return { salesforce, controls, reader, client, classified: buildFinancialClassifications(salesforce, f.xero, controls, { linkFirst: true }) };
 }
 
-async function full(f) {
+async function full(f, context = safetyContext) {
   const reader = salesforceReader(f.tables);
-  const salesforce = await loadSalesforceFinancialSnapshot(cutoff, reader.query, safetyContext);
+  const salesforce = await loadSalesforceFinancialSnapshot(cutoff, reader.query, context);
   const client = controlClient(f.tables);
   const controls = await loadStoredFinancialControls(client);
   return { salesforce, controls, reader, client, classified: buildFinancialClassifications(salesforce, f.xero, controls, { linkFirst: true }) };
 }
+
+test('both Salesforce document snapshots select the native marker without additional queries', async () => {
+  const f = fixture();
+  const context = clone(safetyContext);
+  for (const object of ['Invoice__c', 'Supplier_Invoice__c']) context.fields[object].push('Document_FX_Fingerprint__c');
+  for (const record of [...f.buyers, ...f.suppliers]) record.Document_FX_Fingerprint__c = null;
+  f.suppliers[0].Document_FX_Fingerprint__c = 'a'.repeat(64);
+  for (const read of [full, scoped]) {
+    const baseline = await read(f);
+    const current = await read(f, context);
+    assert.equal(current.reader.log.length, baseline.reader.log.length);
+    for (const entry of current.reader.log.filter(({ table }) => ['Invoice__c', 'Supplier_Invoice__c'].includes(table))) {
+      assert.match(entry.soql, /\bDocument_FX_Fingerprint__c\b/);
+    }
+    const result = current.classified.rows.find(row => row.salesforceId === f.suppliers[0].Id);
+    assert.equal(result.status, 'blocked');
+    assert.equal(result.proposedPayload, null);
+    assert.match(result.blockers[0], /explicit FX workflow/);
+  }
+});
 
 test('scoped supplier link is byte-equivalent to full classification and excludes unrelated hydration', async (t) => {
   const f = fixture(1000); const baseline = await full(f); const current = await scoped(f);

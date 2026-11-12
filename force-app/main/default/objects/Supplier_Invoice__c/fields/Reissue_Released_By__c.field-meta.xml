@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Reissue_Released_By__c</fullName>
+    <deleteConstraint>SetNull</deleteConstraint>
+    <label>Reissue Released By</label>
+    <referenceTo>User</referenceTo>
+    <relationshipLabel>Supplier Native Reissue Releases</relationshipLabel>
+    <relationshipName>SupplierNativeReissueReleases</relationshipName>
+    <type>Lookup</type>
+</CustomField>

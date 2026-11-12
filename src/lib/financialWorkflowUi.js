@@ -74,7 +74,7 @@ export function paymentReferenceReviewEligible(row = {}) {
     && row.bankAccountId && row.xeroDocumentUrl && row.paymentDate && row.currency
       && Number.isFinite(Number(row.amount)) && Number(row.amount) > 0
       && row.sourceFingerprint && row.reviewFingerprint
-      && row.referenceComparison && !row.referenceComparison.sourceReference
+      && row.referenceComparison && (row.nativeFxReadbackConfirmed === true || !row.referenceComparison.sourceReference)
       && (row.referenceComparison.sourceFallbackReference || row.salesforcePaymentName)
       && row.referenceComparison.xeroReference);
 }
@@ -84,6 +84,7 @@ export function paymentReferenceReviewTarget(rows, target) {
   const targets = Array.isArray(target) ? target : [target];
   const current = targets.map((item) => (rows || []).find((row) => row.salesforcePaymentId === item.salesforcePaymentId));
   return { rows: current.filter(Boolean), eligible: targets.length > 0 && targets.length <= 25
+    && (targets.length === 1 || current.every(row => !row?.nativeFxReadbackConfirmed))
     && new Set(targets.map((item) => item.salesforcePaymentId)).size === targets.length
     && current.every((row, index) => row && paymentReferenceReviewEligible(row)
       && row.sourceFingerprint === targets[index].sourceFingerprint && row.reviewFingerprint === targets[index].reviewFingerprint) };

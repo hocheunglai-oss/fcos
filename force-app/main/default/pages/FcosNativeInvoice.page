@@ -1,0 +1,38 @@
+<apex:page controller="FcosNativeInvoiceController" renderAs="pdf" showHeader="false" sidebar="false" standardStylesheets="false" applyBodyTag="false">
+<html><head><style>
+    @page { size: A4; margin: 18mm; }
+    body { font-family: Arial Unicode MS; font-size: 10pt; color: #142c42; }
+    h1 { font-size: 16pt; text-align: center; } h2 { font-size: 13pt; }
+    .contact { font-size: 8pt; text-align: center; border-bottom: 1px solid #142c42; padding-bottom: 12px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 14px; }
+    th,td { padding: 7px 4px; border-bottom: 1px solid #ddd; vertical-align: top; }
+    th { text-align: left; } .number { text-align: right; white-space: nowrap; }
+    .text { white-space: pre-wrap; } .accounting { font-size: 9pt; margin-top: 20px; }
+</style></head><body>
+<h1><apex:outputText value="{!presentation['legalEntity']}"/></h1>
+<div class="contact"><apex:outputText value="{!presentation['companyContact']}"/></div>
+<h2><apex:outputText value="{!title}"/> — <apex:outputText value="{!invoice.Name}"/></h2>
+<apex:outputPanel rendered="{!finalFromProforma}"><p><strong>Final of proforma: </strong><apex:outputText value="{!proformaReference}"/></p></apex:outputPanel>
+<p><strong>Buyer: </strong><apex:outputText value="{!presentation['buyerName']}"/></p>
+<p class="text"><apex:outputText value="{!presentation['buyerAddress']}"/></p>
+<p><strong>Attention: </strong><apex:outputText value="{!presentation['attention']}"/></p>
+<table>
+<tr><td>Vessel / IMO</td><td><apex:outputText value="{!presentation['vessel']}"/> / <apex:outputText value="{!presentation['imo']}"/></td><td>Port</td><td><apex:outputText value="{!presentation['port']}"/></td></tr>
+<tr><td>Invoice date</td><td><apex:outputText value="{0,date,dd MMM yyyy}"><apex:param value="{!invoice.Invoice_Date__c}"/></apex:outputText></td><td>Due date</td><td><apex:outputText value="{0,date,dd MMM yyyy}"><apex:param value="{!invoice.Invoice_Due_Date__c}"/></apex:outputText></td></tr>
+<tr><td>Delivery date</td><td><apex:outputText value="{0,date,dd MMM yyyy}"><apex:param value="{!invoice.Delivery_Date__c}"/></apex:outputText></td><td>Reference / PO</td><td><apex:outputText value="{!presentation['reference']}"/> / <apex:outputText value="{!presentation['customerPo']}"/></td></tr>
+</table>
+<table>
+<thead><tr><th>Description</th><th>Pricing basis</th><th>Quantity</th><th class="number">Unit price ({!currencyCode})</th><th class="number">Amount ({!currencyCode})</th></tr></thead>
+<tbody><apex:repeat value="{!lines}" var="line"><tr><td><apex:outputText value="{!line.description}"/></td><td><apex:outputText value="{!line.pricingBasis}"/></td><td><apex:outputText value="{!line.quantity}"/></td><td class="number"><apex:outputText value="{!line.unitPrice}"/></td><td class="number"><apex:outputText value="{!line.amount}"/></td></tr></apex:repeat></tbody>
+</table>
+<p class="number"><strong>Total {!currencyCode} <apex:outputText value="{!nativeTotal}"/></strong></p>
+<div class="accounting">USD accounting equivalent: USD <apex:outputText value="{!accountingTotal}"/>. <apex:outputPanel rendered="{!isHkd}">Confirmed company rate: <apex:outputText value="{!companyRate}"/> HKD per USD.</apex:outputPanel> Settlement currency: {!currencyCode}.</div>
+<apex:outputPanel rendered="{!showDeposit}"><p><strong>Deposit requested: </strong>{!currencyCode} <apex:outputText value="{!depositRequested}"/><apex:outputPanel rendered="{!isHkd}"> (USD accounting equivalent <apex:outputText value="{!depositUsdEquivalent}"/>)</apex:outputPanel>, due <apex:outputText value="{0,date,dd MMM yyyy}"><apex:param value="{!depositDueDate}"/></apex:outputText>.</p><p><apex:outputText value="{!depositDisclosure}"/></p></apex:outputPanel>
+<p><strong>Payment term: </strong><apex:outputText value="{!presentation['paymentTerm']}"/></p>
+<p><apex:outputText value="{!presentation['paymentInstruction']}"/></p>
+<p class="text"><strong>Beneficiary bank: </strong><apex:outputText value="{!presentation['beneficiaryBank']}"/></p>
+<p class="text"><strong>Intermediary bank: </strong><apex:outputText value="{!presentation['intermediaryBank']}"/></p>
+<p><strong>Beneficiary: </strong><apex:outputText value="{!presentation['beneficiary']}"/></p>
+<p><strong>Account number: </strong><apex:outputText value="{!presentation['accountNumber']}"/></p>
+</body></html>
+</apex:page>

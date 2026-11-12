@@ -52,8 +52,9 @@ import {
 import { loadDashboardAccountExposureBatch, loadDashboardCounterpartySearch, resolveUnifiedCounterpartyMemberIds } from '../_dashboardUnifiedCounterpartyService.js';
 import { generateSpecialTermsDocument } from '../_specialTermsExport.js';
 import { groupPaymentReminderRows } from '../_paymentReminderRouting.js';
+import { loadPaymentReminderCurrencies, paymentReminderCurrencyTotal, paymentReminderMoney } from '../_paymentReminderCurrency.js';
 import { applyBuyerReminderRules, buyerReminderAccountType, buyerReminderCandidateByAccount, buyerReminderRuleMap, canonicalSalesforceAccountId, evaluateBuyerReminderSelection } from '../_buyerInvoiceReminderRules.js';
-import { completePaymentReminderBatch, completePaymentReminderOperation, mapPaymentReminderBatches, paymentReminderBatchHash, paymentReminderDeliveryUncertain, paymentReminderPreviewSecret, paymentReminderRequestHash, repairPaymentReminderTimelines, reservePaymentReminderBatch, reservePaymentReminderOperation, savePaymentReminderTimeline, signPaymentReminderPreview, verifyPaymentReminderPreview } from '../_paymentReminderOperations.js';
+import { completePaymentReminderBatch, completePaymentReminderOperation, mapPaymentReminderBatches, paymentReminderBatchHash, paymentReminderDeliveryUncertain, paymentReminderPreparationFingerprint, paymentReminderPreviewSecret, paymentReminderRequestHash, repairPaymentReminderTimelines, reservePaymentReminderBatch, reservePaymentReminderOperation, savePaymentReminderTimeline, signPaymentReminderPreview, verifyPaymentReminderPreview } from '../_paymentReminderOperations.js';
 import { accountNameKey, buildAccountManagerRows, groupEligibleSalesforceAccounts, managerDisplayText, normalizeAccountManagerUserIds } from '../_accountManagers.js';
 import { ACCOUNT_PIC_MAX_CSV_BYTES, accountPicDirectoryProjection, accountPicFlexibleDirectoryProjection, accountPicFlexiblePayloadHash, accountPicPayloadHash, accountPicRowColorPayloadHash, normalizeAccountPicGrid, normalizeAccountPicRows, parseAccountPicCsv, validAccountPicAccountId } from '../_accountPicDirectories.js';
 import { normalizeAccountPicRowColorRules } from '../../src/lib/accountPicRowColors.js';
@@ -234,6 +235,7 @@ import { createDashboardFinanceLoader, financeToday, summarizeDashboardFinance, 
 import { secondaryMopsFailureMessage } from '../_marketSourceHealth.js';
 import { ciModuleAccess, isReadOnlyCiProfile, isReadOnlyMarketAction, requireReadOnlyCiOperation } from '../_readOnlyCiAccess.js';
 import { isDeploymentReadOnly, requireDeploymentMutationAllowed } from '../_deploymentReadOnly.js';
+import { loadStemDetailLineItems } from '../_stemDetailLineItems.js';
 import { isReadOnlyHedgeDeskAction } from '../_deploymentReadActions.js';
 import { marketAssistantSettings, runMarketAssistant, saveMarketAssistantSettings } from '../_marketAssistant.js';
 import { analyzeMarketReportLibrary, loadMarketReportCatalogue } from '../_marketReportAnalysis.js';
@@ -13986,8 +13988,11 @@ function paymentReminderRecipients(rows) {
   return paymentReminderRoutingForRows(rows).to;
 }
 
+function paymentReminderDisplayCurrency(row) {
+  return row.nativeCurrencyEvidence ? row.currency : 'USD';
+}
+
 function paymentReminderTemplateContext(report, rows, selected, routing = null) {
-  const totalReceivable = (rows || []).reduce((sum, row) => sum + Number(row.receivableBalance || 0), 0);
   const selectedRow = selected || {};
   const brokerRows = rows?.length ? rows : [selectedRow];
   const routingInfo = routing || paymentReminderRoutingForRows(rows || []).groups[0] || null;
@@ -13997,8 +14002,8 @@ function paymentReminderTemplateContext(report, rows, selected, routing = null) 
     buyerName: selectedRow.buyerName || 'Customer',
     primaryRecipientName: routingInfo?.primaryRecipientName || selectedRow.buyerName || 'Customer',
     buyerGroupName: selectedRow.buyerGroupName || '',
-    invoiceAmount: money(selectedRow.invoiceAmount),
-    receivableBalance: money(selectedRow.receivableBalance),
+    invoiceAmount: paymentReminderMoney(selectedRow.invoiceAmount, paymentReminderDisplayCurrency(selectedRow)),
+    receivableBalance: paymentReminderMoney(selectedRow.receivableBalance, paymentReminderDisplayCurrency(selectedRow)),
     buyerInvoiceDueDate: prettyDate(selectedRow.buyerInvoiceDueDate),
     buyerTraderInCharge: selectedRow.buyerTraderInCharge || '',
     buyerAccountsEmail: selectedRow.buyerAccountsEmail || '',
@@ -14016,7 +14021,9 @@ function paymentReminderTemplateContext(report, rows, selected, routing = null) 
     today: prettyDate(report.today),
     dueThrough: prettyDate(report.dueThrough),
     invoiceCount: String((rows || []).length),
-    totalReceivable: money(totalReceivable),
+    totalReceivable: paymentReminderCurrencyTotal((rows || []).map((row) => ({
+      currency: paymentReminderDisplayCurrency(row), receivableBalance: row.receivableBalance,
+    }))),
   };
 }
 
@@ -14114,12 +14121,13 @@ function buildBuyerInvoicePaymentReminderEmail(report, settings, selected, rows,
       const severity = overdueEmailStyles(row.daysUntilDue, row.prpspStatus);
       const cellStyle = `border-bottom:1px solid ${severity.border};padding:7px 8px;vertical-align:top`;
       const nowrapCellStyle = `${cellStyle};white-space:nowrap`;
+      const currency = paymentReminderDisplayCurrency(row);
       return `
     <tr style="${severity.row}">
       <td style="${cellStyle};font-weight:600;min-width:150px">${escapeHtml(row.stemName)}</td>
       <td style="${cellStyle};min-width:110px">${escapeHtml(row.buyerName || '-')}</td>
-      <td style="${nowrapCellStyle};text-align:right">${money(row.invoiceAmount)}</td>
-      <td style="${nowrapCellStyle};text-align:right;font-weight:600">${money(row.receivableBalance)}</td>
+      <td style="${nowrapCellStyle};text-align:right">${paymentReminderMoney(row.invoiceAmount, currency)}</td>
+      <td style="${nowrapCellStyle};text-align:right;font-weight:600">${paymentReminderMoney(row.receivableBalance, currency)}</td>
       <td style="${nowrapCellStyle}">${prettyDate(row.buyerInvoiceDueDate)}</td>
       <td style="${cellStyle};min-width:84px">${escapeHtml(row.buyerTraderInCharge || '-')}</td>
       <td style="${nowrapCellStyle}">
@@ -14149,7 +14157,7 @@ function buildBuyerInvoicePaymentReminderEmail(report, settings, selected, rows,
     </div>`;
   const bodyHtml = paymentReminderContentHtml(body);
   const htmlWithTable = insertInvoiceTable(bodyHtml, tableHtml);
-  const invoiceText = selectedRows.map((row) => `${row.stemName} | ${row.buyerName || '-'} | Receivable Balance ${money(row.receivableBalance)} | Due ${prettyDate(row.buyerInvoiceDueDate)} | ${row.status} | Overdue ${overdueDisplayValue(row.daysUntilDue)} | Buyer Trader ${row.buyerTraderInCharge || '-'}`).join('\n');
+  const invoiceText = selectedRows.map((row) => `${row.stemName} | ${row.buyerName || '-'} | Receivable Balance ${paymentReminderMoney(row.receivableBalance, paymentReminderDisplayCurrency(row))} | Due ${prettyDate(row.buyerInvoiceDueDate)} | ${row.status} | Overdue ${overdueDisplayValue(row.daysUntilDue)} | Buyer Trader ${row.buyerTraderInCharge || '-'}`).join('\n');
   const bodyText = hasHtmlMarkup(body) ? htmlToPlainText(body) : body;
   const html = `
     <div style="font-family:Inter,Arial,sans-serif;color:#1f2937;line-height:1.45">
@@ -14192,13 +14200,17 @@ async function loadBuyerInvoicePaymentReminderContext(body = {}, accessContext =
   }
   const selected = report.rows.find((row) => row.stemId === stemId);
   if (!selected) throw appError('Selected invoice is no longer in the current outstanding invoice window.', 404);
-  const candidates = report.rows
+  const scopedRows = report.rows
     .filter((row) => buyerReminderCandidateByAccount(row, selected))
     .sort((a, b) => {
       if (a.buyerInvoiceDueDate !== b.buyerInvoiceDueDate) return a.buyerInvoiceDueDate.localeCompare(b.buyerInvoiceDueDate);
       return String(a.stemName || '').localeCompare(String(b.stemName || ''));
     });
-  return { settings, settingsRevision: Number(stored.meta.revision || 0), report, selected, candidates, sender };
+  const candidates = await loadPaymentReminderCurrencies(scopedRows);
+  const reviewedSelection = candidates.find((row) => row.stemId === stemId);
+  if (!reviewedSelection) throw appError('The selected invoice currency could not be reviewed. Reopen the payment reminder.', 409);
+  return { settings, settingsRevision: Number(stored.meta.revision || 0), report,
+    selected: reviewedSelection, candidates, sender };
 }
 
 function preparePaymentReminderRouting(report, settings, selected, candidates) {
@@ -14232,32 +14244,13 @@ function preparePaymentReminderRouting(report, settings, selected, candidates) {
   return { eligibleCandidates, routing, firstGroup, firstPreparedGroup, preparedGroups, email };
 }
 
-function paymentReminderPreparationFingerprint({ candidates, preparedGroups, settingsRevision }) {
-  return createHash('sha256').update(JSON.stringify({
-    candidates: candidates.map((row) => ({
-      stemId: row.stemId,
-      lastModifiedAt: row.lastModifiedAt || null,
-      eligible: row.paymentReminderEligible === true,
-      ruleRevision: Number(row.reminderRuleRevision || 0),
-      ruleUpdatedAt: row.reminderRuleUpdatedAt || null,
-    })).sort((left, right) => left.stemId.localeCompare(right.stemId)),
-    groups: preparedGroups.map((group) => ({
-      key: group.key,
-      stemIds: [...group.stemIds].sort(),
-      to: uniqueEmailList(group.to).map((email) => email.toLowerCase()).sort(),
-      cc: uniqueEmailList(group.cc).map((email) => email.toLowerCase()).sort(),
-      bcc: uniqueEmailList(group.bcc).map((email) => email.toLowerCase()).sort(),
-    })).sort((left, right) => left.key.localeCompare(right.key)),
-    settingsRevision,
-  })).digest('hex');
-}
-
 function paymentReminderConflictDetails(candidates = []) {
   return {
     candidates: candidates.map((row) => ({
       stemId: row.stemId,
       stemName: row.stemName,
       buyerName: row.buyerName,
+      currency: row.currency,
       receivableBalance: row.receivableBalance,
       buyerInvoiceDueDate: row.buyerInvoiceDueDate,
       paymentReminderEligible: row.paymentReminderEligible === true,
@@ -14265,6 +14258,13 @@ function paymentReminderConflictDetails(candidates = []) {
       lastModifiedAt: row.lastModifiedAt || null,
     })),
   };
+}
+
+function publicPaymentReminderCandidate({ nativeCurrencyEvidence: _privateEvidence, ...candidate }) {
+  if (_privateEvidence && candidate.paymentReminderEligible === true) {
+    return { ...candidate, reminderCurrencyVerified: true };
+  }
+  return candidate;
 }
 
 async function buyerInvoicePaymentReminderPrepare(body, req, accessContext = null) {
@@ -14285,8 +14285,8 @@ async function buyerInvoicePaymentReminderPrepare(body, req, accessContext = nul
     prepareMs,
   }, paymentReminderPreviewSecret());
   return {
-    selected,
-    candidates,
+    selected: publicPaymentReminderCandidate(selected),
+    candidates: candidates.map(publicPaymentReminderCandidate),
     to: firstPreparedGroup.to,
     allTo: routing.to,
     cc: firstPreparedGroup.cc,
@@ -17635,7 +17635,18 @@ async function salesforceStemDetailUncached(body, req = null, accessContext = nu
 
   const [recordRaw, lineItems, extraCosts, buyerBrokers, buyerInvoices] = await Promise.all([
     sfRequest(`/sobjects/stem__c/${actualStemId}`).then(cleanRecord),
-    queryRows(`SELECT Id, Name, STEM__c, Product__c, Product__r.Name, Product__r.Family, Supplier_Name__c, BDN_Company__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Max__c, Quantity_in_MT__c, Is_Quantity_Range__c, Price_Per_Unit__c, Cost_Per_Unit__c, Unit_Sell_At__c, Unit_Buy_At__c, Unit_Cost__c, Subtotal_Sell_At__c, Subtotal_Buy_At__c, Total_Price__c, Total_Cost__c, Supplier_Invoice__c, Payment_Term__c, BDN_Number__c, Cancelled__c, Buyers_Broker__c, Buyer_Broker__c, Buyers_Brokers_Commission_Per_Unit__c, Buyers_Brokers_Commission_Lumpsum__c, Commission_Cost__c, Supplier_Broker__c, Suppliers_Brokers_Commission_Per_Unit__c, Suppliers_Brokers_Commission_Lumpsum__c, Offer_Line_Item__r.UnitPrice, Offer_Line_Item__r.Supplier_Unit_Price__c FROM STEM_Line_Item__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: false }),
+    loadStemDetailLineItems(actualStemId, {
+      query: queryRows,
+      describe: async () => (await getOrLoadRuntimeCache({
+        namespace: 'salesforce-stem-detail-line-schema', version: '1', accessScope: 'schema',
+        apiVersion: salesforceCacheApiIdentity(), payload: {}, ttlSeconds: 60,
+        tags: ['salesforce:schema', 'salesforce:schema:stem_line_item__c'], force: isDeploymentReadOnly(),
+        loader: async () => {
+          const { fields } = await sfRequest('/sobjects/STEM_Line_Item__c/describe/');
+          return { fields: fields.map(({ name }) => ({ name })) };
+        },
+      })).value,
+    }),
     queryRows(`SELECT Id, Name, Description__c, Product2Id__c, Product2Id__r.Name, Product2Id__r.Family, Supplier_Name__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_in_MT__c, Quantity_Range_Max__c, Is_Quantity_Range__c, Unit_Price__c, Unit_Cost__c, Line_Total__c, Line_Total_Buy__c, Supplier_Invoice__c, Supplier_Issued__c, Payment_Term__c, Cancelled__c FROM STEM_Extra_Cost__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: false }),
     queryRows(`SELECT Id, STEM__c, Buyer_Broker__c, Refcode_Index__c, Exported__c FROM STEM_Buyer_Broker__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: false }),
     queryRows(`SELECT Id, Name, STEM__c, Proforma__c, Deprecated__c, Amount__c FROM Invoice__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: false }),
@@ -17912,7 +17923,7 @@ async function salesforceStemDetailFull(body, req = null, accessContext = null) 
   assertStemReadRequest(body);
   const stemId = String(body?.stemId || '').trim();
   const cached = await cachedSalesforceValue({
-    namespace: 'salesforce-stem-detail-v3-active-lines',
+    namespace: 'salesforce-stem-detail-v4-native-prices',
     ttlSeconds: 15,
     payload: { stemId },
     tags: ['salesforce:stem', `salesforce:stem:${stemId}`],

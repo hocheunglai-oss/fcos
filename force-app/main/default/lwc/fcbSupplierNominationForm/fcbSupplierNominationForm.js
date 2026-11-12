@@ -1,3 +1,5 @@
+import prepareNativeDocument from '@salesforce/apex/FcosNativeConfirmationService.prepareWithRemarks';
+import readNativeDocument from '@salesforce/apex/FcosNativeConfirmationService.readPrepared';
 import { LightningElement , api , track , wire} from 'lwc';
 import jsPDF from '@salesforce/resourceUrl/jsPDF';
 import {loadScript} from "lightning/platformResourceLoader";
@@ -9,6 +11,7 @@ import generateDocument from "@salesforce/apex/NominationController.generateDocu
 import getStemSupplierInfo from "@salesforce/apex/NominationController.getStemSupplierInfo";
 import getSupplierPaymentTerms from "@salesforce/apex/NominationController.getSupplierPaymentTerms";
 import getNominationSpecialTerms from "@salesforce/apex/NominationController.getNominationSpecialTerms";
+import getTradeDocument from "@salesforce/apex/FcosTradeDocumentService.nomination";
 import {updateRecord} from "lightning/uiRecordApi";
 import { fireEvent } from 'c/pubsub';
 import { ShowToastEvent } from "lightning/platformShowToastEvent";
@@ -29,6 +32,8 @@ export default class FcbSupplierNominationForm extends LightningElement {
     specialTermsReady = false;
     formLoadSequence = 0;
     inFlightNominationIds = [];
+    tradeDocument;
+    nativePreparation;
 
     draggedId;
     hoverId;
@@ -54,6 +59,8 @@ export default class FcbSupplierNominationForm extends LightningElement {
         this.partialCiaPaymentInputId = null;
         this.formLoadError = null;
         this.operationError = null;
+        this.tradeDocument = undefined;
+        this.nativePreparation = undefined;
         this.specialTermsReady = false;
         this.isModalOpen = true;
         this.actionExecuted = false;
@@ -77,7 +84,23 @@ export default class FcbSupplierNominationForm extends LightningElement {
                 this.closeModal();
                 return;
             }
-            if (!lastSavedContract || this.hasPartialCiaPayment) {
+            loadStage = 'fx';
+            const review = await getTradeDocument({ nominationId: recordData.Id });
+            if (loadSequence !== this.formLoadSequence) return;
+            if (review?.currencyCode === 'HKD' && !review.fingerprint) {
+                throw new Error('Reopen the nomination to review its agreed FX before previewing or generating.');
+            }
+            this.tradeDocument = review;
+            if (this.isHkdDocument) {
+                const preparation = await readNativeDocument({ nominationId: recordData.Id, reviewedFxFingerprint: review.fingerprint });
+                if (loadSequence !== this.formLoadSequence) return;
+                if (preparation) {
+                    this.applyNativePreparation(preparation, recordData.Id, review.fingerprint);
+                    this.specialTermsReady = true;
+                    return;
+                }
+            }
+            if (!lastSavedContract || this.hasPartialCiaPayment || this.isHkdDocument) {
                 loadStage = 'payment';
                 const paymentTerms = await getSupplierPaymentTerms({ paymentTerms: [recordData.Payment_Term__c] });
                 if (loadSequence !== this.formLoadSequence) return;
@@ -86,9 +109,13 @@ export default class FcbSupplierNominationForm extends LightningElement {
             }
             if (lastSavedContract) {
                 loadStage = 'saved form';
-                this.inputs = JSON.parse(recordData.Last_Saved_Inputs__c.replace(/&quot;/g, '"')).map(input => ({ ...input, isPaymentLocked: false }));
                 this.specialTerms = JSON.parse(recordData.Last_Saved_Remarks__c.replace(/&quot;/g, '"'));
-                this.applyPartialCiaPayment();
+                if (this.isHkdDocument) {
+                    this.prefillInputs(this.paymentTerms);
+                } else {
+                    this.inputs = JSON.parse(recordData.Last_Saved_Inputs__c.replace(/&quot;/g, '"')).map(input => ({ ...input, isPaymentLocked: false }));
+                    this.applyPartialCiaPayment();
+                }
             } else {
                 loadStage = 'remarks';
                 const specialTerms = await getNominationSpecialTerms({ lineItemIds: [...lineItems, ...extraCosts].map(line => line.Id), remarks: recordData.Remarks__c, enquiryId: recordData.Enquiry__c });
@@ -104,6 +131,7 @@ export default class FcbSupplierNominationForm extends LightningElement {
             this.formLoadError = error?.message?.startsWith('Supplier partial CIA') || error?.message?.startsWith('Select a valid supplier') || error?.message?.startsWith('The supplier partial-CIA source')
                 ? error.message
                 : loadStage === 'payment' ? SUPPLIER_BALANCE_TERM_ERROR
+                : loadStage === 'fx' ? (error?.body?.message || error?.message || 'The agreed nomination currency could not be loaded. Reopen the nomination.')
                 : loadStage === 'remarks' ? 'Supplier nomination special terms could not be loaded. Reopen the nomination; refresh the page if the problem continues.'
                 : 'Supplier nomination form could not be loaded. Reopen the nomination; refresh the page if the problem continues.';
         } finally {
@@ -171,6 +199,57 @@ export default class FcbSupplierNominationForm extends LightningElement {
 
     finishDocumentOperation(nominationId) {
         this.inFlightNominationIds = this.inFlightNominationIds.filter(id => id !== nominationId);
+    }
+
+    get isHkdDocument() {
+        return this.tradeDocument?.currencyCode === 'HKD';
+    }
+
+    get documentCurrencyCode() {
+        return this.isHkdDocument ? 'HKD' : 'USD';
+    }
+
+    get displayInputs() {
+        return this.inputs.map(input => ({ ...input, isRemovalDisabled: this.isHkdDocument || input.isPaymentLocked }));
+    }
+
+    get hasNativePreparation() {
+        return Boolean(this.nativePreparation);
+    }
+
+    applyNativePreparation(preparation, nominationId, reviewedFxFingerprint) {
+        if (preparation?.nominationId !== nominationId || preparation.reviewedFxFingerprint !== reviewedFxFingerprint
+            || preparation.currencyCode !== 'HKD' || !preparation.contentFingerprint) {
+            throw new Error('The prepared HKD confirmation did not match this nomination and FX review.');
+        }
+        const rows = JSON.parse(preparation.savedInputs);
+        const remarks = preparation.savedRemarks ? JSON.parse(preparation.savedRemarks) : { label: 'REMARKS', value: '' };
+        if (!Array.isArray(rows) || !rows.length || !remarks || typeof remarks !== 'object' || Array.isArray(remarks)) {
+            throw new Error('The prepared HKD confirmation content is incomplete.');
+        }
+        this.inputs = rows.map((row, index) => this.decorateRow({ ...row, id: `prepared-${index}` }));
+        this.specialTerms = remarks;
+        this.nativePreparation = preparation;
+    }
+
+    async prepareReviewedNomination(nominationId, reviewedFxFingerprint, operationSequence) {
+        const reviewedRemarks = this.nativePreparation ? null : JSON.stringify(this.specialTerms);
+        const preparation = await prepareNativeDocument({ nominationId, reviewedFxFingerprint, reviewedRemarks });
+        if (operationSequence !== this.formLoadSequence) return null;
+        this.applyNativePreparation(preparation, nominationId, reviewedFxFingerprint);
+        return preparation;
+    }
+
+    nativeLine(lineId) {
+        if (!this.isHkdDocument) return null;
+        const line = this.tradeDocument?.lines?.find(line => line.id === lineId);
+        if (!line) throw new Error('The reviewed HKD nomination is missing a pricing line.');
+        return line;
+    }
+
+    formatCurrency(value) {
+        if (value === null || value === undefined) return '';
+        return this.numberWithCommas(this.isHkdDocument ? Number(value).toLocaleString('en-US', { useGrouping: false, minimumFractionDigits: 2, maximumFractionDigits: 8 }) : Number(value).toFixed(2));
     }
 
     prefillInputs(paymentTerms) {
@@ -243,7 +322,9 @@ export default class FcbSupplierNominationForm extends LightningElement {
                         ? this.numberWithCommas(stemLineItem.Quantity__c) + '-' + this.numberWithCommas(stemLineItem.Quantity_Max__c) + ' ' + stemLineItem.Unit_of_Measure__c
                         : this.numberWithCommas(stemLineItem.Quantity__c) + ' ' + stemLineItem.Unit_of_Measure__c
                 });
-                this.inputs.push({ id: this.makeId(7), label: "PRICE", value: 'USD ' + this.numberWithCommas(stemLineItem.Unit_Buy_At__c.toFixed(2)) + '/' + stemLineItem.Unit_of_Measure__c });
+                const nativeLine = this.nativeLine(stemLineItem.Id);
+                const unitPrice = nativeLine ? nativeLine.nativeUnitPrice : stemLineItem.Unit_Buy_At__c;
+                this.inputs.push({ id: this.makeId(7), label: "PRICE", value: this.documentCurrencyCode + ' ' + this.formatCurrency(unitPrice) + '/' + stemLineItem.Unit_of_Measure__c });
                 if (this.stem.STEM_Extra_Costs__r) {
                     this.stem.STEM_Extra_Costs__r.filter(stemExtraCost => stemExtraCost.STEM_Line_Item__c === stemLineItem.Id && stemExtraCost.Line_Total_Buy__c != null && stemExtraCost.Line_Total_Buy__c != 0
                         && (stemExtraCost.Transportation_Included__c === false || stemExtraCost.Nundination_Type__c === 'Buy')).forEach((stemExtraCost => {
@@ -284,6 +365,7 @@ export default class FcbSupplierNominationForm extends LightningElement {
     }
 
     handleChangeLabel(event){
+        if (this.isHkdDocument) return;
         if (this.hasPartialCiaPayment && event.target.dataset.id === this.partialCiaPaymentInputId) return;
         try {
             this.inputs.find(input => input.id === event.target.dataset.id).label = event.detail.value;    
@@ -293,6 +375,7 @@ export default class FcbSupplierNominationForm extends LightningElement {
     }
 
     handleChangeValue(event){
+        if (this.isHkdDocument) return;
         if (this.hasPartialCiaPayment && event.target.dataset.id === this.partialCiaPaymentInputId) return;
         try {
             this.inputs.find(input => input.id === event.target.dataset.id).value = event.detail.value;   
@@ -302,18 +385,22 @@ export default class FcbSupplierNominationForm extends LightningElement {
     }
 
     handleChangeSpecialTermLabel(event){
+        if (this.nativePreparation) return;
         this.specialTerms.label = event.detail.value; 
     }
 
     handleChangeSpecialTermValue(event){
+        if (this.nativePreparation) return;
         this.specialTerms.value = event.detail.value;
     }
 
     addNewInput(){
+        if (this.isHkdDocument) return;
         this.inputs.push({id: this.makeId(7), label: '', value: ''});
     }
 
     removeInput(event){
+        if (this.isHkdDocument) return;
         if (this.hasPartialCiaPayment && event.target.dataset.id === this.partialCiaPaymentInputId) return;
         this.inputs = this.inputs.filter(input => {
             return input.id !== event.target.dataset.id;
@@ -410,19 +497,20 @@ export default class FcbSupplierNominationForm extends LightningElement {
         if (this.isDocumentActionDisabled) return;
         const operationSequence = this.formLoadSequence;
         const lockedNominationId = this.startDocumentOperation();
+        const reviewedFxFingerprint = this.isHkdDocument ? this.tradeDocument.fingerprint : null;
         this.operationError = null;
         this.actionExecuted = false;
 
         try {
-            const fields = {
-                Id: lockedNominationId,
-                Saved_Inputs__c: JSON.stringify(this.inputs),
-                Saved_Remarks__c: JSON.stringify(this.specialTerms)
-            };
-            await updateRecord({ fields });
-            if (operationSequence !== this.formLoadSequence) return;
+            if (reviewedFxFingerprint) {
+                if (!await this.prepareReviewedNomination(lockedNominationId, reviewedFxFingerprint, operationSequence)) return;
+            } else {
+                await updateRecord({ fields: { Id: lockedNominationId, Saved_Inputs__c: JSON.stringify(this.inputs),
+                    Saved_Remarks__c: JSON.stringify(this.specialTerms) } });
+                if (operationSequence !== this.formLoadSequence) return;
+            }
             const vfUrl =
-                '/apex/NominationToSupplier?nominationId=' + fields.Id;
+                '/apex/NominationToSupplier?nominationId=' + lockedNominationId;
 
             window.open(vfUrl, '_blank');
             this.actionExecuted = true;
@@ -595,11 +683,12 @@ export default class FcbSupplierNominationForm extends LightningElement {
         try {
             if (this.isDocumentActionDisabled) return;
             lockedNominationId = this.startDocumentOperation();
+            const reviewedFxFingerprint = this.isHkdDocument ? this.tradeDocument.fingerprint : null;
             this.operationError = null;
             this.actionExecuted = false;
             
             const fields = {
-                Id: this.nomination.Id,
+                Id: lockedNominationId,
                 Saved_Inputs__c: JSON.stringify(this.inputs),
                 Saved_Remarks__c: JSON.stringify(this.specialTerms)
             };
@@ -615,18 +704,25 @@ export default class FcbSupplierNominationForm extends LightningElement {
                 }
             }
 
-            await updateRecord({ fields });
-            if (operationSequence !== this.formLoadSequence) return;
+            let preparation;
+            if (reviewedFxFingerprint) {
+                preparation = await this.prepareReviewedNomination(lockedNominationId, reviewedFxFingerprint, operationSequence);
+                if (!preparation) return;
+            } else {
+                await updateRecord({ fields });
+                if (operationSequence !== this.formLoadSequence) return;
+            }
             await generateDocument({
                 nominationId: fields.Id,
                 fileUrl,
-                fileName
+                fileName,
+                reviewedFxFingerprint
             });
 
             const generatedFields = {
                 Id: fields.Id,
-                Last_Saved_Inputs__c: fields.Saved_Inputs__c,
-                Last_Saved_Remarks__c: fields.Saved_Remarks__c,
+                Last_Saved_Inputs__c: preparation ? preparation.savedInputs : fields.Saved_Inputs__c,
+                Last_Saved_Remarks__c: preparation ? preparation.savedRemarks : fields.Saved_Remarks__c,
                 PDF__c: '🟢',
                 Additional_Subject__c: additionalSubject
             };
@@ -709,6 +805,8 @@ export default class FcbSupplierNominationForm extends LightningElement {
 
     closeModal() {
         this.formLoadSequence++;
+        this.tradeDocument = undefined;
+        this.nativePreparation = undefined;
         this.specialTermsReady = false;
         this.inputs = [];
         this.isModalOpen = false;
@@ -792,14 +890,19 @@ export default class FcbSupplierNominationForm extends LightningElement {
                 : this.numberWithCommas(extraCost.Quantity__c) + ' ' + extraCost.Unit_of_Measure__c
         }
 
+        const nativeLine = this.nativeLine(extraCost.Id);
+        const unitPrice = nativeLine ? nativeLine.nativeUnitPrice : extraCost.Unit_Cost__c;
+        const minimum = nativeLine ? nativeLine.nativeMinimum : extraCost.Minimum_Buy_At__c;
+        const lumpsum = nativeLine ? nativeLine.nativeLumpsum : extraCost.Lumpsum_Cost__c;
+        const currencyCode = this.documentCurrencyCode;
         let value =
             !extraCost.Fixed__c
-                ? quantity + ` AT USD ${this.numberWithCommas(formatter.format(extraCost.Unit_Cost__c))}/${extraCost.Unit_of_Measure__c}  ${
-                    extraCost.Minimum_Buy_At__c
-                        ? `MINIMUM USD ${this.numberWithCommas(formatter.format(extraCost.Minimum_Buy_At__c))}`
+                ? quantity + ` AT ${currencyCode} ${this.numberWithCommas(formatter.format(unitPrice))}/${extraCost.Unit_of_Measure__c}  ${
+                    minimum
+                        ? `MINIMUM ${currencyCode} ${this.numberWithCommas(formatter.format(minimum))}`
                         : ''
                 }`
-                : `USD ${this.numberWithCommas(formatter.format(extraCost.Lumpsum_Cost__c))} LUMPSUM`;
+                : `${currencyCode} ${this.numberWithCommas(formatter.format(lumpsum))} LUMPSUM`;
 
         return {id: this.makeId(7), label, value};
     }

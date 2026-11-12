@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Supplier_Invoice__c</fullName>
+    <deleteConstraint>Restrict</deleteConstraint>
+    <label>Supplier Invoice</label>
+    <referenceTo>Supplier_Invoice__c</referenceTo>
+    <relationshipLabel>Trade Cash Allocations</relationshipLabel>
+    <relationshipName>SupplierTradeCashAllocations</relationshipName>
+    <type>Lookup</type>
+</CustomField>

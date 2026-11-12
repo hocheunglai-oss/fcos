@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<PermissionSet xmlns="http://soap.sforce.com/2006/04/metadata">
+    <classAccesses><apexClass>FcosTradeCashService</apexClass><enabled>true</enabled></classAccesses>
+    <customPermissions><enabled>true</enabled><name>Fcos_Trading_FX_Settlement</name></customPermissions>
+    <description>Finance cash settlement actions with immutable server-managed evidence. Assign alongside trading FX read access.</description>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Event__c.Bank_Currency__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Event__c.Bank_Evidence__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Event__c.Bank_Native_Amount__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Event__c.Bank__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Event__c.Buyer_Proforma__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Event__c.Cash_HKD_Amount__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Event__c.Cash_USD_Amount__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Event__c.Credit_Invoice__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Event__c.Credit_Supplier_Invoice__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Event__c.Currency__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Event__c.FX_Effective_At__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Event__c.FX_Rate__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Event__c.FX_Revision__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Event__c.Operation_Id__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Event__c.Original_Bank_Allocation__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Event__c.Original_Carrying_USD__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Event__c.Original_Cash_Event__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Event__c.Payment_Date__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Event__c.Reference__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Event__c.Request_Fingerprint__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Event__c.Settlement_FX_USD__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Event__c.Supplier_Proforma__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Event__c.Trade_FX_Side__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Allocation__c.Allocated_Cash_USD__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Allocation__c.Allocated_HKD__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Allocation__c.Allocation_Date__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Allocation__c.Bank_Native_Allocation__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Allocation__c.Buyer_Invoice__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Allocation__c.Currency__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Allocation__c.Invoice_Carrying_USD__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Allocation__c.Operation_Id__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Allocation__c.Payment__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Allocation__c.Request_Fingerprint__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Allocation__c.Reverses_Allocation__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Allocation__c.Settlement_FX_USD__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>false</editable><field>Trade_Cash_Allocation__c.Supplier_Invoice__c</field><readable>true</readable></fieldPermissions>
+    <label>FCOS Native Cash Settlement</label>
+    <objectPermissions><allowCreate>false</allowCreate><allowDelete>false</allowDelete><allowEdit>false</allowEdit><allowRead>true</allowRead><modifyAllRecords>false</modifyAllRecords><object>Trade_Cash_Event__c</object><viewAllRecords>false</viewAllRecords></objectPermissions>
+    <objectPermissions><allowCreate>false</allowCreate><allowDelete>false</allowDelete><allowEdit>false</allowEdit><allowRead>true</allowRead><modifyAllRecords>false</modifyAllRecords><object>Trade_Cash_Allocation__c</object><viewAllRecords>false</viewAllRecords></objectPermissions>
+</PermissionSet>

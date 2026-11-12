@@ -8,6 +8,8 @@ import { NavigationMixin } from "lightning/navigation";
 import { fireEvent } from 'c/pubsub';
 import { refreshApex } from "@salesforce/apex";
 import { updateRecord , createRecord} from "lightning/uiRecordApi";
+import previewTradeDocument from "@salesforce/apex/FcosTradeDocumentService.preview";
+import recordNativeSupplierInvoice from "@salesforce/apex/FcosTradeDocumentService.recordSupplierInvoice";
 import getSupplierVariableChargeReadiness from "@salesforce/apex/VariableChargeInvoiceReadinessService.getSupplierReadiness";
 import getSupplierMasterContractReadiness from "@salesforce/apex/MasterContractInvoiceReadinessService.getSupplierReadiness";
 
@@ -55,6 +57,53 @@ export default class FcbSupplierInvoices extends  NavigationMixin (
   @track invoiceAmountValue;
   calculatedAmount;
   @track supplierVariableChargeReadiness;
+  @track currencyReview;
+  @track currencyReviewError = '';
+  currencyReviewLoading = false;
+  currencyReviewRequest = 0;
+  createdNativeInvoiceId = null;
+
+  get isHkdInvoice() { return this.currencyReview?.currencyCode === 'HKD'; }
+  get isManagedInvoice() { return this.isHkdInvoice || Boolean(this.currencyReview?.reissueOfId); }
+  get nativeInvoiceRecorded() { return Boolean(this.createdNativeInvoiceId); }
+  get invoiceAmountLabel() { return this.isHkdInvoice ? 'Invoice Amount (HKD)' : 'Invoice Amount (USD)'; }
+  get createButtonLabel() { return this.createdNativeInvoiceId ? 'Retry Invoice File Attachment' : 'Create Supplier Invoice'; }
+  get currencyReviewSummary() {
+    if (!this.currencyReview) return '';
+    return this.isHkdInvoice
+      ? `HKD ${this._numberWithCommas(Number(this.currencyReview.nativeTotal))} · USD ${this._numberWithCommas(Number(this.currencyReview.usdTotal))} · Company rate ${this.currencyReview.rate} HKD per USD`
+      : `USD ${this._numberWithCommas(Number(this.currencyReview.usdTotal))}`;
+  }
+  get currencyConfirmedAt() { return this.currencyReview?.confirmedAt || ''; }
+
+  async refreshCurrencyReview() {
+    const request = ++this.currencyReviewRequest;
+    this.currencyReview = null;
+    this.currencyReviewError = '';
+    if (!this.supplierValue || !this.selectedProducts?.length) { this.currencyReviewLoading = false; return; }
+    this.currencyReviewLoading = true;
+    try {
+      const review = await previewTradeDocument({ stemId: this.recordId, direction: 'Buy', supplierId: this.supplierValue, lineIds: [...this.selectedProducts] });
+      if (request !== this.currencyReviewRequest) return;
+      this.currencyReview = review;
+      if (review.currencyCode === 'HKD' || review.reissueOfId) this.invoiceAmountValue = Number(review.nativeTotal);
+    } catch (error) {
+      if (request !== this.currencyReviewRequest) return;
+      this.currencyReviewError = error.body?.message || error.message || 'Review and confirm supplier trading prices before creating the invoice.';
+    } finally { if (request === this.currencyReviewRequest) this.currencyReviewLoading = false; }
+  }
+
+  async finishNativeInvoice() {
+    const binder = this.template.querySelector('c-fcb-file-upload-binder');
+    if (!binder) throw new Error('The invoice was recorded. Refresh and attach its supplier invoice file.');
+    binder.relatedTo = this.createdNativeInvoiceId;
+    await binder.bindWithParent();
+    this.handleReset();
+    await Promise.all([refreshApex(this.wiredProductSuppliers), refreshApex(this.wiredSupplierInvoices)]);
+    this.isSaved = true;
+    this.dispatchEvent(new ShowToastEvent({ title: 'Supplier Invoice Saved', variant: 'success' }));
+    fireEvent(this.pageRef, 'refreshSupplierInvoicesList', true);
+  }
 
   @track productColumns = COLS;
   @track productInfo;
@@ -78,7 +127,8 @@ export default class FcbSupplierInvoices extends  NavigationMixin (
   }
 
   get supplierInvoiceCreateDisabled() {
-    return !this.isSaved || (this.supplierVariableChargeReadiness && this.supplierVariableChargeReadiness.ready !== true);
+    if (this.createdNativeInvoiceId) return !this.isSaved;
+    return !this.isSaved || this.currencyReviewLoading || (this.selectedProducts?.length > 0 && !this.currencyReview) || (this.supplierVariableChargeReadiness && this.supplierVariableChargeReadiness.ready !== true);
   }
 
   async loadSupplierVariableChargeReadiness() {
@@ -168,6 +218,8 @@ export default class FcbSupplierInvoices extends  NavigationMixin (
   async handleSubmit(event) {
     try {
       this.isSaved = false;
+      this.currencyReviewError = '';
+      if (this.createdNativeInvoiceId) { await this.finishNativeInvoice(); return; }
       const readiness = await this.loadSupplierVariableChargeReadiness();
       if (readiness && readiness.ready !== true) {
         this.dispatchEvent(new ShowToastEvent({
@@ -222,10 +274,17 @@ export default class FcbSupplierInvoices extends  NavigationMixin (
         this.isSaved = true;
         return;
       }
+      const reviewedCurrency = this.currencyReview;
+      const latest = await previewTradeDocument({ stemId: this.recordId, direction: 'Buy', supplierId: this.supplierValue, lineIds: [...this.selectedProducts] });
+      this.currencyReview = latest;
+      if (latest.currencyCode === 'HKD' || latest.reissueOfId) this.invoiceAmountValue = Number(latest.nativeTotal);
+      if (!reviewedCurrency || latest.fingerprint !== reviewedCurrency.fingerprint) {
+        throw new Error('Supplier prices, selected lines or currency changed. Review the refreshed amount before creating the invoice.');
+      }
       let products = this.productInfo.filter(product => this.selectedProducts.includes(product.id))
       const fields = {};
       fields.Name = this.invoiceNumber;
-      fields.Invoice_Amount__c = this.invoiceAmountValue;
+      fields.Invoice_Amount__c = this.isManagedInvoice ? Number(this.currencyReview.usdTotal) : this.invoiceAmountValue;
       fields.Bank_Details__c = this.bankDetailsValue ? this.bankDetailsValue : '';
       fields.FCBS_Reference__c = this.fcbsReferenceVisible ? this.fcbsReference : '';
       fields.Supplier__c = this.supplierValue;
@@ -253,6 +312,13 @@ export default class FcbSupplierInvoices extends  NavigationMixin (
       expectedDueDate.setDate(expectedDueDate.getDate() + daysToAdd);
 
       const expectedDateStr = expectedDueDate.toISOString().split('T')[0];
+      if (this.isManagedInvoice) {
+        fields.Invoice_Due_Date__c = expectedDateStr;
+        this.createdNativeInvoiceId = await recordNativeSupplierInvoice({ stemId: this.recordId, supplierId: this.supplierValue,
+          lineIds: [...this.selectedProducts], reviewedFxFingerprint: this.currencyReview.fingerprint, invoiceFields: fields });
+        await this.finishNativeInvoice();
+        return;
+      }
       const supplierInvoice = this.supplierInvoices.find(supplierInvoice => supplierInvoice.Supplier__c === this.supplierValue 
         && supplierInvoice.STEM__c === this.recordId && supplierInvoice.Supplier_Delivery_Date__c === this.deliveryDateValue
         && supplierInvoice.Invoice_Due_Date__c === expectedDateStr);
@@ -275,7 +341,9 @@ export default class FcbSupplierInvoices extends  NavigationMixin (
         })
       } 
     } catch (error) {
-      console.error(error)
+      this.currencyReviewError = `${this.createdNativeInvoiceId ? 'Invoice recorded; retry attaching the file. ' : ''}${error.body?.message || error.message || 'Unable to create supplier invoice.'}`;
+      this.dispatchEvent(new ShowToastEvent({ title: 'Supplier Invoice requires attention', message: this.currencyReviewError, variant: 'error' }));
+      this.isSaved = true;
     }
   }
 
@@ -348,6 +416,7 @@ export default class FcbSupplierInvoices extends  NavigationMixin (
   }
 
   async handleChange(event){
+    if (this.createdNativeInvoiceId) return;
     try {
       const [supplierId, paymentTerm] = event.detail.value.split('_');
       this.optionValue = event.detail.value;
@@ -360,6 +429,7 @@ export default class FcbSupplierInvoices extends  NavigationMixin (
       this.setFcsbReference(products);
       this.recaclulateInoviceAmountValue();
       await this.loadSupplierVariableChargeReadiness();
+      await this.refreshCurrencyReview();
     } catch (error) {
       console.error(error)
     } 
@@ -416,10 +486,12 @@ export default class FcbSupplierInvoices extends  NavigationMixin (
     } 
   }
 
-  handleProductChange(event) {
+  async handleProductChange(event) {
+    if (this.createdNativeInvoiceId) return;
     try { 
       this.selectedProducts = event.detail.selectedRows.map(row => row.id);
       this.recaclulateInoviceAmountValue();
+      await this.refreshCurrencyReview();
     } catch (error) {
       console.error(error)
     }
@@ -431,6 +503,7 @@ export default class FcbSupplierInvoices extends  NavigationMixin (
   }
   
   handleChangeInvoiceAmount(event){
+    if (this.isManagedInvoice) return;
     this.invoiceAmountValue = event.target.value;
   }
 
@@ -445,6 +518,11 @@ export default class FcbSupplierInvoices extends  NavigationMixin (
   }
 
   handleReset() {
+    this.currencyReviewRequest += 1;
+    this.currencyReview = null;
+    this.currencyReviewError = '';
+    this.currencyReviewLoading = false;
+    this.createdNativeInvoiceId = null;
     this.productInfo = null;
     this.invoiceNumber = null;
     this.selectedProducts = [];

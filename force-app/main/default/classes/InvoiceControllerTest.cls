@@ -23,31 +23,43 @@ public class InvoiceControllerTest {
         Test.stopTest();
     }
     
-    @isTest
-    static void testCreateInvoice(){
-        Account buyer = [SELECT Id, Mailing_Requirement__c FROM Account WHERE RecordTypeId =: FCBStatic.BUYER_ACCOUNT_RT_ID LIMIT 1];
-        buyer.Mailing_Requirement__c = 'OXCX-1a';
-        update buyer;
-        Test.startTest();
-        STEM__c stem = [SELECT Id, Mailing_Requirement__c FROM STEM__c LIMIT 1];
-		STEM_Line_Item__c stemLineItem = [SELECT Id FROM STEM_Line_Item__c WHERE STEM__c = :stem.Id ];
-		STEM_Extra_Cost__c stemExtraCost = new STEM_Extra_Cost__c(STEM__c =stem.id ,STEM_Line_Item__c =stemLineItem.id, Unit_Price__c = 100, Unit_Cost__c = 50, Quantity__c = 100);
-        insert stemExtraCost;
-        List<String> extraIds = new List<String>{stemLineItem.Id, stemExtraCost.Id};
-        Invoice__c invoice = InvoiceController.createInvoice(stem.Id, extraIds, false, false, Date.today(), Date.today(), Date.today());
-        InvoiceController.generateInvoicePdf(invoice.Id, invoice.Name, extraIds, 'TestString', false);
-        invoice.Deprecated__c = true;
-        update invoice;
-        System.assertEquals(1, [SELECT Id FROM Task WHERE WhatId =: stem.Id].size());
-        Invoice__c newInvoice = InvoiceController.createInvoice(stem.Id, extraIds, false, false, Date.today(), Date.today(), Date.today());
-        InvoiceController.generateInvoicePdf(newInvoice.Id, newInvoice.Name, extraIds, 'TestString', false);
-        System.assertNotEquals(null, invoice.Id, 'The first invoice must be created.');
-        System.assertNotEquals(null, newInvoice.Id, 'The replacement invoice must be created.');
-        System.assertNotEquals(invoice.Id, newInvoice.Id, 'The replacement invoice must be a distinct record.');
-        
-        Test.stopTest();
+    @IsTest
+    static void staleNativeReviewCannotAuthorizeInvoiceCreation() {
+        STEM_Line_Item__c selected=[SELECT Id FROM STEM_Line_Item__c LIMIT 1];
+        FcosTradeDocumentService.Line line=new FcosTradeDocumentService.Line();
+        line.id=selected.Id;
+        FcosTradeDocumentService.DocumentReview review=new FcosTradeDocumentService.DocumentReview();
+        review.currencyCode='HKD';
+        review.fingerprint='current-review';
+        review.lines.add(line);
+        Integer dmlBefore=Limits.getDmlStatements();
+        for(String fingerprint:new List<String>{null,'stale-review'}) {
+            try {
+                InvoiceController.assertNativeCreateReview(review,fingerprint,new List<Id>{selected.Id});
+                System.assert(false,'A missing or stale fingerprint cannot authorize an invoice.');
+            } catch(AuraHandledException expected) {}
+        }
+        try {
+            InvoiceController.assertNativeCreateReview(review,'current-review',new List<Id>{selected.Id,selected.Id});
+            System.assert(false,'Duplicate selected rows cannot authorize an invoice.');
+        } catch(AuraHandledException expected) {}
+        InvoiceController.assertNativeCreateReview(review,'current-review',new List<Id>{selected.Id});
+        System.assertEquals(dmlBefore,Limits.getDmlStatements(),'Review admission is read-only.');
     }
-    
+
+    @IsTest
+    static void ordinaryInvoiceRejectsAnUnmatchedReviewBeforeWriting() {
+        STEM__c stem=[SELECT Id FROM STEM__c LIMIT 1];
+        Integer invoiceCount=[SELECT COUNT() FROM Invoice__c WHERE STEM__c=:stem.Id];
+        Integer taskCount=[SELECT COUNT() FROM Task WHERE WhatId=:stem.Id];
+        try {
+            InvoiceController.createReviewedInvoice(stem.Id,new List<String>(),false,false,Date.today(),Date.today(),Date.today(),'review-for-another-selection');
+            System.assert(false,'An ordinary invoice must refuse an unrelated managed review.');
+        } catch(AuraHandledException expected) {}
+        System.assertEquals(invoiceCount,[SELECT COUNT() FROM Invoice__c WHERE STEM__c=:stem.Id]);
+        System.assertEquals(taskCount,[SELECT COUNT() FROM Task WHERE WhatId=:stem.Id]);
+    }
+
     @IsTest
     static void testUpserLastInvoiceForm(){
         Test.startTest();

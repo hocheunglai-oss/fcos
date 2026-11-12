@@ -48,6 +48,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { accountClKeyLabel } from '@/lib/accountDisplay';
 import { canonicalizeBuyerInvoiceEmailValue } from '@/lib/buyerInvoiceEmailSettings';
 import { paymentReminderCopyLine } from '@/lib/paymentReminderClipboard';
+import { reminderAccountingTotal, reminderCurrency, reminderMoney, reminderTotals } from '@/lib/paymentReminderDisplay';
 import { latestPaymentReminderSentAt } from '@/lib/paymentReminderState';
 import { numericValue, textValue } from '@/lib/displayValue';
 import { cn } from '@/lib/utils';
@@ -1724,9 +1725,8 @@ function PaymentReminderModal({ row, rows = [], initialSettings, open, daysAhead
     const selected = new Set(selectedIds);
     return eligibleCandidates.filter((candidate) => selected.has(candidate.stemId));
   }, [eligibleCandidates, selectedIds]);
-  const selectedReceivable = useMemo(() => (
-    selectedRows.reduce((sum, candidate) => sum + Number(candidate.receivableBalance || 0), 0)
-  ), [selectedRows]);
+  const selectedReceivable = useMemo(() => reminderTotals(selectedRows), [selectedRows]);
+  const selectedAccountingUsd = useMemo(() => reminderAccountingTotal(selectedRows), [selectedRows]);
   const selectedRoutingGroups = useMemo(() => {
     const selected = new Set(selectedIds);
     return (data?.routingGroups || [])
@@ -1766,15 +1766,14 @@ function PaymentReminderModal({ row, rows = [], initialSettings, open, daysAhead
     || {}
   ), [row, selectedRows]);
   const previewContext = useMemo(() => {
-    const totalReceivable = selectedRows.reduce((sum, candidate) => sum + Number(candidate.receivableBalance || 0), 0);
     return {
       stemName: previewSelectedRow?.stemName || '',
       keyStem: previewSelectedRow?.keyStem || '',
       buyerName: previewSelectedRow?.buyerName || 'Customer',
       primaryRecipientName: selectedPreviewGroup?.primaryRecipientName || previewSelectedRow?.buyerName || 'Customer',
       buyerGroupName: previewSelectedRow?.buyerGroupName || '',
-      invoiceAmount: fmtMoney(previewSelectedRow?.invoiceAmount),
-      receivableBalance: fmtMoney(previewSelectedRow?.receivableBalance),
+      invoiceAmount: reminderMoney(previewSelectedRow?.invoiceAmount, reminderCurrency(previewSelectedRow), true),
+      receivableBalance: reminderMoney(previewSelectedRow?.receivableBalance, reminderCurrency(previewSelectedRow), true),
       buyerInvoiceDueDate: fmtDate(previewSelectedRow?.buyerInvoiceDueDate),
       buyerTraderInCharge: previewSelectedRow?.buyerTraderInCharge || '',
       buyerAccountsEmail: previewSelectedRow?.buyerAccountsEmail || '',
@@ -1792,7 +1791,7 @@ function PaymentReminderModal({ row, rows = [], initialSettings, open, daysAhead
 	      invoiceStatus: previewSelectedRow?.status || '',
       daysAhead: String(daysAhead ?? DEFAULT_EMAIL_SETTINGS.daysAhead),
       invoiceCount: String(selectedRows.length),
-      totalReceivable: fmtMoney(totalReceivable),
+      totalReceivable: reminderTotals(selectedRows, true),
     };
 	  }, [daysAhead, previewSelectedRow, selectedPreviewGroup, selectedPreviewRecipients.bcc, selectedPreviewRecipients.cc, selectedPreviewRecipients.to, selectedRows]);
 	  const renderedPreviewSubject = useMemo(() => (
@@ -2096,7 +2095,10 @@ function PaymentReminderModal({ row, rows = [], initialSettings, open, daysAhead
                     </div>
                     <div>
                       <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Receivable</div>
-                      <div className="mt-1 text-lg font-semibold text-slate-950">{fmtMoney(selectedReceivable)}</div>
+                      <div className="mt-1 text-lg font-semibold text-slate-950">{selectedReceivable}</div>
+                      {selectedRows.some((candidate) => reminderCurrency(candidate) === 'HKD') && (
+                        <div className="mt-1 text-xs text-slate-500">USD accounting equivalent: {reminderMoney(selectedAccountingUsd, 'USD')}</div>
+                      )}
                     </div>
                     <div>
                       <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Email batches</div>
@@ -2195,7 +2197,13 @@ function PaymentReminderModal({ row, rows = [], initialSettings, open, daysAhead
                                 {brokerRoutingLabel(candidate.buyerBrokerRoutingMode)}
                               </span>
                             </td>
-                            <td className="px-3 py-2 text-right font-semibold text-slate-950">{fmtMoney(candidate.receivableBalance)}</td>
+                            <td className="px-3 py-2 text-right font-semibold text-slate-950">
+                              <div>{reminderMoney(candidate.receivableBalance, reminderCurrency(candidate))}</div>
+                              <div className="text-[11px] font-normal text-slate-500">Invoice: {reminderMoney(candidate.invoiceAmount, reminderCurrency(candidate))}</div>
+                              {reminderCurrency(candidate) === 'HKD' && (
+                                <div className="text-[11px] font-normal text-slate-500">Outstanding USD equivalent: {reminderMoney(candidate.accountingReceivableUsd, 'USD')}</div>
+                              )}
+                            </td>
                             <td className="px-3 py-2 text-slate-700">{fmtDate(candidate.buyerInvoiceDueDate)}</td>
                             <td className="px-3 py-2 text-right">
                               <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${reminderOverduePillClass(candidate.daysUntilDue)}`}>

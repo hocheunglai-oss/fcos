@@ -19,7 +19,7 @@ function publicPaymentRow(row) {
     groupBankSourceRevalidation: _groupRevalidation,
     ordinaryRemittanceCashEvidence: _ordinaryCash, ordinaryRemittanceReviewBase: _ordinaryReview,
     retainedReferenceEvidence: _retainedReference, documentMappingSnapshot: _documentMapping,
-    bankMappingSnapshot: _bankMapping, ...result } = row;
+    bankMappingSnapshot: _bankMapping, nativeHkdMapping: _nativeHkdMapping, nativeHkdRecovery: _nativeHkdRecovery, ...result } = row;
   if (Object.hasOwn(row, 'bankEvidence')) result.bankEvidence = metadata(row.bankEvidence, BANK_FIELDS);
   if (Object.hasOwn(row, 'remittanceSummary')) {
     result.remittanceSummary = metadata(row.remittanceSummary, SUMMARY_FIELDS);

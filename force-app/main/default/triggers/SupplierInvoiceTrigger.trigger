@@ -1,4 +1,10 @@
 trigger SupplierInvoiceTrigger on Supplier_Invoice__c (before insert, before update, after insert, after update, before delete, after delete) {
+    if (Trigger.isBefore) {
+        Map<Id,SObject> previousDocuments=new Map<Id,SObject>();
+        if(Trigger.isUpdate || Trigger.isDelete) for(SObject previousDocument:Trigger.old) previousDocuments.put(previousDocument.Id,previousDocument);
+        FcosTradeDocumentService.guardDocuments(Trigger.isDelete?Trigger.old:Trigger.new,previousDocuments,Trigger.isDelete);
+    }
+
     if (ContextManager.skipTriggers) return;
     if(!ContextManager.avoidSupplierInvoiceFiring){
         if((Trigger.isUpdate || Trigger.isInsert) && Trigger.isBefore){

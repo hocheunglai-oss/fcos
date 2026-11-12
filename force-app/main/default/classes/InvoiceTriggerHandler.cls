@@ -16,8 +16,12 @@ public class InvoiceTriggerHandler {
         	stemIds.add(invoice.STEM__c);
         }
         Map<String, Boolean> deprecatedInvoices = new Map<String, Boolean>();
-        for(Invoice__c invoice: [SELECT Id, File__c, Deprecated__c FROM Invoice__c WHERE STEM__c IN: stemIds]){
+        Set<Id> managedNativeInvoices = new Set<Id>();
+        for(Invoice__c invoice: [SELECT Id, File__c, Deprecated__c, Document_Currency__c, Document_FX_Side__c,
+                                 Document_FX_Confirmed_At__c, Document_FX_Fingerprint__c, Final_Of_Proforma__c,
+                                 Reissue_Of_Invoice__c, Original_Invoice__c FROM Invoice__c WHERE STEM__c IN: stemIds]){
 			deprecatedInvoices.put(invoice.File__c, invoice.Deprecated__c);
+            if(FcosTradeDocumentService.isManagedDocument(invoice)) managedNativeInvoices.add(invoice.Id);
         }
         Map<Id, STEM_Line_Item__c> stemLineItemMap = new Map<Id, STEM_Line_Item__c>([SELECT Id, Input__c, Issued__c, Buyer_Invoice__c FROM STEM_Line_Item__c WHERE STEM__c IN: stemIds]);
         Map<Id, STEM_Extra_Cost__c> stemExtraCostMap = new Map<Id, STEM_Extra_Cost__c>([SELECT Id, Input__c, Issued__c, Buyer_Invoice__c FROM STEM_Extra_Cost__c WHERE STEM__c IN: stemIds]); 
@@ -33,6 +37,7 @@ public class InvoiceTriggerHandler {
         }
         List<Stem_Line_Item__c> stemLineItemsToUpdate = new List<STEM_Line_Item__c>();
         for (STEM_Line_Item__c lineItem : stemLineItemMap.values()) {
+            if(managedNativeInvoices.contains(lineItem.Buyer_Invoice__c)) continue;
         	List<String> contentDocumentIds = linkedEntityIdToContentDocumentId.get(lineItem.Id);
             if (contentDocumentIds == null) {
             	lineItem.Input__c = '🔴';
@@ -59,6 +64,7 @@ public class InvoiceTriggerHandler {
        
         List<Stem_Extra_Cost__c> stemExtraCostsToUpdate = new List<Stem_Extra_Cost__c>();
         for (STEM_Extra_Cost__c extraCost : stemExtraCostMap.values()) {
+            if(managedNativeInvoices.contains(extraCost.Buyer_Invoice__c)) continue;
         	List<String> contentDocumentIds = linkedEntityIdToContentDocumentId.get(extraCost.Id);
             if (contentDocumentIds == null) {
                 extraCost.Input__c = '🔴';

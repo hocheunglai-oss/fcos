@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { paymentDocumentIdentityBlockers, selectXeroPaymentMatch } from '../api/_xeroPaymentIdentity.js';
+import { confirmedNativeHkdPaymentFields, nativeHkdPaymentPostingPlan, nativeHkdPaymentSnapshot, paymentDocumentIdentityBlockers, selectXeroPaymentMatch } from '../api/_xeroPaymentIdentity.js';
 
 const payment = {
   Id: 'sf-payment-1', Name: 'PAY-1', RecordType: { DeveloperName: 'Payable' },
@@ -183,4 +183,90 @@ test('payment currency requires authoritative source evidence and never defaults
   assert.match(paymentDocumentIdentityBlockers({ ...payment, CurrencyIsoCode: undefined }, mapping, currentDocument).join(' '), /currency is missing/);
   assert.deepEqual(paymentDocumentIdentityBlockers({ ...payment, CurrencyIsoCode: undefined, _currency: { currency: 'HKD' } }, mapping, { ...currentDocument, currency: 'HKD' }), []);
   assert.match(paymentDocumentIdentityBlockers({ ...payment, CurrencyIsoCode: 'HKD' }, mapping, currentDocument).join(' '), /currency does not match/);
+});
+
+const nativeHkdFixture = {
+    ...payment, Supplier_Invoice__c: 'a0P000000000001AAA', Payment_Currency__c: 'HKD',
+    Amount__c: '97.50', Payment_HKD_Amount__c: '780.00', Payment_FX_Rate__c: '8.000000',
+    Payment_FX_Revision__c: 'reviewed-payment-rate', Payment_FX_Effective_At__c: '2026-09-05T15:59:59.999Z',
+    Invoice_Carrying_USD__c: '100.00', Settlement_FX_USD__c: '2.50',
+    Bank_Currency__c: 'HKD', Bank_Native_Amount__c: '780.00', Bank_FX_Evidence__c: 'synthetic receipt',
+    Payment_Operation_Id__c: '11111111-1111-4111-8111-111111111111', Payment_Request_Fingerprint__c: 'a'.repeat(64),
+  };
+
+test('native HKD evidence binds the exact payment day, rounding and accounting-side settlement', () => {
+  const native = nativeHkdFixture;
+  const exact = nativeHkdPaymentSnapshot(native);
+  assert.equal(exact.cashCents, 9750);
+  assert.equal(exact.carryingCents, 10000);
+  assert.equal(exact.settlementCents, 250);
+  assert.equal(exact.nativeCents, 78000);
+  assert.equal(Object.values(exact).includes('synthetic receipt'), false);
+  const buyer = { ...native, RecordType: { DeveloperName: 'Receivable' },
+    Buyer_Invoice__c: native.Supplier_Invoice__c, Settlement_FX_USD__c: -2.50 };
+  assert.equal(nativeHkdPaymentSnapshot(buyer).settlementCents, -250);
+  const halfway = { ...native, Payment_HKD_Amount__c: '0.04', Bank_Native_Amount__c: '0.04',
+    Amount__c: '0.01', Invoice_Carrying_USD__c: '0.01', Settlement_FX_USD__c: '0.00' };
+  assert.equal(nativeHkdPaymentSnapshot(halfway).cashCents, 1);
+  for (const drift of [
+    { Payment_FX_Effective_At__c: '2026-09-05T16:00:00Z' }, { Amount__c: '97.51' },
+    { Payment_FX_Revision__c: '' }, { Settlement_FX_USD__c: '-2.50' }, { Bank_Native_Amount__c: '779.99' },
+    { Payment_Request_Fingerprint__c: 'unbound' }, { Bank_FX_Evidence__c: '' }, { Payment_FX_Rate__c: '8.0000001' },
+  ]) assert.equal(nativeHkdPaymentSnapshot({ ...native, ...drift }), null);
+});
+
+test('native HKD readback keeps company and observed Xero rates separate and requires exact cash evidence', () => {
+  const row = {
+    xeroPaymentId: '11111111-1111-4111-8111-111111111111',
+    xeroDocumentId: '22222222-2222-4222-8222-222222222222',
+    bankAccountId: '33333333-3333-4333-8333-333333333333',
+  };
+  const response = {
+    PaymentID: row.xeroPaymentId, PaymentType: 'ACCPAYPAYMENT', Status: 'AUTHORISED',
+    Invoice: { InvoiceID: row.xeroDocumentId, Type: 'ACCPAY', CurrencyCode: 'HKD' },
+    Account: { AccountID: row.bankAccountId, CurrencyCode: 'HKD' },
+    Amount: 780, BankAmount: 780, CurrencyRate: 8, Date: '2026-09-05', Reference: 'PAY-1',
+  };
+  const fields = confirmedNativeHkdPaymentFields(nativeHkdFixture, row, response, 'USD', 'HKD');
+  assert.equal(fields.accounting_usd, 97.5);
+  assert.equal(fields.invoice_carrying_usd, 100);
+  assert.equal(fields.company_fx_rate, 8);
+  assert.equal(fields.currency_evidence.nativeAmount, 780);
+  for (const drift of [
+    { Amount: 779.99 }, { BankAmount: 779.99 }, { CurrencyRate: 1 }, { Reference: 'another payment' },
+    { Account: { ...response.Account, CurrencyCode: 'USD' } }, { PaymentID: row.bankAccountId },
+    { Invoice: { ...response.Invoice, InvoiceID: row.xeroPaymentId } },
+  ]) assert.equal(confirmedNativeHkdPaymentFields(nativeHkdFixture, row, { ...response, ...drift }, 'USD', 'HKD'), null);
+  const usdBank = { ...nativeHkdFixture, Bank_Currency__c: 'USD', Bank_Native_Amount__c: '97.50' };
+  const usdResult = { ...response, BankAmount: 97.50, Account: { ...response.Account, CurrencyCode: 'USD' } };
+  assert.equal(confirmedNativeHkdPaymentFields(usdBank, row, usdResult, 'USD', 'USD').xero_bank_amount, 97.50);
+  assert.equal(confirmedNativeHkdPaymentFields(usdBank, row, { ...usdResult, CurrencyRate: 0.125 }, 'HKD', 'USD').xero_currency_rate, 0.125);
+  assert.equal(confirmedNativeHkdPaymentFields({ ...usdBank, Bank_Native_Amount__c: '98.00' }, row, usdResult, 'USD', 'USD'), null);
+});
+
+test('native HKD posting plan uses bank cash for cross-currency and preserves the exact reviewed claim payload', () => {
+  const row = { xeroDocumentId: '22222222-2222-4222-8222-222222222222', bankAccountId: '33333333-3333-4333-8333-333333333333' };
+  const hkdBank = nativeHkdPaymentPostingPlan(nativeHkdFixture, row, 'USD', 'HKD');
+  assert.equal(hkdBank.proposedPayment.Amount, 780);
+  assert.equal(hkdBank.proposedPayment.CurrencyRate, 8);
+  assert.equal(Object.hasOwn(hkdBank.proposedPayment, 'BankAmount'), false);
+  const usd = { ...nativeHkdFixture, Bank_Currency__c: 'USD', Bank_Native_Amount__c: 97.5 };
+  const usdBank = nativeHkdPaymentPostingPlan(usd, row, 'USD', 'USD');
+  assert.equal(usdBank.proposedPayment.BankAmount, 97.5);
+  assert.equal(Object.hasOwn(usdBank.proposedPayment, 'CurrencyRate'), false);
+  assert.equal(usdBank.nativeHkdMapping.expectedXeroRate, 8);
+  assert.equal(usdBank.nativeHkdMapping.currencyEvidence.requestFingerprint, usd.Payment_Request_Fingerprint__c);
+  assert.equal(nativeHkdPaymentPostingPlan(usd, row, 'HKD', 'USD').nativeHkdMapping.expectedXeroRate, 0.125);
+  assert.equal(nativeHkdPaymentPostingPlan(usd, row, 'USD', 'HKD'), null);
+  assert.equal(nativeHkdPaymentPostingPlan({ ...usd, Bank_Native_Amount__c: 98 }, row, 'USD', 'USD'), null);
+});
+
+
+test('standalone HKD plan refuses cash-family evidence and opposite invoice ownership', () => {
+  const row = { xeroDocumentId: '22222222-2222-4222-8222-222222222222', bankAccountId: '33333333-3333-4333-8333-333333333333' };
+  assert.ok(nativeHkdPaymentPostingPlan(nativeHkdFixture, row, 'USD', 'HKD'));
+  for (const extra of [{ Remittance__c: 'a0S000000000123AAA' }, { Cash_Event__c: 'a0S000000000124AAA' },
+    { _groupBankEvidence: {} }, { _ordinaryRemittanceFamily: {} }, { Buyer_Invoice__c: 'a0P000000000001AAA' }]) {
+    assert.equal(nativeHkdPaymentPostingPlan({ ...nativeHkdFixture, ...extra }, row, 'USD', 'HKD'), null);
+  }
 });

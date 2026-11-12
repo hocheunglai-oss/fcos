@@ -544,14 +544,14 @@ public class StemExtraCostTriggerHandler {
             if(stemExtraCost.Nundination_Type__c == 'Buy'){
                 stemExtraCost.Line_Total__c = 0;
             } else if(stemExtraCost.Fixed__c){
-                stemExtraCost.Line_Total__c = stemExtraCost.Lumpsum_Price__c != null ? stemExtraCost.Lumpsum_Price__c : 0;
+                stemExtraCost.Line_Total__c = FcosTradeCurrencyGuard.accountingValue(stemExtraCost, 'Sell', 'Lumpsum', 'Lumpsum_Price__c') != null ? FcosTradeCurrencyGuard.accountingValue(stemExtraCost, 'Sell', 'Lumpsum', 'Lumpsum_Price__c') : 0;
             } else{
-                 if(stemExtraCost.Quantity_Delivered_Per_BDN__c == null && (stemExtraCost.Quantity__c * stemExtraCost.Unit_Price__c > stemExtraCost.Minimum_Sell_At__c || stemExtraCost.Minimum_Sell_At__c == null)){
-                    stemExtraCost.Line_Total__c = stemExtraCost.Quantity__c * stemExtraCost.Unit_Price__c;
-                } else if(stemExtraCost.Quantity_Delivered_Per_BDN__c != null && (stemExtraCost.Quantity_Delivered_Per_BDN__c * stemExtraCost.Unit_Price__c > stemExtraCost.Minimum_Sell_At__c || stemExtraCost.Minimum_Sell_At__c == null)){
-                    stemExtraCost.Line_Total__c = stemExtraCost.Quantity_Delivered_Per_BDN__c * stemExtraCost.Unit_Price__c;
+                 if(stemExtraCost.Quantity_Delivered_Per_BDN__c == null && (stemExtraCost.Quantity__c * FcosTradeCurrencyGuard.accountingValue(stemExtraCost, 'Sell', 'Unit_Price', 'Unit_Price__c') > FcosTradeCurrencyGuard.accountingValue(stemExtraCost, 'Sell', 'Minimum', 'Minimum_Sell_At__c') || FcosTradeCurrencyGuard.accountingValue(stemExtraCost, 'Sell', 'Minimum', 'Minimum_Sell_At__c') == null)){
+                    stemExtraCost.Line_Total__c = stemExtraCost.Quantity__c * FcosTradeCurrencyGuard.accountingValue(stemExtraCost, 'Sell', 'Unit_Price', 'Unit_Price__c');
+                } else if(stemExtraCost.Quantity_Delivered_Per_BDN__c != null && (stemExtraCost.Quantity_Delivered_Per_BDN__c * FcosTradeCurrencyGuard.accountingValue(stemExtraCost, 'Sell', 'Unit_Price', 'Unit_Price__c') > FcosTradeCurrencyGuard.accountingValue(stemExtraCost, 'Sell', 'Minimum', 'Minimum_Sell_At__c') || FcosTradeCurrencyGuard.accountingValue(stemExtraCost, 'Sell', 'Minimum', 'Minimum_Sell_At__c') == null)){
+                    stemExtraCost.Line_Total__c = stemExtraCost.Quantity_Delivered_Per_BDN__c * FcosTradeCurrencyGuard.accountingValue(stemExtraCost, 'Sell', 'Unit_Price', 'Unit_Price__c');
                 } else {
-                    stemExtraCost.Line_Total__c = stemExtraCost.Minimum_Sell_At__c;
+                    stemExtraCost.Line_Total__c = FcosTradeCurrencyGuard.accountingValue(stemExtraCost, 'Sell', 'Minimum', 'Minimum_Sell_At__c');
                 }
             }
         }
@@ -562,14 +562,14 @@ public class StemExtraCostTriggerHandler {
             if(stemExtraCost.Nundination_Type__c == 'Sell'){
                 stemExtraCost.Line_Total_Buy__c = 0;
             } else if(stemExtraCost.Fixed__c){
-                stemExtraCost.Line_Total_Buy__c = stemExtraCost.Lumpsum_Cost__c != null ? stemExtraCost.Lumpsum_Cost__c : 0;
+                stemExtraCost.Line_Total_Buy__c = FcosTradeCurrencyGuard.accountingValue(stemExtraCost, 'Buy', 'Lumpsum', 'Lumpsum_Cost__c') != null ? FcosTradeCurrencyGuard.accountingValue(stemExtraCost, 'Buy', 'Lumpsum', 'Lumpsum_Cost__c') : 0;
             } else{
-                 if(stemExtraCost.Quantity_Delivered_Per_BDN__c == null && (stemExtraCost.Quantity__c * stemExtraCost.Unit_Cost__c > stemExtraCost.Minimum_Buy_At__c || stemExtraCost.Minimum_Buy_At__c == null)){
-                    stemExtraCost.Line_Total_Buy__c = stemExtraCost.Quantity__c * stemExtraCost.Unit_Cost__c;
-                } else if(stemExtraCost.Quantity_Delivered_Per_BDN__c != null && (stemExtraCost.Quantity_Delivered_Per_BDN__c * stemExtraCost.Unit_Cost__c > stemExtraCost.Minimum_Buy_At__c || stemExtraCost.Minimum_Buy_At__c == null)){
-                    stemExtraCost.Line_Total_Buy__c = stemExtraCost.Quantity_Delivered_Per_BDN__c * stemExtraCost.Unit_Cost__c;
+                 if(stemExtraCost.Quantity_Delivered_Per_BDN__c == null && (stemExtraCost.Quantity__c * FcosTradeCurrencyGuard.accountingValue(stemExtraCost, 'Buy', 'Unit_Price', 'Unit_Cost__c') > FcosTradeCurrencyGuard.accountingValue(stemExtraCost, 'Buy', 'Minimum', 'Minimum_Buy_At__c') || FcosTradeCurrencyGuard.accountingValue(stemExtraCost, 'Buy', 'Minimum', 'Minimum_Buy_At__c') == null)){
+                    stemExtraCost.Line_Total_Buy__c = stemExtraCost.Quantity__c * FcosTradeCurrencyGuard.accountingValue(stemExtraCost, 'Buy', 'Unit_Price', 'Unit_Cost__c');
+                } else if(stemExtraCost.Quantity_Delivered_Per_BDN__c != null && (stemExtraCost.Quantity_Delivered_Per_BDN__c * FcosTradeCurrencyGuard.accountingValue(stemExtraCost, 'Buy', 'Unit_Price', 'Unit_Cost__c') > FcosTradeCurrencyGuard.accountingValue(stemExtraCost, 'Buy', 'Minimum', 'Minimum_Buy_At__c') || FcosTradeCurrencyGuard.accountingValue(stemExtraCost, 'Buy', 'Minimum', 'Minimum_Buy_At__c') == null)){
+                    stemExtraCost.Line_Total_Buy__c = stemExtraCost.Quantity_Delivered_Per_BDN__c * FcosTradeCurrencyGuard.accountingValue(stemExtraCost, 'Buy', 'Unit_Price', 'Unit_Cost__c');
                 } else {
-                    stemExtraCost.Line_Total_Buy__c = stemExtraCost.Minimum_Buy_At__c;
+                    stemExtraCost.Line_Total_Buy__c = FcosTradeCurrencyGuard.accountingValue(stemExtraCost, 'Buy', 'Minimum', 'Minimum_Buy_At__c');
                 }
             }
         }

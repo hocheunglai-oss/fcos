@@ -3,6 +3,7 @@ import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 import {
   buyerInvoiceApprovalFields,
+  buyerInvoiceApprovalFxFields,
   buyerInvoiceApprovalProjection,
   buyerInvoiceSnapshotComparison,
 } from '../api/_buyerInvoiceApproval.js';
@@ -136,4 +137,57 @@ test('buyer invoice snapshot comparison fails closed for changed assignments, ac
     _buyerInvoiceDocument: { ...currentInvoice._buyerInvoiceDocument, LatestPublishedVersionId: '0682x0000000002AAA' },
   }, live).matches, false);
   assert.equal(buyerInvoiceSnapshotComparison({ ...currentInvoice, Buyer_Charge_Snapshot__c: '{not json' }, live).matches, false);
+});
+
+test('Trading FX field selections match the Apex document, line and extra-cost contract', async () => {
+  const apex = await readFile(new URL('../force-app/main/default/classes/BuyerInvoiceApprovalService.cls', import.meta.url), 'utf8');
+  for (const [kind, key] of [['INVOICE', 'invoice'], ['LINE', 'row'], ['EXTRA', 'row']]) {
+    const declaration = apex.match(new RegExp('List<String> FX_' + kind + '_FIELDS = new List<String>\\{([^}]+)\\}', 'u'));
+    assert.ok(declaration);
+    const fields = [...declaration[1].matchAll(/'([^']+)'/gu)].map(match => match[1]);
+    assert.deepEqual(fields, buyerInvoiceApprovalFxFields[key]);
+  }
+  const describe = { fields: [{ name: 'Document_FX_Rate__c' }, { name: 'Document_Unexpected__c' }] };
+  assert.equal(variableChargeInternals.optionalTradingFxFields(describe, buyerInvoiceApprovalFxFields.invoice), ', Document_FX_Rate__c');
+  assert.equal(variableChargeInternals.optionalTradingFxFields({ fields: [] }, buyerInvoiceApprovalFxFields.invoice), '');
+});
+
+test('an Apex FX snapshot retains evidence pairing and rejects missing or changed source fields', () => {
+  const ordinary = invoice();
+  const live = liveCase();
+  const ordinarySnapshot = buyerInvoiceApprovalProjection(ordinary, live);
+  const fill = (fields, overrides) => Object.assign(Object.fromEntries(fields.map(field => [field, null])), overrides);
+  const document = fill(buyerInvoiceApprovalFxFields.invoice, {
+    Document_Currency__c: 'HKD', Document_FX_Rate__c: 7.8, Document_FX_Confirmed_At__c: '2026-08-01T04:05:06.000Z',
+  });
+  const rowA = fill(buyerInvoiceApprovalFxFields.row, { Sell_Currency__c: 'HKD', Sell_HKD_Unit_Price__c: 780 });
+  const rowB = fill(buyerInvoiceApprovalFxFields.row, { Sell_Currency__c: 'HKD', Sell_HKD_Unit_Price__c: 1560 });
+  const extra = fill(buyerInvoiceApprovalFxFields.row, {});
+  const secondId = 'a012x0000000002AAA';
+  const saved = {
+    ...ordinarySnapshot,
+    lines: [{ ...ordinarySnapshot.lines[0], Id: secondId }, ordinarySnapshot.lines[0]],
+    fx: { version: 1, document, lines: [rowB, rowA], extras: [extra] },
+  };
+  const current = invoice({
+    ...document, Document_FX_Confirmed_At__c: '2026-08-01T04:05:06.000+0000',
+    Buyer_Charge_Snapshot__c: JSON.stringify(saved),
+  });
+  const source = {
+    ...live,
+    allLineItems: [
+      { ...live.allLineItems[0], ...rowA },
+      { ...live.allLineItems[0], ...rowB, Id: secondId },
+      { ...live.allLineItems[0], Id: 'a012x0000000003AAA', Cancelled__c: true },
+    ],
+    allExtraCosts: [{ ...live.allExtraCosts[0], ...extra }],
+  };
+  assert.equal(buyerInvoiceSnapshotComparison(current, source).matches, true);
+  const missing = { ...current };
+  delete missing.Document_FX_Rate__c;
+  assert.equal(buyerInvoiceSnapshotComparison(missing, source).matches, false);
+  const changed = { ...source, allLineItems: [{ ...source.allLineItems[0], Sell_HKD_Unit_Price__c: 781 }, ...source.allLineItems.slice(1)] };
+  assert.equal(buyerInvoiceSnapshotComparison(current, changed).matches, false);
+  const malformed = { ...saved, fx: { ...saved.fx, lines: [rowA] } };
+  assert.equal(buyerInvoiceSnapshotComparison({ ...current, Buyer_Charge_Snapshot__c: JSON.stringify(malformed) }, source).matches, false);
 });

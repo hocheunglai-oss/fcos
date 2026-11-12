@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>STEM__c</fullName>
+    <deleteConstraint>Restrict</deleteConstraint>
+    <label>STEM</label>
+    <referenceTo>STEM__c</referenceTo>
+    <relationshipLabel>Trade Cash Events</relationshipLabel>
+    <relationshipName>TradeCashEvents</relationshipName>
+    <required>true</required>
+    <type>Lookup</type>
+</CustomField>

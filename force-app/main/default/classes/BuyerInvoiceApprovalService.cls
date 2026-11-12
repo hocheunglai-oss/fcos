@@ -17,6 +17,20 @@ public without sharing class BuyerInvoiceApprovalService {
         'Quantity_Delivered_Per_BDN__c','Quantity_Range_Max__c','Unit_of_Measure__c',
         'Unit_Price__c','Lumpsum_Price__c','Line_Total__c','CurrencyIsoCode'
     };
+    public static final List<String> FX_INVOICE_FIELDS = new List<String>{
+        'Document_Currency__c','Document_HKD_Amount__c','Document_FX_Rate__c',
+        'Document_FX_Revision__c','Document_FX_Confirmed_At__c','Document_FX_Side__c'
+    };
+    public static final List<String> FX_LINE_FIELDS = new List<String>{
+        'Sell_Currency__c','Sell_USD_Unit_Price_Precise__c','Sell_HKD_Unit_Price__c','Sell_HKD_Minimum__c',
+        'Sell_HKD_Lumpsum__c','Sell_FX_Rate__c','Sell_FX_Revision__c',
+        'Sell_FX_Confirmed_At__c','Sell_FX_Side__c'
+    };
+    public static final List<String> FX_EXTRA_FIELDS = new List<String>{
+        'Sell_Currency__c','Sell_USD_Unit_Price_Precise__c','Sell_HKD_Unit_Price__c','Sell_HKD_Minimum__c',
+        'Sell_HKD_Lumpsum__c','Sell_FX_Rate__c','Sell_FX_Revision__c',
+        'Sell_FX_Confirmed_At__c','Sell_FX_Side__c'
+    };
 
     @TestVisible private static Boolean currencyIsoCodeAvailableForTest;
 
@@ -36,14 +50,28 @@ public without sharing class BuyerInvoiceApprovalService {
         return result;
     }
 
+    private static List<String> optionalQueryFields(List<String> fields, Schema.SObjectType objectType) {
+        Map<String, Schema.SObjectField> available = objectType.getDescribe().fields.getMap();
+        List<String> result = new List<String>();
+        for (String field : fields) if (available.containsKey(field)) result.add(field);
+        return result;
+    }
+
+    private static List<String> queryFieldsWithFx(List<String> fields, List<String> fxFields, Schema.SObjectType objectType) {
+        List<String> result = new List<String>();
+        result.addAll(queryFields(fields, objectType));
+        result.addAll(optionalQueryFields(fxFields, objectType));
+        return result;
+    }
+
     public static String snapshot(Invoice__c invoice) {
         Id stemId = invoice.STEM__c, invoiceId = invoice.Id;
         STEM__c stem = Database.query('SELECT ' + String.join(queryFields(STEM_FIELDS, STEM__c.SObjectType), ',')
             + ' FROM STEM__c WHERE Id = :stemId LIMIT 1');
-        List<SObject> lines = Database.query('SELECT ' + String.join(queryFields(LINE_FIELDS, STEM_Line_Item__c.SObjectType), ',')
+        List<SObject> lines = Database.query('SELECT ' + String.join(queryFieldsWithFx(LINE_FIELDS, FX_LINE_FIELDS, STEM_Line_Item__c.SObjectType), ',')
             + ' FROM STEM_Line_Item__c WHERE STEM__c = :stemId AND Buyer_Invoice__c = :invoiceId'
             + ' AND Cancelled__c = false ORDER BY Id');
-        List<SObject> extras = Database.query('SELECT ' + String.join(queryFields(EXTRA_FIELDS, STEM_Extra_Cost__c.SObjectType), ',')
+        List<SObject> extras = Database.query('SELECT ' + String.join(queryFieldsWithFx(EXTRA_FIELDS, FX_EXTRA_FIELDS, STEM_Extra_Cost__c.SObjectType), ',')
             + ' FROM STEM_Extra_Cost__c WHERE STEM__c = :stemId AND Buyer_Invoice__c = :invoiceId'
             + ' AND Cancelled__c = false ORDER BY Id');
         Id documentId;
@@ -51,18 +79,55 @@ public without sharing class BuyerInvoiceApprovalService {
         catch (Exception error) { throw blocked('The invoice PDF could not be verified. Generate the invoice PDF again.'); }
         List<ContentDocument> documents = [SELECT Id, LatestPublishedVersionId FROM ContentDocument WHERE Id = :documentId];
         if (documents.isEmpty()) throw blocked('The invoice PDF could not be verified. Generate the invoice PDF again.');
-        return JSON.serialize(new Map<String, Object>{
+        Map<String, Object> result = new Map<String, Object>{
             'version' => 1, 'invoice' => project(invoice, INVOICE_FIELDS),
             'stem' => project(stem, STEM_FIELDS),
             'pdf' => new Map<String, Object>{'Id' => documents[0].Id, 'LatestPublishedVersionId' => documents[0].LatestPublishedVersionId},
             'lines' => projectRows(lines, LINE_FIELDS), 'extras' => projectRows(extras, EXTRA_FIELDS)
-        });
+        };
+        Map<String, Object> fx = fxSection(invoice, lines, extras);
+        if (fx != null) result.put('fx', fx);
+        return JSON.serialize(result);
     }
 
     private static List<Object> projectRows(List<SObject> rows, List<String> fields) {
         List<Object> result = new List<Object>();
         for (SObject row : rows) result.add(project(row, fields));
         return result;
+    }
+
+    private static Boolean hasHkdCurrency(SObject row, String field) {
+        Object value = fieldValue(row, field);
+        return value != null && String.valueOf(value).trim().toUpperCase() == 'HKD';
+    }
+
+    private static Map<String, Object> fxSection(Invoice__c invoice, List<SObject> lines, List<SObject> extras) {
+        Boolean hasHkd = hasHkdCurrency(invoice, 'Document_Currency__c');
+        for (SObject line : lines) hasHkd = hasHkd || hasHkdCurrency(line, 'Sell_Currency__c') || fieldValue(line,'Sell_USD_Unit_Price_Precise__c')!=null;
+        for (SObject extra : extras) hasHkd = hasHkd || hasHkdCurrency(extra, 'Sell_Currency__c') || fieldValue(extra,'Sell_USD_Unit_Price_Precise__c')!=null;
+        if (!hasHkd) return null;
+        return new Map<String, Object>{
+            'version' => 1, 'document' => projectFx(invoice, FX_INVOICE_FIELDS),
+            'lines' => projectRowsFx(lines, FX_LINE_FIELDS), 'extras' => projectRowsFx(extras, FX_EXTRA_FIELDS)
+        };
+    }
+
+    private static List<Object> projectRowsFx(List<SObject> rows, List<String> fields) {
+        List<Object> result = new List<Object>();
+        for (SObject row : rows) result.add(projectFx(row, fields));
+        return result;
+    }
+
+    private static Map<String, Object> projectFx(SObject row, List<String> fields) {
+        Map<String, Object> result = new Map<String, Object>();
+        for (String field : fields) result.put(field, fieldValue(row, field));
+        return result;
+    }
+
+    private static Object fieldValue(SObject row, String field) {
+        if (!row.getSObjectType().getDescribe().fields.getMap().containsKey(field)) return null;
+        try { return row.get(field); }
+        catch (Exception error) { return null; }
     }
 
     private static Map<String, Object> project(SObject row, List<String> fields) {
@@ -82,8 +147,9 @@ public without sharing class BuyerInvoiceApprovalService {
 
     public static void assertPersistedInvoicesCanSend(Set<Id> invoiceIds) {
         if (invoiceIds == null || invoiceIds.isEmpty()) return;
+        List<String> invoiceFields = queryFieldsWithFx(INVOICE_FIELDS, FX_INVOICE_FIELDS, Invoice__c.SObjectType);
         List<Invoice__c> invoices = Database.query('SELECT Proforma__c, Deprecated__c,'
-            + 'Buyer_Charge_Snapshot__c,' + String.join(queryFields(INVOICE_FIELDS, Invoice__c.SObjectType), ',')
+            + 'Buyer_Charge_Snapshot__c,' + String.join(invoiceFields, ',')
             + ' FROM Invoice__c WHERE Id IN :invoiceIds');
         if (invoices.size() != invoiceIds.size()) throw blocked('Invoice approval could not be checked.');
         for (Invoice__c invoice : invoices) assertCanSend(invoice);

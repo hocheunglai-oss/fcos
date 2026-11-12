@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Source_Side__c</fullName>
+    <deleteConstraint>SetNull</deleteConstraint>
+    <label>Source Side</label>
+    <referenceTo>Trade_Currency_Side__c</referenceTo>
+    <relationshipLabel>Derived Trade Currency Sides</relationshipLabel>
+    <relationshipName>DerivedTradeCurrencySides</relationshipName>
+    <type>Lookup</type>
+</CustomField>
+

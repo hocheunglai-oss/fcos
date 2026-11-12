@@ -31,6 +31,19 @@ test('critical external actions and mutations carry checked policy metadata', ()
   assert.equal(registeredHandlerBehavior('specialTermsTermRetire').externalAction, true);
   assert.equal(registeredHandlerBehavior('specialTermsTermRetire').capability, 'special_terms_clause_approve');
   assert.equal(registeredHandlerBehavior('emailRouterActionStatus').externalAction, true);
+  for (const name of ['xeroPrepaymentPolicyGet', 'xeroPrepaymentPolicySave']) {
+    const policy = registeredHandlerBehavior(name);
+    assert.equal(policy.externalAction, true);
+    assert.equal(policy.capability, 'xero_portal_manage');
+    assert.equal(policy.mutation, name.endsWith('Save'));
+  }
+  for (const name of ['xeroNativeDocumentApply', 'xeroNativeDocumentReconcile', 'xeroNativeDocumentRecoveryQueue']) {
+    const policy = registeredHandlerBehavior(name);
+    assert.equal(policy.externalAction, true);
+    assert.equal(policy.capability, 'xero_portal_manage');
+    assert.equal(policy.mutation, name !== 'xeroNativeDocumentRecoveryQueue');
+    assert.equal(policy.cache, 'none');
+  }
 });
 
 test('declared handler capabilities are enforced by the shared access adapter', async () => {

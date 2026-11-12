@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Document_FX_Side__c</fullName>
+    <deleteConstraint>SetNull</deleteConstraint>
+    <label>Document FX Side</label>
+    <referenceTo>Trade_Currency_Side__c</referenceTo>
+    <relationshipLabel>Document FX Sides</relationshipLabel>
+    <relationshipName>NominationDocumentFXSides</relationshipName>
+    <type>Lookup</type>
+</CustomField>
+

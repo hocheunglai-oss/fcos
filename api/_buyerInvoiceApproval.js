@@ -12,6 +12,15 @@ const EXTRA_FIELDS = [
   'Quantity_Delivered_Per_BDN__c', 'Quantity_Range_Max__c', 'Unit_of_Measure__c',
   'Unit_Price__c', 'Lumpsum_Price__c', 'Line_Total__c', 'CurrencyIsoCode',
 ];
+const FX_INVOICE_FIELDS = [
+  'Document_Currency__c', 'Document_HKD_Amount__c', 'Document_FX_Rate__c',
+  'Document_FX_Revision__c', 'Document_FX_Confirmed_At__c', 'Document_FX_Side__c',
+];
+const FX_ROW_FIELDS = [
+  'Sell_Currency__c', 'Sell_USD_Unit_Price_Precise__c', 'Sell_HKD_Unit_Price__c', 'Sell_HKD_Minimum__c',
+  'Sell_HKD_Lumpsum__c', 'Sell_FX_Rate__c', 'Sell_FX_Revision__c',
+  'Sell_FX_Confirmed_At__c', 'Sell_FX_Side__c',
+];
 
 function text(value) {
   return String(value ?? '').trim();
@@ -29,10 +38,32 @@ function compareById(left, right) {
   return text(left?.Id).localeCompare(text(right?.Id));
 }
 
-function projectRows(rows, fields) {
-  return [...(rows || [])]
-    .sort(compareById)
-    .map((row) => project(row, fields));
+function invoiceRows(rows, invoiceId) {
+  return (rows || []).filter(row => row.Buyer_Invoice__c === invoiceId && row.Cancelled__c !== true).sort(compareById);
+}
+
+function normalizeFxTimestamp(fields, key) {
+  const value = fields?.[key];
+  if (typeof value !== 'string') return fields;
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? { ...fields, [key]: new Date(time).toISOString() } : fields;
+}
+
+function requiresFxEvidence(invoice, lines, extras) {
+  const hkd = value => text(value).toUpperCase() === 'HKD';
+  const hasFx = row => hkd(row.Sell_Currency__c) || row.Sell_USD_Unit_Price_Precise__c != null;
+  return hkd(invoice.Document_Currency__c) || lines.some(hasFx) || extras.some(hasFx);
+}
+
+function projectFxRow(row) {
+  return normalizeFxTimestamp(project(row, FX_ROW_FIELDS), 'Sell_FX_Confirmed_At__c');
+}
+
+function sortSnapshotFxRows(baseRows, fxRows) {
+  if (!Array.isArray(fxRows) || fxRows.length !== baseRows.length) return null;
+  // Apex emits one FX row per invoice row in the same order, without duplicating the Id.
+  return baseRows.map((row, index) => ({ Id: row?.Id, fx: fxRows[index] }))
+    .sort(compareById).map(({ fx }) => normalizeFxTimestamp(fx, 'Sell_FX_Confirmed_At__c'));
 }
 
 function contentDocumentId(fileUrl) {
@@ -65,14 +96,27 @@ export function buyerInvoiceApprovalProjection(invoice, liveCase) {
   const document = invoice?._buyerInvoiceDocument;
   if (!invoice || !invoiceSource?.stem || !documentId || !document
     || text(document.Id) !== documentId || !text(document.LatestPublishedVersionId)) return null;
-  return {
+  const lines = invoiceRows(invoiceSource.allLineItems, invoice.Id);
+  const extras = invoiceRows(invoiceSource.allExtraCosts, invoice.Id);
+  const projection = {
     version: 1,
     invoice: project(invoice, INVOICE_FIELDS),
     stem: project(invoiceSource.stem, STEM_FIELDS),
     pdf: { Id: document.Id, LatestPublishedVersionId: document.LatestPublishedVersionId },
-    lines: projectRows((invoiceSource.allLineItems || []).filter((row) => row.Buyer_Invoice__c === invoice.Id), LINE_FIELDS),
-    extras: projectRows((invoiceSource.allExtraCosts || []).filter((row) => row.Buyer_Invoice__c === invoice.Id), EXTRA_FIELDS),
+    lines: lines.map(row => project(row, LINE_FIELDS)),
+    extras: extras.map(row => project(row, EXTRA_FIELDS)),
   };
+  if (requiresFxEvidence(invoice, lines, extras)) {
+    const hasFields = (row, fields) => fields.every(field => Object.hasOwn(row, field));
+    if (!hasFields(invoice, FX_INVOICE_FIELDS) || ![...lines, ...extras].every(row => hasFields(row, FX_ROW_FIELDS))) return null;
+    projection.fx = {
+      version: 1,
+      document: normalizeFxTimestamp(project(invoice, FX_INVOICE_FIELDS), 'Document_FX_Confirmed_At__c'),
+      lines: lines.map(projectFxRow),
+      extras: extras.map(projectFxRow),
+    };
+  }
+  return projection;
 }
 
 export function buyerInvoiceSnapshotComparison(invoice, liveCase) {
@@ -94,8 +138,18 @@ export function buyerInvoiceSnapshotComparison(invoice, liveCase) {
     lines: [...parsed.lines].sort(compareById),
     extras: [...parsed.extras].sort(compareById),
   };
+  if (parsed.fx != null && typeof parsed.fx === 'object' && !Array.isArray(parsed.fx)) {
+    normalized.fx = {
+      ...parsed.fx,
+      document: normalizeFxTimestamp(parsed.fx.document, 'Document_FX_Confirmed_At__c'),
+      lines: sortSnapshotFxRows(parsed.lines, parsed.fx.lines),
+      extras: sortSnapshotFxRows(parsed.extras, parsed.fx.extras),
+    };
+  }
   return { kind: 'snapshot', matches: stableJson(normalized) === stableJson(current) };
 }
+
+export const buyerInvoiceApprovalFxFields = { invoice: FX_INVOICE_FIELDS, row: FX_ROW_FIELDS };
 
 export const buyerInvoiceApprovalFields = {
   invoice: INVOICE_FIELDS,

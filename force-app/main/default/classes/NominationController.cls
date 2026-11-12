@@ -32,8 +32,11 @@ public class NominationController {
     }
     */
     @AuraEnabled
-    public static void generateDocument(String nominationId, String fileUrl, String fileName){
-        Nomination__c nomination = [SELECT Id, RecordTypeId, STEM__c, File__c, Replaced__c, Sent__c FROM Nomination__c WHERE Id =: nominationId LIMIT 1];
+    public static void generateDocument(String nominationId, String fileUrl, String fileName, String reviewedFxFingerprint){
+        FcosTradeDocumentService.DocumentReview fxReview=FcosTradeDocumentService.nomination((Id)nominationId);
+        if(fxReview.currencyCode=='HKD' && fxReview.fingerprint!=reviewedFxFingerprint) throw new AuraHandledException('The native confirmation changed. Review it again.');
+        Nomination__c nomination = [SELECT Id, RecordTypeId, STEM__c, File__c, Replaced__c, Sent__c,Document_Currency__c,Document_FX_Fingerprint__c,Document_Content_Fingerprint__c,Saved_Inputs__c,Saved_Remarks__c FROM Nomination__c WHERE Id =: nominationId LIMIT 1];
+        if(fxReview.currencyCode=='HKD') FcosNativeConfirmationService.assertPrepared(nomination,fxReview.fingerprint);
         PageReference vfPage = null;
         String fileTitle;
         if (nomination.RecordTypeId == FCBStatic.NOMINATION_BUYER_RT_IT){
@@ -54,21 +57,35 @@ public class NominationController {
             body = Blob.valueOf('TestString');
         }
     
+        if(fxReview.currencyCode=='HKD') {
+            Id stemId=nomination.STEM__c;STEM__c locked=[SELECT Id FROM STEM__c WHERE Id=:stemId FOR UPDATE];
+            Nomination__c refreshed=[SELECT Id,Document_Currency__c,Document_FX_Fingerprint__c,Document_Content_Fingerprint__c,Saved_Inputs__c,Saved_Remarks__c FROM Nomination__c WHERE Id=:nominationId FOR UPDATE];
+            FcosTradeDocumentService.DocumentReview current=FcosTradeDocumentService.nomination((Id)nominationId);
+            if(current.fingerprint!=fxReview.fingerprint || refreshed.Document_Content_Fingerprint__c!=nomination.Document_Content_Fingerprint__c) throw new AuraHandledException('The reviewed confirmation changed during rendering. Review it again.');
+            FcosNativeConfirmationService.assertPrepared(refreshed,current.fingerprint);
+        }
         saveGeneratedDocument(body, nomination, fileName);
     }
     
     @AuraEnabled
-    public static void generateDocumentFromBlob(String body, String nominationId, String fileUrl, String fileName){
+    public static void generateDocumentFromBlob(String body, String nominationId, String fileUrl, String fileName, String reviewedFxFingerprint){
+        FcosTradeDocumentService.DocumentReview fxReview=FcosTradeDocumentService.nomination((Id)nominationId);
+        if(fxReview.currencyCode=='HKD' && fxReview.fingerprint!=reviewedFxFingerprint) throw new AuraHandledException('The native confirmation changed. Review it again.');
         Nomination__c nomination = [
             SELECT Id, File__c, Replaced__c, Sent__c
             FROM Nomination__c
             WHERE Id = :nominationId
             LIMIT 1
         ];
+        if(fxReview.currencyCode=='HKD') { generateDocument(nominationId,fileUrl,fileName,reviewedFxFingerprint);return; }
         saveGeneratedDocument(EncodingUtil.base64Decode(body), nomination, fileName);
     }
 
+    public static void generateDocument(String nominationId,String fileUrl,String fileName) { generateDocument(nominationId,fileUrl,fileName,null); }
+    public static void generateDocumentFromBlob(String body,String nominationId,String fileUrl,String fileName) { generateDocumentFromBlob(body,nominationId,fileUrl,fileName,null); }
+
     private static void saveGeneratedDocument(Blob body, Nomination__c nomination, String fileName) {
+        if(nomination.getPopulatedFieldsAsMap().containsKey('Document_Currency__c')) update nomination;
         ContentVersion contentVersion = new ContentVersion(
             PathOnClient = '/' + fileName + '.pdf',
             Title = fileName + '.pdf',

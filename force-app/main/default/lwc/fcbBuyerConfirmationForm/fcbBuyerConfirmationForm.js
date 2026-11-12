@@ -1,3 +1,4 @@
+import prepareNativeDocument from '@salesforce/apex/FcosNativeConfirmationService.prepare';
 import { LightningElement , api , track , wire} from 'lwc';
 import jsPDF from '@salesforce/resourceUrl/jsPDF';
 import {loadScript} from "lightning/platformResourceLoader";
@@ -12,6 +13,7 @@ import generateDocument from "@salesforce/apex/NominationController.generateDocu
 import getStemBuyerInfo from "@salesforce/apex/NominationController.getStemBuyerInfo";
 import getConfirmationSpecialTerms from "@salesforce/apex/NominationController.getConfirmationSpecialTerms";
 import getPaymentTerm from "@salesforce/apex/NominationController.getPaymentTerm";
+import getTradeDocument from "@salesforce/apex/FcosTradeDocumentService.nomination";
 import {updateRecord} from "lightning/uiRecordApi";
 import { fireEvent } from 'c/pubsub';
 import { ShowToastEvent } from "lightning/platformShowToastEvent";
@@ -27,6 +29,7 @@ export default class FcbBuyerConfirmationForm extends LightningElement {
     actionExecuted = true;
     @track inputs = [];
     @track specialTerms = {};
+    tradeDocument;
 
     @wire(CurrentPageReference) pageRef;
 
@@ -48,15 +51,20 @@ export default class FcbBuyerConfirmationForm extends LightningElement {
         this.fileName = this.nomination.STEM__r.Name + ' - CON';
         this.stemId = recordData.STEM__c;
         if(lastSavedContract){
-            this.inputs = JSON.parse(this.nomination.Last_Saved_Inputs__c);
-            this.specialTerms = JSON.parse(this.nomination.Last_Saved_Remarks__c);
-            this.actionExecuted = true;
+            this.loadTradeDocument().then(() => {
+                this.inputs = JSON.parse(this.nomination.Last_Saved_Inputs__c);
+                this.specialTerms = JSON.parse(this.nomination.Last_Saved_Remarks__c);
+                this.actionExecuted = true;
+            }).catch(error => this.showError(error));
         } else{
             getStemBuyerInfo({stemId: this.stemId}).then((stem) => {
                 this.stem = stem;
-                getPaymentTerm({paymentTerm: this.stem.Payment_Term__c}).then(paymentTerm => {
+                Promise.all([
+                    getPaymentTerm({paymentTerm: this.stem.Payment_Term__c}),
+                    this.loadTradeDocument()
+                ]).then(([paymentTerm]) => {
                     this.prefillInputs(paymentTerm);
-                })
+                }).catch(error => this.showError(error));
                 let lineItemIds = [
                     ...(this.stem.STEM_Line_Items__r ? this.stem.STEM_Line_Items__r.map(stemLineItem => stemLineItem.Id) : []),
                     ...(this.stem.STEM_Extra_Costs__r ? this.stem.STEM_Extra_Costs__r.map(stemExtraCost => stemExtraCost.Id) : [])
@@ -67,6 +75,31 @@ export default class FcbBuyerConfirmationForm extends LightningElement {
                 })
             })
         }    
+    }
+
+    loadTradeDocument() {
+        return getTradeDocument({ nominationId: this.nomination.Id }).then(review => {
+            this.tradeDocument = review;
+            return review;
+        });
+    }
+
+    get isHkdDocument() {
+        return this.tradeDocument?.currencyCode === 'HKD';
+    }
+
+    get documentCurrencyCode() {
+        return this.isHkdDocument ? 'HKD' : 'USD';
+    }
+
+    nativeLine(lineId) {
+        if (!this.isHkdDocument) return null;
+        return this.tradeDocument?.lines?.find(line => line.id === lineId) || null;
+    }
+
+    formatCurrency(value) {
+        if (value === null || value === undefined) return '';
+        return this.numberWithCommas(this.isHkdDocument ? Number(value).toLocaleString('en-US', { useGrouping: false, minimumFractionDigits: 2, maximumFractionDigits: 8 }) : Number(value).toFixed(2));
     }
 
     prefillInputs(paymentTerm) {
@@ -121,7 +154,9 @@ export default class FcbBuyerConfirmationForm extends LightningElement {
                         ? this.numberWithCommas(stemLineItem.Quantity__c) + '-' + this.numberWithCommas(stemLineItem.Quantity_Max__c) + ' ' + stemLineItem.Unit_of_Measure__c 
                         : this.numberWithCommas(stemLineItem.Quantity__c) + ' ' + stemLineItem.Unit_of_Measure__c
                 });
-                this.inputs.push({ id: this.makeId(7), label: "PRICE", value: 'USD ' + this.numberWithCommas(stemLineItem.Unit_Sell_At__c.toFixed(2)) + '/' + stemLineItem.Unit_of_Measure__c });
+                const nativeLine = this.nativeLine(stemLineItem.Id);
+                const unitPrice = nativeLine ? nativeLine.nativeUnitPrice : stemLineItem.Unit_Sell_At__c;
+                this.inputs.push({ id: this.makeId(7), label: "PRICE", value: this.documentCurrencyCode + ' ' + this.formatCurrency(unitPrice) + '/' + stemLineItem.Unit_of_Measure__c });
                 if(this.stem.STEM_Extra_Costs__r){
                     this.stem.STEM_Extra_Costs__r.filter(stemExtraCost => stemExtraCost.STEM_Line_Item__c === stemLineItem.Id && stemExtraCost.Line_Total__c != null && stemExtraCost.Line_Total__c != 0
                         && (stemExtraCost.Transportation_Included__c === false || stemExtraCost.Nundination_Type__c === 'Sell')).forEach((stemExtraCost => {
@@ -296,7 +331,9 @@ export default class FcbBuyerConfirmationForm extends LightningElement {
         };
 
         try {
-            await updateRecord({ fields });
+            if (this.isHkdDocument) delete fields.Saved_Inputs__c;
+        await updateRecord({ fields });
+        if (this.isHkdDocument) await prepareNativeDocument({ nominationId: this.nomination.Id, reviewedFxFingerprint: this.tradeDocument.fingerprint });
             const vfUrl =
                 '/apex/ConfirmationToBuyer?nominationId=' + this.nomination.Id;
 
@@ -489,7 +526,8 @@ export default class FcbBuyerConfirmationForm extends LightningElement {
         await generateDocument({
             nominationId: this.nomination.Id,
             fileUrl: this.nomination.File__c,
-            fileName: this.fileName
+            fileName: this.fileName,
+            reviewedFxFingerprint: this.isHkdDocument ? this.tradeDocument.fingerprint : null
         });
 
         const generatedFields = {
@@ -765,14 +803,19 @@ export default class FcbBuyerConfirmationForm extends LightningElement {
                     : this.numberWithCommas(extraCost.Quantity__c) + ' ' + extraCost.Unit_of_Measure__c
         }
 
+        const nativeLine = this.nativeLine(extraCost.Id);
+        const unitPrice = nativeLine ? nativeLine.nativeUnitPrice : extraCost.Unit_Price__c;
+        const minimum = nativeLine ? nativeLine.nativeMinimum : extraCost.Minimum_Sell_At__c;
+        const lumpsum = nativeLine ? nativeLine.nativeLumpsum : extraCost.Lumpsum_Price__c;
+        const currencyCode = this.documentCurrencyCode;
         let value =
             !extraCost.Fixed__c
-                ? quantity + ` AT USD ${this.numberWithCommas(formatter.format(extraCost.Unit_Price__c))}/${extraCost.Unit_of_Measure__c} ${
-                    extraCost.Minimum_Sell_At__c
-                        ? `MINIMUM USD ${this.numberWithCommas(formatter.format(extraCost.Minimum_Sell_At__c))}`
+                ? quantity + ` AT ${currencyCode} ${this.numberWithCommas(formatter.format(unitPrice))}/${extraCost.Unit_of_Measure__c} ${
+                    minimum
+                        ? `MINIMUM ${currencyCode} ${this.numberWithCommas(formatter.format(minimum))}`
                         : ''
                 }`
-                : `USD ${this.numberWithCommas(formatter.format(extraCost.Lumpsum_Price__c))} LUMPSUM`;
+                : `${currencyCode} ${this.numberWithCommas(formatter.format(lumpsum))} LUMPSUM`;
         
         return {id: this.makeId(7), label, value};
     }

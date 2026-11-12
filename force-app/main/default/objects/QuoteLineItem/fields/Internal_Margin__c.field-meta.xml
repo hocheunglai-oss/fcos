@@ -1,8 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
     <fullName>Internal_Margin__c</fullName>
-    <formula>UnitPrice -  Buyer_Broker_Commission__c -  Supplier_Unit_Price__c - Supplier_Broker_Commission__c</formula>
-    <formulaTreatBlanksAs>BlankAsZero</formulaTreatBlanksAs>
+    <formula>IF(
+    OR(
+        AND(ISPICKVAL(Buy_Currency__c, "HKD"), BLANKVALUE(Buy_FX_Rate__c, 0) &lt;= 0),
+        AND(ISPICKVAL(Sell_Currency__c, "HKD"), BLANKVALUE(Sell_FX_Rate__c, 0) &lt;= 0)
+    ),
+    NULL,
+    IF(ISPICKVAL(Sell_Currency__c, "HKD"), BLANKVALUE(Sell_HKD_Unit_Price__c, 0) / Sell_FX_Rate__c, BLANKVALUE(Sell_USD_Unit_Price_Precise__c, BLANKVALUE(UnitPrice, 0))) -  BLANKVALUE(Buyer_Broker_Commission__c, 0) -  IF(ISPICKVAL(Buy_Currency__c, "HKD"), BLANKVALUE(Buy_HKD_Unit_Price__c, 0) / Buy_FX_Rate__c, BLANKVALUE(Buy_USD_Unit_Price_Precise__c, BLANKVALUE(Supplier_Unit_Price__c, 0))) - BLANKVALUE(Supplier_Broker_Commission__c, 0)
+)</formula>
+    <formulaTreatBlanksAs>BlankAsBlank</formulaTreatBlanksAs>
     <label>Internal Margin</label>
     <precision>18</precision>
     <required>false</required>

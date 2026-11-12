@@ -56,6 +56,10 @@ const STATUS_FILTERS = ['eligible', 'blocked', 'kept', 'not-selected', 'updated'
 
 const RECEIPT_CURRENCIES = ['HKD', 'USD', 'SGD', 'CNY', 'EUR', 'GBP', 'AUD', 'NZD', 'CAD', 'JPY'];
 const XeroFinancialSync = lazy(() => import('@/components/xero/XeroFinancialSync'));
+const XeroNativeDocumentPreview = lazy(() => import('@/components/xero/XeroNativeDocumentPreview'));
+const XeroCreditAllocationActions = lazy(() => import('@/components/xero/XeroCreditAllocationActions'));
+const XeroPrepaymentActions = lazy(() => import('@/components/xero/XeroPrepaymentActions'));
+const XeroPrepaymentPolicy = lazy(() => import('@/components/xero/XeroPrepaymentPolicy'));
 const XeroIntegrityReport = lazy(() => import('@/components/xero/XeroIntegrityReport'));
 const XeroPortalManual = lazy(() => import('@/components/xero/XeroPortalManual'));
 const XeroContactResolution = lazy(() => import('@/components/xero/XeroContactResolution'));
@@ -63,7 +67,7 @@ const XeroContactResolution = lazy(() => import('@/components/xero/XeroContactRe
 export default function XeroPortal() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [tab, setTab] = useState('accounting');
-  const { hasCapability } = useAuth();
+  const { hasCapability, user } = useAuth();
   const canViewIntegrity = hasCapability('xero_portal_manage');
   const [status, setStatus] = useState(null);
   const [receipts, setReceipts] = useState([]);
@@ -688,6 +692,18 @@ export default function XeroPortal() {
           <TabsContent value="accounting" className="space-y-4">
             <Suspense fallback={<StateBlock icon={Loader2} title={copy.financial.loadingTitle} description={copy.financial.loadingDescription} />}>
               <XeroFinancialSync portalStatus={status} language="en" />
+              {canViewIntegrity && status?.externalActions?.xero_financial_sync?.control === 'deployment_read_only'
+                && <XeroNativeDocumentPreview verificationOnly />}
+              {canViewIntegrity && status?.xero?.connected
+                && status.externalActions?.xero_financial_sync?.control !== 'deployment_read_only' && <>
+                  {status.xero.scopeFlags?.settingsRead && <>
+                    <XeroPrepaymentActions key={status.xero.tenantId} tenantId={status.xero.tenantId} />
+                    <XeroPrepaymentPolicy />
+                    {user?.id && <XeroCreditAllocationActions key={`${status.xero.tenantId}:${user.id}`} tenantId={status.xero.tenantId} actorId={user.id} />}
+                  </>}
+                  {user?.id && <XeroNativeDocumentPreview key={`native-document:${status.xero.tenantId}:${user.id}`}
+                    tenantId={status.xero.tenantId} actorId={user.id} reviewEnabled={Boolean(status.xero.scopeFlags?.settingsRead)} />}
+                </>}
             </Suspense>
           </TabsContent>
 

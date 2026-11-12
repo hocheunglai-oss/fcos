@@ -785,6 +785,19 @@ test('equal amount alone cannot own a Xero transaction; conflicting saved owners
   assert.equal(claimed.outcome, 'blocked'); assert.match(claimed.reason, /different Salesforce/);
 });
 
+test('native source and mapping evidence block ordinary invoice and bill corrections', () => {
+  const f = fixture();
+  f.salesforce.buyers[0].Document_FX_Fingerprint__c = 'a'.repeat(64);
+  f.stored.documentMappings[1].currency_evidence = { managedUsdDocument: true };
+  const items = buildDocumentCorrectionItems({ salesforce: f.salesforce, stored: f.stored, xero: f.xero() });
+  assert.equal(items.length, 2);
+  for (const item of items) {
+    assert.equal(item.outcome, 'blocked');
+    assert.equal(item.xeroInvoiceId, null);
+    assert.match(item.reason, /explicit FX workflow/);
+  }
+});
+
 test('legitimate distinct stored bill mappings may share the prescribed derived bill number', () => {
   const f = fixture(); const second = { ...structuredClone(f.salesforce.suppliers[0]), Id: 'a06000000000002AAA', Name: 'ORIGINAL-SUPPLIER-2' };
   f.salesforce.suppliers.push(second);

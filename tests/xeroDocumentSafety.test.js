@@ -148,6 +148,60 @@ test('read-only schema checks never query unavailable currency fields and requir
   assert.equal(multi.singleCurrency, false); assert.equal(multi.corporateCurrency, null);
 });
 
+test('native HKD invoices cannot enter the ordinary Xero draft or authorised path as USD', () => {
+  for (const mode of ['draft', 'authorised']) {
+    const f = fixture(mode);
+    f.buyer.Document_Currency__c = 'HKD';
+    assert.equal(f.build().status, 'blocked');
+    assert.equal(f.build().proposedPayload, null);
+    assert.match(f.build().blockers.join(' '), /explicit FX workflow/i);
+  }
+});
+
+test('managed USD stays out of ordinary document posting, including stale reviews and Salesforce ID aliases', () => {
+  for (const mode of ['draft', 'authorised']) {
+    const f = fixture(mode);
+    f.buyer.Id = 'a10000000000001AAA';
+    f.line.Buyer_Invoice__c = f.buyer.Id;
+    const baseline = f.build();
+    assert.equal(baseline.status, 'eligible');
+    f.buyer.Document_FX_Fingerprint__c = null;
+    assert.equal(xeroReviewFingerprint(f.build()), xeroReviewFingerprint(baseline));
+    f.buyer.Document_FX_Fingerprint__c = 'a'.repeat(64);
+    const held = f.build();
+    assert.equal(held.action, 'blocked');
+    assert.equal(held.proposedPayload, null);
+    assert.match(held.blockers[0], /explicit FX workflow/);
+    const saved = { id: 'review', source_payload: baseline, proposed_action: baseline.action,
+      proposed_payload: baseline.proposedPayload, xero_payload: {}, blockers: [], differences: [] };
+    assert.match(changedXeroReviewItems([saved], new Map([[`Invoice__c:${f.buyer.Id}`, held]]))[0].reason, /explicit FX workflow/);
+
+    delete f.buyer.Document_FX_Fingerprint__c;
+    f.salesforce.safetyContext = { fields: { Invoice__c: ['Document_FX_Fingerprint__c'] } };
+    assert.equal(f.build().action, 'blocked', 'missing selected marker is incomplete');
+    f.buyer.Document_FX_Fingerprint__c = null;
+    f.stored.documentMappings = [{ salesforce_object: 'Invoice__c', salesforce_id: f.buyer.Id.slice(0, 15),
+      xero_document_id: 'native-draft', xero_document_type: 'ACCREC', currency_evidence: { managedUsdDocument: true } }];
+    assert.equal(f.build().action, 'blocked', 'durable evidence remains when the source marker is cleared');
+    assert.equal(f.build().proposedPayload, null);
+  }
+});
+
+test('currency evidence preserves ordinary USD and blocks incomplete or managed cash evidence', () => {
+  const context = { singleCurrency: true, corporateCurrency: 'USD', fields: {
+    Supplier_Invoice__c: ['Document_Currency__c'], Payment__c: ['Payment_Currency__c', 'Cash_Event__c'],
+  } };
+  assert.deepEqual(financialSourceCurrency({ Document_Currency__c: null }, [], context, 'Supplier_Invoice__c'), {
+    currency: 'USD', blockers: [],
+  });
+  assert.ok(financialSourceCurrency({}, [], context, 'Supplier_Invoice__c').blockers.length);
+  assert.ok(financialSourceCurrency({ Document_Currency__c: 'HKD' }, [], context, 'Supplier_Invoice__c').blockers.length);
+  assert.ok(financialSourceCurrency({ Payment_Currency__c: 'USD', Cash_Event__c: 'event' }, [], context, 'Payment__c').blockers.length);
+  assert.deepEqual(financialSourceCurrency({ Payment_Currency__c: null, Cash_Event__c: null }, [], context, 'Payment__c'), {
+    currency: 'USD', blockers: [],
+  });
+});
+
 test('exact draft is authorised only in reviewed authorised mode with readiness rechecked', () => {
   const f = fixture('authorised'); f.xero.documents = [current(f.build())];
   const row = f.build(); assert.equal(row.action, 'safe_update'); assert.equal(row.proposedPayload.Status, 'AUTHORISED');

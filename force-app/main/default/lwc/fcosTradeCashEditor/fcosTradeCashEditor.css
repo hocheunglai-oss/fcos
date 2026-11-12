@@ -1,0 +1,36 @@
+.review-card {
+    border-left: 0.25rem solid var(--slds-g-color-brand-base-50, #0176d3);
+}
+
+.reversal-card {
+    border-left: 0.25rem solid var(--slds-g-color-error-base-40, #ba0517);
+}
+
+.history-row {
+    background: var(--slds-g-color-neutral-base-100, #fff);
+}
+
+.slds-list_horizontal dt {
+    width: 42%;
+    padding-right: 0.75rem;
+}
+
+.slds-list_horizontal dd {
+    width: 58%;
+}
+
+.wrap-value {
+    overflow-wrap: anywhere;
+    white-space: normal;
+}
+
+@media (max-width: 48rem) {
+    .slds-list_horizontal dt,
+    .slds-list_horizontal dd {
+        width: 100%;
+    }
+
+    .slds-list_horizontal dd {
+        margin-bottom: 0.5rem;
+    }
+}

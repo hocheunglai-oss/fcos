@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomPermission xmlns="http://soap.sforce.com/2006/04/metadata">
+    <description>Allows the FCOS variable-charge integration to submit explicit precise USD extra-charge prices. Does not allow fuel pricing or rate changes.</description>
+    <isLicensed>false</isLicensed>
+    <label>FCOS Precise USD Charge Price</label>
+</CustomPermission>

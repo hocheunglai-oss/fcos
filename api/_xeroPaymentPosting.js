@@ -1,7 +1,7 @@
 import { assertOrdinaryRemittancePostingRow } from './_xeroOrdinaryRemittanceCash.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { claimReviewedGroupPayment, finishReviewedGroupPayment, groupBankProofMatches, hasGroupBankSourceEvidence } from './_xeroGroupPaymentPersistence.js';
-import { confirmedPaymentValues, matchPaymentResponses, paymentConfirmationErrors } from './_xeroPaymentIdentity.js';
+import { HKD_PAYMENT_WRITE_HOLD, isIssuedNativeHkdPostingRow, confirmedPaymentValues, matchPaymentResponses, paymentConfirmationErrors } from './_xeroPaymentIdentity.js';
 
 const hash = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const uuid = (value) => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
@@ -93,6 +93,26 @@ async function audit(client, claim, actor, outcome, code = null) {
 }
 
 async function claimPayment(client, tenantId, row, actor) {
+  if (row.currency === 'HKD') {
+    let result;
+    try {
+      result = await client.rpc('claim_xero_native_hkd_payment_v1', {
+        p_tenant_id: tenantId, p_row: row, p_actor_id: actor.id, p_actor_email: actor.email,
+      });
+    } catch {
+      throw storageFailure();
+    }
+    if (result?.error) throw storageFailure();
+    if (result?.data?.alreadyClaimed === true && result.data.claim === null) return null;
+    const claim = result?.data?.claim;
+    const saved = journal(claim);
+    if (result?.data?.alreadyClaimed !== false || !uuid(claim?.id) || claim.status !== 'processing'
+      || claim.idempotency_key !== paymentPostingKey(tenantId, row.salesforcePaymentId)
+      || claim.source_fingerprint !== row.sourceFingerprint || saved?.state !== 'intent'
+      || saved.tenantId !== tenantId || saved.reviewed?.reviewFingerprint !== row.reviewFingerprint
+      || claim.reviewed_by !== actor.id) throw storageFailure();
+    return claim;
+  }
   if (hasGroupBankSourceEvidence(row)) return claimReviewedGroupPayment(client, tenantId, row, actor);
   const now = new Date().toISOString();
   const claim = { id: randomUUID(), mode: 'payment_apply', status: 'processing', idempotency_key: paymentPostingKey(tenantId, row.salesforcePaymentId),
@@ -123,12 +143,55 @@ async function finishClaim(client, claim, actor, state, message, observedPayment
 
 export async function resolvePaymentPostingClaim(client, claim, payment, actor) {
   const saved = journal(claim);
+  if (saved?.reviewed?.currency === 'HKD' && saved.reviewed.nativeHkdMapping) {
+    return resolveNativeHkdPaymentClaim(client, claim, saved, payment, actor);
+  }
   if (['confirmed', 'reference_linked', 'group_linked'].includes(saved?.state)) return;
+  if (saved?.reviewed?.currency === 'HKD') throw failure(HKD_PAYMENT_WRITE_HOLD, 'XERO_PAYMENT_FX_PERSISTENCE_REQUIRED');
   if (!saved?.reviewed || paymentConfirmationErrors(saved.reviewed, payment || {}, saved.confirmedPaymentId).length) throw failure('The reread payment does not confirm the original posting.');
   await finishClaim(client, claim, actor, 'confirmed', null, [payment.PaymentID], payment.PaymentID, confirmedPaymentValues(payment));
 }
 
+async function resolveNativeHkdPaymentClaim(client, claim, saved, payment, actor) {
+  const reviewed = saved.reviewed;
+  const fx = reviewed.nativeHkdMapping;
+  const amount = reviewed.amount;
+  if (!['intent', 'uncertain', 'confirmed'].includes(saved.state) || !uuid(claim.id) || !uuid(saved.tenantId)
+    || !uuid(actor?.id) || actor.id !== claim.reviewed_by || typeof actor.email !== 'string'
+    || actor.email.trim().toLowerCase() !== claim.reviewed_by_email?.toLowerCase()
+    || saved.paymentId !== canonicalPaymentId(reviewed.salesforcePaymentId)
+    || claim.idempotency_key !== paymentPostingKey(saved.tenantId, reviewed.salesforcePaymentId)
+    || claim.source_fingerprint !== reviewed.sourceFingerprint || typeof reviewed.reviewFingerprint !== 'string'
+    || !reviewed.reviewFingerprint || !Number.isFinite(amount) || amount <= 0
+    || amount !== reviewed.proposedPayment?.Amount || reviewed.paymentDate !== reviewed.proposedPayment?.Date
+    || reviewed.xeroDocumentId !== reviewed.proposedPayment?.Invoice?.InvoiceID
+    || reviewed.bankAccountId !== reviewed.proposedPayment?.Account?.AccountID
+    || !['USD', 'HKD'].includes(fx.bankCurrency) || !Number.isFinite(fx.expectedBankAmount) || fx.expectedBankAmount <= 0
+    || !Number.isFinite(fx.expectedXeroRate) || fx.expectedXeroRate <= 0
+    || fx.currencyEvidence?.documentCurrency !== 'HKD' || fx.currencyEvidence.nativeAmount !== amount
+    || !fx.companyFxRevision || fx.currencyEvidence.rateRevision !== fx.companyFxRevision
+    || payment?.CurrencyRate !== fx.expectedXeroRate
+    || paymentConfirmationErrors(reviewed, payment || {}, saved.confirmedPaymentId, {
+      bankAmount: fx.expectedBankAmount, bankCurrency: fx.bankCurrency, expectedRate: fx.expectedXeroRate,
+    }).length) throw failure('The reread payment does not confirm the original native HKD posting.');
+  let result;
+  try {
+    result = await client.rpc('finish_xero_native_hkd_payment_v1', {
+      p_tenant_id: saved.tenantId, p_claim_id: claim.id, p_actor_id: actor.id, p_actor_email: actor.email,
+      p_confirmation: { paymentId: payment.PaymentID, invoiceId: payment.Invoice.InvoiceID,
+        bankAccountId: payment.Account.AccountID, currency: payment.Invoice.CurrencyCode,
+        date: confirmedPaymentValues(payment).payment_date, amount: payment.Amount, bankAmount: payment.BankAmount,
+        currencyRate: payment.CurrencyRate, reference: payment.Reference },
+    });
+  } catch {
+    throw storageFailure();
+  }
+  if (result?.error || !uuid(result?.data?.mappingId) || typeof result.data.reused !== 'boolean') throw storageFailure();
+  return result.data;
+}
+
 export async function postReviewedPaymentBatch(rows, { client, connection, actor, accountingFetch, options = {} }) {
+  if (rows.some(row => row.currency === 'HKD' && !isIssuedNativeHkdPostingRow(row))) throw failure(HKD_PAYMENT_WRITE_HOLD, 'XERO_PAYMENT_FX_PERSISTENCE_REQUIRED');
   rows.forEach(assertOrdinaryRemittancePostingRow);
   if (!uuid(connection.tenantId)) throw failure('A verified Xero tenant is required.', 'XERO_PAYMENT_TENANT_INVALID');
   const claims = []; const outcomes = [];
@@ -150,11 +213,22 @@ export async function postReviewedPaymentBatch(rows, { client, connection, actor
   const confirmations = matchPaymentResponses(claims.map(({ row }) => row), response?.Payments);
   for (const [index, { row, claim }] of claims.entries()) {
     const { response: actual, errors: matchErrors } = confirmations[index];
+    const fx = row.currency === 'HKD' ? row.nativeHkdMapping : null;
     const errors = transportUnknown ? ['The Xero request ended without a confirmed response. Its write outcome is unknown; verify it in a fresh payment check.']
-      : [...matchErrors, ...paymentConfirmationErrors(row, actual)];
+      : [...matchErrors, ...paymentConfirmationErrors(row, actual, null, fx && {
+        bankAmount: fx.expectedBankAmount, bankCurrency: fx.bankCurrency, expectedRate: fx.expectedXeroRate,
+      })];
+    if (fx && actual.CurrencyRate !== fx.expectedXeroRate && !errors.length) {
+      errors.push('Xero did not confirm the exact reviewed HKD rate.');
+    }
     if (errors.length) {
       await finishClaim(client, claim, actor, 'uncertain', errors.join(' '), observedIds);
       outcomes.push({ salesforcePaymentId: row.salesforcePaymentId, status: 'failed', reviewRequired: true, errors });
+      continue;
+    }
+    if (fx) {
+      await resolveNativeHkdPaymentClaim(client, claim, journal(claim), actual, actor);
+      outcomes.push({ salesforcePaymentId: row.salesforcePaymentId, xeroPaymentId: actual.PaymentID, status: 'applied' });
       continue;
     }
     if (hasGroupBankSourceEvidence(row)) {

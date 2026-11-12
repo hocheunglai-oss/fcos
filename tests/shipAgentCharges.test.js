@@ -391,6 +391,10 @@ test('currency SELECTs follow each Salesforce object describe', () => {
   for (const objectName of Object.keys(withCurrency)) {
     assert.equal(variableChargeInternals.optionalBuyerInvoiceCurrencyField(withCurrency, objectName), ', CurrencyIsoCode');
   }
+  assert.equal(variableChargeInternals.optionalTradingFxFields({ fields: [{ name: 'CurrencyIsoCode' }] }), '');
+  assert.equal(variableChargeInternals.optionalTradingFxFields({ fields: [
+    { name: 'Buy_USD_Unit_Price_Precise__c' }, { name: 'Sell_FX_Rate__c' }, { name: 'Buy_Unexpected__c' },
+  ] }), ', Buy_USD_Unit_Price_Precise__c, Sell_FX_Rate__c');
 });
 
 test('paired fingerprints isolate cost-only and buyer-only changes while sharing identity fields', () => {
@@ -399,6 +403,7 @@ test('paired fingerprints isolate cost-only and buyer-only changes while sharing
     stem: { Id: 'a002x0000000001AAA', CurrencyIsoCode: 'USD', Delivery_Date__c: '2026-08-01' },
     accounts: [{ Id: supplierId, Is_Agent__c: true }],
     supplierRequirements: [{ supplierId }],
+    nominations: [],
     lineItems: [{
       Id: 'a012x0000000001AAA', Original_Supplier__c: supplierId, Cancelled__c: false,
       Product__c: '01t2x0000000001AAA', Quantity__c: 10, Unit_of_Measure__c: 'MT',
@@ -424,6 +429,41 @@ test('paired fingerprints isolate cost-only and buyer-only changes while sharing
   const sharedChanged = { ...base, lineItems: [{ ...base.lineItems[0], Quantity__c: 11 }] };
   assert.notEqual(variableChargeInternals.supplierLiveFingerprint(sharedChanged, supplierId), cost);
   assert.notEqual(variableChargeInternals.buyerChargeLiveFingerprint(sharedChanged, supplierId), buyer);
+
+  const fxFields = { Buy_Currency__c: 'USD', Sell_Currency__c: 'USD',
+    Buy_USD_Unit_Price_Precise__c: 500.00000001, Sell_USD_Unit_Price_Precise__c: 520.00000001 };
+  const fxCases = [
+    fields => ({ ...base, lineItems: [{ ...base.lineItems[0], ...fields }] }),
+    fields => ({ ...base, extraCosts: [{ Id: 'a032x0000000001AAA', Supplier__c: supplierId, ...fields }] }),
+  ];
+  for (const makeCase of fxCases) {
+    const fingerprints = fields => {
+      const value = makeCase(fields);
+      return {
+        supplier: variableChargeInternals.supplierLiveFingerprint(value, supplierId),
+        buyer: variableChargeInternals.buyerChargeLiveFingerprint(value, supplierId),
+        buyerAggregate: variableChargeInternals.buyerAggregateFingerprint(value),
+        full: variableChargeInternals.liveFingerprint(value),
+      };
+    };
+    const exact = fingerprints(fxFields);
+    const buy = fingerprints({ ...fxFields, Buy_USD_Unit_Price_Precise__c: 500.00000002 });
+    assert.notEqual(buy.supplier, exact.supplier);
+    assert.equal(buy.buyer, exact.buyer);
+    assert.equal(buy.buyerAggregate, exact.buyerAggregate);
+    assert.notEqual(buy.full, exact.full);
+    const sell = fingerprints({ ...fxFields, Sell_USD_Unit_Price_Precise__c: 520.00000002 });
+    assert.equal(sell.supplier, exact.supplier);
+    assert.notEqual(sell.buyer, exact.buyer);
+    assert.notEqual(sell.buyerAggregate, exact.buyerAggregate);
+    assert.notEqual(sell.full, exact.full);
+    assert.deepEqual(fingerprints({ Buy_Currency__c: 'USD', Buy_USD_Unit_Price_Precise__c: null }), fingerprints({}));
+    assert.notEqual(fingerprints({ Buy_Currency__c: 'USD', Buy_USD_Unit_Price_Precise__c: 0 }).supplier, fingerprints({}).supplier);
+    const hkd = { Sell_Currency__c: 'HKD', Sell_HKD_Unit_Price__c: 500, Sell_FX_Rate__c: 7.8 };
+    const changedRate = fingerprints({ ...hkd, Sell_FX_Rate__c: 7.81 });
+    assert.notEqual(changedRate.buyer, fingerprints(hkd).buyer);
+    assert.equal(changedRate.supplier, fingerprints(hkd).supplier);
+  }
 });
 
 test('plain-language queues identify the current user task without changing internal statuses', () => {

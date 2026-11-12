@@ -1,4 +1,25 @@
 public without sharing class VariableChargeSupplierHandler {
+    private static final Set<String> STATUS_FIELDS=new Set<String>{'Supplier_Status__c','Buyer_Charge_Status__c'};
+    private static final List<String> EVIDENCE_FIELDS=new List<String>{
+        'Supplier_Status__c','Verified_At__c','Verified_By_Email__c','Reviewed_Source_Fingerprint__c',
+        'Buyer_Charge_Status__c','Buyer_Charge_Confirmed_At__c','Buyer_Charge_Confirmed_By_Email__c','Buyer_Charge_Reviewed_Source_Fingerprint__c'
+    };
+    public static void guardEvidence(List<STEM_Variable_Charge_Supplier__c> rows,Map<Id,STEM_Variable_Charge_Supplier__c> oldRows) {
+        if(FeatureManagement.checkPermission('Fcos_Variable_Charge_Evidence')) return;
+        Boolean revoking=VariableChargeInvoiceReadinessService.isRevokingEvidence();
+        for(STEM_Variable_Charge_Supplier__c row:rows) {
+            STEM_Variable_Charge_Supplier__c previous=oldRows==null?null:oldRows.get(row.Id);
+            for(String field:EVIDENCE_FIELDS) {
+                Object value=row.get(field),before=previous==null?null:previous.get(field);
+                if(value==before || (previous==null && STATUS_FIELDS.contains(field) && value=='Pending')) continue;
+                // The internal invalidation scope can only remove evidence or mark it invalidated.
+                if(revoking && previous!=null && (value==null || (STATUS_FIELDS.contains(field) && value=='Invalidated'))) continue;
+                if(ReconfirmProcessing.isResettingSupplierEvidence(row,previous,field)) continue;
+                row.addError('Variable-charge approval evidence is service-managed. Complete the assigned FCOS review.');break;
+            }
+        }
+    }
+
     public static void beforeInsert(List<STEM_Variable_Charge_Supplier__c> rows) {
         for (STEM_Variable_Charge_Supplier__c row : rows) {
             if (row.STEM__c == null || row.Supplier__c == null) {

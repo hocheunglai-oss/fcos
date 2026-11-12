@@ -101,3 +101,34 @@ test.describe('application draft recovery', () => {
     await expect(title).toHaveValue('China contract draft');
   });
 });
+
+test('desktop STEM detail shows reviewed native sell price beside the independent USD buy price', async ({ page }, testInfo) => {
+  test.skip(process.env.FCOS_E2E_WORKFLOW_FIXTURE !== '1' || testInfo.project.name !== 'desktop-chrome', 'Local desktop fixture only.');
+  const violations = [];
+  const origin = new URL(testInfo.project.use.baseURL).origin;
+  await page.route('**/*', (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    // Vite serves local imports under api/ as modules, including the letterhead asset.
+    const localImport = /\.(?:js|mjs)$/.test(url.pathname) || url.pathname === '/api/assets/hedge-letterhead-logo.jpg';
+    const apiCall = url.pathname.startsWith('/api/') && !localImport;
+    if (url.origin !== origin || request.method() !== 'GET' || apiCall) {
+      violations.push(request.method());
+      return route.abort();
+    }
+    return route.continue();
+  });
+  await page.goto('/e2e/fixtures/app-workflow-recovery.html?native-prices=1');
+  const toggle = page.getByRole('button', { name: 'Toggle STEM workspace' });
+  await expect(toggle).toBeVisible();
+  await toggle.click();
+  const native = page.getByRole('row').filter({ hasText: 'Native price fixture' });
+  await expect(native.getByText(/HKD\s*7,800/)).toBeVisible();
+  await expect(native.getByText(/USD\s*1,000/)).toBeVisible();
+  await expect(native.getByText(/confirmed/i)).toBeVisible();
+  await expect(native.getByText(/USD\s*600\.12345678/)).toBeVisible();
+  const legacy = page.getByRole('row').filter({ hasText: 'Legacy price fixture' });
+  await expect(legacy.getByText(/\$777/).filter({ visible: true })).toBeVisible();
+  await expect(page.getByText('Cancelled price fixture', { exact: true })).toHaveCount(0);
+  expect(violations).toEqual([]);
+});

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Original_Supplier_Invoice__c</fullName>
+    <deleteConstraint>SetNull</deleteConstraint>
+    <label>Original Supplier Invoice</label>
+    <referenceTo>Supplier_Invoice__c</referenceTo>
+    <relationshipLabel>Credit and Reissue Supplier Invoices</relationshipLabel>
+    <relationshipName>CreditAndReissueSupplierInvoices</relationshipName>
+    <type>Lookup</type>
+</CustomField>

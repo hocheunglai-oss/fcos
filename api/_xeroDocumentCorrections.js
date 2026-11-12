@@ -8,6 +8,7 @@ import { allFinancialRows, buildFinancialClassifications, hasSupplierFinancialBu
   loadSalesforceFinancialSnapshot, loadStoredFinancialControls, normalizeXeroInvoice, recordXeroFinancialAudit, xeroFinancialRateSnapshot, XERO_FINANCIAL_CUTOFF } from './_xeroFinancialSync.js';
 import { buildDocumentFieldCorrectionPayload, evaluateDocumentFieldCorrection, verifyDocumentFieldCorrectionReadback } from './_xeroDocumentFieldPolicy.js';
 import { claimDocumentCorrection, finishDocumentCorrection } from './_xeroDocumentCorrectionPersistence.js';
+import { hasNativeDocumentMapping, NATIVE_DOCUMENT_REVIEW_REQUIRED } from './_xeroDocumentSafety.js';
 import { assertDocumentCorrectionPreviewBounds, buildDocumentCorrectionScope, collectDocumentCorrectionInvoices,
   compactDocumentCorrectionPreview, correctionScopeError } from './_xeroDocumentCorrectionScope.js';
 import { assertCorrectionAllowance, resolveCorrectionReserveAuthority, verifyCorrectionCanary } from './_xeroDocumentCorrectionReserve.js';
@@ -103,6 +104,7 @@ export function buildDocumentCorrectionItems({ salesforce, xero, stored }) {
     const mappings = stored.documentMappings.filter((m) => m.salesforce_object === source.salesforceObject && sameSf(m.salesforce_id, source.salesforceId));
     if (mappings.length > 1) return { ...item, reason: 'More than one saved mapping identifies this Salesforce document.' };
     const mapping = mappings[0]; item.mapping = mapping || null;
+    if (hasNativeDocumentMapping(mapping)) return { ...item, reason: NATIVE_DOCUMENT_REVIEW_REQUIRED };
     if (hasSupplierFinancialBucketReceipt(mapping)) {
       return { ...item, reason: 'This supplier bill has a retained financial link. Verify it through the financial-only workflow.' };
     }

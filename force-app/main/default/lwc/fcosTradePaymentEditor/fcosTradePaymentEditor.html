@@ -1,0 +1,69 @@
+<template>
+    <lightning-quick-action-panel header="Record Native Payment">
+        <template if:true={isLoading}>
+            <lightning-spinner alternative-text="Refreshing native payment review" size="small"></lightning-spinner>
+        </template>
+        <template if:true={recordError}>
+            <div class="slds-notify slds-notify_alert slds-alert_error" role="alert">{recordError}</div>
+        </template>
+        <template if:true={error}>
+            <div class="slds-notify slds-notify_alert slds-alert_error slds-m-bottom_small" role="alert">{error}</div>
+        </template>
+        <template if:true={showReview}>
+            <div class="slds-box slds-theme_shade slds-m-bottom_small">
+                <p class="slds-text-title_bold">Invoice snapshot</p>
+                <p lwc:if={isCreditReview}>Only cash received or paid against the original invoice is refundable. The unpaid amount is offset by the credit.</p>
+                <dl class="slds-list_horizontal slds-wrap slds-m-top_x-small">
+                    <dt class="slds-item_label slds-truncate" title="Document currency">Document currency</dt><dd class="slds-item_detail slds-truncate">{review.currencyCode}</dd>
+                    <dt class="slds-item_label slds-truncate" title="Native invoice total">Native invoice total</dt><dd class="slds-item_detail slds-truncate">{invoiceNativeTotal}</dd>
+                    <dt class="slds-item_label slds-truncate" title={remainingLabel}>{remainingLabel}</dt><dd class="slds-item_detail slds-truncate">{remainingNative}</dd>
+                    <dt class="slds-item_label slds-truncate" title="Invoice carrying USD">Invoice carrying USD</dt><dd class="slds-item_detail slds-truncate">{invoiceUsdTotal}</dd>
+                    <dt class="slds-item_label slds-truncate" title="Outstanding carrying USD">Outstanding carrying USD</dt><dd class="slds-item_detail slds-truncate">{remainingCarryingUsd}</dd>
+                </dl>
+            </div>
+        </template>
+        <div class="slds-grid slds-wrap slds-gutters_small">
+            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-2">
+                <lightning-input type="number" label={nativeAllocationLabel} value={nativeAmount} step="0.01" required onchange={handleNativeAmountChange} disabled={controlsDisabled}></lightning-input>
+            </div>
+            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-2">
+                <lightning-input type="date" label="Payment date" value={paymentDate} required onchange={handlePaymentDateChange} disabled={controlsDisabled}></lightning-input>
+            </div>
+        </div>
+        <template if:true={isHkdReview}>
+            <div class="slds-box slds-m-top_small">
+                <p class="slds-text-title_bold">Server payment-date review</p>
+                <p class="slds-m-top_x-small">{reviewRate}</p>
+                <p class="slds-text-body_small">{rateStatus}</p>
+                <dl class="slds-list_horizontal slds-wrap slds-m-top_x-small">
+                    <dt class="slds-item_label slds-truncate" title="Cash USD">Cash USD</dt><dd class="slds-item_detail slds-truncate">{cashUsd}</dd>
+                    <dt class="slds-item_label slds-truncate" title="Invoice carrying USD">Invoice carrying USD</dt><dd class="slds-item_detail slds-truncate">{carryingUsd}</dd>
+                    <dt class="slds-item_label slds-truncate" title="Settlement FX USD">Settlement FX USD</dt><dd class="slds-item_detail slds-truncate">{settlementFxUsd}</dd>
+                </dl>
+            </div>
+        </template>
+        <div class="slds-m-top_small">
+            <p class="slds-text-title_bold slds-m-bottom_x-small">Actual bank evidence</p>
+            <div class="slds-grid slds-wrap slds-gutters_small">
+                <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-2">
+                    <lightning-combobox label="Bank" value={bankName} options={bankOptions} required onchange={handleBankNameChange} disabled={controlsDisabled}></lightning-combobox>
+                </div>
+                <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-2">
+                    <lightning-combobox label="Bank currency" value={bankCurrencyCode} options={bankCurrencyOptions} required onchange={handleBankCurrencyChange} disabled={controlsDisabled}></lightning-combobox>
+                </div>
+                <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-2">
+                    <lightning-input type="number" label="Actual bank amount" field-level-help={bankAmountHelpText} value={bankNativeAmount} step="0.01" min="0.01" required onchange={handleBankNativeAmountChange} disabled={controlsDisabled}></lightning-input>
+                </div>
+                <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-2">
+                    <lightning-textarea label="Bank evidence reference" value={bankEvidence} required onchange={handleBankEvidenceChange} disabled={controlsDisabled}></lightning-textarea>
+                </div>
+            </div>
+        </div>
+        <div slot="footer">
+            <template if:true={pendingOperation}>
+                <lightning-button label="Start a different payment" onclick={handleNewRequest} disabled={isSaving}></lightning-button>
+            </template>
+            <lightning-button variant="brand" label="Record reviewed payment" onclick={handleRecord} disabled={recordDisabled}></lightning-button>
+        </div>
+    </lightning-quick-action-panel>
+</template>

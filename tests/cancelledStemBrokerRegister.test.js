@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 import { financialQuantityValue, nativeFinancialQuantity } from '../api/_financialQuantity.js';
+import { loadStemDetailLineItems } from '../api/_stemDetailLineItems.js';
 import { assertStemReadRequest } from '../shared/salesforceReadRequest.js';
 import { activeStemLineItems } from '../src/lib/stemLineVisibility.js';
 
@@ -85,15 +86,22 @@ test('cancelled lines are excluded before supplier, primary and secondary broker
   ]);
 });
 
-async function detail(lines) {
-  const before = JSON.stringify(lines), lookups = [], paymentQueries = [];
+async function detail(lines, { pricingFields = [], staged = false } = {}) {
+  const before = JSON.stringify(lines), lookups = [], paymentQueries = [], lineQueries = [], schemaReads = [];
   const buyerHeader = { Id: 'unlinked-header', STEM__c: stemId, Buyer_Broker__c: brokerId, Commission_Lumpsum__c: 7, Exported__c: true };
   const handler = actualFunction('async function salesforceStemDetailUncached(', '\nasync function salesforceStemDetailFull(', {
     activeStemLineItems, assertStemReadRequest, resolveStemId: async () => stemId,
     sfRequest: async () => ({ Id: stemId, Name: 'History fixture', Delivery_Date__c: '2026-10-01', Total_Invoice_Amount__c: 100 }),
     cleanRecord: (record) => record,
+    loadStemDetailLineItems,
+    getOrLoadRuntimeCache: async (options) => {
+      schemaReads.push(options);
+      return { value: { fields: pricingFields.map((name) => ({ name })) } };
+    },
+    salesforceCacheApiIdentity: () => 'fixture',
+    isDeploymentReadOnly: () => staged,
     queryRows: async (soql) => {
-      if (soql.includes('FROM STEM_Line_Item__c')) return lines;
+      if (soql.includes('FROM STEM_Line_Item__c')) { lineQueries.push(soql); return lines; }
       if (soql.includes('FROM STEM_Extra_Cost__c')) return [];
       if (soql.includes('FROM STEM_Buyer_Broker__c')) return [buyerHeader];
       if (soql.includes('FROM Invoice__c')) return [];
@@ -121,7 +129,7 @@ async function detail(lines) {
   });
   const result = await handler({ stemId });
   assert.equal(JSON.stringify(lines), before);
-  return { result: JSON.parse(JSON.stringify(result)), lookups, paymentQueries };
+  return { result: JSON.parse(JSON.stringify(result)), lookups, paymentQueries, lineQueries, schemaReads };
 }
 
 test('actual detail hides cancelled line projection while retaining its invoice and payment history and STEM-level broker header', async () => {
@@ -148,5 +156,50 @@ test('actual detail cache namespaces prevent reuse of old unfiltered server proj
     cachedSalesforceValue, PAYMENT_DATA_RELIABLE_FROM: '2026-01-01', salesforceBrokerRegisterUncached: () => { throw Error('Unexpected loader'); },
   });
   await detailFull({ stemId }); await registerFull({});
-  assert.deepEqual(namespaces, ['salesforce-stem-detail-v3-active-lines', 'salesforce-broker-register-v2-active-lines']);
+  assert.deepEqual(namespaces, ['salesforce-stem-detail-v4-native-prices', 'salesforce-broker-register-v2-active-lines']);
+});
+
+test('actual detail reads complete side-specific native price fields in the existing scoped query', async () => {
+  const suffixes = ['Currency__c', 'HKD_Unit_Price__c', 'FX_Rate__c', 'FX_Revision__c', 'FX_Confirmed_At__c'];
+  const sellFields = suffixes.map((field) => `Sell_${field}`);
+  const pricingFields = [...sellFields, 'Buy_Currency__c', 'Buy_HKD_Unit_Price__c', 'Buy_USD_Unit_Price_Precise__c'];
+  const active = line('active', { Sell_Currency__c: 'HKD', Sell_HKD_Unit_Price__c: 7800, Buy_USD_Unit_Price_Precise__c: 612.3456 });
+  const { result, lineQueries, schemaReads } = await detail([active, line('cancelled', { Cancelled__c: true })], { pricingFields, staged: true });
+  assert.equal(lineQueries.length, 1);
+  assert.match(lineQueries[0], new RegExp(`WHERE STEM__c = '${stemId}'`));
+  assert.ok(sellFields.every((field) => lineQueries[0].includes(field)));
+  assert.doesNotMatch(lineQueries[0], /Buy_Currency__c|Buy_HKD_Unit_Price__c/);
+  assert.match(lineQueries[0], /Buy_USD_Unit_Price_Precise__c/);
+  assert.equal(schemaReads[0].force, true);
+  assert.deepEqual(result.lineItems.map((item) => item.Id), ['active']);
+  assert.equal(result.lineItems[0].Sell_HKD_Unit_Price__c, 7800);
+});
+
+test('a missing pricing schema preserves the legacy line query, including its original amount fields', async () => {
+  let actualQuery;
+  await loadStemDetailLineItems(stemId, {
+    describe: async () => { throw new Error('Unavailable schema'); },
+    query: async (soql, options) => { actualQuery = soql; assert.deepEqual(options, { softFail: false }); return []; },
+  });
+  assert.match(actualQuery, /Price_Per_Unit__c, Cost_Per_Unit__c/);
+  assert.doesNotMatch(actualQuery, /HKD_|FX_|USD_Unit_Price_Precise/);
+  await assert.rejects(loadStemDetailLineItems("not-an-id'", {
+    describe: async () => assert.fail('Invalid input reached Salesforce'), query: async () => assert.fail('Invalid input reached Salesforce'),
+  }), /resolved Salesforce STEM ID/);
+});
+
+test('stale optional field visibility retries the same legacy scope once', async () => {
+  const queries = [];
+  const describe = async () => ({ fields: [{ name: 'Buy_USD_Unit_Price_Precise__c' }] });
+  await loadStemDetailLineItems(stemId, { describe, query: async (soql) => {
+    queries.push(soql);
+    if (queries.length === 1) throw Object.assign(new Error('Field removed'), { code: 'INVALID_FIELD' });
+    return [];
+  } });
+  assert.equal(queries.length, 2);
+  assert.match(queries[0], /Buy_USD_Unit_Price_Precise__c/);
+  assert.equal(queries[0].replace(', Buy_USD_Unit_Price_Precise__c', ''), queries[1]);
+  await assert.rejects(loadStemDetailLineItems(stemId, { describe, query: async () => {
+    throw Object.assign(new Error('Denied'), { code: 'INSUFFICIENT_ACCESS' });
+  } }), { code: 'INSUFFICIENT_ACCESS' });
 });

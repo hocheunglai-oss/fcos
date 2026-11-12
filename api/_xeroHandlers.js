@@ -1,3 +1,7 @@
+import { xeroCreditAllocationApply, xeroCreditAllocationPreview, xeroCreditAllocationReconcile, xeroCreditAllocationRecoveryQueue } from './_xeroCreditAllocationActions.js';
+import { xeroNativeDocumentApply, xeroNativeDocumentReconcile, xeroNativeDocumentRecoveryQueue } from './_xeroNativeDocumentActions.js';
+import { xeroPrepaymentApply, xeroPrepaymentContacts, xeroPrepaymentPreview, xeroPrepaymentQueue, xeroPrepaymentReconcile } from './_xeroPrepayments.js';
+import { xeroPrepaymentPolicyGet, xeroPrepaymentPolicySave } from './_xeroPrepaymentPolicy.js';
 import { xeroReconciliationCampaignCreate, xeroReconciliationCampaignRead, xeroReconciliationCampaignRefresh, xeroReconciliationCampaignPreview, xeroReconciliationCampaignApprove, xeroReconciliationCampaignRun, xeroReconciliationCampaignRetry, xeroReconciliationConnectionCheck } from './_xeroReconciliationCampaign.js';
 import { xeroFinancialDocumentCorrectionPreview, xeroFinancialDocumentCorrectionPage, xeroFinancialDocumentCorrectionApply, xeroFinancialDocumentCorrectionVerify } from './_xeroDocumentCorrections.js';
 import {
@@ -63,6 +67,20 @@ export const XERO_HANDLER_MODULE_ACCESS = Object.freeze(Object.fromEntries([
   'xeroPortalContactAutoCreateLatest',
   'xeroPortalContactAutoCreateRun',
   'xeroFinancialMappingsGet',
+  'xeroPrepaymentPolicyGet',
+  'xeroPrepaymentPolicySave',
+  'xeroPrepaymentQueue',
+  'xeroPrepaymentContacts',
+  'xeroPrepaymentPreview',
+  'xeroPrepaymentApply',
+  'xeroPrepaymentReconcile',
+  'xeroCreditAllocationPreview',
+  'xeroCreditAllocationApply',
+  'xeroCreditAllocationReconcile',
+  'xeroCreditAllocationRecoveryQueue',
+  'xeroNativeDocumentApply',
+  'xeroNativeDocumentReconcile',
+  'xeroNativeDocumentRecoveryQueue',
   'xeroFinancialMappingsSave',
   'xeroFinancialSyncPreview',
   'xeroFinancialSyncLatest',
@@ -127,6 +145,20 @@ export function createXeroHandlers({ requireActiveUser, resolveRecoveredSystemEr
     xeroPortalContactAutoCreateLatest: wrap(xeroPortalContactAutoCreateLatest),
     xeroPortalContactAutoCreateRun: wrap(xeroPortalContactAutoCreateRun),
     xeroFinancialMappingsGet: wrap(xeroFinancialMappingsGet),
+    xeroPrepaymentPolicyGet: wrap(xeroPrepaymentPolicyGet),
+    xeroPrepaymentPolicySave: wrap(xeroPrepaymentPolicySave),
+    xeroPrepaymentQueue: wrap(xeroPrepaymentQueue),
+    xeroPrepaymentContacts: wrap(xeroPrepaymentContacts),
+    xeroPrepaymentPreview: wrap(xeroPrepaymentPreview),
+    xeroPrepaymentApply: wrap(xeroPrepaymentApply),
+    xeroPrepaymentReconcile: wrap(xeroPrepaymentReconcile),
+    xeroCreditAllocationPreview: wrap(xeroCreditAllocationPreview),
+    xeroCreditAllocationApply: wrap(xeroCreditAllocationApply),
+    xeroCreditAllocationReconcile: wrap(xeroCreditAllocationReconcile),
+    xeroCreditAllocationRecoveryQueue: wrap(xeroCreditAllocationRecoveryQueue),
+    xeroNativeDocumentApply: wrap(xeroNativeDocumentApply),
+    xeroNativeDocumentReconcile: wrap(xeroNativeDocumentReconcile),
+    xeroNativeDocumentRecoveryQueue: wrap(xeroNativeDocumentRecoveryQueue),
     xeroFinancialMappingsSave: wrap(xeroFinancialMappingsSave),
     xeroFinancialSyncPreview: wrap(xeroFinancialSyncPreview, { recoveredHandler: 'xeroFinancialSyncPreview' }),
     xeroFinancialSyncLatest: wrap(xeroFinancialSyncLatest),

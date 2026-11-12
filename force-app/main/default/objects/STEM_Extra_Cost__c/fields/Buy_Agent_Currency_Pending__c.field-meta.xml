@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Buy_Agent_Currency_Pending__c</fullName>
+    <defaultValue>false</defaultValue>
+    <description>System-managed creation marker. A new eligible Hong Kong agent supplier extra cost may receive an HKD review proposal; it is consumed by the first reviewed currency save.</description>
+    <label>Buy Agent Currency Pending</label>
+    <type>Checkbox</type>
+</CustomField>

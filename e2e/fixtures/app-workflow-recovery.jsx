@@ -20,11 +20,20 @@ import '@/index.css';
 // Local fixtures never access a provider or save business records.
 setClientSessionOwner('fixture-user-a');
 window.recoveryFixture = { calls: [] };
+const nativePrices = new URLSearchParams(location.search).has('native-prices');
+const pricedLines = [
+  { Id: 'native-line', _Product_Name: 'Native price fixture', Price_Per_Unit__c: 1000, Cost_Per_Unit__c: 600,
+    Buy_USD_Unit_Price_Precise__c: 600.12345678,
+    Sell_Currency__c: 'HKD', Sell_HKD_Unit_Price__c: 7800, Sell_FX_Rate__c: 7.8, Sell_FX_Revision__c: 'fixture-1',
+    Sell_FX_Confirmed_At__c: '2026-09-10T00:00:00Z' },
+  { Id: 'legacy-line', _Product_Name: 'Legacy price fixture', Price_Per_Unit__c: 777, Cost_Per_Unit__c: 333 },
+  { Id: 'cancelled-line', _Product_Name: 'Cancelled price fixture', Price_Per_Unit__c: 999, Cancelled__c: true },
+];
 appClient.functions.invoke = async (name, body) => {
   window.recoveryFixture.calls.push({ name, body });
   if (name === 'specialTermMigrationPreviewAll') return { data: { projections: Object.fromEntries(['termsText', 'confirmationRemark', 'nominationRemark'].map((key) => [key, { style: 'Numbered', segments: [{ clauseText: 'Existing China clause.', suggestedShortName: 'China clause', suggestedCategory: 'General' }] }])) } };
   if (name === 'workspaceSearch') return { data: { results: [{ id: 'invoice', stemId: 'a0H000000000001AAA', kind: 'Buyer invoice', label: 'TEST-INV-2026' }], unavailableSources: [] } };
-  if (name === 'salesforceStemDetail') return { data: { record: { Id: body.stemId, Name: 'TEST STEM WORKSPACE', _Vessel_Name: 'TEST VESSEL', _Port_Name: 'Hong Kong', Delivery_Date__c: '2026-09-16' }, lineItems: [], extraCosts: [] } };
+  if (name === 'salesforceStemDetail') return { data: { record: { Id: body.stemId, Name: 'TEST STEM WORKSPACE', _Vessel_Name: 'TEST VESSEL', _Port_Name: 'Hong Kong', Delivery_Date__c: '2026-09-16' }, lineItems: nativePrices ? pricedLines : [], extraCosts: [] } };
   if (name === 'salesforceStemDocuments') return { data: { documents: [] } };
   if (name === 'stemWorkspaceActivity') return { data: { events: [{ id: 'event', source: 'Collections', action: 'note_added', createdAt: '2026-09-16T01:00:00Z', actor: 'Test Finance', note: 'Collection reviewed' }], unavailableSources: ['Variable charges'] } };
   return { data: { error: 'Synthetic failure; no provider action attempted.' } };

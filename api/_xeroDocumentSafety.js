@@ -37,6 +37,19 @@ export function safetySelectFields(context, object, candidates, prefix = '') {
   return candidates.filter((name) => context?.fields?.[object]?.includes(name)).map((name) => `, ${prefix}${name}`).join('');
 }
 
+export const NATIVE_DOCUMENT_REVIEW_REQUIRED = 'Use the explicit FX workflow to review this native Salesforce document.';
+
+export function requiresNativeDocumentReview(record, context, object) {
+  return record.Document_Currency__c === 'HKD' || record.Document_FX_Fingerprint__c != null
+    || (context.fields?.[object]?.includes('Document_FX_Fingerprint__c') && !Object.hasOwn(record, 'Document_FX_Fingerprint__c'));
+}
+
+export function hasNativeDocumentMapping(mapping) {
+  const evidence = mapping?.currency_evidence;
+  return evidence?.managedUsdDocument === true || evidence?.documentCurrency === 'HKD'
+    || Object.hasOwn(evidence || {}, 'originalLines');
+}
+
 export function financialSourceCurrency(record, children, context = {}, object = 'Invoice__c') {
   const sourceCurrency = currencyCode(record.CurrencyIsoCode)
     || (context.singleCurrency === true ? currencyCode(context.corporateCurrency) : null);
@@ -44,6 +57,21 @@ export function financialSourceCurrency(record, children, context = {}, object =
   if (record.CurrencyIsoCode != null && !currencyCode(record.CurrencyIsoCode)) blockers.push('Salesforce document CurrencyIsoCode is invalid.');
   if (!sourceCurrency) blockers.push('Authoritative Salesforce document currency is missing. Confirm source currency before posting.');
   if (context.fields?.[object]?.includes('CurrencyIsoCode') && !currencyCode(record.CurrencyIsoCode)) blockers.push('Salesforce document CurrencyIsoCode is missing or invalid.');
+  const nativeField = object === 'Payment__c' ? 'Payment_Currency__c' : 'Document_Currency__c';
+  const nativeCurrency = record[nativeField];
+  const nativeCode = currencyCode(nativeCurrency);
+  if (context.fields?.[object]?.includes(nativeField) && !Object.hasOwn(record, nativeField)) {
+    blockers.push('Salesforce native currency evidence is incomplete.');
+  }
+  if (nativeCurrency != null && (!nativeCode || nativeCode !== sourceCurrency)) {
+    blockers.push('Salesforce native currency differs from accounting currency or is invalid. An explicit FX workflow is required.');
+  }
+  if (object === 'Payment__c') {
+    if (context.fields?.Payment__c?.includes('Cash_Event__c') && !Object.hasOwn(record, 'Cash_Event__c')) {
+      blockers.push('Salesforce native cash evidence is incomplete.');
+    }
+    if (record.Cash_Event__c) blockers.push('Native Salesforce cash requires a reviewed allocation workflow before Xero sync.');
+  }
   for (const child of children) {
     const childObject = child.Product__c ? 'STEM_Line_Item__c' : 'STEM_Extra_Cost__c';
     const childCurrency = currencyCode(child.CurrencyIsoCode);

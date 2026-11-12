@@ -14,9 +14,15 @@ import { readDocumentSettings } from '@/lib/documentSettings';
 import PaymentDataReliabilityBadge from '@/components/common/PaymentDataReliabilityBadge';
 import { LEGACY_PAYMENT_DATA_LABEL } from '@/lib/paymentDataReliability';
 import { activeStemLineItems } from '@/lib/stemLineVisibility';
+import { tradingCurrencyDisplay } from '@/lib/tradingCurrencyDisplay';
 
 const FINANCIAL_HEADER_RIGHT = "sticky top-0 z-10 bg-card text-right py-2.5 px-3 font-semibold text-muted-foreground";
 const FINANCIAL_HEADER_LEFT = "sticky top-0 z-10 bg-card text-left py-2.5 px-3 font-semibold text-muted-foreground";
+const FUEL_CURRENCY_PRICE_CLASS = "hidden md:flex flex-col items-end leading-tight";
+const MOBILE_UNIT_PRICE_CLASS = "md:hidden";
+const FUEL_NATIVE_PRICE_CLASS = "font-medium text-foreground";
+const FUEL_EQUIVALENT_PRICE_CLASS = "mt-0.5 text-[11px] text-muted-foreground";
+const FUEL_CONFIRMATION_CLASS = "mt-0.5 text-[10px] text-muted-foreground";
 
 const SF_BASE = "https://fratellicosulich.my.salesforce.com";
 
@@ -49,6 +55,29 @@ const lineItemQuantityLabel = (li) => {
   if (li.Quantity_in_MT__c > 0) return fmtQuantity(li.Quantity_in_MT__c, unit);
   return li.Quantity__c != null ? fmtQuantity(li.Quantity__c, unit) : '—';
 };
+
+const fmtTradingUnitPrice = (amount, currency) => `${currency} ${Number(amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 8 })}`;
+
+function FuelCurrencyPrice({ value }) {
+  if (!value.hasHkdEvidence) return (
+    <div className={FUEL_CURRENCY_PRICE_CLASS}>
+      {value.existingUsd != null ? value.hasPreciseUsd ? fmtTradingUnitPrice(value.existingUsd, 'USD') : fmtMoney(value.existingUsd) : '—'}
+    </div>
+  );
+
+  const confirmation = value.fxConfirmedAt
+    ? `${value.rateStatus} · ${fmtDate(value.fxConfirmedAt)}`
+    : value.rateStatus;
+  return (
+    <div className={FUEL_CURRENCY_PRICE_CLASS}>
+      <span className={FUEL_NATIVE_PRICE_CLASS}>{fmtTradingUnitPrice(value.nativeHkd, 'HKD')}</span>
+      <span className={FUEL_EQUIVALENT_PRICE_CLASS}>{fmtTradingUnitPrice(value.usdEquivalent, 'USD')} equivalent</span>
+      <span className={FUEL_CONFIRMATION_CLASS} title={`FX rate ${value.fxRate} HKD/USD · revision ${value.fxRevision}`}>
+        {confirmation}
+      </span>
+    </div>
+  );
+}
 
 const SECTIONS = [
   {
@@ -841,6 +870,36 @@ export default function StemDetailModal({ stemId, open, onClose, embedded = fals
                             const bbLumpsum = bbs.reduce((s, bb) => s + (bb.Commission_Lumpsum__c ?? 0), 0);
                             const bbName = bbs.map(bb => bb._Buyer_Broker_Name).filter(Boolean).join(', ')
                               || record._Buyer_Broker_Name || null;
+                            const sellUsd = li.Price_Per_Unit__c != null
+                              ? li.Price_Per_Unit__c
+                              : li.Unit_Sell_At__c != null
+                                ? li.Unit_Sell_At__c
+                                : li['Offer_Line_Item__r']?.UnitPrice ?? null;
+                            const buyUsd = li.Cost_Per_Unit__c != null
+                              ? li.Cost_Per_Unit__c
+                              : li.Unit_Buy_At__c != null
+                                ? li.Unit_Buy_At__c
+                                : li.Unit_Cost__c != null
+                                  ? li.Unit_Cost__c
+                                  : li['Offer_Line_Item__r']?.Supplier_Unit_Price__c ?? null;
+                            const sellCurrency = tradingCurrencyDisplay({
+                              currency: li.Sell_Currency__c,
+                              hkdUnitPrice: li.Sell_HKD_Unit_Price__c,
+                              fxRate: li.Sell_FX_Rate__c,
+                              fxRevision: li.Sell_FX_Revision__c,
+                              fxConfirmedAt: li.Sell_FX_Confirmed_At__c,
+                              existingUsd: li.Sell_USD_Unit_Price_Precise__c ?? sellUsd,
+                              hasPreciseUsd: li.Sell_USD_Unit_Price_Precise__c != null,
+                            });
+                            const buyCurrency = tradingCurrencyDisplay({
+                              currency: li.Buy_Currency__c,
+                              hkdUnitPrice: li.Buy_HKD_Unit_Price__c,
+                              fxRate: li.Buy_FX_Rate__c,
+                              fxRevision: li.Buy_FX_Revision__c,
+                              fxConfirmedAt: li.Buy_FX_Confirmed_At__c,
+                              existingUsd: li.Buy_USD_Unit_Price_Precise__c ?? buyUsd,
+                              hasPreciseUsd: li.Buy_USD_Unit_Price_Precise__c != null,
+                            });
                             return (
                               <tr key={li.Id} className={`border-b border-border/40 hover:bg-muted/20 transition-colors ${idx % 2 === 0 ? '' : 'bg-muted/10'}`}>
                                 <td className="py-2.5 px-3 font-medium text-foreground">{li._Product_Name || '—'}</td>
@@ -852,24 +911,12 @@ export default function StemDetailModal({ stemId, open, onClose, embedded = fals
                                   {lineItemQuantityLabel(li)}
                                 </td>
                                 <td className="py-2.5 px-3 text-right text-foreground">
-                                  {li.Price_Per_Unit__c != null
-                                    ? fmtMoney(li.Price_Per_Unit__c)
-                                    : li.Unit_Sell_At__c != null
-                                      ? fmtMoney(li.Unit_Sell_At__c)
-                                      : li['Offer_Line_Item__r']?.UnitPrice != null
-                                        ? fmtMoney(li['Offer_Line_Item__r'].UnitPrice)
-                                        : '—'}
+                                  <span className={MOBILE_UNIT_PRICE_CLASS}>{sellUsd != null ? fmtMoney(sellUsd) : '—'}</span>
+                                  <FuelCurrencyPrice value={sellCurrency} />
                                 </td>
                                 <td className="py-2.5 px-3 text-right text-foreground">
-                                  {li.Cost_Per_Unit__c != null
-                                    ? fmtMoney(li.Cost_Per_Unit__c)
-                                    : li.Unit_Buy_At__c != null
-                                      ? fmtMoney(li.Unit_Buy_At__c)
-                                      : li.Unit_Cost__c != null
-                                        ? fmtMoney(li.Unit_Cost__c)
-                                        : li['Offer_Line_Item__r']?.Supplier_Unit_Price__c != null
-                                          ? fmtMoney(li['Offer_Line_Item__r'].Supplier_Unit_Price__c)
-                                          : '—'}
+                                  <span className={MOBILE_UNIT_PRICE_CLASS}>{buyUsd != null ? fmtMoney(buyUsd) : '—'}</span>
+                                  <FuelCurrencyPrice value={buyCurrency} />
                                 </td>
                                 <td className="py-2.5 px-3 text-right font-semibold text-foreground">{li.Total_Price__c != null ? fmtMoney(li.Total_Price__c) : '—'}</td>
                                 <td className="py-2.5 px-3 text-right font-semibold text-foreground">{li.Total_Cost__c != null ? fmtMoney(li.Total_Cost__c) : '—'}</td>

@@ -1,11 +1,19 @@
 public class PaymentTriggerHandler {
+    public static Decimal carryingAmount(Payment__c payment){
+        return carryingAmount(payment==null?null:payment.Amount__c,payment==null?null:payment.Carrying_Adjustment_USD__c);
+    }
+
+    @TestVisible private static Decimal carryingAmount(Decimal amount,Decimal adjustment){
+        return (amount==null ? 0 : amount)+(adjustment==null ? 0 : adjustment);
+    }
+
     public static void updatePartialCiaBuyerInvoiceDueDate(List<Payment__c> payments){
         Set<Id> stemIds = new Set<Id>();
         Id receivableRecordTypeId = Schema.SObjectType.Payment__c.getRecordTypeInfosByName().get('Receivable').getRecordTypeId();
         Id bankChargeRecordTypeId = Schema.SObjectType.Payment__c.getRecordTypeInfosByName().get('Bank Charge').getRecordTypeId();
         Id writeOffRecordTypeId = Schema.SObjectType.Payment__c.getRecordTypeInfosByName().get('Write Off').getRecordTypeId();
         for(Payment__c payment: payments){
-            if(payment.STEM__c != null && (payment.RecordTypeId == receivableRecordTypeId 
+            if(payment.Cash_Event__c == null && payment.STEM__c != null && (payment.RecordTypeId == receivableRecordTypeId
             || payment.RecordTypeId == bankChargeRecordTypeId || payment.RecordTypeId == writeOffRecordTypeId)){
                 stemIds.add(payment.STEM__c);
             }
@@ -24,14 +32,24 @@ public class PaymentTriggerHandler {
     }
 
     public static void updatePayableBalance(Map<Id, Payment__c> payments){
-        Id payableRecordTypeId = Schema.SObjectType.Payment__c.getRecordTypeInfosByName().get('Payable').getRecordTypeId();
-        List<String> supplierInvoiceIds = new List<String>();
-        for(Payment__c payment: payments.values()){
-            supplierInvoiceIds.add(payment.Supplier_Invoice__c);
+        updatePayableBalance(payments,null);
+    }
+
+    @TestVisible private static Set<Id> payableInvoiceIds(Map<Id,Payment__c> payments,Map<Id,Payment__c> oldPayments){
+        Set<Id> invoiceIds=new Set<Id>();
+        for(Payment__c payment:payments.values()) if(payment.Supplier_Invoice__c!=null) invoiceIds.add(payment.Supplier_Invoice__c);
+        if(oldPayments!=null) for(Payment__c payment:oldPayments.values()) {
+            if(payment.Supplier_Invoice__c!=null) invoiceIds.add(payment.Supplier_Invoice__c);
         }
+        return invoiceIds;
+    }
+
+    public static void updatePayableBalance(Map<Id,Payment__c> payments,Map<Id,Payment__c> oldPayments){
+        Id payableRecordTypeId = Schema.SObjectType.Payment__c.getRecordTypeInfosByName().get('Payable').getRecordTypeId();
+        Set<Id> supplierInvoiceIds=payableInvoiceIds(payments,oldPayments);
         if(!supplierInvoiceIds.isEmpty()){
             List<Supplier_Invoice__c> supplierInvoices = [SELECT Id, Invoice_Amount__c, Payable_Balance__c, Volume_Discount_Amount__c FROM Supplier_Invoice__c WHERE Id In: supplierInvoiceIds];
-            List<Payment__c> currentPayments = [SELECT Id, Supplier_Invoice__c, Amount__c, Volume_Discount__c FROM Payment__c
+            List<Payment__c> currentPayments = [SELECT Id, Supplier_Invoice__c, Amount__c, Carrying_Adjustment_USD__c, Volume_Discount__c FROM Payment__c
                                                 WHERE Supplier_Invoice__c In: supplierInvoiceIds AND RecordTypeId =: payableRecordTypeId ORDER BY Date__c];
             List<Payment__c> paymentsToUpdate = new List<Payment__c>();
             for(Supplier_Invoice__c supplierInvoice: supplierInvoices){
@@ -41,7 +59,7 @@ public class PaymentTriggerHandler {
                 Boolean lastSet = false;
                 for(Payment__c currentPayment: currentPayments){
                     if(supplierInvoice.Id == currentPayment.Supplier_Invoice__c){
-                        totalAmount += currentPayment.Amount__c;
+                        totalAmount += carryingAmount(currentPayment);
                         if(currentPayment.Volume_Discount__c != null){
                             discountAmount += currentPayment.Amount__c;
                         }

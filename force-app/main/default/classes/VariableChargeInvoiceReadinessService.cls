@@ -4,6 +4,7 @@ public without sharing class VariableChargeInvoiceReadinessService {
     private static final Decimal ANCHORAGE_BUYER_RATE_USD = 0.002;
     private static final String ANCHORAGE_BUYER_CALCULATION_VERSION = 'hk-buyer-nrt-hour-2026-v1';
     private static Boolean invalidationInProgress = false;
+    public static Boolean isRevokingEvidence() { return invalidationInProgress; }
 
     public class Readiness {
         @AuraEnabled public Boolean ready { get; set; }
@@ -216,7 +217,7 @@ public without sharing class VariableChargeInvoiceReadinessService {
         return [
             SELECT COUNT()
             FROM Supplier_Invoice__c
-            WHERE STEM__c = :stemId AND Supplier__c = :supplierId
+            WHERE STEM__c = :stemId AND Supplier__c = :supplierId AND Proforma__c = false
         ] > 0;
     }
 
@@ -543,6 +544,7 @@ public without sharing class VariableChargeInvoiceReadinessService {
         }, 'WHERE STEM__c = :stemId AND Supplier__c = :supplierId AND Cancelled__c = false ORDER BY Id', binds);
         for (SObject row : extraRows) parts.add('E|' + serializeProjection(row, baseExtraFields));
         addReviewedEvidenceFingerprintParts(parts, stemId, extraRows, true);
+        appendFxFingerprintParts(parts,lineRows,extraRows,supplierId,'Buy');
         Blob digest = Crypto.generateDigest('SHA-256', Blob.valueOf(String.join(parts, '\n')));
         return EncodingUtil.convertToHex(digest).toLowerCase();
     }
@@ -592,8 +594,28 @@ public without sharing class VariableChargeInvoiceReadinessService {
         }, 'WHERE STEM__c = :stemId AND Supplier__c = :supplierId AND Cancelled__c = false ORDER BY Id', binds);
         for (SObject row : extraRows) parts.add('E|' + serializeProjection(row, baseExtraFields));
         addReviewedEvidenceFingerprintParts(parts, stemId, extraRows, false);
+        appendFxFingerprintParts(parts,lineRows,extraRows,supplierId,'Sell');
         Blob digest = Crypto.generateDigest('SHA-256', Blob.valueOf(String.join(parts, '\n')));
         return EncodingUtil.convertToHex(digest).toLowerCase();
+    }
+
+    private static List<String> tradeFxFields(String direction) {
+        List<String> fields=new List<String>();
+        for(String suffix:new List<String>{'Currency__c','HKD_Unit_Price__c','HKD_Minimum__c','HKD_Lumpsum__c','USD_Unit_Price_Precise__c','FX_Rate__c','FX_Revision__c','FX_Confirmed_At__c','FX_Side__c'}) fields.add(direction+'_'+suffix);
+        return fields;
+    }
+    @TestVisible private static Boolean tradeFxChanged(SObject current,SObject previous,String direction) {
+        return changed(current,previous,tradeFxFields(direction));
+    }
+    @TestVisible private static void appendFxFingerprintParts(List<String> parts,List<SObject> lines,List<SObject> extras,Id supplierId,String direction) {
+        List<SObject> rows=new List<SObject>();
+        for(SObject line:lines) if(line.get('Original_Supplier__c')==supplierId) rows.add(line);
+        rows.addAll(extras);
+        for(SObject row:rows) {
+            Map<String,Object> values=row.getPopulatedFieldsAsMap();
+            if(values.get(direction+'_Currency__c')!='HKD' && values.get(direction+'_USD_Unit_Price_Precise__c')==null) continue;
+            parts.add('FX|'+direction+'|'+String.valueOf(row.Id)+'|'+serializeProjection(row,tradeFxFields(direction)));
+        }
     }
 
     private static List<SObject> fingerprintRows(
@@ -605,6 +627,9 @@ public without sharing class VariableChargeInvoiceReadinessService {
         Map<String, Schema.SObjectField> available = objectType.getDescribe().fields.getMap();
         List<String> selected = new List<String>();
         for (String field : requestedFields) if (available.containsKey(field)) selected.add(field);
+        if(objectType==STEM_Line_Item__c.SObjectType || objectType==STEM_Extra_Cost__c.SObjectType)
+            for(String direction:new List<String>{'Buy','Sell'}) for(String field:tradeFxFields(direction))
+                if(available.containsKey(field) && !selected.contains(field)) selected.add(field);
         if (selected.isEmpty() || selected[0] != 'Id') throw messageException('Variable Charges fingerprint schema is unavailable.');
         String soql = 'SELECT ' + String.join(selected, ',') + ' FROM '
             + objectType.getDescribe().getName() + ' ' + whereClause;
@@ -704,9 +729,9 @@ public without sharing class VariableChargeInvoiceReadinessService {
             if (oldRow != null) addActiveCountDelta(activeCountDelta, oldRow.STEM__c, oldRow.Cancelled__c != true ? -1 : 0);
             if (oldRow == null || changed(row, oldRow, new List<String>{'STEM__c','Original_Supplier__c','Cancelled__c','Product__c','Quantity__c','Quantity_Delivered_Per_BDN__c','Quantity_Max__c','Unit_of_Measure__c','CurrencyIsoCode'}))
                 addChangedPairs(sharedPairs, row, oldRow, 'Original_Supplier__c');
-            if (oldRow != null && changed(row, oldRow, new List<String>{'Payment_Term__c','Unit_Buy_At__c','Total_Cost__c','Commission_Cost__c'}))
+            if (oldRow != null && (changed(row, oldRow, new List<String>{'Payment_Term__c','Unit_Buy_At__c','Total_Cost__c','Commission_Cost__c'}) || tradeFxChanged(row,oldRow,'Buy')))
                 addChangedPairs(costPairs, row, oldRow, 'Original_Supplier__c');
-            if (oldRow != null && changed(row, oldRow, new List<String>{'Unit_Sell_At__c','Total_Price__c'}))
+            if (oldRow != null && (changed(row, oldRow, new List<String>{'Unit_Sell_At__c','Total_Price__c'}) || tradeFxChanged(row,oldRow,'Sell')))
                 addChangedPairs(buyerPairs, row, oldRow, 'Original_Supplier__c');
         }
         if (newRecords == null && oldMap != null) for (STEM_Line_Item__c row : oldMap.values()) {
@@ -733,9 +758,9 @@ public without sharing class VariableChargeInvoiceReadinessService {
             STEM_Extra_Cost__c oldRow = oldMap == null ? null : oldMap.get(row.Id);
             if (oldRow == null || changed(row, oldRow, new List<String>{'STEM__c','Supplier__c','Cancelled__c','Product2Id__c','Description__c','STEM_Line_Item__c','Quantity__c','Quantity_Delivered_Per_BDN__c','Quantity_Range_Max__c','Unit_of_Measure__c','CurrencyIsoCode','Supplier_Cost_Input_Currency__c','Supplier_Cost_Input_Value__c','Supplier_Cost_USD_HKD_Rate__c','Supplier_Cost_FX_Settings_Revision__c','Anchorage_Arrival__c','Anchorage_Departure__c','Anchorage_Location__c','Anchorage_Dues_Allocation_HKD__c','Anchorage_NRT_Snapshot__c','Anchorage_USD_HKD_Rate__c','Anchorage_FX_Settings_Revision__c','Anchorage_Calculation_Version__c','Anchorage_Buyer_Default_USD__c','Anchorage_Buyer_Rate_USD__c','Anchorage_Buyer_Calc_Version__c','Light_Dues_Entry_Date__c','Light_Dues_Category__c','Light_Dues_NRT_Snapshot__c','Light_Dues_Rate_HKD__c','Light_Dues_Amount_HKD__c','Light_Dues_USD_HKD_Rate__c','Light_Dues_FX_Settings_Revision__c','Light_Dues_Calculation_Version__c','Hong_Kong_Bundle_Key__c','Hong_Kong_Bundle_Managed__c','Hong_Kong_Bundle_Sequence__c','Hong_Kong_Bundle_Source__c','Port_Clearance_Rate_HKD__c','Port_Clearance_Calculation_Version__c'}))
                 addChangedPairs(sharedPairs, row, oldRow, 'Supplier__c');
-            if (oldRow != null && changed(row, oldRow, new List<String>{'Payment_Term__c','Unit_Cost__c','Lumpsum_Cost__c','Line_Total_Buy__c','Supplier_Invoice__c'}))
+            if (oldRow != null && (changed(row, oldRow, new List<String>{'Payment_Term__c','Unit_Cost__c','Lumpsum_Cost__c','Line_Total_Buy__c','Supplier_Invoice__c'}) || tradeFxChanged(row,oldRow,'Buy')))
                 addChangedPairs(costPairs, row, oldRow, 'Supplier__c');
-            if (oldRow != null && changed(row, oldRow, new List<String>{'Unit_Price__c','Lumpsum_Price__c','Line_Total__c'}))
+            if (oldRow != null && (changed(row, oldRow, new List<String>{'Unit_Price__c','Lumpsum_Price__c','Line_Total__c'}) || tradeFxChanged(row,oldRow,'Sell')))
                 addChangedPairs(buyerPairs, row, oldRow, 'Supplier__c');
         }
         if (newRecords == null && oldMap != null) for (STEM_Extra_Cost__c row : oldMap.values()) addPair(sharedPairs, row.STEM__c, row.Supplier__c);
@@ -984,7 +1009,7 @@ public without sharing class VariableChargeInvoiceReadinessService {
         if (stemIds == null || stemIds.isEmpty()) return result;
         for (AggregateResult aggregate : [
             SELECT STEM__c stemId FROM STEM_Line_Item__c
-            WHERE STEM__c IN :stemIds AND Cancelled__c = false GROUP BY STEM__c
+            WHERE STEM__c IN :stemIds AND Cancelled__c = false WITH SYSTEM_MODE GROUP BY STEM__c
         ]) result.add((Id)aggregate.get('stemId'));
         return result;
     }
@@ -993,10 +1018,10 @@ public without sharing class VariableChargeInvoiceReadinessService {
         if (activeCountDelta == null || activeCountDelta.isEmpty()) return;
         Set<Id> stemIds = activeCountDelta.keySet();
         Map<Id, Integer> currentCounts = new Map<Id, Integer>();
-        for (AggregateResult aggregate : [
-            SELECT STEM__c stemId, COUNT(Id) itemCount FROM STEM_Line_Item__c
-            WHERE STEM__c IN :stemIds AND Cancelled__c = false GROUP BY STEM__c
-        ]) currentCounts.put((Id)aggregate.get('stemId'), (Integer)aggregate.get('itemCount'));
+        for (SObject aggregate : Database.queryWithBinds(
+            'SELECT STEM__c stemId, COUNT(Id) itemCount FROM STEM_Line_Item__c WHERE STEM__c IN :stemIds AND Cancelled__c = false GROUP BY STEM__c',
+            new Map<String,Object>{'stemIds'=>stemIds},AccessLevel.SYSTEM_MODE))
+            currentCounts.put((Id)aggregate.get('stemId'), (Integer)aggregate.get('itemCount'));
         Set<Id> transitioned = new Set<Id>();
         for (Id stemId : stemIds) {
             Integer currentCount = currentCounts.containsKey(stemId) ? currentCounts.get(stemId) : 0;
@@ -1006,6 +1031,8 @@ public without sharing class VariableChargeInvoiceReadinessService {
         invalidateStagesForStems(transitioned, true, true, true);
     }
 
+    // These private trigger-derived operations only revoke stale approvals. Keep their
+    // evidence read-only for traders; API 67 user-mode defaults must not block invalidation.
     private static void invalidateStagesForStems(Set<Id> stemIds, Boolean invalidateCost, Boolean invalidateBuyer, Boolean invalidateStemAggregate) {
         if (invalidationInProgress || stemIds == null || stemIds.isEmpty()) return;
         List<STEM_Variable_Charge_Supplier__c> stages = [
@@ -1013,14 +1040,14 @@ public without sharing class VariableChargeInvoiceReadinessService {
                 Reviewed_Source_Fingerprint__c, Revision__c, Buyer_Charge_Status__c,
                 Buyer_Charge_Reviewed_Source_Fingerprint__c, Buyer_Charge_Confirmed_At__c,
                 Buyer_Charge_Confirmed_By_Email__c, Buyer_Charge_Revision__c
-            FROM STEM_Variable_Charge_Supplier__c WHERE STEM__c IN :stemIds
+            FROM STEM_Variable_Charge_Supplier__c WHERE STEM__c IN :stemIds WITH SYSTEM_MODE
         ];
         invalidationInProgress = true;
         try {
             for (STEM_Variable_Charge_Supplier__c stage : stages) {
                 invalidateStage(stage, invalidateCost, invalidateBuyer);
             }
-            if (!stages.isEmpty()) update stages;
+            if (!stages.isEmpty()) Database.update(stages, true, AccessLevel.SYSTEM_MODE);
             if (invalidateBuyer == true && invalidateStemAggregate == true) invalidateStems(stemIds);
         } finally {
             invalidationInProgress = false;
@@ -1035,7 +1062,7 @@ public without sharing class VariableChargeInvoiceReadinessService {
                 Reviewed_Source_Fingerprint__c, Revision__c, Buyer_Charge_Status__c,
                 Buyer_Charge_Reviewed_Source_Fingerprint__c, Buyer_Charge_Confirmed_At__c,
                 Buyer_Charge_Confirmed_By_Email__c, Buyer_Charge_Revision__c
-            FROM STEM_Variable_Charge_Supplier__c WHERE External_Key__c IN :pairs
+            FROM STEM_Variable_Charge_Supplier__c WHERE External_Key__c IN :pairs WITH SYSTEM_MODE
         ];
         for (String pair : pairs) stemIds.add((Id)pair.substringBefore(':'));
         invalidationInProgress = true;
@@ -1043,7 +1070,7 @@ public without sharing class VariableChargeInvoiceReadinessService {
             for (STEM_Variable_Charge_Supplier__c stage : stages) {
                 invalidateStage(stage, invalidateCost, invalidateBuyer);
             }
-            if (!stages.isEmpty()) update stages;
+            if (!stages.isEmpty()) Database.update(stages, true, AccessLevel.SYSTEM_MODE);
             if (invalidateBuyer == true) invalidateStems(stemIds);
         } finally {
             invalidationInProgress = false;
@@ -1067,8 +1094,8 @@ public without sharing class VariableChargeInvoiceReadinessService {
 
     private static void invalidateStems(Set<Id> stemIds) {
         if (stemIds == null || stemIds.isEmpty()) return;
-        List<STEM__c> stems = [SELECT Id, Variable_Charges_Confirmed__c FROM STEM__c WHERE Id IN :stemIds AND Variable_Charges_Confirmed__c = true];
+        List<STEM__c> stems = [SELECT Id, Variable_Charges_Confirmed__c FROM STEM__c WHERE Id IN :stemIds AND Variable_Charges_Confirmed__c = true WITH SYSTEM_MODE];
         for (STEM__c stem : stems) stem.Variable_Charges_Confirmed__c = false;
-        if (!stems.isEmpty()) update stems;
+        if (!stems.isEmpty()) Database.update(stems, true, AccessLevel.SYSTEM_MODE);
     }
 }

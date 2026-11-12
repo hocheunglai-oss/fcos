@@ -20,7 +20,7 @@
                             <span>{formError}</span>
                         </div>
                     </template>
-                    <template for:each={inputs} for:item="input">
+                    <template for:each={displayInputs} for:item="input">
                         <template if:false={input.isDisabled}>
                             <template if:true={input.isHidden}>
                                 <div class="slds-grid slds-gutters" key={input.id} ondragover={handleDragOver}
@@ -28,7 +28,7 @@
                                     <div class="slds-col slds-size_11-of-12">
                                         <hr />
                                     </div>
-                                    <lightning-button onclick={removeInput} data-id={input.id} variant="base"
+                                    <lightning-button disabled={isHkdDocument} onclick={removeInput} data-id={input.id} variant="base"
                                         title="Remove Input" icon-name="utility:close"
                                         class="slds-col slds-size_1-of-12 slds-m-top_x-small slds-m-left_small">
                                     </lightning-button>
@@ -41,14 +41,14 @@
                                     <div class={input.rowClass}>
                                         <div class="slds-grid slds-gutters row-content">
                                             <lightning-input class="slds-col slds-size_5-of-12"
-                                                value={input.label} read-only={input.isPaymentLocked} onchange={handleChangeLabel} data-id={input.id}></lightning-input>
+                                                value={input.label} read-only={input.isPaymentLocked} disabled={isHkdDocument} onchange={handleChangeLabel} data-id={input.id}></lightning-input>
                                             <lightning-input class="slds-col slds-size_5-of-12"
-                                                value={input.value} read-only={input.isPaymentLocked} onchange={handleChangeValue} data-id={input.id}></lightning-input>
+                                                value={input.value} read-only={input.isPaymentLocked} disabled={isHkdDocument} onchange={handleChangeValue} data-id={input.id}></lightning-input>
                                             <lightning-icon icon-name="utility:move" size="x-small" draggable="true"
                                                 ondragstart={handleDragStart} ondragover={handleDragOver} ondrop={handleDrop}
                                                 class="drag-handle slds-col slds-size_1-of-12 slds-m-top_large" data-id={input.id}></lightning-icon>
                                             <lightning-button icon-name="utility:close" variant="base"
-                                                disabled={input.isPaymentLocked}
+                                                disabled={input.isRemovalDisabled}
                                                 class="slds-col slds-size_1-of-12 slds-m-top_medium"
                                                 onclick={removeInput} data-id={input.id}></lightning-button>
                                         </div>
@@ -61,12 +61,12 @@
                     </template>
                     <div class="slds-grid slds-gutters">
                         <lightning-input class="slds-col slds-size_5-of-12" value={specialTerms.label}
-                            onchange={handleChangeSpecialTermLabel}></lightning-input>
+                            read-only={hasNativePreparation} onchange={handleChangeSpecialTermLabel}></lightning-input>
                         <lightning-input-rich-text class="slds-col slds-size_5-of-12 slds-m-top_medium" value={specialTerms.value}
-                            onchange={handleChangeSpecialTermValue}></lightning-input-rich-text>
+                            disabled={hasNativePreparation} onchange={handleChangeSpecialTermValue}></lightning-input-rich-text>
                     </div>
                     <lightning-button-icon size="x-small" icon-name="utility:add" variant="brand"
-                        alternative-text="Add Input" onclick={addNewInput}>
+                        alternative-text="Add Input" disabled={isHkdDocument} onclick={addNewInput}>
                     </lightning-button-icon>
                 </div>
                 <footer class="slds-modal__footer">

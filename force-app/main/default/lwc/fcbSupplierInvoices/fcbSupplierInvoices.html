@@ -22,7 +22,7 @@
             <lightning-input label="Name" value={invoiceNumber} onchange={handleChangeInvoiceNumber} variant="label-stacked" required>
             </lightning-input>
             <lightning-combobox name="suplierpicklist" label="Supplier" value={optionValue} placeholder="Select Supplier"
-              options={options} required="true" onchange={handleChange}>
+              options={options} required="true" onchange={handleChange} disabled={nativeInvoiceRecorded}>
             </lightning-combobox>
             <template if:true={supplierVariableChargeReadiness}>
               <template if:false={supplierVariableChargeReadiness.ready}>
@@ -41,11 +41,26 @@
   
   
           <div class="slds-col slds-size_1-of-2">
-            <lightning-input variant="label-stacked" type="number" formatter="currency" label="Invoice Amount"
-              value={invoiceAmountValue} onchange={handleChangeInvoiceAmount} required step="0.01">
+            <lightning-input variant="label-stacked" type="number" label={invoiceAmountLabel}
+              value={invoiceAmountValue} onchange={handleChangeInvoiceAmount} required step="0.01" disabled={isManagedInvoice}>
             </lightning-input>
+            <template if:true={currencyReview}>
+              <div class="slds-box slds-m-top_small" role="status">
+                <p>{currencyReviewSummary}</p>
+                <template if:true={isHkdInvoice}>
+                  <p class="slds-text-body_small slds-m-top_x-small">Confirmed: <lightning-formatted-date-time value={currencyConfirmedAt} time-zone="Asia/Hong_Kong" year="numeric" month="short" day="2-digit" hour="2-digit" minute="2-digit"></lightning-formatted-date-time> (Hong Kong)</p>
+                  <p class="slds-text-body_small">HKD totals use the confirmed supplier prices. Amend prices in the trading record first. This creates a separate invoice; it does not merge existing invoices.</p>
+                </template>
+              </div>
+            </template>
+            <template if:true={currencyReviewLoading}><p role="status">Refreshing agreed-currency totals…</p></template>
+            <template if:true={currencyReviewError}><p class="slds-text-color_error slds-m-top_small" role="alert">{currencyReviewError}</p></template>
+            <template if:true={productInfo}>
+              <lightning-button class="slds-m-top_small" label="Refresh Currency Review" onclick={refreshCurrencyReview} disabled={nativeInvoiceRecorded}></lightning-button>
+            </template>
+            <template if:true={nativeInvoiceRecorded}><p class="slds-m-top_small" role="status">The invoice and selected lines are recorded. Retry the file attachment to finish.</p></template>
             <template if:true={partialCIA}>
-              <lightning-input label="Partial CIA Amount" type="number" formatter="currency"
+              <lightning-input label="Partial CIA Amount (USD)" type="number" formatter="currency"
                 value={partialAmount} onchange={handleChangePartialAmount} step="0.01"
                 variant="label-stacked" required>
               </lightning-input>
@@ -62,14 +77,14 @@
         </div>
         <template if:true={productInfo}>
           <lightning-datatable class="product-info" columns={productColumns} data={productInfo} key-field="id"
-           onrowselection={handleProductChange} selected-rows={selectedProducts}></lightning-datatable>
+           onrowselection={handleProductChange} selected-rows={selectedProducts} hide-checkbox-column={nativeInvoiceRecorded}></lightning-datatable>
         </template>
         <div class="slds-grid">
           <c-fcb-file-upload-binder uploader-label="Invoice" uploader-value={invoiceNumber}></c-fcb-file-upload-binder>
         </div>
         <div class="slds-grid">
           <lightning-button class="slds-var-m-top_small slds-column" variant="brand" onclick={handleSubmit} name="createSEC"
-            label="Create Supplier Invoice" disabled={supplierInvoiceCreateDisabled}>
+            label={createButtonLabel} disabled={supplierInvoiceCreateDisabled}>
           </lightning-button>
         </div>
     </div>
