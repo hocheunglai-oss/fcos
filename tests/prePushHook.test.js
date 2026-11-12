@@ -10,6 +10,9 @@ const ZERO_SHA = '0'.repeat(40);
 const LOCAL_SHA = 'a'.repeat(40);
 const MAIN_SHA = 'b'.repeat(40);
 const BASE_SHA = 'c'.repeat(40);
+const reviewRef = 'refs/heads/codex/fcos-salesforce-review/' + LOCAL_SHA;
+const ordinaryPush = `refs/heads/topic ${LOCAL_SHA} refs/heads/topic ${ZERO_SHA}\n`;
+const reviewedPush = `refs/heads/topic ${LOCAL_SHA} ${reviewRef} ${ZERO_SHA}\n`;
 
 const gitMock = `#!/bin/sh
 case "$1" in
@@ -35,7 +38,11 @@ esac
 
 const ghMock = `#!/bin/sh
 printf '%s|%s|%s' "\${GH_TOKEN+x}" "\${GITHUB_TOKEN+x}" "$GH_CONFIG_DIR" > "$MOCK_GH_ENV"
-printf '%s\\n' "$MOCK_GH_ACCOUNT"
+if [ "$2" = "repos/hocheunglai-oss/fcos" ]; then
+  printf '%s\\n' "$MOCK_GH_REPOSITORY"
+else
+  printf '%s\\n' "$MOCK_GH_ACCOUNT"
+fi
 `;
 
 const npmMock = `#!/bin/sh
@@ -43,27 +50,35 @@ printf called > "$MOCK_NPM_CALLED"
 exit "\${MOCK_NPM_STATUS:-0}"
 `;
 
+const nodeMock = `#!/bin/sh
+printf '%s\\n' "$@" > "$MOCK_NODE_CALLED"
+exit "$MOCK_NODE_STATUS"
+`;
+
 async function makeExecutable(filename, source) {
   await writeFile(filename, source);
   await chmod(filename, 0o700);
 }
 
-async function runHook(t, { account = 'hocheunglai-oss', changedPaths = 'src/App.jsx', npmStatus = 0 } = {}) {
+async function runHook(t, { account = 'hocheunglai-oss', repository = 'hocheunglai-oss/fcos:1278654816',
+  changedPaths = 'src/App.jsx', npmStatus = 0, nodeStatus = 0, input = ordinaryPush, reviewManifest = '' } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'fcos-pre-push-'));
   const repo = path.join(root, 'repo');
   const bin = path.join(root, 'bin');
   const ghEnv = path.join(root, 'gh-env');
   const npmCalled = path.join(root, 'npm-called');
+  const nodeCalled = path.join(root, 'node-called');
   await Promise.all([mkdir(path.join(repo, '.git'), { recursive: true }), mkdir(bin, { recursive: true })]);
   await Promise.all([
     makeExecutable(path.join(bin, 'git'), gitMock),
     makeExecutable(path.join(bin, 'gh'), ghMock),
     makeExecutable(path.join(bin, 'npm'), npmMock),
+    makeExecutable(path.join(bin, 'node'), nodeMock),
   ]);
   t.after(() => rm(root, { recursive: true, force: true }));
   const result = spawnSync('sh', [hook.pathname, 'origin', 'https://github.com/hocheunglai-oss/fcos.git'], {
     cwd: repo,
-    input: `refs/heads/topic ${LOCAL_SHA} refs/heads/topic ${ZERO_SHA}\n`,
+    input,
     encoding: 'utf8',
     env: {
       PATH: `${bin}:${process.env.PATH}`,
@@ -77,12 +92,16 @@ async function runHook(t, { account = 'hocheunglai-oss', changedPaths = 'src/App
       MOCK_TREE_PATHS: 'force-app/main/default/classes/should-not-be-used.cls',
       MOCK_CHANGED_PATHS: changedPaths,
       MOCK_GH_ACCOUNT: account,
+      MOCK_GH_REPOSITORY: repository,
       MOCK_GH_ENV: ghEnv,
       MOCK_NPM_CALLED: npmCalled,
       MOCK_NPM_STATUS: String(npmStatus),
+      MOCK_NODE_CALLED: nodeCalled,
+      MOCK_NODE_STATUS: String(nodeStatus),
+      FCOS_SALESFORCE_REVIEW_RELEASE_MANIFEST: reviewManifest,
     },
   });
-  return { result, ghEnv, npmCalled, repo };
+  return { result, ghEnv, npmCalled, nodeCalled, repo };
 }
 
 test('pre-push rejects a mismatched isolated account without inherited GitHub tokens', async (t) => {
@@ -106,4 +125,54 @@ test('pre-push permits a clean new branch even when the proposed tree contains e
   const { result, npmCalled } = await runHook(t, { changedPaths: 'src/App.jsx' });
   assert.equal(result.status, 0);
   await assert.rejects(() => readFile(npmCalled, 'utf8'));
+});
+
+test('review source admits a single exact creation after verification', async t => {
+  const reviewManifest = '/tmp/frozen FCOS release.json';
+  const { result, nodeCalled, npmCalled, repo } = await runHook(t, {
+    input: reviewedPush, reviewManifest, changedPaths: 'force-app/main/default/classes/Changed.cls', npmStatus: 1,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const [script, directory, sha, manifest] = (await readFile(nodeCalled, 'utf8')).trimEnd().split('\n');
+  assert.match(script, /verify-salesforce-review-source\.mjs$/u);
+  assert.deepEqual([directory, sha, manifest], [repo, LOCAL_SHA, reviewManifest]);
+  await assert.rejects(() => readFile(npmCalled, 'utf8'));
+});
+
+test('review source rejects wrong refs, updates, deletions and multi-ref pushes', async t => {
+  const inputs = [
+    reviewedPush.replace(reviewRef, reviewRef + '-alias'),
+    reviewedPush.replace(ZERO_SHA, BASE_SHA),
+    reviewedPush.replace(LOCAL_SHA, ZERO_SHA),
+    reviewedPush + ordinaryPush,
+  ];
+  for (const input of inputs) {
+    const { result, nodeCalled } = await runHook(t, { input, reviewManifest: '/tmp/frozen.json' });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /one new exact commit/u);
+    await assert.rejects(() => readFile(nodeCalled, 'utf8'));
+  }
+});
+
+test('review source requires a verified manifest on the pinned repository', async t => {
+  const absent = await runHook(t, { input: reviewedPush });
+  assert.equal(absent.result.status, 1);
+  assert.match(absent.result.stderr, /exact verified release manifest/u);
+  const failed = await runHook(t, { input: reviewedPush, reviewManifest: '/tmp/frozen.json', nodeStatus: 1 });
+  assert.equal(failed.result.status, 1);
+  assert.match(failed.result.stderr, /exact verified release manifest/u);
+  const otherRepository = await runHook(t, {
+    input: reviewedPush, reviewManifest: '/tmp/frozen.json', repository: 'hocheunglai-oss/fcos:100',
+  });
+  assert.equal(otherRepository.result.status, 1);
+  assert.match(otherRepository.result.stderr, /pinned FCOS repository/u);
+});
+
+test('an ordinary Salesforce push still requires the mirror with a review manifest set', async t => {
+  const { result, nodeCalled, npmCalled } = await runHook(t, {
+    changedPaths: 'force-app/main/default/classes/Changed.cls', reviewManifest: '/tmp/frozen.json', npmStatus: 1,
+  });
+  assert.equal(result.status, 1);
+  assert.equal(await readFile(npmCalled, 'utf8'), 'called');
+  await assert.rejects(() => readFile(nodeCalled, 'utf8'));
 });

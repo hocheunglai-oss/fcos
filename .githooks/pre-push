@@ -39,6 +39,42 @@ fi
 GIT_NO_REPLACE_OBJECTS=1
 export GIT_NO_REPLACE_OBJECTS
 
+# Create-only review refs supply immutable source to the protected release.
+# The controller still requires DEVEE deployment and a strict mirror before QAT.
+review_prefix=refs/heads/codex/fcos-salesforce-review/
+if printf '%s\n' "$updates" | awk -v prefix="$review_prefix" 'index($3, prefix) == 1 { found=1 } END { exit !found }'; then
+  review_sha="$(printf '%s\n' "$updates" | awk -v prefix="$review_prefix" '
+    NF { rows++ }
+    NF == 4 && length($2) == 40 && $2 ~ /^[0-9a-f]+$/ && $2 !~ /^0+$/ &&
+      $3 == prefix $2 && length($4) == 40 && $4 ~ /^0+$/ { sha=$2 }
+    END { if (rows != 1 || !sha) exit 1; print sha }')" || {
+    echo "FCOS push blocked: Salesforce review refs accept one new exact commit and cannot be updated." >&2
+    exit 1
+  }
+  if [ -s "$git_common_dir/info/grafts" ] || [ -s "$git_common_dir/shallow" ] \
+    || [ -n "${GIT_GRAFT_FILE:-}" ] || [ -n "${GIT_SHALLOW_FILE:-}" ]; then
+    echo "FCOS push blocked: Salesforce review source requires complete, unmodified Git history." >&2
+    exit 1
+  fi
+  review_repository="$(env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$github_config_dir" gh api repos/hocheunglai-oss/fcos --jq '.full_name + ":" + (.id|tostring)' 2>/dev/null)" || exit 1
+  if [ "$review_repository" != "hocheunglai-oss/fcos:1278654816" ]; then
+    echo "FCOS push blocked: Salesforce review source requires the pinned FCOS repository." >&2
+    exit 1
+  fi
+  hook_directory="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)" || exit 1
+  review_manifest="${FCOS_SALESFORCE_REVIEW_RELEASE_MANIFEST:-}"
+  git_local_environment="$(git rev-parse --local-env-vars)" || exit 1
+  if [ -z "$review_manifest" ] || ! (
+    unset $git_local_environment
+    export GIT_NO_REPLACE_OBJECTS=1
+    node "$hook_directory/../scripts/verify-salesforce-review-source.mjs" "$repo_root" "$review_sha" "$review_manifest"
+  ); then
+    echo "FCOS push blocked: Salesforce review source requires its exact verified release manifest." >&2
+    exit 1
+  fi
+  exit 0
+fi
+
 verify_advertised_commits() {
   git cat-file --batch-check='%(objectname) %(objecttype)' < "$publication_check/published" > "$publication_check/objects" 2>/dev/null || return 1
   if awk 'NF != 2 || $2 != "commit" {bad=1} END {exit bad}' "$publication_check/objects"; then
@@ -74,8 +110,10 @@ EOF
     elif git ls-remote --heads "$remote_url" > "$publication_check/advertised" 2>/dev/null \
       && [ -s "$publication_check/advertised" ] \
       && awk 'NF != 2 || length($1) != 40 || $1 ~ /[^0-9a-f]/ || $2 !~ /^refs\/heads\// {bad=1} END {exit bad}' "$publication_check/advertised"; then
-      awk '{print $1}' "$publication_check/advertised" | sort -u > "$publication_check/published"
-      if verify_advertised_commits; then
+      # A review-only ref cannot satisfy ordinary Salesforce publication.
+      awk -v prefix="$review_prefix" 'index($2, prefix) != 1 { print $1 }' "$publication_check/advertised" \
+        | sort -u > "$publication_check/published"
+      if [ -s "$publication_check/published" ] && verify_advertised_commits; then
         cat "$publication_check/tips" > "$publication_check/revisions"
         awk '{print "^" $1}' "$publication_check/published" >> "$publication_check/revisions"
         if git rev-list --stdin < "$publication_check/revisions" > "$publication_check/unpublished" 2>/dev/null; then
