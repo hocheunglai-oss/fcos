@@ -8,6 +8,7 @@ import { buildDocumentFieldProjection, projectAccountingPayload } from './_xeroD
 import { salesInvoiceSummaryPayload, SALES_INVOICE_SUMMARY_POLICY } from './_xeroSalesInvoiceSummary.js';
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
 import { ISSUED_PETROLEUM_POLICY, ISSUED_PETROLEUM_V2_POLICY, ISSUED_PRESERVATION_POLICIES, isIssuedPreservationPolicy } from '../config/xeroIssuedPreservationPolicies.js';
+import { ISSUED_GROUPED_PETROLEUM_PRESERVATION_POLICY } from './_xeroIssuedGroupedPetroleumPreservation.js';
 import { currentIssuedSupplierRoundingMatches, ISSUED_SUPPLIER_PRESERVATION_POLICY } from './_xeroIssuedSupplierPreservation.js';
 import { currentIssuedPetroleumMatches } from './_xeroIssuedPetroleumSticky.js';
 import { accountingDecimalCents, accountingProductCents, accountingUnitNumber, accountingCentsNumber, accountingCentsText } from './_xeroAccountingLineCents.js';
@@ -828,7 +829,7 @@ async function loadDisputeReconciliationStates(client, stemIds) {
 
 export async function xeroFinancialSyncLatest(_body = {}, { env = process.env, client = xeroContactSyncServiceClient(env) } = {}) {
   let latestQuery = client.from('xero_financial_sync_runs').select('*').eq('mode', 'preview');
-  for (const policy of [...ISSUED_PRESERVATION_POLICIES, 'supplier_financial_bucket_preserve_v1', 'authorise_existing_xero_drafts_v1']) {
+  for (const policy of [...ISSUED_PRESERVATION_POLICIES, ISSUED_GROUPED_PETROLEUM_PRESERVATION_POLICY, 'supplier_financial_bucket_preserve_v1', 'authorise_existing_xero_drafts_v1']) {
     latestQuery = latestQuery.not('control_totals', 'cs', JSON.stringify({ preservationPolicy: policy }));
   }
   const { data: runs, error } = await latestQuery.not('status', 'in', '(building,cancelled)').not('control_totals->workflowSnapshot', 'is', null).order('created_at', { ascending: false }).limit(1);
@@ -1940,7 +1941,8 @@ export function buildFinancialClassifications(salesforce, xero, stored, { postin
       source,
       candidatesFor(source, true),
       {
-        storedMapping: storedBySource.get(`Invoice__c:${source.salesforceId}`) || stored.documentMappings.find((row) => hasGroupedPreservation(row)
+        storedMapping: storedBySource.get(`Invoice__c:${source.salesforceId}`) || stored.documentMappings.find((row) => (hasGroupedPreservation(row)
+          || Object.hasOwn(row.retained_differences || {}, 'issuedSupplierPreservation'))
           && row.salesforce_object === 'Invoice__c' && String(row.salesforce_id).slice(0, 15) === String(source.salesforceId).slice(0, 15)),
         organisation: xero.organisation,
         linkFirst,

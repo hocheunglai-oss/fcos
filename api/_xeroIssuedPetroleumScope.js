@@ -82,7 +82,6 @@ export async function collectPetroleumPreservationScope({ records, connection, s
   const sourceAccountIds = unique(selections.flatMap(({ source, ownership }) => ownership?.sourceAccountIds || [sf(source.accountId)]));
   const stemIds = unique(selections.map(({ source }) => sf(source.stemId)));
   const sourceIds = unique(selections.map(({ source }) => sf(source.salesforceId)));
-  const xeroContactIds = unique(selections.map(({ source }) => uid(source.contactId)));
   const queryFingerprints = [];
   const read = async (soql, limit, all = false) => {
     const result = await (all ? queryAll : query)(soql, { clean: true, limit });
@@ -123,6 +122,36 @@ export async function collectPetroleumPreservationScope({ records, connection, s
     const product = children.length === 1 ? products.filter((row) => sf(row.Id) === sf(children[0].Product__c)) : [];
     sourceFacts.set(sf(source.salesforceId), { parent: selected[0], lines: children, extras: sourceExtras, product: product.length === 1 ? product[0] : null });
   }
+  const { targetClaims, creditClaims, accountTax, xeroContactIds, queryFingerprints: xeroFingerprints } =
+    await collectPetroleumXeroHistory({ connection, selections: selections.map(({ source, target }) => ({ contactId: source.contactId, target })) },
+      { accountingFetch, env, fetchImpl, onResponse, requestGate });
+  queryFingerprints.push(...xeroFingerprints);
+  const scope = { policyVersion: POLICY, salesforceOrgId: org.orgId, tenantId: connection.tenantId, sourceFacts,
+    sourceClaims: parents, targetClaims, creditClaims, accountTax, currencyContext: { singleCurrency: salesforce.safetyContext?.singleCurrency === true, corporateCurrency: salesforce.safetyContext?.corporateCurrency || null },
+    coverage: { sourceAccountIds, stemIds, xeroContactIds, sourceQueryAll: true, sourceCount: parents.length,
+      targetCount: targetClaims.length, creditCount: creditClaims.length, sourceComplete: true, targetComplete: true,
+      creditComplete: true, accountTaxComplete: true, queryFingerprints } };
+  scope.coverage.contentFingerprint = petroleumScopeFingerprint(scope);
+  return scope;
+}
+
+// Keep provider pagination, quota and request controls shared across both issued policies.
+export async function collectPetroleumXeroHistory({ connection, selections }, {
+  accountingFetch = xeroAccountingFetch, env = process.env, fetchImpl = fetch, onResponse = () => {}, requestGate,
+} = {}) {
+  if (!uid(connection?.tenantId) || !Array.isArray(selections) || selections.length === 0 || selections.length > 25
+    || selections.some(entry => !uid(entry?.contactId) || !uid(entry?.target?.id)
+      || uid(entry.target.contactId) !== uid(entry.contactId) || !['ACCREC', 'ACCPAY'].includes(entry.target.type))
+    || new Set(selections.map(({ target }) => uid(target.id))).size !== selections.length) {
+    throw fail('Exact selected Xero Contact and document identities are required.');
+  }
+  const scopeKeys = unique(selections.map(({ contactId, target }) => `${uid(contactId)}:${target.type}`));
+  const scopes = scopeKeys.map(key => {
+    const [contactId, type] = key.split(':');
+    return { contactId, type };
+  });
+  const xeroContactIds = unique(scopes.map(({ contactId }) => contactId));
+  const queryFingerprints = [];
   let calls = 0; let historyCount = 0; const rate = {}; const contactCounts = new Map();
   const observed = (event) => { Object.assign(rate, xeroFinancialRateSnapshot(event.headers, rate)); onResponse(event); assertXeroFinancialDailyReserve(rate, env); };
   const get = async (path) => {
@@ -164,23 +193,21 @@ export async function collectPetroleumPreservationScope({ records, connection, s
     }
   };
   const targetClaims = []; const creditClaims = [];
-  for (const contactId of xeroContactIds) {
-    targetClaims.push(...await history(contactId, 'Invoices', 'ACCPAY', 'InvoiceID', normalizeXeroInvoice));
-    creditClaims.push(...await history(contactId, 'CreditNotes', 'ACCPAYCREDIT', 'CreditNoteID', normalizeXeroCreditNote));
+  for (const { contactId, type } of scopes) {
+    targetClaims.push(...await history(contactId, 'Invoices', type, 'InvoiceID', normalizeXeroInvoice));
+    const creditType = type === 'ACCREC' ? 'ACCRECCREDIT' : 'ACCPAYCREDIT';
+    creditClaims.push(...await history(contactId, 'CreditNotes', creditType, 'CreditNoteID', normalizeXeroCreditNote));
+  }
+  if ([targetClaims, creditClaims].some(rows => new Set(rows.map(({ document }) => uid(document.id))).size !== rows.length)) {
+    throw fail('Xero returned the same history identity in distinct scopes.');
   }
   for (const { target } of selections) {
     const fresh = targetClaims.filter(({ document }) => uid(document.id) === uid(target.id));
-    if (fresh.length !== 1 || hash(fresh[0].document) !== hash(target)) throw fail('The selected Xero bill changed between current reads.');
+    if (fresh.length !== 1 || hash(fresh[0].document) !== hash(target)) throw fail('The selected Xero document changed between current reads.');
   }
   const accountResult = await get('/Accounts'); const taxResult = await get('/TaxRates');
   if (!Array.isArray(accountResult?.Accounts) || !Array.isArray(taxResult?.TaxRates)
     || accountResult.Accounts.length > 10000 || taxResult.TaxRates.length > 1000) throw fail('Current ledger account and tax evidence is incomplete.');
   const accountTax = { accounts: sorted(accountResult.Accounts, 'AccountID'), taxRates: sorted(taxResult.TaxRates, 'TaxType') };
-  const scope = { policyVersion: POLICY, salesforceOrgId: org.orgId, tenantId: connection.tenantId, sourceFacts,
-    sourceClaims: parents, targetClaims, creditClaims, accountTax, currencyContext: { singleCurrency: salesforce.safetyContext?.singleCurrency === true, corporateCurrency: salesforce.safetyContext?.corporateCurrency || null },
-    coverage: { sourceAccountIds, stemIds, xeroContactIds, sourceQueryAll: true, sourceCount: parents.length,
-      targetCount: targetClaims.length, creditCount: creditClaims.length, sourceComplete: true, targetComplete: true,
-      creditComplete: true, accountTaxComplete: true, queryFingerprints } };
-  scope.coverage.contentFingerprint = petroleumScopeFingerprint(scope);
-  return scope;
+  return { targetClaims, creditClaims, accountTax, xeroContactIds, queryFingerprints };
 }

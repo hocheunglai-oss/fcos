@@ -5,6 +5,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { PRESERVATION_PACKET_MAX_BYTES, parsePreservationPacket, preservationOutcomes, preservationRowSelectable, preservationSelection } from '@/lib/xeroIssuedSupplierPreservationUi';
+import { ISSUED_GROUPED_PETROLEUM_PRESERVATION_POLICY } from '../../../config/xeroIssuedPreservationPolicies.js';
 
 const OPTIONS = { force: true, cache: false, invalidateCache: true };
 const INPUT_ERROR = 'Use valid JSON evidence: 1–25 records, at most 200 KB; printed facts and identifiers only, no PDFs or credentials.';
@@ -16,6 +17,7 @@ export default function XeroIssuedSupplierPreservation({ onClose, enabled, onAll
   const [selected, setSelected] = useState(new Set());
   const [outcomes, setOutcomes] = useState(null);
   const [attempted, setAttempted] = useState(false);
+  const [originalLink, setOriginalLink] = useState(null);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const generation = useRef(0);
@@ -26,7 +28,7 @@ export default function XeroIssuedSupplierPreservation({ onClose, enabled, onAll
 
   function resetEvidence(name) {
     const current = ++generation.current;
-    setPacket(null); setPreview(null); setSelected(new Set()); setOutcomes(null); setAttempted(false); setError('');
+    setPacket(null); setPreview(null); setSelected(new Set()); setOutcomes(null); setAttempted(false); setOriginalLink(null); setError('');
     setFilename(name);
     return current;
   }
@@ -82,11 +84,11 @@ export default function XeroIssuedSupplierPreservation({ onClose, enabled, onAll
     requestBusy.current = true;
     const current = ++generation.current;
     const ids = [...selectedIds];
+    const request = { runId: preview.run.id, revision: preview.run.revision, selectedItemIds: ids, reviewed: true };
+    if (preview.policyVersion && preview.policyVersion === ISSUED_GROUPED_PETROLEUM_PRESERVATION_POLICY) setOriginalLink(request);
     setBusy('link'); setAttempted(true); setError('');
     try {
-      const result = await appClient.functions.invoke('xeroFinancialDocumentPreservationRun', {
-        runId: preview.run.id, revision: preview.run.revision, selectedItemIds: ids, reviewed: true,
-      }, OPTIONS);
+      const result = await appClient.functions.invoke('xeroFinancialDocumentPreservationRun', request, OPTIONS);
       if (current !== generation.current) return;
       onAllowance?.(result.data);
       if (result.data?.error) throw new Error(result.data.error);
@@ -102,11 +104,29 @@ export default function XeroIssuedSupplierPreservation({ onClose, enabled, onAll
     } finally { requestBusy.current = false; if (current === generation.current) setBusy(''); }
   }
 
+  async function checkOriginalLink() {
+    if (!enabled || busy || requestBusy.current || !originalLink || !outcomes?.some(row => row.status === 'uncertain')) return;
+    requestBusy.current = true;
+    const current = ++generation.current;
+    setBusy('readback'); setError('');
+    try {
+      const { data } = await appClient.functions.invoke('xeroFinancialDocumentPreservationRun', { ...originalLink, readbackOnly: true }, OPTIONS);
+      if (current !== generation.current) return;
+      if (data?.error || data?.financialWrites !== 0 || data?.run?.id !== originalLink.runId) {
+        throw new Error(data?.error || 'The original run could not be confirmed.');
+      }
+      setOutcomes(preservationOutcomes(originalLink.selectedItemIds, data.outcomes));
+      setPreview(value => ({ ...value, run: data.run }));
+    } catch (failure) {
+      if (current === generation.current) setError(failure.message || 'The original link is still unconfirmed.');
+    } finally { requestBusy.current = false; if (current === generation.current) setBusy(''); }
+  }
+
   return <Dialog open onOpenChange={(open) => { if (!open && !busy) onClose(); }}>
     <DialogContent className="max-h-[85vh] max-w-4xl overflow-y-auto" onEscapeKeyDown={(event) => { if (busy) event.preventDefault(); }} onInteractOutside={(event) => { if (busy) event.preventDefault(); }}>
       <DialogHeader>
-        <DialogTitle>Preserve verified bills</DialogTitle>
-        <DialogDescription>Verify issued Salesforce documents and link selected existing Xero bills. Bill details, amounts, lines, tax, status and payments stay unchanged. No bills or payments are created.</DialogDescription>
+        <DialogTitle>Preserve verified documents</DialogTitle>
+        <DialogDescription>Verify issued Salesforce documents and record a link to the existing Xero invoice or bill. The link preserves the original accounting and payment details.</DialogDescription>
       </DialogHeader>
       <div className="space-y-2">
         <label className="block text-sm font-medium" htmlFor="xero-preservation-packet">JSON evidence packet (1–25 records, maximum 200 KB)</label>
@@ -120,7 +140,7 @@ export default function XeroIssuedSupplierPreservation({ onClose, enabled, onAll
       {preview && <>
         <p className="text-sm">{filename} · {preview.rows.length} records · {preview.rows.filter((row) => row.status === 'eligible').length} eligible · Run {preview.run.id} / revision {preview.run.revision}</p>
         <div className="overflow-auto rounded-md border">
-          <Table><TableHeader><TableRow>{['Select', 'Salesforce → Xero bill', 'Amount', 'Verification / result'].map((label) => <TableHead key={label}>{label}</TableHead>)}</TableRow></TableHeader>
+          <Table><TableHeader><TableRow>{['Select', 'Salesforce → Xero document', 'Amount', 'Verification / result'].map((label) => <TableHead key={label}>{label}</TableHead>)}</TableRow></TableHeader>
             <TableBody>{preview.rows.map((row) => {
               const outcome = outcomes?.find((value) => value.id === row.id);
               const eligible = preservationRowSelectable(preview, row);
@@ -128,7 +148,7 @@ export default function XeroIssuedSupplierPreservation({ onClose, enabled, onAll
                 <TableCell><Checkbox aria-label={`Select ${row.sourceNumber || row.sourceId} to link to ${row.xeroNumber || row.xeroDocumentId}`} checked={selected.has(row.id)} disabled={!eligible || Boolean(busy) || attempted} onCheckedChange={(checked) => setSelected((value) => { const next = new Set(value); if (checked === true) next.add(row.id); else next.delete(row.id); return next; })} /></TableCell>
                 <TableCell><span className="block">{row.sourceNumber || row.sourceId} → {row.xeroNumber || row.xeroDocumentId}</span><span className="text-xs text-muted-foreground">{row.sourceId} → {row.xeroDocumentId}</span></TableCell>
                 <TableCell className="whitespace-nowrap">{row.currency} {row.total}</TableCell>
-                <TableCell><span className="block">{outcome?.status || row.status}</span>{(row.blockers || []).join('; ')}{outcome && <span className="block text-xs">{outcome.error || outcome.reason || outcome.message || (outcome.status === 'linked' ? 'Link confirmed; Xero bill details preserved.' : 'Review the saved run before another attempt.')}</span>}</TableCell>
+                <TableCell><span className="block">{outcome?.status || row.status}</span>{(row.blockers || []).join(', ')}{outcome && <span className="block text-xs">{outcome.error || outcome.reason || outcome.message || (outcome.status === 'linked' ? 'Link confirmed. Xero document details preserved.' : 'Review the saved run before another attempt.')}</span>}</TableCell>
               </TableRow>;
             })}</TableBody>
           </Table>
@@ -139,6 +159,8 @@ export default function XeroIssuedSupplierPreservation({ onClose, enabled, onAll
       {!enabled && <p className="text-sm text-amber-800">Financial actions are locked. Verification remains available.</p>}
       <div className="flex flex-wrap justify-end gap-2">
         <Button type="button" variant="outline" onClick={onClose} disabled={Boolean(busy)}>Close</Button>
+        {originalLink && outcomes?.some(row => row.status === 'uncertain') && <Button type="button" variant="outline" onClick={checkOriginalLink}
+          disabled={!enabled || Boolean(busy)}>{busy === 'readback' ? 'Checking the original link…' : 'Check original link'}</Button>}
         <Button type="button" onClick={linkRecords} disabled={!enabled || Boolean(busy) || attempted || !selectedIds.length}>{busy === 'link' ? 'Linking…' : 'Link and preserve Xero details'}</Button>
       </div>
     </DialogContent>
