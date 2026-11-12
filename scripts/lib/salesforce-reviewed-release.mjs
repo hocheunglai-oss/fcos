@@ -545,7 +545,7 @@ export function assertProductionAuthorization(authorization, plan, now = new Dat
   return hash(authorization);
 }
 
-function assertMirror(result, plan, policy, deploymentJobId) {
+export function assertReviewedMirror(result, plan, policy, deploymentJobId) {
   const pr = result?.pullRequest;
   if (result?.releaseMode !== REVIEWED_SALESFORCE_MODE || result?.sourceTreeHash !== plan.binding.sourceTreeHash
     || result?.sourceEnvironment !== 'devee' || result?.sourceDeploymentJobId !== deploymentJobId
@@ -639,6 +639,11 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
         && entry.outcome === 'resolved' && /^[a-f0-9]{40}$/u.test(entry.mirror?.commit || '')
         && Number.isSafeInteger(entry.mirror.pullRequest) && entry.mirror.pullRequest > 0) {
         missingMirror = entry.mirror;
+        continue;
+      }
+      if (!local && entry.stage === 'shared_mirror' && entry.operation === 'publication'
+        && entry.outcome === 'pending' && typeof provider.readPendingMirror === 'function') {
+        missingMirror = { pending: true };
         continue;
       }
       const environment = policy.environments.find(item => item.key === entry.stage);
@@ -796,8 +801,10 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
       saved = await persist('shared_mirror', 'publication', { status: 'submitting', ...gate });
       if (!(Date.parse(saved.receiptExpiresAt) > now().getTime())) throw new Error('Salesforce mirror ownership expired while saving intent; reconcile the saved intent before retry.');
     }
-    const result = assertMirror(await provider.mirror(action, { plan, journalFile: journal.file, deveeDeployment: deployment }), plan, policy, deployment.jobId);
-    if (original && (result.commit !== original.commit || result.pullRequest.number !== original.pullRequest)) {
+    const context = { plan, journalFile: journal.file, deveeDeployment: deployment };
+    const proof = original?.pending ? await provider.readPendingMirror(context) : await provider.mirror(action, context);
+    const result = assertReviewedMirror(proof, plan, policy, deployment.jobId);
+    if (original && !original.pending && (result.commit !== original.commit || result.pullRequest.number !== original.pullRequest)) {
       throw new Error('Shared mirror readback differs from the original durable publication.');
     }
     await unchanged();
