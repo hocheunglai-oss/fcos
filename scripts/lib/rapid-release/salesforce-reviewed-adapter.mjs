@@ -62,8 +62,7 @@ function hostedReviewedPlan(cwd, plan) {
 }
 
 function reviewedBootstrapFingerprint(reviewed, plan) {
-  requireCondition(plan.deferSchemaDependentSmoke === true && reviewed.review.bootstrap
-    && /^[a-f0-9]{64}$/u.test(reviewed.binding.bootstrapSha256 || ''),
+  requireCondition(reviewed.review.bootstrap && /^[a-f0-9]{64}$/u.test(reviewed.binding.bootstrapSha256 || ''),
     'SALESFORCE_HOSTED_BOOTSTRAP_PLAN_REQUIRED');
   const fingerprint = digest({ salesforceFingerprint: reviewed.fingerprint, bootstrapSha256: reviewed.binding.bootstrapSha256 });
   requireCondition(fingerprint === plan.bootstrapFingerprint, 'SALESFORCE_HOSTED_BOOTSTRAP_PLAN_MISMATCH');
@@ -72,7 +71,8 @@ function reviewedBootstrapFingerprint(reviewed, plan) {
 
 export async function verifyPreBootstrapStage({ manifest, staged, plan, salesforceCandidateDirectory: cwd, env }, { withDatabase = false } = {}) {
   const databaseSelected = withDatabase ? manifest.selection.database === true : !manifest.selection.database;
-  requireCondition(manifest.selection.salesforce && databaseSelected && cwd && plan.backwardCompatible === true,
+  requireCondition(manifest.selection.salesforce && databaseSelected && cwd && plan.backwardCompatible === true
+    && plan.deferSchemaDependentSmoke === true,
     'SALESFORCE_HOSTED_BOOTSTRAP_PLAN_REQUIRED');
   const reviewed = hostedReviewedPlan(cwd, plan);
   return runPreBootstrapSmoke({ manifest, staged, env }, reviewedBootstrapFingerprint(reviewed, plan));
@@ -94,7 +94,14 @@ export function prepareReviewedSalesforcePrerequisites({
   'SALESFORCE_HOSTED_REVIEW_REQUIRED');
   const reviewed = hostedReviewedPlan(cwd, plan);
   const schemaBootstrap = Boolean(reviewed.review.bootstrap);
-  if (schemaBootstrap || plan.deferSchemaDependentSmoke) reviewedBootstrapFingerprint(reviewed, plan);
+  if (schemaBootstrap || plan.deferSchemaDependentSmoke) {
+    // Salesforce-only schema can qualify the full application before approval
+    // when the staged application does not read the new metadata.
+    requireCondition(plan.deferSchemaDependentSmoke === true
+      || (!withDatabase && plan.deferSchemaDependentSmoke === false && plan.deferredModules === undefined),
+    'SALESFORCE_HOSTED_BOOTSTRAP_PLAN_REQUIRED');
+    reviewedBootstrapFingerprint(reviewed, plan);
+  }
 
   assertHostedSalesforceRunner(env);
   return () => applyPreparedSalesforce({ manifestHash, approval, salesforce, cwd, env, reviewed, schemaBootstrap });

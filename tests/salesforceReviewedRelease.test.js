@@ -797,6 +797,15 @@ test('hosted stage derives its bootstrap binding from the reviewed tracked candi
     await assert.rejects(applyReviewedPrerequisites({ ...apply, plan: { ...plan, deferSchemaDependentSmoke: false } }), /SALESFORCE_HOSTED_BOOTSTRAP_PLAN_REQUIRED/);
     await assert.rejects(applyReviewedPrerequisites({ ...apply, plan: { ...plan, bootstrapFingerprint: 'f'.repeat(64) } }), /SALESFORCE_HOSTED_BOOTSTRAP_PLAN_MISMATCH/);
     await assert.rejects(applyReviewedPrerequisites(apply), /SALESFORCE_HOSTED_RUNNER_REQUIRED/);
+    const { deferredModules, ...fullPlanFields } = plan;
+    assert.deepEqual(deferredModules, ['hedge_desk']);
+    const fullPlan = { ...fullPlanFields, deferSchemaDependentSmoke: false };
+    const fullManifest = { ...apply.manifest, prerequisites: { plan: fullPlan } };
+    const fullApply = { ...apply, plan: fullPlan, manifest: fullManifest, approval: { ...approval, manifestHash: digest(fullManifest) } };
+    await assert.rejects(applyReviewedPrerequisites({ ...fullApply, approval }), /SALESFORCE_HOSTED_REVIEW_REQUIRED/);
+    await assert.rejects(applyReviewedPrerequisites({ ...fullApply, plan: { ...fullPlan, bootstrapFingerprint: undefined } }), /SALESFORCE_HOSTED_BOOTSTRAP_PLAN_MISMATCH/);
+    await assert.rejects(verifyPreBootstrapStage({ ...input, plan: fullPlan }), /SALESFORCE_HOSTED_BOOTSTRAP_PLAN_REQUIRED/);
+    await assert.rejects(applyReviewedPrerequisites(fullApply), /SALESFORCE_HOSTED_RUNNER_REQUIRED/);
     run(['rm', '--cached', 'manifest/bootstrap.xml']);
     await assert.rejects(verifyPreBootstrapStage(input), /ls-files/);
   } finally {
