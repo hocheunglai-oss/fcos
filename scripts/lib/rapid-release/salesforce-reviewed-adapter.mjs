@@ -9,7 +9,7 @@ import { openSalesforcePromotionJournal } from '../salesforce-promotion-journal.
 import { assertReviewedJobReport, matchesSalesforceCheckpoint, reviewedJobExpectations, runReviewedSalesforceRelease, safeProjectFile } from '../salesforce-reviewed-release.mjs';
 import { assertHostedSalesforceRunner, authenticateHostedSalesforce } from './salesforce-hosted-auth.mjs';
 import { digest, git, requireCondition, targets } from './contract.mjs';
-import { awaitLocalMirrorReceipt, createLocalMirrorRequest } from './local-mirror-handoff.mjs';
+import { awaitLocalMirrorReceipt, createLocalMirrorRequest, usesLocalCollaboratorMirror } from './local-mirror-handoff.mjs';
 import { githubClient } from './providers.mjs';
 import { runPreBootstrapSmoke } from './smoke.mjs';
 
@@ -76,6 +76,7 @@ export async function verifyPreBootstrapStage({ manifest, staged, plan, salesfor
   requireCondition(manifest.selection.salesforce && databaseSelected && cwd && plan.backwardCompatible === true
     && plan.deferSchemaDependentSmoke === true,
     'SALESFORCE_HOSTED_BOOTSTRAP_PLAN_REQUIRED');
+  requireCondition(plan.mirrorPublication === undefined || usesLocalCollaboratorMirror(manifest), 'SALESFORCE_MIRROR_MODE_INVALID');
   const reviewed = hostedReviewedPlan(cwd, plan);
   return runPreBootstrapSmoke({ manifest, staged, env }, reviewedBootstrapFingerprint(reviewed, plan));
 }
@@ -107,7 +108,7 @@ export function prepareReviewedSalesforcePrerequisites({
 
   assertHostedSalesforceRunner(env);
   const localMirror = plan.mirrorPublication === 'local-collaborator';
-  requireCondition(plan.mirrorPublication === undefined || (localMirror && !withDatabase), 'SALESFORCE_MIRROR_MODE_INVALID');
+  requireCondition(plan.mirrorPublication === undefined || (localMirror && usesLocalCollaboratorMirror(manifest)), 'SALESFORCE_MIRROR_MODE_INVALID');
   return () => applyPreparedSalesforce({ manifest, manifestHash, approval, salesforce, cwd, env, reviewed, schemaBootstrap, localMirror });
 }
 
