@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import { createManifest, digest, sourceSnapshot, targets } from '../scripts/lib/rapid-release/contract.mjs';
-import { applyReviewedPrerequisites as applySalesforce, reconcileHostedSalesforceJob, recoverReviewedDeveeBootstrap } from '../scripts/lib/rapid-release/salesforce-reviewed-adapter.mjs';
+import { applyReviewedPrerequisites as applySalesforce, reconcileHostedSalesforceJob, recoverReviewedDeveeBootstrap, recoverReviewedDeveePromotion } from '../scripts/lib/rapid-release/salesforce-reviewed-adapter.mjs';
 import { verifyBeforeBootstrap, runPrerequisites } from '../scripts/lib/rapid-release/prerequisites.mjs';
 function fixture({ salesforce = false } = {}) {
  const directory=mkdtempSync(join(tmpdir(),'rapid-prerequisite-')),source='// Tracked, reviewed adapter fixture.\n',h='b'.repeat(64);
@@ -273,4 +273,78 @@ test('hosted quick-deploy recovery verifies its original positive validation che
   assert.equal((await reconcileHostedSalesforceJob(input)).jobId, jobId);
   validation.numberTestsTotal = validation.numberTestsCompleted = 0;
   await assert.rejects(reconcileHostedSalesforceJob(input), /positive test execution/);
+});
+
+test('completed DEVEE jobs carry forward only with linked native checkpoints and matching final inventory', async () => {
+  const policy = FCOS_CONNECTION_POLICY.providers.find(item => item.id === 'salesforce');
+  const candidate = 'a'.repeat(40), fingerprint = 'b'.repeat(64), packageSha256 = 'c'.repeat(64);
+  const inventoryHash = 'd'.repeat(64), component = 'CustomField:Demo__c.Value__c';
+  const operations = ['bootstrap', 'validation', 'deployment'];
+  const now = () => new Date('2026-11-08T12:10:00.000Z');
+  const reviewed = {
+    fingerprint, manifest: [component], review: { bootstrap: { components: [component] } },
+    binding: { sourceTreeHash: 'e'.repeat(64), manifestSha256: 'f'.repeat(64),
+      testPlan: { level: 'RunLocalTests', minimumTests: 1 } },
+    nativeInventories: { devee: { final: { files: {}, inventoryHash } } },
+  };
+  const context = { sha: candidate, environment: 'fcos-release-journal-v1' };
+  const payload = { kind: 'fcos_rapid_release_event', releaseId: 'original', manifestHash: '1'.repeat(64) };
+  const jobIds = ['0AfHF00000700KB0AY', '0AfHF00000702c50AA', '0AfHF000007G94v0AC'];
+  const originals = operations.map((operation, index) => ({
+    ...context, id: index + 10, creator: { id: 41898282, login: 'github-actions[bot]' },
+    payload: { ...payload, event: 'salesforce.checkpoint', data: {
+      fingerprint, stage: 'devee', operation, outcome: 'resolved', evidenceDigest: '2'.repeat(64),
+      job: { id: jobIds[index], validationId: index === 2 ? jobIds[1] : null,
+        submittedAt: '2026-11-08T12:0' + index + ':00.000Z', ...(index < 2 ? { packageSha256 } : {}) },
+    } },
+  }));
+  const receipt = {
+    ...context, id: 13, creator: { id: policy.publication.requiredAccountId, login: policy.publication.requiredAccount },
+    payload: { ...payload, event: 'prerequisites.result', data: {
+      salesforceFingerprint: fingerprint, evidenceDigest: '3'.repeat(64), deveeCheckpoints: originals.map(item => item.id),
+      outcome: 'devee_verified_mirror_not_published',
+    } },
+  };
+  let observedHash = inventoryHash;
+  let conversions = 0;
+  const reads = [];
+  const prepare = () => {
+    conversions++;
+    return { packageSha256, cleanup() {} };
+  };
+  const provider = {
+    prepareBootstrap: prepare, prepareValidation: prepare,
+    async verifyIdentity(org) { assert.equal(org.orgId, policy.environments[0].orgId); },
+    async report(_org, id) {
+      reads.push(id);
+      const index = jobIds.indexOf(id);
+      assert.ok(index >= 0);
+      return { id, status: 'Succeeded', success: true, done: true, checkOnly: index === 1, rollbackOnError: true,
+        numberComponentsTotal: 1, numberComponentsDeployed: 1, numberTestsTotal: index === 1 ? 1 : 0,
+        numberTestsCompleted: index === 1 ? 1 : 0, completedDate: '2026-11-08T12:0' + index + ':30.000Z',
+        details: { componentSuccesses: [{ componentType: 'CustomField', fullName: 'Demo__c.Value__c', success: true }] } };
+    },
+    async verifyInventory(org) {
+      return { orgId: org.orgId, inventoryHash: observedHash, sourceTreeHash: null,
+        verifiedAt: now().toISOString(), evidenceSha256: '4'.repeat(64) };
+    },
+  };
+  const github = { async read(path) { return [...originals, receipt].find(item => path.endsWith('/' + item.id)); } };
+  const input = { receiptId: receipt.id, manifest: { candidate: { sha: candidate } }, reviewed, provider, github, now };
+  const recovered = await recoverReviewedDeveePromotion(input);
+  assert.deepEqual(recovered.map(item => item.operation), operations);
+  assert.deepEqual(recovered.map(item => item.record.jobId), jobIds);
+  assert.deepEqual(reads, jobIds);
+  assert.equal(conversions, 2);
+  assert.equal(recovered[2].record.testExecution, 'verified-linked-apex-tests');
+
+  originals[2].payload.data.job.validationId = jobIds[0];
+  await assert.rejects(recoverReviewedDeveePromotion(input), /DEVEE_PROMOTION_JOB_ORDER_REQUIRED/);
+  assert.deepEqual(reads, jobIds);
+  originals[2].payload.data.job.validationId = jobIds[1];
+  originals[1].payload.manifestHash = '9'.repeat(64);
+  await assert.rejects(recoverReviewedDeveePromotion(input), /DEVEE_PROMOTION_CHECKPOINT_REQUIRED/);
+  originals[1].payload.manifestHash = payload.manifestHash;
+  observedHash = '9'.repeat(64);
+  await assert.rejects(recoverReviewedDeveePromotion(input), /inventory receipt is absent, stale, or differs/);
 });

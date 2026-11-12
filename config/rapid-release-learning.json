@@ -409,6 +409,24 @@
       "measuredTimeSavedMs": null,
       "measuredCallsSaved": null,
       "prevention": "Rehearse exact provider result formats and test retained original job adoption with failed receipt, package, and inventory bindings."
+    },
+    {
+      "id": "salesforce-mirror-handover-stage-provenance",
+      "cause": "The local mirror worker rejected the owner-created staging receipt from a protected handover before claiming publication. DEVEE had already completed all three reviewed jobs.",
+      "correction": "Accept the owner-created staging receipt only when it matches the verified permanent handover and exact artifact. Carry forward the three terminal DEVEE jobs through their native checkpoints and fresh inventory.",
+      "verification": {
+        "originalRunId": 43293839283,
+        "mirrorRequestId": 7748308097,
+        "originalClosureReceipt": 7748479028,
+        "exactStageReceipt": 7747767813,
+        "deveeJobsRetained": 3,
+        "readbackMs": 38893,
+        "providerWrites": 0,
+        "releaseTestsPassed": 263
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Exercise both protected staging receipt producers and refuse altered job lineage, package hashes or current DEVEE inventory before downstream promotion."
     }
   ]
 }

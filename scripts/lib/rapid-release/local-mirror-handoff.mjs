@@ -22,6 +22,21 @@ export function usesLocalCollaboratorMirror(manifest) {
       || (selection.database === true && adapter === 'trading-fx-prerequisites'));
 }
 
+export function readLocalMirrorStage(record, { manifest, handover, workflowActorId }) {
+  const result = record?.payload?.data?.result;
+  const publishedByWorkflow = record?.creator?.id === workflowActorId;
+  const qualifiedByHandover = record?.creator?.id === publication.requiredAccountId
+    && handover?.candidateSha === manifest.candidate.sha
+    && handover?.qualificationDeploymentId === result?.id && handover?.buildId === result?.buildId
+    && handover?.artifactDigest === result?.artifactDigest;
+  requireCondition(record?.payload?.event === 'stage.result' && record.payload.manifestHash === digest(manifest)
+    && record.payload.data.outcome === 'applied' && (publishedByWorkflow || qualifiedByHandover)
+    && result?.sha === manifest.candidate.sha && result.buildId === manifest.build.buildId
+    && result.manifestHash === record.payload.manifestHash && isDigest(result.artifactDigest)
+    && typeof result.id === 'string' && result.id.startsWith('dpl_'), 'LOCAL_MIRROR_STAGE_RECEIPT_REQUIRED');
+  return result;
+}
+
 export function createLocalMirrorRequest({ manifest, approval, reviewed, deployment, runAttempt, intentHash, expiresAt, mode = 'publish', sequence = 1, now = Date.now() }) {
   const manifestHash = digest(manifest);
   const deadline = Date.parse(expiresAt);
