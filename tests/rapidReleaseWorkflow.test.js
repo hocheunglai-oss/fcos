@@ -40,6 +40,10 @@ test('three ordinary jobs keep credential-free preparation independent and seria
  }
  assert.match(workflow.jobs.quality.steps.find(step=>step.with?.path==='controller').with.ref,/controllerSha/);
 });
+test('Salesforce go-live has a longer job limit for ordered validations while ordinary releases retain 20 minutes', () => {
+ assert.equal(workflow.jobs['go-live']['timeout-minutes'],
+  '${{ fromJSON(inputs.manifest_json).selection.salesforce == true && 45 || 20 }}');
+});
 test('deferred Salesforce staging reads the exact candidate without installing Salesforce CLI or granting Salesforce credentials',()=>{
  const steps=workflow.jobs['stage-and-smoke'].steps;
  const index=steps.findIndex(step=>step.with?.path==='salesforce-candidate');

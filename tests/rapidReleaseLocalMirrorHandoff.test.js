@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { digest } from '../scripts/lib/rapid-release/contract.mjs';
 import { REVIEWED_SALESFORCE_MODE } from '../scripts/lib/salesforce-reviewed-release.mjs';
-import { awaitLocalMirrorReceipt, createLocalMirrorReceipt, createLocalMirrorRequest, LOCAL_MIRROR_ENVIRONMENT, recordLocalMirrorDeployment, verifyLocalMirrorReceipt }
+import { awaitLocalMirrorReceipt, createLocalMirrorReceipt, createLocalMirrorRequest, LOCAL_MIRROR_ENVIRONMENT, recordLocalMirrorDeployment, usesLocalCollaboratorMirror, verifyLocalMirrorReceipt }
   from '../scripts/lib/rapid-release/local-mirror-handoff.mjs';
 
 const now = Date.parse('2026-11-12T16:30:00.000Z');
@@ -14,6 +14,18 @@ const deployment = { status: 'Succeeded', fingerprint, orgId: reviewed.binding.o
   validationJobId: '0Af000000000001', jobId: '0Af000000000002' };
 const approval = { manifestHash: digest(manifest), runId: 101, nativeReviewVerified: true, approvedAt: iso(now - 9000) };
 const options = { manifest, reviewed, deployment, approval, runAttempt: 1, intentHash: 'e'.repeat(64), expiresAt: iso(now + 120000), now };
+
+test('local publication admits the reviewed Salesforce-only and Trading FX combined routes', () => {
+  const route = (adapter, database, salesforce = true, mirrorPublication = 'local-collaborator') =>
+    usesLocalCollaboratorMirror({ selection: { salesforce, database }, prerequisites: { adapter, plan: { mirrorPublication } } });
+  assert.equal(route('salesforce-reviewed-manifest', false), true);
+  assert.equal(route('trading-fx-prerequisites', true), true);
+  assert.equal(route('salesforce-reviewed-manifest', true), false);
+  assert.equal(route('trading-fx-prerequisites', false), false);
+  assert.equal(route('trading-fx-prerequisites', true, false), false);
+  assert.equal(route('company-fx-history', true), false);
+  assert.equal(route('trading-fx-prerequisites', true, true, 'hosted'), false);
+});
 
 test('mirror request binds the approved run attempt, DEVEE job pair and exact source', () => {
   const request = createLocalMirrorRequest(options);
