@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { issuedPetroleumV2Fixture } from './xeroIssuedPetroleumV2Fixtures.js';
+import { issuedGroupedPetroleumFixture } from './xeroIssuedGroupedPetroleumPreservationFixtures.js';
 import { PRESERVATION_PACKET_MAX_BYTES, parsePreservationPacket, preservationOutcomes, preservationSelection, validatePreservationPacket } from '../src/lib/xeroIssuedSupplierPreservationUi.js';
 
 const record = { sourceId: 'source', xeroDocumentId: 'xero', documentId: 'document', versionId: 'version', sha256: 'hash',
@@ -25,6 +26,17 @@ test('v2 packets keep literal null paper dates and complete attachment facts for
   ]) {
     const changed = structuredClone(packet); mutate(changed);
     assert.equal(validatePreservationPacket(changed), false);
+  }
+});
+
+test('desktop parser preserves exact grouped buyer and supplier documentary details', () => {
+  for (const direction of ['buyer', 'supplier']) {
+    const { packet } = issuedGroupedPetroleumFixture({ direction });
+    assert.deepEqual(parsePreservationPacket(JSON.stringify(packet)), packet);
+    const changed = structuredClone(packet);
+    changed.records[0].review.lines[1].sourceChildId = changed.records[0].review.lines[0].sourceChildId;
+    assert.equal(validatePreservationPacket(changed), false);
+    assert.equal(validatePreservationPacket({ ...packet, policyVersion: 'issued_petroleum_preserve_v1' }), false);
   }
 });
 
@@ -126,6 +138,24 @@ test('link UI sends the exact reviewed selection once and retains uncertain or f
     assert.equal(outcomes?.[0]?.status, response === 'stale' ? undefined : ['linked', 'failed'].includes(response) ? response : 'uncertain');
     if (response === 'lost') assert.match(error, /No automatic retry/);
   }
+});
+
+test('desktop recovery sends only the original selection with the readback flag', async () => {
+  const source = await readFile(new URL('../src/components/xero/XeroIssuedSupplierPreservation.jsx', import.meta.url), 'utf8');
+  const method = source.slice(source.indexOf('  async function checkOriginalLink()'), source.indexOf('  return <Dialog'));
+  const execute = new Function('appClient', 'originalLink', 'preservationOutcomes', 'setOutcomes',
+    `const enabled=true,busy='',requestBusy={current:false},generation={current:0},outcomes=[{status:'uncertain'}],
+      OPTIONS={},setBusy=()=>{},setError=()=>{},setPreview=()=>{};
+      ${method}; return checkOriginalLink();`);
+  const original = { runId: 'original', revision: 1, selectedItemIds: ['one'], reviewed: true };
+  const requests = [];
+  let result;
+  await execute({ functions: { invoke: async (name, body) => {
+    requests.push({ name, body });
+    return { data: { run: { id: original.runId }, financialWrites: 0, outcomes: [{ id: 'one', status: 'linked' }] } };
+  } } }, original, preservationOutcomes, value => { result = value; });
+  assert.deepEqual(requests, [{ name: 'xeroFinancialDocumentPreservationRun', body: { ...original, readbackOnly: true } }]);
+  assert.deepEqual(result, [{ id: 'one', status: 'linked' }]);
 });
 
 test('parent lazy-loads preservation and pauses all background scans until an intentional check', async () => {

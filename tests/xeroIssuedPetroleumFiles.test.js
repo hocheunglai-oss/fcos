@@ -2,14 +2,16 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
 import { issuedPetroleumFixture } from './xeroIssuedPetroleumPreservationFixtures.js';
-import { collectIssuedPetroleumFiles, validateIssuedPetroleumPacket, issuedPetroleumReviewHash } from '../api/_xeroIssuedPetroleumFiles.js';
+import { issuedGroupedPetroleumFixture } from './xeroIssuedGroupedPetroleumPreservationFixtures.js';
+import { collectIssuedPetroleumFiles, validateIssuedPetroleumPacket, issuedPetroleumReviewHash,
+  collectIssuedGroupedPetroleumFiles, validateIssuedGroupedPetroleumPacket, issuedGroupedPetroleumReviewHash } from '../api/_xeroIssuedPetroleumFiles.js';
 
 const bytes = Buffer.from('%PDF-1.7\nNative petroleum fixture\n%%EOF');
 const hash = (data, algorithm) => createHash(algorithm).update(data).digest('hex');
 const complete = (records) => ({ records, totalSize: records.length, done: true });
 const invalid = { code: 'XERO_ISSUED_PETROLEUM_EVIDENCE_INVALID' };
-function fixture() {
-  const f = issuedPetroleumFixture(); const record = f.packet.records[0]; record.sha256 = hash(bytes, 'sha256');
+function fixture(f = issuedPetroleumFixture()) {
+  const record = f.packet.records[0]; record.sha256 = hash(bytes, 'sha256');
   const links = [{ Id: f.ids.link, LinkedEntityId: f.ids.source, ContentDocumentId: f.ids.document, ContentDocument: { LatestPublishedVersionId: f.ids.version } }];
   const versions = [{ Id: f.ids.version, ContentDocumentId: f.ids.document, IsLatest: true, Checksum: hash(bytes, 'md5'), ContentSize: bytes.length, FileType: 'PDF', FileExtension: 'pdf' }];
   const calls = []; const options = { tenantId: f.ids.tenant, approvedReviewHashes: [issuedPetroleumReviewHash(record)],
@@ -31,6 +33,36 @@ test('production registry rejects unregistered reviews and changed literals/tena
   for (const change of [g => { g.record.review.lines[0].quantity = '1'; }, g => { g.record.review.counterparties.printedSeller = 'OTHER'; },
     g => { g.record.review.totalTax = '0'; }, g => { g.record.review.deliveryDate = '2026-03-17'; }, g => { g.options.tenantId = g.ids.contact; }]) {
     const g = fixture(); change(g); await assert.rejects(collectIssuedPetroleumFiles(g.packet, g.options), invalid); assert.equal(g.calls.length, 0);
+  }
+});
+
+for (const direction of ['buyer', 'supplier']) test(`grouped ${direction} uses its own approved hash and exact latest PDF`, async () => {
+  const f = fixture(issuedGroupedPetroleumFixture({ direction }));
+  assert.equal(validateIssuedGroupedPetroleumPacket(f.packet)[0].sourceId, f.ids.source);
+  assert.throws(() => validateIssuedPetroleumPacket(f.packet), invalid);
+  await assert.rejects(collectIssuedGroupedPetroleumFiles(f.packet, f.options), invalid);
+  await assert.rejects(collectIssuedGroupedPetroleumFiles(f.packet, { ...f.options, approvedReviewHashes: undefined }), invalid);
+  assert.equal(f.calls.length, 0);
+  f.options.approvedReviewHashes = [issuedGroupedPetroleumReviewHash(f.record)];
+  const files = await collectIssuedGroupedPetroleumFiles(f.packet, f.options);
+  assert.deepEqual(files.get(f.ids.source).review, f.record.review);
+  assert.equal(f.calls.length, 4);
+  f.record.review.lines[0].quantity = '99';
+  await assert.rejects(collectIssuedGroupedPetroleumFiles(f.packet, f.options), invalid);
+  assert.equal(f.calls.length, 4);
+});
+
+test('grouped documentary validation rejects duplicate physical identities and incomplete review shape', () => {
+  for (const mutate of [
+    row => { row.review.lines.pop(); },
+    row => { row.review.lines[1].sourceChildId = row.review.lines[0].sourceChildId; },
+    row => { row.review.lines[0].sourceChildId = row.documentId; },
+    row => { delete row.review.imo; },
+    row => { row.sourceId = row.documentId; },
+  ]) {
+    const f = fixture(issuedGroupedPetroleumFixture());
+    mutate(f.record);
+    assert.throws(() => validateIssuedGroupedPetroleumPacket(f.packet), invalid);
   }
 });
 
