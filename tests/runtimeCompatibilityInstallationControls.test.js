@@ -2,13 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { SOURCE_ROOT, installationControls, installationCurrentV4, installationControlSource, assertBoundSource, hash } from './helpers/runtimeCompatibilitySuccessorPortable.mjs';
+import { SOURCE_ROOT, installationControls, currentInstallationControlPins, installationControlSource, assertBoundSource, hash } from './helpers/runtimeCompatibilitySuccessorPortable.mjs';
 
 test('reviewed installation bytes use exact retained historical controls without accepting arbitrary current drift', () => {
   assert.equal(installationControls.sources.length,8);
   for (const entry of installationControls.sources) {
     const current = readFileSync(join(SOURCE_ROOT,entry.path));
-    assert.equal(hash(current),entry.path === installationCurrentV4.path ? installationCurrentV4.currentSha256 : entry.currentSha256);
+    assert.equal(hash(current),currentInstallationControlPins.get(entry.path)?.currentSha256 ?? entry.currentSha256);
     const historical = installationControlSource(entry.path,current);
     assert.equal(hash(historical),entry.sha256); assertBoundSource(entry.path,historical);
     assert.notEqual(hash(historical),hash(current));
