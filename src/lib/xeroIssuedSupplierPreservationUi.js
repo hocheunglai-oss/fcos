@@ -1,4 +1,5 @@
-import { ISSUED_SUPPLIER_POLICY, ISSUED_PETROLEUM_POLICY, ISSUED_PETROLEUM_V2_POLICY, isIssuedPreservationPolicy } from '../../config/xeroIssuedPreservationPolicies.js';
+import { ISSUED_SUPPLIER_POLICY, ISSUED_PETROLEUM_POLICY, ISSUED_PETROLEUM_V2_POLICY,
+  ISSUED_GROUPED_PETROLEUM_PRESERVATION_POLICY, isIssuedPreservationPolicy } from '../../config/xeroIssuedPreservationPolicies.js';
 
 export const PRESERVATION_PACKET_MAX_BYTES = 200000;
 
@@ -22,21 +23,28 @@ const scalar = (value) => typeof value === 'string' || (typeof value === 'number
 export function validatePreservationPacket(data) {
   if (!onlyKeys(data, ['records', 'policyVersion']) || !Array.isArray(data.records) || !data.records.length || data.records.length > 25) return false;
   const policy = Object.hasOwn(data, 'policyVersion') ? data.policyVersion : ISSUED_SUPPLIER_POLICY;
-  if (!isIssuedPreservationPolicy(policy)) return false;
+  const grouped = policy === ISSUED_GROUPED_PETROLEUM_PRESERVATION_POLICY;
+  if (!grouped && !isIssuedPreservationPolicy(policy)) return false;
   const v2 = policy === ISSUED_PETROLEUM_V2_POLICY;
-  const petroleum = v2 || policy === ISSUED_PETROLEUM_POLICY;
+  const petroleum = grouped || v2 || policy === ISSUED_PETROLEUM_POLICY;
+  const reviewKeys = grouped ? [...PETROLEUM_REVIEW_KEYS, 'imo'] : petroleum ? PETROLEUM_REVIEW_KEYS : REVIEW_KEYS;
+  const lineKeys = grouped ? [...PETROLEUM_LINE_KEYS, 'sourceChildId'] : petroleum ? PETROLEUM_LINE_KEYS : ['description', 'amount'];
   return data.records.every((record) => onlyKeys(record, v2 ? [...RECORD_KEYS, 'attachments'] : RECORD_KEYS)
     && RECORD_KEYS.filter((key) => key !== 'review').every((key) => typeof record[key] === 'string' && record[key].trim())
     && (!v2 || (Array.isArray(record.attachments) && record.attachments.length >= 1 && record.attachments.length <= 20
       && record.attachments.every((entry) => onlyKeys(entry, ATTACHMENT_KEYS)
         && ATTACHMENT_KEYS.every((key) => Object.hasOwn(entry, key) && scalar(entry[key])))))
-    && onlyKeys(record.review, petroleum ? PETROLEUM_REVIEW_KEYS : REVIEW_KEYS)
+    && onlyKeys(record.review, reviewKeys)
+    && (!grouped || (Array.isArray(record.review.lines) && record.review.lines.length >= 2 && record.review.lines.length <= 50
+      && (record.review.imo === null || typeof record.review.imo === 'string' && /^\d{7}$/.test(record.review.imo))
+      && record.review.lines.every(line => typeof line?.sourceChildId === 'string' && /^a05[A-Za-z0-9]{12}(?:[A-Za-z0-9]{3})?$/.test(line.sourceChildId))
+      && new Set(record.review.lines.map(line => line.sourceChildId.slice(0, 15))).size === record.review.lines.length))
     && Object.entries(record.review).every(([key, value]) => key === 'lines'
-      ? Array.isArray(value) && value.every((line) => onlyKeys(line, petroleum ? PETROLEUM_LINE_KEYS : ['description', 'amount'])
+      ? Array.isArray(value) && value.every((line) => onlyKeys(line, lineKeys)
         && typeof line.description === 'string' && scalar(line.amount) && Object.values(line).every(scalar))
       : petroleum && key === 'counterparties'
         ? onlyKeys(value, COUNTERPARTY_KEYS) && Object.values(value).every((literal) => typeof literal === 'string')
-        : (petroleum && ['deliveryDate', 'totalTax', ...(v2 ? ['invoiceDate', 'dueDate'] : [])].includes(key) && value === null) || scalar(value)));
+        : (petroleum && ['deliveryDate', 'totalTax', ...(v2 ? ['invoiceDate', 'dueDate'] : []), ...(grouped ? ['imo'] : [])].includes(key) && value === null) || scalar(value)));
 }
 
 export function preservationSelection(preview, selected) {
