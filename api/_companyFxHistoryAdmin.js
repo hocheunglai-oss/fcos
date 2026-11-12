@@ -34,7 +34,13 @@ export async function saveHistoricalCompanyFxRate(body, context) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveDate) || effectiveDate >= today) {
     throw error('Choose a valid Hong Kong calendar date before today.', 400, 'COMPANY_FX_HISTORY_DATE_INVALID');
   }
-  const effectiveAt = hkCompanyFxMidnight(effectiveDate);
+  let effectiveAt;
+  try {
+    effectiveAt = hkCompanyFxMidnight(effectiveDate);
+  } catch (cause) {
+    if (cause?.code !== 'COMPANY_FX_DATE_INVALID' || cause.status !== 400) throw cause;
+    throw error('Choose a valid Hong Kong calendar date before today.', 400, 'COMPANY_FX_HISTORY_DATE_INVALID');
+  }
   const value = typeof body?.usdHkdRate === 'number' || typeof body?.usdHkdRate === 'string' ? String(body.usdHkdRate).trim() : '';
   if (!/^\d{1,3}(?:\.\d{1,6})?$/.test(value) || Number(value) <= 0 || Number(value) > 100) {
     throw error('Enter a USD/HKD company rate greater than zero and no more than 100, with at most six decimal places.', 400, 'COMPANY_FX_HISTORY_RATE_INVALID');

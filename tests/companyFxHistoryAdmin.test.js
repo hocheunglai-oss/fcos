@@ -71,3 +71,17 @@ test('staging denies history writes before any storage and rejects invalid histo
   }
   assert.equal(admin.calls.some(call => call[0] === 'insert'), false);
 });
+
+test('invalid history dates share one error and Hong Kong midnight changes the accepted day', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-09-10T15:59:59Z') });
+  const admin = context('administrator');
+  for (const effectiveDate of ['2026-02-30', '2026-09-10', '09/09/2026', '0000-09-09']) {
+    await assert.rejects(saveHistoricalCompanyFxRate({ ...inputs, effectiveDate }, admin), {
+      status: 400, code: 'COMPANY_FX_HISTORY_DATE_INVALID',
+    });
+  }
+  assert.equal(admin.calls.some(call => call[0] === 'insert'), false);
+  t.mock.timers.setTime(new Date('2026-09-10T16:00:00Z').getTime());
+  await saveHistoricalCompanyFxRate(inputs, admin);
+  assert.equal(admin.calls.find(call => call[0] === 'insert')[2].effective_at, '2026-09-09T16:00:00.000Z');
+});
