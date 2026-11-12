@@ -198,7 +198,9 @@ function verifyNativeMetadataProjection({ root, sourceRoot, plan, projectionPath
     const permission = /^permissionsets\/([A-Za-z][A-Za-z0-9_]*)\.permissionset-meta\.xml$/u.exec(name);
     const falseFlags = plan.review.nativeCustomFieldFalseFlags?.[name];
     const objectDefaults = plan.review.nativeCustomObjectDefaults?.[name];
-    if (!permission && !falseFlags && !objectDefaults && source.equals(native)) continue;
+    // A reviewed field can already include the same native false default.
+    // The omission allowance is only needed when source and provider bytes differ.
+    if (!permission && !objectDefaults && source.equals(native)) continue;
     if (!Buffer.from(source.toString('utf8')).equals(source) || !Buffer.from(native.toString('utf8')).equals(native)) {
       throw new Error(`Native metadata projection differs from the exact reviewed source: ${name}`);
     }

@@ -6,7 +6,7 @@ import { assertReviewedInputsUnchanged, cliSalesforceProvider, loadReviewedSales
 import { runReviewedMirror } from '../../sync-salesforce-reviewed-repository.mjs';
 import { preflightSharedMirrorPublication } from '../../sync-salesforce-shared-repository.mjs';
 import { openSalesforcePromotionJournal } from '../salesforce-promotion-journal.mjs';
-import { assertReviewedJobReport, matchesSalesforceCheckpoint, reviewedJobExpectations, runReviewedSalesforceRelease, safeProjectFile } from '../salesforce-reviewed-release.mjs';
+import { assertReviewedJobReport, matchesSalesforceCheckpoint, reviewedJobExpectations, runReviewedSalesforceRelease, safeProjectFile, verifyReviewedOrgInventory } from '../salesforce-reviewed-release.mjs';
 import { assertHostedSalesforceRunner, authenticateHostedSalesforce } from './salesforce-hosted-auth.mjs';
 import { digest, git, requireCondition, targets } from './contract.mjs';
 import { awaitLocalMirrorReceipt, createLocalMirrorRequest, usesLocalCollaboratorMirror } from './local-mirror-handoff.mjs';
@@ -47,6 +47,55 @@ export async function reconcileHostedSalesforceJob({ environment, jobId, reviewe
   return { fingerprint: reviewed.fingerprint, orgId: target.orgId, jobId, operation,
     sourceTreeHash: reviewed.binding.sourceTreeHash, manifestSha256: reviewed.binding.manifestSha256,
     evidenceSha256: digest({ original, reportSha256: proof.reportSha256 }), verifiedAt: verifiedAt.toISOString() };
+}
+
+export async function recoverReviewedDeveeBootstrap({ adoption, manifest, reviewed, provider, github, now = () => new Date() }) {
+  const environment = policy.environments[0];
+  const endpoint = '/repos/' + targets().repository + '/deployments/';
+  const receipt = await github.read(endpoint + adoption.receiptId);
+  const checkpoint = receipt?.payload?.data;
+  const reference = checkpoint?.job;
+  requireCondition(receipt?.id === adoption.receiptId && receipt.creator?.id === policy.publication.requiredAccountId
+    && receipt.creator.login === targets().account && receipt.environment === 'fcos-release-journal-v1'
+    && receipt.sha === manifest.candidate.sha && receipt.payload?.kind === 'fcos_rapid_release_event'
+    && receipt.payload.event === 'salesforce.checkpoint' && receipt.payload.manifestHash !== digest(manifest)
+    && checkpoint?.stage === 'devee' && checkpoint.operation === 'bootstrap' && checkpoint.outcome === 'resolved'
+    && checkpoint.result === 'succeeded_no_change' && checkpoint.fingerprint === reviewed.fingerprint
+    && /^[a-f0-9]{64}$/u.test(checkpoint.evidenceDigest || '') && Number.isSafeInteger(checkpoint.originalCheckpoint)
+    && checkpoint.originalCheckpoint > 0 && reference?.id === adoption.jobId && reference.validationId === null
+    && /^[a-f0-9]{64}$/u.test(reference.packageSha256 || '') && Number.isFinite(Date.parse(reference.submittedAt)),
+  'SALESFORCE_DEVEE_BOOTSTRAP_RECEIPT_REQUIRED');
+
+  const original = await github.read(endpoint + checkpoint.originalCheckpoint);
+  requireCondition(original?.id === checkpoint.originalCheckpoint && original.creator?.id === 41898282
+    && original.creator.login === 'github-actions[bot]' && original.environment === receipt.environment
+    && original.sha === receipt.sha && original.payload?.kind === receipt.payload.kind
+    && original.payload.releaseId === receipt.payload.releaseId && original.payload.manifestHash === receipt.payload.manifestHash
+    && original.payload.event === 'salesforce.checkpoint' && original.payload.data?.stage === 'devee'
+    && original.payload.data.operation === 'bootstrap' && original.payload.data.outcome === 'pending'
+    && original.payload.data.fingerprint === checkpoint.fingerprint
+    && digest(original.payload.data.job) === digest(reference), 'SALESFORCE_DEVEE_BOOTSTRAP_ORIGINAL_REQUIRED');
+
+  const prepared = await provider.prepareBootstrap(environment, reviewed);
+  try {
+    requireCondition(prepared.packageSha256 === reference.packageSha256, 'SALESFORCE_DEVEE_BOOTSTRAP_PACKAGE_CHANGED');
+  } finally { await prepared.cleanup(); }
+  await provider.verifyIdentity(environment);
+  const report = await provider.report(environment, reference.id);
+  const proof = assertReviewedJobReport(report, { environment, jobId: reference.id,
+    ...reviewedJobExpectations(reviewed, environment, 'bootstrap') });
+  const completed = Date.parse(proof.completedAt);
+  const successes = [report.details.componentSuccesses].flat();
+  requireCondition(completed >= Date.parse(reference.submittedAt) - 30_000 && completed <= now().getTime() + 30_000
+    && successes.filter(entry => ['CustomObject', 'CustomField', 'PermissionSet'].includes(entry.componentType))
+      .every(entry => entry.changed === false && entry.created !== true && entry.deleted !== true), 'SALESFORCE_DEVEE_BOOTSTRAP_NO_CHANGE_REQUIRED');
+  const inventory = await verifyReviewedOrgInventory({ provider, environment, plan: reviewed,
+    expected: reviewed.nativeInventories.devee.bootstrap, now });
+  const verifiedAt = now().toISOString();
+  return { ...proof, fingerprint: reviewed.fingerprint, validationJobId: null, submittedAt: reference.submittedAt,
+    packageSha256: reference.packageSha256, verifiedAt, reconciledAt: verifiedAt,
+    recoveredEvidenceDigest: digest({ receiptId: receipt.id, originalCheckpoint: original.id,
+      providerReportSha256: proof.reportSha256, inventoryReceiptSha256: inventory.evidenceSha256 }) };
 }
 
 function hostedReviewedPlan(cwd, plan) {
@@ -109,7 +158,11 @@ export function prepareReviewedSalesforcePrerequisites({
   assertHostedSalesforceRunner(env);
   const localMirror = plan.mirrorPublication === 'local-collaborator';
   requireCondition(plan.mirrorPublication === undefined || (localMirror && usesLocalCollaboratorMirror(manifest)), 'SALESFORCE_MIRROR_MODE_INVALID');
-  return () => applyPreparedSalesforce({ manifest, manifestHash, approval, salesforce, cwd, env, reviewed, schemaBootstrap, localMirror });
+  const adoption = plan.deveeBootstrapAdoption;
+  requireCondition(adoption === undefined || (!withDatabase && schemaBootstrap && reviewed.nativeInventories?.devee?.bootstrap
+    && adoption && Object.keys(adoption).length === 2 && Number.isSafeInteger(adoption.receiptId) && adoption.receiptId > 0
+    && /^0Af[A-Za-z0-9]{15}$/u.test(adoption.jobId || '')), 'SALESFORCE_DEVEE_BOOTSTRAP_ADOPTION_INVALID');
+  return () => applyPreparedSalesforce({ manifest, manifestHash, approval, salesforce, cwd, env, reviewed, schemaBootstrap, localMirror, adoption });
 }
 
 async function hostedLocalMirrorTransport({ manifest, approval, env, reviewed, salesforce }) {
@@ -152,7 +205,7 @@ async function hostedLocalMirrorTransport({ manifest, approval, env, reviewed, s
   };
 }
 
-async function applyPreparedSalesforce({ manifest, manifestHash, approval, salesforce, cwd, env, reviewed, schemaBootstrap, localMirror }) {
+async function applyPreparedSalesforce({ manifest, manifestHash, approval, salesforce, cwd, env, reviewed, schemaBootstrap, localMirror, adoption }) {
   const saved = await salesforce.journal.readCheckpoints();
   const localTransport = localMirror ? await hostedLocalMirrorTransport({ manifest, approval, env, reviewed, salesforce }) : null;
   const directory = mkdtempSync(join(tmpdir(), 'fcos-salesforce-hosted-'));
@@ -166,6 +219,13 @@ async function applyPreparedSalesforce({ manifest, manifestHash, approval, sales
       provider.reconcile = (environment, jobId, { operation, submittedAt, validationJobId, packageSha256 }) =>
         reconcileHostedSalesforceJob({ environment, jobId, reviewed, operation, submittedAt, validationJobId,
           packageSha256, provider, journal: salesforce.journal });
+      if (adoption && !saved.some(item => item.stage === 'devee' && item.operation === 'bootstrap')) {
+        const github = githubClient({ token: env.GITHUB_TOKEN, candidateSha: manifest.candidate.sha, actions: true });
+        const record = await recoverReviewedDeveeBootstrap({ adoption, manifest, reviewed, provider, github });
+        await assertReviewedInputsUnchanged(reviewed, { cwd, policy });
+        const savedBootstrap = journal.update('devee', 'bootstrap', record);
+        await salesforce.journal.checkpoint({ fingerprint: reviewed.fingerprint, stage: 'devee', operation: 'bootstrap', record: savedBootstrap });
+      }
       provider.mirror = localTransport
         ? (mode, { deveeDeployment }) => localTransport(mode, deveeDeployment, journal.state.stages.shared_mirror?.publication)
         : mode => runReviewedMirror({ mode, cwd, plan: reviewed, state: journal.state, policy,

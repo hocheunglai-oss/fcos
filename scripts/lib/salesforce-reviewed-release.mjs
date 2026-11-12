@@ -447,7 +447,12 @@ export function assertReviewedJobReport(report, { environment, jobId, validation
   if (bootstrap && !schemaBootstrap) throw new Error('Zero-test bootstrap evidence requires the exact reviewed schema/permission intent and environment test level.');
   if (schemaBootstrap) {
     const successes = report.details?.componentSuccesses;
-    if ((Array.isArray(successes) ? successes : [successes]).some(entry => !['CustomObject', 'CustomField', 'PermissionSet', 'Package'].includes(entry?.componentType))) throw new Error('Schema-only bootstrap report contains an unexpected non-schema component.');
+    const isManifestDescriptor = entry => entry?.componentType === '' && entry.success === true
+      && entry.fullName === 'package.xml' && ['package.xml', 'zip/package.xml'].includes(entry.fileName);
+    if ((Array.isArray(successes) ? successes : [successes]).some(entry => !isManifestDescriptor(entry)
+      && !['CustomObject', 'CustomField', 'PermissionSet', 'Package'].includes(entry?.componentType))) {
+      throw new Error('Schema-only bootstrap report contains an unexpected non-schema component.');
+    }
     if (!Number.isSafeInteger(total) || total < 0 || completed !== total || (environment.isSandbox && total !== 0)) throw new Error('Schema bootstrap test counts do not match its reviewed test intent.');
   } else {
     if (!['RunLocalTests', 'RunSpecifiedTests', 'RunRelevantTests'].includes(testPlan.level)) throw new Error('NoTestRun is confined to reviewed sandbox schema bootstrap.');
