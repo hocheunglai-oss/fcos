@@ -8,7 +8,7 @@ import { READ_ONLY_CI_HANDLERS, isReadOnlyMarketAction, CI_DENIAL_PROBES } from 
 import { canonicalFcosE2eCandidateUrl } from '../../verify-e2e-candidate.mjs';
 import { candidateAuthenticationState, writePrivateE2eState, removePrivateE2eState } from '../../e2e-private-state.mjs';
 import { candidateProtectionState } from '../../e2e-protection-state.mjs';
-import { digest, requiresCompanyFxHistorySmoke } from './contract.mjs';
+import { digest, requiresCompanyFxHistorySmoke, requiresSupplierBucketSmoke, requiresGroupedPetroleumSmoke } from './contract.mjs';
 import { MODULE_READERS as moduleReaders, MODULE_SURFACES, NORMAL_NAVIGATION_READS, moduleReadBody, moduleReaderPayloadVerified as modulePayloadVerified } from './normal-role-readers.mjs';
 
 const issuer = new URL(FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation.issuer).origin;
@@ -249,11 +249,16 @@ async function denialProbes(route, origin) {
   return receipts;
 }
 
-async function verifyModuleDesktop({ page, origin, module }) {
+async function verifyModuleDesktop({ page, origin, module, groupedPetroleumRequired }) {
   const spec = MODULE_SURFACES[module];
   requireFact(spec, 'MODULE_DESKTOP_COVERAGE_MISSING');
   await page.goto(`${origin}${spec.route}`, { waitUntil: 'domcontentloaded', timeout: 45000 });
   requireFact(page.url() === `${origin}${spec.route}`, 'SMOKE_CANDIDATE_NAVIGATION_CHANGED');
+  if (module === 'xero_portal' && groupedPetroleumRequired) {
+    try {
+      await page.getByRole('button', { name: 'Preserve verified documents', exact: true }).waitFor({ state: 'visible', timeout: 15000 });
+    } catch { throw fail('SMOKE_GROUPED_PETROLEUM_DESKTOP_MISSING'); }
+  }
   try {
     await page.getByRole('heading', { name: spec.heading }).first().waitFor({ state: 'visible', timeout: 30000 });
   } catch { throw fail('SMOKE_MODULE_DESKTOP_HEADING_MISSING'); }
@@ -289,6 +294,7 @@ async function verifyModuleDesktop({ page, origin, module }) {
   const body = await page.locator('body').innerText();
   requireFact(!/Access denied|Something went wrong|temporarily unavailable|could not (?:load|read|verify)|No validator data loaded|Loading Hedge Desk/i.test(body), 'SMOKE_MODULE_DESKTOP_INCOMPLETE');
   return { module, route: spec.route, rendered: true, dataSource: moduleReaders[module].path, businessSurface: true,
+    ...(module === 'xero_portal' && groupedPetroleumRequired ? { groupedPetroleumControl: true } : {}),
     ...(spec.readControl ? { readControl: spec.readControl } : {}) };
 }
 
@@ -310,7 +316,41 @@ async function verifyCompanyFxHistory(route, origin) {
   return { readVerified: true, writeDenied: true };
 }
 
-async function browserRun({ origin, manifest, credentials, normal, modules, env, browserFactory, diagnostic, historyRequired }) {
+async function verifySupplierBucketRoutes(route, origin, normal) {
+  const probes = [
+    { action: 'Read', status: normal ? 409 : 403,
+      codes: normal ? ['XERO_SUPPLIER_FINANCIAL_WORKFLOW_INVALID'] : ['FCOS_CI_READ_ONLY'] },
+    ...['Preview', 'Apply'].map(action => ({ action, status: 403,
+      codes: normal ? ['FCOS_DEPLOYMENT_READ_ONLY'] : ['FCOS_DEPLOYMENT_READ_ONLY', 'FCOS_CI_READ_ONLY'] })),
+  ];
+  // An empty body cannot identify a review or select a financial operation.
+  await Promise.all(probes.map(async ({ action, status, codes }) => {
+    const url = `${origin}/api/functions/xeroSupplierFinancialBucket${action}`;
+    let response;
+    try {
+      response = await route.fetch({ url, method: 'POST', postData: '{}', maxRedirects: 0, maxRetries: 0, timeout: 10000 });
+      requireFact(response.url() === url && response.status() === status && codes.includes((await response.json()).code),
+        'SMOKE_SUPPLIER_BUCKET_ROUTE_BOUNDARY_FAILED');
+    } finally { await response?.dispose(); }
+  }));
+  return true;
+}
+
+async function verifyGroupedPetroleumRoutes(route, origin, normal) {
+  for (const action of ['Preview', 'Run']) {
+    const url = `${origin}/api/functions/xeroFinancialDocumentPreservation${action}`;
+    let response;
+    try {
+      response = await route.fetch({ url, method: 'POST', postData: '{}', maxRedirects: 0, maxRetries: 0, timeout: 10000 });
+      const code = (await response.json()).code;
+      requireFact(response.url() === url && response.status() === 403
+        && (code === 'FCOS_DEPLOYMENT_READ_ONLY' || !normal && code === 'FCOS_CI_READ_ONLY'), 'SMOKE_GROUPED_PETROLEUM_WRITE_NOT_DENIED');
+    } finally { await response?.dispose(); }
+  }
+  return true;
+}
+
+async function browserRun({ origin, manifest, credentials, normal, modules, env, browserFactory, diagnostic, historyRequired, supplierBucketRequired, groupedPetroleumRequired }) {
   async function checkModule(module, surface, check) {
     const start = performance.now();
     let receipt, code;
@@ -323,7 +363,7 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
     return receipt;
   }
   let phase = 'SETUP';
-  let browser, context, privateEnv, readNormalModules, companyFxHistory, cleanupFailed = false;
+  let browser, context, privateEnv, readNormalModules, companyFxHistory, supplierBucketVerified, groupedPetroleumVerified, cleanupFailed = false;
   let denialReceipts = [], extraReads = [], desktopChecks = [], authProbed = false, probeError, rejectProbe, resolveProbe;
   const probeFailure = new Promise((_, reject) => { rejectProbe = reject; });
   probeFailure.catch(() => {});
@@ -351,6 +391,8 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
         const authorization = await actual.json();
         assertIdentity(authorization, credentials, normal, modules);
         requireFact(!normal || authorization.workspacePreferences?.initialized !== false, 'NORMAL_ROLE_PREFERENCES_REQUIRE_INITIALIZATION');
+        if (supplierBucketRequired) supplierBucketVerified = await verifySupplierBucketRoutes(route, origin, normal);
+        if (groupedPetroleumRequired) groupedPetroleumVerified = await verifyGroupedPetroleumRoutes(route, origin, normal);
         if (!normal) denialReceipts = await denialProbes(route, origin);
         else {
           // No bearer extraction: all reads inherit this app-owned request in
@@ -432,7 +474,7 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
     if (normal && diagnostic?.desktop !== false) for (const module of modules.filter(value => !baselineModules.includes(value)
       && (!diagnostic?.desktopModules || diagnostic.desktopModules.includes(value)))) {
       phase = `DESKTOP_${module.toUpperCase()}`;
-      const receipt = await checkModule(module, 'desktop', () => verifyModuleDesktop({ page, origin, module }));
+      const receipt = await checkModule(module, 'desktop', () => verifyModuleDesktop({ page, origin, module, groupedPetroleumRequired }));
       if (receipt) desktopChecks.push(receipt);
     }
     if (!normal) {
@@ -445,7 +487,8 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
     }
     gate.assertHealthy();
     return { role: credentials.role, requiredModules: unique(modules), modules: unique(reads.map(read => read.module)), reads, desktopChecks, denialReceipts,
-      ...gate.summary(), candidateSha: manifest.candidate.sha, ...(companyFxHistory ? { companyFxHistory } : {}) };
+      ...gate.summary(), candidateSha: manifest.candidate.sha, ...(companyFxHistory ? { companyFxHistory } : {}),
+      ...(supplierBucketVerified ? { supplierBucketVerified } : {}), ...(groupedPetroleumVerified ? { groupedPetroleumVerified } : {}) };
   } catch (error) {
     const cause = probeError || error;
     const failure = fail(/^(?:SMOKE_|NORMAL_ROLE_)[A-Z0-9_]+$/.test(cause?.code || '') ? cause.code : `SMOKE_BROWSER_${phase}_FAILED`);
@@ -524,16 +567,26 @@ async function stagedSmoke({ manifest, staged, env = process.env, fetchImpl = fe
   const ci = credentialsFor(env, false);
   const normal = manifest.selection?.normalRole === true ? credentialsFor(env, true) : null;
   const historyRequired = afterPrerequisites && requiresCompanyFxHistorySmoke(manifest);
+  const supplierBucketRequired = requiresSupplierBucketSmoke(manifest);
+  const groupedPetroleumRequired = requiresGroupedPetroleumSmoke(manifest);
   requireFact(!historyRequired || normal?.role === 'general_manager', 'SMOKE_COMPANY_FX_HISTORY_GM_REQUIRED');
+  requireFact(!supplierBucketRequired || normal && normalModules.includes('xero_portal'), 'SMOKE_SUPPLIER_BUCKET_NORMAL_ROLE_REQUIRED');
+  requireFact(!groupedPetroleumRequired || normal && normalModules.includes('xero_portal'), 'SMOKE_GROUPED_PETROLEUM_NORMAL_ROLE_REQUIRED');
   requireFact(!normalModules.includes('admin') || normal?.role === 'general_manager', 'NORMAL_ROLE_ADMIN_REQUIRES_APPROVED_GM');
   requireFact(!env.FCOS_E2E_VERCEL_BYPASS || /^[a-zA-Z0-9]{32}$/.test(env.FCOS_E2E_VERCEL_BYPASS), 'SMOKE_PROTECTION_CREDENTIAL_INVALID');
   await verifyIdentity(origin, manifest, fetchImpl, env.FCOS_E2E_VERCEL_BYPASS);
   const launch = browserFactory || (async options => (await import('@playwright/test')).chromium.launch(options));
-  const restricted = await browserRun({ origin, manifest, credentials: ci, normal: false, modules: baselineModules, env, browserFactory: launch });
-  const ordinary = normal ? await browserRun({ origin, manifest, credentials: normal, normal: true, modules: normalModules, env, browserFactory: launch, diagnostic, historyRequired }) : null;
+  const restricted = await browserRun({ origin, manifest, credentials: ci, normal: false, modules: baselineModules, env, browserFactory: launch, supplierBucketRequired, groupedPetroleumRequired });
+  const ordinary = normal ? await browserRun({ origin, manifest, credentials: normal, normal: true, modules: normalModules, env, browserFactory: launch,
+    diagnostic, historyRequired, supplierBucketRequired, groupedPetroleumRequired }) : null;
   return { passed: true, deploymentId: staged.id, buildId: staged.buildId, login: true, restrictedAccess: true, businessWrites: 0,
     modules: unique([...restricted.modules, ...(ordinary?.modules || [])]), restrictedEvidence: restricted,
     ...(ordinary ? { normalRole: true, normalRoleEvidence: ordinary } : {}),
+    ...(supplierBucketRequired ? { supplierBucket: { restrictedVerified: restricted.supplierBucketVerified === true,
+      normalVerified: ordinary?.supplierBucketVerified === true } } : {}),
+    ...(groupedPetroleumRequired ? { groupedPetroleum: { restrictedVerified: restricted.groupedPetroleumVerified === true,
+      normalVerified: ordinary?.groupedPetroleumVerified === true,
+      desktopVerified: ordinary?.desktopChecks.some(check => check.groupedPetroleumControl === true) === true } } : {}),
     ...(ordinary?.companyFxHistory ? { companyFxHistory: ordinary.companyFxHistory } : {}) };
 }
 
