@@ -119,3 +119,20 @@ test('browser installers run from each job’s trusted controller checkout', () 
   assert.equal(installer['working-directory'] || '.', checkout.with.path || '.');
  }
 });
+
+test('Trading FX database credentials are confined to the exact combined prerequisite at go-live', () => {
+  const names = ['FCOS_RAPID_TRADING_FX_DB_ACCESS_TOKEN', 'FCOS_RAPID_TRADING_FX_GH_OWNER_TOKEN'];
+  for (const [name, job] of Object.entries(workflow.jobs)) {
+    const matching = job.steps.filter(step => names.some(key => Object.hasOwn(step.env || {}, key)));
+    if (name !== 'go-live') {
+      assert.deepEqual(matching, []);
+      continue;
+    }
+    assert.equal(job.environment.name, 'fcos-production-release');
+    assert.equal(matching.length, 1);
+    const [step] = matching;
+    assert.match(step.run, /scripts\/rapid-release\.mjs promote/);
+    assert.ok(job.steps.indexOf(step) > job.steps.findIndex(item => item.id === 'admit-controller'));
+    for (const key of names) assert.match(step.env[key], /selection\.database && fromJSON\(inputs\.manifest_json\)\.selection\.salesforce && .*prerequisites\.adapter == 'trading-fx-prerequisites'/);
+  }
+});

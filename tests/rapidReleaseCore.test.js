@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createManifest, digest, selectChecks, targets, publicBuildEnvironment } from '../scripts/lib/rapid-release/contract.mjs';
 import { MemoryJournal, validateChain, assertPublicPayload, DeploymentJournal } from '../scripts/lib/rapid-release/journal.mjs';
-import { stageRelease, promoteRelease } from '../scripts/lib/rapid-release/engine.mjs';
+import { assertPreBootstrapProof, stageRelease, promoteRelease } from '../scripts/lib/rapid-release/engine.mjs';
 import { selectedProductTests } from '../scripts/lib/rapid-release/build.mjs';
 
 const sha = 'a'.repeat(40), h = 'b'.repeat(64);
@@ -289,12 +289,14 @@ test('Company FX promotion requires history readback and can resume without reap
 for (const [adapter, field, errorCode] of [
   ['supplier-bucket-migrations', 'supplierBucket', 'SMOKE_SUPPLIER_BUCKET_ROUTE_BOUNDARY_FAILED'],
   ['grouped-petroleum-migration', 'groupedPetroleum', 'SMOKE_GROUPED_PETROLEUM_BOUNDARY_REQUIRED'],
+  ['trading-fx-prerequisites', 'tradingFx', 'SMOKE_TRADING_FX_BOUNDARY_REQUIRED'],
 ]) test(`${adapter} requires both staging proofs and reuses a successful database operation`, async () => {
   const f = fixture();
+  const tradingFx = adapter === 'trading-fx-prerequisites';
   f.manifest = createManifest({ candidate: f.manifest.candidate, controllerSha: f.manifest.controllerSha,
-    previous: f.manifest.previous, paths: ['supabase/migrations/20990101000000_fixture.sql'],
+    previous: f.manifest.previous, paths: [...(tradingFx ? ['force-app/main/default/classes/Fixture.cls'] : []), 'supabase/migrations/20990101000000_fixture.sql'],
     publicEnvironment: f.manifest.build.publicEnvironment, releaseId: f.manifest.releaseId,
-    prerequisites: { adapter, adapterDigest: h, plan: {} } });
+    prerequisites: { adapter, adapterDigest: h, plan: tradingFx ? { xeroQualificationDeploymentId: 17, xeroQualificationDigest: h } : {} } });
   f.approval.manifestHash = digest(f.manifest);
   const originalSmoke = f.smoke;
   let stageVerified = false, postVerified = false, applications = 0;
@@ -313,4 +315,21 @@ for (const [adapter, field, errorCode] of [
   assert.equal((await promoteRelease(f)).state, 'complete');
   assert.equal(applications, 1);
   assert.equal(f.calls.filter(call => call === 'promote').length, 1);
+});
+
+test('Trading FX preserves required role and desktop evidence on the pre-bootstrap receipt', () => {
+  const f = fixture();
+  const manifest = { ...f.manifest, selection: { ...f.manifest.selection, database: true, salesforce: true,
+    normalRole: true, modules: ['dashboard', 'markets', 'xero_portal', 'buyer_invoices'] },
+  prerequisites: { adapter: 'trading-fx-prerequisites', plan: {
+    deferSchemaDependentSmoke: true, bootstrapFingerprint: h, deferredModules: ['buyer_invoices'],
+  } } };
+  const proof = { passed: true, mode: 'pre_bootstrap', manifestHash: digest(manifest), deploymentId: f.staged.id,
+    buildId: f.build.buildId, isolationVerified: true, businessWrites: 0, normalRole: true, bootstrapFingerprint: h,
+    deferredChecks: ['buyer_invoices'], completedChecks: ['runtime_identity', 'authenticated_login', 'authentication_denials', 'request_isolation'],
+    completedModules: ['dashboard', 'markets', 'xero_portal'] };
+  assert.throws(() => assertPreBootstrapProof(proof, manifest, f.staged), { code: 'SMOKE_TRADING_FX_BOUNDARY_REQUIRED' });
+  assert.doesNotThrow(() => assertPreBootstrapProof({ ...proof, tradingFx: {
+    restrictedVerified: true, normalVerified: true, desktopVerified: true,
+  } }, manifest, f.staged));
 });

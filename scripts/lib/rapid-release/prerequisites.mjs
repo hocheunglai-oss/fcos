@@ -1,7 +1,7 @@
 import { readFileSync, realpathSync } from 'node:fs';
 import { resolve, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { assertAuthorization, digest, git, isDigest, requireCondition, sourceSnapshot } from './contract.mjs';
+import { assertAuthorization, digest, git, isDigest, requireCondition, requiresTradingFxSmoke, sourceSnapshot } from './contract.mjs';
 import { assertPreBootstrapProof } from './engine.mjs';
 import { FCOS_CONNECTION_POLICY } from '../../../config/fcosConnections.js';
 
@@ -134,5 +134,6 @@ export async function verifyBeforeBootstrap({ manifest, staged, controllerDirect
   return { passed: true, mode: 'pre_bootstrap', deploymentId: proof.deploymentId, buildId: proof.buildId,
     manifestHash: proof.manifestHash, isolationVerified: true, businessWrites: 0,
     completedChecks: proof.completedChecks, completedModules: proof.completedModules, deferredChecks: proof.deferredChecks,
-    bootstrapFingerprint: descriptor.plan.bootstrapFingerprint, ...(proof.normalRole === true ? { normalRole: true } : {}) };
+    bootstrapFingerprint: descriptor.plan.bootstrapFingerprint, ...(proof.normalRole === true ? { normalRole: true } : {}),
+    ...(requiresTradingFxSmoke(manifest) ? { tradingFx: { restrictedVerified: true, normalVerified: true, desktopVerified: true } } : {}) };
 }
