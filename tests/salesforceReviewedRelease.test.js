@@ -934,7 +934,7 @@ test('native bootstrap stages only exact reviewed files in a temporary project',
       assert.equal(args[args.indexOf('--test-level') + 1], 'NoTestRun');
       assert.equal(args[args.indexOf('--target-org') + 1], policy.environments[0].alias);
       assert.notEqual(project, cwd);
-      assert.ok(args.includes('--single-package'));
+      assert.ok(!args.includes('--single-package'));
       const converted = args[args.indexOf('--metadata-dir') + 1];
       assert.deepEqual(readFileSync(path.join(converted, 'package.xml')), f.inputs.bootstrapBytes);
       const staged = path.join(project, policy.publication.sourceRoot);
@@ -1011,7 +1011,7 @@ test('native validation submits only the verified metadata package with the revi
       assert.equal(args[args.indexOf('--metadata-dir') + 1], payload);
       assert.equal(args[args.indexOf('--test-level') + 1], 'RunSpecifiedTests');
       assert.equal(args[args.indexOf('--tests') + 1], 'ExampleTest');
-      assert.ok(args.includes('--single-package') && !args.includes('--manifest'));
+      assert.ok(!args.includes('--single-package') && !args.includes('--manifest'));
       assert.notEqual(project, cwd);
       return { id: jobId(98) };
     } });
