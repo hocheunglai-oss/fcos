@@ -99,7 +99,6 @@ test('ordinary promotion retains staging browsers and installs go-live browsers 
  assert.equal(stage.if,undefined);
  assert.equal(promotion.run,stage.run);
  assert.equal(promotion['timeout-minutes'],stage['timeout-minutes']);
- assert.equal(promotion['working-directory'],stage['working-directory']);
  assert.equal(promotion.if,'fromJSON(inputs.manifest_json).selection.salesforce || fromJSON(inputs.manifest_json).selection.database');
  assert.equal(qualification.if,"inputs.mode == 'qualify'");
  assert.equal(qualification['working-directory'],stage['working-directory']);
@@ -107,5 +106,16 @@ test('ordinary promotion retains staging browsers and installs go-live browsers 
   assert.equal(step.run,stage.run);
   assert.equal(step['timeout-minutes'],stage['timeout-minutes']);
   assert.equal(step.env,undefined);
+ }
+});
+
+test('browser installers run from each job’s trusted controller checkout', () => {
+ for (const job of Object.values(workflow.jobs)) {
+  const installer = job.steps.find(step => step.run === 'bash scripts/rapid-release-browser.sh');
+  const checkout = job.steps.find(step => step.uses?.startsWith('actions/checkout@')
+   && /controllerSha|controller_sha/.test(step.with?.ref || ''));
+  assert.ok(installer && checkout);
+  assert.ok(job.steps.indexOf(checkout) < job.steps.indexOf(installer));
+  assert.equal(installer['working-directory'] || '.', checkout.with.path || '.');
  }
 });

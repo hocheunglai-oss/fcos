@@ -299,7 +299,6 @@ jobs:
         if: fromJSON(inputs.manifest_json).selection.salesforce || fromJSON(inputs.manifest_json).selection.database
         run: bash scripts/rapid-release-browser.sh
         timeout-minutes: 4
-        working-directory: controller
       - name: Reuse frozen release manifest
         env:
           FCOS_RAPID_MANIFEST: ${{ inputs.manifest_json }}
