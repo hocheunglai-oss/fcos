@@ -23,13 +23,14 @@ async function readSchemaDigest(db, check) {
 
 export async function runReviewedMigrationTransaction({
   db, migrationBytes, mode, operationDigest, baselineSchemaDigest, assertConnection, assertWriteAuthorized,
-}, { reviewedMigrations, readCatalog, errorPrefix }) {
+}, { reviewedMigrations, readCatalog, errorPrefix, schemaEffect = 'change' }) {
   const check = (condition, code) => requireCondition(condition, `${errorPrefix}_${code}`);
   const migrations = bindMigrations(migrationBytes, reviewedMigrations, check);
   check((mode === 'apply' || mode === 'readback') && isDigest(operationDigest)
     && isDigest(baselineSchemaDigest) && typeof assertConnection === 'function'
     && (mode === 'readback' || typeof assertWriteAuthorized === 'function'),
   'OPERATION_BINDING_REQUIRED');
+  check(schemaEffect === 'change' || schemaEffect === 'preserve', 'SCHEMA_EFFECT_INVALID');
 
   await db.query('begin isolation level read committed');
   let commitSubmitted = false;
@@ -61,7 +62,8 @@ export async function runReviewedMigrationTransaction({
           return row.version === version && row.name === name && row.idempotency_key === `${operationDigest}:${schemaDigest}`
             && Array.isArray(row.statements) && row.statements.length === 1 && row.statements[0] === sql;
         });
-        check(sameOperation && catalog.state === 'migrated', 'ORIGINAL_OPERATION_MISMATCH');
+        check(sameOperation && catalog.state === 'migrated'
+          && (schemaEffect !== 'preserve' || schemaDigest === baselineSchemaDigest), 'ORIGINAL_OPERATION_MISMATCH');
         state = 'recovered';
       }
       await db.query('rollback');
@@ -73,7 +75,11 @@ export async function runReviewedMigrationTransaction({
       check(catalog.state === 'migrated', 'MIGRATED_SCHEMA_REQUIRED');
       await db.query("select set_config('search_path',$1,true)", [originalSearchPath]);
       schemaDigest = await readSchemaDigest(db, check);
-      check(schemaDigest !== baselineSchemaDigest, 'SCHEMA_UNCHANGED');
+      if (schemaEffect === 'preserve') {
+        check(schemaDigest === baselineSchemaDigest, 'SCHEMA_CHANGED');
+      } else {
+        check(schemaDigest !== baselineSchemaDigest, 'SCHEMA_UNCHANGED');
+      }
       for (const { version, name, sql } of migrations) {
         await db.query(writeLedger, [version, name, `${operationDigest}:${schemaDigest}`, [sql]]);
       }

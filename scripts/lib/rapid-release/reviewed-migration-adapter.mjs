@@ -6,7 +6,10 @@ import { githubClient } from './providers.mjs';
 const submissionEvent = 'prerequisites.database_submitting';
 const writerIdentity = "select session_user,current_user,current_database() as database,current_setting('transaction_read_only') as read_only";
 
-export function reviewedMigrationAdapter({ migrations, workflowPaths, transactMigration, errorPrefix, credentialsPrefix, purpose }) {
+export function reviewedMigrationAdapter({
+  migrations, workflowPaths, transactMigration, errorPrefix, credentialsPrefix, purpose,
+  requiredModule = 'xero_portal',
+}) {
   const expectedPlan = { migrations };
   const reviewedPaths = migrations.map(({ path }) => path);
   const check = (condition, code) => requireCondition(condition, `${errorPrefix}_${code}`);
@@ -31,7 +34,7 @@ export function reviewedMigrationAdapter({ migrations, workflowPaths, transactMi
     const manifestHash = digest(manifest);
     check(digest(plan) === digest(expectedPlan) && manifest.selection.database === true
       && manifest.selection.salesforce === false && manifest.selection.normalRole === true && isSha(manifest.candidate.sha)
-      && manifest.selection.modules.includes('xero_portal')
+      && manifest.selection.modules.includes(requiredModule)
       && workflowPaths.every(path => manifest.paths.includes(path))
       && digest(manifest.paths.filter(path => path.startsWith('supabase/migrations/'))) === digest(reviewedPaths),
     'REVIEWED_PLAN_MISMATCH');

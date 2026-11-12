@@ -51,6 +51,15 @@
       "salesforce": false,
       "database": true,
       "databaseWrite": true
+    },
+    {
+      "id": "outlook-filing-access",
+      "status": "qualified",
+      "sourceDigest": "a23ac61ebd6d353090c6a9ea96433cd92d34446e325ff90e9010ec9544c5bc74",
+      "path": "scripts/lib/rapid-release/outlook-filing-adapter.mjs",
+      "salesforce": false,
+      "database": true,
+      "databaseWrite": true
     }
   ]
 }
