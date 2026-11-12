@@ -225,7 +225,8 @@ jobs:
     needs: stage-and-smoke
     if: inputs.mode != 'qualify' && vars.FCOS_RAPID_RELEASE_ENABLED == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # Salesforce promotion serializes three validations and the live observation.
+    timeout-minutes: ${{ fromJSON(inputs.manifest_json).selection.salesforce == true && 45 || 20 }}
     environment:
       name: fcos-production-release
     permissions:
