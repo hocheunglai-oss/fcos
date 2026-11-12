@@ -8,7 +8,7 @@ import { runReviewedMirror } from './sync-salesforce-reviewed-repository.mjs';
 import { assertAuthorization, digest, git, requireCondition, sourceSnapshot, targets, validateManifest } from './lib/rapid-release/contract.mjs';
 import { DeploymentJournal } from './lib/rapid-release/journal.mjs';
 import { assertFrozenWorkflow, assertPermanentHandover, nativeWorkflowPath } from './lib/rapid-release/providers.mjs';
-import { createLocalMirrorReceipt, recordLocalMirrorDeployment, verifyLocalMirrorRequest } from './lib/rapid-release/local-mirror-handoff.mjs';
+import { createLocalMirrorReceipt, recordLocalMirrorDeployment, usesLocalCollaboratorMirror, verifyLocalMirrorRequest } from './lib/rapid-release/local-mirror-handoff.mjs';
 
 const policy = FCOS_CONNECTION_POLICY.providers.find(provider => provider.id === 'salesforce');
 const { publication } = policy;
@@ -39,8 +39,8 @@ async function main() {
   const manifest = JSON.parse(readFileSync(manifestFile, 'utf8'));
   const manifestHash = validateManifest(manifest);
   const plan = manifest.prerequisites?.plan;
-  requireCondition(manifest.selection.salesforce && !manifest.selection.database
-    && plan?.mirrorPublication === 'local-collaborator' && git(process.cwd(), ['rev-parse', 'HEAD']) === manifest.controllerSha
+  requireCondition(usesLocalCollaboratorMirror(manifest)
+    && git(process.cwd(), ['rev-parse', 'HEAD']) === manifest.controllerSha
     && !git(process.cwd(), ['status', '--porcelain', '--untracked-files=normal']), 'LOCAL_MIRROR_CONTROLLER_MISMATCH');
   const cwd = resolve(candidateDirectory);
   const source = sourceSnapshot(cwd);

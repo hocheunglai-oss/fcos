@@ -13,6 +13,15 @@ const sha = value => typeof value === 'string' && /^[a-f0-9]{40}$/u.test(value);
 const positiveId = value => Number.isSafeInteger(value) && value > 0;
 const salesforceJob = value => typeof value === 'string' && /^0Af[A-Za-z0-9]{12}(?:[A-Za-z0-9]{3})?$/u.test(value);
 
+export function usesLocalCollaboratorMirror(manifest) {
+  const { selection, prerequisites } = manifest;
+  const adapter = prerequisites?.adapter;
+  return prerequisites?.plan?.mirrorPublication === 'local-collaborator'
+    && selection?.salesforce === true
+    && ((selection.database === false && adapter === 'salesforce-reviewed-manifest')
+      || (selection.database === true && adapter === 'trading-fx-prerequisites'));
+}
+
 export function createLocalMirrorRequest({ manifest, approval, reviewed, deployment, runAttempt, intentHash, expiresAt, mode = 'publish', sequence = 1, now = Date.now() }) {
   const manifestHash = digest(manifest);
   const deadline = Date.parse(expiresAt);
