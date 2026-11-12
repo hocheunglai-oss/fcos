@@ -7,7 +7,7 @@ import { runReviewedMigrationTransaction } from '../scripts/lib/rapid-release/re
 const baselineSchemaDigest = 'a'.repeat(64);
 const migratedSchemaDigest = 'b'.repeat(64);
 const operationDigest = 'c'.repeat(64);
-const sql = 'create table public.fixture(id integer);\n';
+const sql = 'begin;\n\ncreate table public.fixture(id integer);\n\ncommit;\n';
 
 function fixture(source = sql, { changesSchema = true } = {}) {
   const path = 'supabase/migrations/20261111180108_fixture.sql';
@@ -23,7 +23,7 @@ function fixture(source = sql, { changesSchema = true } = {}) {
       }
       if (query.startsWith('select version')) return { rows: ledger };
       if (query === 'show search_path') return { rows: [{ search_path: 'public' }] };
-      if (query === source) migrated = true;
+      if (query === source.slice('begin;\n'.length, -'\ncommit;\n'.length)) migrated = true;
       if (query.startsWith('insert into supabase_migrations')) {
         const [version, name, idempotency_key, statements] = values;
         ledger = [{ version, name, idempotency_key, statements }];
@@ -33,15 +33,40 @@ function fixture(source = sql, { changesSchema = true } = {}) {
   };
   const input = { db, migrationBytes, mode: 'apply', operationDigest, baselineSchemaDigest,
     assertConnection: async () => {}, assertWriteAuthorized: async () => {} };
-  const options = { reviewedMigrations: [{ path, digest: digest(migrationBytes[0]) }],
+  const options = { reviewedMigrations: [{ path, digest: digest(migrationBytes[0]), transactionEnvelope: true }],
     errorPrefix: 'FIXTURE', readCatalog: async () => ({
       state: migrated ? 'migrated' : 'baseline', evidenceDigest: migrated ? migratedSchemaDigest : baselineSchemaDigest,
     }) };
   return { input, options, calls };
 }
 
+test('reviewed standalone SQL keeps its original ledger bytes inside one controller transaction', async () => {
+  const { input, options, calls } = fixture();
+  const applied = await runReviewedMigrationTransaction(input, options);
+  assert.equal(applied.state, 'applied');
+  assert.deepEqual(calls.filter(({ query }) => query.includes('create table')).map(({ query }) => query),
+    ['\ncreate table public.fixture(id integer);\n']);
+  assert.deepEqual(calls.find(({ query }) => query.startsWith('insert into supabase_migrations')).values.at(-1), [sql]);
+  assert.equal(calls.filter(({ query }) => query === 'commit').length, 1);
+  calls.length = 0;
+  const recovered = await runReviewedMigrationTransaction({ ...input, mode: 'readback' }, options);
+  assert.equal(recovered.state, 'recovered');
+  assert.equal(recovered.evidenceDigest, applied.evidenceDigest);
+  assert.equal(calls.some(({ query }) => /create table|^insert into/.test(query)), false);
+});
+
+test('malformed or modified wrapped SQL is rejected before a database call', async () => {
+  const malformed = fixture(sql.replace('commit;', 'rollback;'));
+  await assert.rejects(runReviewedMigrationTransaction(malformed.input, malformed.options), { code: 'FIXTURE_MIGRATION_ENVELOPE_INVALID' });
+  assert.deepEqual(malformed.calls, []);
+  const changed = fixture();
+  changed.input.migrationBytes[0] = Buffer.from(sql + '\n');
+  await assert.rejects(runReviewedMigrationTransaction(changed.input, changed.options), { code: 'FIXTURE_MIGRATION_BYTES_CHANGED' });
+  assert.deepEqual(changed.calls, []);
+});
+
 test('catalog registration preserves the schema through apply and original-operation readback', async () => {
-  const registration = 'insert into public.fixture values (1);\n';
+  const registration = 'begin;\n\ninsert into public.fixture values (1);\n\ncommit;\n';
   const { input, options, calls } = fixture(registration, { changesSchema: false });
   options.schemaEffect = 'preserve';
   const applied = await runReviewedMigrationTransaction(input, options);

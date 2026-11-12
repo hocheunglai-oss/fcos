@@ -33,7 +33,8 @@ export async function reviewedDeveePublicationProof({ plan, state, policy = POLI
     baselineInventoryHash: deveeBaseline?.inventoryHash || plan.binding.baselineInventoryHash, manifestSha256: plan.binding.manifestSha256,
     fingerprint: plan.fingerprint, deploymentJobId: stage.deployment.jobId, verifiedAt: receipt.verifiedAt,
     ...(expected.nativeExport ? { nativeInventoryHash: receipt.inventoryHash, nativeSourceTreeHash: receipt.nativeSourceTreeHash,
-      nativeEvidenceSha256: receipt.evidenceSha256 } : {}) };
+      nativeEvidenceSha256: receipt.evidenceSha256,
+      ...(expected.projectedNativeInventory ? { observedNativeInventoryHash: receipt.observedNativeInventoryHash } : {}) } : {}) };
 }
 
 export async function main(argv = process.argv.slice(2), { cwd = ROOT, policy = POLICY } = {}) {

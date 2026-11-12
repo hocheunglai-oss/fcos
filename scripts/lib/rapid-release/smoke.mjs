@@ -8,7 +8,7 @@ import { READ_ONLY_CI_HANDLERS, isReadOnlyMarketAction, CI_DENIAL_PROBES } from 
 import { canonicalFcosE2eCandidateUrl } from '../../verify-e2e-candidate.mjs';
 import { candidateAuthenticationState, writePrivateE2eState, removePrivateE2eState } from '../../e2e-private-state.mjs';
 import { candidateProtectionState } from '../../e2e-protection-state.mjs';
-import { digest, requiresCompanyFxHistorySmoke, requiresSupplierBucketSmoke, requiresGroupedPetroleumSmoke } from './contract.mjs';
+import { digest, requiresCompanyFxHistorySmoke, requiresSupplierBucketSmoke, requiresGroupedPetroleumSmoke, requiresTradingFxSmoke } from './contract.mjs';
 import { MODULE_READERS as moduleReaders, MODULE_SURFACES, NORMAL_NAVIGATION_READS, moduleReadBody, moduleReaderPayloadVerified as modulePayloadVerified } from './normal-role-readers.mjs';
 
 const issuer = new URL(FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation.issuer).origin;
@@ -249,7 +249,7 @@ async function denialProbes(route, origin) {
   return receipts;
 }
 
-async function verifyModuleDesktop({ page, origin, module, groupedPetroleumRequired }) {
+async function verifyModuleDesktop({ page, origin, module, groupedPetroleumRequired, tradingFxRequired }) {
   const spec = MODULE_SURFACES[module];
   requireFact(spec, 'MODULE_DESKTOP_COVERAGE_MISSING');
   await page.goto(`${origin}${spec.route}`, { waitUntil: 'domcontentloaded', timeout: 45000 });
@@ -273,6 +273,12 @@ async function verifyModuleDesktop({ page, origin, module, groupedPetroleumRequi
   try {
     if (module === 'settings') await page.getByLabel(/Annual financing rate/i).waitFor({ state: 'visible', timeout: 30000 });
     else if (module === 'xero_portal') {
+      if (tradingFxRequired) {
+        await page.getByRole('tab', { name: 'Accounting', exact: true }).click();
+        const panel = page.getByRole('region', { name: 'Trading FX document review', exact: true });
+        await panel.waitFor({ state: 'visible', timeout: 15000 });
+        requireFact(await panel.getByRole('button').count() === 0, 'SMOKE_TRADING_FX_DESKTOP_ACTION_VISIBLE');
+      }
       await page.getByRole('tab', { name: 'Receipts', exact: true }).click();
       await page.locator('[aria-label="Receipt audit"] tbody tr').first().waitFor({ state: 'visible', timeout: 30000 });
     }
@@ -290,11 +296,15 @@ async function verifyModuleDesktop({ page, origin, module, groupedPetroleumRequi
       const empty = page.getByText(/No (?:records|rows|items|invoices|payments|receipts|messages|contracts|terms|trades|positions|data|STEMs|matching|Accounts|Dispute Workflow|forecast rows)(?:\b)/i);
       await surface.or(empty).first().waitFor({ state: 'visible', timeout: 30000 });
     }
-  } catch { throw fail('SMOKE_MODULE_DESKTOP_CONTENT_MISSING'); }
+  } catch (error) {
+    if (module === 'xero_portal' && tradingFxRequired && error?.code === 'SMOKE_TRADING_FX_DESKTOP_ACTION_VISIBLE') throw error;
+    throw fail('SMOKE_MODULE_DESKTOP_CONTENT_MISSING');
+  }
   const body = await page.locator('body').innerText();
   requireFact(!/Access denied|Something went wrong|temporarily unavailable|could not (?:load|read|verify)|No validator data loaded|Loading Hedge Desk/i.test(body), 'SMOKE_MODULE_DESKTOP_INCOMPLETE');
   return { module, route: spec.route, rendered: true, dataSource: moduleReaders[module].path, businessSurface: true,
     ...(module === 'xero_portal' && groupedPetroleumRequired ? { groupedPetroleumControl: true } : {}),
+    ...(module === 'xero_portal' && tradingFxRequired ? { tradingFxPanel: true } : {}),
     ...(spec.readControl ? { readControl: spec.readControl } : {}) };
 }
 
@@ -367,7 +377,29 @@ async function browserBaselineResponse(page, origin, module, reader) {
   }
 }
 
-async function browserRun({ origin, manifest, credentials, normal, modules, env, browserFactory, diagnostic, historyRequired, supplierBucketRequired, groupedPetroleumRequired }) {
+export const TRADING_FX_STAGED_DENIAL_HANDLERS = Object.freeze([
+  'xeroFinancialSyncPreview', 'xeroFinancialPaymentApply',
+  'xeroNativeDocumentApply', 'xeroNativeDocumentReconcile', 'xeroNativeDocumentRecoveryQueue',
+  'xeroPrepaymentPreview', 'xeroPrepaymentApply', 'xeroPrepaymentReconcile', 'xeroPrepaymentPolicySave',
+  'xeroCreditAllocationPreview', 'xeroCreditAllocationApply', 'xeroCreditAllocationReconcile', 'xeroCreditAllocationRecoveryQueue',
+]);
+
+async function verifyTradingFxRoutes(route, origin, normal) {
+  const results = await Promise.allSettled(TRADING_FX_STAGED_DENIAL_HANDLERS.map(async handler => {
+    const url = `${origin}/api/functions/${handler}`;
+    let response;
+    try {
+      response = await route.fetch({ url, method: 'POST', postData: '{}', maxRedirects: 0, maxRetries: 0, timeout: 10000 });
+      const { code } = await response.json();
+      requireFact(response.url() === url && response.status() === 403
+        && (code === 'FCOS_DEPLOYMENT_READ_ONLY' || !normal && code === 'FCOS_CI_READ_ONLY'), 'SMOKE_TRADING_FX_ROUTE_NOT_DENIED');
+    } finally { await response?.dispose(); }
+  }));
+  requireFact(results.every(result => result.status === 'fulfilled'), 'SMOKE_TRADING_FX_ROUTE_NOT_DENIED');
+  return true;
+}
+
+async function browserRun({ origin, manifest, credentials, normal, modules, env, browserFactory, diagnostic, historyRequired, supplierBucketRequired, groupedPetroleumRequired, tradingFxRequired }) {
   async function checkModule(module, surface, check) {
     const start = performance.now();
     let receipt, code;
@@ -380,7 +412,7 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
     return receipt;
   }
   let phase = 'SETUP';
-  let browser, context, privateEnv, readNormalModules, companyFxHistory, supplierBucketVerified, groupedPetroleumVerified, cleanupFailed = false;
+  let browser, context, privateEnv, readNormalModules, companyFxHistory, supplierBucketVerified, groupedPetroleumVerified, tradingFxVerified, cleanupFailed = false;
   let denialReceipts = [], extraReads = [], desktopChecks = [], authProbed = false, probeError, rejectProbe, resolveProbe;
   const probeFailure = new Promise((_, reject) => { rejectProbe = reject; });
   probeFailure.catch(() => {});
@@ -410,6 +442,7 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
         requireFact(!normal || authorization.workspacePreferences?.initialized !== false, 'NORMAL_ROLE_PREFERENCES_REQUIRE_INITIALIZATION');
         if (supplierBucketRequired) supplierBucketVerified = await verifySupplierBucketRoutes(route, origin, normal);
         if (groupedPetroleumRequired) groupedPetroleumVerified = await verifyGroupedPetroleumRoutes(route, origin, normal);
+        if (tradingFxRequired) tradingFxVerified = await verifyTradingFxRoutes(route, origin, normal);
         if (!normal) denialReceipts = await denialProbes(route, origin);
         else {
           // No bearer extraction: all reads inherit this app-owned request in
@@ -499,7 +532,7 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
     if (normal && diagnostic?.desktop !== false) for (const module of modules.filter(value => !baselineModules.includes(value)
       && (!diagnostic?.desktopModules || diagnostic.desktopModules.includes(value)))) {
       phase = `DESKTOP_${module.toUpperCase()}`;
-      const receipt = await checkModule(module, 'desktop', () => verifyModuleDesktop({ page, origin, module, groupedPetroleumRequired }));
+      const receipt = await checkModule(module, 'desktop', () => verifyModuleDesktop({ page, origin, module, groupedPetroleumRequired, tradingFxRequired }));
       if (receipt) desktopChecks.push(receipt);
     }
     if (!normal) {
@@ -513,7 +546,8 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
     gate.assertHealthy();
     return { role: credentials.role, requiredModules: unique(modules), modules: unique(reads.map(read => read.module)), reads, desktopChecks, denialReceipts,
       ...gate.summary(), candidateSha: manifest.candidate.sha, ...(companyFxHistory ? { companyFxHistory } : {}),
-      ...(supplierBucketVerified ? { supplierBucketVerified } : {}), ...(groupedPetroleumVerified ? { groupedPetroleumVerified } : {}) };
+      ...(supplierBucketVerified ? { supplierBucketVerified } : {}), ...(groupedPetroleumVerified ? { groupedPetroleumVerified } : {}),
+      ...(tradingFxVerified ? { tradingFxVerified } : {}) };
   } catch (error) {
     const cause = probeError || error;
     const failure = fail(/^(?:SMOKE_|NORMAL_ROLE_)[A-Z0-9_]+$/.test(cause?.code || '') ? cause.code : `SMOKE_BROWSER_${phase}_FAILED`);
@@ -549,7 +583,8 @@ export async function runPreBootstrapSmoke(options, verifiedBootstrapFingerprint
   return { passed: true, mode: 'pre_bootstrap', deploymentId: staged.id, buildId: staged.buildId,
     manifestHash: digest(manifest), bootstrapFingerprint: verifiedBootstrapFingerprint, isolationVerified: true, businessWrites: proof.businessWrites,
     completedChecks: ['runtime_identity', 'authenticated_login', 'authentication_denials', 'request_isolation'],
-    completedModules, deferredChecks: deferred, ...(proof.normalRole === true ? { normalRole: true } : {}) };
+    completedModules, deferredChecks: deferred, ...(proof.normalRole === true ? { normalRole: true } : {}),
+    ...(proof.tradingFx ? { tradingFx: proof.tradingFx } : {}) };
 }
 
 // Diagnostics share the request guard and identity checks, but never produce
@@ -594,16 +629,19 @@ async function stagedSmoke({ manifest, staged, env = process.env, fetchImpl = fe
   const historyRequired = afterPrerequisites && requiresCompanyFxHistorySmoke(manifest);
   const supplierBucketRequired = requiresSupplierBucketSmoke(manifest);
   const groupedPetroleumRequired = requiresGroupedPetroleumSmoke(manifest);
+  const tradingFxRequired = requiresTradingFxSmoke(manifest);
   requireFact(!historyRequired || normal?.role === 'general_manager', 'SMOKE_COMPANY_FX_HISTORY_GM_REQUIRED');
   requireFact(!supplierBucketRequired || normal && normalModules.includes('xero_portal'), 'SMOKE_SUPPLIER_BUCKET_NORMAL_ROLE_REQUIRED');
   requireFact(!groupedPetroleumRequired || normal && normalModules.includes('xero_portal'), 'SMOKE_GROUPED_PETROLEUM_NORMAL_ROLE_REQUIRED');
+  requireFact(!tradingFxRequired || normal && normalModules.includes('xero_portal'), 'SMOKE_TRADING_FX_NORMAL_ROLE_REQUIRED');
   requireFact(!normalModules.includes('admin') || normal?.role === 'general_manager', 'NORMAL_ROLE_ADMIN_REQUIRES_APPROVED_GM');
   requireFact(!env.FCOS_E2E_VERCEL_BYPASS || /^[a-zA-Z0-9]{32}$/.test(env.FCOS_E2E_VERCEL_BYPASS), 'SMOKE_PROTECTION_CREDENTIAL_INVALID');
   await verifyIdentity(origin, manifest, fetchImpl, env.FCOS_E2E_VERCEL_BYPASS);
   const launch = browserFactory || (async options => (await import('@playwright/test')).chromium.launch(options));
-  const restricted = await browserRun({ origin, manifest, credentials: ci, normal: false, modules: baselineModules, env, browserFactory: launch, supplierBucketRequired, groupedPetroleumRequired });
+  const restricted = await browserRun({ origin, manifest, credentials: ci, normal: false, modules: baselineModules, env, browserFactory: launch,
+    supplierBucketRequired, groupedPetroleumRequired, tradingFxRequired });
   const ordinary = normal ? await browserRun({ origin, manifest, credentials: normal, normal: true, modules: normalModules, env, browserFactory: launch,
-    diagnostic, historyRequired, supplierBucketRequired, groupedPetroleumRequired }) : null;
+    diagnostic, historyRequired, supplierBucketRequired, groupedPetroleumRequired, tradingFxRequired }) : null;
   return { passed: true, deploymentId: staged.id, buildId: staged.buildId, login: true, restrictedAccess: true, businessWrites: 0,
     modules: unique([...restricted.modules, ...(ordinary?.modules || [])]), restrictedEvidence: restricted,
     ...(ordinary ? { normalRole: true, normalRoleEvidence: ordinary } : {}),
@@ -612,6 +650,9 @@ async function stagedSmoke({ manifest, staged, env = process.env, fetchImpl = fe
     ...(groupedPetroleumRequired ? { groupedPetroleum: { restrictedVerified: restricted.groupedPetroleumVerified === true,
       normalVerified: ordinary?.groupedPetroleumVerified === true,
       desktopVerified: ordinary?.desktopChecks.some(check => check.groupedPetroleumControl === true) === true } } : {}),
+    ...(tradingFxRequired ? { tradingFx: { restrictedVerified: restricted.tradingFxVerified === true,
+      normalVerified: ordinary?.tradingFxVerified === true,
+      desktopVerified: ordinary?.desktopChecks.some(check => check.tradingFxPanel === true) === true } } : {}),
     ...(ordinary?.companyFxHistory ? { companyFxHistory: ordinary.companyFxHistory } : {}) };
 }
 
