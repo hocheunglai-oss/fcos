@@ -61,13 +61,37 @@ if printf '%s\n' "$updates" | awk -v prefix="$review_prefix" 'index($3, prefix) 
     echo "FCOS push blocked: Salesforce review source requires the pinned FCOS repository." >&2
     exit 1
   fi
-  hook_directory="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)" || exit 1
   review_manifest="${FCOS_SALESFORCE_REVIEW_RELEASE_MANIFEST:-}"
+  case "$review_manifest" in
+    /*) ;;
+    *) echo "FCOS push blocked: Salesforce review source requires its exact verified release manifest." >&2; exit 1 ;;
+  esac
+  verifier_directory="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)" || exit 1
+  candidate_directory="$(CDPATH= cd -- "$repo_root" && pwd -P)" || exit 1
+  if [ "$verifier_directory" = "$candidate_directory" ]; then
+    echo "FCOS push blocked: Salesforce review verification must run from a separate frozen protected-main checkout." >&2
+    exit 1
+  fi
+  protected_main="$(env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$github_config_dir" gh api repos/hocheunglai-oss/fcos/branches/main --jq 'select(.protected == true and .name == "main") | .commit.sha' 2>/dev/null)" || exit 1
   git_local_environment="$(git rev-parse --local-env-vars)" || exit 1
-  if [ -z "$review_manifest" ] || ! (
-    unset $git_local_environment
+  if ! (
+    unset $git_local_environment NODE_OPTIONS NODE_PATH GH_TOKEN GITHUB_TOKEN
     export GIT_NO_REPLACE_OBJECTS=1
-    node "$hook_directory/../scripts/verify-salesforce-review-source.mjs" "$repo_root" "$review_sha" "$review_manifest"
+    cd "$verifier_directory" &&
+      [ "$(git rev-parse --show-toplevel)" = "$verifier_directory" ] &&
+      [ "$(git rev-parse --path-format=absolute --git-common-dir)" = "$git_common_dir" ] &&
+      [ -n "$protected_main" ] && [ "$(git rev-parse HEAD)" = "$protected_main" ] &&
+      ! git symbolic-ref --quiet HEAD >/dev/null &&
+      verifier_changes="$(git status --porcelain --untracked-files=normal)" && [ -z "$verifier_changes" ]
+  ); then
+    echo "FCOS push blocked: Salesforce review verification must run from a separate frozen protected-main checkout." >&2
+    exit 1
+  fi
+  if ! (
+    unset $git_local_environment NODE_OPTIONS NODE_PATH GH_TOKEN GITHUB_TOKEN
+    export GIT_NO_REPLACE_OBJECTS=1
+    cd "$verifier_directory" &&
+      node "$verifier_directory/scripts/verify-salesforce-review-source.mjs" "$repo_root" "$review_sha" "$review_manifest"
   ); then
     echo "FCOS push blocked: Salesforce review source requires its exact verified release manifest." >&2
     exit 1

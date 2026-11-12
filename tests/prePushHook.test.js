@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
 const hook = new URL('../.githooks/pre-push', import.meta.url);
+const verifierRoot = new URL('..', import.meta.url).pathname.replace(/\/$/u, '');
 const ZERO_SHA = '0'.repeat(40);
 const LOCAL_SHA = 'a'.repeat(40);
 const MAIN_SHA = 'b'.repeat(40);
@@ -18,12 +19,18 @@ const gitMock = `#!/bin/sh
 case "$1" in
   rev-parse)
     case "$2" in
-      --show-toplevel) printf '%s\\n' "$MOCK_REPO_ROOT" ;;
+      --show-toplevel)
+        if [ "$PWD" = "$MOCK_REPO_ROOT" ]; then printf '%s\\n' "$MOCK_REPO_ROOT"
+        else printf '%s\\n' "$MOCK_VERIFIER_ROOT"; fi
+        ;;
+      HEAD) printf '%s\\n' "$MOCK_VERIFIER_SHA" ;;
       --path-format=absolute) printf '%s\\n' "$MOCK_REPO_ROOT/.git" ;;
       --verify) [ "$MOCK_HAS_ORIGIN_MAIN" = "1" ] && printf '%s\\n' "$MOCK_MAIN_SHA" ;;
       --local-env-vars) printf '%s\\n' GIT_DIR GIT_WORK_TREE ;;
     esac
     ;;
+  symbolic-ref) [ "$MOCK_VERIFIER_ATTACHED" = 1 ] ;;
+  status) printf '%s' "$MOCK_VERIFIER_CHANGES" ;;
   config) printf '%s\\n' hocheunglai-oss ;;
   remote) printf '%s\\n' https://github.com/hocheunglai-oss/fcos.git ;;
   ls-remote) printf '%s\\trefs/heads/main\\n' "$MOCK_MAIN_SHA" ;;
@@ -40,6 +47,8 @@ const ghMock = `#!/bin/sh
 printf '%s|%s|%s' "\${GH_TOKEN+x}" "\${GITHUB_TOKEN+x}" "$GH_CONFIG_DIR" > "$MOCK_GH_ENV"
 if [ "$2" = "repos/hocheunglai-oss/fcos" ]; then
   printf '%s\\n' "$MOCK_GH_REPOSITORY"
+elif [ "$2" = "repos/hocheunglai-oss/fcos/branches/main" ]; then
+  printf '%s\\n' "$MOCK_MAIN_SHA"
 else
   printf '%s\\n' "$MOCK_GH_ACCOUNT"
 fi
@@ -61,8 +70,9 @@ async function makeExecutable(filename, source) {
 }
 
 async function runHook(t, { account = 'hocheunglai-oss', repository = 'hocheunglai-oss/fcos:1278654816',
-  changedPaths = 'src/App.jsx', npmStatus = 0, nodeStatus = 0, input = ordinaryPush, reviewManifest = '' } = {}) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'fcos-pre-push-'));
+  changedPaths = 'src/App.jsx', npmStatus = 0, nodeStatus = 0, input = ordinaryPush, reviewManifest = '',
+  candidateHook = false, verifierSha = MAIN_SHA, verifierAttached = false, verifierChanges = '' } = {}) {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'fcos-pre-push-')));
   const repo = path.join(root, 'repo');
   const bin = path.join(root, 'bin');
   const ghEnv = path.join(root, 'gh-env');
@@ -76,7 +86,12 @@ async function runHook(t, { account = 'hocheunglai-oss', repository = 'hocheungl
     makeExecutable(path.join(bin, 'node'), nodeMock),
   ]);
   t.after(() => rm(root, { recursive: true, force: true }));
-  const result = spawnSync('sh', [hook.pathname, 'origin', 'https://github.com/hocheunglai-oss/fcos.git'], {
+  const hookPath = candidateHook ? path.join(repo, '.githooks', 'pre-push') : hook.pathname;
+  if (candidateHook) {
+    await mkdir(path.dirname(hookPath));
+    await makeExecutable(hookPath, await readFile(hook, 'utf8'));
+  }
+  const result = spawnSync('sh', [hookPath, 'origin', 'https://github.com/hocheunglai-oss/fcos.git'], {
     cwd: repo,
     input,
     encoding: 'utf8',
@@ -87,6 +102,10 @@ async function runHook(t, { account = 'hocheunglai-oss', repository = 'hocheungl
       MOCK_REPO_ROOT: repo,
       MOCK_HAS_ORIGIN_MAIN: '1',
       MOCK_MAIN_SHA: MAIN_SHA,
+      MOCK_VERIFIER_ROOT: verifierRoot,
+      MOCK_VERIFIER_SHA: verifierSha,
+      MOCK_VERIFIER_ATTACHED: verifierAttached ? '1' : '0',
+      MOCK_VERIFIER_CHANGES: verifierChanges,
       MOCK_LOCAL_SHA: LOCAL_SHA,
       MOCK_BASE_SHA: BASE_SHA,
       MOCK_TREE_PATHS: 'force-app/main/default/classes/should-not-be-used.cls',
@@ -175,4 +194,15 @@ test('an ordinary Salesforce push still requires the mirror with a review manife
   assert.equal(result.status, 1);
   assert.equal(await readFile(npmCalled, 'utf8'), 'called');
   await assert.rejects(() => readFile(nodeCalled, 'utf8'));
+});
+
+test('review source never executes a verifier from the candidate or a mutable checkout', async t => {
+  for (const options of [{ candidateHook: true }, { verifierSha: BASE_SHA }, { verifierAttached: true }, { verifierChanges: ' M script' }]) {
+    const { result, nodeCalled } = await runHook(t, {
+      input: reviewedPush, reviewManifest: '/tmp/frozen.json', ...options,
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /separate frozen protected-main checkout/u);
+    await assert.rejects(() => readFile(nodeCalled, 'utf8'));
+  }
 });
