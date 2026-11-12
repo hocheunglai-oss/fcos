@@ -4,7 +4,7 @@ import { requireExternalActionGate } from './_externalActionGates.js';
 import { getFreshXeroConnection, splitScopes, xeroAccountingFetch, xeroContactSyncServiceClient } from './_xeroContactSync.js';
 import { previewEvidenceHash as hash } from './_xeroPreviewPersistence.js';
 import { accountingCentsNumber, accountingDecimalCents, accountingProductCents } from './_xeroAccountingLineCents.js';
-import { allFinancialRows, buildFinancialClassifications, loadAllXeroPages,
+import { allFinancialRows, buildFinancialClassifications, hasSupplierFinancialBucketReceipt, loadAllXeroPages,
   loadSalesforceFinancialSnapshot, loadStoredFinancialControls, normalizeXeroInvoice, recordXeroFinancialAudit, xeroFinancialRateSnapshot, XERO_FINANCIAL_CUTOFF } from './_xeroFinancialSync.js';
 import { buildDocumentFieldCorrectionPayload, evaluateDocumentFieldCorrection, verifyDocumentFieldCorrectionReadback } from './_xeroDocumentFieldPolicy.js';
 import { claimDocumentCorrection, finishDocumentCorrection } from './_xeroDocumentCorrectionPersistence.js';
@@ -103,6 +103,9 @@ export function buildDocumentCorrectionItems({ salesforce, xero, stored }) {
     const mappings = stored.documentMappings.filter((m) => m.salesforce_object === source.salesforceObject && sameSf(m.salesforce_id, source.salesforceId));
     if (mappings.length > 1) return { ...item, reason: 'More than one saved mapping identifies this Salesforce document.' };
     const mapping = mappings[0]; item.mapping = mapping || null;
+    if (hasSupplierFinancialBucketReceipt(mapping)) {
+      return { ...item, reason: 'This supplier bill has a retained financial link. Verify it through the financial-only workflow.' };
+    }
     const compatible = (target) => target.Type === source.xeroType && target.Contact?.ContactID === source.contactId
       && target.CurrencyCode === source.currency && money(target.Total, source.total) && ['DRAFT', 'SUBMITTED', 'AUTHORISED', 'PAID'].includes(target.Status);
     const candidates = mapping ? raw.filter((r) => r.InvoiceID === mapping.xero_document_id)

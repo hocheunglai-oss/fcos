@@ -18,6 +18,51 @@ test('unbound callers fail closed even with a mocked fetch; injected controller 
   assert.equal(receipts[0].tokenVersion,1);
 });
 
+test('a reserved accounting read can disable transient retries without spending another admission', async () => {
+  for (const failure of ['response', 'network']) {
+    const admissions = [];
+    const observations = [];
+    let calls = 0;
+    const control = fixtureSharedControl({
+      admit: async data => { admissions.push(data); return { requestId: String(admissions.length) }; },
+      observe: async data => observations.push(data),
+    });
+    const bound = fixtureXeroConnection(connection, control);
+    await assert.rejects(runWithXeroBudget(bound, { budgetId: 'fixture-budget' }, () => xeroAccountingFetch(bound, '/Invoices', {
+      transientRetryLimit: 0,
+      env: { XERO_TRANSIENT_RETRY_LIMIT: '2' },
+      requestGate: immediate,
+      wait: async () => {},
+      fetchImpl: async () => {
+        calls++;
+        if (calls > 1) return json({});
+        if (failure === 'network') throw Error('Synthetic connection failure');
+        return json({}, 503);
+      },
+    })));
+    assert.equal(calls, 1);
+    assert.equal(admissions.length, 1);
+    assert.equal(admissions[0].budgetId, 'fixture-budget');
+    assert.equal(observations.length, 1);
+  }
+});
+
+test('a per-request retry limit cannot expand the configured cap and invalid limits never dispatch', async () => {
+  let calls = 0;
+  const bound = fixtureXeroConnection(connection, fixtureSharedControl());
+  const options = {
+    env: { XERO_TRANSIENT_RETRY_LIMIT: '0' },
+    requestGate: immediate,
+    wait: async () => {},
+    fetchImpl: async () => { calls++; return json({}, 503); },
+  };
+  await assert.rejects(xeroAccountingFetch(bound, '/Invoices', { ...options, transientRetryLimit: 2 }));
+  assert.equal(calls, 1);
+  await assert.rejects(xeroAccountingFetch(bound, '/Invoices', { ...options, transientRetryLimit: -1 }),
+    { code: 'XERO_REQUEST_RETRY_INVALID' });
+  assert.equal(calls, 1);
+});
+
 test('write reserves future verification, uncertain response is never replayed, and callbacks receive receipts', async()=>{
   const budgets=[];const events=[];let calls=0;
   const control=fixtureSharedControl({reserve:async x=>{budgets.push(x);return{id:'budget'};},observe:async x=>events.push(x)});

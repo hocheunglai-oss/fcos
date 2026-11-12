@@ -850,7 +850,14 @@ export async function xeroAccountingFetch(connection, pathName, options = {}) {
   const retryRateLimit = !context.probeId && (retryOnRateLimit ?? requestMethod === 'GET');
   const intervalMs = callsPerMinute > 0 ? Math.ceil(60_000 / Math.min(45, callsPerMinute)) : 0;
   let rateWaitMs = 0;
-  const transientRetryLimit = requestMethod === 'GET' && !context.probeId ? xeroTransientRetryLimit(env) : 0;
+  const requestedRetryLimit = options.transientRetryLimit;
+  if (requestedRetryLimit !== undefined && (!Number.isSafeInteger(requestedRetryLimit) || requestedRetryLimit < 0 || requestedRetryLimit > 2)) {
+    throw xeroControlError('XERO_REQUEST_RETRY_INVALID');
+  }
+  // A bounded read may spend fewer retries than the transport normally allows.
+  const transientRetryLimit = requestMethod === 'GET' && !context.probeId
+    ? Math.min(xeroTransientRetryLimit(env), requestedRetryLimit ?? 2)
+    : 0;
   let transientRetries = 0;
   for (let attempt = 0; attempt < 4; attempt += 1) {
     let response, receipt, payload, bodyError;
