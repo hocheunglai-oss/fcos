@@ -396,6 +396,7 @@ const ADMIN_APP_MODULES = [
   { id: 'xero_portal', label: 'Xero Portal', path: '/xero-portal', sortOrder: 89 }, { id: 'email_router', label: 'Email Router', path: '/email-router', sortOrder: 91 },
   { id: 'settings', label: 'Settings', path: '/settings', sortOrder: 90 },
   { id: 'admin', label: 'People & Access', path: '/settings?section=people', sortOrder: 100 },
+  { id: 'outlook_nomination_filing', label: 'Outlook Nomination Filing', path: '/outlook-nomination-filing', sortOrder: 190 },
 ];
 
 let portalOutboxScheduledAt = 0;
