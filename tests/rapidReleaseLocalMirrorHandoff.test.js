@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { digest } from '../scripts/lib/rapid-release/contract.mjs';
 import { REVIEWED_SALESFORCE_MODE } from '../scripts/lib/salesforce-reviewed-release.mjs';
-import { createLocalMirrorReceipt, createLocalMirrorRequest, LOCAL_MIRROR_ENVIRONMENT, recordLocalMirrorDeployment, verifyLocalMirrorReceipt }
+import { awaitLocalMirrorReceipt, createLocalMirrorReceipt, createLocalMirrorRequest, LOCAL_MIRROR_ENVIRONMENT, recordLocalMirrorDeployment, verifyLocalMirrorReceipt }
   from '../scripts/lib/rapid-release/local-mirror-handoff.mjs';
 
 const now = Date.parse('2026-11-12T16:30:00.000Z');
@@ -96,4 +96,18 @@ test('a lost native acknowledgement is resolved by readback without another subm
   records.length = 0;
   await assert.rejects(recordLocalMirrorDeployment({ ...input, readbackOnly: true }), /LOCAL_MIRROR_RECORD_ACK_UNCERTAIN/);
   assert.equal(writes, 1);
+});
+
+test('hosted job waits for a bound receipt and stops at the original request deadline', async () => {
+  const request = createLocalMirrorRequest({ ...options, expiresAt: iso(now + 6000) });
+  const requestDeployment = { id: 201, creator: { id: 41898282 }, environment: LOCAL_MIRROR_ENVIRONMENT,
+    sha: request.candidateSha, created_at: iso(now), payload: request };
+  let current = now;
+  let writes = 0;
+  const records = [];
+  const github = { pages: async () => records, write: async () => { writes++; records.push(requestDeployment); } };
+  await assert.rejects(awaitLocalMirrorReceipt({ github, request, reviewed, workflowActorId: 41898282, publisherId: 265701760,
+    now: () => current, pause: async ms => { current += ms; } }), /LOCAL_MIRROR_RECEIPT_WINDOW_ENDED/);
+  assert.equal(writes, 1);
+  assert.equal(current, Date.parse(request.expiresAt));
 });

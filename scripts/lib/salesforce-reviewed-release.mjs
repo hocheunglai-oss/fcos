@@ -641,6 +641,11 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
         missingMirror = entry.mirror;
         continue;
       }
+      if (!local && entry.stage === 'shared_mirror' && entry.operation === 'publication'
+        && entry.outcome === 'pending' && typeof provider.readPendingMirror === 'function') {
+        missingMirror = { pending: true };
+        continue;
+      }
       const environment = policy.environments.find(item => item.key === entry.stage);
       const permission = entry.permission;
       if (environment && entry.outcome === 'resolved' && permission
@@ -796,8 +801,10 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
       saved = await persist('shared_mirror', 'publication', { status: 'submitting', ...gate });
       if (!(Date.parse(saved.receiptExpiresAt) > now().getTime())) throw new Error('Salesforce mirror ownership expired while saving intent; reconcile the saved intent before retry.');
     }
-    const result = assertReviewedMirror(await provider.mirror(action, { plan, journalFile: journal.file, deveeDeployment: deployment }), plan, policy, deployment.jobId);
-    if (original && (result.commit !== original.commit || result.pullRequest.number !== original.pullRequest)) {
+    const context = { plan, journalFile: journal.file, deveeDeployment: deployment };
+    const proof = original?.pending ? await provider.readPendingMirror(context) : await provider.mirror(action, context);
+    const result = assertReviewedMirror(proof, plan, policy, deployment.jobId);
+    if (original && !original.pending && (result.commit !== original.commit || result.pullRequest.number !== original.pullRequest)) {
       throw new Error('Shared mirror readback differs from the original durable publication.');
     }
     await unchanged();

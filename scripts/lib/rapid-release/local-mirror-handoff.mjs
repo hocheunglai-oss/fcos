@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from 'node:timers/promises';
 import { FCOS_CONNECTION_POLICY } from '../../../config/fcosConnections.js';
 import { assertReviewedMirror } from '../salesforce-reviewed-release.mjs';
 import { digest, isDigest, requireCondition, targets } from './contract.mjs';
@@ -12,11 +13,12 @@ const sha = value => typeof value === 'string' && /^[a-f0-9]{40}$/u.test(value);
 const positiveId = value => Number.isSafeInteger(value) && value > 0;
 const salesforceJob = value => typeof value === 'string' && /^0Af[A-Za-z0-9]{12}(?:[A-Za-z0-9]{3})?$/u.test(value);
 
-export function createLocalMirrorRequest({ manifest, approval, reviewed, deployment, runAttempt, intentHash, expiresAt, now = Date.now() }) {
+export function createLocalMirrorRequest({ manifest, approval, reviewed, deployment, runAttempt, intentHash, expiresAt, mode = 'publish', sequence = 1, now = Date.now() }) {
   const manifestHash = digest(manifest);
   const deadline = Date.parse(expiresAt);
   const approvedAt = Date.parse(approval?.approvedAt);
   requireCondition(approval?.manifestHash === manifestHash && approval.nativeReviewVerified === true
+    && ['publish', 'check', 'recover'].includes(mode) && positiveId(sequence)
     && positiveId(approval.runId) && positiveId(runAttempt) && sha(manifest.controllerSha) && sha(manifest.candidate?.sha)
     && isDigest(reviewed?.fingerprint) && isDigest(reviewed.binding?.sourceTreeHash) && isDigest(intentHash)
     && deployment?.status === 'Succeeded' && deployment.fingerprint === reviewed.fingerprint
@@ -27,7 +29,7 @@ export function createLocalMirrorRequest({ manifest, approval, reviewed, deploym
   'LOCAL_MIRROR_REQUEST_INVALID');
   return {
     kind: 'fcos_local_mirror_request', manifestHash, controllerSha: manifest.controllerSha, candidateSha: manifest.candidate.sha,
-    runId: approval.runId, runAttempt, fingerprint: reviewed.fingerprint, sourceTreeHash: reviewed.binding.sourceTreeHash,
+    runId: approval.runId, runAttempt, mode, sequence, fingerprint: reviewed.fingerprint, sourceTreeHash: reviewed.binding.sourceTreeHash,
     deveeOrgId: deployment.orgId, deploymentJobId: deployment.jobId, validationJobId: deployment.validationJobId,
     repository: publication.repository, repositoryId: publication.repositoryId,
     intentHash, expiresAt: new Date(deadline).toISOString(),
@@ -119,4 +121,28 @@ export async function recordLocalMirrorDeployment({ github, candidateSha, actorI
   const recorded = await lookup();
   requireCondition(recorded, 'LOCAL_MIRROR_RECORD_ACK_UNCERTAIN');
   return recorded;
+}
+
+
+// The hosted job retains the production concurrency slot while the operator
+// publishes or rechecks the mirror through its isolated local GitHub session.
+export async function awaitLocalMirrorReceipt({ github, request, reviewed, workflowActorId, publisherId,
+  now = Date.now, pause = sleep }) {
+  const requestDeployment = await recordLocalMirrorDeployment({
+    github, candidateSha: request.candidateSha, actorId: workflowActorId, payload: request,
+  });
+  while (now() < Date.parse(request.expiresAt)) {
+    const records = await readLocalMirrorDeployments(github, request.candidateSha);
+    const receipts = records.filter(record => record.creator?.id === publisherId
+      && record.payload?.kind === 'fcos_local_mirror_receipt' && record.payload.requestId === requestDeployment.id);
+    requireCondition(receipts.length <= 1, 'LOCAL_MIRROR_RECEIPT_DUPLICATE');
+    if (receipts.length) {
+      return verifyLocalMirrorReceipt({
+        request, requestDeployment, receiptDeployment: receipts[0], reviewed, workflowActorId, publisherId, now: now(),
+      });
+    }
+    const remaining = Date.parse(request.expiresAt) - now();
+    if (remaining > 0) await pause(Math.min(5000, remaining));
+  }
+  throw new Error('LOCAL_MIRROR_RECEIPT_WINDOW_ENDED');
 }
