@@ -7,11 +7,16 @@ const writeLedger = 'insert into supabase_migrations.schema_migrations(version,n
 function bindMigrations(migrationBytes, reviewedMigrations, check) {
   check(Array.isArray(migrationBytes) && migrationBytes.length === reviewedMigrations.length,
     'MIGRATIONS_REQUIRED');
-  return reviewedMigrations.map(({ path, digest: expected }, index) => {
+  return reviewedMigrations.map(({ path, digest: expected, transactionEnvelope }, index) => {
     const bytes = migrationBytes[index];
     check(Buffer.isBuffer(bytes) && digest(bytes) === expected, 'MIGRATION_BYTES_CHANGED');
     const [, version, name] = /\/(\d{14})_(.+)\.sql$/.exec(path);
-    return { version, name, sql: bytes.toString('utf8') };
+    const sql = bytes.toString('utf8');
+    // Some reviewed files also run independently. Keep their original bytes
+    // in migration history and execute the body under the controller's lock.
+    const body = transactionEnvelope ? /^begin;\n([\s\S]+)\ncommit;\n?$/.exec(sql)?.[1] : sql;
+    check(typeof body === 'string' && body.trim().length > 0, 'MIGRATION_ENVELOPE_INVALID');
+    return { version, name, sql, body };
   });
 }
 
@@ -78,7 +83,7 @@ export async function runReviewedMigrationTransaction({
     } else {
       check(isBaseline, 'BASELINE_CHANGED');
       await assertWriteAuthorized();
-      for (const { sql } of migrations) await db.query(sql);
+      for (const { body } of migrations) await db.query(body);
       catalog = await readCatalog(db);
       check(catalog.state === 'migrated', 'MIGRATED_SCHEMA_REQUIRED');
       await db.query("select set_config('search_path',$1,true)", [originalSearchPath]);

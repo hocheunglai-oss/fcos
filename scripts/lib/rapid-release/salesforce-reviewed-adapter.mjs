@@ -62,33 +62,52 @@ function hostedReviewedPlan(cwd, plan) {
 }
 
 function reviewedBootstrapFingerprint(reviewed, plan) {
-  requireCondition(plan.deferSchemaDependentSmoke === true && reviewed.review.bootstrap
-    && /^[a-f0-9]{64}$/u.test(reviewed.binding.bootstrapSha256 || ''),
+  requireCondition(reviewed.review.bootstrap && /^[a-f0-9]{64}$/u.test(reviewed.binding.bootstrapSha256 || ''),
     'SALESFORCE_HOSTED_BOOTSTRAP_PLAN_REQUIRED');
   const fingerprint = digest({ salesforceFingerprint: reviewed.fingerprint, bootstrapSha256: reviewed.binding.bootstrapSha256 });
   requireCondition(fingerprint === plan.bootstrapFingerprint, 'SALESFORCE_HOSTED_BOOTSTRAP_PLAN_MISMATCH');
   return fingerprint;
 }
 
-export async function verifyPreBootstrapStage({ manifest, staged, plan, salesforceCandidateDirectory: cwd, env }) {
-  requireCondition(manifest.selection.salesforce && !manifest.selection.database && cwd && plan.backwardCompatible === true,
+export async function verifyPreBootstrapStage({ manifest, staged, plan, salesforceCandidateDirectory: cwd, env }, { withDatabase = false } = {}) {
+  const databaseSelected = withDatabase ? manifest.selection.database === true : !manifest.selection.database;
+  requireCondition(manifest.selection.salesforce && databaseSelected && cwd && plan.backwardCompatible === true
+    && plan.deferSchemaDependentSmoke === true,
     'SALESFORCE_HOSTED_BOOTSTRAP_PLAN_REQUIRED');
   const reviewed = hostedReviewedPlan(cwd, plan);
   return runPreBootstrapSmoke({ manifest, staged, env }, reviewedBootstrapFingerprint(reviewed, plan));
 }
 
-export async function applyReviewedPrerequisites({ manifest, approval, plan, salesforce, salesforceCandidateDirectory: cwd, env = process.env }) {
+export async function applyReviewedPrerequisites(input) {
+  return prepareReviewedSalesforcePrerequisites(input)();
+}
+
+export function prepareReviewedSalesforcePrerequisites({
+  manifest, approval, plan, salesforce, salesforceCandidateDirectory: cwd, env = process.env,
+}, { withDatabase = false } = {}) {
   const manifestHash = digest(manifest);
-  requireCondition(manifest.selection.salesforce && !manifest.selection.database && plan.backwardCompatible === true
+  const databaseSelected = withDatabase ? manifest.selection.database === true : !manifest.selection.database;
+  requireCondition(manifest.selection.salesforce && databaseSelected && plan.backwardCompatible === true
     && cwd && typeof salesforce?.journal?.readCheckpoints === 'function'
     && typeof salesforce?.ownership?.assert === 'function' && approval?.manifestHash === manifestHash
     && approval.nativeReviewVerified === true && approval.reviewer === targets().account,
   'SALESFORCE_HOSTED_REVIEW_REQUIRED');
   const reviewed = hostedReviewedPlan(cwd, plan);
   const schemaBootstrap = Boolean(reviewed.review.bootstrap);
-  if (schemaBootstrap || plan.deferSchemaDependentSmoke) reviewedBootstrapFingerprint(reviewed, plan);
+  if (schemaBootstrap || plan.deferSchemaDependentSmoke) {
+    // Salesforce-only schema can qualify the full application before approval
+    // when the staged application does not read the new metadata.
+    requireCondition(plan.deferSchemaDependentSmoke === true
+      || (!withDatabase && plan.deferSchemaDependentSmoke === false && plan.deferredModules === undefined),
+    'SALESFORCE_HOSTED_BOOTSTRAP_PLAN_REQUIRED');
+    reviewedBootstrapFingerprint(reviewed, plan);
+  }
 
   assertHostedSalesforceRunner(env);
+  return () => applyPreparedSalesforce({ manifestHash, approval, salesforce, cwd, env, reviewed, schemaBootstrap });
+}
+
+async function applyPreparedSalesforce({ manifestHash, approval, salesforce, cwd, env, reviewed, schemaBootstrap }) {
   const saved = await salesforce.journal.readCheckpoints();
   const directory = mkdtempSync(join(tmpdir(), 'fcos-salesforce-hosted-'));
   const credentials = mkdtempSync(join(tmpdir(), 'fcos-salesforce-credentials-'));
