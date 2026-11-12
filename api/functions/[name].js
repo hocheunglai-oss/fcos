@@ -1,3 +1,4 @@
+import { listCompanyFxHistory, saveHistoricalCompanyFxRate } from '../_companyFxHistoryAdmin.js';
 import { setManagedUserActivation } from '../_fcunoManagedActivation.js';
 import { deploymentSafeSupabaseFetch } from '../_deploymentReadOnlyFetch.js';
 import { withDeploymentRequestSafety } from '../_deploymentReadOnly.js';
@@ -1438,7 +1439,7 @@ const HANDLER_MODULE_ACCESS = {
   shipAgentChargesSync: ['buyer_invoices', 'incoming_payments'],
   variableChargesList: ['buyer_invoices', 'incoming_payments'],
   variableChargesDetail: ['buyer_invoices', 'incoming_payments'],
-  variableChargesAnchorageSave: ['buyer_invoices', 'incoming_payments'], variableChargesVesselNrtSave: ['buyer_invoices', 'incoming_payments'], variableChargesLightDuesSave: ['buyer_invoices', 'incoming_payments'], variableChargesSettingsGet: ['buyer_invoices', 'incoming_payments'], variableChargesSettingsSave: ['buyer_invoices', 'incoming_payments'],
+  variableChargesAnchorageSave: ['buyer_invoices', 'incoming_payments'], variableChargesVesselNrtSave: ['buyer_invoices', 'incoming_payments'], variableChargesLightDuesSave: ['buyer_invoices', 'incoming_payments'], variableChargesSettingsGet: ['buyer_invoices', 'incoming_payments'], variableChargesSettingsSave: ['buyer_invoices', 'incoming_payments'], companyFxHistoryGet: ['buyer_invoices', 'incoming_payments'], companyFxHistorySave: ['buyer_invoices', 'incoming_payments'],
   variableChargesOptions: ['buyer_invoices', 'incoming_payments'],
   variableChargesSupplierVerify: ['buyer_invoices', 'incoming_payments'],
   variableChargesBuyerConfirm: ['buyer_invoices', 'incoming_payments'],
@@ -4796,6 +4797,8 @@ async function variableChargesLightDuesSave(body, req, accessContext = null) { c
 
 async function variableChargesSettingsGet(body, req, accessContext = null) { return getVariableChargeSettings(body, await shipAgentChargesContext(req, accessContext)); }
 
+async function companyFxHistoryGet(body, req, accessContext = null) { return listCompanyFxHistory(body, accessContext || await requireActiveUser(req)); }
+async function companyFxHistorySave(body, req, accessContext = null) { return saveHistoricalCompanyFxRate(body, accessContext || await requireActiveUser(req)); }
 async function variableChargesSettingsSave(body, req, accessContext = null) { return saveVariableChargeSettings(body, await shipAgentChargesContext(req, accessContext)); }
 
 async function variableChargesOptions(body, req, accessContext = null) { return variableChargeOptions(body, await shipAgentChargesContext(req, accessContext)); }
@@ -19353,7 +19356,7 @@ const handlers = {
   shipAgentChargesSync,
   variableChargesList,
   variableChargesDetail,
-  variableChargesAnchorageSave, variableChargesVesselNrtSave, variableChargesLightDuesSave, variableChargesSettingsGet, variableChargesSettingsSave,
+  variableChargesAnchorageSave, variableChargesVesselNrtSave, variableChargesLightDuesSave, variableChargesSettingsGet, variableChargesSettingsSave, companyFxHistoryGet, companyFxHistorySave,
   variableChargesOptions,
   variableChargesSupplierVerify,
   variableChargesBuyerConfirm,
