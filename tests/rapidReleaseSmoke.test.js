@@ -48,7 +48,7 @@ const readPayloads = {
 
 // Fixtures replace browser/provider transports. They simulate the app-owned
 // bootstrap response and actual response events; they never establish live proof.
-function browserFixture({ badIdentity = false, badRead = false, badDenial = false, unexpected = false, missingModule = false, background = false, optionalRequest = null, badPayload = false, badDesktop = false, deniedModule = null, role = 'manager', companyFxRows = undefined, supplierBoundaryRegression = null, groupedBoundaryRegression = false, groupedDesktopMissing = false } = {}) {
+function browserFixture({ badIdentity = false, badRead = false, badDenial = false, unexpected = false, missingModule = false, background = false, optionalRequest = null, badPayload = false, badDesktop = false, deniedModule = null, role = 'manager', companyFxRows = undefined, supplierBoundaryRegression = null, groupedBoundaryRegression = false, groupedDesktopMissing = false, marketReadTimeouts = 0, marketResponseStatus = 200 } = {}) {
   const observations = { launches: [], reads: [], contextsClosed: 0, browsersClosed: 0, nativeAborts: 0 };
   const browserFactory = async options => {
     observations.launches.push(options);
@@ -121,14 +121,21 @@ function browserFixture({ badIdentity = false, badRead = false, badDenial = fals
       getByRole: (role, options) => locator(role, options.name),
       getByLabel: name => locator('label', name),
       waitForURL: predicate => new Promise(resolve => { if (location !== 'about:blank' && predicate(new URL(location))) resolve(); else urlWaiters.push({ predicate, resolve }); }),
-      waitForResponse: predicate => new Promise(resolve => responseWaiters.push({ predicate, resolve })),
+      waitForResponse: predicate => new Promise((resolve, reject) => responseWaiters.push({ predicate, resolve, reject })),
       goto: async url => {
         changeLocation(url);
         if (new URL(url).pathname === '/login') return;
         const handler = new URL(url).pathname === '/' ? 'dashboardSummary' : new URL(url).pathname === '/markets' ? 'marketPulseSnapshot' : null;
+        if (handler === 'marketPulseSnapshot') {
+          observations.marketNavigations = (observations.marketNavigations || 0) + 1;
+          if (observations.marketNavigations <= marketReadTimeouts) {
+            responseWaiters.shift().reject(Object.assign(new Error('PRIVATE_FIXTURE_TIMEOUT'), { name: 'TimeoutError' }));
+            return;
+          }
+        }
         if (handler) emit(apiResponse(`${origin}/api/functions/${handler}`, badPayload ? {} : handler === 'dashboardSummary'
           ? { complete: true, financials: [] }
-          : { complete: true, reportCompleteness: { complete: true }, asOfDate: '2026-11-06', products: ['hsfo380', 'vlsfo', 'lsmgo'].map(productKey => ({ productKey, latestMops: { value: 1 } })) }, badRead ? 503 : 200));
+          : { complete: true, reportCompleteness: { complete: true }, asOfDate: '2026-11-06', products: ['hsfo380', 'vlsfo', 'lsmgo'].map(productKey => ({ productKey, latestMops: { value: 1 } })) }, badRead ? 503 : handler === 'marketPulseSnapshot' ? marketResponseStatus : 200));
       },
     };
     const context = {
@@ -160,6 +167,28 @@ test('restricted smoke proves actual browser reads and API/UI denials without wi
   assert.equal(fixture.observations.launches[0].env.VERCEL_TOKEN, undefined);
   assert.equal(calls.length, 2);
   assert.equal(JSON.stringify(proof).includes('PRIVATE_'), false);
+});
+
+test('Markets retries one missing read on the same pinned read-only page', async () => {
+  const fixture = browserFixture({ marketReadTimeouts: 1 });
+  const proof = await runStagedSmoke({ manifest: manifest(), staged, env, fetchImpl: publicFetch(), browserFactory: fixture.browserFactory });
+  assert.deepEqual(proof.modules, ['dashboard', 'markets']);
+  assert.equal(proof.businessWrites, 0);
+  assert.equal(fixture.observations.marketNavigations, 2);
+  assert.equal(fixture.observations.contextsClosed, 1);
+});
+
+test('Markets fails after two read timeouts and does not retry an HTTP rejection', async () => {
+  for (const [options, code, navigations] of [
+    [{ marketReadTimeouts: 2 }, 'SMOKE_BASELINE_RESPONSE_TIMEOUT', 2],
+    [{ marketResponseStatus: 503 }, 'SMOKE_MODULE_READ_FAILED', 1],
+  ]) {
+    const fixture = browserFixture(options);
+    await assert.rejects(runStagedSmoke({ manifest: manifest(), staged, env, fetchImpl: publicFetch(), browserFactory: fixture.browserFactory }),
+      { code, smokeModule: 'markets', smokeSurface: 'read' });
+    assert.equal(fixture.observations.marketNavigations, navigations);
+    assert.equal(fixture.observations.contextsClosed, 1);
+  }
 });
 
 test('normal-role proof requires a fresh real identity response and selected authenticated read receipts', async () => {

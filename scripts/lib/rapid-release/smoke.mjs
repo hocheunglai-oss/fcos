@@ -350,6 +350,23 @@ async function verifyGroupedPetroleumRoutes(route, origin, normal) {
   return true;
 }
 
+async function browserBaselineResponse(page, origin, module, reader) {
+  const reject = code => Object.assign(fail(code), { smokeModule: module, smokeSurface: 'read' });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const [read, navigation] = await Promise.allSettled([
+      page.waitForResponse(response => response.url() === `${origin}${reader.path}` && response.request().method() === 'POST', { timeout: 45000 }),
+      page.goto(`${origin}${reader.route}`, { waitUntil: 'domcontentloaded', timeout: 45000 }),
+    ]);
+    if (navigation.status === 'rejected') throw reject('SMOKE_BASELINE_NAVIGATION_FAILED');
+    if (new URL(page.url()).origin !== origin) throw reject('SMOKE_CANDIDATE_NAVIGATION_CHANGED');
+    if (read.status === 'fulfilled') return read.value;
+    if (read.reason?.name !== 'TimeoutError') throw reject('SMOKE_BASELINE_RESPONSE_FAILED');
+    // Reload the same pinned read-only page once when its request never arrived.
+    // An HTTP error, malformed result or failed navigation never triggers replay.
+    if (module !== 'markets' || attempt !== 0) throw reject('SMOKE_BASELINE_RESPONSE_TIMEOUT');
+  }
+}
+
 async function browserRun({ origin, manifest, credentials, normal, modules, env, browserFactory, diagnostic, historyRequired, supplierBucketRequired, groupedPetroleumRequired }) {
   async function checkModule(module, surface, check) {
     const start = performance.now();
@@ -460,14 +477,22 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
     for (const module of baselineModules) {
       phase = `BASELINE_${module.toUpperCase()}`;
       const reader = moduleReaders[module];
-      const [response] = await Promise.all([
-        page.waitForResponse(value => value.url() === `${origin}${reader.path}` && value.request().method() === 'POST', { timeout: 45000 }),
-        page.goto(`${origin}${reader.route}`, { waitUntil: 'domcontentloaded', timeout: 45000 }),
-      ]);
-      requireFact(response.status() === 200 && await response.finished() === null, 'SMOKE_MODULE_READ_FAILED');
-      const data = await response.json();
-      requireFact(modulePayloadVerified(module, data), 'SMOKE_MODULE_PAYLOAD_INCOMPLETE');
-      await page.getByRole('heading', { level: 1, name: reader.heading, exact: false }).first().waitFor({ state: 'visible', timeout: 30000 });
+      const response = await browserBaselineResponse(page, origin, module, reader);
+      let data;
+      try {
+        requireFact(response.status() === 200 && await response.finished() === null, 'SMOKE_MODULE_READ_FAILED');
+        data = await response.json();
+      } catch {
+        throw Object.assign(fail('SMOKE_MODULE_READ_FAILED'), { smokeModule: module, smokeSurface: 'read' });
+      }
+      if (!modulePayloadVerified(module, data)) {
+        throw Object.assign(fail('SMOKE_MODULE_PAYLOAD_INCOMPLETE'), { smokeModule: module, smokeSurface: 'read' });
+      }
+      try {
+        await page.getByRole('heading', { level: 1, name: reader.heading, exact: false }).first().waitFor({ state: 'visible', timeout: 30000 });
+      } catch {
+        throw Object.assign(fail('SMOKE_MODULE_DESKTOP_HEADING_MISSING'), { smokeModule: module, smokeSurface: 'desktop' });
+      }
       requireFact(new URL(page.url()).origin === origin, 'SMOKE_CANDIDATE_NAVIGATION_CHANGED');
       reads.push({ module, path: reader.path, status: 200, authenticated: true, dataVerified: true, surface: 'browser' });
     }
