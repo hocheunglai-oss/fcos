@@ -108,6 +108,10 @@ export function assertXeroFinancialDailyReserve(rate, env = process.env) {
   }
 }
 
+export function hasSupplierFinancialBucketReceipt(mapping) {
+  return Object.hasOwn(mapping?.retained_differences || {}, 'financialBucketPreservation');
+}
+
 export function classifyXeroFinancialDocument(source, candidates, {
   storedMapping = null,
   organisation = {},
@@ -126,6 +130,16 @@ export function classifyXeroFinancialDocument(source, candidates, {
   const blocked = (code, message, matches = []) => ({
     ...blockedClassification(code, message), matchEvidence: { ...evidence, candidates: matches.map(documentCandidateEvidence) },
   });
+  if (hasSupplierFinancialBucketReceipt(storedMapping)) {
+    const savedTargetId = storedMapping.xero_document_id;
+    const target = active.find((row) => row.id && String(row.id).toLowerCase() === String(savedTargetId).toLowerCase());
+    return {
+      ...blocked('financial_preservation_current_review_required',
+        'This supplier bill has a retained financial link. Verify it through the financial-only workflow.', target ? [target] : []),
+      xero: target || null, proposedPayload: null, reviewRequired: false,
+      supplierFinancialPreservation: { accepted: true, verificationHeld: true, documentVerification: 'UNVERIFIED', savedTargetId },
+    };
+  }
   const correctedTarget = storedMapping && active.find((candidate) => candidate.id === storedMapping.xero_document_id);
   let correction = correctedTarget && confirmedDocumentCorrection(source, correctedTarget, storedMapping, correctionControls, normalizeXeroInvoice);
   if (correction && (issuedSaved || groupedSaved)) {
@@ -340,6 +354,9 @@ export function isProtectedXeroDocument(document, organisation = {}) {
 }
 
 export function buildXeroAccountingPayload(source, xeroDocumentId = null, currentStatus = null, current = null) {
+  if (Object.hasOwn(source || {}, 'supplierFinancialPreservation')) {
+    throw financialError('Supplier financial preservation requires its dedicated workflow.', 409, 'XERO_SUPPLIER_FINANCIAL_PRESERVATION_LINK_ONLY');
+  }
   if (Object.hasOwn(source || {}, 'issuedSupplierPreservation')) throw financialError('Issued supplier preservation never creates or updates Xero accounting.', 409, 'XERO_ISSUED_PRESERVATION_LINK_ONLY');
   if (source.groupedPreservation) throw financialError('Grouped preservation never creates or updates Xero accounting.', 409, 'XERO_GROUPED_PRESERVATION_LINK_ONLY');
   const payload = accountingPayload(source, xeroDocumentId, currentStatus, current);
@@ -1870,6 +1887,9 @@ export function buildFinancialClassifications(salesforce, xero, stored, { postin
   const linesBySupplier = index([...salesforce.lines, ...salesforce.extras].filter((row) => row.Supplier_Invoice__c), (row) => row.Supplier_Invoice__c);
   const mappingByKey = new Map(stored.productMappings.map((row) => [`${row.direction}:${row.salesforce_product_id}`, row]));
   const storedBySource = new Map(stored.documentMappings.map((row) => [`${row.salesforce_object}:${row.salesforce_id}`, row]));
+  const supplierFinancialReceipts = new Map(stored.documentMappings
+    .filter((row) => row.salesforce_object === 'Supplier_Invoice__c' && hasSupplierFinancialBucketReceipt(row))
+    .map((row) => [String(row.salesforce_id).slice(0, 15), row]));
   const storedByXero = new Map(stored.documentMappings.map((row) => [`${row.xero_document_type}:${row.xero_document_id}`, row]));
   // Earlier invoices read for payment evidence may support their existing exact
   // mapping only. They do not become unrelated new document-match candidates.
@@ -1925,7 +1945,8 @@ export function buildFinancialClassifications(salesforce, xero, stored, { postin
       source,
       candidatesFor(source, true),
       {
-        storedMapping: storedBySource.get(`Supplier_Invoice__c:${source.salesforceId}`) || stored.documentMappings.find((row) => (hasGroupedPreservation(row) || Object.hasOwn(row.retained_differences || {}, 'issuedSupplierPreservation'))
+        storedMapping: supplierFinancialReceipts.get(String(source.salesforceId).slice(0, 15)) || storedBySource.get(`Supplier_Invoice__c:${source.salesforceId}`)
+          || stored.documentMappings.find((row) => (hasGroupedPreservation(row) || Object.hasOwn(row.retained_differences || {}, 'issuedSupplierPreservation'))
           && row.salesforce_object === 'Supplier_Invoice__c' && String(row.salesforce_id).slice(0, 15) === String(source.salesforceId).slice(0, 15)),
         organisation: xero.organisation,
         linkFirst,
@@ -2423,6 +2444,9 @@ function compareDocument(source, candidate) {
 }
 
 async function finalizeLinkedItem(client, row, context = {}) {
+  if (Object.hasOwn(row.source_payload || {}, 'supplierFinancialPreservation')) {
+    throw financialError('Supplier financial preservation requires its dedicated workflow.', 409, 'XERO_SUPPLIER_FINANCIAL_PRESERVATION_LINK_ONLY');
+  }
   if (Object.hasOwn(row.source_payload || {}, 'issuedSupplierPreservation')) throw financialError('Issued supplier preservation requires its dedicated transaction.', 409, 'XERO_ISSUED_PRESERVATION_LINK_ONLY');
   if (row.source_payload?.groupedPreservation) {
     const { current, run, tenantId, actor } = context;
