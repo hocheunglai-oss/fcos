@@ -9,6 +9,8 @@ import { openSalesforcePromotionJournal } from '../salesforce-promotion-journal.
 import { assertReviewedJobReport, matchesSalesforceCheckpoint, reviewedJobExpectations, runReviewedSalesforceRelease, safeProjectFile } from '../salesforce-reviewed-release.mjs';
 import { assertHostedSalesforceRunner, authenticateHostedSalesforce } from './salesforce-hosted-auth.mjs';
 import { digest, git, requireCondition, targets } from './contract.mjs';
+import { awaitLocalMirrorReceipt, createLocalMirrorRequest } from './local-mirror-handoff.mjs';
+import { githubClient } from './providers.mjs';
 import { runPreBootstrapSmoke } from './smoke.mjs';
 
 const policy = FCOS_CONNECTION_POLICY.providers.find(item => item.id === 'salesforce');
@@ -104,31 +106,79 @@ export function prepareReviewedSalesforcePrerequisites({
   }
 
   assertHostedSalesforceRunner(env);
-  return () => applyPreparedSalesforce({ manifestHash, approval, salesforce, cwd, env, reviewed, schemaBootstrap });
+  const localMirror = plan.mirrorPublication === 'local-collaborator';
+  requireCondition(plan.mirrorPublication === undefined || (localMirror && !withDatabase), 'SALESFORCE_MIRROR_MODE_INVALID');
+  return () => applyPreparedSalesforce({ manifest, manifestHash, approval, salesforce, cwd, env, reviewed, schemaBootstrap, localMirror });
 }
 
-async function applyPreparedSalesforce({ manifestHash, approval, salesforce, cwd, env, reviewed, schemaBootstrap }) {
+async function hostedLocalMirrorTransport({ manifest, approval, env, reviewed, salesforce }) {
+  const github = githubClient({ token: env.GITHUB_TOKEN, candidateSha: manifest.candidate.sha, actions: true });
+  const { user, repo } = await github.identity();
+  const runAttempt = Number(env.GITHUB_RUN_ATTEMPT);
+  requireCondition(user.login === 'github-actions[bot]' && repo.owner?.id === policy.publication.requiredAccountId
+    && Number(env.GITHUB_RUN_ID) === approval.runId && Number.isSafeInteger(runAttempt) && runAttempt > 0,
+  'LOCAL_MIRROR_WORKFLOW_IDENTITY_REQUIRED');
+  let sequence = 0;
+  let verifiedCommit;
+  return async (mode, deployment, intent) => {
+    const receipt = await salesforce.ownership.assert({
+      fingerprint: reviewed.fingerprint, stage: 'devee', orgId: deployment.orgId, operation: 'shared-publication',
+    });
+    if (mode === 'publish') {
+      requireCondition(intent?.status === 'submitting' && intent.receiptId === receipt.receiptId,
+        'LOCAL_MIRROR_PUBLICATION_INTENT_REQUIRED');
+    }
+    const checkpoint = (await salesforce.journal.readCheckpoints())
+      .find(item => item.stage === 'shared_mirror' && item.operation === 'publication');
+    requireCondition(checkpoint?.outcome === (mode === 'check' ? 'resolved' : 'pending')
+      && (mode !== 'publish' || checkpoint.evidenceDigest === digest(intent)), 'LOCAL_MIRROR_PUBLICATION_CHECKPOINT_REQUIRED');
+    const expiresAt = mode === 'publish' ? intent.receiptExpiresAt : receipt.expiresAt;
+    const request = createLocalMirrorRequest({
+      manifest, approval, reviewed, deployment, runAttempt, intentHash: checkpoint.evidenceDigest,
+      expiresAt, mode, sequence: ++sequence,
+    });
+    const proof = await awaitLocalMirrorReceipt({
+      github, request, reviewed, workflowActorId: user.id, publisherId: policy.publication.requiredAccountId,
+    });
+    requireCondition((!verifiedCommit || verifiedCommit === proof.commit)
+      && (mode !== 'check' || (checkpoint.mirror?.commit === proof.commit && checkpoint.mirror?.pullRequest === proof.pullRequest.number)),
+    'LOCAL_MIRROR_HEAD_CHANGED');
+    verifiedCommit = proof.commit;
+    await salesforce.ownership.assert({
+      fingerprint: reviewed.fingerprint, stage: 'devee', orgId: deployment.orgId, operation: 'shared-publication',
+    });
+    return proof;
+  };
+}
+
+async function applyPreparedSalesforce({ manifest, manifestHash, approval, salesforce, cwd, env, reviewed, schemaBootstrap, localMirror }) {
   const saved = await salesforce.journal.readCheckpoints();
+  const localTransport = localMirror ? await hostedLocalMirrorTransport({ manifest, approval, env, reviewed, salesforce }) : null;
   const directory = mkdtempSync(join(tmpdir(), 'fcos-salesforce-hosted-'));
   const credentials = mkdtempSync(join(tmpdir(), 'fcos-salesforce-credentials-'));
   let finished = false;
   try {
-    const commandEnvironment = authenticateHostedSalesforce({ directory: credentials, cwd, env, requireMirrorCredential: saved.length === 0 });
+    const commandEnvironment = authenticateHostedSalesforce({ directory: credentials, cwd, env, requireMirrorCredential: !localMirror && saved.length === 0 });
     const journal = openSalesforcePromotionJournal({ directory, binding: reviewed.binding });
     try {
       const provider = cliSalesforceProvider({ cwd, policy, commandEnvironment });
       provider.reconcile = (environment, jobId, { operation, submittedAt, validationJobId, packageSha256 }) =>
         reconcileHostedSalesforceJob({ environment, jobId, reviewed, operation, submittedAt, validationJobId,
           packageSha256, provider, journal: salesforce.journal });
-      provider.mirror = mode => runReviewedMirror({ mode, cwd, plan: reviewed, state: journal.state, policy,
-        provider, ownership: salesforce.ownership });
+      provider.mirror = localTransport
+        ? (mode, { deveeDeployment }) => localTransport(mode, deveeDeployment, journal.state.stages.shared_mirror?.publication)
+        : mode => runReviewedMirror({ mode, cwd, plan: reviewed, state: journal.state, policy,
+          provider, ownership: salesforce.ownership });
+      if (localTransport) {
+        provider.readPendingMirror = ({ deveeDeployment }) => localTransport('recover', deveeDeployment);
+      }
       const authorization = {
         productionMutation: true, fingerprint: reviewed.fingerprint, manifestSha256: reviewed.binding.manifestSha256,
         sourceTreeHash: reviewed.binding.sourceTreeHash, orgIds: reviewed.binding.orgIds,
         authorizedBy: approval.reviewer, evidence: manifestHash,
         expiresAt: new Date(Date.parse(approval.approvedAt) + 86_400_000).toISOString(),
       };
-      let mirrorPreflightPassed = false;
+      let mirrorPreflightPassed = localMirror;
       const ownership = {
         async assert(binding) {
           if (!mirrorPreflightPassed) {
