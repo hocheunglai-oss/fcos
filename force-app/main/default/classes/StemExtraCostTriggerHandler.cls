@@ -766,6 +766,7 @@ public class StemExtraCostTriggerHandler {
         Set<String> stemIds = new Set<String>();
         Set<String> productIds = new Set<String>();
         Set<String> portCountries = new Set<String>();
+        Set<String> supplierPaymentTerms = new Set<String>();
         Map<String, STEM_Extra_Cost__c> stemExtraCostByStemId = new Map<String, STEM_Extra_Cost__c>();
         Map<String, List<STEM_Extra_Cost__c>> stemExtraCostsByStemId = new Map<String, List<STEM_Extra_Cost__c>>();
         Map<STEM_Extra_Cost__c, String> countryByStemExtraCost = new Map<STEM_Extra_Cost__c, String>();
@@ -775,6 +776,7 @@ public class StemExtraCostTriggerHandler {
             portIds.add(stemExtraCost.Port__c);
             stemIds.add(stemExtraCost.STEM__c);
             productIds.add(stemExtraCost.Product2Id__c);
+            supplierPaymentTerms.add(stemExtraCost.Payment_Term__c);
             stemExtraCostByPortId.put(stemExtraCost.Port__c, stemExtraCost);
             stemExtraCostByStemId.put(stemExtraCost.STEM__c, stemExtraCost);
             if(stemExtraCostsByStemId.get(stemExtraCost.STEM__c) == null){
@@ -802,13 +804,22 @@ public class StemExtraCostTriggerHandler {
         for (Special_Term_Rule__c str : [SELECT Id, Special_Term__c, Special_Term__r.Name, Port__c,
                                                 Port__r.Name, Port__r.Country__c, Port__r.Offshore__c, Account__c,
                                                 Account__r.Name, Country__c,  Product__r.Name, Product__c,
-                                                Supplier_Buyer__c
+                                                Supplier_Buyer__c, Supplier_Payment_Term__c, Supplier_Payment_Term__r.Name
                                             FROM Special_Term_Rule__c WHERE Port__c IN :portIds
                                             OR Product__c IN :productIds
                                             OR Account__c IN :supplierIds
-                                            OR Country__c IN :portCountries]) {
+                                            OR Country__c IN :portCountries
+                                            OR Supplier_Payment_Term__r.Name IN: supplierPaymentTerms]) {
             for (STEM_Extra_Cost__c sec : stemExtraCosts) {
                 String enquiryId = enquiryIdByStemExtraCost.get(sec);
+                if (str.Supplier_Payment_Term__c != null
+                    && (str.Supplier_Buyer__c != 'Supplier'
+                        || String.isBlank(sec.Payment_Term__c)
+                        || str.Supplier_Payment_Term__r == null
+                        || !str.Supplier_Payment_Term__r.Name.equals(sec.Payment_Term__c)
+                        || (str.Account__c != null && str.Account__c != sec.Supplier__c))) {
+                    continue;
+                }
                 if (!String.isEmpty(str.Account__c) && !String.isEmpty(sec.Supplier__c)
                                                     && str.Account__c.equals(sec.Supplier__c) && str.Supplier_Buyer__c == 'Supplier') {
                     // base case, this supplier ALWAYS gets this rule
@@ -847,6 +858,14 @@ public class StemExtraCostTriggerHandler {
                             enquirySpecialTermsToCreate = addEnquirySpecialTerms(enquirySpecialTermsToCreate, str, enquiryId, sec.Id,
                                                                                     'Supplier is: ' + str.Account__r.Name + ' Port\'s Country is ' + str.Country__c);
                         }
+                    }
+                }
+
+                //PAYMENT TERM matches special terms rule
+                if (!String.isEmpty(str.Supplier_Payment_Term__c) && !String.isEmpty(sec.Payment_Term__c)
+                                                    && str.Supplier_Payment_Term__r.Name.equals(sec.Payment_Term__c) && str.Supplier_Buyer__c == 'Supplier') {
+                    if (String.isEmpty(str.Product__c) && String.isEmpty(str.Port__c) && String.isEmpty(str.Country__c)) {
+                        enquirySpecialTermsToCreate = addEnquirySpecialTerms(enquirySpecialTermsToCreate, str, enquiryId, sec.Id, 'Payment Term is: ' + str.Supplier_Payment_Term__r.Name);
                     }
                 }
 

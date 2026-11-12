@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Supplier_Payment_Term__c</fullName>
+    <deleteConstraint>SetNull</deleteConstraint>
+    <label>Supplier Payment Term</label>
+    <lookupFilter>
+        <active>true</active>
+        <errorMessage>Payment Term doesn&apos;t exist</errorMessage>
+        <filterItems>
+            <field>Payment_Term__c.RecordTypeId</field>
+            <operation>equals</operation>
+            <value>Supplier</value>
+        </filterItems>
+        <isOptional>false</isOptional>
+    </lookupFilter>
+    <referenceTo>Payment_Term__c</referenceTo>
+    <relationshipLabel>Special Term Rules (Supplier Payment Term)</relationshipLabel>
+    <relationshipName>Supplier_Special_Term_Rules</relationshipName>
+    <required>false</required>
+    <trackTrending>false</trackTrending>
+    <type>Lookup</type>
+</CustomField>

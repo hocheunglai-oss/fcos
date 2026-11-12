@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Package xmlns="http://soap.sforce.com/2006/04/metadata">
+    <types>
+        <members>CiaSupplierAccessTest</members>
+        <members>NominationTriggerHandler</members>
+        <members>NominationTriggerHandlerTest</members>
+        <members>OverrideNewOpportunityControllerTest</members>
+        <members>StemExtraCostTriggerHandler</members>
+        <name>ApexClass</name>
+    </types>
+    <types>
+        <members>Special_Term_Rule__c.Supplier_Payment_Term__c</members>
+        <name>CustomField</name>
+    </types>
+    <version>67.0</version>
+</Package>
