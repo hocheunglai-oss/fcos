@@ -26,6 +26,10 @@ export async function runReviewedMigrationTransaction({
 }, { reviewedMigrations, readCatalog, errorPrefix, schemaEffect = 'change' }) {
   const check = (condition, code) => requireCondition(condition, `${errorPrefix}_${code}`);
   const migrations = bindMigrations(migrationBytes, reviewedMigrations, check);
+  const operationKey = schemaDigest => `${operationDigest}:${schemaDigest}`;
+  const migrationKey = (schemaDigest, version) => migrations.length === 1
+    ? operationKey(schemaDigest)
+    : `${operationKey(schemaDigest)}:${version}`;
   check((mode === 'apply' || mode === 'readback') && isDigest(operationDigest)
     && isDigest(baselineSchemaDigest) && typeof assertConnection === 'function'
     && (mode === 'readback' || typeof assertWriteAuthorized === 'function'),
@@ -57,9 +61,13 @@ export async function runReviewedMigrationTransaction({
       if (isBaseline) {
         state = 'absent';
       } else {
+        // Older releases could record one shared key on ledgers without a unique
+        // constraint. A complete legacy package still has exact original evidence.
+        const legacyKeys = ledger.every(row => row.idempotency_key === operationKey(schemaDigest));
         const sameOperation = ledger.length === migrations.length && migrations.every(({ version, name, sql }, index) => {
           const row = ledger[index];
-          return row.version === version && row.name === name && row.idempotency_key === `${operationDigest}:${schemaDigest}`
+          return row.version === version && row.name === name
+            && (legacyKeys || row.idempotency_key === migrationKey(schemaDigest, version))
             && Array.isArray(row.statements) && row.statements.length === 1 && row.statements[0] === sql;
         });
         check(sameOperation && catalog.state === 'migrated'
@@ -81,7 +89,7 @@ export async function runReviewedMigrationTransaction({
         check(schemaDigest !== baselineSchemaDigest, 'SCHEMA_UNCHANGED');
       }
       for (const { version, name, sql } of migrations) {
-        await db.query(writeLedger, [version, name, `${operationDigest}:${schemaDigest}`, [sql]]);
+        await db.query(writeLedger, [version, name, migrationKey(schemaDigest, version), [sql]]);
       }
       commitSubmitted = true;
       const committed = await db.query('commit');
