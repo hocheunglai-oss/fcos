@@ -12,6 +12,7 @@ import {
 import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   assertInventoryUnchanged,
   expectedManifest,
@@ -27,6 +28,22 @@ import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import { SALESFORCE_RELEASE_MODE } from '../scripts/salesforce-workflow-state.mjs';
 
 const publication = FCOS_CONNECTION_POLICY.providers.find(({ id }) => id === 'salesforce').publication;
+
+test('mirror CLI accepts only one exact mode before checking shared-repository credentials', () => {
+  const script = fileURLToPath(new URL('../scripts/sync-salesforce-shared-repository.mjs', import.meta.url));
+  const env = { ...process.env, GITHUB_ACTIONS: 'true', FCOS_RAPID_SALESFORCE_MIRROR_TOKEN: '' };
+  const run = (...args) => spawnSync(process.execPath, [script, ...args], { env, encoding: 'utf8', timeout: 5000 });
+  for (const mode of ['--check', '--publish']) {
+    const result = run(mode);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /shared-repository GitHub authorization is unavailable/);
+  }
+  for (const args of [[], ['--unknown'], ['--check', '--publish'], ['--publish', '--unknown'], ['--check', '--check']]) {
+    const result = run(...args);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Choose exactly one mode: --check or --publish/);
+  }
+});
 
 test('mirror source cannot change beneath a previously verified deployment hash', () => {
   const directory = mkdtempSync(path.join(tmpdir(), 'fcos-mirror-frozen-'));

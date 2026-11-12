@@ -25,6 +25,41 @@
       "salesforce": false,
       "database": true,
       "databaseWrite": true
+    },
+    {
+      "id": "salesforce-reviewed-manifest",
+      "status": "qualified",
+      "sourceDigest": "264ce408ab560f518e2ce3f8d26d0ba5b617df885d41285d9e8e91c5684b4592",
+      "path": "scripts/lib/rapid-release/salesforce-reviewed-adapter.mjs",
+      "salesforce": true,
+      "database": false
+    },
+    {
+      "id": "supplier-bucket-migrations",
+      "status": "qualified",
+      "sourceDigest": "1228a9970741e65b1e6dd18d11b202bf445787a7444047dca620d095501af837",
+      "path": "scripts/lib/rapid-release/supplier-bucket-adapter.mjs",
+      "salesforce": false,
+      "database": true,
+      "databaseWrite": true
+    },
+    {
+      "id": "grouped-petroleum-migration",
+      "status": "qualified",
+      "sourceDigest": "df5a8f60c0887cb2e12f633b7a7c8e7ee682bf3250fe05212862f43411526af7",
+      "path": "scripts/lib/rapid-release/grouped-petroleum-adapter.mjs",
+      "salesforce": false,
+      "database": true,
+      "databaseWrite": true
+    },
+    {
+      "id": "outlook-filing-access",
+      "status": "qualified",
+      "sourceDigest": "a23ac61ebd6d353090c6a9ea96433cd92d34446e325ff90e9010ec9544c5bc74",
+      "path": "scripts/lib/rapid-release/outlook-filing-adapter.mjs",
+      "salesforce": false,
+      "database": true,
+      "databaseWrite": true
     }
   ]
 }
