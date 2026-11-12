@@ -8,11 +8,14 @@ import {
   jwtVerify,
 } from 'jose';
 import {
+  listPortalApplicationsForUser,
+  processPortalOutbox,
   resolveEffectivePortalAccess,
   signPortalAssertion,
   validateTargetEntitlementAcknowledgement,
   validateTargetLaunchUrl,
 } from '../api/_portal.js';
+import { runWithDeploymentRequestSafety } from '../api/_deploymentReadOnly.js';
 
 const application = {
   id: 'emailrouter',
@@ -20,6 +23,42 @@ const application = {
   administrator_default_role: 'owner',
   target_base_url: 'https://emailrouter.example',
 };
+
+test('staging reads saved portal access without reconciling and disables external launch', async () => {
+  const partner = { ...application, id: 'partner_fixture', name: 'Partner', status: 'active' };
+  const profile = { id: 'profile-fixture', active: true, user_type: 'administrator' };
+  const stored = { id: 'entitlement-fixture', user_id: profile.id, application_id: partner.id,
+    effective_active: true, effective_role_id: 'viewer', effective_source: 'explicit', sync_status: 'synced', revision: 4 };
+  const rows = {
+    portal_applications: [partner],
+    portal_application_roles: [{ application_id: partner.id, role_id: 'viewer', label: 'Viewer' }],
+    portal_user_app_entitlements: [stored],
+  };
+  let writes = 0;
+  const client = { from(table) {
+    assert.ok(Object.hasOwn(rows, table));
+    return { select() { return this; }, order() { return this; }, eq() { return this; },
+      then(resolve) { return Promise.resolve({ data: rows[table] }).then(resolve); },
+      update() { writes++; throw new Error('reconciliation attempted'); },
+    };
+  } };
+  const env = { VERCEL_ENV: 'production' };
+  const list = () => listPortalApplicationsForUser({ client, profile, env });
+  const apps = await runWithDeploymentRequestSafety({ headers: { host: 'fcos-fixture.vercel.app' } }, list, env);
+  assert.equal(writes, 0);
+  assert.deepEqual(apps.map(({ id, roleId, available, blockingReason }) => ({ id, roleId, available, blockingReason })),
+    [{ id: partner.id, roleId: 'viewer', available: false, blockingReason: 'Application launch is unavailable in this read-only environment.' }]);
+  await assert.rejects(runWithDeploymentRequestSafety({ headers: { host: 'fcos.fcuno.com' } }, list, env), /reconciliation attempted/);
+  assert.equal(writes, 1);
+});
+
+test('staging rejects a direct outbox invocation before storage access', async () => {
+  const env = { VERCEL_ENV: 'production' };
+  const client = { from() { assert.fail('outbox must not reach storage in staging'); } };
+  const run = () => processPortalOutbox({ client, env });
+  await assert.rejects(runWithDeploymentRequestSafety({ headers: { host: 'fcos-fixture.vercel.app' } }, run, env),
+    { code: 'FCOS_DEPLOYMENT_READ_ONLY' });
+});
 
 test('Administrator access is automatic while explicit grants survive a downgrade', () => {
   const explicit = {
