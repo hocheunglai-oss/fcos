@@ -44,5 +44,3 @@ supabase/.branches/
 supabase/.temp/
 playwright-report/
 test-results/
-
-outputs/

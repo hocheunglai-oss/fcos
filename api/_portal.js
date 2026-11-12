@@ -400,10 +400,10 @@ export async function listPortalApplicationsForUser({
 }) {
   const catalog = await loadPortalCatalog(client);
   const readOnly = isDeploymentReadOnly(env);
-  const reconciled = readOnly
+  const entitlements = readOnly
     ? await loadUserEntitlements(client, profile.id)
     : await reconcilePortalEntitlementsForProfile(client, profile, null, { catalog });
-  const entitlementMap = new Map(reconciled.map((row) => [row.application_id, row]));
+  const entitlementMap = new Map(entitlements.map((row) => [row.application_id, row]));
   const hasFcosAccess = ['administrator', 'general_manager'].includes(profile.user_type)
     || Object.values(moduleAccess || {}).some((allowed) => allowed === true || allowed === 'read' || allowed === 'full');
 
@@ -430,7 +430,7 @@ export async function listPortalApplicationsForUser({
 
     const entitlement = entitlementMap.get(application.id);
     if (!entitlement?.effective_active) return [];
-    const configurationIssue = appConfigurationIssue(application, env);
+    const configurationIssue = readOnly ? null : appConfigurationIssue(application, env);
     const syncBlockingReason = entitlement.sync_status === 'synced'
       ? null
       : entitlement.sync_status === 'error'
@@ -440,6 +440,7 @@ export async function listPortalApplicationsForUser({
       ? null
       : (application.status_message || 'Application unavailable.');
     const deploymentBlockingReason = readOnly ? 'Application launch is unavailable in this read-only environment.' : null;
+    const blockingReason = deploymentBlockingReason || configurationIssue || syncBlockingReason || statusBlockingReason;
     return [{
       id: application.id,
       name: application.name,
@@ -452,8 +453,8 @@ export async function listPortalApplicationsForUser({
       roleLabel: roleLabel(application, entitlement.effective_role_id),
       accessSource: entitlement.effective_source,
       status: application.status,
-      available: !deploymentBlockingReason && !configurationIssue && !syncBlockingReason && !statusBlockingReason,
-      blockingReason: deploymentBlockingReason || configurationIssue || syncBlockingReason || statusBlockingReason,
+      available: !blockingReason,
+      blockingReason,
       syncStatus: entitlement.sync_status,
       revision: entitlement.revision,
     }];

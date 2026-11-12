@@ -797,6 +797,21 @@ test('legitimate distinct stored bill mappings may share the prescribed derived 
   assert.equal(new Set(bills.map((item) => item.xeroInvoiceId)).size, 2);
 });
 
+test('an accepted supplier financial receipt blocks a previously reviewed correction before provider dispatch', async () => {
+  const f = fixture();
+  const preview = await f.preview();
+  const bill = preview.items.find((item) => item.kind === 'supplier_bill');
+  assert.equal(bill.outcome, 'eligible');
+  f.stored.documentMappings[1].retained_differences.financialBucketPreservation = null;
+  const current = buildDocumentCorrectionItems({ salesforce: f.salesforce, xero: f.xero(), stored: f.stored })
+    .find((item) => item.kind === 'supplier_bill');
+  assert.match(current.reason, /financial-only workflow/);
+  const result = await f.apply(preview, [bill.id]);
+  assert.equal(result.items[0].outcome, 'blocked');
+  assert.equal(f.claims.length, 0);
+  assert.equal(f.calls.some((call) => call.method === 'POST'), false);
+});
+
 test('source, target, mapping and immutable target-ID drift block before a correction claim or provider write', async () => {
   for (const mutate of [
     (f) => { f.salesforce.buyers[0].Delivery_Date__c = '2026-01-29'; },

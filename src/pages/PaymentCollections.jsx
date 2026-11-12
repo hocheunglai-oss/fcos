@@ -230,17 +230,17 @@ export default function PaymentCollections() {
             </>
           )}
         />
+        {!deploymentMutationAllowed && (
+          <div className="mt-2 rounded-md border border-border bg-muted/50 px-3 py-2 text-xs text-muted-foreground" role="status">
+            {deploymentCapabilities?.mutationsAllowed === false
+              ? 'Reconciliation and reminder changes are disabled in this read-only environment.'
+              : 'Reconciliation and reminder changes are unavailable while access is being verified.'}
+          </div>
+        )}
         {reconciliationError && (
           <div className="mt-2 flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
             <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
             Automatic reconciliation is unavailable: {reconciliationError}
-          </div>
-        )}
-        {!deploymentMutationAllowed && (
-          <div className="mt-2 rounded-md border border-border bg-muted/50 px-3 py-2 text-xs text-muted-foreground" role="status">
-            {deploymentCapabilities?.mutationsAllowed === false
-              ? 'This environment is read-only. Collection and incoming payment data remain available; automatic reconciliation and reminder-control changes are disabled.'
-              : 'Changes are unavailable while access is being verified. You can still view collection and incoming payment data.'}
           </div>
         )}
       </div>

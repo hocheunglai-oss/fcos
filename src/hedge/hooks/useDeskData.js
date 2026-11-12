@@ -29,13 +29,22 @@ export function useDeskData() {
     setError(null);
     try {
       const applySnapshot = (snapshot) => {
-        const nextData = { ...EMPTY_DATA, ...(snapshot || {}) };
+        if (!Array.isArray(snapshot?.physicals) || !Array.isArray(snapshot?.swaps)) {
+          throw new Error('Hedge Desk returned an incomplete book snapshot.');
+        }
+        const nextData = { ...EMPTY_DATA, ...snapshot };
         setData(nextData);
         setLastUpdated(new Date());
         return nextData;
       };
       const snapshot = await loadDeskSnapshot({
-        ...navigationCacheOptions("collaboration", applySnapshot),
+        ...navigationCacheOptions("collaboration", (updated) => {
+          try {
+            applySnapshot(updated);
+          } catch (nextError) {
+            setError(nextError);
+          }
+        }),
         force,
       });
       const nextData = applySnapshot(snapshot);

@@ -1,0 +1,147 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Only reproduced, verified, version-bound operational repairs belong here. No credentials, business records, commands from provider logs, or grants of authority.",
+  "recipes": [],
+  "observations": [
+    {
+      "id": "canonical-cron-fixture-scope",
+      "cause": "Direct reminder fixtures omitted the request scope now required on hosted workers.",
+      "correction": "Model canonical cron request in fixtures; retain fail-closed unscoped worker.",
+      "verification": {
+        "command": "node --test tests/missingNomBBackend.test.js tests/rapidReleaseCore.test.js tests/rapidReleaseLearning.test.js",
+        "passed": 71,
+        "elapsedMs": 155.793,
+        "providerCalls": 0,
+        "regressionDigest": "a2911e7c1ac9584d7150a79261acb715e4a9235e0fc7d07ba9d890bcb4bc29d4"
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Request-scope regression fixtures"
+    },
+    {
+      "id": "prebuilt-standalone-references",
+      "cause": "Pinned Vercel adapter default output references source files outside uploaded output.",
+      "correction": "Build standalone and reject external or traversal filePathMap references before credentials.",
+      "verification": {
+        "command": "npm run release:qualify",
+        "passed": 49,
+        "elapsedMs": 2439.688,
+        "providerCalls": 0,
+        "regressionDigest": "a2911e7c1ac9584d7150a79261acb715e4a9235e0fc7d07ba9d890bcb4bc29d4"
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Artifact confinement regression test"
+    },
+    {
+      "id": "resume-post-prerequisite-smoke",
+      "cause": "A failed post-prerequisite smoke could be skipped when prerequisite success was reused.",
+      "correction": "Persist prerequisite and affected smoke checkpoints independently.",
+      "verification": {
+        "command": "node --test tests/rapidReleaseCore.test.js",
+        "passed": 17,
+        "providerCalls": 0,
+        "regressionDigest": "a2911e7c1ac9584d7150a79261acb715e4a9235e0fc7d07ba9d890bcb4bc29d4"
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Resume test checks exactly one prerequisite write and one promotion"
+    },
+    {
+      "id": "published-history-preflight",
+      "cause": "A new application branch was compared to old main and inherited already-published Salesforce history.",
+      "correction": "Check unpublished commits against fresh exact-remote heads, preserving conservative mirror gates for real or uncertain Salesforce changes.",
+      "verification": {
+        "command": "node --test tests/fcosPushPublication.test.js tests/prePushHook.test.js tests/fcosConnections.test.js",
+        "passed": 36,
+        "representativeFixtureMs": 359,
+        "gitCliCalls": 7,
+        "githubIdentityCalls": 1,
+        "remoteAdvertisements": 1,
+        "mirrorCalls": 0,
+        "regressionDigest": "3d953e47c38d1185357152571777931fa3a1daae5bda0b7faed20673a8257174"
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Fresh-remote/reversion/merge/spoofed-ref regression cases"
+    },
+    {
+      "id": "runtime-settings-unit-isolation",
+      "cause": "Public build settings initialized runtime clients in SSR unit fixtures and retained open work.",
+      "correction": "Provide public runtime settings only to the build and pinned contract check; keep unit commands isolated.",
+      "verification": {
+        "passed": 4585,
+        "skipped": 41,
+        "fullSuiteMs": 39218.862,
+        "preparationMs": 73648,
+        "credentialedProviderWrites": 0,
+        "knownPublicGitHubReads": 4,
+        "regressionDigest": "b61a995e94541c5c6241938f2536ffb2ce2ae7fa18295c355a44a94609a1da13"
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Credential-free command environment and full clean-build qualification"
+    },
+    {
+      "id": "complete-module-source-binding",
+      "cause": "Broad changes selected normal-role checks but could leave only two baseline modules selected.",
+      "correction": "Bind actual literal candidate module inventory, broaden all affected modules, and require real read/desktop/path evidence.",
+      "verification": {
+        "moduleCount": 18,
+        "regressionDigest": "44332583dc0d3a5614d589df7e7058f73566a7685be44304e3b26833ea23452b",
+        "privateOrLiveWrites": 0
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Unknown modules and moved paths fail closed"
+    },
+    {
+      "id": "stable-controller-source-pin",
+      "cause": "Binding the controller to current main HEAD forced unrelated application commits to requalify it.",
+      "correction": "Use the qualified frozen checkout and hash-bound complete handover plan, with native workflow-blob admission before credentials.",
+      "verification": {
+        "regressionDigest": "69d6fc537e3d3c71860e07f5bd234bee33b1597bf77e803c43b9f12394d0c3e7",
+        "nativeProviderWrites": 0
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Forged source under old plan, changed workflow and failed qualification tests"
+    },
+    {
+      "id": "durable-controller-qualification",
+      "cause": "Continuing controller admission depended on old Actions run and review histories that can expire.",
+      "correction": "Retain the observed review in an owner-created Deployment and finalized private receipt; recheck the current private fence before provider writes.",
+      "verification": {
+        "command": "node --test tests/rapidReleaseBuildProvider.test.js tests/rapidReleaseWorkflow.test.js tests/rapidReleaseHandover.test.js",
+        "passed": 25,
+        "durationMs": 3988.213708,
+        "expiredHistoryReads": 0,
+        "nativeProviderWrites": 0,
+        "regressionDigest": "6e8ebb776ffa5e7ef6b9038d04e813b49ab926f50440a6e02f5000ed137d8e8f"
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Expired-history, bot-copy, latest-receipt, unknown-write and disabled-guard regression cases"
+    },
+    {
+      "id": "hosted-worker-database-fixture-scope",
+      "cause": "The real disposable-database fixture invoked a Production worker without canonical request scope, so the new safety guard correctly disabled it before checkpointing.",
+      "correction": "Invoke the unchanged worker through its canonical request-safety boundary in the disposable integration fixture.",
+      "verification": {
+        "command": "node --test tests/missingNomBMigration.test.js",
+        "testDigest": "5d48165ba0282511ffaa206d9d9b75de00a4dfa53d4a31fe0bc728ca8052d0b2",
+        "requestSafetyDigest": "ef93ab5329a5691eb48166e94669cbb2453bfd369252a6a87b6c2f3974cba28c",
+        "workerDigest": "78d73c4375ee4d5eed1c0b3309fbf5dd2c24609a3f8a08fce8de2995ab3e407a",
+        "passed": 12,
+        "skipped": 0,
+        "elapsedMs": 859,
+        "postgres": "postgres (PostgreSQL) 17.11 (Homebrew)",
+        "liveProviderCalls": 0
+      },
+      "diagnosisElapsedMs": null,
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "The existing required GitHub disposable-database check now exercises the real canonical worker boundary; production guards remain unchanged."
+    }
+  ]
+}

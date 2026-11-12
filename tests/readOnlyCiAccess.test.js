@@ -131,7 +131,7 @@ test('every authenticated dispatcher enforces the CI guard and Markets skips exp
   assert.match(main, /requireReadOnlyCiOperation\(accessContext\?\.profile, name, body\)/);
   assert.match(wrapper, /requireReadOnlyCiOperation\(context\.profile, resolvedHandlerName, body/);
   assert.match(main, /readOnlyCi \? \[\] : await listPortalApplicationsForUser/);
-  assert.match(main, /deploymentCapabilities\(process\.env, \{ readOnlyProfile: readOnlyCi \}\)/);
-  assert.match(main, /if \(deployment\.mutationsAllowed\) schedulePortalOutboxRetry/);
+  assert.match(main, /const mutationsAllowed = !readOnlyCi && !isDeploymentReadOnly\(\)/);
+  assert.match(main, /if \(mutationsAllowed\) schedulePortalOutboxRetry/);
   assert.match(markets, /isReadOnlyCiProfile\(profile\)\s*\? \{ status: 'not_run', reason: 'read_only_identity' \}\s*: await reconcilePaperHedgeExpiry\(client\)/);
 });

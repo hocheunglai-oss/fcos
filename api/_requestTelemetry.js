@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
+import { isDeploymentReadOnly } from './_deploymentReadOnly.js';
 
 const requestTelemetryStorage = new AsyncLocalStorage();
 
@@ -175,7 +176,7 @@ export function markRuntimeCacheUnsafe(reason = 'upstream_error') {
 }
 
 export function runtimeCacheWriteAllowed() {
-  return currentRequestTelemetry()?.cache.writeAllowed !== false;
+  return !isDeploymentReadOnly() && currentRequestTelemetry()?.cache.writeAllowed !== false;
 }
 
 function redactTelemetryText(value) {

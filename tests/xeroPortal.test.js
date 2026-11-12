@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { fixtureSharedControl } from './helpers/xeroSharedControl.js';
+import { runWithDeploymentRequestSafety } from '../api/_deploymentReadOnly.js';
 import {
   buildContactLifecycleRows,
   signXeroOAuthState,
@@ -94,23 +95,31 @@ test('Xero Portal status refreshes a stale access token before reporting expiry'
   assert.deepEqual(requests.map((url) => new URL(url).pathname), ['/connect/token']);
 });
 
-test('read-only Xero status never refreshes stale or missing expiry, even when explicitly requested', async () => {
-  for (const deployment of [{ VERCEL_ENV: 'preview' }, { VERCEL_ENV: 'production', FCOS_ENABLE_READ_ONLY_CI: 'true' }]) {
-    for (const expires_at of ['2026-08-27T00:00:00.000Z', null]) {
-      for (const forceRefresh of [false, true]) {
-        const initial = { tenant_id: 'tenant-1', tenant_name: 'FCOS Test', access_token: 'old-access', refresh_token: 'old-refresh', expires_at, token_version: 4 };
-        const client = fakePortalStatusClient(initial);
-        const result = await xeroPortalStatus({ forceRefresh }, {
-          client,
-          env: { ...deployment, XERO_CLIENT_ID: 'client', XERO_CLIENT_SECRET: 'secret', FCOS_PUBLIC_URL: 'https://fcos.fcuno.com', XERO_REFRESH_TOKEN: 'configured-refresh' },
-          fetchImpl: async () => assert.fail('Read-only status must not use token refresh network'),
-        });
-        assert.equal(result.xero.connected, true);
-        assert.equal(result.xero.expiresAt, expires_at);
-        assert.deepEqual(client.connection, initial);
-        assert.deepEqual(client.controlCalls, []);
-      }
-    }
+test('staged Xero status skips the extra token-renewal read', async (t) => {
+  const scenarios = [
+    { name: 'expired access', expiresAt: '2026-08-27T00:00:00.000Z', forceRefresh: false },
+    { name: 'forced refresh with valid access', expiresAt: '2099-01-01T00:00:00.000Z', forceRefresh: true },
+  ];
+  for (const { name, expiresAt, forceRefresh } of scenarios) {
+    await t.test(name, async () => {
+      const client = fakePortalStatusClient({
+        tenant_id: 'tenant-1', access_token: 'fixture-access', refresh_token: 'fixture-refresh',
+        expires_at: expiresAt, token_version: 4,
+      });
+      const env = { VERCEL_ENV: 'production' };
+      const request = { headers: { host: 'fcos-staged.vercel.app' } };
+      const response = await runWithDeploymentRequestSafety(request, () => xeroPortalStatus({ forceRefresh }, {
+        client, env, fetchImpl: () => assert.fail('Staged status contacted Xero'),
+      }), env);
+
+      assert.equal(response.xero.connected, true);
+      assert.equal(response.xero.expiresAt, expiresAt);
+      assert.equal(response.xero.refreshError, null);
+      // Connection status and the separate usage cache summary each read once.
+      assert.equal(client.connectionReads, 2);
+      assert.deepEqual(client.controlCalls, []);
+      assert.equal(client.connection.token_version, 4);
+    });
   }
 });
 
@@ -197,11 +206,13 @@ test('native Xero Portal migration is service-role only and creates private rece
   assert.match(sql, /'xero_portal_manage'/);
 });
 
-test('Xero Portal exposes saved reporting only and no connection or financial actions', async () => {
+test('connected Xero users can refresh missing scopes without deleting the stored connection first', async () => {
   const ui = await readFile(new URL('../src/pages/XeroPortal.jsx', import.meta.url), 'utf8');
-  assert.match(ui, /xeroIntegrityReport/);
-  assert.doesNotMatch(ui, /xeroPortalConnectStart|xeroPortalDisconnect|xeroPortalReceiptCreate|xeroFinancialSyncPreview|xeroFinancialSyncApply|xeroFinancialPaymentApply/);
-  assert.doesNotMatch(ui, /import.*XeroFinancialSync|import.*XeroContactResolution/);
+  const { xeroPortalUiCopy } = await import('../src/lib/xeroPortalUiCopy.js');
+  assert.match(ui, /needsFinancialReconnect/);
+  assert.match(ui, /copy\.header\.reconnect/);
+  assert.equal(xeroPortalUiCopy('en').header.reconnect, 'Reconnect scopes');
+  assert.match(ui, /onClick=\{connectXero\}/);
 });
 
 function jsonResponse(body, status = 200) {
@@ -218,6 +229,7 @@ function fakePortalStatusClient(initialConnection) {
     connection: { ...initialConnection },
     refreshLease: null,
     controlCalls: [],
+    connectionReads: 0,
   };
   const control = fixtureSharedControl({
     claimRefresh: async ({ tenantId, tokenVersion, leaseId }) => {
@@ -244,6 +256,9 @@ function fakePortalStatusClient(initialConnection) {
   });
   const client = {
     controlCalls: state.controlCalls,
+    get connectionReads() {
+      return state.connectionReads;
+    },
     get connection() {
       return state.connection;
     },
@@ -287,6 +302,7 @@ class FakeQuery {
 
   async maybeSingle() {
     if (this.table === 'xero_contact_sync_connections') {
+      this.state.connectionReads += 1;
       if (this.selected === 'token_version') return { data: { token_version: this.state.connection.token_version || 0 }, error: null };
       return { data: this.state.connection, error: null };
     }

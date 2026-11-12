@@ -2,9 +2,11 @@ import { createHash } from 'node:crypto';
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
 import { sfDownload, sfQuery } from './_salesforce.js';
 import { APPROVED_ISSUED_PETROLEUM_REVIEW_HASHES } from '../config/xeroIssuedPetroleumReviews.js';
-import { issuedSupplierHash } from './_xeroIssuedSupplierPreservation.js';
+import { issuedSupplierHash, issuedSupplierSfId } from './_xeroIssuedSupplierPreservation.js';
+import { ISSUED_GROUPED_PETROLEUM_PRESERVATION_POLICY } from './_xeroIssuedGroupedPetroleumPreservation.js';
 
 export const issuedPetroleumReviewHash = (record) => issuedSupplierHash({ policyVersion: 'issued_petroleum_preserve_v1', record });
+export const issuedGroupedPetroleumReviewHash = (record) => issuedSupplierHash({ policyVersion: ISSUED_GROUPED_PETROLEUM_PRESERVATION_POLICY, record });
 const SF = /^[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?$/;
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const digest = (bytes, algorithm) => createHash(algorithm).update(bytes).digest('hex');
@@ -12,11 +14,27 @@ const failure = (message) => Object.assign(new Error(message), { code: 'XERO_ISS
 const same = (left, right) => typeof left === 'string' && typeof right === 'string' && left.slice(0, 15) === right.slice(0, 15);
 
 export function validateIssuedPetroleumPacket(packet) {
-  if (!packet || packet.policyVersion !== 'issued_petroleum_preserve_v1' || Object.keys(packet).some((key) => !['policyVersion', 'records'].includes(key)) || !Array.isArray(packet.records) || !packet.records.length || packet.records.length > 25
-    || Buffer.byteLength(JSON.stringify(packet)) > 200000) throw failure('Select a bounded issued-evidence packet containing 1–25 records.');
+  return validatePacket(packet, 'issued_petroleum_preserve_v1');
+}
+
+export function validateIssuedGroupedPetroleumPacket(packet) {
+  return validatePacket(packet, ISSUED_GROUPED_PETROLEUM_PRESERVATION_POLICY);
+}
+
+function validatePacket(packet, policy) {
+  const grouped = policy === ISSUED_GROUPED_PETROLEUM_PRESERVATION_POLICY;
+  if (!packet || packet.policyVersion !== policy || Object.keys(packet).some((key) => !['policyVersion', 'records'].includes(key)) || !Array.isArray(packet.records) || !packet.records.length || packet.records.length > 25) throw failure('Select a bounded issued-evidence packet containing 1–25 records.');
+  let size;
+  try { size = Buffer.byteLength(JSON.stringify(packet)); } catch { throw failure('Select a bounded JSON documentary packet.'); }
+  if (size > 200000) throw failure('Select a bounded issued-evidence packet containing 1–25 records.');
   const rows = packet.records;
   const fields = ['sourceId', 'xeroDocumentId', 'documentId', 'versionId', 'sha256', 'review'];
   const reviewFields = ['reviewer', 'reviewedAt', 'reviewRecordHash', 'sourceNumber', 'printedNumber', 'sellerName', 'buyerName', 'invoiceDate', 'dueDate', 'currency', 'total', 'totalTax', 'vessel', 'lines', 'numberRule', 'deliveryDate', 'taxEvidence', 'counterparties'];
+  const lineFields = ['description', 'quantity', 'unit', 'unitPrice', 'amount', 'sourceProductId', 'sourceProductName', 'productEvidence'];
+  if (grouped) {
+    reviewFields.push('imo');
+    lineFields.push('sourceChildId');
+  }
   for (const row of rows) {
     if (!row || typeof row !== 'object' || Array.isArray(row) || Object.keys(row).some((key) => !fields.includes(key))
       || ![row.sourceId, row.documentId, row.versionId].every((id) => typeof id === 'string' && SF.test(id))
@@ -24,7 +42,17 @@ export function validateIssuedPetroleumPacket(packet) {
       || typeof row.xeroDocumentId !== 'string' || !UUID.test(row.xeroDocumentId) || !/^[a-f0-9]{64}$/.test(row.sha256 || '')
       || !row.review || typeof row.review !== 'object' || Array.isArray(row.review)
       || Object.keys(row.review).some((key) => !reviewFields.includes(key)) || !Array.isArray(row.review.lines)
-      || row.review.lines.some((line) => !line || typeof line !== 'object' || Array.isArray(line) || Object.keys(line).some((key) => !['description', 'quantity', 'unit', 'unitPrice', 'amount', 'sourceProductId', 'sourceProductName', 'productEvidence'].includes(key)))) throw failure('Each issued-evidence row requires exact source, file, Xero and reviewed content identities.');
+      || row.review.lines.some((line) => !line || typeof line !== 'object' || Array.isArray(line) || Object.keys(line).some((key) => !lineFields.includes(key)))) throw failure('Each issued-evidence row requires exact source, file, Xero and reviewed content identities.');
+    if (grouped) {
+      const children = row.review.lines.map(line => issuedSupplierSfId(line.sourceChildId));
+      if (!/^(?:a06|a0K)/.test(issuedSupplierSfId(row.sourceId) || '')
+        || !issuedSupplierSfId(row.documentId) || !issuedSupplierSfId(row.versionId)
+        || children.length < 2 || children.length > 50 || children.some(id => !id?.startsWith('a05'))
+        || new Set(children).size !== children.length
+        || !(row.review.imo === null || typeof row.review.imo === 'string' && /^\d{7}$/.test(row.review.imo))) {
+        throw failure('Grouped evidence requires exact buyer or supplier, unique physical lines and the literal printed IMO.');
+      }
+    }
   }
   if (new Set(rows.map((r) => r.sourceId.slice(0, 15))).size !== rows.length
     || new Set(rows.map((r) => r.xeroDocumentId.toLowerCase())).size !== rows.length) throw failure('The evidence packet contains repeated source or Xero identities.');
@@ -37,11 +65,20 @@ export function validateIssuedPetroleumPacket(packet) {
   return rows.map(({ sourceId, xeroDocumentId, documentId, versionId, sha256, review }) => ({ sourceId, xeroDocumentId, documentId, versionId, sha256, review }));
 }
 
-export async function collectIssuedPetroleumFiles(packet, { query = sfQuery, download = sfDownload,
-  approvedReviewHashes = APPROVED_ISSUED_PETROLEUM_REVIEW_HASHES, tenantId } = {}) {
-  const records = validateIssuedPetroleumPacket(packet);
+export function collectIssuedPetroleumFiles(packet, options) {
+  return collectReviewedFiles(packet, validateIssuedPetroleumPacket, issuedPetroleumReviewHash, APPROVED_ISSUED_PETROLEUM_REVIEW_HASHES, options);
+}
+
+export function collectIssuedGroupedPetroleumFiles(packet, options) {
+  return collectReviewedFiles(packet, validateIssuedGroupedPetroleumPacket, issuedGroupedPetroleumReviewHash, [], options);
+}
+
+async function collectReviewedFiles(packet, validate, reviewHash, defaultReviewHashes, {
+  query = sfQuery, download = sfDownload, approvedReviewHashes = defaultReviewHashes, tenantId,
+} = {}) {
+  const records = validate(packet);
   if (!UUID.test(tenantId || '') || records.some((row) => row.review.counterparties.tenantId !== tenantId
-    || !approvedReviewHashes.includes(issuedPetroleumReviewHash(row)))) throw failure('This packet differs from the independently approved documentary review. New or amended paper facts require a separate verified review.');
+    || !approvedReviewHashes.includes(reviewHash(row)))) throw failure('This packet differs from the independently approved documentary review. New or amended paper facts require a separate verified review.');
   const complete = async (soql, limit = 100000) => {
     const result = await query(soql, { clean: true, limit });
     if (result?.error || result?.done === false || !Array.isArray(result?.records)

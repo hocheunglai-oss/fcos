@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { isDeploymentReadOnly } from './_deploymentReadOnly.js';
 
 const HANDLER_CONTEXT = {
   missingNomBReminderCron: {
@@ -124,6 +125,7 @@ export function shouldNotifySystemError(status) {
 }
 
 export function shouldRecordSystemErrorEnvironment(environment = process.env) {
+  if (isDeploymentReadOnly(environment)) return false;
   if (String(environment?.VERCEL_ENV || '').trim().toLowerCase() === 'production') return true;
   return String(environment?.FCOS_ALLOW_NONPRODUCTION_SYSTEM_ERROR_NOTIFICATIONS || '').trim() === '1';
 }

@@ -2,6 +2,7 @@ import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import { resolveAuthRuntimePolicy } from './shared/authRuntimePolicy.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -15,6 +16,22 @@ export default defineConfig({
   },
   plugins: [
     react(),
+    {
+      name: 'fcos-public-supabase-config',
+      configResolved({ env, command }) {
+        const development = command === 'serve' && env.DEV === true;
+        for (const publicKey of [env.VITE_SUPABASE_ANON_KEY, env.VITE_SUPABASE_PUBLISHABLE_KEY]) {
+          if (publicKey && !resolveAuthRuntimePolicy({
+            url: env.VITE_SUPABASE_URL,
+            publicKey,
+            development,
+            hostname: development ? 'localhost' : '',
+          }).configured) {
+            throw new Error('Invalid FCOS browser configuration. Use an approved Supabase URL and a public client key.');
+          }
+        }
+      },
+    },
   ],
   build: {
     manifest: true,

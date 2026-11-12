@@ -24,7 +24,12 @@ never use that fallback; incomplete or unapproved authentication configuration
 shows an error. Public configuration accepts a publishable or legacy anonymous
 key, never a secret/service-role key. Server authorization remains mandatory.
 
-Authenticated browser checks are fail-closed. For a pull request, the workflow
+The [authentication guide](docs/authentication.md) describes the current
+consumer contract. When rapid release is active, hosted acceptance runs on the
+exact staged artifact through the [protected workflow](docs/rapid-release.md).
+
+Authenticated browser checks are fail-closed. For a pull request under the
+historical release path, the workflow
 requires a governed renewable FCUNO test identity (`FCOS_E2E_EMAIL` and
 `FCOS_E2E_PASSWORD`) and `FCOS_AUTH_E2E_ENABLED=true`. Using read-only GitHub
 deployment evidence, it discovers the newest Vercel Preview for the exact
@@ -224,10 +229,6 @@ For a temporary test only, `SALESFORCE_ACCESS_TOKEN` can be used, but it will ex
 
 ## Deployment
 
-Salesforce metadata follows one source-controlled promotion path: deploy and verify an explicit reviewed change manifest in DEVEE, publish the complete current DEVEE-owned `force-app` tree to the `ivanyk20/fcbhk` `src/` mirror, then promote the same manifest to QAT and finally Production. Run `npm run salesforce:deploy:all -- --manifest manifest/<change>.xml`; the command verifies every pinned org identity, derives the scoped Apex tests from the manifest, enforces the order, records a non-secret DEVEE deployment proof bound to the complete source-tree hash, and blocks shared publication unless that hash matches. Never develop or synchronize independently from QAT or Production. Full-tree validation remains available through `npm run salesforce:validate:all`, but it intentionally includes unrelated local org tests and is not the normal promotion route.
+Ordinary releases use **Quality → stage and smoke → one go-live decision, promotion and verification**. The trusted controller builds once without deployment credentials, tests the staged Production-configured artifact without its live domain, then promotes the same Vercel deployment and observes it for five minutes. Checks follow the actual Production-to-candidate difference; frontend-only changes do not deploy Salesforce, publish its mirror, verify Xero or run migrations. Recovery preserves completed work and reads back original uncertain operations. See [the rapid release procedure](docs/rapid-release.md) for preparation, autonomous repair, qualification and one-time activation.
 
-Production deploys are handled by Vercel:
-
-```bash
-pnpm dlx vercel@latest --prod
-```
+Salesforce changes retain **DEVEE → verified complete DEVEE mirror → QAT → Production**. Run Salesforce commands from the selected authoritative application source checkout, which owns the reviewed metadata and baseline evidence. Use `npm run salesforce:deploy:all -- prepare --manifest manifest/<change>.xml --review <review.json> --adapter <trusted-adapter.mjs>`, then `apply` with exact authorization. Reviewed incremental evidence must establish the baseline, changed components, dependencies and resulting tree; a tree hash alone is insufficient. The separate `salesforce:complete:deploy` route retains complete-tree proof and `salesforce:validate:all` remains explicit broad validation. Never develop independently in QAT or Production or merge the shared draft PR automatically.

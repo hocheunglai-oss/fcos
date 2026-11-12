@@ -20,15 +20,25 @@ test('executed AuthProvider rejects late auth after logout and after a newer acc
     useState: (initial) => { const i = stateIndex++; states[i] = initial; return [initial, (value) => { states[i] = value; }]; },
   };
   let authEvent;
-  let sessionUser = 'user-a';
-  const stored = new Map();
+  const previousSessionId = '0d3b6c21-922d-4797-8685-09f42d151537';
+  const replacementSessionId = '9dffbefb-61cb-4a69-a5ea-5e46da6d42c4';
+  const fakeSession = (id, iat) => ({
+    user: { id: 'user-b' },
+    access_token: `header.${Buffer.from(JSON.stringify({ session_id: id, iat })).toString('base64url')}.fixture`,
+  });
+  let browserSession = fakeSession(previousSessionId, 1);
+  let sessionReads = 0;
   const supabase = { auth: {
-    getSession: async () => ({ data: { session: { user: { id: sessionUser } } } }),
-    signOut: async () => { authEvent?.('SIGNED_OUT', null); return { error: null }; },
+    getSession: async () => {
+      sessionReads += 1;
+      return { data: { session: browserSession } };
+    },
+    signOut: async () => { authEvent?.('SIGNED_OUT', null); },
     onAuthStateChange: (fn) => { authEvent = fn; return { data: { subscription: { unsubscribe() {} } } }; },
   } };
   const client = { functions: { clearCache() {}, invoke: () => new Promise((resolve) => pending.push(resolve)) } };
-  globalThis.window = { sessionStorage: { removeItem: (k) => stored.delete(k), setItem: (k, v) => stored.set(k, v) }, localStorage: {}, setTimeout, clearTimeout };
+  const sessionStorage = new Map();
+  globalThis.window = { sessionStorage: { getItem: (key) => sessionStorage.get(key) ?? null, removeItem: (key) => sessionStorage.delete(key), setItem: (key, value) => sessionStorage.set(key, value) }, localStorage: {}, setTimeout, clearTimeout };
   globalThis.__authHarness = { react, supabase, client };
   let source = await readFile(new URL('../src/lib/AuthContext.jsx', import.meta.url), 'utf8');
   source = source.replace(/^import .*;\n/gm, '').replaceAll('import.meta.env.', 'testEnv.');
@@ -49,19 +59,16 @@ test('executed AuthProvider rejects late auth after logout and after a newer acc
   effects[1]();
   const old = auth.checkUserAuth();
   await Promise.resolve();
-  sessionUser = 'user-b';
   const newest = auth.checkUserAuth();
   await Promise.resolve();
-  pending[1]({ data: { user: { id: 'user-b', active: true }, moduleAccess: { dashboard: true }, deploymentCapabilities: { mutationsAllowed: true }, permissionGroups: [{id:'group-b'}], accessRevision:7, grantSources:{dashboard:['group-b']} } });
+  pending[1]({ data: { user: { id: 'user-b', active: true }, moduleAccess: { dashboard: true } } });
   await newest;
-  pending[0]({ data: { user: { id: 'user-a', active: true }, moduleAccess: { admin: true } } });
+  pending[0]({ data: { code: 'FCUNO_IDENTITY_SESSION_REVOKED', error: 'The older session was revoked.' } });
   assert.equal((await old).stale, true);
+  assert.equal(sessionStorage.has('fcos:fcuno-force-reauth'), false);
   assert.equal(states[0].id, 'user-b');
-  assert.deepEqual(states[11], { permissionGroups: [{id:'group-b'}], accessRevision:7, grantSources:{dashboard:['group-b']} }, 'only the current verified user supplies effective group provenance');
-  assert.deepEqual(states[12], { mutationsAllowed: true }, 'only verified current-user response supplies deployment capability');
   assert.equal(clientSessionState().ownerId, 'user-b');
   const beforeLogout = auth.checkUserAuth();
-  assert.equal(states[12], null, 'a fresh authorization check immediately invalidates deployment mutation eligibility');
   await Promise.resolve();
   let finishSignOut;
   supabase.auth.signOut = () => new Promise((resolve) => { finishSignOut = resolve; });
@@ -70,8 +77,10 @@ test('executed AuthProvider rejects late auth after logout and after a newer acc
   assert.equal(states[7], true, 'transition loader prevents automatic FCUNO navigation during sign-out');
   assert.equal(states[10], false, 'logout is not yet complete');
   assert.equal((await auth.checkUserAuth()).stale, true);
-  finishSignOut({ error: null });
+  assert.equal(sessionStorage.get('fcos:failed-sign-out-session'), previousSessionId, 'Reload protection is persisted before provider acknowledgement');
+  finishSignOut();
   await logout;
+  assert.equal(sessionStorage.has('fcos:failed-sign-out-session'), false);
   assert.equal(states[7], false);
   pending[2]({ data: { user: { id: 'user-a' } } });
   assert.equal((await beforeLogout).stale, true);
@@ -87,62 +96,131 @@ test('executed AuthProvider rejects late auth after logout and after a newer acc
   assert.equal(states[7], false);
   assert.equal(states[9].type, 'user_inactive');
   assert.equal(states[0], null);
-  // A refreshed access token must revalidate authorization instead of silently
-  // retaining the preceding session's permissions.
-  authEvent('TOKEN_REFRESHED', { user: { id: sessionUser } });
+  const mismatched = auth.checkUserAuth();
+  await Promise.resolve();
+  pending[4]({ data: { user: { id: 'different-account', active: true }, moduleAccess: { admin: true } } });
+  assert.equal((await mismatched).user, null);
+  assert.equal(states[0], null);
+  assert.equal(clientSessionState().ownerId, null);
+  const recovered = auth.checkUserAuth();
+  await Promise.resolve();
+  pending[5]({ data: { user: { id: 'user-b', active: true }, moduleAccess: { dashboard: true } } });
+  await recovered;
+  authEvent('TOKEN_REFRESHED', { user: { id: 'user-b' } });
   await new Promise((resolve) => setTimeout(resolve, 5));
-  pending[4]({ data: { error: 'Sign in again.', code: 'FCUNO_IDENTITY_SESSION_REVOKED' } });
+  assert.equal(pending.length, 7, 'a refreshed token must trigger a current server authorization check');
+  pending[6]({ data: { code: 'FCUNO_IDENTITY_SESSION_REVOKED', error: 'This FCOS session was revoked. Sign in again.' } });
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(states[0], null);
+  assert.deepEqual(states[1], {});
   assert.equal(states[9].type, 'auth_required');
-  assert.equal(states[12], null, 'revoked federation cannot retain deployment capability');
-  assert.deepEqual(states[11], { permissionGroups: [], accessRevision:null, grantSources:{} }, 'revoked federation clears effective group provenance');
-  assert.equal(stored.get('fcos:fcuno-force-reauth'), 'true');
-  for (const user of [{ id: 'foreign-user', active: true }, { id: sessionUser, active: false }]) {
-    const check = auth.checkUserAuth();
-    await Promise.resolve();
-    pending.at(-1)({ data: { user, moduleAccess: { admin: true } } });
-    assert.equal((await check).user, null);
-    assert.equal(states[0], null);
-    assert.deepEqual(states[1], {});
-  }
-  // Supabase may resolve signOut with an error rather than reject. Keep the
-  // current view locked and expose the failure in the returned summary.
-  supabase.auth.signOut = async () => ({ error: new Error('revoke failed') });
+  assert.equal(sessionStorage.get('fcos:fcuno-force-reauth'), 'true');
+  const failedSignOut = async () => ({ error: new Error('provider sign-out failed') });
+  supabase.auth.signOut = failedSignOut;
+  const beforeFailedLogout = sessionReads;
   const failedLogout = await auth.logout();
-  assert.equal(failedLogout.failures[0].applicationId, 'fcos');
-  assert.equal((await auth.checkUserAuth()).stale, true);
+  assert.equal(sessionReads, beforeFailedLogout, 'Failed sign-out must not attempt a session refresh');
+  assert.deepEqual(failedLogout.failures.map(({ applicationId }) => applicationId), ['fcos']);
+  assert.equal(JSON.parse(sessionStorage.get('fcos:portal-logout-warning'))[0].applicationId, 'fcos');
+  assert.equal(clientSessionState().ownerId, null);
+  assert.deepEqual(await auth.checkUserAuth(), { user: null, stale: true });
+  authEvent('TOKEN_REFRESHED', { user: { id: 'user-b' } });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(pending.length, 7);
+  assert.equal(states[0], null);
+
+  // A full reload remounts the provider, while this tab and its stored
+  // Supabase session survive the failed sign-out.
+  assert.equal(sessionStorage.get('fcos:failed-sign-out-session'), previousSessionId);
+  browserSession = fakeSession(previousSessionId, 2);
+  stateIndex = 0;
+  const reloaded = AuthProvider({ children: null }).props.value;
+  const invoke = client.functions.invoke;
+  let reloadChecks = 0;
+  client.functions.invoke = async () => {
+    reloadChecks += 1;
+    return { data: { user: { id: 'user-b', active: true } } };
+  };
+  const afterReload = await reloaded.checkUserAuth();
+  assert.equal(afterReload.user, null, 'Reload must not revive the prior session after failed sign-out');
+  assert.equal(reloadChecks, 0, 'The retained session must not reach authorization');
+  assert.equal(states[7], false);
+  assert.equal(states[10], true);
+
+  // A different session is still subject to the normal server verification.
+  browserSession = fakeSession(replacementSessionId, 3);
+  client.functions.invoke = async () => ({ data: {
+    code: 'FCUNO_IDENTITY_SESSION_REVOKED', error: 'The replacement is not authorized.',
+  } });
+  assert.equal((await reloaded.checkUserAuth()).user, null);
+  assert.equal(sessionStorage.get('fcos:failed-sign-out-session'), previousSessionId);
+  client.functions.invoke = async () => ({ data: { user: { id: 'user-b', active: true } } });
+  assert.equal((await reloaded.checkUserAuth()).user.id, 'user-b');
+  assert.equal(sessionStorage.has('fcos:failed-sign-out-session'), false);
+
+  // Explicit password sign-in can recover when the old session could not
+  // be identified, and still runs normal server verification.
+  browserSession = { user: { id: 'user-b' }, access_token: 'malformed' };
+  stateIndex = 0;
+  const unverified = AuthProvider({ children: null }).props.value;
+  await unverified.logout();
+  assert.equal(sessionStorage.get('fcos:failed-sign-out-session'), 'unknown');
+  browserSession = fakeSession(previousSessionId, 4);
+  stateIndex = 0;
+  const recovery = AuthProvider({ children: null }).props.value;
+  client.functions.invoke = () => assert.fail('Unknown prior session must stay blocked');
+  assert.equal((await recovery.checkUserAuth()).user, null);
+  assert.equal(sessionStorage.get('fcos:failed-sign-out-session'), previousSessionId);
+
+  client.functions.invoke = invoke;
+  supabase.auth.signInWithPassword = async () => {
+    browserSession = fakeSession(replacementSessionId, 5);
+    return { error: null };
+  };
+  const newSignIn = recovery.login('test@example.invalid', 'fixture-only');
+  await Promise.resolve();
+  await Promise.resolve();
+  pending[7]({ data: { user: { id: 'user-b', active: true } } });
+  await newSignIn;
+  assert.equal(states[0].id, 'user-b');
+  assert.equal(sessionStorage.has('fcos:failed-sign-out-session'), false);
   delete globalThis.__authHarness;
 });
 
-test('the route boundary denies unverified states and preserves the requested login destination', async () => {
-  const location = { pathname: '/special-terms/private', search: '?view=details' };
-  globalThis.__routeHarness = {
-    auth: {}, location,
-    createElement: (type, props) => ({ type, props }),
-  };
-  try {
-    let source = await readFile(new URL('../src/components/ProtectedRoute.jsx', import.meta.url), 'utf8');
-    source = source.replace(/^import .*;\n/gm, '');
-    source = `const React = globalThis.__routeHarness;
-      const useEffect = () => {}, useAuth = () => globalThis.__routeHarness.auth, useLocation = () => globalThis.__routeHarness.location;
-      const Navigate = 'navigate', Outlet = 'outlet', UserNotRegisteredError = 'unregistered';
-      ${source}`;
-    const compiled = ts.transpileModule(source, { compilerOptions: { jsx: ts.JsxEmit.React, module: ts.ModuleKind.ESNext } }).outputText;
-    const { default: ProtectedRoute } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`);
-    for (const auth of [
-      { isAuthenticated: false, authChecked: true },
-      { isAuthenticated: true, authChecked: true, authError: { type: 'user_inactive' } },
-    ]) {
-      globalThis.__routeHarness.auth = auth;
-      const result = ProtectedRoute({});
-      assert.equal(result.type, 'navigate');
-      assert.equal(result.props.to, '/login');
-      assert.equal(result.props.state.from, location);
+test('the login screen withholds sign-in controls when hosted authentication is unavailable', async () => {
+  const source = (await readFile(new URL('../src/pages/Login.jsx', import.meta.url), 'utf8')).replace(/^import .*;\n/gm, '');
+  const harness = `
+    let state;
+    export function render(auth) {
+      state = auth;
+      return Login();
     }
-    globalThis.__routeHarness.auth = { isAuthenticated: true, authChecked: false };
-    assert.equal(ProtectedRoute({ fallback: 'pending' }), 'pending');
-    globalThis.__routeHarness.auth = { isAuthenticated: true, authChecked: true };
-    assert.equal(ProtectedRoute({}).type, 'outlet');
-  } finally { delete globalThis.__routeHarness; }
+    const React = {
+      createElement: (type, props, ...children) => ({ type, props, children }),
+      Fragment: 'fragment',
+    };
+    const useAuth = () => state;
+    const useLocation = () => ({ search: '', hash: '' });
+    const useState = (value) => [typeof value === 'function' ? value() : value, () => {}];
+    const useEffect = () => {};
+    const useRef = (current) => ({ current });
+    const window = { sessionStorage: { getItem: () => null } };
+    const Boxes = 'boxes', Loader2 = 'loader', LockKeyhole = 'lock', TriangleAlert = 'alert';
+    const Navigate = 'navigate';
+  `;
+  const compiled = ts.transpileModule(harness + source, {
+    compilerOptions: { jsx: ts.JsxEmit.React, module: ts.ModuleKind.ESNext },
+  }).outputText;
+  const { render } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`);
+  const defaults = { authChecked: true, fcunoOidcEnabled: true, legacyPasswordLoginEnabled: true };
+  const unavailable = JSON.stringify(render({ ...defaults, authMode: 'unavailable' }));
+  assert.match(unavailable, /FCOS sign-in is unavailable/);
+  assert.doesNotMatch(unavailable, /"type":"(?:button|form|navigate)"|local administrator mode/);
+  const hosted = { ...defaults, authMode: 'supabase', isSupabaseConfigured: true };
+  assert.match(JSON.stringify(render(hosted)), /Opening FCUNO sign-in/);
+  const manual = JSON.stringify(render({ ...hosted, authError: { type: 'user_inactive' } }));
+  assert.match(manual, /"type":"button"/);
+  assert.match(manual, /"type":"form"/);
+  const local = JSON.stringify(render({ ...defaults, authMode: 'local' }));
+  assert.match(local, /"type":"navigate"/);
 });

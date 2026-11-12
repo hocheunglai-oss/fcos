@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { fetchEmailRouterDetail, listEmailRouterMessages } from '../api/_emailRouterCore.js';
+import { fetchEmailRouterDetail } from '../api/_emailRouterCore.js';
+
+import { runWithDeploymentRequestSafety } from '../api/_deploymentReadOnly.js';
 
 const mailbox = { id: 'mailbox-1', emailAddress: 'router@example.test' };
-const listedMessage = { id: 'listed-message-1', subject: 'Read-only list', hasAttachments: false, isRead: false };
 const detailMessage = { id: 'detail-message-1', subject: 'Read-only detail', body: { contentType: 'html', content: '<p>Body</p>' }, hasAttachments: false };
 
 function response(value) {
@@ -42,17 +43,21 @@ function createRouterClient({
   };
 }
 
-function graphFetch({ list = [listedMessage], detail = detailMessage, attachments = [] } = {}) {
+function graphFetch({ detail = detailMessage, attachments = [] } = {}) {
   return async (url) => {
     const requested = String(url);
     if (requested.includes('/attachments?')) return response({ value: attachments });
     if (requested.includes(`/messages/${detail.id}?`)) return response(detail);
-    return response({ value: list, '@odata.nextLink': 'https://graph.microsoft.com/v1.0/users/router@example.test/mailFolders/inbox/messages?$skiptoken=next' });
+    assert.fail('Unexpected Graph request');
   };
 }
 
-test('Preview and explicit read-only production return real Graph reads without storage writes, RPC, or deferred attachment work', async () => {
-  for (const env of [{ VERCEL_ENV: 'preview' }, { VERCEL_ENV: 'production', FCOS_ENABLE_READ_ONLY_CI: 'true' }]) {
+test('Read-only message detail returns provider data without storage writes, RPC, or deferred attachment work', async () => {
+  for (const { host, env } of [
+    { host: 'fcos-preview.vercel.app', env: { VERCEL_ENV: 'preview' } },
+    { host: 'fcos-staging.vercel.app', env: { VERCEL_ENV: 'production' } },
+    { host: 'fcos.fcuno.com', env: { VERCEL_ENV: 'production', FCOS_ENABLE_READ_ONLY_CI: 'true' } },
+  ]) {
     const attachment = { id: 'attachment-read-only', name: 'evidence.pdf', contentType: 'application/pdf', size: 12, isInline: false };
     const actionHistory = [{ id: 'action-1', action_type: 'redirect', state: 'confirmed', confirmed_at: '2026-10-02T00:00:00.000Z' }];
     const detailMessageWithAttachment = { ...detailMessage, hasAttachments: true };
@@ -60,11 +65,8 @@ test('Preview and explicit read-only production return real Graph reads without 
     let deferred = 0;
     const dependencies = { env, accessToken: 'test-token',
       fetchImpl: graphFetch({ detail: detailMessageWithAttachment, attachments: [attachment] }), defer: () => { deferred += 1; } };
-    const listed = await listEmailRouterMessages({ client, mailbox, folder: 'inbox', limit: 10 }, dependencies);
-    const detail = await fetchEmailRouterDetail({ client, mailbox, messageId: detailMessageWithAttachment.id, hasAttachmentsHint: true }, dependencies);
-    assert.deepEqual(listed.items, [listedMessage]);
-    assert.equal(listed.total, 1);
-    assert.equal(Buffer.from(listed.nextCursor, 'base64url').toString('utf8'), 'https://graph.microsoft.com/v1.0/users/router@example.test/mailFolders/inbox/messages?$skiptoken=next');
+    const detail = await runWithDeploymentRequestSafety({ headers: { host } },
+      () => fetchEmailRouterDetail({ client, mailbox, messageId: detailMessageWithAttachment.id, hasAttachmentsHint: true }, dependencies), env);
     assert.equal(detail.body.content, '<p>Body</p>');
     assert.deepEqual(detail.attachments, [attachment]);
     assert.deepEqual(detail.actionHistory, [{ id: 'action-1', action: 'redirect', status: 'confirmed', at: '2026-10-02T00:00:00.000Z' }]);
@@ -73,19 +75,17 @@ test('Preview and explicit read-only production return real Graph reads without 
   }
 });
 
-test('normal Production retains list metadata and indexed attachment persistence after unchanged Graph reads', async () => {
+test('canonical Production retains indexed attachment persistence', async () => {
   const attachment = { id: 'attachment-1', name: 'evidence.pdf', contentType: 'application/pdf', size: 12, isInline: false };
   const detail = { ...detailMessage, hasAttachments: true };
   const { client, operations } = createRouterClient();
   const deferred = [];
   const dependencies = { env: { VERCEL_ENV: 'production' }, accessToken: 'test-token',
     fetchImpl: graphFetch({ detail, attachments: [attachment] }), defer: (job) => deferred.push(job) };
-  const listed = await listEmailRouterMessages({ client, mailbox, folder: 'inbox', limit: 10 }, dependencies);
-  const full = await fetchEmailRouterDetail({ client, mailbox, messageId: detail.id, hasAttachmentsHint: true }, dependencies);
+  const full = await runWithDeploymentRequestSafety({ headers: { host: 'fcos.fcuno.com' } },
+    () => fetchEmailRouterDetail({ client, mailbox, messageId: detail.id, hasAttachmentsHint: true }, dependencies), dependencies.env);
   await Promise.all(deferred);
-  assert.deepEqual(listed.items, [listedMessage]);
   assert.deepEqual(full.attachments, [attachment]);
-  assert.ok(operations.some((operation) => operation.table === 'messages' && operation.mutation === 'upsert'));
   assert.ok(operations.some((operation) => operation.table === 'message_attachment_metadata' && operation.mutation === 'upsert'));
   assert.ok(operations.some((operation) => operation.table === 'messages' && operation.mutation === 'update'));
   assert.equal(deferred.length, 1);

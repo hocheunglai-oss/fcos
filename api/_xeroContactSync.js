@@ -1,5 +1,6 @@
-import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
+import { deploymentSafeSupabaseFetch } from './_deploymentReadOnlyFetch.js';
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 import { requireExternalActionGate } from './_externalActionGates.js';
 import { serverSupabaseConfig } from './_supabaseConfig.js';
@@ -283,7 +284,7 @@ export function xeroContactSyncServiceClient(env = process.env) {
       fetch: async (input, init) => {
         const startedAt = Date.now();
         try {
-          const response = await fetch(input, init);
+          const response = await deploymentSafeSupabaseFetch(input, init);
           recordSupabaseRequest({ durationMs: Date.now() - startedAt, ok: response.ok });
           return response;
         } catch (error) {
@@ -711,6 +712,7 @@ export function xeroConfig(env, stored = null) {
 }
 
 export async function requestXeroToken(config, body, fetchImpl) {
+  requireDeploymentMutationAllowed(true);
   const response = await fetchImpl(`${XERO_IDENTITY_BASE}/connect/token`, {
     method: 'POST',
     headers: {
@@ -831,6 +833,9 @@ export async function createXeroContactsBatch(connection, contacts, runId, { env
 
 export async function xeroAccountingFetch(connection, pathName, options = {}) {
   const { method, body, rawBody, idempotencyKey, retryOnRateLimit, env = process.env, fetchImpl = fetch, headers: extraHeaders = {}, onResponse = null, callsPerMinute = 0, wait = sleep, requestGate = xeroRequestGate(fetchImpl) } = options;
+  // Even accounting reads need durable admission/observation writes. A staged
+  // runtime must not consume or change the live Xero coordination state.
+  requireDeploymentMutationAllowed(true, env);
   const context = xeroSharedContext(connection, options);
   const control = context.sharedControl;
   const requestMethod = String(method || 'GET').toUpperCase();
@@ -840,22 +845,19 @@ export async function xeroAccountingFetch(connection, pathName, options = {}) {
   if (context.probeId && pathName !== '/Organisations') throw xeroControlError('XERO_PROBE_AUTHORITY_INVALID');
   if (rawBody !== undefined && body !== undefined) throw xeroControlError('XERO_REQUEST_BODY_INVALID');
   const requestBody = rawBody !== undefined ? rawBody : body ? JSON.stringify(body) : undefined;
-  // Bind admission to the actual serialized request, including JSON supplied as
-  // rawBody. Non-JSON attachments remain ordinary traffic and cannot use a
-  // status-only exception whose exact payload is mandatory in the database.
-  let payloadJson = null;
-  if (typeof requestBody === 'string') {
-    try { payloadJson = JSON.parse(requestBody); } catch { /* Scoped admission rejects an absent JSON payload. */ }
-  }
   const contentType = rawBody !== undefined ? Object.entries(extraHeaders).find(([key]) => key.toLowerCase() === 'content-type')?.[1] || 'application/octet-stream' : 'application/json';
   const headers = { ...extraHeaders, Authorization: `Bearer ${connection.accessToken}`, 'xero-tenant-id': connection.tenantId, Accept: 'application/json', 'Content-Type': contentType, ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}) };
   const retryRateLimit = !context.probeId && (retryOnRateLimit ?? requestMethod === 'GET');
   const intervalMs = callsPerMinute > 0 ? Math.ceil(60_000 / Math.min(45, callsPerMinute)) : 0;
   let rateWaitMs = 0;
-  if (options.transientRetryLimit !== undefined && (!Number.isSafeInteger(options.transientRetryLimit)
-    || options.transientRetryLimit < 0 || options.transientRetryLimit > 2)) throw xeroControlError('XERO_REQUEST_RETRY_INVALID');
+  const requestedRetryLimit = options.transientRetryLimit;
+  if (requestedRetryLimit !== undefined && (!Number.isSafeInteger(requestedRetryLimit) || requestedRetryLimit < 0 || requestedRetryLimit > 2)) {
+    throw xeroControlError('XERO_REQUEST_RETRY_INVALID');
+  }
+  // A bounded read may spend fewer retries than the transport normally allows.
   const transientRetryLimit = requestMethod === 'GET' && !context.probeId
-    ? options.transientRetryLimit ?? xeroTransientRetryLimit(env) : 0;
+    ? Math.min(xeroTransientRetryLimit(env), requestedRetryLimit ?? 2)
+    : 0;
   let transientRetries = 0;
   for (let attempt = 0; attempt < 4; attempt += 1) {
     let response, receipt, payload, bodyError;
@@ -875,7 +877,7 @@ export async function xeroAccountingFetch(connection, pathName, options = {}) {
         let capacityWait = 0;
         for (;;) {
           try {
-            receipt = await control.admit({ tenantId: connection.tenantId, tokenVersion: connection.tokenVersion, ...(context.requestId ? { requestId: context.requestId } : {}), method: requestMethod, resourceKey, resourcePath: pathName, payloadJson, budgetId, budgetPhase: context.budgetPhase || 'operation', probeId: context.probeId || null });
+            receipt = await control.admit({ tenantId: connection.tenantId, tokenVersion: connection.tokenVersion, ...(context.requestId ? { requestId: context.requestId } : {}), method: requestMethod, resourceKey, budgetId, budgetPhase: context.budgetPhase || 'operation', probeId: context.probeId || null });
             break;
           } catch (error) {
             if (!['XERO_INFLIGHT_LIMIT', 'XERO_MINUTE_LIMIT'].includes(error.code)

@@ -65,8 +65,8 @@ export function createXeroSharedControl(client) {
     },
     release: ({ tenantId, budgetId, reason = 'Completed' }) => rpc('xero_shared_release', { p_tenant_id: tenantId, p_id: budgetId, p_reason: reason }),
     authorizeProbe: ({ tenantId, probeId = randomUUID(), actorId, notBefore, reason }) => rpc('xero_shared_authorize_probe', { p_tenant_id: tenantId, p_id: probeId, p_actor_id: actorId, p_not_before: notBefore, p_reason: reason }),
-    admit: ({ tenantId, tokenVersion, requestId = randomUUID(), method, resourceKey, resourcePath, payloadJson = null, budgetId = null, budgetPhase = 'operation', probeId = null }) => rpc('xero_shared_admit_scoped_v1', {
-      p_tenant_id: tenantId, p_id: requestId, p_token_version: tokenVersion, p_method: method, p_resource_key: resourceKey, p_budget_id: budgetId, p_phase: budgetPhase, p_probe_id: probeId, p_resource_path: resourcePath, p_payload_json: payloadJson,
+    admit: ({ tenantId, tokenVersion, requestId = randomUUID(), method, resourceKey, budgetId = null, budgetPhase = 'operation', probeId = null }) => rpc('xero_shared_admit', {
+      p_tenant_id: tenantId, p_id: requestId, p_token_version: tokenVersion, p_method: method, p_resource_key: resourceKey, p_budget_id: budgetId, p_phase: budgetPhase, p_probe_id: probeId,
     }),
     observe: ({ tenantId, requestId, status = null, headers = null, outcomeUnknown = false }) => rpc('xero_shared_observe', {
       p_tenant_id: tenantId, p_request_id: requestId, p_status: status, p_snapshot: headers ? xeroRateLimitSnapshot(headers) : {}, p_outcome_unknown: outcomeUnknown,

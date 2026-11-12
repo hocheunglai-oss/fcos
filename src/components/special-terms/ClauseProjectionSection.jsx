@@ -2,7 +2,6 @@ import { memo } from 'react';
 import { Badge } from '@/components/ui/badge';
 import ClauseComposer from '@/components/special-terms/ClauseComposer';
 import MigrationReviewPanel from '@/components/special-terms/MigrationReviewPanel';
-import { richTextToCopyText } from '@/lib/specialTermsText';
 
 function ClauseProjectionSection({
   detail,
@@ -66,7 +65,9 @@ function ClauseProjectionSection({
       ) : (
         <div className="space-y-2">
           <p className="text-xs font-medium text-muted-foreground">Current live Salesforce wording</p>
-          <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap rounded-lg border border-border bg-muted/30 p-4 text-sm leading-relaxed">{richTextToCopyText(projectionDetail.text) || `No ${projectionDetail.label}`}</pre>
+          <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap rounded-lg border border-border bg-muted/30 p-4 text-sm leading-relaxed">{typeof projectionDetail.plainText === 'string'
+            ? projectionDetail.plainText || `No ${projectionDetail.label}`
+            : 'Refresh to load the preserved wording.'}</pre>
           <p className="text-xs text-muted-foreground">This wording stays read-only and live until reviewed assignments are approved and activated atomically.</p>
         </div>
       )}

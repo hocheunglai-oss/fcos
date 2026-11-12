@@ -1,6 +1,3 @@
-import { existingDraftAuthorisationApprovedScope } from './_xeroExistingDraftAuthorisationScope.js';
-import { existingDraftAuthorisationPreview, existingDraftAuthorisationRead, existingDraftAuthorisationApply, existingDraftAuthorisationRecover } from './_xeroExistingDraftAuthorisation.js';
-import { supplierFinancialBucketPreview, supplierFinancialBucketRead, supplierFinancialBucketApply } from './_xeroSupplierFinancialBucketWorkflow.js';
 import { xeroReconciliationCampaignCreate, xeroReconciliationCampaignRead, xeroReconciliationCampaignRefresh, xeroReconciliationCampaignPreview, xeroReconciliationCampaignApprove, xeroReconciliationCampaignRun, xeroReconciliationCampaignRetry, xeroReconciliationConnectionCheck } from './_xeroReconciliationCampaign.js';
 import { xeroFinancialDocumentCorrectionPreview, xeroFinancialDocumentCorrectionPage, xeroFinancialDocumentCorrectionApply, xeroFinancialDocumentCorrectionVerify } from './_xeroDocumentCorrections.js';
 import {
@@ -34,17 +31,10 @@ import { xeroContactIdentitySave } from './_xeroContactIdentity.js';
 import { xeroContactRepairApply } from './_xeroContactRepair.js';
 import { xeroContactRestoreApply } from './_xeroContactRestore.js';
 import { xeroFinancialDocumentPreservationPreview, xeroFinancialDocumentPreservationRun } from './_xeroIssuedSupplierWorkflow.js';
+import { supplierFinancialBucketApply, supplierFinancialBucketPreview, supplierFinancialBucketRead } from './_xeroSupplierFinancialBucketWorkflow.js';
 import { xeroIntegrityReport } from './_xeroIntegrityReport.js';
 
 export const XERO_HANDLER_MODULE_ACCESS = Object.freeze(Object.fromEntries([
-  'xeroExistingDraftAuthorisationApprovedScope',
-  'xeroExistingDraftAuthorisationPreview',
-  'xeroExistingDraftAuthorisationRead',
-  'xeroExistingDraftAuthorisationApply',
-  'xeroExistingDraftAuthorisationRecover',
-  'xeroSupplierFinancialBucketPreview',
-  'xeroSupplierFinancialBucketRead',
-  'xeroSupplierFinancialBucketApply',
   'xeroIntegrityReport',
   'xeroReconciliationCampaignCreate',
   'xeroReconciliationCampaignRead',
@@ -85,6 +75,9 @@ export const XERO_HANDLER_MODULE_ACCESS = Object.freeze(Object.fromEntries([
   'xeroFinancialDocumentCorrectionVerify',
   'xeroFinancialDocumentPreservationPreview',
   'xeroFinancialDocumentPreservationRun',
+  'xeroSupplierFinancialBucketPreview',
+  'xeroSupplierFinancialBucketRead',
+  'xeroSupplierFinancialBucketApply',
 ].map((name) => [name, ['xero_portal']])));
 
 export function createXeroHandlers({ requireActiveUser, resolveRecoveredSystemErrorHandler }) {
@@ -106,14 +99,6 @@ export function createXeroHandlers({ requireActiveUser, resolveRecoveredSystemEr
     return result;
   };
   return {
-    xeroExistingDraftAuthorisationApprovedScope: wrap(existingDraftAuthorisationApprovedScope),
-    xeroExistingDraftAuthorisationPreview: wrap(existingDraftAuthorisationPreview),
-    xeroExistingDraftAuthorisationRead: wrap(existingDraftAuthorisationRead),
-    xeroExistingDraftAuthorisationApply: wrap(existingDraftAuthorisationApply),
-    xeroExistingDraftAuthorisationRecover: wrap(existingDraftAuthorisationRecover),
-    xeroSupplierFinancialBucketPreview: wrap(supplierFinancialBucketPreview),
-    xeroSupplierFinancialBucketRead: wrap(supplierFinancialBucketRead),
-    xeroSupplierFinancialBucketApply: wrap(supplierFinancialBucketApply),
     xeroIntegrityReport: wrap(xeroIntegrityReport),
     xeroReconciliationCampaignCreate: wrap(xeroReconciliationCampaignCreate),
     xeroReconciliationCampaignRead: wrap(xeroReconciliationCampaignRead),
@@ -154,5 +139,8 @@ export function createXeroHandlers({ requireActiveUser, resolveRecoveredSystemEr
     xeroFinancialDocumentCorrectionVerify: wrap(xeroFinancialDocumentCorrectionVerify),
     xeroFinancialDocumentPreservationPreview: wrap(xeroFinancialDocumentPreservationPreview),
     xeroFinancialDocumentPreservationRun: wrap(xeroFinancialDocumentPreservationRun),
+    xeroSupplierFinancialBucketPreview: wrap(supplierFinancialBucketPreview),
+    xeroSupplierFinancialBucketRead: wrap(supplierFinancialBucketRead),
+    xeroSupplierFinancialBucketApply: wrap(supplierFinancialBucketApply),
   };
 }

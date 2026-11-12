@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { isDeploymentReadOnly } from './_deploymentReadOnly.js';
 import {
   currentRequestTelemetry,
   recordCacheEvent,
@@ -198,7 +199,7 @@ function usableEntry(entry, now) {
 async function readEntry(adapter, key, now) {
   const entry = await adapter.get(key);
   if (!entry || usableEntry(entry, now)) return entry;
-  await adapter.delete?.(key);
+  if (!isDeploymentReadOnly()) await adapter.delete?.(key);
   return null;
 }
 
@@ -271,7 +272,7 @@ export async function getOrLoadRuntimeCache({
 }
 
 async function loadAndOptionallyCache({ adapter, key, ttl, tags, loader, now, status, cacheError = null }) {
-  const deduplicate = status !== 'bypass';
+  const deduplicate = status !== 'bypass' && !isDeploymentReadOnly();
   if (deduplicate && inFlightLoads.has(key)) {
     const result = await inFlightLoads.get(key);
     if (result.sources?.salesforce === true && currentRequestTelemetry()?.salesforce?.backed !== true) {
@@ -280,7 +281,8 @@ async function loadAndOptionallyCache({ adapter, key, ttl, tags, loader, now, st
     return result;
   }
   const loadToken = Symbol(key);
-  latestLoadTokens.set(key, loadToken);
+  // A staged load must not replace a canonical request's pending cache token.
+  if (!isDeploymentReadOnly()) latestLoadTokens.set(key, loadToken);
 
   const promise = (async () => {
     const salesforceReadsBefore = currentRequestTelemetry()?.salesforce?.sourceReads || 0;
@@ -295,9 +297,11 @@ async function loadAndOptionallyCache({ adapter, key, ttl, tags, loader, now, st
     let finalStatus = status;
     let finalError = cacheError;
 
-    if (ttl > 0 && latestLoadTokens.get(key) === loadToken && !runtimeCacheWriteAllowed()) {
+    if (ttl > 0 && !runtimeCacheWriteAllowed()) {
       finalStatus = 'bypass';
-      finalError = new Error('Runtime cache write skipped after an upstream partial failure');
+      finalError = new Error(isDeploymentReadOnly()
+        ? 'Runtime cache write skipped in a read-only request'
+        : 'Runtime cache write skipped after an upstream partial failure');
     } else if (ttl > 0 && latestLoadTokens.get(key) === loadToken) {
       const entry = { value, fetchedAt, expiresAt: fetchedAt + ttl * 1000, tags, sources };
       try {
@@ -330,6 +334,7 @@ async function loadAndOptionallyCache({ adapter, key, ttl, tags, loader, now, st
 
 export async function expireRuntimeCacheTags(tags, { cacheAdapter } = {}) {
   const normalizedTags = normalizeRuntimeCacheTags(tags);
+  if (isDeploymentReadOnly()) return { status: 'bypass', tags: normalizedTags, reason: 'deployment_read_only' };
   if (normalizedTags.length === 0) return { status: 'bypass', tags: [] };
   const adapter = await resolveCacheAdapter(cacheAdapter);
   try {

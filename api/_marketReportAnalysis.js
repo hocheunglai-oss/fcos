@@ -281,6 +281,15 @@ function modelInstructions() {
   ].join('\n');
 }
 
+// Shared deterministic evidence retrieval for the report analyst and Market chat.
+// The caller supplies selected catalogue keys, never SQL or client-supplied facts.
+export async function loadMarketReportFacts(client, body = {}) {
+  const catalogueRows = await allCatalogueRows(client);
+  const request = normalizeRequest(body, catalogueRows);
+  const rows = await observationRows(client, request.selected, request.startDate, request.endDate);
+  return { request, series: seriesFacts(request.selected, rows) };
+}
+
 export async function analyzeMarketReportLibrary(client, profile, body = {}, { apiKey = process.env.OPENAI_API_KEY, fetchImpl = fetch, onUsage } = {}) {
   const prompt = String(body.prompt || '').trim().slice(0, 1_200);
   if (prompt.length < 3) throw analysisError('Enter a market-analysis question.');
@@ -288,12 +297,9 @@ export async function analyzeMarketReportLibrary(client, profile, body = {}, { a
   if (!isAllowedAiSelection(selection)) throw analysisError('Select an allowed AI model.', 400, 'MARKET_REPORT_MODEL_INVALID');
   if (!String(apiKey || '').trim()) throw analysisError('Market report AI analysis is not configured.', 503, 'OPENAI_NOT_CONFIGURED');
 
-  const catalogueRows = await allCatalogueRows(client);
-  const request = normalizeRequest(body, catalogueRows);
-  const rows = await observationRows(client, request.selected, request.startDate, request.endDate);
+  const { request, series: completeSeries } = await loadMarketReportFacts(client, body);
   const routing = resolveAiModel({ task: 'market_report', selection, prompt, contextCount: request.selected.length });
   const modelId = routing.modelId;
-  const completeSeries = seriesFacts(request.selected, rows);
   const sampled = sampledFacts(completeSeries);
   const evidence = [];
   const seriesForModel = sampled.series.map((series, seriesIndex) => ({

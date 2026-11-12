@@ -14,5 +14,3 @@ playwright-report/
 test-results/
 supabase/.temp/
 *.docx
-
-outputs/

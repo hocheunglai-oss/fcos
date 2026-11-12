@@ -13,6 +13,7 @@ import { cashflowExplanation, changedCashflowRows } from '../src/lib/cashflowExp
 import { readFile } from 'node:fs/promises';
 import * as methodologySource from '../src/lib/pageMethodologies.js';
 import * as methodologyIndex from '../src/lib/pageMethodologyIndex.js';
+import { PAGE_METHODOLOGIES } from '../src/hedge/lib/methodology.js';
 
 test('on-demand methodology assets preserve all authoritative source text and descriptors', async () => {
   const documents = JSON.parse(await readFile(new URL('../src/content/page-methodologies.json', import.meta.url), 'utf8'));
@@ -23,6 +24,16 @@ test('on-demand methodology assets preserve all authoritative source text and de
       assert.equal(descriptor.title, document.title);
       assert.equal(descriptor.sections, undefined);
     }
+  }
+  assert.deepEqual(methodologyIndex.HEDGE_METHODOLOGY_TITLES, Object.keys(PAGE_METHODOLOGIES));
+  for (const [title, methodology] of Object.entries(PAGE_METHODOLOGIES)) {
+    assert.deepEqual(documents[`hedge:${title}`], {
+      sections: [
+        { title: 'Purpose', body: methodology.summary },
+        { title: 'Calculation and control rules', points: methodology.steps },
+      ],
+      sources: methodology.sources || [],
+    });
   }
 });
 

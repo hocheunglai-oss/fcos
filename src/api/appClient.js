@@ -69,7 +69,7 @@ async function requestAuthContext() {
   const { data } = await supabase.auth.getSession();
   return {
     accessToken: data?.session?.access_token || null,
-    providerToken: data?.session?.provider_token || null,
+    fcunoProviderToken: data?.session?.provider_token || null,
     scope: data?.session?.user?.id || 'anonymous',
   };
 }
@@ -176,11 +176,15 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
   if (DEDICATED_FUNCTION_ENDPOINTS[name]) headers['x-fcos-function-name'] = name;
   if (options.force) headers['x-fcos-cache-bypass'] = '1';
   if (authContext.accessToken) headers.authorization = `Bearer ${authContext.accessToken}`;
-  // Bootstrap only: never include the FCUNO proof in payloads, cache keys or
-  // unrelated API requests. Both tokens come from the same Supabase session.
-  if (name === 'authContext' && authContext.accessToken && authContext.providerToken) {
-    headers['x-fcos-fcuno-provider-token'] = authContext.providerToken;
-  }
+  if (name === 'authContext' && authContext.fcunoProviderToken) headers['x-fcos-fcuno-provider-token'] = authContext.fcunoProviderToken;
+  const invalidateAfterRequest = (mutationHeader = null) => {
+    const shouldInvalidateCache = options.invalidateCache === true
+      || (options.invalidateCache !== false && (mutationHeader === '1' || (!cacheKey && mutationHeader !== '0')));
+    if (shouldInvalidateCache) invalidateFunctionCache();
+    else if (options.invalidateNames?.length || options.invalidateTags?.length) {
+      invalidateFunctionCache({ names: options.invalidateNames, tags: options.invalidateTags });
+    }
+  };
   let res;
   try {
     res = await fetch(functionEndpoint(name), {
@@ -190,6 +194,8 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
       signal: options.signal,
     });
   } catch (error) {
+    if (!isCurrentClientSession(session)) return changedSessionResponse();
+    invalidateAfterRequest();
     if (error?.name === 'AbortError') {
       return {
         data: { cancelled: true },
@@ -218,7 +224,6 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
   }
   const responseContentType = res.headers?.get?.('content-type') || '';
   const responseIsJson = responseContentType.toLowerCase().includes('application/json');
-  const data = responseIsJson ? await res.json().catch(() => ({})) : {};
   if (!isCurrentClientSession(session)) return changedSessionResponse();
   const responseHeader = (name) => res.headers?.get?.(name) || null;
   const serverCacheStatus = responseHeader('x-fcos-cache') || 'BYPASS';
@@ -231,6 +236,7 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
   const mutationHeader = responseHeader('x-fcos-handler-mutation');
 
   if (!responseIsJson) {
+    invalidateAfterRequest(mutationHeader);
     return {
       data: { error: res.status === 504
         ? 'The FCOS request timed out before it completed. Refresh the saved result before retrying.'
@@ -246,8 +252,34 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
     };
   }
 
+  let data;
+  try {
+    data = await res.json();
+  } catch (error) {
+    if (!isCurrentClientSession(session)) return changedSessionResponse();
+    invalidateAfterRequest(mutationHeader);
+    const cancelled = error?.name === 'AbortError' || options.signal?.aborted === true;
+    return {
+      data: cancelled
+        ? { cancelled: true }
+        : { code: 'FCOS_RESPONSE_INVALID', error: 'The FCOS response could not be read. Refresh the saved result before retrying.' },
+      meta: {
+        cached: false,
+        cacheLayer: 'network',
+        cacheStatus: cancelled ? 'CANCELLED' : 'UNAVAILABLE',
+        cachedAt: null,
+        requestId,
+        salesforceCalls: Number.isFinite(salesforceCalls) ? salesforceCalls : null,
+        ...(cancelled ? { cancelled: true } : {}),
+      },
+    };
+  }
+  if (!isCurrentClientSession(session)) return changedSessionResponse();
+
   if (!res.ok) {
-    if (res.status >= 500) {
+    invalidateAfterRequest(mutationHeader);
+    // The list subscribes to this event. A failed list request must not refresh itself.
+    if (res.status >= 500 && name !== 'workNotificationsList') {
       window.dispatchEvent(new CustomEvent('fcos:work-notifications-changed'));
     }
     return {
@@ -292,12 +324,7 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
     trimFunctionCache();
   }
 
-  const shouldInvalidateCache = options.invalidateCache === true
-    || (options.invalidateCache !== false && (mutationHeader === '1' || (!cacheKey && mutationHeader !== '0')));
-  if (shouldInvalidateCache) invalidateFunctionCache();
-  else if (options.invalidateNames?.length || options.invalidateTags?.length) {
-    invalidateFunctionCache({ names: options.invalidateNames, tags: options.invalidateTags });
-  }
+  invalidateAfterRequest(mutationHeader);
 
   return {
     data,

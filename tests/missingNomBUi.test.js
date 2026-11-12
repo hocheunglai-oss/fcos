@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { clearPendingUpload, createUploadAttempt, displayNomBDate, fingerprintNomBFile, initialPagination, isDefiniteNoWrite, isProvenNoWriteForOperation, isVerifiedUpload, listPayload, paginationReducer, persistPendingUpload, recoverPendingUpload, validateNomBFile } from '../src/lib/missingNomB.js';
+import { clearPendingUpload, createUploadAttempt, displayNomBDate, fingerprintNomBFile, initialPagination, isDefiniteNoWrite, isProvenNoWriteForOperation, isVerifiedUpload, listPayload, nomBDataIssues, paginationReducer, persistPendingUpload, recoverPendingUpload, validateNomBFile } from '../src/lib/missingNomB.js';
 
 const file = (name, size) => ({ name, size });
 const fingerprint = 'a'.repeat(64);
@@ -12,6 +12,13 @@ const storage = () => {
     removeItem: (key) => values.delete(key),
   };
 };
+
+test('Nom B filing identifies missing details and leaves complete rows clear', () => {
+  assert.deepEqual(nomBDataIssues({ buyerName: 'Buyer', vesselName: ' ', portName: null }), [
+    'Vessel details unavailable', 'Port details unavailable', 'IMO unavailable',
+  ]);
+  assert.deepEqual(nomBDataIssues({ buyerName: 'Buyer', vesselName: 'Vessel', portName: 'Port', imo: 1234567 }), []);
+});
 
 test('Nom B selection enforces the decoded 3 MiB cap and allowed file types', () => {
   assert.equal(validateNomBFile(file('nom-b.PDF', 3 * 1024 * 1024)), null);

@@ -1,6 +1,4 @@
 import assert from 'node:assert/strict';
-import { sourceStatePath as genericSourceStatePath } from '../scripts/salesforce-workflow-state.mjs';
-import { sourceStatePath as hotfixSourceStatePath } from '../scripts/salesforce-schema-free-hotfix-state.mjs';
 import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -11,7 +9,7 @@ import {
   assertJobReport,
   parseDeploymentArguments,
   selectedMirrorProof,
-} from '../scripts/deploy-salesforce-schema-free-hotfix.mjs';
+} from '../scripts/deploy-salesforce-environments.mjs';
 import {
   COMPLETE_SALESFORCE_SCOPE,
   FULL_SALESFORCE_TEST_LEVEL,
@@ -25,7 +23,7 @@ import {
   validateDeveeSourceState,
   validationResumeDisposition,
   workflowMatchesFrozenSource,
-} from '../scripts/salesforce-schema-free-hotfix-state.mjs';
+} from '../scripts/salesforce-workflow-state.mjs';
 
 const sourceHash = 'a'.repeat(64);
 const frozen = { sourceTreeHash: sourceHash, releaseMode: SALESFORCE_RELEASE_MODE };
@@ -80,6 +78,8 @@ test('validation and deployment resume exact jobs and reject drift or failed job
   };
   const deployment = { ...validation, jobId: '0Af000000000002AAA', checkOnly: false };
   assert.equal(validationResumeDisposition(null, frozen), 'submit');
+  assert.throws(() => validationResumeDisposition({ ...validation, status: 'submitting', jobId: null }, frozen), /uncertain outcome/);
+  assert.throws(() => deploymentResumeDisposition({ ...deployment, status: 'submitting', jobId: null }, frozen), /owner readback/);
   assert.equal(validationResumeDisposition({ ...validation, status: 'InProgress' }, frozen), 'resume');
   assert.equal(validationResumeDisposition({ ...validation, status: 'Succeeded' }, frozen), 'reuse');
   assert.equal(deploymentResumeDisposition(null, frozen), 'submit');
@@ -92,7 +92,8 @@ test('validation and deployment resume exact jobs and reject drift or failed job
 
 test('successful validation proof requires the exact target job and every local test', () => {
   const environment = { label: 'DEVEE' };
-  const result = { id: '0Af000000000001AAA', status: 'Succeeded', checkOnly: true, numberTestsTotal: 528, numberTestsCompleted: 528 };
+  const result = { id: '0Af000000000001AAA', status: 'Succeeded', checkOnly: true, numberTestsTotal: 528, numberTestsCompleted: 528,
+    done: true, success: true, rollbackOnError: true, numberComponentErrors: 0, numberTestErrors: 0 };
   assert.equal(assertJobReport(result, { checkOnly: true, environment, jobId: result.id }), undefined);
   assert.throws(() => assertJobReport({ ...result, numberTestsCompleted: 527 }, { checkOnly: true, environment, jobId: result.id }), /complete RunLocalTests/);
   assert.throws(() => assertJobReport({ ...result, checkOnly: false }, { checkOnly: true, environment, jobId: result.id }), /expected successful validation/);
@@ -167,11 +168,6 @@ test('shared proof requires the configured repository and exact open draft head'
 });
 
 test('the shared draft is reverified after QAT before Production starts', async () => {
-  const source = await readFile(new URL('../scripts/deploy-salesforce-schema-free-hotfix.mjs', import.meta.url), 'utf8');
+  const source = await readFile(new URL('../scripts/deploy-salesforce-environments.mjs', import.meta.url), 'utf8');
   assert.match(source, /ensureDeployment\(qat\);[\s\S]*ensurePublication\(\);[\s\S]*ensureValidation\(production\);/u);
-});
-
-test('manifest/bootstrap and schema-free workflows cannot overwrite or adopt each other saved proof', () => {
-  assert.notEqual(genericSourceStatePath(), hotfixSourceStatePath());
-  assert.equal(hotfixSourceStatePath(), `${genericSourceStatePath()}.schema-free-hotfix`);
 });

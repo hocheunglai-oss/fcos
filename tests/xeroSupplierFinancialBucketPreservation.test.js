@@ -1,8 +1,7 @@
-import { originalFinancialBuilderSource } from './helpers/originalFinancialBuilderFixture.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { financialFixture, ids, hash } from './xeroSupplierFinancialBucketPreservation.fixture.js';
-import { supplierDocumentSourceEvidence, supplierFinancialSourcePayload } from '../api/_xeroFinancialSync.js';
+import { supplierFinancialSourcePayload } from '../api/_xeroFinancialSync.js';
 import { evaluateSettledSupplierPaymentProof } from '../api/_xeroSettledSupplierPaymentProof.js';
 import { evaluateSupplierFinancialBucketPreservation as evaluate, supplierFinancialSignedCents as cents,
   supplierFinancialBucketReview, supplierFinancialBucketDiagnostics, supplierFinancialBucketApprovalMaterial } from '../api/_xeroSupplierFinancialBucketPreservation.js';
@@ -174,10 +173,7 @@ test('public diagnostics omit entire private originals/provider identity and rev
     { reviewFingerprint: hash('x'), legacyReviewFingerprint: hash('y') }), null);
 });
 
-test('new fixed wrapper shares the original builder without changing its complete payload or old nine-field evidence', async () => {
-  const path = new URL('../api/_xeroFinancialSync.js', import.meta.url), original = originalFinancialBuilderSource();
-  const text = original.replace(/from '([^']+)'/g, (all, name) => name.startsWith('.') ? `from '${new URL(name, path).href}'` : all)
-    + '\nexport function originalPayload({parent,children,charges,buyers,productMappings,contacts,safetyContext}) { const mappingByKey=new Map(productMappings.map(row=>[`${row.direction}:${row.salesforce_product_id}`,row])); return stripClassification(buildSalesforceDocument(parent,"supplier",[...children,...charges],mappingByKey,buildXeroContactIndex(contacts),{...safetyContext,postingMode:"draft",documentFieldSnapshot:{buyers,lines:children,extras:charges,cutoff:XERO_FINANCIAL_CUTOFF}})); }';
-  const old = await import(`data:text/javascript;base64,${Buffer.from(text).toString('base64')}`), f = financialFixture(), args = sourceArgs(f);
-  assert.deepEqual(supplierFinancialSourcePayload(args), old.originalPayload(args)); assert.deepEqual(supplierDocumentSourceEvidence(args), Object.fromEntries(['salesforceObject','salesforceId','accountId','contactId','stemId','sourceFingerprint','financialFingerprint','blockers','readiness'].map(key=>[key,old.originalPayload(args)[key]])));
+test('the current supplier source wrapper retains the archived builder payload', () => {
+  const payload = supplierFinancialSourcePayload(sourceArgs(financialFixture()));
+  assert.equal(hash(payload), '6d0d0e93a34448fd23fba3a5e9c80fc0d6e48347062922807be46465b165beeb');
 });

@@ -37,7 +37,7 @@ export function useAppSettings() {
       setUpdatedAt(nextUpdatedAt);
       setRevisions(nextRevisions);
     } catch (nextError) {
-      setValues({});
+      setValues(null);
       setUpdatedAt({});
       setError(nextError);
     } finally {
@@ -77,6 +77,7 @@ export function useAppSettings() {
 
   return useMemo(() => ({
     loading,
+    hasLoaded: values !== null,
     error,
     savingKey,
     reload: load,

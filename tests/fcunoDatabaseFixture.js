@@ -6,8 +6,8 @@ import path from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
 import pg from 'pg';
 
-export const newMigration = '20261016230316_fcuno_session_proof_and_atomic_projection.sql';
-export const revocationMigration = '20261016231319_fcuno_monotonic_revocation_floor.sql';
+export const newMigration = '20261019144041_fcuno_session_proof_and_atomic_projection.sql';
+export const revocationMigration = '20261019144123_fcuno_monotonic_revocation_floor.sql';
 export const userId = '11111111-1111-4111-8111-111111111111';
 export const subject = '22222222-2222-4222-8222-222222222222';
 export const sessionId = '33333333-3333-4333-8333-333333333333';

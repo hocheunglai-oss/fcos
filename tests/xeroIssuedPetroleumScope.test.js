@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { issuedPetroleumFixture, issuedPetroleumOwnerFixture } from './xeroIssuedPetroleumPreservationFixtures.js';
 import { buildGroupedPreservationContext } from '../api/_xeroGroupedPreservationAdapter.js';
-import { collectPetroleumPreservationScope, petroleumScopeFingerprint, PETROLEUM_SCOPE_LIMITS } from '../api/_xeroIssuedPetroleumScope.js';
+import { collectPetroleumPreservationScope, collectPetroleumXeroHistory, petroleumScopeFingerprint, PETROLEUM_SCOPE_LIMITS } from '../api/_xeroIssuedPetroleumScope.js';
 import { evaluatePetroleumFinancialDocument } from '../api/_xeroIssuedPetroleumPreservationAdapter.js';
+import { normalizeXeroInvoice } from '../api/_xeroFinancialSync.js';
 
 const complete = (records) => ({ records, totalSize: records.length, done: true });
 const invalid = { code: 'XERO_PETROLEUM_SCOPE_INCOMPLETE' };
@@ -29,6 +30,37 @@ function fixture(make = issuedPetroleumFixture) {
   const input = { records: f.packet.records, connection: { tenantId: f.ids.tenant }, salesforce: f.salesforce, xero: f.xero, sources: [f.source], stored: f.stored };
   return { ...f, input, options, rows, queries, calls };
 }
+
+test('typed Xero history deduplicates a Contact and direction while keeping buyer and supplier claims distinct', async () => {
+  const f = fixture();
+  const buyer = { ...f.raw, Type: 'ACCREC', InvoiceID: uuid(21) };
+  const anotherSupplier = { ...f.raw, InvoiceID: uuid(22) };
+  const supplierRows = [f.raw, anotherSupplier];
+  const selections = [...supplierRows, buyer].map(row => ({ contactId: f.ids.contact, target: normalizeXeroInvoice(row) }));
+  const accountingFetch = async (connection, path, options) => {
+    if (path.startsWith('/Invoices?')) {
+      f.calls.push({ path, options });
+      const where = new URL(path, 'https://fixture.invalid').searchParams.get('where');
+      return { Invoices: where.includes('"ACCREC"') ? [buyer] : supplierRows };
+    }
+    return f.options.accountingFetch(connection, path, options);
+  };
+  const input = { connection: f.input.connection, selections };
+  const result = await collectPetroleumXeroHistory(input, { accountingFetch });
+  assert.deepEqual(result.xeroContactIds, [f.ids.contact]);
+  assert.deepEqual(result.targetClaims.map(({ document }) => document.type).sort(), ['ACCPAY', 'ACCPAY', 'ACCREC']);
+  assert.deepEqual(result.creditClaims, []);
+  assert.equal(f.calls.length, 6);
+  assert.equal(f.calls.filter(({ path }) => path.startsWith('/Accounts')).length, 1);
+  assert.equal(f.calls.filter(({ path }) => path.startsWith('/TaxRates')).length, 1);
+  assert.ok(f.calls.every(({ options }) => options.method === 'GET'));
+  assert.ok(f.calls.filter(({ path }) => path.startsWith('/Invoices?')).every(({ path }) => path.includes('includeArchived=true')));
+  assert.ok(f.calls.some(({ path }) => decodeURIComponent(path).includes('Type=="ACCRECCREDIT"')));
+  await assert.rejects(collectPetroleumXeroHistory({ ...input,
+    selections: [{ ...selections[0], contactId: uuid(23) }] }, { accountingFetch }), invalid);
+  assert.equal(f.calls.length, 6);
+  await assert.rejects(collectPetroleumXeroHistory(input, { accountingFetch: async () => ({ Invoices: [buyer] }) }), invalid);
+});
 
 test('real collector scans every retained inactive owner even with zero supplier obligations', async () => {
   const f = fixture(issuedPetroleumOwnerFixture);

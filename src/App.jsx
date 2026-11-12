@@ -9,7 +9,6 @@ import { AuthProvider, useAuth } from '@/lib/AuthContext';
 import UserNotRegisteredError from '@/components/UserNotRegisteredError';
 import ModuleGate from '@/components/ModuleGate';
 import ModuleGateAny from '@/components/ModuleGateAny';
-import ProtectedRoute from '@/components/ProtectedRoute';
 import Layout from '@/components/Layout';
 import WorkspaceErrorBoundary from '@/components/WorkspaceErrorBoundary';
 
@@ -89,12 +88,17 @@ const AuthenticatedApp = () => {
     <Suspense fallback={<RouteLoader />}>
     <Routes>
       <Route path="/login" element={<Login />} />
-      <Route element={<ProtectedRoute
-        fallback={<RouteLoader />}
-        unauthenticatedElement={authError && authError.type !== 'auth_required'
-          ? <AuthErrorScreen authError={authError} />
-          : <Navigate to="/login" replace state={loginRedirectState} />}
-      />}>
+      {authError?.type === 'auth_required' && (
+        <Route path="*" element={<Navigate to="/login" replace state={loginRedirectState} />} />
+      )}
+      {authError && authError.type !== 'auth_required' && (
+        <Route path="*" element={<AuthErrorScreen authError={authError} />} />
+      )}
+      {!authError && !isAuthenticated && (
+        <Route path="*" element={<Navigate to="/login" replace state={loginRedirectState} />} />
+      )}
+      {!authError && isAuthenticated && (
+        <>
           <Route path="/apps" element={<Navigate to="/" replace />} />
           <Route path="/v2/*" element={<RedirectLegacyWorkspace />} />
           <Route element={<Layout />}>
@@ -131,7 +135,8 @@ const AuthenticatedApp = () => {
             <Route path="/admin" element={<RedirectWithSection section="people" />} />
             <Route path="*" element={<PageNotFound />} />
           </Route>
-      </Route>
+        </>
+      )}
     </Routes>
     </Suspense>
     </WorkspaceErrorBoundary>

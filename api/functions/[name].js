@@ -1,5 +1,8 @@
-import { loadDashboardNomB, saveDashboardNomBPolicy, loadDashboardNomBAudit } from '../_dashboardNomBService.js';
-import { missingNomBList as missingNomBListService, missingNomBUpload as missingNomBUploadService, runMissingNomBReminders, missingNomBStatus } from '../_missingNomB.js';
+import { listCompanyFxHistory, saveHistoricalCompanyFxRate } from '../_companyFxHistoryAdmin.js';
+import { setManagedUserActivation } from '../_fcunoManagedActivation.js';
+import { deploymentSafeSupabaseFetch } from '../_deploymentReadOnlyFetch.js';
+import { withDeploymentRequestSafety } from '../_deploymentReadOnly.js';
+import { activeStemLineItems } from '../../src/lib/stemLineVisibility.js';
 import { loadEffectiveGroupAccess, readAllAccessRows, serializeGroupUser, accessOperationError } from '../_accessGroups.js';
 import { AUTO_AI_MODEL, AI_MODEL_SELECTIONS, AI_ROUTING_VERSION, isAllowedAiSelection, automaticRoutingFor, resolveAiModel } from '../_aiModelRouting.js';
 import { createStemWorkspaceActivity } from '../_stemWorkspaceActivity.js';
@@ -29,7 +32,6 @@ import {
   paymentDataReliableSoql,
 } from '../../src/lib/paymentDataReliability.js';
 import { grossMarginPercent } from '../_dashboardMetrics.js';
-import { activeStemLineItems, visibleStemBuyerBrokers } from '../../src/lib/stemLineVisibility.js';
 import { buildDashboardDateScopeWhere } from '../_dashboardDateScope.js';
 import { dashboardLineItemVolume, dashboardVolumeLabel, findDashboardUomField } from '../_dashboardVolume.js';
 import { dashboardCurrency, dashboardCurrentYearDateWindows, dashboardMonthlyComparison, dashboardMonthlyFinancialTrend, dashboardMonthlyYearOverYear, dashboardSupplierProductRows, decodeDashboardCursor, decisionDashboardCompleteness, decisionDashboardSummary, decisionDashboardSupplierAmount, encodeDashboardCursor, normalizeDecisionDashboardFilters, priorEquivalentDateWindows, yearOverYearDateWindows } from '../_decisionDashboard.js';
@@ -37,6 +39,7 @@ import { dashboardAccountRankings } from '../../src/lib/dashboardAccountRankings
 import { loadDashboardAccountInsight } from '../_dashboardAccountInsightService.js';
 import { generateDashboardAccountInsightExport } from '../_dashboardAccountInsightExport.js';
 import { loadDashboardAccountCreditDirectory, loadDashboardAccountCreditStatement } from '../_dashboardAccountCreditStatementService.js';
+import { loadDashboardNomB, saveDashboardNomBPolicy, loadDashboardNomBAudit } from '../_dashboardNomBService.js';
 import { isPaymentRemittance, paymentRecordTypeToken } from '../_paymentClassification.js';
 import { accountInsightStatementRequest, createAccountInsightReportHandlers } from '../_accountInsightReportScope.js';
 import { validateAccountInsightReportConfig, projectAccountInsightReport, MAX_REPORT_DETAIL_ROWS } from '../_accountInsightReport.js';
@@ -94,6 +97,7 @@ import {
   collaborationTemplateSave as collaborationTemplateSaveService,
   collaborationUpdate as collaborationUpdateService,
 } from '../_collaborationService.js';
+import { loadDashboardBuyerPaymentAnalysis } from '../_dashboardBuyerPaymentAnalysisService.js';
 import { DASHBOARD_AI_MODELS, compileDashboardAiWhere, dashboardAiModel, interpretDashboardAiSearch, isAllowedDashboardAiModel, normalizeDashboardAiPrompt } from '../_dashboardAi.js';
 import { operationalMailConfig, operationalMailDeliveryAvailable, sendOperationalMail } from '../_operationalMail.js';
 import { loadFinancialReportSettings, saveFinancialReportSettings } from '../_financialReportSettings.js';
@@ -229,8 +233,9 @@ import { createFinanceSettingsHandlers, loadFinanceSettings } from '../_dashboar
 import { createDashboardFinanceLoader, financeToday, summarizeDashboardFinance, validateFinanceSnapshot } from '../_dashboardFinance.js';
 import { secondaryMopsFailureMessage } from '../_marketSourceHealth.js';
 import { ciModuleAccess, isReadOnlyCiProfile, isReadOnlyMarketAction, requireReadOnlyCiOperation } from '../_readOnlyCiAccess.js';
-import { isReadOnlyHedgeDeskAction } from '../_hedgeDeskReadOnly.js';
-import { deploymentCapabilities, requireDeploymentMutationAllowed } from '../_deploymentReadOnly.js';
+import { isDeploymentReadOnly, requireDeploymentMutationAllowed } from '../_deploymentReadOnly.js';
+import { isReadOnlyHedgeDeskAction } from '../_deploymentReadActions.js';
+import { marketAssistantSettings, runMarketAssistant, saveMarketAssistantSettings } from '../_marketAssistant.js';
 import { analyzeMarketReportLibrary, loadMarketReportCatalogue } from '../_marketReportAnalysis.js';
 import {
   applyMasterContractPrice as applyMasterContractPriceService,
@@ -307,6 +312,7 @@ import {
 } from '../_emailRouterHandlers.js';
 import { createEmailRouterServiceClient, currentEmailRouterMailbox, emailRouterGraphFetch, maintainEmailRouterSubscriptions, processEmailRouterOutbox, recordEmailRouterAlert, resolveEmailRouterAlert, syncEmailRouterFolderFromStoredCursor } from '../_emailRouterCore.js';
 import { processEmailRouterLearningJobs } from '../_emailRouterLearning.js';
+import { missingNomBList as missingNomBListService, missingNomBUpload as missingNomBUploadService, runMissingNomBReminders, missingNomBStatus } from '../_missingNomB.js';
 import { createXeroHandlers, XERO_HANDLER_MODULE_ACCESS } from '../_xeroHandlers.js';
 import {
   importCashflowBankStatement as importCashflowBankStatementService,
@@ -390,11 +396,13 @@ const ADMIN_APP_MODULES = [
   { id: 'xero_portal', label: 'Xero Portal', path: '/xero-portal', sortOrder: 89 }, { id: 'email_router', label: 'Email Router', path: '/email-router', sortOrder: 91 },
   { id: 'settings', label: 'Settings', path: '/settings', sortOrder: 90 },
   { id: 'admin', label: 'People & Access', path: '/settings?section=people', sortOrder: 100 },
+  { id: 'outlook_nomination_filing', label: 'Outlook Nomination Filing', path: '/outlook-nomination-filing', sortOrder: 190 },
 ];
 
 let portalOutboxScheduledAt = 0;
 
 function schedulePortalOutboxRetry(client) {
+  if (isDeploymentReadOnly()) return;
   const now = Date.now();
   if (now - portalOutboxScheduledAt < 60_000) return;
   portalOutboxScheduledAt = now;
@@ -741,7 +749,7 @@ function supabaseAdminClient() {
     const trackedFetch = async (...args) => {
       const startedAt = Date.now();
       try {
-        const response = await fetch(...args);
+        const response = await deploymentSafeSupabaseFetch(...args);
         recordSupabaseRequest({
           durationMs: Date.now() - startedAt,
           ok: response.ok,
@@ -827,7 +835,7 @@ async function loadAuthBootstrapPreferences(client, userId) {
 async function authContext(body, req, accessContext) {
   const { client, authUser, profile } = accessContext || (await requireActiveUser(req));
   const readOnlyCi = isReadOnlyCiProfile(profile);
-  const deployment = deploymentCapabilities(process.env, { readOnlyProfile: readOnlyCi });
+  const mutationsAllowed = !readOnlyCi && !isDeploymentReadOnly();
   const preferencesPromise = loadAuthBootstrapPreferences(client, profile.id);
   let permissionValues;
   let capabilityValues;
@@ -852,7 +860,7 @@ async function authContext(body, req, accessContext) {
     moduleAccess,
   });
   const bootstrapPreferences = await preferencesPromise;
-  if (deployment.mutationsAllowed) schedulePortalOutboxRetry(client);
+  if (mutationsAllowed) schedulePortalOutboxRetry(client);
 
   return {
     user: {
@@ -873,7 +881,7 @@ async function authContext(body, req, accessContext) {
       [REPORT_ARCHIVE_MODULE_ID]: reportArchiveAccessLevel(permissionValues[REPORT_ARCHIVE_MODULE_ID]),
     },
     capabilities: capabilityValues,
-    deploymentCapabilities: deployment,
+    deploymentCapabilities: { mutationsAllowed },
     applications,
     navigationPreferences: bootstrapPreferences?.navigationPreferences || null,
     workspacePreferences: bootstrapPreferences?.workspacePreferences || null,
@@ -1157,9 +1165,6 @@ async function listAccessModel(client) {
 const AUTH_EXEMPT_HANDLERS = new Set(['outstandingBuyerInvoicesEmailCron', 'paymentCollectionsReconcileCron', 'portalEntitlementSyncCron', 'collaborationDailyCron', 'growthCoachingDailyCron', 'hedgeDeskMaintenanceCron', 'marketReportDriveSyncCron', 'masterContractReconcileCron', 'emailRouterMaintenanceCron', 'missingNomBReminderCron']);
 
 const HANDLER_MODULE_ACCESS = {
-  dashboardNomBRead: ['dashboard'],
-  dashboardNomBPolicySave: ['dashboard'],
-  dashboardNomBAuditRead: ['dashboard'],
   missingNomBList: ['dashboard'],
   missingNomBUpload: ['dashboard'],
   missingNomBReminderCron: [],
@@ -1241,6 +1246,9 @@ const HANDLER_MODULE_ACCESS = {
   marketIntelligenceCurve: ['markets'],
   marketReportCatalogue: ['markets'],
   marketReportAnalysis: ['markets'],
+  marketAssistant: ['markets'],
+  marketAssistantSettingsGet: ['markets', 'settings'],
+  marketAssistantSettingsSave: ['settings'],
   marketIntelligenceValuation: ['markets'],
   marketForwardFallbackSave: ['markets'],
   marketIntelligenceAlertRulesGet: ['markets'],
@@ -1432,7 +1440,7 @@ const HANDLER_MODULE_ACCESS = {
   shipAgentChargesSync: ['buyer_invoices', 'incoming_payments'],
   variableChargesList: ['buyer_invoices', 'incoming_payments'],
   variableChargesDetail: ['buyer_invoices', 'incoming_payments'],
-  variableChargesAnchorageSave: ['buyer_invoices', 'incoming_payments'], variableChargesVesselNrtSave: ['buyer_invoices', 'incoming_payments'], variableChargesLightDuesSave: ['buyer_invoices', 'incoming_payments'], variableChargesSettingsGet: ['buyer_invoices', 'incoming_payments'], variableChargesSettingsSave: ['buyer_invoices', 'incoming_payments'],
+  variableChargesAnchorageSave: ['buyer_invoices', 'incoming_payments'], variableChargesVesselNrtSave: ['buyer_invoices', 'incoming_payments'], variableChargesLightDuesSave: ['buyer_invoices', 'incoming_payments'], variableChargesSettingsGet: ['buyer_invoices', 'incoming_payments'], variableChargesSettingsSave: ['buyer_invoices', 'incoming_payments'], companyFxHistoryGet: ['buyer_invoices', 'incoming_payments'], companyFxHistorySave: ['buyer_invoices', 'incoming_payments'],
   variableChargesOptions: ['buyer_invoices', 'incoming_payments'],
   variableChargesSupplierVerify: ['buyer_invoices', 'incoming_payments'],
   variableChargesBuyerConfirm: ['buyer_invoices', 'incoming_payments'],
@@ -1668,18 +1676,16 @@ async function requireInterofficeStemAccess(stemId, accessContext) {
   if (!rows.length) throw appError('This STEM is not available for Interoffice users.', 403);
 }
 
-async function requireHandlerAccess(name, req) {
+async function requireHandlerAccess(name, req, classifiedBody = null) {
   const policy = handlerPolicyFor(HANDLER_POLICY_REGISTRY, name);
   if (!policy) {
     throw appError('This FCOS operation has no access policy and is unavailable.', 500, 'HANDLER_ACCESS_POLICY_MISSING');
   }
-  if (policy.authentication === 'cron') {
-    requireDeploymentMutationAllowed(policy.mutation);
-    return null;
-  }
+  if (policy.authentication === 'cron') return null;
   const context = await requireActiveUser(req);
   requireReadOnlyCiOperation(context.profile, name, {}, { mutation: policy.mutation && name !== 'hedgeMarkets' });
-  requireDeploymentMutationAllowed(policy.mutation && !['hedgeMarkets', 'hedgeDeskEntity'].includes(name));
+  const pureHedgeRead = name === 'hedgeDeskEntity' && !isReadOnlyCiProfile(context.profile) && isReadOnlyHedgeDeskAction(classifiedBody);
+  requireDeploymentMutationAllowed(policy.mutation && name !== 'hedgeMarkets' && !pureHedgeRead);
   const allowed = await userHasAnyModuleAccess(context.client, context.profile, policy.modules);
   if (!allowed) throw appError('You do not have access to this module.', 403);
   if (policy.capability) {
@@ -1972,14 +1978,12 @@ async function assertAdministratorContinuity(client, { userId, nextActive = fals
 }
 
 async function persistManagedUser(client, body, actor = null) {
+  if (Object.hasOwn(body, 'activationOnly')) {
+    return setManagedUserActivation(client, body, actor, { appError, fcunoFederationConfig, assertAdministratorContinuity, writeAdminAudit });
+  }
   const payload = await sanitizeManagedUserPayload(client, body);
   const isUpdate = Boolean(payload.id);
   const identityManagedByFcuno = fcunoFederationConfig().federationEnabled;
-  const activationOnly = body.activationOnly === true;
-  if ((body.activationOnly !== undefined && typeof body.activationOnly !== 'boolean')
-    || (activationOnly && (!identityManagedByFcuno || !isUpdate || typeof body.active !== 'boolean'))) {
-    throw appError('Activation-only changes require an existing FCUNO-managed user and explicit application access.', 400, 'FCOS_APPLICATION_ACCESS_INVALID');
-  }
   if (identityManagedByFcuno && !isUpdate) {
     throw appError('Create company identities in FCUNO User Management, then assign FCOS access here.', 409, 'FCUNO_IDENTITY_CREATE_REQUIRED');
   }
@@ -2001,12 +2005,6 @@ async function persistManagedUser(client, body, actor = null) {
         throw appError('FCOS application access must be explicitly Active or Disabled.', 400, 'FCOS_APPLICATION_ACCESS_INVALID');
       }
       payload.active = body.active === undefined ? managedProfile.active === true : body.active;
-      if (activationOnly) {
-        // Activation expresses no role intent. Preserve the latest stored role,
-        // including a role changed before this request's initial profile read.
-        payload.user_type = managedProfile.user_type;
-        payload.use_type_defaults = managedProfile.use_type_defaults !== false;
-      }
     }
     if (identityManagedByFcuno && (
       String(payload.email || '').toLowerCase() !== String(managedProfile?.email || '').toLowerCase()
@@ -2076,7 +2074,6 @@ async function persistManagedUser(client, body, actor = null) {
   const authorizationPatch = {
     user_type: stagedUserType,
     ...(!identityManagedByFcuno || body.active !== undefined ? { active: effectiveActive } : {}),
-    use_type_defaults: identityManagedByFcuno ? managedProfile.use_type_defaults ?? true : payload.use_type_defaults,
     updated_at: nowIso,
   };
   if (identityManagedByFcuno) {
@@ -2097,6 +2094,7 @@ async function persistManagedUser(client, body, actor = null) {
   } else {
     const { error: profileError } = await client.from('user_profiles').upsert({
       id: authUser.id, email: effectiveEmail, full_name: effectiveFullName, ...authorizationPatch,
+      use_type_defaults: managedProfile?.use_type_defaults ?? true,
     }, { onConflict: 'id' });
     if (profileError) throw profileError;
   }
@@ -2594,8 +2592,9 @@ async function universalAuditTrail(body, req) {
       },
     })),
     safeAuditRows(client.from('connection_attestations').select('id,profile,revision,schema_version,policy_version,key_id,verified_at,expires_at,duration_ms,providers,created_at').order('created_at', { ascending: false }).limit(queryLimit), (row) => {
-      const attestation = connectionAttestationFromRow(row);
-      const state = connectionAttestationState(attestation, row.created_at);
+      const historical = { historical: true };
+      const attestation = connectionAttestationFromRow(row, historical);
+      const state = connectionAttestationState(attestation, row.created_at, historical);
       return {
         id: `connection-attestation:${row.id}`,
         source: 'System Connections',
@@ -4799,6 +4798,8 @@ async function variableChargesLightDuesSave(body, req, accessContext = null) { c
 
 async function variableChargesSettingsGet(body, req, accessContext = null) { return getVariableChargeSettings(body, await shipAgentChargesContext(req, accessContext)); }
 
+async function companyFxHistoryGet(body, req, accessContext = null) { return listCompanyFxHistory(body, accessContext || await requireActiveUser(req)); }
+async function companyFxHistorySave(body, req, accessContext = null) { return saveHistoricalCompanyFxRate(body, accessContext || await requireActiveUser(req)); }
 async function variableChargesSettingsSave(body, req, accessContext = null) { return saveVariableChargeSettings(body, await shipAgentChargesContext(req, accessContext)); }
 
 async function variableChargesOptions(body, req, accessContext = null) { return variableChargeOptions(body, await shipAgentChargesContext(req, accessContext)); }
@@ -5332,9 +5333,10 @@ async function dashboardAiSearch(body, req, accessContext = null) {
   const clarification = String(body.clarification || '')
     .trim()
     .slice(0, 200);
-  const currentYear = new Date().getFullYear();
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Hong_Kong', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const currentYear = Number(today.slice(0, 4));
   const selectedYears = Array.isArray(body.selectedYears) && body.selectedYears.length ? body.selectedYears : [currentYear];
-  const selectedMonths = Array.isArray(body.selectedMonths) && body.selectedMonths.length ? body.selectedMonths : [new Date().getMonth() + 1];
+  const selectedMonths = Array.isArray(body.selectedMonths) && body.selectedMonths.length ? body.selectedMonths : [Number(today.slice(5, 7))];
   const selectedPeriodLabel = dashboardAiSelectedPeriodLabel(selectedYears, selectedMonths);
   const settings = await loadDashboardAiSettings(context.client);
   if (!settings.apiConfigured) throw appError('Dashboard AI Search is not configured in Vercel.', 503);
@@ -5343,14 +5345,14 @@ async function dashboardAiSearch(body, req, accessContext = null) {
   const safetyIdentifier = `fcos-dashboard-${createHash('sha256').update(String(context.profile.id)).digest('hex').slice(0, 32)}`;
   const interpretationResult = await getOrLoadRuntimeCache({
     namespace: 'dashboard-ai-interpretation',
-    version: AI_ROUTING_VERSION,
+    version: `${AI_ROUTING_VERSION}:buyer-payment-v1`,
     accessScope: salesforceCacheAccessScope(context),
     apiVersion: routing.modelId,
     payload: {
       modelId: settings.modelId,
       revision: settings.revision,
       selectedPeriodLabel,
-      today: dateOnly(new Date()),
+      today,
       prompt,
       clarification,
     },
@@ -5363,7 +5365,7 @@ async function dashboardAiSearch(body, req, accessContext = null) {
         clarification,
         modelId: settings.modelId,
         selectedPeriodLabel,
-        today: dateOnly(new Date()),
+        today,
         safetyIdentifier,
         signal: AbortSignal.timeout(60_000),
         onUsage: (usage) => recordDashboardAiUsage(context.client, context.profile, usage),
@@ -5372,6 +5374,7 @@ async function dashboardAiSearch(body, req, accessContext = null) {
   const interpretation = interpretationResult.value;
   const baseAiSearch = {
     status: interpretation.status,
+    analysis: interpretation.analysis,
     interpretation: interpretation.interpretation,
     chips: interpretation.chips,
     includeCancelled: interpretation.includeCancelled,
@@ -5419,7 +5422,25 @@ async function dashboardAiSearch(body, req, accessContext = null) {
   // AI results intentionally use the same paginated, access-filtered scope as
   // the dashboard APIs.  The old 3,000-record dashboard path is not safe for
   // AI because it can turn a complete natural-language result into a subset.
-  const aiScope = await loadDecisionDashboardScope({ ...body.filterSpec, force }, req, context, { additionalWhere: where });
+  const aiScope = await loadDecisionDashboardScope({
+    ...(body.filterSpec || {}),
+    dateWindows: [],
+    filters: { ...(body.filterSpec?.filters || {}), includeCancelled: interpretation.includeCancelled },
+    force,
+  }, req, context, { additionalWhere: where });
+  if (interpretation.analysis === 'buyer_payment_timing') {
+    const paymentAnalysis = await loadDashboardBuyerPaymentAnalysis({
+      scopedStemIds: aiScope.rows.filter((row) => row.account?.id).map((row) => row.id),
+      expectedAccounts: Object.fromEntries(aiScope.rows.filter((row) => row.account?.id).map((row) => [row.id.slice(0, 15), row.account.id])),
+      stemAccessWhere: await interofficeStemAccessCondition(context, (stem.fields || []).map((field) => field.name)) || 'Id != null',
+      complete: aiScope.completeness.complete === true,
+      today,
+      describe: (objectName) => salesforceObjectFields({ objectName, forceRefresh: force }),
+      query: (soql, limit) => sfQuery(soql, { clean: true, limit, softFail: false }),
+      readOrganization: () => sfRequest('/connect/organization', { readOnly: true }),
+    });
+    return { paymentAnalysis, aiSearch: { ...baseAiSearch, status: 'ready', matchedCount: paymentAnalysis.buyers.length, loadedCount: paymentAnalysis.buyers.length, truncated: false, resultLimit: null } };
+  }
   const dashboard = {
     ...decisionDashboardSummary(aiScope.rows, aiScope.completeness),
     recentStems: publicDecisionDashboardRows(aiScope.rows),
@@ -6911,7 +6932,7 @@ async function cachedHealthCheck(namespace, ttlSeconds, force, loader, payload =
   return cached.value;
 }
 
-function connectionAttestationFromRow(row) {
+function connectionAttestationFromRow(row, options) {
   const attestation = sanitizeConnectionAttestation({
     schemaVersion: row?.schema_version,
     policyVersion: row?.policy_version,
@@ -6921,7 +6942,7 @@ function connectionAttestationFromRow(row) {
     expiresAt: row?.expires_at,
     durationMs: row?.duration_ms,
     providers: row?.providers,
-  });
+  }, options);
   return attestation ? { ...attestation, revision: Number(row.revision) } : null;
 }
 
@@ -10501,7 +10522,7 @@ async function cashflowCachedHolidays(countryCode, year, warnings = []) {
       const holidays = await fetchNagerHolidays(countryCode, year);
       const expiresAt = new Date();
       expiresAt.setUTCDate(expiresAt.getUTCDate() + 30);
-      await client.from('cashflow_holiday_cache').upsert(
+      if (!isDeploymentReadOnly()) await client.from('cashflow_holiday_cache').upsert(
         {
           country_code: countryCode,
           calendar_year: year,
@@ -16377,7 +16398,7 @@ async function disputeBetaList(body = {}, req, accessContext = null) {
   ]);
   let reconciled = false;
   const reconciliationErrors = new Map();
-  for (const stem of rows) {
+  for (const stem of isDeploymentReadOnly() ? [] : rows) {
     const workflow = workflowMap[stem.Id];
     if (workflow?.case?.approvalStatus !== 'Approved' || workflow.case.workflowStatus === 'Closed' || !workflow.actions.some((action) => action.actionType === 'resolve_supplier_dispute') || !stem._Supplier_Settlement_Schema?.valid) continue;
     try {
@@ -17783,13 +17804,15 @@ async function salesforceStemDetailUncached(body, req = null, accessContext = nu
   const [vesselName, portName, agentName, accountName, buyerBrokerName, factoringInvoiceName] = await Promise.all([recordRaw.Vessel__c ? resolveViaQuery('Vessel__c', recordRaw.Vessel__c, 'Name') : Promise.resolve(null), recordRaw.Port__c ? resolveViaQuery('Port__c', recordRaw.Port__c, 'Name') : Promise.resolve(null), recordRaw.Agent__c ? resolveViaQuery('Account', recordRaw.Agent__c, 'Name') : Promise.resolve(null), recordRaw.Account__c ? resolveViaQuery('Account', recordRaw.Account__c, 'Name') : Promise.resolve(null), recordRaw.Buyer_Broker__c ? resolveViaQuery('Account', recordRaw.Buyer_Broker__c, 'Name') : Promise.resolve(null), recordRaw.Factoring_Invoice__c ? resolveViaQuery('Invoice__c', recordRaw.Factoring_Invoice__c, 'Name') : Promise.resolve(null)]);
 
   const buyerBrokersWithNames = await Promise.all(
-    visibleStemBuyerBrokers(buyerBrokers, lineItems).map(async (bb) => ({
+    buyerBrokers.map(async (bb) => ({
       ...bb,
       _Buyer_Broker_Name: bb.Buyer_Broker__c ? brokerAccountMap[bb.Buyer_Broker__c] || brokerAccountMap[String(bb.Buyer_Broker__c).slice(0, 15)] || (await resolveViaQuery('Account', bb.Buyer_Broker__c, 'Name')) : null,
     })),
   );
 
-  const supplierBrokerIds = [...new Set(lineItems.map((li) => li.Supplier_Broker__c).filter(Boolean))];
+  // The raw lines above still anchor historical invoice and payment lookups.
+  const visibleLineItems = activeStemLineItems(lineItems);
+  const supplierBrokerIds = [...new Set(visibleLineItems.map((li) => li.Supplier_Broker__c).filter(Boolean))];
   const supplierBrokerNameMap = {};
   await Promise.all(
     supplierBrokerIds.map(async (id) => {
@@ -17797,9 +17820,7 @@ async function salesforceStemDetailUncached(body, req = null, accessContext = nu
     }),
   );
 
-  // Keep the original lines above for invoice/payment history. Only the current
-  // detail projection excludes cancelled children.
-  const lineItemsWithNames = activeStemLineItems(lineItems).map((li) => {
+  const lineItemsWithNames = visibleLineItems.map((li) => {
     const calculatedQuantity = financialQuantity(li, stemHasDelivery);
     const calculatedSell = lineSellAmount(li, stemHasDelivery);
     const calculatedBuy = lineBuyAmount(li, stemHasDelivery);
@@ -18175,8 +18196,6 @@ async function salesforceBrokerRegisterUncached(body, req = null, accessContext 
 
   const rawRows = [];
   const financialWarnings = new Set();
-  // Exclude a cancelled source line before every commission side and before
-  // grouping, so active lines sharing the same broker retain their own amounts.
   for (const item of activeStemLineItems(lineItems)) {
     const stem = stemMap[item.STEM__c];
     if (!stem) continue;
@@ -18189,7 +18208,7 @@ async function salesforceBrokerRegisterUncached(body, req = null, accessContext 
     const qty = nativeQuantity.quantity;
     const quantityUnit = nativeQuantity.unitOfMeasure || 'UOM not set';
     if (nativeQuantity.warning) financialWarnings.add(`${stem.Name || 'STEM'} · ${item.Name || item.Id}: ${nativeQuantity.warning}`);
-    const supplierAmount = item.Cancelled__c ? 0 : brokerAmount(item.Suppliers_Brokers_Commission_Per_Unit__c, qty);
+    const supplierAmount = brokerAmount(item.Suppliers_Brokers_Commission_Per_Unit__c, qty);
     if (item.Supplier_Broker__c && supplierAmount !== 0) {
       rawRows.push({
         id: `supplier-${item.Id}`,
@@ -18538,6 +18557,24 @@ async function hedgePhysicalSalesforceApply(body = {}, req = null, accessContext
 async function hedgeDeskAssistant(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
   return runHedgeAssistant(context.client, context.profile, body);
+}
+
+async function marketAssistant(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return runMarketAssistant(context.client, context.profile, body);
+}
+
+async function marketAssistantSettingsGet(_body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return { ...(await marketAssistantSettings(context.client)), canManage: await userHasCapability(context.client, context.profile, 'hedge_admin') };
+}
+
+async function marketAssistantSettingsSave(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  const canManage = await userHasCapability(context.client, context.profile, 'hedge_admin');
+  const result = await saveMarketAssistantSettings(context.client, context.profile, body, { canManage });
+  await writeAdminAudit(context.client, context.profile, 'market_assistant_model_changed', null, null, { modelId: result.modelId, revision: result.revision });
+  return result;
 }
 
 async function hedgeDeskAssistantSettings(body = {}, req = null, accessContext = null) {
@@ -19066,9 +19103,6 @@ async function missingNomBHealthRow() {
 
 const xeroHandlers = createXeroHandlers({ requireActiveUser, resolveRecoveredSystemErrorHandler });
 const handlers = {
-  dashboardNomBRead,
-  dashboardNomBPolicySave,
-  dashboardNomBAuditRead,
   missingNomBList,
   missingNomBUpload,
   missingNomBReminderCron,
@@ -19150,6 +19184,9 @@ const handlers = {
   marketIntelligenceCurve,
   marketReportCatalogue,
   marketReportAnalysis,
+  marketAssistant,
+  marketAssistantSettingsGet,
+  marketAssistantSettingsSave,
   marketIntelligenceValuation,
   marketForwardFallbackSave,
   marketIntelligenceAlertRulesGet,
@@ -19320,7 +19357,7 @@ const handlers = {
   shipAgentChargesSync,
   variableChargesList,
   variableChargesDetail,
-  variableChargesAnchorageSave, variableChargesVesselNrtSave, variableChargesLightDuesSave, variableChargesSettingsGet, variableChargesSettingsSave,
+  variableChargesAnchorageSave, variableChargesVesselNrtSave, variableChargesLightDuesSave, variableChargesSettingsGet, variableChargesSettingsSave, companyFxHistoryGet, companyFxHistorySave,
   variableChargesOptions,
   variableChargesSupplierVerify,
   variableChargesBuyerConfirm,
@@ -19444,7 +19481,7 @@ if (handlersWithoutAccessPolicy.length) {
   throw new Error(`FCOS handler access policy is missing for: ${handlersWithoutAccessPolicy.join(', ')}`);
 }
 
-export default async function handler(req, res) {
+async function handler(req, res) {
   const url = new URL(req.url, 'http://localhost');
   const name = url.pathname.split('/').pop();
   const requestId = requestIdFrom(req);
@@ -19462,6 +19499,20 @@ export default async function handler(req, res) {
         if (handlerPolicy && typeof res?.setHeader === 'function') {
           res.setHeader('X-FCOS-Handler-Mutation', handlerPolicy.mutation ? '1' : '0');
           res.setHeader('X-FCOS-External-Action', handlerPolicy.externalAction ? '1' : '0');
+        }
+        // Fixed mutation/external-action routes, including cron, are rejected
+        // before authentication can bind or provision an identity. The mixed
+        // Markets, Hedge Desk and FCOS Updates reads depend on the request body.
+        let classifiedBody;
+        if (['hedgeMarkets', 'hedgeDeskEntity'].includes(name) && isDeploymentReadOnly()) {
+          classifiedBody = await readBody(req);
+          requireDeploymentMutationAllowed(name === 'hedgeDeskEntity'
+            ? !isReadOnlyHedgeDeskAction(classifiedBody) : !isReadOnlyMarketAction(classifiedBody));
+        } else if (name === 'adminFcosUpdatesList' && isDeploymentReadOnly()) {
+          classifiedBody = await readBody(req);
+          requireDeploymentMutationAllowed(classifiedBody?.sync !== false || classifiedBody?.includePreparation !== false);
+        } else {
+          requireDeploymentMutationAllowed(handlerPolicy?.mutation || handlerPolicy?.externalAction);
         }
         if (name === 'salesforceDocumentDownload') {
           const accessContext = await requireHandlerAccess(name, req);
@@ -19481,15 +19532,13 @@ export default async function handler(req, res) {
         }
         const fn = handlers[name];
         if (!fn) return sendJson(res, { error: `Unknown function: ${name}` }, 404);
-        const accessContext = await requireHandlerAccess(name, req);
+        const accessContext = await requireHandlerAccess(name, req, classifiedBody);
         metricContext = accessContext;
-        const body = await readBody(req);
+        const body = classifiedBody ?? await readBody(req);
         requireReadOnlyCiOperation(accessContext?.profile, name, body);
-        const deploymentMutation = handlerPolicy?.mutation && (
-          name === 'hedgeMarkets' ? !isReadOnlyMarketAction(body)
-            : name === 'hedgeDeskEntity' ? !isReadOnlyHedgeDeskAction(body) : true
-        );
-        requireDeploymentMutationAllowed(deploymentMutation);
+        requireDeploymentMutationAllowed(handlerPolicy?.mutation
+          && !(name === 'hedgeMarkets' && isReadOnlyMarketAction(body))
+          && !(name === 'hedgeDeskEntity' && !isReadOnlyCiProfile(accessContext?.profile) && isReadOnlyHedgeDeskAction(body)));
         const contract = validateFunctionRequest(name, body);
         if (!contract.ok) {
           throw appError(`Invalid ${name} request: ${contract.issues.join('; ')}.`, 400, 'FUNCTION_CONTRACT_INVALID', {
@@ -19500,6 +19549,8 @@ export default async function handler(req, res) {
         metricResult = data;
         return sendJson(res, data);
       } catch (error) {
+        // Preserve the CI denial contract while fixed writes still stop before authentication.
+        if (error?.code === 'FCOS_DEPLOYMENT_READ_ONLY' && process.env.FCOS_ENABLE_READ_ONLY_CI === 'true') error.code = 'FCOS_CI_READ_ONLY';
         const status = error.status || error.statusCode || 500;
         recordRequestFailure(error, status);
         if (shouldNotifySystemError(status)) {
@@ -19520,7 +19571,7 @@ export default async function handler(req, res) {
         return sendJson(res, publicApiErrorPayload(error, status, requestId), status);
       } finally {
         logRequestTelemetry(res.statusCode || 500);
-        if (process.env.VERCEL_ENV === 'production' && metricContext?.profile?.read_only_ci !== true
+        if (!isDeploymentReadOnly() && process.env.VERCEL_ENV === 'production' && !isReadOnlyCiProfile(metricContext?.profile)
           && metricContext?.profile?.id && handlerPolicyFor(HANDLER_POLICY_REGISTRY, name)?.mutation) {
           waitUntil(recordWorkflowMetric(safeSupabaseAdminClient(), { handler: name, status: res.statusCode || 500,
             data: metricResult, durationMs: Date.now() - metricStartedAt }).catch(() => {}));
@@ -19529,3 +19580,5 @@ export default async function handler(req, res) {
     },
   );
 }
+
+export default withDeploymentRequestSafety(handler);

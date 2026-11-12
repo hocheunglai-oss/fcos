@@ -1,58 +1,12 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { closeSync, constants, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
-import { dirname, join, relative } from 'node:path';
+import { lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { join, relative } from 'node:path';
 import ignore from 'ignore';
 
 // The generated receipt cannot contribute to its own digest. Release-history
 // source remains included: changing the human-readable release is a source change.
 export const GENERATED_PROVENANCE_FILES = new Set(['public/app-version.json', 'api/_runtime-build-receipt.json']);
-// Generated data is excluded from hashing, but never from path integrity checks.
-export function validateGeneratedReceiptPaths(cwd) {
-  for (const path of GENERATED_PROVENANCE_FILES) {
-    const parts = path.split('/');
-    for (let index = 1; index <= parts.length; index += 1) {
-      let info;
-      try { info = lstatSync(join(cwd, ...parts.slice(0, index))); }
-      catch (error) { if (error.code === 'ENOENT') break; throw error; }
-      if (info.isSymbolicLink() || (index === parts.length ? !info.isFile() : !info.isDirectory())) {
-        throw new Error('Generated receipt paths must use regular files and directories; symlinks are unsupported.');
-      }
-    }
-  }
-}
-
-export function writeBuildReceipts({ cwd, receipt, env = process.env }) {
-  const expected = receipt.provenance;
-  const assertUnchanged = () => {
-    const actual = collectBuildProvenance({ cwd, env });
-    for (const key of ['commit', 'sourceDigest', 'gitDirty', 'releaseEligible']) {
-      if (actual[key] !== expected[key]) throw new Error('Source changed during receipt generation.');
-    }
-  };
-  validateGeneratedReceiptPaths(cwd);
-  assertUnchanged();
-  const serialized = `${JSON.stringify(receipt, null, 2)}\n`;
-  const written = [];
-  try {
-    for (const path of GENERATED_PROVENANCE_FILES) {
-      const absolute = join(cwd, path);
-      mkdirSync(dirname(absolute), { recursive: true });
-      validateGeneratedReceiptPaths(cwd);
-      const fd = openSync(absolute, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o600);
-      try { writeFileSync(fd, serialized); } finally { closeSync(fd); }
-      written.push(absolute);
-    }
-    validateGeneratedReceiptPaths(cwd);
-    assertUnchanged();
-  } catch (error) {
-    // A failed generation must not leave apparently eligible receipt data.
-    validateGeneratedReceiptPaths(cwd);
-    for (const path of written) unlinkSync(path);
-    throw error;
-  }
-}
-
 // Vercel CLI source-upload defaults. Keep in sync with the pinned CLI when it
 // changes: https://vercel.com/docs/builds/build-features#ignored-files-and-folders
 const VERCEL_DEFAULT_IGNORES = ['.hg', '.git', '.gitmodules', '.svn', '.cache', '.next', '.now', '.vercel',
@@ -104,7 +58,6 @@ function provenanceFailure(message, statusChanges, contentChanges) {
 }
 
 export function collectBuildProvenance({ cwd = process.cwd(), env = process.env, requireClean = env.FCOS_REQUIRE_CLEAN_BUILD === '1' || env.VERCEL === '1' } = {}) {
-  validateGeneratedReceiptPaths(cwd);
   let head = null;
   let paths;
   let gitDirty = null;
@@ -147,10 +100,6 @@ export function collectBuildProvenance({ cwd = process.cwd(), env = process.env,
   const hash = createHash('sha256');
   hash.update('fcos-vercel-source-v1\0');
   let sourceFileCount = 0;
-  let executableFileCount = 0;
-  const sourceInputDiagnostics = [];
-  const diagnosticPaths = new Set(['.vercelignore', 'vercel.json', 'package.json', 'package-lock.json', '.githooks/pre-push',
-    'src/content/page-methodologies.json', 'src/lib/pageMethodologyIndex.js', 'src/content/xero-portal-manual.json']);
   let contentMatchesHead = Boolean(head);
   for (const path of [...new Set(paths)].sort()) {
     if (GENERATED_PROVENANCE_FILES.has(path) || isCredentialPath(path)) continue;
@@ -177,10 +126,6 @@ export function collectBuildProvenance({ cwd = process.cwd(), env = process.env,
     // Git cleanliness covers the full source tree, including upload-excluded
     // files. The portable digest covers the exact non-secret deployment inputs.
     if (!included(path)) continue;
-    const executable = Boolean(info.mode & 0o111);
-    if (executable) executableFileCount += 1;
-    if (diagnosticPaths.has(path)) sourceInputDiagnostics.push({ path, executable, bytes: content.length,
-      sha256: createHash('sha256').update(content).digest('hex') });
     hash.update(`${path}\0${info.mode & 0o111 ? 'executable' : 'regular'}\0${content.length}\0`);
     hash.update(content);
     hash.update('\0');
@@ -192,14 +137,7 @@ export function collectBuildProvenance({ cwd = process.cwd(), env = process.env,
   if (head) gitDirty ||= !contentMatchesHead;
   const expectedDigest = String(env.FCOS_EXPECTED_SOURCE_SHA256 || '').trim().toLowerCase();
   if (expectedDigest && (!/^[0-9a-f]{64}$/.test(expectedDigest) || expectedDigest !== sourceDigest)) {
-    const error = provenanceFailure('Build provenance source digest does not match the expected source attestation.', statusChanges, contentChanges);
-    // Hashes and fixed public input names distinguish provider extraction,
-    // generated-file drift and a wrong expected hash without exposing contents.
-    error.message += ` Source attestation diagnostics: ${JSON.stringify({
-      expectedSha256: /^[0-9a-f]{64}$/.test(expectedDigest) ? expectedDigest : 'invalid',
-      actualSha256: sourceDigest, sourceFileCount, executableFileCount, inputs: sourceInputDiagnostics,
-    })}`;
-    throw error;
+    throw provenanceFailure('Build provenance source digest does not match the expected source attestation.', statusChanges, contentChanges);
   }
   const sourceAttested = Boolean(expectedDigest && supplied.length);
   const sanitizedMissing = new Set(contentChanges.filter(change => change.kind === 'missing'

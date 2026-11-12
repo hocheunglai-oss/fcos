@@ -1,3 +1,4 @@
+import { withDeploymentRequestSafety } from './_deploymentReadOnly.js';
 import { Readable } from 'node:stream';
 import { emailRouterAttachmentStreamHandler } from './_emailRouterHandlers.js';
 
@@ -7,7 +8,7 @@ function json(res, status, error) {
   res.end(JSON.stringify({ error }));
 }
 
-export default async function handler(req, res) {
+async function handler(req, res) {
   if (req.method !== 'GET') return json(res, 405, 'Method not allowed.');
   const startedAt = Date.now();
   try {
@@ -26,3 +27,5 @@ export default async function handler(req, res) {
     return json(res, error.status || error.statusCode || 500, error.message || 'Attachment download is unavailable.');
   }
 }
+
+export default withDeploymentRequestSafety(handler);

@@ -173,3 +173,6 @@ export const UNOFFICIAL_COMPENSATION_METHODOLOGY = {
   "description": "How FCOS combines Salesforce claims and recoveries and controls compensation changes.",
   contentUrl, "contentKey": "UNOFFICIAL_COMPENSATION_METHODOLOGY"
 };
+
+export const HEDGE_METHODOLOGY_TITLES = ["Markets","Position control","Physical trades","Hedges","MOPS market","Settlement","Counterparties","Settings","Audit history"];
+export const HEDGE_METHODOLOGY_URL = contentUrl;

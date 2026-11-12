@@ -1,3 +1,4 @@
+import { withVerifiedFcunoSessionInsert } from './_deploymentReadOnlyFetch.js';
 import { createHash } from 'node:crypto';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { isDeploymentReadOnly, requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
@@ -416,7 +417,8 @@ async function requireFederatedSession({ client, authUser, link, session, provid
   // authority. Read-only deployments require an already-owned link and existing
   // profile before this path; the signed proof, replay and revocation checks stay
   // identical to Production. Never store the provider token itself.
-  const { error } = await client.from('fcos_external_identity_sessions').insert(binding);
+  const { error } = await withVerifiedFcunoSessionInsert(binding, async () =>
+    await client.from('fcos_external_identity_sessions').insert(binding));
   if (error) {
     if (error.code !== '23505') throw error;
     // Identical concurrent bootstrap is safe; a token already bound to another

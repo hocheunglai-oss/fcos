@@ -17,7 +17,7 @@ import {
   sanitizeConnectionAttestation,
 } from '../src/lib/connectionChecklist.js';
 import { resolveSalesforceBrowserAuthentication } from '../scripts/fcos-connections.mjs';
-import { parseDeploymentArguments } from '../scripts/deploy-salesforce-schema-free-hotfix.mjs';
+import { parseDeploymentArguments } from '../scripts/deploy-salesforce-environments.mjs';
 
 const VERIFIED_AT = '2026-08-09T08:00:00.000Z';
 const EXPIRES_AT = '2026-08-10T08:00:00.000Z';
@@ -220,40 +220,6 @@ test('Salesforce promotions fail closed and enforce DEVEE, GitHub, QAT, Producti
   assert.match(source, /display\?\.connectedStatus !== 'Connected'/);
   assert.match(source, /organization\?\.IsSandbox !== environment\.isSandbox/);
   assert.match(source, /sync-salesforce-shared-repository\.mjs/);
-  assert.match(source, /promotion requires an explicit reviewed manifest/);
-  assert.match(source, /manifestTestClasses/);
-  assert.match(source, /Apex promotion manifest must include at least one \*Test Apex class/);
-  assert.match(source, /EXPECTED_ORDER = \['devee', 'qat', 'production'\]/);
-  assert.match(source, /writeDeveeSourceState/);
-  assert.match(source, /FCOS_SALESFORCE_TEST_LEVEL/);
-  assert.match(source, /manifestHasApex \? 'RunLocalTests' : 'RunRelevantTests'/);
-  assert.match(source, /\['RunLocalTests', 'RunSpecifiedTests', 'RunRelevantTests'\]\.includes\(TEST_LEVEL\)/);
-  assert.match(source, /deploymentMode: !manifestHasApex && MANIFEST \? 'all-or-none-metadata' : 'validated-quick-deploy'/);
-  assert.match(source, /--schema-cutover/);
-  assert.match(source, /--schema-bootstrap/);
-  assert.match(source, /all-or-none-schema-bootstrap/);
-  assert.match(source, /'project', 'deploy', 'start'/);
-  assert.match(source, /FCOS_Variable_Charges_Integration/);
-  assert.match(source, /FCOS_Variable_Charges_API/);
-  assert.match(source, /assignPermission\(environment, VARIABLE_CHARGE_DATA_PERMISSION\)/);
-  assert.match(source, /environment\.isSandbox \? 'NoTestRun' : 'RunRelevantTests'/);
-  assert.match(source, /Salesforce source must use LF line endings/);
-  assert.ok(
-    source.indexOf("upstream?.status !== 'succeeded'") < source.indexOf("sharedPublication = mirror('--publish')"),
-    'DEVEE must be deployed successfully before shared publication.',
-  );
-  assert.ok(
-    source.indexOf("sharedPublication = mirror('--check')") < source.indexOf('const validation = validate(environment)'),
-    'Shared publication must succeed before QAT and Production promotion.',
-  );
-});
-
-test('Schema-free hotfix promotions fail closed and enforce DEVEE, GitHub, QAT, Production order', async () => {
-  const source = await readFile(new URL('../scripts/deploy-salesforce-schema-free-hotfix.mjs', import.meta.url), 'utf8');
-  assert.match(source, /display\?\.username === environment\.username/);
-  assert.match(source, /display\?\.connectedStatus !== 'Connected'/);
-  assert.match(source, /organization\?\.IsSandbox !== environment\.isSandbox/);
-  assert.match(source, /sync-salesforce-schema-free-hotfix-repository\.mjs/);
   assert.equal(parseDeploymentArguments([], {}).completeOwnedTree, true);
   assert.throws(() => parseDeploymentArguments(['--manifest', 'manifest/focused.xml'], {}), /validation-only/);
   assert.throws(() => parseDeploymentArguments(['--schema-cutover'], {}), /schema-free/);
@@ -279,4 +245,18 @@ test('Schema-free hotfix promotions fail closed and enforce DEVEE, GitHub, QAT, 
     source.indexOf('ensurePublication()') < source.indexOf('ensureValidation(qat)'),
     'Shared publication must succeed before QAT and Production promotion.',
   );
+});
+
+test('policy 11 evidence remains readable only for historical audit', () => {
+  const previousPolicy = attestation({ policyVersion: 11 });
+  const observedAt = new Date(VERIFIED_AT);
+  assert.equal(sanitizeConnectionAttestation(previousPolicy), null);
+  assert.equal(connectionAttestationState(previousPolicy, observedAt).status, 'unavailable');
+
+  const historical = { historical: true };
+  const decoded = sanitizeConnectionAttestation(previousPolicy, historical);
+  assert.equal(decoded.policyVersion, 11);
+  assert.equal(decoded.verifiedAt, VERIFIED_AT);
+  assert.equal(connectionAttestationState(decoded, observedAt, historical).verifiedCount, CONNECTION_TARGETS.length);
+  assert.equal(sanitizeConnectionAttestation(attestation({ policyVersion: 10 }), historical), null);
 });

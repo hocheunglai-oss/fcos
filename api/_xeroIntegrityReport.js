@@ -1,5 +1,6 @@
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
 import { XERO_RECONCILIATION_VERSION } from './_xeroFinancialSync.js';
+import { isDeploymentReadOnly } from './_deploymentReadOnly.js';
 import { hydratePreviewPayments } from './_xeroPreviewPayments.js';
 import { previewEvidenceHash } from './_xeroPreviewPersistence.js';
 
@@ -313,6 +314,7 @@ export async function xeroIntegrityReport(body = {}, { client, accessContext, no
     const runNotice = runResult.error ? 'Saved document evidence is unavailable.' : !run ? 'No saved document check for this organisation.'
       : !validRun ? 'The saved document check uses unsupported policy or org evidence. Recheck through Codex.' : null;
     let items = { rows: [], available: false, complete: false, total: null }; let paymentRows = null;
+    const stagedCheckpoint = isDeploymentReadOnly() && Object.hasOwn(snapshot, 'paymentsReference');
     let savedRowsComplete = false;
     if (validRun) {
       checkedAt = instant(snapshot.checkedAt ?? run.source_snapshot_at ?? run.xero_snapshot_at ?? run.created_at);
@@ -324,7 +326,7 @@ export async function xeroIntegrityReport(body = {}, { client, accessContext, no
         && snapshot.expectedItemCount === items.total && snapshot.expectedItemCount === items.rows.length;
       if (!savedRowsComplete) notices.push('The complete saved document row count could not be confirmed against its capture manifest.');
       if (!items.complete) notices.push('Document counts are partial: saved rows were capped or could not be fully loaded.');
-      if (snapshot.includePayments === true) {
+      if (snapshot.includePayments === true && !stagedCheckpoint) {
         try {
           const hydrated = await integrityPaymentSnapshot(client, run);
           if (!Array.isArray(hydrated.payments?.rows) || hydrated.payments.tenantId !== tenantId) throw new Error('payments');
@@ -342,7 +344,9 @@ export async function xeroIntegrityReport(body = {}, { client, accessContext, no
     coverage.push({ key: 'payments', label: 'Payments / allocations', checkedAt, available: paymentRows !== null,
       complete: paymentRows !== null && paymentRows.length <= ROW_CAP && snapshot.complete === true,
       total: paymentRows === null ? null : rows.filter(row => row.kind === 'payment' && inScope(row, filters)).length,
-      notice: paymentRows === null ? 'A complete verified saved payment capture is unavailable.' : 'Saved payment observations only. Settlement cannot be inferred from a link or a successful API request.' });
+      notice: stagedCheckpoint ? 'Saved payment checkpoints are excluded from staging verification.'
+        : paymentRows === null ? 'A complete verified saved payment capture is unavailable.'
+          : 'Saved payment observations only. Settlement cannot be inferred from a link or a successful API request.' });
     const contactRun = contactsResult.data?.[0];
     if (contactRun && contactRun.xero?.tenantId === tenantId) {
       const contacts = await boundedRows(() => client.from('xero_contact_lifecycle_rows')

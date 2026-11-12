@@ -6,9 +6,32 @@ import { supplierFinancialBucketPreview as preview, supplierFinancialBucketRead 
   supplierFinancialBucketApply as apply } from '../api/_xeroSupplierFinancialBucketWorkflow.js';
 import { SUPPLIER_FINANCIAL_BUCKET_POLICY as POLICY } from '../api/_xeroSupplierFinancialBucketPreservation.js';
 import { SUPPLIER_FINANCIAL_BUCKET_RECEIPT } from '../api/_xeroSupplierFinancialBucketPersistence.js';
+import { createXeroHandlers, XERO_HANDLER_MODULE_ACCESS } from '../api/_xeroHandlers.js';
+import { registeredHandlerBehavior } from '../api/_handlerPolicyRegistry.js';
 const copy = v => JSON.parse(JSON.stringify(v));
 const uuid = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const EVENT = 'supplier_financial_bucket_document_linked';
+
+test('supplier bucket handlers use the Xero Portal capability and require a verified session before service access', async () => {
+  const unauthorized = new Error('Synthetic authentication refusal');
+  let authenticationChecks = 0;
+  const handlers = createXeroHandlers({
+    async requireActiveUser() {
+      authenticationChecks += 1;
+      throw unauthorized;
+    },
+  });
+  for (const [action, mutation] of [['Preview', true], ['Read', false], ['Apply', true]]) {
+    const name = `xeroSupplierFinancialBucket${action}`;
+    assert.deepEqual(XERO_HANDLER_MODULE_ACCESS[name], ['xero_portal']);
+    const policy = registeredHandlerBehavior(name);
+    assert.equal(policy.capability, 'xero_portal_manage');
+    assert.equal(policy.mutation, mutation);
+    assert.equal(policy.externalAction, mutation);
+    await assert.rejects(handlers[name]({}, {}), error => error === unauthorized);
+  }
+  assert.equal(authenticationChecks, 3);
+});
 const noPrivate = v => { const text = JSON.stringify(v); assert.ok(!text.includes('APIKey')); assert.ok(!text.includes('PRIVATE_SYNTHETIC_PROVIDER_IDENTITY')); assert.ok(!text.includes('originalReview')); };
 
 // Server-only collection callbacks and in-memory service tables. This fixture

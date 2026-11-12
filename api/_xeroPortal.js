@@ -744,7 +744,7 @@ async function readXeroPublicStatus(client, { env, fetchImpl, refresh = false })
   let refreshError = null;
   const expiresAtMs = Date.parse(stored?.expiresAt || '');
   const shouldRefresh = refresh || !Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now() + 90_000;
-  if (!isDeploymentReadOnly(env) && shouldRefresh && (stored?.refreshToken || env.XERO_REFRESH_TOKEN)) {
+  if (shouldRefresh && !isDeploymentReadOnly(env) && (stored?.refreshToken || env.XERO_REFRESH_TOKEN)) {
     try {
       connection = await getFreshXeroConnection(client, { env, fetchImpl });
     } catch (error) {

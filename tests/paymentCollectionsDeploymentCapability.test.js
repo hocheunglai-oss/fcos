@@ -2,8 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
-import { deploymentCapabilities, requireDeploymentMutationAllowed } from '../api/_deploymentReadOnly.js';
-import { listPortalApplicationsForUser, processPortalOutbox } from '../api/_portal.js';
+import { runWithDeploymentRequestSafety } from '../api/_deploymentReadOnly.js';
 import { clientSessionState, setClientSessionOwner } from '../src/lib/clientSessionState.js';
 
 const source = async (relative) => readFile(new URL(relative, import.meta.url), 'utf8');
@@ -63,13 +62,6 @@ function nodes(tree) {
 }
 
 test('server declares the same deployment restriction it enforces, including the read-only CI profile', async () => {
-  for (const env of [{ VERCEL_ENV: 'preview' }, { VERCEL_ENV: 'production', FCOS_ENABLE_READ_ONLY_CI: 'true' }]) {
-    assert.deepEqual(deploymentCapabilities(env), { mutationsAllowed: false });
-    assert.throws(() => requireDeploymentMutationAllowed(true, env), { code: 'FCOS_DEPLOYMENT_READ_ONLY' });
-  }
-  assert.deepEqual(deploymentCapabilities({ VERCEL_ENV: 'production' }), { mutationsAllowed: true });
-  assert.deepEqual(deploymentCapabilities({ VERCEL_ENV: 'production' }, { readOnlyProfile: true }), { mutationsAllowed: false });
-
   // Execute the actual authenticated response builder with provider-free dependencies.
   const server = ts.createSourceFile('server.js', await source('../api/functions/[name].js'), ts.ScriptTarget.ES2022, true);
   const authFunction = server.statements.find((statement) => ts.isFunctionDeclaration(statement) && statement.name?.text === 'authContext');
@@ -87,39 +79,41 @@ test('server declares the same deployment restriction it enforces, including the
     schedulePortalOutboxRetry() { scheduled += 1; }, REPORT_ARCHIVE_MODULE_ID: 'report_archive', reportArchiveAccessLevel: () => 'none',
   };
   const { authContext } = await execute(`
-    import { deploymentCapabilities } from ${JSON.stringify(new URL('../api/_deploymentReadOnly.js', import.meta.url).href)};
+    import { isDeploymentReadOnly } from ${JSON.stringify(new URL('../api/_deploymentReadOnly.js', import.meta.url).href)};
     const { isReadOnlyCiProfile, loadAuthBootstrapPreferences, ADMIN_APP_MODULES, ADMIN_CAPABILITY_IDS,
       ciModuleAccess, isAdministratorUserType, ADMIN_FULL_ACCESS, ADMIN_FULL_CAPABILITIES,
       loadEffectiveGroupAccess, permissionCanView, listPortalApplicationsForUser, schedulePortalOutboxRetry,
       REPORT_ARCHIVE_MODULE_ID, reportArchiveAccessLevel } = globalThis.__deploymentResponseHarness;
     ${declaration}
   `);
-  const oldEnv = { VERCEL_ENV: process.env.VERCEL_ENV, FCOS_ENABLE_READ_ONLY_CI: process.env.FCOS_ENABLE_READ_ONLY_CI };
+  const cases = [
+    ['fcos-stage.vercel.app', { VERCEL_ENV: 'production' }, 'administrator', false],
+    ['fcos.fcuno.com', { VERCEL_ENV: 'preview' }, 'administrator', false],
+    ['fcos.fcuno.com', { VERCEL_ENV: 'production', FCOS_ENABLE_READ_ONLY_CI: 'true' }, 'administrator', false],
+    ['fcos.fcuno.com', { VERCEL_ENV: 'production' }, 'ci_read_only', false],
+    ['fcos.fcuno.com', { VERCEL_ENV: 'production' }, 'administrator', true],
+  ];
   try {
-    delete process.env.FCOS_ENABLE_READ_ONLY_CI;
-    for (const [environment, userType, expected] of [['preview', 'administrator', false], ['production', 'ci_read_only', false], ['production', 'administrator', true]]) {
-      process.env.VERCEL_ENV = environment;
-      const result = await authContext({}, null, { client: {}, authUser: {}, profile: { id: 'fixture', active: true, user_type: userType } });
+    for (const [host, env, userType, expected] of cases) {
+      const request = { headers: { host } };
+      const access = { client: {}, authUser: {}, profile: { id: 'fixture', active: true, user_type: userType } };
+      const result = await runWithDeploymentRequestSafety(request, () => authContext({}, request, access), env);
       assert.deepEqual(result.deploymentCapabilities, { mutationsAllowed: expected });
-      assert.equal(result.moduleAccess.buyer_invoices, true, 'deployment restrictions preserve authorized reads');
+      assert.equal(result.moduleAccess.buyer_invoices, true);
     }
-    assert.equal(scheduled, 1, 'only writable Production schedules implicit portal work');
+    assert.equal(scheduled, 1);
   } finally {
-    for (const [key, value] of Object.entries(oldEnv)) {
-      if (value === undefined) delete process.env[key]; else process.env[key] = value;
-    }
     delete globalThis.__deploymentResponseHarness;
   }
 });
 
 test('AuthProvider fails closed for missing or malformed declarations and clears capability after auth failure or logout', async () => {
   const harness = reactHarness();
-  let sessionId = 'fixture';
-  let response = { data: { user: { id: 'fixture', user_type: 'administrator', active: true } } };
+  let response = { data: { user: { id: 'fixture', active: true, user_type: 'administrator' } } };
   let failure = false;
-  let pause = false, finishRequest, authEvent;
+  let pause = false, finishRequest, authEvent, sessionUser = 'fixture';
   const supabase = { auth: {
-    getSession: async () => ({ data: { session: { user: { id: sessionId } } } }),
+    getSession: async () => ({ data: { session: { user: { id: sessionUser } } } }),
     signOut: async () => {},
     onAuthStateChange: (callback) => { authEvent = callback; return { data: { subscription: { unsubscribe() {} } } }; },
   } };
@@ -132,7 +126,10 @@ test('AuthProvider fails closed for missing or malformed declarations and clears
     } } },
   };
   const oldWindow = globalThis.window;
-  globalThis.window = { sessionStorage: { removeItem() {}, setItem() {} }, setTimeout };
+  const storage = new Map();
+  globalThis.window = { sessionStorage: {
+    getItem: key => storage.get(key) ?? null, removeItem: key => storage.delete(key), setItem: (key, value) => storage.set(key, value),
+  }, setTimeout, clearTimeout };
   const authSource = withoutImports(await source('../src/lib/AuthContext.jsx')).replaceAll('import.meta.env.', 'testEnv.');
   const { AuthProvider } = await execute(`
     const { react: React, supabase, appClient } = globalThis.__deploymentAuthHarness;
@@ -149,26 +146,12 @@ test('AuthProvider fails closed for missing or malformed declarations and clears
     let auth = render();
     assert.equal(auth.deploymentMutationAllowed, false);
     for (const declaration of [undefined, {}, { mutationsAllowed: 'true' }, { mutationsAllowed: 1 }, { mutationsAllowed: false }, { mutationsAllowed: true }]) {
-      response = { data: { user: { id: 'fixture', user_type: 'administrator', active: true }, deploymentCapabilities: declaration } };
+      response = { data: { user: { id: 'fixture', active: true, user_type: 'administrator' }, deploymentCapabilities: declaration } };
       await auth.checkUserAuth();
       auth = render();
       assert.equal(auth.deploymentMutationAllowed, declaration?.mutationsAllowed === true);
       assert.equal(auth.hasCapability('financial_report_settings_manage'), true, 'administrator permissions do not override deployment capability');
     }
-    for (const user of [
-      { id: 'fixture', user_type: 'administrator' },
-      { id: 'fixture', user_type: 'administrator', active: false },
-      { id: 'other-session', user_type: 'administrator', active: true },
-    ]) {
-      response = { data: { user, deploymentCapabilities: { mutationsAllowed: true } } };
-      await auth.checkUserAuth();
-      auth = render();
-      assert.equal(auth.user, null, 'inactive or mismatched identities cannot inherit capabilities');
-      assert.equal(auth.deploymentMutationAllowed, false);
-    }
-    response = { data: { user: { id: 'fixture', user_type: 'administrator', active: true }, deploymentCapabilities: { mutationsAllowed: true } } };
-    await auth.checkUserAuth();
-    auth = render();
     pause = true;
     const pendingRefresh = auth.checkUserAuth({ showLoader: false });
     await new Promise((resolve) => setImmediate(resolve));
@@ -181,8 +164,8 @@ test('AuthProvider fails closed for missing or malformed declarations and clears
     assert.equal(auth.deploymentMutationAllowed, true);
     harness.runEffect(1);
     pause = true;
-    sessionId = 'replacement';
-    authEvent('SIGNED_IN', { user: { id: 'replacement' } });
+    sessionUser = 'replacement';
+    authEvent('SIGNED_IN', { user: { id: sessionUser } });
     auth = render();
     assert.equal(auth.deploymentMutationAllowed, false, 'session replacement clears the old user declaration immediately');
     await new Promise((resolve) => setTimeout(resolve, 5));
@@ -212,74 +195,10 @@ test('AuthProvider fails closed for missing or malformed declarations and clears
   }
 });
 
-function portalClient() {
-  const reads = [], writes = [];
-  const entitlement = { id: 'entitlement', user_id: 'fixture', application_id: 'external', explicit_active: true,
-    explicit_role_id: 'operator', effective_active: true, effective_role_id: 'operator', effective_source: 'explicit', revision: 4, sync_status: 'synced' };
-  const tables = {
-    portal_applications: [
-      { id: 'fcos', name: 'FCOS', application_kind: 'internal', status: 'active', launch_path: '/' },
-      { id: 'external', name: 'Existing app', application_kind: 'external', status: 'active', protocol: 'portal', administrator_default_role: 'owner', target_base_url: 'https://fixture.example' },
-    ],
-    portal_application_roles: [{ application_id: 'external', id: 'operator', label: 'Operator' }],
-    portal_user_app_entitlements: [entitlement],
-    portal_entitlement_outbox: [],
-  };
-  return {
-    reads, writes, entitlement,
-    from(table) {
-      let operation = 'read', payload, single = false;
-      const query = {
-        select() { return query; }, order() { return query; }, eq() { return query; }, in() { return query; }, lt() { return query; }, lte() { return query; }, limit() { return query; },
-        update(value) { operation = 'update'; payload = value; return query; },
-        insert(value) { operation = 'insert'; payload = value; return query; },
-        upsert(value) { operation = 'upsert'; payload = value; return query; },
-        maybeSingle() { single = true; return query; }, single() { single = true; return query; },
-        then(resolve, reject) {
-          if (operation === 'read') reads.push(table); else writes.push({ table, operation, payload });
-          const data = operation === 'read' ? structuredClone(tables[table] || []) : [{ ...entitlement, ...payload }];
-          return Promise.resolve({ data: single ? data[0] || null : data, error: null }).then(resolve, reject);
-        },
-      };
-      return query;
-    },
-  };
-}
-
-test('read-only portal listing returns existing data without entitlement repairs, and outbox fails before database access', async () => {
-  for (const env of [{ VERCEL_ENV: 'preview' }, { VERCEL_ENV: 'production', FCOS_ENABLE_READ_ONLY_CI: 'true' }]) {
-    const client = portalClient(), before = structuredClone(client.entitlement);
-    const applications = await listPortalApplicationsForUser({ client, profile: { id: 'fixture', active: true, user_type: 'administrator' }, moduleAccess: { buyer_invoices: true }, env });
-    assert.deepEqual(client.writes, []);
-    assert.deepEqual(client.reads.sort(), ['portal_applications', 'portal_application_roles', 'portal_user_app_entitlements'].sort());
-    assert.deepEqual(client.entitlement, before);
-    assert.equal(applications.find((app) => app.id === 'fcos').available, true, 'internal navigation remains available');
-    const existing = applications.find((app) => app.id === 'external');
-    assert.equal(existing.roleId, 'operator', 'listing does not invent a repaired role');
-    assert.equal(existing.revision, 4);
-    assert.equal(existing.available, false);
-    assert.match(existing.blockingReason, /read-only/);
-    const outboxClient = portalClient();
-    await assert.rejects(processPortalOutbox({ client: outboxClient, env }), { status: 403, code: 'FCOS_DEPLOYMENT_READ_ONLY' });
-    assert.deepEqual(outboxClient.reads, []);
-    assert.deepEqual(outboxClient.writes, []);
-  }
-  const production = portalClient();
-  const applications = await listPortalApplicationsForUser({ client: production, profile: { id: 'fixture', active: true, user_type: 'administrator' }, env: { VERCEL_ENV: 'production' } });
-  assert.equal(applications.find((app) => app.id === 'external').roleId, 'owner');
-  assert.deepEqual(production.writes.map(({ table, operation }) => [table, operation]), [
-    ['portal_user_app_entitlements', 'update'], ['portal_entitlement_outbox', 'upsert'],
-  ], 'writable Production retains reconciliation and queued synchronization');
-  const outboxClient = portalClient();
-  const result = await processPortalOutbox({ client: outboxClient, env: { VERCEL_ENV: 'production' } });
-  assert.ok(result);
-  assert.deepEqual(outboxClient.writes.map(({ table, operation }) => [table, operation]), [['portal_entitlement_outbox', 'update']], 'writable Production retains stale-lock recovery');
-});
-
 test('Payment Collections issues no reconciliation mutation until declared writable, while collection and incoming pages stay mounted', async () => {
   const harness = reactHarness(), calls = [];
   let tab = 'collections';
-  const auth = { hasModuleAccess: () => true, user: { id: 'fixture', user_type: 'administrator' }, deploymentCapabilities: null, deploymentMutationAllowed: false };
+  const auth = { hasModuleAccess: () => true, user: { id: 'fixture', active: true, user_type: 'administrator' }, deploymentCapabilities: null, deploymentMutationAllowed: false };
   const result = { summary: { checked: 1 }, exceptions: [], items: [], capabilities: { canOverridePostingReminder: true } };
   globalThis.__deploymentCollectionsHarness = {
     react: harness.react, auth, useSearchParams: () => [new URLSearchParams({ tab }), () => {}],

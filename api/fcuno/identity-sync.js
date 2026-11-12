@@ -1,3 +1,5 @@
+import { deploymentSafeSupabaseFetch } from '../_deploymentReadOnlyFetch.js';
+import { withDeploymentRequestSafety } from '../_deploymentReadOnly.js';
 import { createClient } from '@supabase/supabase-js';
 import { processFcunoIdentitySync } from '../_fcunoIdentityFederation.js';
 import { requireDeploymentMutationAllowed } from '../_deploymentReadOnly.js';
@@ -10,7 +12,7 @@ const MAX_BODY_BYTES = 64 * 1024;
 function serviceClient() {
   const config = serverSupabaseConfig();
   if (!config.configured) throw Object.assign(new Error('FCOS server storage is unavailable.'), { status: 503, code: 'FCOS_STORAGE_UNAVAILABLE', expose: true });
-  return createClient(config.url, config.key, { auth: { persistSession: false, autoRefreshToken: false } });
+  return createClient(config.url, config.key, { global: { fetch: deploymentSafeSupabaseFetch }, auth: { persistSession: false, autoRefreshToken: false } });
 }
 
 async function discardRawBody(req) {
@@ -33,7 +35,7 @@ function json(res, status, payload) {
   res.end(JSON.stringify(payload));
 }
 
-export default async function handler(req, res) {
+async function handler(req, res) {
   const requestId = requestIdFrom(req);
   return runWithRequestTelemetry({ handler: 'fcunoIdentitySync', requestId }, async () => {
     try {
@@ -55,3 +57,5 @@ export default async function handler(req, res) {
     }
   });
 }
+
+export default withDeploymentRequestSafety(handler);

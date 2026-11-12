@@ -28,9 +28,9 @@
     "migrate:special-term-clauses": "node scripts/migrate-special-term-clause-bank.mjs",
     "migrate:variable-charges": "node scripts/backfill-variable-charges.mjs",
     "migrate:variable-charge-sides": "node --env-file=.env.local scripts/backfill-variable-charge-paired-sides.mjs",
-    "salesforce:deploy:all": "node scripts/deploy-salesforce-environments.mjs",
+    "salesforce:deploy:all": "node scripts/deploy-salesforce-reviewed-manifest.mjs",
     "salesforce:validate:all": "node scripts/deploy-salesforce-environments.mjs --check-only",
-    "salesforce:mirror:verify": "node scripts/verify-salesforce-mirror.mjs",
+    "salesforce:mirror:verify": "node scripts/sync-salesforce-shared-repository.mjs --check",
     "salesforce:mirror:publish": "node scripts/sync-salesforce-shared-repository.mjs --publish",
     "improvements:agent": "node --env-file=.env.local scripts/fcos-improvements.mjs",
     "typecheck": "tsc -p ./jsconfig.json && tsc -p ./jsconfig.core.json",
@@ -40,8 +40,6 @@
     "verify:compatibility": "node scripts/verify-compatibility-registry.mjs",
     "verify:release": "node scripts/verify-release.mjs",
     "verify:fcuno-contract": "node scripts/verify-fcuno-federation-contract.mjs",
-    "verify:controls": "node scripts/fcos-project-doctor.mjs --controls",
-    "release:readiness": "node scripts/fcos-project-doctor.mjs --release-readiness",
     "connections:verify": "node scripts/fcos-connections.mjs verify",
     "connections:doctor": "node scripts/fcos-connections.mjs doctor",
     "connections:bootstrap": "node scripts/fcos-connections.mjs bootstrap",
@@ -49,12 +47,12 @@
     "connections:keychain": "node scripts/fcos-connections.mjs keychain",
     "connections:cli": "node scripts/fcos-connections.mjs run",
     "preview": "vite preview",
-    "test:historical:supplier": "node --test tests/xeroSupplierFinancialBucketDatabase.historical-test.js",
-    "salesforce:hotfix:deploy": "node scripts/deploy-salesforce-schema-free-hotfix.mjs",
-    "salesforce:hotfix:validate": "node scripts/deploy-salesforce-schema-free-hotfix.mjs --check-only",
-    "salesforce:hotfix:mirror:verify": "node scripts/sync-salesforce-schema-free-hotfix-repository.mjs --check",
-    "salesforce:hotfix:mirror:publish": "node scripts/sync-salesforce-schema-free-hotfix-repository.mjs --publish",
-    "test:original54": "node scripts/test-original54-private.mjs"
+    "release": "node scripts/rapid-release.mjs",
+    "release:repair": "node scripts/rapid-release.mjs repair",
+    "verify:controls": "node scripts/fcos-project-doctor.mjs --controls",
+    "release:readiness": "node scripts/fcos-project-doctor.mjs --release-readiness",
+    "release:qualify": "node --test tests/rapidRelease*.test.js",
+    "salesforce:complete:deploy": "node scripts/deploy-salesforce-environments.mjs"
   },
   "dependencies": {
     "@fontsource-variable/ibm-plex-sans": "5.3.0",
@@ -95,7 +93,6 @@
     "clsx": "^2.1.1",
     "cmdk": "^1.0.0",
     "date-fns": "^3.6.0",
-    "docx": "^9.7.1",
     "embla-carousel-react": "^8.5.2",
     "htmlparser2": "^12.0.0",
     "input-otp": "^1.4.2",
@@ -104,6 +101,7 @@
     "lucide-react": "^0.475.0",
     "next-themes": "^0.4.4",
     "pdf-parse": "1.1.1",
+    "pdfjs-dist": "6.3.289",
     "react": "^18.2.0",
     "react-day-picker": "^8.10.1",
     "react-dom": "^18.2.0",
@@ -118,17 +116,14 @@
     "tailwindcss-animate": "^1.0.7",
     "tesseract.js": "^7.0.0",
     "vaul": "^1.1.2",
-    "zod": "^3.24.2",
-    "pdfjs-dist": "6.3.289",
-    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+    "zod": "^3.24.2"
   },
   "overrides": {
     "quill": "2.0.2",
-    "brace-expansion": "1.1.18",
-    "js-yaml": "4.3.2"
+    "brace-expansion": "1.1.18"
   },
   "devDependencies": {
-    "@actions/artifact": "6.3.1",
     "@electric-sql/pglite": "0.5.8",
     "@eslint/js": "^9.19.0",
     "@playwright/test": "^1.54.2",
@@ -143,13 +138,13 @@
     "eslint-plugin-react-refresh": "^0.4.18",
     "eslint-plugin-unused-imports": "^4.3.0",
     "globals": "^15.14.0",
+    "ignore": "5.3.2",
     "pg": "^8.22.0",
     "postcss": "^8.5.3",
     "supabase": "2.113.0",
     "tailwindcss": "^3.4.17",
     "terser": "5.51.2",
     "typescript": "^5.8.2",
-    "vite": "^6.1.0",
-    "ignore": "5.3.2"
+    "vite": "^6.1.0"
   }
 }

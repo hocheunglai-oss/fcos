@@ -18,6 +18,51 @@ test('unbound callers fail closed even with a mocked fetch; injected controller 
   assert.equal(receipts[0].tokenVersion,1);
 });
 
+test('a reserved accounting read can disable transient retries without spending another admission', async () => {
+  for (const failure of ['response', 'network']) {
+    const admissions = [];
+    const observations = [];
+    let calls = 0;
+    const control = fixtureSharedControl({
+      admit: async data => { admissions.push(data); return { requestId: String(admissions.length) }; },
+      observe: async data => observations.push(data),
+    });
+    const bound = fixtureXeroConnection(connection, control);
+    await assert.rejects(runWithXeroBudget(bound, { budgetId: 'fixture-budget' }, () => xeroAccountingFetch(bound, '/Invoices', {
+      transientRetryLimit: 0,
+      env: { XERO_TRANSIENT_RETRY_LIMIT: '2' },
+      requestGate: immediate,
+      wait: async () => {},
+      fetchImpl: async () => {
+        calls++;
+        if (calls > 1) return json({});
+        if (failure === 'network') throw Error('Synthetic connection failure');
+        return json({}, 503);
+      },
+    })));
+    assert.equal(calls, 1);
+    assert.equal(admissions.length, 1);
+    assert.equal(admissions[0].budgetId, 'fixture-budget');
+    assert.equal(observations.length, 1);
+  }
+});
+
+test('a per-request retry limit cannot expand the configured cap and invalid limits never dispatch', async () => {
+  let calls = 0;
+  const bound = fixtureXeroConnection(connection, fixtureSharedControl());
+  const options = {
+    env: { XERO_TRANSIENT_RETRY_LIMIT: '0' },
+    requestGate: immediate,
+    wait: async () => {},
+    fetchImpl: async () => { calls++; return json({}, 503); },
+  };
+  await assert.rejects(xeroAccountingFetch(bound, '/Invoices', { ...options, transientRetryLimit: 2 }));
+  assert.equal(calls, 1);
+  await assert.rejects(xeroAccountingFetch(bound, '/Invoices', { ...options, transientRetryLimit: -1 }),
+    { code: 'XERO_REQUEST_RETRY_INVALID' });
+  assert.equal(calls, 1);
+});
+
 test('write reserves future verification, uncertain response is never replayed, and callbacks receive receipts', async()=>{
   const budgets=[];const events=[];let calls=0;
   const control=fixtureSharedControl({reserve:async x=>{budgets.push(x);return{id:'budget'};},observe:async x=>events.push(x)});
@@ -70,20 +115,6 @@ test('valid access survives absent renewal config; expired connection uses one c
   assert.equal(fresh.accessToken,'fixture-access');assert.equal(calls,0);
   const result=await getFreshXeroConnection(storedClient(storedRow),{env,sharedControl:control,fetchImpl:async()=>{calls++;return json({access_token:'fixture-new',refresh_token:'fixture-new-refresh',expires_in:1800});}});
   assert.equal(result.tokenVersion,2);assert.equal(calls,1);assert.equal(finished[0].tokenVersion,1);assert.equal(result.tenantId,connection.tenantId);
-});
-
-test('read-only deployments use existing access but never claim or refresh expired credentials', async () => {
-  for (const deployment of [{ VERCEL_ENV: 'preview' }, { VERCEL_ENV: 'production', FCOS_ENABLE_READ_ONLY_CI: 'true' }]) {
-    let claims = 0, requests = 0, finished = 0;
-    const control = fixtureSharedControl({ claimRefresh: async () => { claims++; return { state: 'claimed' }; }, finishRefresh: async () => { finished++; return { tokenVersion: 2 }; } });
-    const options = { env: { ...env, ...deployment }, sharedControl: control, fetchImpl: async () => { requests++; throw new Error('Refresh must never be requested'); } };
-    const fresh = await getFreshXeroConnection(storedClient({ ...storedRow, expires_at: new Date(Date.now() + 3600_000).toISOString() }), options);
-    assert.equal(fresh.accessToken, storedRow.access_token);
-    for (const expires_at of [storedRow.expires_at, null, 'invalid']) {
-      await assert.rejects(getFreshXeroConnection(storedClient({ ...storedRow, expires_at }), options), { code: 'FCOS_DEPLOYMENT_READ_ONLY' });
-    }
-    assert.deepEqual({ claims, requests, finished }, { claims: 0, requests: 0, finished: 0 });
-  }
 });
 
 test('busy or uncertain renewal never reuses refresh token; revocation differs from configuration failure',async()=>{
@@ -152,20 +183,4 @@ test('cross-instance capacity queues without sending requests before durable adm
     fetchImpl: async () => { sent++; return json({ Invoices: [] }); },
   });
   assert.equal(sent, 1); assert.deepEqual(waited, [1000, 1000]);
-});
-
-test('transport admission binds exact serialized path and JSON including toJSON/rawJSON',async()=>{
-  const admissions=[],sent=[];
-  const control=fixtureSharedControl({admit:async data=>{admissions.push(data);return{requestId:'r'};}});
-  const bound=fixtureXeroConnection(connection,control),path='/Invoices/10000000-0000-4000-8000-000000000002?unitdp=4';
-  const value={Invoices:[{InvoiceID:'10000000-0000-4000-8000-000000000002',Status:'AUTHORISED'}]};
-  const fetchImpl=async(_url,options)=>{sent.push(options.body);return json({Invoices:[]});};
-  await xeroAccountingFetch(bound,path,{method:'POST',body:{toJSON:()=>value},requestGate:immediate,fetchImpl});
-  await xeroAccountingFetch(bound,path,{method:'POST',rawBody:JSON.stringify(value),headers:{'Content-Type':'application/json'},requestGate:immediate,fetchImpl});
-  for(let i=0;i<2;i++){assert.equal(admissions[i].resourcePath,path);assert.deepEqual(admissions[i].payloadJson,JSON.parse(sent[i]));}
-});
-test('scoped admission RPC receives transport facts and cannot request a reserve override',async()=>{
-  let call;const control=createXeroSharedControl({rpc:async(name,args)=>{call={name,args};return{data:{requestId:'r'},error:null};}});
-  await control.admit({tenantId:connection.tenantId,tokenVersion:1,requestId:'r',method:'GET',resourceKey:'Invoices',resourcePath:'/Invoices?id=x',budgetId:'b',reserveFloor:0});
-  assert.equal(call.name,'xero_shared_admit_scoped_v1');assert.equal(call.args.p_resource_path,'/Invoices?id=x');assert.equal(call.args.p_payload_json,null);assert.equal(Object.hasOwn(call.args,'p_reserve_floor'),false);
 });

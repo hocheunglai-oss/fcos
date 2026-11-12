@@ -17,11 +17,23 @@ async function requestEntities(payload, options = { cache: false }) {
     ...options,
     invalidateCache: options.invalidateCache ?? mutates,
     onBackgroundUpdate: backgroundUpdate
-      ? (result) => backgroundUpdate(result.data?.data)
+      ? (result) => {
+        const { data, meta } = result;
+        if (!data?.error && !data?.cancelled && !meta?.cancelled && data?.data != null) {
+          backgroundUpdate(data.data);
+        }
+      }
       : undefined,
   });
-  if (response.data?.error) throw new Error(response.data.error);
-  return response.data?.data;
+  const { data, meta } = response;
+  if (data?.cancelled || meta?.cancelled) {
+    throw Object.assign(new Error(data?.error || 'The Hedge Desk request was cancelled.'), { name: 'AbortError' });
+  }
+  if (data?.error) throw new Error(data.error);
+  if (data?.data == null) {
+    throw new Error('The Hedge Desk response could not be read. Refresh the saved result before retrying.');
+  }
+  return data.data;
 }
 
 async function entityRequest(entity, action, payload = {}) {

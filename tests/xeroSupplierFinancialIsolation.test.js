@@ -52,3 +52,12 @@ test('financial-only preview, read and apply retain explicit uncached Finance pe
     assert.equal(policy.externalAction, !name.endsWith('Read'));
   }
 });
+
+test('an accepted receipt cannot become an ordinary draft update even if the target changes state', () => {
+  const result = classifyXeroFinancialDocument({ ...source, total: 900 }, [{ ...target, status: 'DRAFT' }], {
+    storedMapping: { xero_document_id: target.id, retained_differences: { financialBucketPreservation: null } },
+  });
+  assert.equal(result.action, 'blocked');
+  assert.equal(result.proposedPayload, null);
+  assert.equal(result.supplierFinancialPreservation.savedTargetId, target.id);
+});

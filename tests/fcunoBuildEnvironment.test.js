@@ -18,16 +18,22 @@ test('hosted builds require the same FCUNO consumer and exact FCOS project', () 
   }
   for (const value of ['', undefined, 'sb_secret_fixture']) assert.throws(() => assertFcunoBuildEnvironment({ ...approved, VITE_SUPABASE_ANON_KEY: value }), /FCUNO release configuration/);
 });
+test('hosted builds accept a publishable-only key and reject private values in either variable', () => {
+  const publishable = {
+    ...approved,
+    VITE_SUPABASE_ANON_KEY: undefined,
+    VITE_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_current_fixture',
+  };
+  assert.equal(assertFcunoBuildEnvironment(publishable).authentication, 'fcuno');
+  assert.throws(() => assertFcunoBuildEnvironment({ ...publishable, VITE_SUPABASE_ANON_KEY: 'sb_secret_fixture' }),
+    /VITE_SUPABASE_ANON_KEY/);
+  assert.throws(() => assertFcunoBuildEnvironment({ ...approved, VITE_SUPABASE_PUBLISHABLE_KEY: 'sb_secret_fixture' }),
+    /VITE_SUPABASE_PUBLISHABLE_KEY/);
+});
 test('local builds remain available but hosted scope cannot bypass via missing VERCEL marker', () => {
   assert.deepEqual(assertFcunoBuildEnvironment({}), { checked: false });
   assert.throws(() => assertFcunoBuildEnvironment({ VERCEL_ENV: 'preview' }), /FCUNO release configuration/);
 });
 test('configuration errors list names only, never raw environment contents', () => {
   assert.throws(() => assertFcunoBuildEnvironment({ ...approved, FCUNO_IDENTITY_ISSUER: 'private-sentinel', UNRELATED_SECRET: 'private-secret' }), error => !/private-sentinel|private-secret/.test(error.message));
-});
-test('publishable key alias is supported without relaxing public credential checks', () => {
-  const env = { ...approved, VITE_SUPABASE_ANON_KEY: undefined, VITE_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_fixture' };
-  assert.equal(assertFcunoBuildEnvironment(env).checked, true);
-  assert.equal(assertFcunoBuildEnvironment({ ...approved, VITE_SUPABASE_PUBLISHABLE_KEY: ' ' }).checked, true);
-  assert.throws(() => assertFcunoBuildEnvironment({ ...approved, VITE_SUPABASE_PUBLISHABLE_KEY: 'sb_secret_fixture' }), /FCUNO release configuration/);
 });

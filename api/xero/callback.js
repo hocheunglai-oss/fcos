@@ -1,7 +1,8 @@
+import { withDeploymentRequestSafety } from '../_deploymentReadOnly.js';
 import { exchangeXeroAuthorizationCode } from '../_xeroPortal.js';
 import { requireDeploymentMutationAllowed } from '../_deploymentReadOnly.js';
 
-export default async function handler(req, res) {
+async function handler(req, res) {
   const origin = requestOrigin(req);
   const url = new URL(req.url, origin);
   const returnPath = '/xero-portal';
@@ -47,3 +48,5 @@ function requestOrigin(req) {
   const host = String(req?.headers?.['x-forwarded-host'] || req?.headers?.host || 'fcos.fcuno.com').split(',')[0].trim();
   return `${protocol}://${host}`;
 }
+
+export default withDeploymentRequestSafety(handler);

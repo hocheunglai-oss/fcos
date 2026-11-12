@@ -1,17 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { setManagedUserActivation } from '../api/_fcunoManagedActivation.js';
 import { federationDatabase, userId } from './fcunoDatabaseFixture.js';
 
 const source = await readFile(new URL('../api/functions/[name].js', import.meta.url), 'utf8');
 function implementation(name, next) {
-  const start = source.indexOf(`async function ${name}(`); let end = source.indexOf(`async function ${next}(`, start);
-  if (end < 0) end = source.indexOf('\nasync function ', start + 1);
+  const start = source.indexOf(`async function ${name}(`), end = source.indexOf(`async function ${next}(`, start);
   assert.ok(start >= 0 && end > start);
   return source.slice(start, end);
 }
 
-function fixture({ profileClient = null, initialProfile = null, generalManager = null, afterAuthUpdate = async () => {} } = {}) {
+function fixture({ profileClient = null, initialProfile = null, generalManager = null, afterAuthUpdate = async () => {}, afterAudit = async () => {} } = {}) {
   const state = { profile: initialProfile || { id: 'local-user', email: 'user@fcuno.example', full_name: 'FCUNO User', active: false, user_type: 'viewer', use_type_defaults: false },
     audits: [], authWrites: [], permissions: [], auditUnavailable: false, otherAdministrators: 1 };
   const gm = generalManager || { id: 'general-manager', active: true, user_type: 'general_manager' };
@@ -30,7 +30,7 @@ function fixture({ profileClient = null, initialProfile = null, generalManager =
           const filters = {};
           const q = { eq: (key, value) => { filters[key] = value; return q; }, select: () => q, maybeSingle: async () => {
             if (Object.entries(filters).some(([key, value]) => state.profile[key] !== value)) return { data: null, error: null };
-            Object.assign(state.profile, patch); return { data: { email: state.profile.email, full_name: state.profile.full_name, active: state.profile.active }, error: null };
+            Object.assign(state.profile, patch); return { data: { ...state.profile }, error: null };
           } };
           return q;
         },
@@ -41,12 +41,13 @@ function fixture({ profileClient = null, initialProfile = null, generalManager =
       };
       if (table === 'admin_audit_logs') return { insert: async (row) => {
         if (state.auditUnavailable) return { error: new Error('FIXTURE_AUDIT_UNAVAILABLE') };
-        state.audits.push(row); return { error: null };
+        state.audits.push(row); await afterAudit(); return { error: null };
       } };
       throw new Error(`Unexpected activation table ${table}`);
     },
   };
   const dependencies = {
+    setManagedUserActivation,
     appError: (message, status = 500, code) => Object.assign(new Error(message), { status, code }),
     listAccessModel: async () => ({ userTypes: [{ id: 'viewer' }, { id: 'administrator' }, { id: 'general_manager' }], typePermissions: {}, typeCapabilities: {} }),
     isAdministratorUserType: (type) => ['administrator', 'general_manager'].includes(type),
@@ -56,19 +57,62 @@ function fixture({ profileClient = null, initialProfile = null, generalManager =
     ADMINISTRATIVE_USER_TYPES: ['administrator', 'general_manager'], ADMIN_APP_MODULES: [], ADMIN_CAPABILITIES: [],
     REPORT_ARCHIVE_MODULE_ID: 'report_archive', REPORT_ARCHIVE_MANAGE_MODULE_ID: 'report_archive_manage',
     ensureReportArchiveManageModule: async () => {}, permissionCanView: () => false,
-    reportArchiveAccessLevel: () => 'none', loadEffectiveGroupAccess: async () => ({permissions:{},capabilities:{},groups:[],access_revision:1,grant_sources:{}}),
+    reportArchiveAccessLevel: () => 'none',
+    loadEffectiveGroupAccess: async () => ({ permissions: {}, capabilities: {}, groups: [] }),
   };
   // Execute the production sanitizer, continuity checks, audit and persistence
   // together. Only provider/database dependencies are fixture implementations.
   const persist = Function(...Object.keys(dependencies), `${implementation('sanitizeManagedUserPayload', 'findAuthUserByEmail')}
     ${implementation('writeAdminAudit', 'loadActiveGeneralManager')}
-    ${implementation('assertAdministratorContinuity', 'ensureReportArchiveManageModule')}
+    ${implementation('assertAdministratorContinuity', 'persistManagedUser')}
     ${implementation('persistManagedUser', 'adminUsersList')}
     return persistManagedUser;`)(...Object.values(dependencies));
   const payload = (patch = {}) => ({ ...state.profile, permissions: {}, capabilities: {}, ...patch });
   const actor = { id: gm.id, email: 'admin@fcuno.example' };
-  return { state, save: (patch) => persist(client, payload(patch), actor), gm };
+  return { state, save: (patch) => persist(client, payload(patch), actor),
+    activate: (patch = {}) => persist(client, { id: state.profile.id, active: true, activationOnly: true, ...patch }, actor), gm };
 }
+
+test('activation-only preserves the current server role without updating Auth metadata', async () => {
+  const { activate, state } = fixture();
+  state.profile.user_type = 'administrator';
+  const result = await activate();
+  assert.equal(result.user_type, 'administrator');
+  assert.equal(result.email, state.profile.email);
+  assert.equal(result.full_name, state.profile.full_name);
+  assert.equal(state.profile.user_type, 'administrator');
+  assert.equal(state.profile.active, true);
+  assert.deepEqual(state.authWrites, []);
+  assert.deepEqual(state.permissions, []);
+  assert.equal(state.audits[0].metadata.user_type, 'administrator');
+  await activate();
+  assert.equal(state.audits.length, 1);
+});
+
+test('activation-only rejects extra identity or role inputs and requires the audit', async () => {
+  const { activate, state } = fixture();
+  for (const patch of [{ user_type: 'viewer' }, { password: 'fixture-password' }, { activationOnly: 'true' }, { active: undefined }]) {
+    await assert.rejects(activate(patch), { code: 'FCOS_APPLICATION_ACCESS_INVALID' });
+  }
+  state.auditUnavailable = true;
+  await assert.rejects(activate(), /FIXTURE_AUDIT_UNAVAILABLE/);
+  assert.equal(state.profile.active, false);
+  assert.deepEqual(state.authWrites, []);
+  assert.deepEqual(state.audits, []);
+});
+
+test('activation-only conflicts on a concurrent role change before the profile write', async (t) => {
+  const { query, client } = await federationDatabase(t);
+  await query("update user_profiles set active=false,user_type='viewer' where id=$1", [userId]);
+  const initialProfile = (await query('select * from user_profiles where id=$1', [userId])).rows[0];
+  const { activate, state } = fixture({ initialProfile, profileClient: client,
+    afterAudit: () => query("update user_profiles set user_type='administrator' where id=$1", [userId]),
+  });
+  await assert.rejects(activate(), { status: 409, code: 'FCOS_AUTHORIZATION_CONFLICT' });
+  assert.deepEqual((await query('select user_type,active from user_profiles where id=$1', [userId])).rows[0],
+    { user_type: 'administrator', active: false });
+  assert.deepEqual(state.authWrites, []);
+});
 
 test('a local administrator can activate and disable FCOS access while FCUNO retains identity ownership', async () => {
   const { state, save } = fixture();
@@ -121,34 +165,6 @@ test('executed activation path preserves a concurrently projected identity in Po
   assert.equal(result.email, stored.email); assert.equal(result.full_name, stored.full_name);
 });
 
-test('activation-only request preserves a role changed before its initial server read', async (t) => {
-  const { query, client } = await federationDatabase(t);
-  await query("update user_profiles set active=false,user_type='viewer',use_type_defaults=false where id=$1", [userId]);
-  const stalePageProfile = (await query('select * from user_profiles where id=$1', [userId])).rows[0];
-  const { save, state } = fixture({ initialProfile: stalePageProfile, profileClient: client });
-  // A separate role edit completes after page load, before this save reads it.
-  await query("update user_profiles set user_type='administrator' where id=$1", [userId]);
-  const result = await save({ activationOnly: true, active: true, user_type: 'viewer' });
-  assert.deepEqual((await query('select active,user_type,use_type_defaults from user_profiles where id=$1', [userId])).rows[0],
-    { active: true, user_type: 'administrator', use_type_defaults: false });
-  assert.deepEqual(state.authWrites, [{ app_metadata: { user_type: 'administrator' } }]);
-  assert.equal(result.user_type, 'administrator');
-  assert.equal(state.audits[0].metadata.user_type, 'administrator');
-  assert.equal(state.permissions.length, 0);
-});
-
-test('activation-only omission cannot fall back to Viewer and malformed activation-only requests stop before writes', async () => {
-  const { save, state } = fixture({ initialProfile: { id: 'local-user', email: 'user@fcuno.example', full_name: 'FCUNO User', active: false, user_type: 'administrator', use_type_defaults: false } });
-  assert.equal((await save({ activationOnly: true, active: true, user_type: undefined })).user_type, 'administrator');
-  assert.equal(state.profile.user_type, 'administrator');
-  assert.deepEqual(state.authWrites[0], { app_metadata: { user_type: 'administrator' } });
-  const before = state.authWrites.length;
-  for (const patch of [{ activationOnly: 'true', active: false }, { activationOnly: true, active: undefined }, { activationOnly: true, id: null, password: 'fixture-password', active: true }]) {
-    await assert.rejects(save(patch), { code: 'FCOS_APPLICATION_ACCESS_INVALID' });
-  }
-  assert.equal(state.authWrites.length, before);
-});
-
 test('permissions-only save conflicts safely when activation changes concurrently', async (t) => {
   const { query, client } = await federationDatabase(t);
   await query("update user_profiles set active=false,user_type='viewer',use_type_defaults=false where id=$1", [userId]);
@@ -190,8 +206,8 @@ test('the administrator entrypoint and desktop form expose local application act
   const admin = await readFile(new URL('../src/pages/AdminControl.jsx', import.meta.url), 'utf8');
   assert.match(implementation('adminUserSave', 'adminUserDelete'), /requireAdministrator\(req\)/);
   assert.match(admin, /FCOS application access/);
-  assert.match(admin, /activationOnly: true, active: currentPerson\.active !== true/);
-  assert.doesNotMatch(admin.slice(admin.indexOf('const toggleFcosAccess'), admin.indexOf('const openIdentity')), /user_type:/);
   assert.doesNotMatch(admin, /Managed in FCUNO/);
   assert.match(admin, /Identity is read-only from FCUNO/);
+  assert.match(admin, /const activationOnly = localActivationChanged && roleValue === rolePerson\.user_type/);
+  assert.match(admin, /\{ id: rolePerson\.id, active: roleActive, activationOnly: true \}/);
 });

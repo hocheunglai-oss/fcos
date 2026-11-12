@@ -5,6 +5,7 @@ import {
   DEFAULT_TRUSTED_EMAIL_IMAGE_DOMAINS,
   emailImageSourceSummary,
   emailRouterClientMetrics,
+  formatEmailRouterSyncAge,
   emailRouterShortcut,
   recordEmailRouterClientMetric,
   senderDomain,
@@ -56,4 +57,13 @@ test('Email Router shortcuts never override typing and require a selected messag
   assert.equal(emailRouterShortcut({ key: 'r', target: {} }, { hasMessage: true }), 'focus_route');
   assert.equal(emailRouterShortcut({ key: 'e', target: { closest: () => ({ tagName: 'INPUT' }) } }, { hasMessage: true }), null);
   assert.equal(emailRouterShortcut({ key: 's', metaKey: true, target: {} }), null);
+});
+
+test('Email Router freshness distinguishes absent timestamps from real synchronization ages', () => {
+  const now = Date.parse('2026-11-07T21:00:00Z');
+  for (const value of [undefined, null, '', 0, false, 'bad timestamp', '2026-11-07T21:00:01Z']) {
+    assert.equal(formatEmailRouterSyncAge(value, now), 'Not yet recorded');
+  }
+  assert.equal(formatEmailRouterSyncAge('2026-11-07T20:59:45Z', now), '15s ago');
+  assert.equal(formatEmailRouterSyncAge(now - 3_600_000, now), '1h ago');
 });

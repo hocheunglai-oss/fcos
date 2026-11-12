@@ -7,7 +7,7 @@ import {
   X,
 } from "lucide-react";
 import { PRODUCT_COLORS, formatMoney } from "../lib/domain";
-import { PAGE_METHODOLOGIES } from "../lib/methodology";
+import { HEDGE_METHODOLOGY_TITLES, HEDGE_METHODOLOGY_URL } from "@/lib/pageMethodologyIndex";
 import PageMethodology from "@/components/common/PageMethodology";
 import SalesforceSyncBadge from "@/components/common/SalesforceSyncBadge";
 
@@ -65,11 +65,7 @@ export function SearchInput({ value, onChange, placeholder = "Search", className
 }
 
 export function PageHeader({ eyebrow, title, description, actions, status, showSalesforceSync = true }) {
-  const methodology = PAGE_METHODOLOGIES[title];
-  const methodologySections = methodology ? [
-    { title: "Purpose", body: methodology.summary },
-    { title: "Calculation and control rules", points: methodology.steps },
-  ] : [];
+  const hasMethodology = HEDGE_METHODOLOGY_TITLES.includes(title);
   return (
     <header className="app-page-header">
       <div className="app-page-header__copy">
@@ -81,14 +77,14 @@ export function PageHeader({ eyebrow, title, description, actions, status, showS
         </div>
         {description && <p>{description}</p>}
       </div>
-      {(methodology || actions) && (
+      {(hasMethodology || actions) && (
         <div className="app-page-header__actions">
-          {methodology && (
+          {hasMethodology && (
             <PageMethodology
               title={title}
               description="Calculation basis, workflow assumptions, and control sources used by this page."
-              sections={methodologySections}
-              sources={methodology.sources || []}
+              contentUrl={HEDGE_METHODOLOGY_URL}
+              contentKey={`hedge:${title}`}
             />
           )}
           {actions}

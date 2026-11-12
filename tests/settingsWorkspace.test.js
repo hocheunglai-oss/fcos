@@ -151,6 +151,7 @@ test('System Health includes a lazy, signed, secret-safe CLI-first Connection Ch
 
   assert.match(settings, /lazy\(\(\) => import\('@\/components\/settings\/ConnectionChecklist'\)\)/);
   assert.match(settings, /<TabsTrigger value="connections">Connection Checklist<\/TabsTrigger>/);
+  assert.match(settings, /Preparing the CLI-first connection runbook/);
   assert.match(settings, /containsStructuredValues/);
   assert.match(settings, /flattenHealthDetails\(entry, `\$\{prefix\} \$\{index \+ 1\}`\.trim\(\), rows\)/);
   assert.match(checklist, /Live, machine-signed verification/);
@@ -164,7 +165,7 @@ test('System Health includes a lazy, signed, secret-safe CLI-first Connection Ch
   assert.match(checklist, /Salesforce DEVEE, and Salesforce QAT/);
   assert.match(checklist, /only for Salesforce Production authentication/);
   assert.match(sharedPolicy, /publicKeySpkiBase64/);
-  assert.match(methodology, /always uses a target-locked and version-approved CLI first/);
+  assert.match(methodology, /uses a target-locked and version-approved CLI first/);
   assert.match(methodology, /Vincent for Salesforce Production/);
 });
 

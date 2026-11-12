@@ -13,7 +13,7 @@ import { AuthenticatedDocumentDownloadButton, AuthenticatedDocumentPreview } fro
 import { readDocumentSettings } from '@/lib/documentSettings';
 import PaymentDataReliabilityBadge from '@/components/common/PaymentDataReliabilityBadge';
 import { LEGACY_PAYMENT_DATA_LABEL } from '@/lib/paymentDataReliability';
-import { activeStemLineItems, visibleStemBuyerBrokers } from '@/lib/stemLineVisibility';
+import { activeStemLineItems } from '@/lib/stemLineVisibility';
 
 const FINANCIAL_HEADER_RIGHT = "sticky top-0 z-10 bg-card text-right py-2.5 px-3 font-semibold text-muted-foreground";
 const FINANCIAL_HEADER_LEFT = "sticky top-0 z-10 bg-card text-left py-2.5 px-3 font-semibold text-muted-foreground";
@@ -620,9 +620,9 @@ export default function StemDetailModal({ stemId, open, onClose, embedded = fals
   const Title = embedded ? InlineHeading : DialogTitle;
   const [meta, setMeta] = useState(null);
   const [record, setRecord] = useState(null);
-  const [allLineItems, setLineItems] = useState([]);
+  const [lineItems, setLineItems] = useState([]);
   const [extraCosts, setExtraCosts] = useState([]);
-  const [allBuyerBrokers, setBuyerBrokers] = useState([]);
+  const [buyerBrokers, setBuyerBrokers] = useState([]);
   const [supplierInvoicePayments, setSupplierInvoicePayments] = useState([]);
   const [buyerInvoicePayments, setBuyerInvoicePayments] = useState([]);
   const [brokerCommissionPayments, setBrokerCommissionPayments] = useState([]);
@@ -633,8 +633,6 @@ export default function StemDetailModal({ stemId, open, onClose, embedded = fals
   const [showAllDocuments, setShowAllDocuments] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const lineItems = activeStemLineItems(allLineItems);
-  const buyerBrokers = visibleStemBuyerBrokers(allBuyerBrokers, allLineItems);
 
   useEffect(() => {
     if (!open || !stemId) return;
@@ -661,7 +659,7 @@ export default function StemDetailModal({ stemId, open, onClose, embedded = fals
       else {
         setError(null);
         setRecord(res.data.record);
-        setLineItems(res.data.lineItems || []);
+        setLineItems(activeStemLineItems(res.data.lineItems));
         setExtraCosts(res.data.extraCosts || []);
         setBuyerBrokers(res.data.buyerBrokers || []);
         setSupplierInvoicePayments(res.data.supplierInvoicePayments || []);

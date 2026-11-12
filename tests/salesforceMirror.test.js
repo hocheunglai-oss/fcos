@@ -21,9 +21,9 @@ import {
   validateFetchedPullRequestHead,
   validatePublicationPullRequest,
   verifyCheckout,
-} from '../scripts/sync-salesforce-schema-free-hotfix-repository.mjs';
+} from '../scripts/sync-salesforce-shared-repository.mjs';
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
-import { SALESFORCE_RELEASE_MODE } from '../scripts/salesforce-schema-free-hotfix-state.mjs';
+import { SALESFORCE_RELEASE_MODE } from '../scripts/salesforce-workflow-state.mjs';
 
 const publication = FCOS_CONNECTION_POLICY.providers.find(({ id }) => id === 'salesforce').publication;
 
@@ -88,7 +88,7 @@ test('FCOS pushes with Salesforce changes require a current shared mirror', asyn
 });
 
 test('closed shared pull requests cannot be silently reused for later Salesforce publication', async () => {
-  const source = await readFile(new URL('../scripts/sync-salesforce-schema-free-hotfix-repository.mjs', import.meta.url), 'utf8');
+  const source = await readFile(new URL('../scripts/sync-salesforce-shared-repository.mjs', import.meta.url), 'utf8');
   assert.match(source, /'pr', 'list'.*'--state', 'open'/s);
   assert.match(source, /No matching open draft shared Salesforce pull request exists/);
   assert.doesNotMatch(source, /remoteBranchHead\(PUBLICATION\.activeBranch\).*PUBLICATION\.activeBranch/s);
@@ -167,7 +167,7 @@ test('refetched draft pull request must bind the exact repository branch and com
 });
 
 test('mirror command refetches and validates the PR before verifying immutable remote bytes', async () => {
-  const source = await readFile(new URL('../scripts/sync-salesforce-schema-free-hotfix-repository.mjs', import.meta.url), 'utf8');
+  const source = await readFile(new URL('../scripts/sync-salesforce-shared-repository.mjs', import.meta.url), 'utf8');
   const refetch = source.indexOf('const pullRequest = refetchPullRequest(');
   const validate = source.indexOf('validatePublicationPullRequest(pullRequest', refetch);
   const verifyRemote = source.indexOf('verifyImmutableRemoteHead(checkout, pullRequest', validate);
@@ -271,7 +271,7 @@ test('publication report identifies the immutable reviewed source and pull reque
 });
 
 test('existing shared publication branches are resumed without corrupting the JSON promotion contract', async () => {
-  const source = await readFile(new URL('../scripts/sync-salesforce-schema-free-hotfix-repository.mjs', import.meta.url), 'utf8');
+  const source = await readFile(new URL('../scripts/sync-salesforce-shared-repository.mjs', import.meta.url), 'utf8');
   assert.match(source, /MODE === 'publish' && !existsRemotely \? PUBLICATION\.defaultBranch : branch/);
   assert.match(source, /MODE === 'publish' && !existsRemotely\) run\('git', \['switch', '-c', branch\]/);
   assert.match(source, /run\('git', pushArgs, \{ cwd: checkout \}\)/);
@@ -279,7 +279,7 @@ test('existing shared publication branches are resumed without corrupting the JS
 });
 
 test('shared Salesforce commits are permanently attributed to the approved GitHub identity', async () => {
-  const source = await readFile(new URL('../scripts/sync-salesforce-schema-free-hotfix-repository.mjs', import.meta.url), 'utf8');
+  const source = await readFile(new URL('../scripts/sync-salesforce-shared-repository.mjs', import.meta.url), 'utf8');
   const publication = FCOS_CONNECTION_POLICY.providers.find(({ id }) => id === 'salesforce').publication;
   assert.equal(publication.requiredAccount, 'vincelessxai');
   assert.equal(publication.requiredAccountId, 304336732);
@@ -291,7 +291,7 @@ test('shared Salesforce commits are permanently attributed to the approved GitHu
 });
 
 test('shared Salesforce publication requires fresh proof from the exact DEVEE source deployment', async () => {
-  const mirror = await readFile(new URL('../scripts/sync-salesforce-schema-free-hotfix-repository.mjs', import.meta.url), 'utf8');
+  const mirror = await readFile(new URL('../scripts/sync-salesforce-shared-repository.mjs', import.meta.url), 'utf8');
   assert.match(mirror, /assertDeveeDeploymentProof\(inventory\)/);
   assert.match(mirror, /allowStaleVerification: true/);
   assert.match(mirror, /refreshDeveeSourceVerification\(currentWorkflow/);
@@ -307,5 +307,6 @@ test('shared Salesforce publication requires fresh proof from the exact DEVEE so
   assert.match(mirror, /record\?\.testLevel !== FULL_SALESFORCE_TEST_LEVEL/);
   assert.match(mirror, /deployment\?\.result\?\.status !== 'Succeeded'/);
   assert.doesNotMatch(mirror, /project', 'deploy', 'validate/);
-  assert.match(mirror, /const deveeDeployment = assertDeveeDeploymentProof\(inventory\)/);
+  assert.match(mirror, /main\(\{ proofResolver = assertDeveeDeploymentProof \} = \{\}\)/);
+  assert.match(mirror, /const deveeDeployment = proofResolver\(inventory\)/);
 });

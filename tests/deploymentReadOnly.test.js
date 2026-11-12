@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { isDeploymentReadOnly, requireDeploymentMutationAllowed } from '../api/_deploymentReadOnly.js';
+import { isDeploymentReadOnly, requireDeploymentMutationAllowed, runWithDeploymentRequestSafety } from '../api/_deploymentReadOnly.js';
 import { externalActionGates, isExternalActionEnabled } from '../api/_externalActionGates.js';
 import { isReadOnlyMarketAction } from '../api/_readOnlyCiAccess.js';
 import { sfRequest } from '../api/_salesforce.js';
@@ -18,7 +18,7 @@ test('Preview and explicit read-only deployments deny every external-action gate
   }
 });
 
-test('Production retains established controls without introducing financial authority', () => {
+test('Canonical Production retains established controls without introducing financial authority', () => runWithDeploymentRequestSafety({ headers: { host: 'fcos.fcuno.com' } }, () => {
   const env = { VERCEL_ENV: 'production' };
   assert.equal(isDeploymentReadOnly(env), false);
   assert.equal(isExternalActionEnabled('salesforce_write', env), true);
@@ -26,7 +26,7 @@ test('Production retains established controls without introducing financial auth
   assert.equal(isExternalActionEnabled('xero_financial_sync', { ...env, FCOS_ENABLE_XERO_FINANCIAL_SYNC: 'true' }), true);
   assert.equal(isExternalActionEnabled('salesforce_write', { ...env, FCOS_DISABLE_SALESFORCE_WRITE: 'true' }), false);
   assert.doesNotThrow(() => requireDeploymentMutationAllowed(true, env));
-});
+}, { VERCEL_ENV: 'production' }));
 
 test('mixed Markets handler permits reviewed reads while unknown or write actions remain mutations', () => {
   for (const action of ['snapshot', 'market_history', 'intelligence_brief', 'intelligence_curve']) assert.equal(isReadOnlyMarketAction({ action }), true);

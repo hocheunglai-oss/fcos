@@ -38,6 +38,7 @@ import { DOCUMENT_SOURCE_GROUPS, readDocumentSettings, saveDocumentSettings } fr
 import { clearDraft, readDraft, sameDraftValue, useDraftAutosave } from '@/lib/draftAutosave';
 import { useAuth } from '@/lib/AuthContext';
 import HedgeAssistantAiSettings from '@/hedge/components/HedgeAssistantAiSettings';
+import MarketAssistantSettings from '@/components/markets/MarketAssistantSettings';
 import EmailRouterAdvisorAiSettings from '@/components/email-router/EmailRouterAdvisorAiSettings';
 import AiModelSettingsCard from '@/components/settings/AiModelSettingsCard';
 import { applyAppearancePreferences, readAppearancePreferences } from '@/lib/appearancePreferences';
@@ -1302,6 +1303,7 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
             />
           )}
           {hasCapability('hedge_admin') && <HedgeAssistantAiSettings />}
+          {(isAdministrator || hasCapability('hedge_admin')) && <MarketAssistantSettings />}
           {isAdministrator && <EmailRouterAdvisorAiSettings />}
           </div>
         </TabsContent>

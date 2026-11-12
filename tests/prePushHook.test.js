@@ -18,20 +18,17 @@ case "$1" in
       --show-toplevel) printf '%s\\n' "$MOCK_REPO_ROOT" ;;
       --path-format=absolute) printf '%s\\n' "$MOCK_REPO_ROOT/.git" ;;
       --verify) [ "$MOCK_HAS_ORIGIN_MAIN" = "1" ] && printf '%s\\n' "$MOCK_MAIN_SHA" ;;
-      --is-shallow-repository) printf '%s\\n' false ;;
       --local-env-vars) printf '%s\\n' GIT_DIR GIT_WORK_TREE ;;
     esac
     ;;
   config) printf '%s\\n' hocheunglai-oss ;;
   remote) printf '%s\\n' https://github.com/hocheunglai-oss/fcos.git ;;
-  ls-remote) printf '%s %s\\n' "$MOCK_MAIN_SHA" refs/heads/main ;;
-  cat-file) exit 0 ;;
+  ls-remote) printf '%s\\trefs/heads/main\\n' "$MOCK_MAIN_SHA" ;;
+  cat-file) while read -r object; do printf '%s commit\\n' "$object"; done ;;
   rev-list) printf '%s\\n' "$MOCK_LOCAL_SHA" ;;
-  diff-tree|diff)
-    case "$MOCK_CHANGED_PATHS" in
-      force-app/main/default/*) printf '%s\\n' "$MOCK_CHANGED_PATHS" ;;
-    esac
-    ;;
+  diff-tree) printf '%s\\n' "$MOCK_CHANGED_PATHS" ;;
+  merge-base) printf '%s\\n' "$MOCK_BASE_SHA" ;;
+  diff) printf '%s\\n' "$MOCK_CHANGED_PATHS" ;;
   ls-tree) printf '%s\\n' "$MOCK_TREE_PATHS" ;;
 esac
 `;
