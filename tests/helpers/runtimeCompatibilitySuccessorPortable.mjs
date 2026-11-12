@@ -78,6 +78,19 @@ assert.equal(installationCurrentV4.previousSupplementSha256, hash(installationV3
 assert.equal(installationCurrentV4.reviewedCurrentCommit, '031aeea1344ec77a8d1f21d7726facbb4e6f6835');
 assert.equal(installationCurrentV4.path, 'AGENTS.md');
 assert.equal(installationCurrentV4.retainedSource, 'installation-controls-v1.json');
+const installationV5Bytes = regularFile(FIXTURE_ROOT, 'installation-control-current-v5.json');
+assert.equal(hash(installationV5Bytes), '2d4f08e67e9847b20adeb3b649d4ed684736ce0dd37793baca899eb6da3bf943');
+const installationCurrentV5 = Object.freeze(JSON.parse(installationV5Bytes));
+assert.equal(installationCurrentV5.schemaVersion, 5);
+assert.equal(installationCurrentV5.previousSupplementSha256, hash(installationV4Bytes));
+assert.deepEqual(installationCurrentV5.sources.map(source => [source.path, source.retainedSource]), [
+  ['.codex/README.md', 'installation-controls-v1.json'],
+  ['AGENTS.md', 'installation-controls-v1.json'],
+  ['config/fcosConnections.js', 'installation-controls-v2.json'],
+]);
+export const currentInstallationControlPins = new Map(
+  installationCurrentV5.sources.map(source => [source.path, Object.freeze(source)]),
+);
 const retainedControls = new Map();
 function retainedControlBodies(controls = installationControls) {
   if (retainedControls.has(controls)) return retainedControls.get(controls);
@@ -115,11 +128,12 @@ export function installationControlSource(path, current) {
   const controls = installationControlsV2.sources.some(row => row.path === path) ? installationControlsV2 : installationControls;
   const entry = controls.sources.find(row => row.path === path);
   if (!entry || hash(current) === entry.sha256) { assertBoundSource(path,current); return current; }
-  const currentPin = controls === installationControlsV2 && path === installationV3.path && hash(current) === installationV3.currentSha256
-    ? installationV3 : controls === installationControls && path === installationCurrentV4.path && hash(current) === installationCurrentV4.currentSha256
-      ? installationCurrentV4 : entry;
-  assert.equal(hash(current),currentPin.currentSha256, `Unreviewed current installation control: ${path}`);
-  if (controls === installationControlsV2 || currentPin === installationCurrentV4) {
+  const supplementalPin = currentInstallationControlPins.get(path);
+  const currentHash = hash(current);
+  const currentPin = [supplementalPin, installationV3, installationCurrentV4]
+    .find(pin => pin?.path === path && pin.currentSha256 === currentHash) || entry;
+  assert.equal(currentHash, currentPin.currentSha256, `Unreviewed current installation control: ${path}`);
+  if (controls === installationControlsV2 || currentPin !== entry) {
     assert.equal(current.length,currentPin.currentByteLength, `Current installation length differs: ${path}`);
     assert.equal(createHash('sha1').update(`blob ${current.length}\0`).update(current).digest('hex'),currentPin.currentOid);
   }

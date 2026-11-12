@@ -149,6 +149,7 @@ function assertIdentity() {
   const repository = json('gh', ['api', `repos/${PUBLICATION.repository}`], { env: ghEnvironment });
   if (account?.login !== PUBLICATION.requiredAccount
     || account?.id !== PUBLICATION.requiredAccountId
+    || repository?.id !== PUBLICATION.repositoryId
     || repository?.full_name?.toLowerCase() !== PUBLICATION.repository.toLowerCase()
     || repository?.permissions?.pull !== true
     || repository?.permissions?.push !== true
