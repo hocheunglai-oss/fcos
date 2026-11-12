@@ -1,6 +1,6 @@
 const connectionPolicy = {
   schemaVersion: 1,
-  policyVersion: 11,
+  policyVersion: 12,
   profile: 'fcos-production',
   browserProfile: 'Otto',
   localStateDirectory: '.fcos-cli',
@@ -176,11 +176,11 @@ const connectionPolicy = {
         { label: 'DEVEE browser authentication profile', value: 'Otto' },
         { label: 'QAT browser authentication profile', value: 'Otto' },
         { label: 'Production browser authentication profile', value: 'Vincent' },
-        { label: 'Shared GitHub account', value: 'vincelessxai' },
-        { label: 'Shared GitHub account ID', value: '304336732' },
+        { label: 'Shared GitHub account', value: 'hocheunglai-oss' },
+        { label: 'Shared GitHub account ID', value: '265701760' },
         { label: 'Shared Salesforce repository', value: 'ivanyk20/fcbhk' },
         { label: 'Shared repository path', value: 'src/' },
-        { label: 'Shared browser fallback profile', value: 'vincexai' },
+        { label: 'Shared browser fallback profile', value: 'Otto' },
         { label: 'Development source', value: 'DEVEE only' },
         { label: 'Promotion order', value: 'DEVEE → GitHub → QAT → Production' },
       ],
@@ -198,20 +198,21 @@ const connectionPolicy = {
       credentialStorage: 'protected_host_store',
       rotationWarningDays: 90,
       expiryWarningDays: 30,
-      persistence: 'Salesforce CLI retains protected host sessions for DEVEE, QAT, and Production. FCOS pins DEVEE as the development/source target and revalidates every exact org ID, username, environment type, and query capability before use. The shared Salesforce mirror uses a separate ignored GitHub CLI profile.',
+      persistence: 'Salesforce CLI retains protected host sessions for DEVEE, QAT, and Production. FCOS pins DEVEE as the development/source target and revalidates every exact org ID, username, environment type, and query capability before use. The shared Salesforce mirror uses the project-isolated GitHub CLI profile with its own repository and permission checks.',
       nonBrowserRoute: 'Use Salesforce CLI only after DEVEE, QAT, and Production match their exact identities. Deploy and verify in DEVEE, publish the byte-equivalent DEVEE source to the shared repository, then promote the same source to QAT and Production in order.',
       publication: {
-        requiredAccount: 'vincelessxai',
-        requiredAccountId: 304336732,
+        requiredAccount: 'hocheunglai-oss',
+        requiredAccountId: 265701760,
         repository: 'ivanyk20/fcbhk',
+        repositoryId: 1318388488,
         defaultBranch: 'main',
         activeBranch: 'codex/special-term-clause-bank-migration',
         branchPrefix: 'codex/salesforce-metadata-sync',
         sourceRoot: 'force-app/main/default',
         targetRoot: 'src',
         manifestPath: '.fcos-salesforce-mirror.json',
-        configPath: '.fcos-cli/github-vincelessxai',
-        browserProfile: 'vincexai',
+        configPath: '.fcos-cli/github',
+        browserProfile: 'Otto',
         sourceEnvironmentKey: 'devee',
         sourceStatePath: '.fcos-cli/salesforce/devee-source-state.json',
         sourceStateMaximumAgeSeconds: 14400,
@@ -366,6 +367,7 @@ export function validateFcosConnectionPolicy(value = connectionPolicy) {
         throw new Error('salesforce.publication.requiredAccountId must be a positive integer.');
       }
       requireString(provider.publication?.repository, 'salesforce.publication.repository');
+      requirePositiveInteger(provider.publication?.repositoryId, 'salesforce.publication.repositoryId');
       requireString(provider.publication?.defaultBranch, 'salesforce.publication.defaultBranch');
       requireString(provider.publication?.activeBranch, 'salesforce.publication.activeBranch');
       requireString(provider.publication?.branchPrefix, 'salesforce.publication.branchPrefix');
@@ -377,8 +379,8 @@ export function validateFcosConnectionPolicy(value = connectionPolicy) {
       if (!approvedBrowserProfiles.has(provider.publication.browserProfile)) {
         throw new Error('Salesforce publication browserProfile is not approved.');
       }
-      if (provider.publication.browserProfile !== 'vincexai') {
-        throw new Error('Salesforce publication browserProfile must remain vincexai.');
+      if (provider.publication.browserProfile !== 'Otto') {
+        throw new Error('Salesforce publication browserProfile must match the approved Otto profile.');
       }
       requireString(provider.publication?.sourceEnvironmentKey, 'salesforce.publication.sourceEnvironmentKey');
       requireString(provider.publication?.sourceStatePath, 'salesforce.publication.sourceStatePath');

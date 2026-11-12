@@ -201,8 +201,7 @@ test('hosted mirror preflight uses only its dedicated token for the pinned repos
   const directory = mkdtempSync(path.join(tmpdir(), 'fcos-mirror-auth-test-'));
   try {
     const draft = pullRequest();
-    const { repository, requiredAccount, requiredAccountId, defaultBranch } = publication;
-    const repositoryId = 12345;
+    const { repository, repositoryId, requiredAccount, requiredAccountId, defaultBranch } = publication;
     const responses = {
       'api user': { login: requiredAccount, id: requiredAccountId },
       ['api repos/' + repository]: { id: repositoryId, full_name: repository, default_branch: defaultBranch, permissions: { pull: true, push: true } },
@@ -222,6 +221,8 @@ test('hosted mirror preflight uses only its dedicated token for the pinned repos
       'const args = process.argv.slice(2);',
       'const response = ' + JSON.stringify(responses) + '[args.slice(0, 2).join(" ")];',
       'if (response === undefined) process.exit(12);',
+      'if (process.env.FIXTURE_OLD_ACCOUNT && args[1] === "user") Object.assign(response, { login: "vincelessxai", id: 304336732 });',
+      'if (process.env.FIXTURE_WRONG_REPOSITORY && args[1] === ' + JSON.stringify('repos/' + repository) + ') response.id++;',
       'if (process.env.FIXTURE_SCOPE_MISMATCH && args[1] === "user/installations/42/repositories") response.total_count = 2;',
       'console.log(JSON.stringify(response));',
     ].join('\n'), { mode: 0o700 });
@@ -235,6 +236,12 @@ test('hosted mirror preflight uses only its dedicated token for the pinned repos
     assert.match(missing.stderr, /isolated shared-repository GitHub authorization is unavailable/);
     const supplied = spawnSync(process.execPath, command, { env: { ...env, FCOS_RAPID_SALESFORCE_MIRROR_TOKEN: 'ghu_mirror_fixture' }, encoding: 'utf8' });
     assert.equal(supplied.status, 0, supplied.stderr);
+    for (const fixture of ['FIXTURE_OLD_ACCOUNT', 'FIXTURE_WRONG_REPOSITORY']) {
+      const rejected = spawnSync(process.execPath, command, { env: { ...env, [fixture]: 'true',
+        FCOS_RAPID_SALESFORCE_MIRROR_TOKEN: 'ghu_mirror_fixture' }, encoding: 'utf8' });
+      assert.notEqual(rejected.status, 0);
+      assert.match(rejected.stderr, /repository identity, default branch, or WRITE permission mismatch/);
+    }
     const broad = spawnSync(process.execPath, command, { env: { ...env, FIXTURE_SCOPE_MISMATCH: 'true',
       FCOS_RAPID_SALESFORCE_MIRROR_TOKEN: 'ghu_mirror_fixture' }, encoding: 'utf8' });
     assert.notEqual(broad.status, 0);
@@ -374,8 +381,9 @@ test('existing shared publication branches are resumed without corrupting the JS
 test('shared Salesforce commits are permanently attributed to the approved GitHub identity', async () => {
   const source = await readFile(new URL('../scripts/sync-salesforce-shared-repository.mjs', import.meta.url), 'utf8');
   const publication = FCOS_CONNECTION_POLICY.providers.find(({ id }) => id === 'salesforce').publication;
-  assert.equal(publication.requiredAccount, 'vincelessxai');
-  assert.equal(publication.requiredAccountId, 304336732);
+  assert.equal(publication.requiredAccount, 'hocheunglai-oss');
+  assert.equal(publication.requiredAccountId, 265701760);
+  assert.equal(publication.repositoryId, 1318388488);
   assert.match(source, /requiredAccountId.*requiredAccount.*users\.noreply\.github\.com/);
   assert.match(source, /configurePushIdentity\(checkout\)[\s\S]*git', \['add'/);
   assert.match(source, /force-with-lease=refs\/heads\/\$\{branch\}:\$\{expectedRemoteHead\}/);

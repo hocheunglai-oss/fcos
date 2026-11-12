@@ -167,3 +167,13 @@ test('multiple pushed tips are batched and any unpublished Salesforce commit req
   assert.equal(result.gitCalls.filter(command => command === 'rev-list').length, 1);
   assert.equal(result.gitCalls.filter(command => command === 'diff-tree').length, 1);
 });
+
+test('an advertised review-only ref cannot establish ordinary Salesforce publication', t => {
+  const f = fixture(t);
+  const candidate = f.commit('force-app/main/default/classes/Example.cls', 'class Example { String reviewOnly; }\n');
+  f.publish(candidate, 'codex/fcos-salesforce-review/' + candidate);
+  const result = f.run();
+  assert.equal(result.status, 1);
+  assert.equal(result.mirrorCalls, 1);
+  assert.match(result.stderr, /byte-for-byte/u);
+});

@@ -76,7 +76,7 @@ export function githubConfigDirectory({ repoRoot = REPO_ROOT, commonDirectory = 
   if (![target('github').configPath, mirrorConfigPath].includes(configPath)) {
     throw new Error('GitHub configuration must use a pinned FCOS profile.');
   }
-  // Keep both isolated profiles anchored in the primary checkout of linked worktrees.
+  // Keep the project-isolated profile anchored in the primary checkout of linked worktrees.
   return path.join(commonDirectory ? path.dirname(commonDirectory) : repoRoot, configPath);
 }
 
@@ -286,7 +286,10 @@ function runCaptured(providerId, args, { inject = true, requireCredential = true
 
 function runSharedSalesforceGitHubCaptured(args) {
   const publication = target('salesforce').publication;
-  const configDirectory = path.join(REPO_ROOT, publication.configPath);
+  const configDirectory = githubConfigDirectory({ configPath: publication.configPath });
+  const env = { ...process.env, GH_CONFIG_DIR: configDirectory, GH_HOST: 'github.com', GH_REPO: `github.com/${publication.repository}` };
+  delete env.GH_TOKEN;
+  delete env.GITHUB_TOKEN;
   return new Promise((resolve) => {
     const startedAt = Date.now();
     let stdout = '';
@@ -294,12 +297,7 @@ function runSharedSalesforceGitHubCaptured(args) {
     let settled = false;
     const child = spawn('gh', args, {
       cwd: REPO_ROOT,
-      env: {
-        ...process.env,
-        GH_CONFIG_DIR: configDirectory,
-        GH_HOST: 'github.com',
-        GH_REPO: `github.com/${publication.repository}`,
-      },
+      env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     const finish = (value) => {
@@ -705,7 +703,7 @@ async function verifySalesforce(version, metadata, startedAt) {
         && record?.IsSandbox === environment.isSandbox,
     };
     })),
-    runSharedSalesforceGitHubCaptured(['api', 'user', '--jq', '.login']),
+    runSharedSalesforceGitHubCaptured(['api', 'user']),
     runSharedSalesforceGitHubCaptured(['api', `repos/${target('salesforce').publication.repository}`]),
     verifySharedSalesforceMirrorCaptured(),
   ]);
@@ -716,8 +714,12 @@ async function verifySalesforce(version, metadata, startedAt) {
     return finalizeReport({ ...report, identityStatus: classifyFailedIdentity(sharedAccount, sharedRepository) }, startedAt);
   }
   const sharedRepo = safeJson(sharedRepository.stdout);
-  const exactSharedIdentity = sharedAccount.stdout.trim() === target('salesforce').publication.requiredAccount
-    && sharedRepo?.full_name?.toLowerCase() === target('salesforce').publication.repository.toLowerCase();
+  const actor = safeJson(sharedAccount.stdout);
+  const publication = target('salesforce').publication;
+  const exactSharedIdentity = actor?.login === publication.requiredAccount
+    && actor?.id === publication.requiredAccountId
+    && sharedRepo?.id === publication.repositoryId
+    && sharedRepo?.full_name?.toLowerCase() === publication.repository.toLowerCase();
   const exactIdentity = checks.every((check) => check.verified) && exactSharedIdentity;
   const exactPin = readSalesforcePin() === target('salesforce').profileName;
   const permissions = checks.flatMap((check) => check.verified ? [`${check.environment.key}.organization.read`, `${check.environment.key}.data.query`] : []);

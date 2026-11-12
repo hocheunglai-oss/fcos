@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 5,
+  "previousSupplementSha256": "af4ce6e053b3eef89756315fddaa43708ef2f98fc4fedd8fe1178c200a1370a1",
+  "reviewedCurrentCommit": "727da3b2cede4d37bd402e2c6a34e91fa5246334",
+  "sources": [
+    {
+      "path": ".codex/README.md",
+      "currentSha256": "bddfacf7f89aa9ce62809fd927a99ddd1a4cde183b9ca8516097a27aa9e90bcc",
+      "currentByteLength": 3759,
+      "currentOid": "9968264e876f541d7e42234a1cd246ddf29a0807",
+      "retainedSource": "installation-controls-v1.json"
+    },
+    {
+      "path": "AGENTS.md",
+      "currentSha256": "7c9dda65fabb6b63883869f0926c9043d782bd9cc33d6b7974f9d2525c712a68",
+      "currentByteLength": 21791,
+      "currentOid": "c8109d5efa69617ce6557959815e15511a53f712",
+      "retainedSource": "installation-controls-v1.json"
+    },
+    {
+      "path": "config/fcosConnections.js",
+      "currentSha256": "f5641a46c3857b9d87a798081ed5da1d31ef38711450c817fa5d8d366cd3613b",
+      "currentByteLength": 26412,
+      "currentOid": "e873c629fc1e84ec71d2caef7adfc2b5596ed7bc",
+      "retainedSource": "installation-controls-v2.json"
+    }
+  ],
+  "reason": "Bind the current Salesforce mirror publisher policy to the reviewed account migration while retaining the historical installation evidence."
+}
