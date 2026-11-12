@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import { createManifest, digest, sourceSnapshot, targets } from '../scripts/lib/rapid-release/contract.mjs';
-import { applyReviewedPrerequisites as applySalesforce, reconcileHostedSalesforceJob } from '../scripts/lib/rapid-release/salesforce-reviewed-adapter.mjs';
+import { applyReviewedPrerequisites as applySalesforce, reconcileHostedSalesforceJob, recoverReviewedDeveeBootstrap } from '../scripts/lib/rapid-release/salesforce-reviewed-adapter.mjs';
 import { verifyBeforeBootstrap, runPrerequisites } from '../scripts/lib/rapid-release/prerequisites.mjs';
 function fixture({ salesforce = false } = {}) {
  const directory=mkdtempSync(join(tmpdir(),'rapid-prerequisite-')),source='// Tracked, reviewed adapter fixture.\n',h='b'.repeat(64);
@@ -188,6 +188,66 @@ test('hosted bootstrap recovery proves the exact original schema job without sub
     report.details.componentSuccesses.push({ componentType: 'ApexClass', fullName: 'Example', success: true });
     await assert.rejects(reconcileHostedSalesforceJob(input), /unexpected non-schema component/);
   }
+});
+
+test('a successor adopts the exact successful DEVEE bootstrap only with its native receipt and current inventory', async () => {
+  const policy = FCOS_CONNECTION_POLICY.providers.find(item => item.id === 'salesforce');
+  const environment = policy.environments[0];
+  const jobId = '0AfHF00000700KB0AY', submittedAt = '2026-11-08T12:00:00.000Z';
+  const candidate = 'a'.repeat(40), fingerprint = 'b'.repeat(64), packageSha256 = 'c'.repeat(64);
+  const inventoryHash = 'd'.repeat(64), component = 'CustomField:Demo__c.Value__c';
+  const now = () => new Date('2026-11-08T12:02:00.000Z');
+  const reviewed = { fingerprint, review: { bootstrap: { components: [component] } },
+    binding: { sourceTreeHash: 'e'.repeat(64), manifestSha256: 'f'.repeat(64) },
+    nativeInventories: { devee: { bootstrap: { files: {}, inventoryHash } } } };
+  const job = { id: jobId, validationId: null, submittedAt, packageSha256 };
+  const context = { sha: candidate, environment: 'fcos-release-journal-v1' };
+  const payload = { kind: 'fcos_rapid_release_event', event: 'salesforce.checkpoint', releaseId: 'original',
+    manifestHash: '1'.repeat(64) };
+  const data = { fingerprint, stage: 'devee', operation: 'bootstrap', job, evidenceDigest: '2'.repeat(64) };
+  const original = { ...context, id: 8, creator: { id: 41898282, login: 'github-actions[bot]' },
+    payload: { ...payload, data: { ...data, outcome: 'pending' } } };
+  const receipt = { ...context, id: 9, creator: { id: policy.publication.requiredAccountId, login: policy.publication.requiredAccount },
+    payload: { ...payload, data: { ...data, outcome: 'resolved', result: 'succeeded_no_change', originalCheckpoint: original.id } } };
+  const field = { componentType: 'CustomField', fullName: 'Demo__c.Value__c', changed: false, success: true };
+  const report = { id: jobId, status: 'Succeeded', success: true, done: true, checkOnly: false, rollbackOnError: true,
+    numberComponentsTotal: 1, numberComponentsDeployed: 1, numberTestsTotal: 0, numberTestsCompleted: 0,
+    completedDate: '2026-11-08T12:01:00.000Z',
+    details: { componentSuccesses: [field, { componentType: '', fullName: 'package.xml', fileName: 'zip/package.xml', success: true }] } };
+  let reads = 0, observedHash = inventoryHash, convertedHash = packageSha256;
+  const provider = {
+    prepareBootstrap(org) {
+      assert.equal(org.orgId, environment.orgId);
+      return { packageSha256: convertedHash, submit() { assert.fail('bootstrap was resubmitted'); }, cleanup() {} };
+    },
+    async verifyIdentity(org) { assert.equal(org.orgId, environment.orgId); },
+    async report(org, id) { assert.equal(org.orgId, environment.orgId); assert.equal(id, jobId); reads++; return report; },
+    async verifyInventory(org, { expectedInventoryHash }) {
+      assert.equal(org.orgId, environment.orgId);
+      assert.equal(expectedInventoryHash, inventoryHash);
+      return { orgId: org.orgId, inventoryHash: observedHash, sourceTreeHash: null, verifiedAt: now().toISOString(), evidenceSha256: '3'.repeat(64) };
+    },
+  };
+  const input = { adoption: { receiptId: receipt.id, jobId }, manifest: { candidate: { sha: candidate } },
+    reviewed, provider, github: { async read(path) { return path.endsWith('/9') ? receipt : original; } }, now };
+  const accepted = await recoverReviewedDeveeBootstrap(input);
+  assert.equal(accepted.jobId, jobId);
+  assert.equal(accepted.packageSha256, packageSha256);
+  assert.equal(reads, 1);
+  receipt.creator.id = 41898282;
+  await assert.rejects(recoverReviewedDeveeBootstrap(input), /BOOTSTRAP_RECEIPT_REQUIRED/);
+  receipt.creator.id = policy.publication.requiredAccountId;
+  original.payload.data.job = { ...job, packageSha256: '9'.repeat(64) };
+  await assert.rejects(recoverReviewedDeveeBootstrap(input), /BOOTSTRAP_ORIGINAL_REQUIRED/);
+  original.payload.data.job = job;
+  convertedHash = '9'.repeat(64);
+  await assert.rejects(recoverReviewedDeveeBootstrap(input), /BOOTSTRAP_PACKAGE_CHANGED/);
+  convertedHash = packageSha256;
+  field.changed = true;
+  await assert.rejects(recoverReviewedDeveeBootstrap(input), /BOOTSTRAP_NO_CHANGE_REQUIRED/);
+  field.changed = false;
+  observedHash = '9'.repeat(64);
+  await assert.rejects(recoverReviewedDeveeBootstrap(input), /inventory receipt is absent, stale, or differs/);
 });
 
 test('hosted quick-deploy recovery verifies its original positive validation checkpoint', async () => {

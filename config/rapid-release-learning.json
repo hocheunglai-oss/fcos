@@ -376,6 +376,39 @@
       "measuredTimeSavedMs": null,
       "measuredCallsSaved": null,
       "prevention": "The native runner can recover a matching fetch timeout in the same job. The second timeout and any received HTTP or payload failure remain terminal. The new controller must qualify before activation."
+    },
+    {
+      "id": "salesforce-metadata-directory-archive-root",
+      "cause": "Salesforce CLI 2.145.6 places metadata directory contents under zip/. The original command declared single-package mode, and Salesforce rejected the bootstrap because package.xml was outside the expected root.",
+      "correction": "Use directory package mode for the verified metadata directory. Keep exact manifest coverage, converted-byte verification, test levels and provider identity checks.",
+      "verification": {
+        "cliVersion": "2.145.6",
+        "failedBootstrapJob": "0AfHF000007G7az0AC",
+        "verifiedBootstrapCheckOnlyJob": "0AfHF000007G7fp0AC",
+        "verifiedValidationCheckOnlyJob": "0AfHF000007G7vx0AC",
+        "validatedComponents": 8,
+        "apexTestsPassed": 451,
+        "originalOperationClosed": true,
+        "regressionDigest": "cab2edc10cea22a639994d7713165deb22228a9a898dce4635e617b3572ee239"
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Check both generated command modes in release qualification and exercise the exact native package transport with check-only DEVEE validation when the transport changes."
+    },
+    {
+      "id": "salesforce-bootstrap-descriptor-readback",
+      "cause": "A successful Salesforce schema bootstrap reported its package.xml descriptor with a blank component type. The readback also rejected an exact native field because the false-default allowance assumed the reviewed source omitted that value.",
+      "correction": "Recognize only the native successful package.xml descriptor and accept exact field bytes before checking serialization allowances. Recover the original DEVEE bootstrap through linked native receipts, exact converted package, terminal provider report, and current inventory.",
+      "verification": {
+        "originalBootstrapJob": "0AfHF000007G94v0AC",
+        "originalClosureReceipt": 7747218667,
+        "providerWrites": 0,
+        "readbackMs": 32616,
+        "regressionDigest": "3e86bbce6859a942124c977707a83002fac3dcf574819914dfedf847ec7df8cf"
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Rehearse exact provider result formats and test retained original job adoption with failed receipt, package, and inventory bindings."
     }
   ]
 }
