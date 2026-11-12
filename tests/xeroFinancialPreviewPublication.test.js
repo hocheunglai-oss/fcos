@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import test from 'node:test';
-import { financialPreviewChanges, xeroFinancialSyncLatest, xeroFinancialSyncPreview, XERO_RECONCILIATION_VERSION } from '../api/_xeroFinancialSync.js';
+import { financialPreviewChanges, xeroFinancialSyncApply, xeroFinancialSyncLatest, xeroFinancialSyncPreview, XERO_RECONCILIATION_VERSION } from '../api/_xeroFinancialSync.js';
 import { fixture } from './xeroFinancialPreviewFixtures.js';
 import { SALES_INVOICE_SUMMARY_POLICY } from '../api/_xeroSalesInvoiceSummary.js';
 
@@ -79,7 +79,7 @@ test('Latest ignores newer building/cancelled and dedicated preservation runs', 
     for (const hidden of ['building', 'cancelled']) f.tables.xero_financial_sync_runs.push({
       ...structuredClone(run), id: randomUUID(), status: hidden, created_at: '9999-01-01T00:00:00Z',
     });
-    for (const policy of ['issued_supplier_preserve_v1', 'issued_petroleum_preserve_v1', 'issued_petroleum_preserve_v2']) {
+    for (const policy of ['issued_supplier_preserve_v1', 'issued_petroleum_preserve_v1', 'issued_petroleum_preserve_v2', 'supplier_financial_bucket_preserve_v1', 'authorise_existing_xero_drafts_v1']) {
       f.tables.xero_financial_sync_runs.push({ ...structuredClone(run), id: randomUUID(), created_at: '9999-01-02T00:00:00Z',
         control_totals: { ...run.control_totals, preservationPolicy: policy } });
     }
@@ -88,6 +88,17 @@ test('Latest ignores newer building/cancelled and dedicated preservation runs', 
     assert.equal(latest.run.status, status);
     assert.equal(latest.rows.length, 1);
   }
+});
+
+test('a dedicated financial review cannot be reused or authorized as an ordinary preview', async () => {
+  const f = fixture(); const id = randomUUID();
+  f.tables.xero_financial_sync_runs = [{ id, mode: 'preview', status: 'ready_for_review',
+    source_snapshot_at: new Date().toISOString(), control_totals: { preservationPolicy: 'supplier_financial_bucket_preserve_v1' } }];
+  const unexpected = () => assert.fail('Dedicated review must stop before an ordinary operation');
+  f.client.rpc = unexpected;
+  await assert.rejects(xeroFinancialSyncApply({ runId: id, reviewed: true, selectedItemIds: [randomUUID()] }, { client: f.client }),
+    { code: 'XERO_ISSUED_PRESERVATION_LINK_ONLY' });
+  assert.deepEqual(await financialPreviewChanges(id, { client: f.client, querySalesforce: unexpected, accountingFetch: unexpected }), { changed: true });
 });
 
 test('building, cancelled and non-preview snapshots always require a fresh check', async () => {

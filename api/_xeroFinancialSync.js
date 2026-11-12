@@ -755,7 +755,7 @@ export async function financialPreviewChanges(runId, { client, connection, env =
   if (!isUuid(runId)) throw financialError('A valid saved check is required.', 400, 'XERO_FINANCIAL_RUN_INVALID');
   const { data: run, error } = await client.from('xero_financial_sync_runs').select('*').eq('id', runId).maybeSingle();
   if (error) throw storageError(error, 'xero_financial_sync_runs');
-  if (run?.mode !== 'preview' || ['building', 'cancelled'].includes(run.status)) return { changed: true };
+  if (run?.mode !== 'preview' || ['building', 'cancelled'].includes(run.status) || isDedicatedFinancialRun(run)) return { changed: true };
   if (postingMode !== undefined && postingMode !== reviewedPostingMode(run)) return { changed: true };
   const since = new Date(run?.source_snapshot_at);
   const snapshot = run?.control_totals?.workflowSnapshot;
@@ -828,7 +828,9 @@ async function loadDisputeReconciliationStates(client, stemIds) {
 
 export async function xeroFinancialSyncLatest(_body = {}, { env = process.env, client = xeroContactSyncServiceClient(env) } = {}) {
   let latestQuery = client.from('xero_financial_sync_runs').select('*').eq('mode', 'preview');
-  for (const policy of ISSUED_PRESERVATION_POLICIES) latestQuery = latestQuery.not('control_totals', 'cs', JSON.stringify({ preservationPolicy: policy }));
+  for (const policy of [...ISSUED_PRESERVATION_POLICIES, 'supplier_financial_bucket_preserve_v1', 'authorise_existing_xero_drafts_v1']) {
+    latestQuery = latestQuery.not('control_totals', 'cs', JSON.stringify({ preservationPolicy: policy }));
+  }
   const { data: runs, error } = await latestQuery.not('status', 'in', '(building,cancelled)').not('control_totals->workflowSnapshot', 'is', null).order('created_at', { ascending: false }).limit(1);
   if (error) throw storageError(error, 'xero_financial_sync_runs');
   const run = runs?.[0];
@@ -857,6 +859,14 @@ export async function savedFinancialPreview(client, run) {
     automaticMappingPolicy: snapshot.automaticMappingPolicy || null, payments: publicPaymentSnapshot(snapshot.payments || null), checkedAt: snapshot.checkedAt || run.created_at, restored: true };
 }
 
+function isDedicatedFinancialRun(run) {
+  return Boolean(run?.control_totals?.preservationPolicy || run?.control_totals?.correctionPolicy);
+}
+
+function requireOrdinaryFinancialRun(run) {
+  if (isDedicatedFinancialRun(run)) throw financialError('Use the dedicated action for this review.', 409, 'XERO_ISSUED_PRESERVATION_LINK_ONLY');
+}
+
 export async function xeroFinancialSyncApply(body = {}, {
   accessContext = null,
   env = process.env,
@@ -869,6 +879,7 @@ export async function xeroFinancialSyncApply(body = {}, {
   const { data: saved, error: savedError } = await client.from('xero_financial_sync_runs').select('*').eq('id', body.runId).maybeSingle();
   if (savedError) throw storageError(savedError, 'xero_financial_sync_runs');
   if (!saved) throw financialError('The saved financial preview was not found.', 404, 'XERO_FINANCIAL_RUN_INVALID');
+  requireOrdinaryFinancialRun(saved);
   reviewedPostingMode(saved, body.postingMode);
   const actor = actorFields(accessContext);
   const { data, error } = await client.rpc('authorise_xero_financial_sync_run_v1', {
@@ -895,7 +906,7 @@ export async function xeroFinancialSyncRun(body = {}, {
   requireExternalActionGate('xero_financial_sync', env);
   const { data: executionRun, error: executionError } = await client.from('xero_financial_sync_runs').select('control_totals').eq('id', body.runId).maybeSingle();
   if (executionError) throw storageError(executionError, 'xero_financial_sync_runs');
-  if (executionRun?.control_totals?.preservationPolicy || executionRun?.control_totals?.correctionPolicy) throw financialError('Use the dedicated preserve-only action for this review.', 409, 'XERO_ISSUED_PRESERVATION_LINK_ONLY');
+  requireOrdinaryFinancialRun(executionRun);
   if (body.reviewed === true) {
     const approved = await xeroFinancialSyncApply(body, { accessContext, env, client });
     body = { ...body, revision: approved.run.revision };
