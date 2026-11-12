@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import { changedPaths, digest, git, isSha, requireCondition, sourceSnapshot, validateManifest } from './lib/rapid-release/contract.mjs';
 import { loadReviewedSalesforcePlan } from './deploy-salesforce-reviewed-manifest.mjs';
+import { safeProjectFile } from './lib/salesforce-reviewed-release.mjs';
 
 export function verifySalesforceReviewSource({ cwd, candidateSha, manifest, verifierDirectory }) {
   validateManifest(manifest);
@@ -29,6 +30,20 @@ export function verifySalesforceReviewSource({ cwd, candidateSha, manifest, veri
     && git(verifierDirectory, ['rev-parse', controllerSha + ':' + adapter.path]) === git(verifierDirectory, ['rev-parse', 'HEAD:' + adapter.path])
     && digest(readFileSync(resolve(verifierDirectory, adapter.path))) === adapterDigest,
   'SALESFORCE_REVIEW_SOURCE_ADAPTER_MISMATCH');
+  const tracked = new Set(candidate.files.map(file => file.path));
+  const checkTracked = paths => requireCondition(paths.every(path => tracked.has(path)), 'SALESFORCE_REVIEW_SOURCE_UNTRACKED_INPUT');
+  checkTracked(['sfdx-project.json', plan.salesforceManifestPath, plan.salesforceReviewPath]);
+  const review = JSON.parse(readFileSync(safeProjectFile(cwd, plan.salesforceReviewPath), 'utf8'));
+  checkTracked([review.baselineWorkflowPath, review.bootstrap?.manifestPath].filter(Boolean));
+  for (const descriptor of Object.values(review.inventoryManifests || {})) {
+    for (const entry of [descriptor, descriptor.apex, descriptor.metadata].filter(Boolean)) {
+      checkTracked([entry.path]);
+      const absolute = safeProjectFile(cwd, entry.path);
+      requireCondition(digest(readFileSync(absolute)) === entry.sha256, 'SALESFORCE_REVIEW_SOURCE_RETRIEVAL_DIGEST_MISMATCH');
+    }
+  }
+  requireCondition(!git(cwd, ['ls-files', '--others', '--ignored', '--exclude-standard', '--', 'force-app/main/default']),
+    'SALESFORCE_REVIEW_SOURCE_UNTRACKED_INPUT');
   const reviewed = loadReviewedSalesforcePlan({ cwd, manifestPath: plan.salesforceManifestPath, reviewPath: plan.salesforceReviewPath });
   requireCondition(reviewed.fingerprint === plan.salesforceFingerprint && reviewed.binding.sourceTreeHash === plan.salesforceSourceTreeHash
     && plan.backwardCompatible === true, 'SALESFORCE_REVIEW_SOURCE_INVENTORY_MISMATCH');
