@@ -1030,6 +1030,32 @@ test('native validation submits only the verified metadata package with the revi
   }
 });
 
+test('schema bootstrap accepts the native blank-typed package.xml descriptor only at the package root', () => {
+  const f = fixture({ bootstrap: true });
+  const environment = policy.environments[0], id = jobId(110);
+  const expectedComponents = f.plan.review.bootstrap.components;
+  const successes = expectedComponents.map(component => {
+    const [componentType, fullName] = component.split(':');
+    return { componentType, fullName, success: true };
+  });
+  const descriptor = { componentType: '', fullName: 'package.xml', fileName: 'zip/package.xml', success: true };
+  const proof = f.makeReport(id, false);
+  const intent = { environment, jobId: id, bootstrap: true, expectedComponents, testPlan: { level: 'NoTestRun' } };
+  const report = { ...proof, numberTestsTotal: 0, numberTestsCompleted: 0,
+    details: { componentSuccesses: [...successes, descriptor] } };
+  try {
+    assert.equal(assertReviewedJobReport(report, intent).testExecution, 'schema-only-bootstrap');
+    for (const invalid of [
+      { ...descriptor, fileName: 'zip/classes/Unreviewed.cls' },
+      { ...descriptor, fullName: 'Unreviewed' },
+      { ...descriptor, success: false },
+    ]) {
+      assert.throws(() => assertReviewedJobReport({ ...report, details: { componentSuccesses: [...successes, invalid] } }, intent),
+        /unexpected non-schema component/);
+    }
+  } finally { f.cleanup(); }
+});
+
 test('validation conversion failure leaves no submission intent and resume keeps the original verified package receipt', async () => {
   const f = fixture();
   let conversions = 0;
@@ -1468,6 +1494,12 @@ test('mixed native readback verifies reviewed definition content even when raw h
       nativeField = Buffer.from(xml('<required>false</required>' + variation));
       assert.throws(() => checkWithFlags(['trackHistory']), /Native CustomField serialization differs/);
     }
+    source[field] = Buffer.from(xml('<required>false</required><trackHistory>false</trackHistory>'));
+    writeFileSync(target, source[field]);
+    nativeField = source[field];
+    assert.deepEqual(checkWithFlags(['trackHistory']).verifiedProjectionPaths, [field]);
+    nativeField = Buffer.from(xml('<required>false</required><trackHistory>true</trackHistory>'));
+    assert.throws(() => checkWithFlags(['trackHistory']), /Native CustomField serialization differs/);
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
 
