@@ -31,6 +31,7 @@ import { xeroContactIdentitySave } from './_xeroContactIdentity.js';
 import { xeroContactRepairApply } from './_xeroContactRepair.js';
 import { xeroContactRestoreApply } from './_xeroContactRestore.js';
 import { xeroFinancialDocumentPreservationPreview, xeroFinancialDocumentPreservationRun } from './_xeroIssuedSupplierWorkflow.js';
+import { supplierFinancialBucketApply, supplierFinancialBucketPreview, supplierFinancialBucketRead } from './_xeroSupplierFinancialBucketWorkflow.js';
 import { xeroIntegrityReport } from './_xeroIntegrityReport.js';
 
 export const XERO_HANDLER_MODULE_ACCESS = Object.freeze(Object.fromEntries([
@@ -74,6 +75,9 @@ export const XERO_HANDLER_MODULE_ACCESS = Object.freeze(Object.fromEntries([
   'xeroFinancialDocumentCorrectionVerify',
   'xeroFinancialDocumentPreservationPreview',
   'xeroFinancialDocumentPreservationRun',
+  'xeroSupplierFinancialBucketPreview',
+  'xeroSupplierFinancialBucketRead',
+  'xeroSupplierFinancialBucketApply',
 ].map((name) => [name, ['xero_portal']])));
 
 export function createXeroHandlers({ requireActiveUser, resolveRecoveredSystemErrorHandler }) {
@@ -135,5 +139,8 @@ export function createXeroHandlers({ requireActiveUser, resolveRecoveredSystemEr
     xeroFinancialDocumentCorrectionVerify: wrap(xeroFinancialDocumentCorrectionVerify),
     xeroFinancialDocumentPreservationPreview: wrap(xeroFinancialDocumentPreservationPreview),
     xeroFinancialDocumentPreservationRun: wrap(xeroFinancialDocumentPreservationRun),
+    xeroSupplierFinancialBucketPreview: wrap(supplierFinancialBucketPreview),
+    xeroSupplierFinancialBucketRead: wrap(supplierFinancialBucketRead),
+    xeroSupplierFinancialBucketApply: wrap(supplierFinancialBucketApply),
   };
 }

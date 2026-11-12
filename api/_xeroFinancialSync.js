@@ -2187,6 +2187,16 @@ function buildSalesforceDocument(record, direction, children, mappingByKey, cont
   return source;
 }
 
+export function supplierFinancialSourcePayload({ parent, children, charges, buyers, productMappings, contacts, safetyContext }) {
+  const mappingByKey = new Map(productMappings.map(row => [`${row.direction}:${row.salesforce_product_id}`, row]));
+  const context = {
+    ...safetyContext,
+    postingMode: 'draft',
+    documentFieldSnapshot: { buyers, lines: children, extras: charges, cutoff: XERO_FINANCIAL_CUTOFF },
+  };
+  return stripClassification(buildSalesforceDocument(parent, 'supplier', [...children, ...charges], mappingByKey, buildXeroContactIndex(contacts), context));
+}
+
 function documentSourceFingerprint(record, children) {
   // Preserve legacy document fingerprints when adding stricter observations.
   // The petroleum sticky guard separately binds these current raw identities
