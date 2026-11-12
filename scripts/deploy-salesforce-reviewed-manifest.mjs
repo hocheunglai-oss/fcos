@@ -353,7 +353,9 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
           if (readReviewedInventory(converted).sourceTreeHash !== packageSha256) {
             throw new Error(`Verified Salesforce ${operation} package changed before submission.`);
           }
-          return sf([...command, '--metadata-dir', converted, '--single-package', '--api-version', apiVersion, '--async', '--json'], project);
+          // The pinned CLI wraps metadata directories in zip/. Salesforce expects
+          // a root package.xml only when the caller requests single-package mode.
+          return sf([...command, '--metadata-dir', converted, '--api-version', apiVersion, '--async', '--json'], project);
         },
         cleanup,
       };
