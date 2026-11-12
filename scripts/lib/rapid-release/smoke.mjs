@@ -223,15 +223,25 @@ async function installGate(context, policy, onAuthRequest) {
       excludedFeatures: ['speed_insights', ...(excludedBackgroundSync ? ['automatic_mailbox_sync'] : []), ...(excludedAutoReconciliation ? ['automatic_payment_reconciliation'] : []), ...(excludedExternalMappings ? ['external_xero_mapping_options'] : []), ...[...excludedOptionalReads].sort()] }) };
 }
 async function routeRead(route, origin, path, body, expectedStatus = 200) {
-  let response;
-  try {
-    response = await route.fetch({ url: `${origin}${path}`, method: 'POST', postData: JSON.stringify(body), maxRedirects: 0, maxRetries: 0, timeout: 20000 });
-    requireFact(response.url() === `${origin}${path}` && response.status() === expectedStatus, 'SMOKE_AUTHENTICATED_READ_FAILED');
-    const data = await response.json();
-    requireFact(data && typeof data === 'object' && !data.error, 'SMOKE_AUTHENTICATED_READ_FAILED');
-    return { response: data, receipt: { path, status: expectedStatus, authenticated: true } };
-  } catch { throw fail('SMOKE_AUTHENTICATED_READ_FAILED'); }
-  finally { await response?.dispose(); }
+  const url = `${origin}${path}`;
+  const options = { url, method: 'POST', postData: JSON.stringify(body), maxRedirects: 0, maxRetries: 0, timeout: 20000 };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let response;
+    try {
+      response = await route.fetch(options);
+      requireFact(response.url() === url && response.status() === expectedStatus, 'SMOKE_AUTHENTICATED_READ_FAILED');
+      const data = await response.json();
+      requireFact(data && typeof data === 'object' && !data.error, 'SMOKE_AUTHENTICATED_READ_FAILED');
+      return { response: data, receipt: { path, status: expectedStatus, authenticated: true,
+        ...(attempt ? { transportRetries: attempt } : {}) } };
+    } catch (error) {
+      // The bounded Cashflow read is safe to repeat once after a fetch timeout.
+      // Once a response arrives, status, body and identity failures stay terminal.
+      if (response || error?.name !== 'TimeoutError' || path !== moduleReaders.cashflow_forecast.path || attempt !== 0) {
+        throw fail('SMOKE_AUTHENTICATED_READ_FAILED');
+      }
+    } finally { await response?.dispose(); }
+  }
 }
 async function denialProbes(route, origin) {
   const receipts = [];

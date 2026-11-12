@@ -48,8 +48,9 @@ const readPayloads = {
 
 // Fixtures replace browser/provider transports. They simulate the app-owned
 // bootstrap response and actual response events; they never establish live proof.
-function browserFixture({ badIdentity = false, badRead = false, badDenial = false, unexpected = false, missingModule = false, background = false, optionalRequest = null, badPayload = false, badDesktop = false, deniedModule = null, role = 'manager', companyFxRows = undefined, supplierBoundaryRegression = null, groupedBoundaryRegression = false, groupedDesktopMissing = false, marketReadTimeouts = 0, marketResponseStatus = 200 } = {}) {
+function browserFixture({ badIdentity = false, badRead = false, badDenial = false, unexpected = false, missingModule = false, background = false, optionalRequest = null, badPayload = false, badDesktop = false, deniedModule = null, role = 'manager', companyFxRows = undefined, supplierBoundaryRegression = null, groupedBoundaryRegression = false, groupedDesktopMissing = false, marketReadTimeouts = 0, marketResponseStatus = 200, moduleReadTimeouts = {} } = {}) {
   const observations = { launches: [], reads: [], contextsClosed: 0, browsersClosed: 0, nativeAborts: 0 };
+  const remainingTimeouts = { ...moduleReadTimeouts };
   const browserFactory = async options => {
     observations.launches.push(options);
     let routeHandler, pausedHandler, websocketHandler, location = 'about:blank', email = '', password = '';
@@ -87,6 +88,10 @@ function browserFixture({ badIdentity = false, badRead = false, badDenial = fals
             return apiResponse(url, { code: 'FCOS_DEPLOYMENT_READ_ONLY' }, 403);
           }
           const module = Object.keys(MODULE_READERS).find(key => url.endsWith(MODULE_READERS[key].path));
+          if (module && remainingTimeouts[module] > 0) {
+            remainingTimeouts[module]--;
+            throw Object.assign(Error('PRIVATE_FIXTURE_TIMEOUT'), { name: 'TimeoutError' });
+          }
           if (module) return apiResponse(url, badPayload ? {} : readPayloads[module], module === deniedModule ? 403 : 200);
           return apiResponse(url, { code: 'FCOS_DEPLOYMENT_READ_ONLY' }, badDenial ? 200 : 403);
         },
@@ -457,6 +462,30 @@ test('native smoke identifies the reviewed module and surface that failed', asyn
     staged, env, fetchImpl: publicFetch(), browserFactory,
   }), { code: 'SMOKE_AUTHENTICATED_READ_FAILED', smokeModule: 'review', smokeSurface: 'read' });
   assert.equal(observations.contextsClosed, 2);
+});
+
+test('Cashflow Forecast replays only a fetch timeout and retains the same authenticated read', async () => {
+  const run = (module, fixture) => runStagedSmoke({
+    manifest: manifest({ modules: [module], normalRole: true }),
+    staged, env, fetchImpl: publicFetch(), browserFactory: fixture.browserFactory,
+  });
+  const reads = (module, fixture) => fixture.observations.reads.filter(item => item.url.endsWith(MODULE_READERS[module].path));
+  const transient = browserFixture({ moduleReadTimeouts: { cashflow_forecast: 1 } });
+  const proof = await run('cashflow_forecast', transient);
+  const attempts = reads('cashflow_forecast', transient);
+  assert.equal(attempts.length, 2);
+  assert.deepEqual(attempts[0], attempts[1]);
+  assert.equal(proof.normalRoleEvidence.reads.find(item => item.module === 'cashflow_forecast').transportRetries, 1);
+  assert.equal(proof.businessWrites, 0);
+  for (const [module, options, count] of [
+    ['cashflow_forecast', { moduleReadTimeouts: { cashflow_forecast: 2 } }, 2],
+    ['cashflow_forecast', { deniedModule: 'cashflow_forecast' }, 1],
+    ['review', { moduleReadTimeouts: { review: 1 } }, 1],
+  ]) {
+    const fixture = browserFixture(options);
+    await assert.rejects(run(module, fixture), { code: 'SMOKE_AUTHENTICATED_READ_FAILED', smokeModule: module, smokeSurface: 'read' });
+    assert.equal(reads(module, fixture).length, count);
+  }
 });
 
 
