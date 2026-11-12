@@ -16,6 +16,7 @@ import {
 } from './_requestTelemetry.js';
 
 const MAX_JSON_BODY_BYTES = 256 * 1024;
+const MAX_STANDALONE_JSON_BODY_BYTES = 1024 * 1024;
 let cachedClient = null;
 
 function endpointError(message, status = 500, code = 'FCOS_ENDPOINT_ERROR', expose = status < 500) {
@@ -90,11 +91,11 @@ async function requireModuleAccess(context, moduleId) {
   }
 }
 
-async function readBody(req) {
+async function readBody(req, maxJsonBodyBytes) {
   if (req.method === 'GET') return {};
   if (req.body && typeof req.body === 'object') {
     const bodyBytes = Buffer.isBuffer(req.body) ? req.body.length : Buffer.byteLength(JSON.stringify(req.body), 'utf8');
-    if (bodyBytes > MAX_JSON_BODY_BYTES) {
+    if (bodyBytes > maxJsonBodyBytes) {
       throw endpointError('Request body is too large.', 413, 'FCOS_REQUEST_TOO_LARGE');
     }
     return req.body;
@@ -106,14 +107,14 @@ async function readBody(req) {
         let bytes = 0;
         for await (const chunk of req) {
           bytes += chunk.length;
-          if (bytes > MAX_JSON_BODY_BYTES) {
+          if (bytes > maxJsonBodyBytes) {
             throw endpointError('Request body is too large.', 413, 'FCOS_REQUEST_TOO_LARGE');
           }
           chunks.push(chunk);
         }
         return chunks;
       })()).toString('utf8');
-  if (Buffer.byteLength(rawBody || '', 'utf8') > MAX_JSON_BODY_BYTES) {
+  if (Buffer.byteLength(rawBody || '', 'utf8') > maxJsonBodyBytes) {
     throw endpointError('Request body is too large.', 413, 'FCOS_REQUEST_TOO_LARGE');
   }
   try {
@@ -152,10 +153,17 @@ function sendJson(res, payload, status = 200) {
  *   handlerName: string | ((req: import('node:http').IncomingMessage) => string),
  *   moduleId?: string | null,
  *   mutation?: boolean | ((req: import('node:http').IncomingMessage) => boolean),
+ *   externalAction?: boolean,
+ *   maxJsonBodyBytes?: number,
  *   execute: (body: Record<string, unknown>, req: import('node:http').IncomingMessage, context: {client: ReturnType<typeof serviceClient>, authUser: unknown, profile: Record<string, any>}) => Promise<unknown> | unknown,
  * }} options
  */
-export function authenticatedFunction({ handlerName, moduleId = null, mutation = false, execute }) {
+export function authenticatedFunction({
+  handlerName, moduleId = null, mutation = false, externalAction = false, maxJsonBodyBytes = MAX_JSON_BODY_BYTES, execute,
+}) {
+  if (!Number.isSafeInteger(maxJsonBodyBytes) || maxJsonBodyBytes < 1 || maxJsonBodyBytes > MAX_STANDALONE_JSON_BODY_BYTES) {
+    throw new RangeError('Invalid standalone JSON body limit.');
+  }
   return withDeploymentRequestSafety(async function handler(req, res) {
     const requestId = requestIdFrom(req);
     const resolvedHandlerName = typeof handlerName === 'function' ? handlerName(req) : handlerName;
@@ -164,12 +172,12 @@ export function authenticatedFunction({ handlerName, moduleId = null, mutation =
         if (!['GET', 'POST'].includes(req.method)) return sendJson(res, { error: 'Method not allowed.' }, 405);
         const requestMutation = typeof mutation === 'function' ? mutation(req) : mutation;
         res.setHeader('X-FCOS-Handler-Mutation', requestMutation ? '1' : '0');
-        res.setHeader('X-FCOS-External-Action', '0');
-        requireDeploymentMutationAllowed(requestMutation);
+        res.setHeader('X-FCOS-External-Action', externalAction ? '1' : '0');
+        requireDeploymentMutationAllowed(requestMutation || externalAction);
         const context = await requireActiveUser(req);
         requireReadOnlyCiOperation(context.profile, resolvedHandlerName, {}, { mutation: requestMutation });
         await requireModuleAccess(context, moduleId);
-        const body = await readBody(req);
+        const body = await readBody(req, maxJsonBodyBytes);
         requireReadOnlyCiOperation(context.profile, resolvedHandlerName, body, { mutation: requestMutation });
         const result = await execute(body, req, context);
         return sendJson(res, result);
