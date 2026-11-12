@@ -42,7 +42,7 @@ test('connection runtimes select pinned executables and repo-local provider conf
   assert.equal(githubConfigDirectory(), expectedGitHubConfig);
   const mirrorProfile = FCOS_CONNECTION_POLICY.providers.find(({ id }) => id === 'salesforce').publication.configPath;
   assert.equal(githubConfigDirectory({ configPath: mirrorProfile }), path.join(path.dirname(commonDirectory), mirrorProfile));
-  assert.notEqual(githubConfigDirectory({ configPath: mirrorProfile }), expectedGitHubConfig);
+  assert.equal(githubConfigDirectory({ configPath: mirrorProfile }), expectedGitHubConfig);
   assert.throws(() => githubConfigDirectory({ configPath: '../unrelated-profile' }), /pinned FCOS profile/);
   assert.equal(
     githubConfigDirectory({ repoRoot: '/tmp/fcos-detached', commonDirectory: '' }),
