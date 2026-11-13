@@ -1744,3 +1744,51 @@ test('native layouts may supply an empty Record action list while retaining revi
   assert.equal(check(layout(section.replace('Financial details', 'Changed') + emptyRecord)), false);
   assert.equal(check(layout(section), layout(section + emptyRecord)), false);
 });
+
+test('schema-free Lightning and Apex can verify a projected final inventory without a bootstrap', () => {
+  const bundle = 'lwc/tradingEditor/tradingEditor.js';
+  const descriptor = 'lwc/tradingEditor/tradingEditor.js-meta.xml';
+  const unrelated = 'objects/Invoice__c/fields/Amount__c.field-meta.xml';
+  const before = { ...files, [bundle]: Buffer.from('export const amount = 1;\n'),
+    [descriptor]: Buffer.from('<LightningComponentBundle/>\n'), [unrelated]: Buffer.from('<CustomField/>\n') };
+  const after = { ...before, [bundle]: Buffer.from('export const amount = 2;\n') };
+  const baselineInventory = inventoryFromFiles(before);
+  const finalInventory = inventoryFromFiles(after);
+  const components = [
+    { id: 'LightningComponentBundle:tradingEditor', files: [bundle, descriptor], dependsOn: ['ApexClass:Example'] },
+    { id: 'ApexClass:Example', files: Object.keys(files), dependsOn: [] },
+  ];
+  const manifestBytes = packageXml(components.map(row => row.id));
+  const rawBaseline = { files: baselineInventory.files, inventoryHash: baselineInventory.inventoryHash };
+  const pinned = { [unrelated]: { ...rawBaseline.files[unrelated] } };
+  const paths = components.flatMap(row => row.files).sort();
+  const final = { projected: true, files: pinned, inventoryHash: projectedNativeInventoryHash(pinned, paths) };
+  const retrieval = { path: 'manifest/stable.xml', sha256: hash('stable'), metadata: { path: 'manifest/changed.xml', sha256: hash(manifestBytes) } };
+  const review = { schemaVersion: 1, releaseMode: REVIEWED_SALESFORCE_MODE, baselineMode: INVENTORY_BASELINE_MODE,
+    sourceTreeHash: finalInventory.sourceTreeHash, manifestSha256: hash(manifestBytes), baselineCommit: 'a'.repeat(40),
+    baselineSourceTreeHash: baselineInventory.sourceTreeHash, baselineInventoryHash: baselineInventory.inventoryHash,
+    components, dependencyReview: { complete: true, reviewer: 'reviewer', evidence: 'reviewed dependency fixture' },
+    testPlan: { level: 'RunSpecifiedTests', tests: ['ExampleTest'], minimumTests: 1 },
+    nativeProjection: 'schema-free-apex-lightning',
+    nativeInventories: Object.fromEntries(policy.environments.map(({ key, orgId }) => [key, { orgId, baseline: rawBaseline, final }])),
+    inventoryManifests: { [rawBaseline.inventoryHash]: retrieval, [final.inventoryHash]: retrieval },
+  };
+  const create = descriptor => createReviewedSalesforcePlan({ review: descriptor, baselineInventory, finalInventory, manifestBytes, policy });
+  const plan = create(review);
+  assert.deepEqual(plan.changedFiles, [bundle]);
+  assert.equal(plan.binding.bootstrapSha256, null);
+  assert.equal(plan.nativeInventories.devee.bootstrap, undefined);
+  assert.deepEqual(plan.nativeInventories.devee.final.projectionPaths, paths);
+  assert.deepEqual(plan.nativeInventories.devee.baseline.projectionPaths, []);
+  const altered = structuredClone(review);
+  altered.nativeInventories.devee.final = structuredClone(final);
+  altered.nativeInventories.devee.final.files[unrelated].sha256 = hash('changed outside the reviewed package');
+  const newHash = projectedNativeInventoryHash(altered.nativeInventories.devee.final.files, paths);
+  altered.nativeInventories.devee.final.inventoryHash = newHash;
+  altered.inventoryManifests[newHash] = retrieval;
+  assert.throws(() => create(altered), /outside the reviewed transition/u);
+  assert.throws(() => create({ ...review, nativeProjection: 'any-metadata' }), /explicit Lightning package/u);
+  const fakeBootstrap = structuredClone(review);
+  fakeBootstrap.nativeInventories.devee.bootstrap = rawBaseline;
+  assert.throws(() => create(fakeBootstrap), /matching post-write checkpoint modes/u);
+});
