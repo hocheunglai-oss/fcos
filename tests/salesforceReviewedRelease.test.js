@@ -1770,7 +1770,7 @@ test('approved hosted continuation keeps the same durable checkpoints and submis
         ['validate', 'deploy', 'bootstrap', 'permission-write'].includes(op) || op === 'mirror' && action === 'publish');
       const count = (calls, kind) => calls.filter(([op, action]) => kind === 'mirror-check' ? op === 'mirror' && action === 'check' : op === kind).length;
       assert.deepEqual(effects(hosted.calls), effects(legacy.calls));
-      assert.equal(count(legacy.calls, 'mirror-check') - count(hosted.calls, 'mirror-check'), 2);
+      assert.equal(count(legacy.calls, 'mirror-check') - count(hosted.calls, 'mirror-check'), bootstrap ? 2 : 1);
       assert.ok(count(hosted.calls, 'inventory') < count(legacy.calls, 'inventory'));
       assert.ok(count(hosted.calls, 'report') < count(legacy.calls, 'report'));
       assert.deepEqual(hosted.checkpoints.find(e => e.operation === 'preparation'), legacy.checkpoints.find(e => e.operation === 'preparation'));
@@ -1841,4 +1841,29 @@ test('schema-free Lightning and Apex can verify a projected final inventory with
   const fakeBootstrap = structuredClone(review);
   fakeBootstrap.nativeInventories.devee.bootstrap = rawBaseline;
   assert.throws(() => create(fakeBootstrap), /matching post-write checkpoint modes/u);
+});
+
+test('approved continuation rechecks the mirror after schema-free Production validation and preserves the job on drift', async () => {
+  const f = fixture({ inventoryBaseline: true });
+  try {
+    const verifyMirror = f.provider.mirror;
+    let drift = true;
+    f.provider.mirror = async (...args) => {
+      if (drift && f.calls.some(([op, stage]) => op === 'validate' && stage === 'production')) {
+        throw Error('fixture mirror changed after validation');
+      }
+      return verifyMirror(...args);
+    };
+    await assert.rejects(f.run('approved-continuation', { authorization: f.authorization }), /mirror changed after validation/);
+    const preparation = f.journal.state.stages.production.preparation;
+    assert.equal(preparation.status, 'ready');
+    assert.ok(!f.calls.some(([op, stage]) => op === 'deploy' && stage === 'production'));
+    f.reopen();
+    f.calls.length = 0;
+    drift = false;
+    assert.equal((await f.run('apply', { authorization: f.authorization })).mode, 'applied');
+    assert.ok(f.calls.some(([op, stage, id]) => op === 'deploy' && stage === 'production' && id === preparation.validationJobId));
+    assert.ok(!f.calls.some(([op]) => ['bootstrap', 'validate', 'permission-write'].includes(op)));
+    assert.equal(f.checkpoints.filter(row => row.operation === 'preparation').length, 1);
+  } finally { f.cleanup(); }
 });

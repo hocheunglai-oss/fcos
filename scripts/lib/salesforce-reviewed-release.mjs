@@ -893,6 +893,9 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
       if (production && (mode === 'prepare' || approvedContinuation && !get('production', 'preparation'))) {
         await persist('production', 'preparation', { status: 'ready', fingerprint: plan.fingerprint, validationJobId: validation.jobId });
         if (!approvedContinuation) return { mode: 'prepared', productionValidation: 'Succeeded', fingerprint: plan.fingerprint, journal: journal.file };
+        // The split prepare/apply path observes the mirror after Production
+        // validation. Keep that read at the same boundary for a single pass.
+        if (!plan.review.bootstrap) await mirror();
       }
       // Validation may run for hours; refresh unchanged metadata before consuming its job.
       await verifyReviewedOrgInventory({ provider, environment, plan, expected: predeploymentInventory, now });
