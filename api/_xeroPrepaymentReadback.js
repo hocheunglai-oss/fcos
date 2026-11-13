@@ -49,8 +49,22 @@ async function prepaymentAt(read, id) {
 
 async function invoiceAt(read, id) {
   const row = await exact(read, 'Invoices', 'InvoiceID', id);
-  return { ...row, Prepayments: canonicalCollection(row.Prepayments, 'invoice prepayment', 'PrepaymentID'),
-    Payments: canonicalCollection(row.Payments, 'invoice payment', 'PaymentID') };
+  const prepayments = canonicalCollection(row.Prepayments, 'invoice prepayment', 'PrepaymentID');
+  if (Object.hasOwn(row, 'Payments')) {
+    return { ...row, Prepayments: prepayments, Payments: canonicalCollection(row.Payments, 'invoice payment', 'PaymentID') };
+  }
+  // Xero can omit Payments on an unpaid invoice. Prove it is empty with a bounded,
+  // invoice-specific read rather than assuming that an omitted collection is empty.
+  if (row.AmountPaid !== 0) fail('Xero omitted payments on an invoice without an explicit zero paid balance.');
+  const params = new URLSearchParams({ where: `Invoice.InvoiceID=guid("${identity(id)}")`, page: '1', pageSize: '100' });
+  const response = await read(`/Payments?${params}`);
+  if (!Array.isArray(response?.Payments) || response.Payments.length !== 0
+    || ['pagination', 'Pagination'].some(key => Object.hasOwn(response, key)
+      && (response[key]?.page !== 1 || ![0, 1].includes(response[key]?.pageCount) || response[key]?.itemCount !== 0
+        || (response[key]?.pageSize !== undefined && response[key].pageSize !== 100)))) {
+    fail('Xero did not establish an empty invoice payment collection.');
+  }
+  return { ...row, Prepayments: prepayments, Payments: [] };
 }
 
 async function verifyCreate(proposal, read) {
@@ -89,7 +103,16 @@ async function verifyRefund(proposal, read) {
   const prepayment = await prepaymentAt(read, evidence.prepaymentId);
   const prior = new Set(evidence.before.Payments.map((row) => identity(row.PaymentID)));
   const added = one(prepayment.Payments.filter((row) => !prior.has(row.PaymentID)), 'new prepayment refund');
-  const payment = await exact(read, 'Payments', 'PaymentID', added.PaymentID);
+  const detail = await exact(read, 'Payments', 'PaymentID', added.PaymentID);
+  if ([added, detail].some(row => (Object.hasOwn(row, 'Prepayment') && row.Prepayment?.PrepaymentID !== evidence.prepaymentId)
+    || (row.Invoice != null && row.Invoice.InvoiceID !== evidence.prepaymentId)
+    || row.CreditNote != null || row.Overpayment != null)) {
+    fail('Xero returned conflicting refund document linkage.');
+  }
+  // A standalone refund can expose its parent as Invoice.InvoiceID instead.
+  // Require any reported ID to match and bind the parent through its exact new payment ID.
+  const payment = Object.hasOwn(detail, 'Prepayment') ? detail
+    : { ...detail, Prepayment: { PrepaymentID: evidence.prepaymentId } };
   const result = validateXeroPrepaymentRefundResult(proposal, { paymentsResponse: { Payments: [payment] }, prepayment });
   return { identities: { xeroPrepaymentId: evidence.prepaymentId, xeroPaymentId: result.paymentId }, result, prepayment, payment };
 }

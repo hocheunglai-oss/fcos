@@ -21,6 +21,12 @@ function readFixture(source) {
       const url = new URL(path, 'https://fixture.invalid');
       const [, resource] = url.pathname.split('/');
       assert.ok(responses[resource]);
+      if (resource === 'Payments' && url.search) {
+        assert.equal(url.searchParams.get('where'), `Invoice.InvoiceID=guid("${id(7)}")`);
+        assert.equal(url.searchParams.get('page'), '1');
+        assert.equal(url.searchParams.get('pageSize'), '100');
+        return structuredClone(source.invoicePaymentSearch);
+      }
       return structuredClone({ [resource]: responses[resource] });
     },
   };
@@ -64,6 +70,28 @@ test('allocation readback requires a unique provider ID and exact invoice and ba
   assert.deepEqual((await verifyXeroPrepaymentOutcome(request, api.read)).identities,
     { xeroPrepaymentId: id(5), xeroAllocationId: id(13) });
   assert.deepEqual(api.calls, [`/Prepayments/${id(5)}`, `/Invoices/${id(7)}`]);
+  const invoice = source.xeroInvoices[0];
+  delete invoice.Payments;
+  source.invoicePaymentSearch = { Payments: [] };
+  assert.equal((await verifyXeroPrepaymentOutcome(request, api.read)).result.status, 'applied');
+  assert.match(api.calls.at(-1), /^\/Payments\?/);
+  for (const search of [
+    { Payments: [{ PaymentID: id(90), Invoice: { InvoiceID: id(7) } }] },
+    { Payments: [], pagination: { page: 1, itemCount: 0, pageCount: 2 } },
+    { Payments: [], Pagination: { page: 1, itemCount: 1, pageCount: 1 } },
+    { Payments: [], pagination: null },
+    {},
+  ]) {
+    source.invoicePaymentSearch = search;
+    await assert.rejects(verifyXeroPrepaymentOutcome(request, api.read), /did not establish an empty invoice payment collection/);
+  }
+  source.invoicePaymentSearch = { Payments: [] };
+  invoice.AmountPaid = 1;
+  await assert.rejects(verifyXeroPrepaymentOutcome(request, api.read), /explicit zero paid balance/);
+  invoice.AmountPaid = 0;
+  invoice.Payments = null;
+  await assert.rejects(verifyXeroPrepaymentOutcome(request, api.read), /omitted the invoice payment collection/);
+  invoice.Payments = [];
   delete source.xeroPrepayments[0].Allocations[0].AllocationId;
   await assert.rejects(verifyXeroPrepaymentOutcome(request, api.read), /exact Xero readback identity/);
 });
@@ -83,6 +111,10 @@ test('reversal requires an explicit allocation collection and restores exact bal
   const request = { action: 'reverse', proposal };
   assert.equal((await verifyXeroPrepaymentOutcome(request, api.read)).result.status, 'reversed');
   assert.equal(api.calls.length, 2);
+  delete invoice.Payments;
+  source.invoicePaymentSearch = { Payments: [], pagination: { page: 1, pageSize: 100, pageCount: 0, itemCount: 0 } };
+  assert.equal((await verifyXeroPrepaymentOutcome(request, api.read)).result.status, 'reversed');
+  assert.match(api.calls.at(-1), /^\/Payments\?/);
   delete prepayment.Allocations;
   await assert.rejects(verifyXeroPrepaymentOutcome(request, api.read), /omitted the prepayment allocation/);
 });
@@ -100,6 +132,25 @@ test('refund verifies the new payment on its own endpoint and preserves exact or
   const request = { action: 'refund', proposal };
   assert.deepEqual((await verifyXeroPrepaymentOutcome(request, api.read)).identities, { xeroPrepaymentId: id(5), xeroPaymentId: id(91) });
   assert.deepEqual(api.calls, [`/Prepayments/${id(5)}`, `/Payments/${id(91)}`]);
+  const payment = source.xeroPayments[0];
+  delete payment.Prepayment;
+  assert.equal((await verifyXeroPrepaymentOutcome(request, api.read)).result.status, 'refunded');
+  for (const contradictoryLink of [null, {}, { PrepaymentID: id(95) }]) {
+    payment.Prepayment = contradictoryLink;
+    await assert.rejects(verifyXeroPrepaymentOutcome(request, api.read), /conflicting refund document linkage/);
+  }
+  delete payment.Prepayment;
+  prepayment.Payments[0].Prepayment = { PrepaymentID: id(95) };
+  await assert.rejects(verifyXeroPrepaymentOutcome(request, api.read), /conflicting refund document linkage/);
+  delete prepayment.Payments[0].Prepayment;
+  payment.Invoice = { InvoiceID: id(5) };
+  assert.equal((await verifyXeroPrepaymentOutcome(request, api.read)).result.status, 'refunded');
+  payment.Invoice = { InvoiceID: id(7) };
+  await assert.rejects(verifyXeroPrepaymentOutcome(request, api.read), /conflicting refund document linkage/);
+  delete payment.Invoice;
+  payment.PaymentID = id(92);
+  await assert.rejects(verifyXeroPrepaymentOutcome(request, api.read), /different Payments identity/);
+  payment.PaymentID = id(91);
   source.xeroPayments[0].BankAmount = 779.99;
   await assert.rejects(verifyXeroPrepaymentOutcome(request, api.read), /differs from immutable refund evidence/);
 });

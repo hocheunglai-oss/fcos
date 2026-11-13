@@ -9,8 +9,8 @@ import { releaseXeroBudget, reserveXeroBudget, xeroSharedContext } from './_xero
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const ACTIONS = {
   create: { resource: 'BankTransactions', method: 'PUT', target: 'xeroBankTransactionId', calls: 3, path: /^\/BankTransactions$/ },
-  allocate: { resource: 'Prepayments', method: 'PUT', target: 'xeroPrepaymentId', calls: 2, path: /^\/Prepayments\/[a-f0-9-]{36}\/Allocations$/i },
-  reverse: { resource: 'Prepayments', method: 'DELETE', target: 'xeroPrepaymentId', calls: 2, path: /^\/Prepayments\/[a-f0-9-]{36}\/Allocations\/[a-f0-9-]{36}$/i },
+  allocate: { resource: 'Prepayments', method: 'PUT', target: 'xeroPrepaymentId', calls: 3, path: /^\/Prepayments\/[a-f0-9-]{36}\/Allocations$/i },
+  reverse: { resource: 'Prepayments', method: 'DELETE', target: 'xeroPrepaymentId', calls: 3, path: /^\/Prepayments\/[a-f0-9-]{36}\/Allocations\/[a-f0-9-]{36}$/i },
   refund: { resource: 'Payments', method: 'PUT', target: 'xeroPaymentId', calls: 2, path: /^\/Payments$/ },
 };
 
@@ -147,7 +147,9 @@ function createJournaledXeroTransport({
       let budgetId = budget.id;
       const exhausted = native && budget.state === 'active' && budget.verification_remaining === 0;
       if (exhausted) await releaseXeroBudget(connection, { budgetId, reason: 'Native draft verification capacity used' });
-      if (exhausted || budget.state !== 'active' || !(Date.parse(budget.expires_at) > now())) {
+      const applicationNeedsCapacity = kind === 'prepayment' && ['allocate', 'reverse'].includes(operation.action)
+        && budget.verification_remaining < intent.calls;
+      if (exhausted || applicationNeedsCapacity || budget.state !== 'active' || !(Date.parse(budget.expires_at) > now())) {
         const reserved = await reserveXeroBudget(connection, { ownerKey: `${intent.owner}:recovery`, operationCalls: 0, verificationCalls: intent.calls });
         if (!uuid.test(reserved?.id || '') || reserved.tenant_id !== tenantId || reserved.owner_key !== `${intent.owner}:recovery`
           || reserved.operation_remaining !== 0 || reserved.verification_remaining !== intent.calls || reserved.state !== 'active') {

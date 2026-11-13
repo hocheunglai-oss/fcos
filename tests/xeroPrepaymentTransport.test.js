@@ -54,7 +54,7 @@ function fixture({ env = { FCOS_ENABLE_XERO_FINANCIAL_SYNC: 'true' } } = {}) {
     client, connection, env, now: () => Date.parse('2026-11-11T18:00:00Z'),
     async accountingFetch(_connection, pathName, request) {
       const resource_key = pathName.split('/')[1];
-      if (request.method === 'PUT') {
+      if (request.method === 'PUT' || request.method === 'DELETE') {
         state.sends.push(request);
         state.requests.set(request.requestId, { id: request.requestId, tenant_id: tenantId, budget_id: request.budgetId,
           method: request.method, resource_key, phase: request.budgetPhase, state: 'unknown', outcome_unknown: true });
@@ -101,6 +101,32 @@ test('one send uses an exact reserved budget and durable readback resolves the o
     evidenceReference: `xero_financial_prepayment_operations:${f.operation.operation_id}` }]);
   assert.deepEqual(f.state.releases, [send.budgetId]);
   assert.equal(f.state.sends.length, 1);
+});
+
+test('allocation and reversal reserve the third invoice payment read, including recovery of an older send', async () => {
+  for (const [action, method, suffix] of [['allocate', 'PUT', ''], ['reverse', 'DELETE', `/${id(9)}`]]) {
+    const f = fixture();
+    f.operation.action = action;
+    Object.assign(f.operation.request_evidence.proposal, { method, path: `/Prepayments/${target}/Allocations${suffix}` });
+    f.transport = createXeroPrepaymentTransport({ ...f.options, verifyOutcome: async (_request, read) => {
+      await read(`/Prepayments/${target}`);
+      await read(`/Invoices/${id(10)}`);
+      await read('/Payments?page=1');
+      return { identities: { xeroPrepaymentId: target } };
+    } });
+    const send = await originalSend(f);
+    assert.equal(f.state.reserves[0].verificationCalls, 3);
+    f.state.budgets.get(send.budgetId).verification_remaining = 2;
+    const result = await f.transport.readOutcome(f.operation.request_evidence, f.operation);
+    assert.equal(f.state.sends.length, 1);
+    assert.equal(f.state.reserves.length, 2);
+    assert.equal(f.state.reserves[1].operationCalls, 0);
+    assert.equal(f.state.reserves[1].verificationCalls, 3);
+    assert.equal(f.state.reads.length, 3);
+    assert.ok(f.state.reads.every(read => read.method === 'GET' && read.budgetId === result.transport.budgetId));
+    await f.transport.settle({ ...f.operation, status: 'applied', response_evidence: result });
+    assert.deepEqual(f.state.releases, [send.budgetId, result.transport.budgetId]);
+  }
 });
 
 test('expired original budget gets only verification capacity and never a new send', async () => {
