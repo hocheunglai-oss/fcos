@@ -16,7 +16,7 @@ const safetyContext = {
 function scopedFixture() {
   const source = fixture();
   allocation(source, { posted: false });
-  const cash = { ...source.events[0], Id: cashId, STEM__c: stem };
+  const cash = { ...source.events[0], Id: cashId, STEM__c: stem, Currency__c: 'HKD' };
   const applied = { ...source.allocations[0], Id: allocationId, Cash_Event__c: cashId, Buyer_Invoice__c: invoiceId, Payment__c: paymentId };
   const invoice = { ...source.invoices[0], Id: invoiceId, STEM__c: stem };
   const payment = { ...source.payments[0], Id: paymentId, STEM__c: stem, Buyer_Invoice__c: invoiceId, Cash_Event__c: cashId };
@@ -174,12 +174,12 @@ test('reads all scoped journal pages and deduplicates provider identities', asyn
   assert.equal(xeroReads.length, 3);
 });
 
-function depositReviewFixture() {
+function depositReviewFixture(currency = 'USD') {
   const tenantId = id(9);
   const contactId = id(3);
   const source = fixture();
-  const cash = { ...source.events[0], Id: cashId, STEM__c: stem };
-  const policies = [{ tenant_id: tenantId, direction: 'Sell', currency: 'HKD', revision: 2 }];
+  const cash = { ...source.events[0], Id: cashId, STEM__c: stem, Currency__c: currency };
+  const policies = [{ tenant_id: tenantId, direction: 'Sell', currency, revision: 2 }];
   const bankMappings = [{ id: id(50), enabled: true }];
   const reads = [];
   const dbReads = [];
@@ -230,7 +230,15 @@ test('deposit review reads only the selected contact, exact posting policy and t
   const policy = dbReads.find((url) => url.pathname.endsWith('posting_policies')).searchParams;
   assert.equal(policy.get('tenant_id'), `eq.${id(9)}`);
   assert.equal(policy.get('direction'), 'eq.Sell');
-  assert.equal(policy.get('currency'), 'eq.HKD');
+  assert.equal(policy.get('currency'), 'eq.USD');
+});
+
+test('HKD deposit is blocked before loading Xero review and posting policy data', async () => {
+  const { options, reads, dbReads, selection } = depositReviewFixture('HKD');
+  await assert.rejects(loadXeroPrepaymentReviewContext(stem, selection, options),
+    { code: 'XERO_PREPAYMENT_HKD_UNSUPPORTED' });
+  assert.deepEqual(reads, []);
+  assert.deepEqual(dbReads, []);
 });
 
 test('deposit context holds truncated legacy search, foreign tenant and unsupported settings scope', async () => {

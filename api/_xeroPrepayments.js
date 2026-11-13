@@ -2,6 +2,7 @@ import { requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
 import { isExternalActionEnabled, requireExternalActionGate } from './_externalActionGates.js';
 import { getFreshXeroConnection, readStoredXeroConnection, splitScopes, xeroContactSyncServiceClient } from './_xeroContactSync.js';
 import { loadPrepaymentContactChoices, loadPrepaymentQueueContext, loadXeroPrepaymentReviewContext, resolvePrepaymentStemKey } from './_xeroPrepaymentContext.js';
+import { requireSupportedXeroPrepaymentCurrency } from './_xeroPrepaymentCurrency.js';
 import { executeXeroPrepayment } from './_xeroPrepaymentExecution.js';
 import { prepaymentLedgerFor } from './_xeroPrepaymentLedger.js';
 import { buildPrepaymentReview } from './_xeroPrepaymentReview.js';
@@ -65,9 +66,11 @@ async function setup(body, {
 }
 
 function reviewLoader(dependencies, loadContext = loadXeroPrepaymentReviewContext) {
-  return async (selected, execution) => buildPrepaymentReview(
-    await loadContext(selected.stemId, selected, dependencies), selected, execution,
-  );
+  return async (selected, execution) => {
+    const review = buildPrepaymentReview(await loadContext(selected.stemId, selected, dependencies), selected, execution);
+    requireSupportedXeroPrepaymentCurrency(review.currency);
+    return review;
+  };
 }
 
 function publicReview(review, tenantId, env) {
@@ -185,6 +188,7 @@ export async function xeroPrepaymentQueue(body = {}, options = {}) {
     const deposit = originalBySource.get(`create:${sourceKey(event.Id)}`);
     const reversedBeforePosting = action === 'allocate' && reversed.has(sourceKey(row.Id))
       || action === 'reverse' && !originalBySource.has(`allocate:${sourceKey(row.Reverses_Allocation__c)}`);
+    const hkdUnsupported = row.Currency__c === 'HKD' || event.Currency__c === 'HKD';
     const available = !unresolvedCash.has(sourceKey(event.Id)) && !reversedBeforePosting
       && (action === 'create' || deposit?.status === 'applied');
     const usd = row.Cash_Event__c ? row.Allocated_Cash_USD__c : row.Cash_USD_Amount__c;
@@ -196,7 +200,8 @@ export async function xeroPrepaymentQueue(body = {}, options = {}) {
       sourceId: row.Id, name: row.Name || row.Id, partyName: event.Party__r?.Name || null,
       action, date: row.Allocation_Date__c || row.Payment_Date__c, currency: row.Currency__c,
       nativeAmount: Math.abs(Number(amount)),
-      status: operation?.status || (reversedBeforePosting ? 'reversed_in_salesforce' : available ? 'ready_for_review' : 'held'),
+      status: operation?.status || (reversedBeforePosting ? 'reversed_in_salesforce'
+        : hkdUnsupported ? 'hkd_unsupported' : available ? 'ready_for_review' : 'held'),
       recovery: canRecover ? { operationId: operation.operation_id, reviewFingerprint: operation.review_hash } : null,
     };
   });

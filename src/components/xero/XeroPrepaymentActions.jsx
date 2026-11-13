@@ -7,10 +7,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 
 const labels = { create: 'Deposit', allocate: 'Allocation', reverse: 'Reversal', refund: 'Refund' };
 const states = { ready_for_review: 'Ready for review', held: 'Held', processing: 'Processing', unknown: 'Needs verification',
-  exception: 'Needs verification', applied: 'Verified', reversed_in_salesforce: 'Reversed before Xero posting' };
+  exception: 'Needs verification', applied: 'Verified', reversed_in_salesforce: 'Reversed before Xero posting',
+  hkd_unsupported: 'HKD posting unavailable in Xero' };
 const callOptions = { force: true, cache: false };
 const definitive = new Set(['XERO_PREPAYMENT_STALE', 'XERO_PREPAYMENT_REVIEW_REQUIRED', 'XERO_PREPAYMENT_DISABLED',
-  'XERO_PREPAYMENT_CANCELLED', 'XERO_PREPAYMENT_SCOPE_MISSING']);
+  'XERO_PREPAYMENT_CANCELLED', 'XERO_PREPAYMENT_SCOPE_MISSING', 'XERO_PREPAYMENT_HKD_UNSUPPORTED']);
 
 async function invoke(name, body, mutation = false) {
   const result = await appClient.functions.invoke(name, body, { ...callOptions, invalidateCache: mutation });
@@ -113,10 +114,10 @@ export default function XeroPrepaymentActions({ tenantId }) {
     setPending(null);
     clearReview();
     setQueue((current) => current && ({ ...current, rows: current.rows.map((row) => row.sourceId === original.sourceId && row.action === original.action
-      ? { ...row, status: result.status === 'applied' ? 'applied' : 'ready_for_review',
+      ? { ...row, status: result.status === 'applied' ? 'applied' : row.currency === 'HKD' ? 'hkd_unsupported' : 'ready_for_review',
         recovery: result.status === 'applied' ? { operationId: original.operationId, reviewFingerprint: original.reviewFingerprint } : null }
       : row) }));
-    setNotice(result.status === 'applied' ? 'Xero operation verified.' : 'The unsent operation was cancelled. A fresh review is available.');
+    setNotice(result.status === 'applied' ? 'Xero operation verified.' : 'The unsent operation was cancelled.');
   }
 
   function submit() {

@@ -1,3 +1,4 @@
+import { requireSupportedXeroPrepaymentCurrency } from './_xeroPrepaymentCurrency.js';
 import { xeroPaymentDate } from './_xeroPaymentAssociation.js';
 import { hkStrippedClKeyNameMatchKey, normalizeName, splitScopes } from './_xeroContactSync.js';
 import { XERO_PREPAYMENT_POLICY_TABLE, loadPrepaymentPostingSettings } from './_xeroPrepaymentPolicy.js';
@@ -233,6 +234,7 @@ export async function loadXeroPrepaymentReviewContext(stemId, selection, {
   const selected = (['create', 'refund'].includes(action) ? context.events : context.allocations).find((row) => row.Id === sourceId);
   const cash = selected && context.events.find((row) => row.Id === (selected.Cash_Event__c || selected.Original_Cash_Event__c || selected.Id));
   if (!cash || cash.Kind__c !== 'Payment' || canonicalId(cash.STEM__c) !== canonicalId(stemId)) contextError('The selected cash event is missing.');
+  requireSupportedXeroPrepaymentCurrency(cash.Currency__c, selected.Currency__c);
   const applied = context.operations.filter((row) => row.action === 'create' && row.status === 'applied' && canonicalId(row.cash_event_id) === canonicalId(cash.Id));
   const exactContact = action === 'create' ? contactId : applied.length === 1 && applied[0].request_evidence?.proposal?.evidence?.contactId;
   if (!uuid(exactContact)) contextError('The selected Xero contact could not be verified.');

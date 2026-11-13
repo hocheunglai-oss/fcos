@@ -13,6 +13,14 @@ function reject(message, code = 'XERO_PREPAYMENT_INVALID') {
   throw Object.assign(new Error(message), { code, status: 409 });
 }
 
+export function requireSupportedXeroPrepaymentCurrency(...currencies) {
+  if (currencies.includes('HKD')) {
+    throw Object.assign(new Error('Xero prepayment posting requires USD for this organisation. HKD cash remains in Salesforce.'), {
+      code: 'XERO_PREPAYMENT_HKD_UNSUPPORTED', status: 409, expose: true,
+    });
+  }
+}
+
 function text(value, label) {
   const result = String(value || '').trim();
   if (!result) reject(`${label} is required.`);

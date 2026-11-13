@@ -11,19 +11,23 @@ const selected = { stemId, sourceId, contactId: id(3), action: 'create' };
 const selection = { tenantId, ...selected };
 const enabled = { FCOS_ENABLE_XERO_PREPAYMENTS: 'true', FCOS_ENABLE_XERO_FINANCIAL_SYNC: 'true' };
 
-function setupFixture() {
+function setupFixture(currency = 'USD') {
   const context = fixture();
   Object.assign(context.events[0], { Id: sourceId, STEM__c: stemId, Party__r: { Name: 'Fixture Buyer', Inactive_Suspended__c: false },
-    Trade_FX_Side__r: { Currency__c: 'HKD' } });
+    Trade_FX_Side__r: { Currency__c: currency } });
+  if (currency === 'USD') Object.assign(context.events[0], {
+    Currency__c: 'USD', Bank_Currency__c: 'USD', Bank_Native_Amount__c: 97.5, Cash_HKD_Amount__c: null,
+    FX_Rate__c: null, FX_Revision__c: null, FX_Effective_At__c: null,
+  });
   Object.assign(context, {
     operations: [], xeroBankTransactions: [], xeroPrepayments: [], xeroInvoices: [], documentMappings: [], invoices: [],
     organisation: { OrganisationID: tenantId, BaseCurrency: 'USD' },
-    accounts: [{ AccountID: id(2), Type: 'BANK', Status: 'ACTIVE', CurrencyCode: 'HKD', Name: 'Fixture Bank', Code: 'BANK' },
+    accounts: [{ AccountID: id(2), Type: 'BANK', Status: 'ACTIVE', CurrencyCode: currency, Name: 'Fixture Bank', Code: 'BANK' },
       { AccountID: id(4), Type: 'CURRENTLIABILITY', Status: 'ACTIVE', Name: 'Customer deposits', Code: 'DEPOSIT' }],
     contacts: [{ ContactID: id(3), ContactStatus: 'ACTIVE', Name: 'Fixture Buyer' }],
     bankMappings: [{ id: id(50), enabled: true, salesforce_bank_name: 'DBS', xero_bank_account_id: id(2),
       xero_bank_account_name: 'Fixture Bank', revision: 1 }],
-    policies: [{ tenant_id: tenantId, direction: 'Sell', currency: 'HKD', enabled: true, account_id: id(4),
+    policies: [{ tenant_id: tenantId, direction: 'Sell', currency, enabled: true, account_id: id(4),
       account_code: 'DEPOSIT', tax_type: 'NONE', revision: 1 }],
     taxes: [{ TaxType: 'NONE', Status: 'ACTIVE', DisplayTaxRate: 0, EffectiveRate: 0, TaxComponents: [{ Rate: 0 }] }],
     bankDiscovery: { complete: true, rows: [] },
@@ -81,7 +85,7 @@ function setupFixture() {
 
 async function approval(f) {
   const review = await xeroPrepaymentPreview(selection, f.options);
-  assert.equal(review.nativeAmount, 780);
+  assert.equal(review.nativeAmount, 97.5);
   assert.equal(review.policyRevision, 1);
   assert.equal(review.contactName, 'Fixture Buyer');
   assert.equal(review.proposal, undefined);
@@ -104,6 +108,17 @@ test('unapproved or stale reviews and disabled posting make no claim or send', a
   await assert.rejects(xeroPrepaymentApply(approved, { ...f.options, env: {} }), { code: 'XERO_PREPAYMENT_DISABLED' });
   f.context.policies[0].revision++;
   await assert.rejects(xeroPrepaymentApply(approved, f.options), { code: 'XERO_PREPAYMENT_STALE' });
+  assert.equal(f.state.operation, null);
+  assert.deepEqual(f.state.calls, ['review', 'review']);
+});
+
+test('unsupported HKD is rejected in preview and apply before any claim or send', async () => {
+  const f = setupFixture('HKD');
+  const code = 'XERO_PREPAYMENT_HKD_UNSUPPORTED';
+  await assert.rejects(xeroPrepaymentPreview(selection, f.options), { code });
+  await assert.rejects(xeroPrepaymentApply({
+    ...selection, operationId: id(23), reviewFingerprint: 'a'.repeat(64), reviewed: true,
+  }, f.options), { code });
   assert.equal(f.state.operation, null);
   assert.deepEqual(f.state.calls, ['review', 'review']);
 });
@@ -149,6 +164,7 @@ test('recovery cancels an exact unmarked claim once and does not use Xero transp
 test('scoped queue uses stored tenant identity without refreshing Xero and limits recovery to the original actor', async () => {
   const f = setupFixture();
   const other = 'a02000000000002AAA';
+  const hkd = 'a02000000000003AAA';
   const options = {
     ...f.options,
     getConnection: () => assert.fail('Queue must not refresh the connection'),
@@ -157,14 +173,17 @@ test('scoped queue uses stored tenant identity without refreshing Xero and limit
       assert.equal(stem, stemId);
       assert.equal(tenant, tenantId);
       return {
-        events: [f.context.events[0], { ...f.context.events[0], Id: other }], allocations: [],
+        events: [f.context.events[0], { ...f.context.events[0], Id: other },
+          { ...f.context.events[0], Id: hkd, Currency__c: 'HKD', Cash_HKD_Amount__c: 780 }], allocations: [],
         operations: [{ operation_id: id(51), source_id: sourceId.slice(0, 15), cash_event_id: sourceId.slice(0, 15), action: 'create',
           status: 'unknown', actor_id: actorId, review_hash: 'a'.repeat(64), response_evidence: 'private' }],
       };
     },
   };
   const payload = await xeroPrepaymentQueue({ tenantId, stemId }, options);
-  assert.deepEqual(payload.rows.map((row) => [row.sourceId, row.status]), [[sourceId, 'unknown'], [other, 'ready_for_review']]);
+  assert.deepEqual(payload.rows.map((row) => [row.sourceId, row.status]), [
+    [sourceId, 'unknown'], [other, 'ready_for_review'], [hkd, 'hkd_unsupported'],
+  ]);
   assert.deepEqual(payload.rows[0].recovery, { operationId: id(51), reviewFingerprint: 'a'.repeat(64) });
   assert.equal(payload.rows[0].response_evidence, undefined);
   const otherActor = await xeroPrepaymentQueue({ tenantId, stemId }, { ...options, accessContext: { profile: { id: id(99) } } });
