@@ -203,7 +203,7 @@ export async function createHandoverAdapter({ plan, db, connection, env = proces
         ownershipVerifier, handoverPlanHash: planHash });
       const journal = new DeploymentJournal({ github: client, releaseId: manifest.releaseId, manifestHash: digest(manifest),
         actorIds: [operator.id], otherReleaseActorIds: [operator.id, bot.id] });
-      await stageRelease({ manifest, journal, provider: stagedProvider, build, smoke: values => runStagedSmoke({ ...values, env }) });
+      await stageRelease({ manifest, journal, provider: stagedProvider, build, smoke: values => runStagedSmoke({ ...values, env, requireNormalRole: true }) });
       const events = (await journal.read()).map(row => row.payload), browser = events.filter(row => row.event === 'smoke.passed').at(-1)?.data;
       requireCondition(browser?.normalRole === true, 'HANDOVER_NORMAL_ROLE_QUALIFICATION_REQUIRED');
       stagedQualification = { runId: nativeReview.runId, planHash, controllerSha: p.controllerSha, candidateSha: p.candidateSha,

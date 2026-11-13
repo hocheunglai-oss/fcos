@@ -219,7 +219,9 @@ function verifyNativeMetadataProjection({ root, sourceRoot, plan, projectionPath
     }
     if (local === observed) continue;
     if (name.endsWith('.xml') && JSON.stringify(normalizedMetadataDefinition(local)) === JSON.stringify(normalizedMetadataDefinition(observed))) continue;
-    if ((name.endsWith('.cls') || name.endsWith('.trigger')) && local.replace(/\n$/u, '') === observed.replace(/\n$/u, '')) continue;
+    // Metadata API retrieval can omit one terminal newline from source files.
+    const nativeSourceFile = name.endsWith('.cls') || name.endsWith('.trigger') || /^lwc\/[^/]+\/[^/]+\.(?:js|html)$/u.test(name);
+    if (nativeSourceFile && local.replace(/\n$/u, '') === observed.replace(/\n$/u, '')) continue;
     throw new Error(`Native metadata projection differs from the exact reviewed source: ${name}`);
   }
   return permissionSets.length ? verifyPermissionSetCatalog(permissionSets, query) : null;
