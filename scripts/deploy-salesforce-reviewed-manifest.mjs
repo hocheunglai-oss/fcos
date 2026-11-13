@@ -9,6 +9,7 @@ import { openSalesforcePromotionJournal, salesforcePromotionHash } from './lib/s
 import { INVENTORY_BASELINE_MODE, NATIVE_CUSTOM_OBJECT_DEFAULTS, createReviewedSalesforcePlan, inventoryFromFiles, matchesProjectedNativeInventory, parseReviewedPackage, projectedNativeInventoryHash, readReviewedInventory, runReviewedSalesforceRelease, safeProjectFile } from './lib/salesforce-reviewed-release.mjs';
 import { proveSalesforceInventoryAbsence } from './lib/salesforce-inventory-absence.mjs';
 import { comparePermissionSetDefinition, verifyPermissionSetCatalog } from './lib/salesforce-permission-projection.mjs';
+import { supportsTradingFxFormulaWitness, verifyTradingFxFormulaWitnesses } from './lib/salesforce-trading-fx-formula-evidence.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const POLICY = FCOS_CONNECTION_POLICY.providers.find(({ id }) => id === 'salesforce');
@@ -170,6 +171,12 @@ export function equivalentNativeSerialization(source, native, type, defaults) {
     if (!entries.length) continue;
     if (value === 'standard-actions') {
       if (!matchesStandardActionOverrides(entries)) return false;
+    } else if (value === 'empty-record-action-list') {
+      const [entry] = entries;
+      const children = entry.children.filter(node => !whitespaceOnly(node));
+      if (entries.length !== 1 || Object.keys(entry.attribs).length || children.length !== 1
+        || children[0].type !== 'tag' || children[0].name !== 'actionListContext'
+        || !plainTextNode(children[0]) || children[0].children[0].data !== 'Record') return false;
     } else {
       const [entry] = entries;
       if (entries.length !== 1) return false;
@@ -186,6 +193,7 @@ export function equivalentNativeSerialization(source, native, type, defaults) {
 
 function verifyNativeMetadataProjection({ root, sourceRoot, plan, projectionPaths, query }) {
   const permissionSets = [];
+  const formulaWitnesses = [];
   for (const name of projectionPaths) {
     const source = readFileSync(safeProjectFile(sourceRoot, name));
     const native = readFileSync(safeProjectFile(root, name));
@@ -208,6 +216,18 @@ function verifyNativeMetadataProjection({ root, sourceRoot, plan, projectionPath
       permissionSets.push(comparePermissionSetDefinition({ name: permission[1], source: local, native: observed, normalize: normalizedMetadataDefinition }));
       continue;
     }
+    const field = /^objects\/(\w+)\/fields\/(\w+)\.field-meta\.xml$/u.exec(name);
+    const formulaName = field && field[1] + '.' + field[2];
+    if (formulaName && supportsTradingFxFormulaWitness(formulaName, salesforcePromotionHash(source))
+      && !observed.includes('formulaTreatBlanksAs')
+      && local.includes('<formulaTreatBlanksAs>BlankAsBlank</formulaTreatBlanksAs>')) {
+      const withoutMode = local.replace(/^[ \t]*<formulaTreatBlanksAs>BlankAsBlank<\/formulaTreatBlanksAs>\n/mu, '');
+      const defaults = (falseFlags || []).map(flag => [flag, 'false']);
+      if (withoutMode !== local && equivalentNativeSerialization(withoutMode, observed, 'CustomField', defaults)) {
+        formulaWitnesses.push(formulaName);
+        continue;
+      }
+    }
     if (falseFlags) {
       if (equivalentNativeSerialization(local, observed, 'CustomField', falseFlags.map(flag => [flag, 'false']))) continue;
       throw new Error(`Native CustomField serialization differs from the exact reviewed source: ${name}`);
@@ -218,13 +238,18 @@ function verifyNativeMetadataProjection({ root, sourceRoot, plan, projectionPath
       throw new Error(`Native CustomObject serialization differs from the exact reviewed source: ${name}`);
     }
     if (local === observed) continue;
+    if (/^layouts\/[^/]+\.layout-meta\.xml$/u.test(name)
+      && equivalentNativeSerialization(local, observed, 'Layout', [['platformActionList', 'empty-record-action-list']])) continue;
     if (name.endsWith('.xml') && JSON.stringify(normalizedMetadataDefinition(local)) === JSON.stringify(normalizedMetadataDefinition(observed))) continue;
     // Metadata API retrieval can omit one terminal newline from source files.
-    const nativeSourceFile = name.endsWith('.cls') || name.endsWith('.trigger') || /^lwc\/[^/]+\/[^/]+\.(?:js|html)$/u.test(name);
+    const nativeSourceFile = name.endsWith('.cls') || name.endsWith('.trigger') || /^pages\/[^/]+\.page$/u.test(name) || /^lwc\/[^/]+\/[^/]+\.(?:js|html|css)$/u.test(name);
     if (nativeSourceFile && local.replace(/\n$/u, '') === observed.replace(/\n$/u, '')) continue;
     throw new Error(`Native metadata projection differs from the exact reviewed source: ${name}`);
   }
-  return permissionSets.length ? verifyPermissionSetCatalog(permissionSets, query) : null;
+  return {
+    ...(permissionSets.length ? verifyPermissionSetCatalog(permissionSets, query) : {}),
+    ...verifyTradingFxFormulaWitnesses(formulaWitnesses, query),
+  };
 }
 
 function assertConvertedPackage(converted, roundTrip, members, files, sourceRoot, apiVersion, operation) {
@@ -475,7 +500,7 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
           throw new Error('Native Salesforce retrieval differs from the exact reviewed inventory.');
         }
         if (verifyApexProjection) verifyNativeApexProjection({ root: supplementalRoot, sourceRoot: path.join(cwd, policy.publication.sourceRoot), plan });
-        const permissionEvidence = nativeBootstrap && projectionPaths.length
+        const metadataEvidence = nativeBootstrap && projectionPaths.length
           ? verifyNativeMetadataProjection({ root: supplementalRoot, sourceRoot: path.join(cwd, policy.publication.sourceRoot),
             plan, projectionPaths, query: soql => sf(['data', 'query', '--target-org', environment.alias, '--api-version', '67.0',
               '--query', soql, '--json'], project) }) : null;
@@ -496,14 +521,14 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
           ...(supplementalJobId ? (nativeBootstrap ? { metadataJobId: supplementalJobId, metadataManifestSha256: supplementalManifest.sha256 }
             : { apexJobId: supplementalJobId, apexManifestSha256: supplementalManifest.sha256 }) : {}),
           ...(nativeBootstrap ? { verifiedProjectionPaths: projectionPaths, supplementalObjectShells, supplementalDuplicates: observed.supplementalDuplicates } : {}),
-          ...permissionEvidence,
+          ...metadataEvidence,
           ...(nativeExport ? { nativeSourceTreeHash: observed.sourceTreeHash, apexProjectionVerified: verifyApexProjection } : {}), ...absence });
         return { orgId: identity.orgId, identity, verifiedAt, sourceTreeHash, inventoryHash: expectedInventoryHash,
           ...(projectedNativeInventory ? { observedNativeInventoryHash: observed.inventoryHash } : {}),
           evidenceSha256, observedInventory: observed.files,
           ...(nativeExport ? { nativeSourceTreeHash: observed.sourceTreeHash, apexProjectionVerified: verifyApexProjection } : {}),
           ...(nativeBootstrap ? { verifiedProjectionPaths: projectionPaths, supplementalObjectShells, supplementalDuplicates: observed.supplementalDuplicates } : {}),
-          ...permissionEvidence,
+          ...metadataEvidence,
           verificationMethod: nativeExport ? 'metadata-api-reviewed-native-byte-inventory' : 'metadata-api-owned-tree-inventory',
           scope: 'force-app/main/default', ...absence };
       } finally {

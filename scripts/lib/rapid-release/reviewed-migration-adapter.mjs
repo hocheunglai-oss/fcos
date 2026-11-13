@@ -1,4 +1,4 @@
-import { digest, isSha, requireCondition, targets } from './contract.mjs';
+import { digest, isDigest, isSha, requireCondition, targets } from './contract.mjs';
 import { assertPinnedDatabaseIdentity, openPinnedDatabase } from './database-connection.mjs';
 import { createDatabaseCredentialIntentStore } from './database-intent.mjs';
 import { githubClient } from './providers.mjs';
@@ -28,7 +28,7 @@ export function reviewedMigrationAdapter({
   }
 
   return async function applyReviewedPrerequisites({
-    manifest, approval, journal, controllerDirectory, env, plan, authorization, databaseWriter,
+    manifest, approval, journal, controllerDirectory, env, plan, authorization, databaseWriter, originalDatabaseOperation,
   }, { github = githubClient, connect = openWriter, verifyIdentity = assertPinnedDatabaseIdentity,
     transact = transactMigration } = {}) {
     const manifestHash = digest(manifest);
@@ -56,6 +56,12 @@ export function reviewedMigrationAdapter({
     const markers = records.filter(record => record.event === submissionEvent);
     check(markers.length <= 1 && markers.every(record => digest(record.data) === digest(submission)),
       'SUBMISSION_BINDING_CHANGED');
+    const original = originalDatabaseOperation;
+    check(original === undefined || (withSalesforce && markers.length === 0
+      && original.operationId !== operationId && typeof original.operationId === 'string'
+      && isDigest(original.operationDigest) && isDigest(original.baselineSchemaDigest)
+      && isDigest(original.schemaDigest) && original.schemaDigest === manifest.previous.schemaDigest),
+    'ORIGINAL_SUBMISSION_BINDING_CHANGED');
 
     const nativeGitHub = github({ token: env.GITHUB_TOKEN, candidateSha: manifest.candidate.sha });
     const migrationBytes = await Promise.all(migrations.map(async ({ path, digest: expected }) => {
@@ -70,8 +76,9 @@ export function reviewedMigrationAdapter({
     const { db, connection } = await connect({ manifest, controllerDirectory, env });
     try {
       const assertConnection = async () => verifyIdentity((await db.query(writerIdentity)).rows[0], connection, { readOnly: false });
-      const transaction = { db, migrationBytes, operationDigest, baselineSchemaDigest: manifest.previous.schemaDigest, assertConnection };
-      if (markers.length === 0) {
+      const transaction = { db, migrationBytes, operationDigest: original?.operationDigest ?? operationDigest,
+        baselineSchemaDigest: original?.baselineSchemaDigest ?? manifest.previous.schemaDigest, assertConnection };
+      if (!original && markers.length === 0) {
         await transact({ ...transaction, mode: 'apply', async assertWriteAuthorized() {
           await databaseWriter.assertAuthorized();
           await assertConnection();
@@ -79,9 +86,11 @@ export function reviewedMigrationAdapter({
         } });
       }
       const result = await transact({ ...transaction, mode: 'readback' });
-      check(result.state === 'recovered', 'ORIGINAL_SUBMISSION_REVIEW_REQUIRED');
+      check(result.state === 'recovered' && (!original || result.schemaDigest === original.schemaDigest),
+        'ORIGINAL_SUBMISSION_REVIEW_REQUIRED');
       return { passed: true, manifestHash, backwardCompatible: true,
-        completedOperations: [{ operationId, evidenceDigest: result.evidenceDigest, verified: true, intentRecorded: true }],
+        completedOperations: [{ operationId: original?.operationId ?? operationId,
+          evidenceDigest: result.evidenceDigest, verified: true, intentRecorded: true }],
         database: { destructiveRollback: false, readbackVerified: true, schemaDigest: result.schemaDigest } };
     } finally {
       await db.end();

@@ -427,6 +427,22 @@
       "measuredTimeSavedMs": null,
       "measuredCallsSaved": null,
       "prevention": "Exercise both protected staging receipt producers and refuse altered job lineage, package hashes or current DEVEE inventory before downstream promotion."
+    },
+    {
+      "id": "trading-fx-native-inventory-and-prerequisite-recovery",
+      "cause": "Salesforce returned the installed DEVEE package with empty layout action lists, omitted source newlines, reordered PermissionSet entries and omitted formula blank modes. The combined run stopped after Supabase committed and DEVEE deployed.",
+      "correction": "Compare only proven serialization differences, verify omitted formula modes through bounded org reads, and adopt the original exact database and DEVEE operations under a qualified successor.",
+      "verification": {
+        "controllerTestsPassed": 324,
+        "nativeFormulaFieldsVerified": 13,
+        "verifiedMigrationVersions": 7,
+        "originalDeveeJobCount": 3,
+        "providerWritesDuringReadback": 0,
+        "nativeInventoryEvidenceDigest": "28d6c260a08ad130be1136a069a665a977233c57f51450873b5008625ad9a18f"
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Regression tests refuse changed formula behavior, grant drift, replay of a closed release and successor writes for already committed migrations."
     }
   ]
 }

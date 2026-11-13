@@ -99,9 +99,7 @@ export async function recoverReviewedDeveeBootstrap({ adoption, manifest, review
 }
 
 export async function recoverReviewedDeveePromotion({ receiptId, manifest, reviewed, provider, github, now = () => new Date() }) {
-  const environment = policy.environments[0];
   const endpoint = '/repos/' + targets().repository + '/deployments/';
-  const operations = ['bootstrap', 'validation', 'deployment'];
   const receipt = await github.read(endpoint + receiptId);
   const result = receipt?.payload?.data;
   const references = result?.deveeCheckpoints;
@@ -111,10 +109,16 @@ export async function recoverReviewedDeveePromotion({ receiptId, manifest, revie
     && receipt.payload.event === 'prerequisites.result' && isDigest(receipt.payload.manifestHash)
     && receipt.payload.manifestHash !== digest(manifest) && result?.outcome === 'devee_verified_mirror_not_published'
     && result.salesforceFingerprint === reviewed.fingerprint && isDigest(result.evidenceDigest)
-    && Array.isArray(references) && references.length === operations.length
-    && new Set(references).size === operations.length && references.every(id => Number.isSafeInteger(id) && id > 0),
+    && Array.isArray(references) && references.length === 3
+    && new Set(references).size === 3 && references.every(id => Number.isSafeInteger(id) && id > 0),
   'SALESFORCE_DEVEE_PROMOTION_RECEIPT_REQUIRED');
   const originals = await Promise.all(references.map(id => github.read(endpoint + id)));
+  return verifyDeveePromotionJobs({ receipt, references, originals, reviewed, provider, now });
+}
+
+async function verifyDeveePromotionJobs({ receipt, references, originals, reviewed, provider, now }) {
+  const environment = policy.environments[0];
+  const operations = ['bootstrap', 'validation', 'deployment'];
   const jobs = originals.map((original, index) => {
     const checkpoint = original?.payload?.data;
     const operation = operations[index];
@@ -157,9 +161,35 @@ export async function recoverReviewedDeveePromotion({ receiptId, manifest, revie
     return { operation, record: { ...proof, fingerprint: reviewed.fingerprint, validationJobId: job.validationId,
       submittedAt: job.submittedAt, verifiedAt: verifiedAt.toISOString(), reconciledAt: verifiedAt.toISOString(),
       ...(job.packageSha256 ? { packageSha256: job.packageSha256 } : {}),
-      recoveredEvidenceDigest: digest({ receiptId, originalCheckpoint: references[index],
+      recoveredEvidenceDigest: digest({ receiptId: receipt.id, originalCheckpoint: references[index],
         providerReportSha256: proof.reportSha256, inventoryReceiptSha256: inventory.evidenceSha256 }) } };
   });
+}
+
+export async function recoverTradingFxDeveePromotion({ recovery, reviewed, provider, now = () => new Date() }) {
+  const { receipt, jobs: originals, permissions } = recovery;
+  const { deveeCheckpoints: references, deveePermissionCheckpoints } = receipt.payload.data;
+  const environment = policy.environments[0];
+  const names = [...new Set([...reviewed.binding.permissionSets, ...(reviewed.review.bootstrap.permissionSets ?? [])])].sort();
+  requireCondition(permissions.length === names.length && deveePermissionCheckpoints.length === names.length,
+    'SALESFORCE_DEVEE_RECOVERY_PERMISSIONS_REQUIRED');
+  const recovered = permissions.map((original, index) => {
+    const checkpoint = original.payload.data;
+    const { permission } = checkpoint;
+    const operation = `permission:${names[index]}`;
+    requireCondition(original.id === deveePermissionCheckpoints[index] && checkpoint.operation === operation
+      && permission?.name === names[index] && permission.orgId === environment.orgId
+      && typeof permission.prestate === 'boolean' && isDigest(checkpoint.evidenceDigest),
+    'SALESFORCE_DEVEE_RECOVERY_PERMISSION_CHANGED');
+    return { operation, record: { ...permission, status: 'Succeeded', addedByRelease: !permission.prestate,
+      recoveredEvidenceDigest: checkpoint.evidenceDigest } };
+  });
+  const jobRecords = await verifyDeveePromotionJobs({ receipt, references, originals, reviewed, provider, now });
+  await Promise.all(recovered.map(async ({ record }) => {
+    requireCondition(await provider.permissionAssigned(environment, record.name) === true, 'SALESFORCE_DEVEE_RECOVERY_PERMISSION_DRIFT');
+    record.verifiedAt = now().toISOString();
+  }));
+  return [...jobRecords, ...recovered];
 }
 
 function hostedReviewedPlan(cwd, plan) {
@@ -200,7 +230,7 @@ export async function applyReviewedPrerequisites(input) {
 
 export function prepareReviewedSalesforcePrerequisites({
   manifest, approval, plan, salesforce, salesforceCandidateDirectory: cwd, env = process.env,
-}, { withDatabase = false } = {}) {
+}, { withDatabase = false, tradingFxRecovery } = {}) {
   const manifestHash = digest(manifest);
   const databaseSelected = withDatabase ? manifest.selection.database === true : !manifest.selection.database;
   requireCondition(manifest.selection.salesforce && databaseSelected && plan.backwardCompatible === true
@@ -230,7 +260,13 @@ export function prepareReviewedSalesforcePrerequisites({
   requireCondition(promotionReceiptId === undefined || (adoption === undefined && !withDatabase && schemaBootstrap && localMirror
     && reviewed.nativeInventories?.devee?.final && Number.isSafeInteger(promotionReceiptId) && promotionReceiptId > 0),
   'SALESFORCE_DEVEE_PROMOTION_ADOPTION_INVALID');
-  return () => applyPreparedSalesforce({ manifest, manifestHash, approval, salesforce, cwd, env, reviewed, schemaBootstrap, localMirror, adoption, promotionReceiptId });
+  requireCondition(tradingFxRecovery === undefined ? plan.tradingFxRecoveryReceiptId === undefined
+    : withDatabase && schemaBootstrap && localMirror && reviewed.nativeInventories?.devee?.final
+      && adoption === undefined && promotionReceiptId === undefined
+      && tradingFxRecovery.receipt?.id === plan.tradingFxRecoveryReceiptId,
+  'SALESFORCE_TRADING_FX_DEVEE_ADOPTION_INVALID');
+  return () => applyPreparedSalesforce({ manifest, manifestHash, approval, salesforce, cwd, env, reviewed, schemaBootstrap,
+    localMirror, adoption, promotionReceiptId, tradingFxRecovery });
 }
 
 async function hostedLocalMirrorTransport({ manifest, approval, env, reviewed, salesforce }) {
@@ -273,7 +309,8 @@ async function hostedLocalMirrorTransport({ manifest, approval, env, reviewed, s
   };
 }
 
-async function applyPreparedSalesforce({ manifest, manifestHash, approval, salesforce, cwd, env, reviewed, schemaBootstrap, localMirror, adoption, promotionReceiptId }) {
+async function applyPreparedSalesforce({ manifest, manifestHash, approval, salesforce, cwd, env, reviewed, schemaBootstrap, localMirror,
+  adoption, promotionReceiptId, tradingFxRecovery }) {
   const saved = await salesforce.journal.readCheckpoints();
   const localTransport = localMirror ? await hostedLocalMirrorTransport({ manifest, approval, env, reviewed, salesforce }) : null;
   const directory = mkdtempSync(join(tmpdir(), 'fcos-salesforce-hosted-'));
@@ -294,18 +331,31 @@ async function applyPreparedSalesforce({ manifest, manifestHash, approval, sales
         const savedBootstrap = journal.update('devee', 'bootstrap', record);
         await salesforce.journal.checkpoint({ fingerprint: reviewed.fingerprint, stage: 'devee', operation: 'bootstrap', record: savedBootstrap });
       }
-      if (promotionReceiptId && ['bootstrap', 'validation', 'deployment'].some(operation =>
+      const tradingFxCheckpoints = tradingFxRecovery ? [...tradingFxRecovery.jobs, ...tradingFxRecovery.permissions] : [];
+      for (const { payload: { data: original } } of tradingFxCheckpoints) {
+        const existing = saved.find(item => item.stage === 'devee' && item.operation === original.operation);
+        requireCondition(!existing || (existing.outcome === 'resolved' && existing.fingerprint === reviewed.fingerprint
+          && isDigest(existing.evidenceDigest) && digest(existing.job ?? existing.permission ?? null)
+            === digest(original.job ?? original.permission ?? null)), 'SALESFORCE_DEVEE_PROMOTION_CURRENT_CHECKPOINT_CHANGED');
+      }
+      const adoptionOperations = ['bootstrap', 'validation', 'deployment', ...tradingFxCheckpoints
+        .filter(checkpoint => checkpoint.payload.data.permission).map(checkpoint => checkpoint.payload.data.operation)];
+      if ((tradingFxRecovery || promotionReceiptId) && adoptionOperations.some(operation =>
         !saved.some(item => item.stage === 'devee' && item.operation === operation))) {
-        const github = githubClient({ token: env.GITHUB_TOKEN, candidateSha: manifest.candidate.sha, actions: true });
-        const recovered = await recoverReviewedDeveePromotion({ receiptId: promotionReceiptId, manifest, reviewed, provider, github });
+        const recovered = tradingFxRecovery ? await recoverTradingFxDeveePromotion({ recovery: tradingFxRecovery, reviewed, provider })
+          : await recoverReviewedDeveePromotion({ receiptId: promotionReceiptId, manifest, reviewed, provider,
+            github: githubClient({ token: env.GITHUB_TOKEN, candidateSha: manifest.candidate.sha, actions: true }) });
         await assertReviewedInputsUnchanged(reviewed, { cwd, policy });
         for (const { operation, record } of recovered) {
           const previous = saved.find(item => item.stage === 'devee' && item.operation === operation);
           if (previous) {
             const job = previous.job;
             requireCondition(previous.outcome === 'resolved' && previous.fingerprint === reviewed.fingerprint
-              && isDigest(previous.evidenceDigest) && job?.id === record.jobId && job.validationId === record.validationJobId
-              && job.submittedAt === record.submittedAt && job.packageSha256 === record.packageSha256,
+              && isDigest(previous.evidenceDigest) && (operation.startsWith('permission:')
+                ? previous.permission?.name === record.name && previous.permission.orgId === record.orgId
+                  && previous.permission.prestate === record.prestate
+                : job?.id === record.jobId && job.validationId === record.validationJobId
+                  && job.submittedAt === record.submittedAt && job.packageSha256 === record.packageSha256),
               'SALESFORCE_DEVEE_PROMOTION_CURRENT_CHECKPOINT_CHANGED');
             continue;
           }
