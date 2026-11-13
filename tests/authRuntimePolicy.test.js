@@ -4,7 +4,9 @@ import { readFile } from 'node:fs/promises';
 import { resolveAuthRuntimePolicy } from '../shared/authRuntimePolicy.js';
 import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
 
-const url = `https://${fcosConnectionIdentifier('supabase', 'Project ref')}.supabase.co`;
+const ref = fcosConnectionIdentifier('supabase', 'Project ref');
+const url = `https://${ref}.supabase.co`;
+const jwt = claims => `fixture.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.fixture`;
 test('only an unconfigured loopback Vite development server permits local administrator UI', () => {
   for (const hostname of ['localhost', '127.0.0.1', '[::1]']) {
     assert.equal(resolveAuthRuntimePolicy({ development: true, hostname }).localAdminAllowed, true);
@@ -24,9 +26,16 @@ test('configured authentication is target locked and permits public keys only', 
     assert.equal(resolveAuthRuntimePolicy({ url, publicKey: 'sb_publishable_fixture', ...overrides }).configured, false);
   }
   for (const role of ['anon', 'service_role', 'authenticated']) {
-    const publicKey = `fixture.${Buffer.from(JSON.stringify({ role })).toString('base64url')}.fixture`;
+    const publicKey = jwt({ role, ref });
     assert.equal(resolveAuthRuntimePolicy({ url, publicKey }).configured, role === 'anon');
   }
+  for (const claims of [{ role: 'anon' }, { role: 'anon', ref: 'different-project' }]) {
+    assert.equal(resolveAuthRuntimePolicy({ url, publicKey: jwt(claims) }).configured, false);
+    assert.equal(resolveAuthRuntimePolicy({ url, publicKey: jwt(claims), development: true, hostname: 'localhost' }).configured, false);
+  }
+  const local = { url: 'http://127.0.0.1:54321', development: true, hostname: 'localhost' };
+  assert.equal(resolveAuthRuntimePolicy({ ...local, publicKey: jwt({ role: 'anon' }) }).configured, true);
+  assert.equal(resolveAuthRuntimePolicy({ ...local, publicKey: jwt({ role: 'service_role' }) }).configured, false);
   assert.equal(resolveAuthRuntimePolicy({ url, publicKey: 'malformed' }).configured, false);
   assert.equal(resolveAuthRuntimePolicy({ url: 'http://127.0.0.1:54321', publicKey: 'sb_publishable_local', development: true, hostname: 'localhost' }).configured, true);
   assert.equal(resolveAuthRuntimePolicy({ url: 'http://127.0.0.1:54321', publicKey: 'sb_publishable_local', development: false, hostname: 'localhost' }).configured, false);
