@@ -159,6 +159,18 @@ function browserFixture({ badIdentity = false, badRead = false, badDenial = fals
 }
 const request = (url, method = 'GET', body = {}, type = 'fetch', headers = {}) => ({ url: () => url, method: () => method, postData: () => JSON.stringify(body), resourceType: () => type, headers: () => headers });
 
+test('controller handover verifies normal-role access with no application changes', async () => {
+  const fixture = browserFixture();
+  const proof = await runStagedSmoke({ manifest: manifest({ modules: [] }), staged, env,
+    fetchImpl: publicFetch(), browserFactory: fixture.browserFactory, requireNormalRole: true });
+  assert.equal(proof.normalRole, true);
+  assert.deepEqual(proof.normalRoleEvidence.modules, ['dashboard', 'markets']);
+  assert.equal(proof.businessWrites, 0);
+  await assert.rejects(runStagedSmoke({ manifest: manifest({ modules: [] }), staged,
+    env: { ...env, FCOS_RAPID_NORMAL_PASSWORD: '' }, fetchImpl: publicFetch(), browserFactory: fixture.browserFactory,
+    requireNormalRole: true }), { code: 'NORMAL_ROLE_COVERAGE_MISSING' });
+});
+
 test('restricted smoke proves actual browser reads and API/UI denials without widening CI coverage', async () => {
   const fixture = browserFixture(), calls = [];
   const proof = await runStagedSmoke({ manifest: manifest(), staged, env: { ...env, VERCEL_TOKEN: 'PRIVATE_ADMIN_TOKEN' }, fetchImpl: publicFetch({ calls }), browserFactory: fixture.browserFactory });

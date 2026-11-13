@@ -1669,3 +1669,56 @@ test('zero-test quick deploy requires native positive validation for the exact l
     assert.equal(proof.validationReportSha256, hash(nativeValidation));
   } finally { f.cleanup(); }
 });
+
+test('mixed native readback allows one terminal newline difference in LWC JavaScript and templates only', () => {
+  const cwd = mkdtempSync(path.join(tmpdir(), 'fcos-native-lwc-fixture-'));
+  const environment = policy.environments[0];
+  const component = 'LightningComponentBundle:examplePanel';
+  const js = 'lwc/examplePanel/examplePanel.js';
+  const html = 'lwc/examplePanel/examplePanel.html';
+  const css = 'lwc/examplePanel/examplePanel.css';
+  const source = {
+    [js]: Buffer.from('export default class ExamplePanel {}\n'),
+    [html]: Buffer.from('<template><div>Example</div></template>\n'),
+    [css]: Buffer.from('div { color: black; }\n'),
+  };
+  const stable = { 'profiles/Example.profile-meta.xml': Buffer.from('<Profile/>') };
+  const native = { ...source, [js]: source[js].subarray(0, -1), [html]: source[html].subarray(0, -1) };
+  const manifest = packageXml(['Profile:Example']);
+  const supplemental = packageXml([component]);
+  const projectionPaths = Object.keys(source).sort();
+  const expectedInventory = inventoryFromFiles(stable).files;
+  const expectedInventoryHash = projectedNativeInventoryHash(expectedInventory, projectionPaths);
+  const write = (root, files) => {
+    for (const [name, bytes] of Object.entries(files)) {
+      const file = path.join(root, name);
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, bytes);
+    }
+  };
+  try {
+    write(path.join(cwd, policy.publication.sourceRoot), source);
+    write(cwd, { 'inventory.xml': manifest, 'metadata.xml': supplemental, 'sfdx-project.json': '{}' });
+    const provider = cliSalesforceProvider({ cwd, run(_program, args, project) {
+      if (args[0] === 'org') return { id: environment.orgId, username: environment.username, connectedStatus: 'Connected' };
+      if (args[0] === 'data') return { records: [{ Id: environment.orgId, IsSandbox: environment.isSandbox }] };
+      const directory = args[args.indexOf('--output-dir') + 1];
+      write(path.join(project, directory), directory === 'metadata' ? native : stable);
+      return { id: '09SHF000002gTFl2AM', status: 'Succeeded', done: true, success: true };
+    } });
+    const request = { plan: { finalInventory: inventoryFromFiles(source), review: {
+      components: [{ id: component, files: projectionPaths }],
+      inventoryManifests: { [expectedInventoryHash]: { path: 'inventory.xml', sha256: hash(manifest),
+        metadata: { path: 'metadata.xml', sha256: hash(supplemental) } } },
+    } }, expectedInventory, expectedInventoryHash, nativeExport: true, nativeBootstrap: true, projectedNativeInventory: true,
+    projectionPaths };
+    assert.deepEqual(provider.verifyInventory(environment, request).verifiedProjectionPaths, projectionPaths);
+    for (const [name, invalid] of [[js, 'export default class OtherPanel {}'], [html, '<template><div>Other</div></template>'],
+      [html, source[html].toString() + '\n'], [css, source[css].toString().slice(0, -1)]]) {
+      const before = native[name];
+      native[name] = Buffer.from(invalid);
+      assert.throws(() => provider.verifyInventory(environment, request), /Native metadata projection differs/);
+      native[name] = before;
+    }
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});

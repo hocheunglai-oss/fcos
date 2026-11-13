@@ -614,7 +614,7 @@ export async function diagnoseStagedSmoke(options, { desktop = true, desktopModu
   return { passed: false, outcomes, ...(code ? { code } : {}) };
 }
 
-async function stagedSmoke({ manifest, staged, env = process.env, fetchImpl = fetch, browserFactory, afterPrerequisites = false } = {}, diagnostic, deferredModules = []) {
+async function stagedSmoke({ manifest, staged, env = process.env, fetchImpl = fetch, browserFactory, afterPrerequisites = false, requireNormalRole = false } = {}, diagnostic, deferredModules = []) {
   const origin = binding(manifest, staged);
   const selected = unique(manifest.selection?.modules || []).filter(module => !deferredModules.includes(module));
   const expanded = String(env.FCOS_RAPID_NORMAL_REQUIRED_MODULES || '').split(',').map(value => value.trim())
@@ -633,9 +633,10 @@ async function stagedSmoke({ manifest, staged, env = process.env, fetchImpl = fe
     }
   }
 
-  requireFact([...selected, ...expanded].every(module => baselineModules.includes(module)) || manifest.selection?.normalRole === true, 'NORMAL_ROLE_COVERAGE_MISSING');
+  const normalRoleRequired = requireNormalRole || manifest.selection?.normalRole === true;
+  requireFact([...selected, ...expanded].every(module => baselineModules.includes(module)) || normalRoleRequired, 'NORMAL_ROLE_COVERAGE_MISSING');
   const ci = credentialsFor(env, false);
-  const normal = manifest.selection?.normalRole === true ? credentialsFor(env, true) : null;
+  const normal = normalRoleRequired ? credentialsFor(env, true) : null;
   const historyRequired = afterPrerequisites && requiresCompanyFxHistorySmoke(manifest);
   const supplierBucketRequired = requiresSupplierBucketSmoke(manifest);
   const groupedPetroleumRequired = requiresGroupedPetroleumSmoke(manifest);
