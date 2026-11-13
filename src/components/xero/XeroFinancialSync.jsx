@@ -198,7 +198,7 @@ export default function XeroFinancialSync({ portalStatus }) {
   }
 
   async function runPreview(preserveSelection = false, checkChanges = false, keepReviewOpen = false) {
-    if (verificationOnly || preservationOpen || requestBusy.current || correctionsOpen || campaignOpen || (checkChanges && backgroundCheckStopped.current)) return false;
+    if (preservationOpen || requestBusy.current || correctionsOpen || campaignOpen || verificationOnly || (checkChanges && backgroundCheckStopped.current)) return false;
     requestBusy.current = true;
     lastCheckAttemptAt.current = Date.now();
     previewGeneration.current += 1;
