@@ -6,7 +6,8 @@ import { loadReviewedSalesforcePlan } from './deploy-salesforce-reviewed-manifes
 import { safeProjectFile } from './lib/salesforce-reviewed-release.mjs';
 
 export function verifySalesforceReviewSource({ cwd, candidateSha, manifest, verifierDirectory }) {
-  validateManifest(manifest);
+  // GitHub needs the exact source commit before it can record the Demo receipt.
+  validateManifest(manifest, { sourcePublicationOnly: true });
   requireCondition(isSha(candidateSha) && manifest.candidate.sha === candidateSha
     && manifest.selection.salesforce === true && manifest.prerequisites?.plan, 'SALESFORCE_REVIEW_SOURCE_PLAN_REQUIRED');
   const controllerSha = manifest.controllerSha;

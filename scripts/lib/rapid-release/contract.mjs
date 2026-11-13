@@ -113,7 +113,7 @@ export function requiresTradingFxSmoke(manifest) {
   return manifest.prerequisites?.adapter === 'trading-fx-prerequisites';
 }
 
-export function createManifest({ candidate, controllerSha, previous, paths, publicEnvironment, releaseId, prerequisites = null, moduleInventory = DEFAULT_MODULE_INVENTORY, now = new Date().toISOString() }) {
+export function createManifest({ candidate, controllerSha, previous, paths, publicEnvironment, releaseId, prerequisites = null, moduleInventory = DEFAULT_MODULE_INVENTORY, now = new Date().toISOString() }, { sourcePublicationOnly = false } = {}) {
   requireCondition(isSha(controllerSha) && isSha(candidate?.sha) && isDigest(candidate.sourceDigest) && isDigest(candidate.lockDigest), 'MANIFEST_SOURCE_INVALID');
   requireCondition(/^dpl_[A-Za-z0-9]+$/.test(previous?.deploymentId || '') && isSha(previous.sha)
     && isDigest(previous.configurationDigest) && isDigest(previous.schemaDigest), 'BASELINE_EVIDENCE_REQUIRED');
@@ -124,8 +124,12 @@ export function createManifest({ candidate, controllerSha, previous, paths, publ
     && prerequisites.plan && Object.getPrototypeOf(prerequisites.plan) === Object.prototype, 'PREREQUISITE_DESCRIPTOR_INVALID');
   if (requiresTradingFxSmoke({ prerequisites })) {
     const { xeroQualificationDeploymentId, xeroQualificationDigest } = prerequisites.plan;
-    requireCondition(selection.salesforce && selection.database && Number.isSafeInteger(xeroQualificationDeploymentId)
-      && xeroQualificationDeploymentId > 0 && isDigest(xeroQualificationDigest), 'TRADING_FX_XERO_QUALIFICATION_LOCATOR_REQUIRED');
+    const pendingQualification = sourcePublicationOnly
+      && xeroQualificationDeploymentId === undefined && xeroQualificationDigest === undefined;
+    const verifiedLocator = Number.isSafeInteger(xeroQualificationDeploymentId)
+      && xeroQualificationDeploymentId > 0 && isDigest(xeroQualificationDigest);
+    requireCondition(selection.salesforce && selection.database && (pendingQualification || verifiedLocator),
+      'TRADING_FX_XERO_QUALIFICATION_LOCATOR_REQUIRED');
   }
   const buildId = digest({ sha: candidate.sha, sourceDigest: candidate.sourceDigest, lockDigest: candidate.lockDigest,
     node: process.version, publicEnvironment: buildEnvironment });
@@ -134,10 +138,10 @@ export function createManifest({ candidate, controllerSha, previous, paths, publ
     previous, paths, moduleInventory: modules, selection, prerequisites, build: { buildId, node: process.version, publicEnvironment: buildEnvironment },
     authorization: { actions: ['prerequisites', 'promote', 'verify', 'compatible_rollback'], lifetimeSeconds: 86400, financialAuthority: false } };
 }
-export function validateManifest(manifest) {
+export function validateManifest(manifest, options) {
   requireCondition(manifest?.contract === 'fcos-rapid-release/v1' && manifest.schemaVersion === 1 && canonical(manifest.targets) === canonical(targets()), 'MANIFEST_TARGET_INVALID');
   const recreated = createManifest({ candidate: manifest.candidate, controllerSha: manifest.controllerSha, previous: manifest.previous,
-    paths: manifest.paths, publicEnvironment: manifest.build?.publicEnvironment, releaseId: manifest.releaseId, prerequisites: manifest.prerequisites, moduleInventory: manifest.moduleInventory, now: manifest.createdAt });
+    paths: manifest.paths, publicEnvironment: manifest.build?.publicEnvironment, releaseId: manifest.releaseId, prerequisites: manifest.prerequisites, moduleInventory: manifest.moduleInventory, now: manifest.createdAt }, options);
   requireCondition(canonical(recreated) === canonical(manifest), 'MANIFEST_CHANGED');
   return digest(manifest);
 }
