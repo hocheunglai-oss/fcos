@@ -386,15 +386,13 @@ async function applyPreparedSalesforce({ manifest, manifestHash, approval, sales
           return salesforce.ownership.assert(binding);
         },
       };
-      const run = mode => runReviewedSalesforceRelease({ plan: reviewed, mode, policy, journal, provider,
-        ownership, externalJournal: salesforce.journal,
-        authorization: mode === 'apply' ? authorization : null,
+      const hasPreparation = saved.some(item => item.stage === 'production' && item.operation === 'preparation'
+        && (item.preparation?.validationJobId || item.preparation?.status === 'awaiting-authorized-bootstrap'));
+      const result = await runReviewedSalesforceRelease({ plan: reviewed, mode: hasPreparation ? 'apply' : 'approved-continuation',
+        policy, journal, provider,
+        ownership, externalJournal: salesforce.journal, authorization,
         assertUnchanged: () => assertReviewedInputsUnchanged(reviewed, { cwd, policy }) });
-      if (!saved.some(item => item.stage === 'production' && item.operation === 'preparation'
-        && (item.preparation?.validationJobId || item.preparation?.status === 'awaiting-authorized-bootstrap'))) {
-        requireCondition((await run('prepare')).mode === 'prepared', 'SALESFORCE_HOSTED_PREPARATION_REQUIRED');
-      }
-      requireCondition((await run('apply')).mode === 'applied', 'SALESFORCE_HOSTED_APPLY_REQUIRED');
+      requireCondition(result.mode === 'applied', 'SALESFORCE_HOSTED_APPLY_REQUIRED');
       const completedOperations = (await salesforce.journal.readCheckpoints()).filter(item => item.outcome === 'resolved'
         && journal.state.stages[item.stage]?.[item.operation]?.status === 'Succeeded'
         && matchesSalesforceCheckpoint(journal.state.stages[item.stage][item.operation], item))

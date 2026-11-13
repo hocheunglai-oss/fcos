@@ -1744,3 +1744,126 @@ test('native layouts may supply an empty Record action list while retaining revi
   assert.equal(check(layout(section.replace('Financial details', 'Changed') + emptyRecord)), false);
   assert.equal(check(layout(section), layout(section + emptyRecord)), false);
 });
+
+test('approved hosted continuation keeps the same durable checkpoints and submissions with fewer provider reads', async () => {
+  for (const bootstrap of [false, true]) {
+    const legacy = fixture({ bootstrap, inventoryBaseline: true });
+    const hosted = fixture({ bootstrap, inventoryBaseline: true });
+    try {
+      await assert.rejects(hosted.run('approved-continuation'), /unexpired exact/);
+      assert.equal(hosted.calls.length, 0);
+      const checkpoint = hosted.externalJournal.checkpoint;
+      const submitted = [];
+      hosted.externalJournal.checkpoint = async event => {
+        await checkpoint(event);
+        if (event.stage === 'production' && event.operation !== 'validation' && event.record.status === 'submitting') {
+          assert.ok(hosted.checkpoints.some(saved => saved.stage === 'production' && saved.operation === 'preparation'));
+          submitted.push(event.operation);
+        }
+      };
+      assert.equal((await legacy.run('prepare')).mode, 'prepared');
+      assert.equal((await legacy.run('apply', { authorization: legacy.authorization })).mode, 'applied');
+      assert.equal((await hosted.run('approved-continuation', { authorization: hosted.authorization })).mode, 'applied');
+      assert.ok(submitted.includes('deployment'));
+      assert.equal(submitted.includes('bootstrap'), bootstrap);
+      const effects = calls => calls.filter(([op, action]) =>
+        ['validate', 'deploy', 'bootstrap', 'permission-write'].includes(op) || op === 'mirror' && action === 'publish');
+      const count = (calls, kind) => calls.filter(([op, action]) => kind === 'mirror-check' ? op === 'mirror' && action === 'check' : op === kind).length;
+      assert.deepEqual(effects(hosted.calls), effects(legacy.calls));
+      assert.equal(count(legacy.calls, 'mirror-check') - count(hosted.calls, 'mirror-check'), bootstrap ? 2 : 1);
+      assert.ok(count(hosted.calls, 'inventory') < count(legacy.calls, 'inventory'));
+      assert.ok(count(hosted.calls, 'report') < count(legacy.calls, 'report'));
+      assert.deepEqual(hosted.checkpoints.find(e => e.operation === 'preparation'), legacy.checkpoints.find(e => e.operation === 'preparation'));
+      console.log(JSON.stringify({ bootstrap, legacy: legacy.calls.length, hosted: hosted.calls.length,
+        inventory: [count(legacy.calls, 'inventory'), count(hosted.calls, 'inventory')],
+        reports: [count(legacy.calls, 'report'), count(hosted.calls, 'report')] }));
+    } finally { hosted.cleanup(); legacy.cleanup(); }
+  }
+});
+
+test('approved continuation cannot bootstrap Production if durable preparation fails', async () => {
+  const f = fixture({ bootstrap: true, inventoryBaseline: true });
+  try {
+    const checkpoint = f.externalJournal.checkpoint;
+    f.externalJournal.checkpoint = event => {
+      if (event.stage === 'production' && event.operation === 'preparation') throw Error('test preparation write refused');
+      return checkpoint(event);
+    };
+    await assert.rejects(f.run('approved-continuation', { authorization: f.authorization }), /preparation write refused/);
+    assert.ok(f.calls.some(([op, stage]) => op === 'deploy' && stage === 'qat'));
+    assert.ok(!f.calls.some(([op, stage]) => stage === 'production' && ['bootstrap', 'validate', 'deploy', 'permission-write'].includes(op)));
+  } finally { f.cleanup(); }
+});
+
+test('schema-free Lightning and Apex can verify a projected final inventory without a bootstrap', () => {
+  const bundle = 'lwc/tradingEditor/tradingEditor.js';
+  const descriptor = 'lwc/tradingEditor/tradingEditor.js-meta.xml';
+  const unrelated = 'objects/Invoice__c/fields/Amount__c.field-meta.xml';
+  const before = { ...files, [bundle]: Buffer.from('export const amount = 1;\n'),
+    [descriptor]: Buffer.from('<LightningComponentBundle/>\n'), [unrelated]: Buffer.from('<CustomField/>\n') };
+  const after = { ...before, [bundle]: Buffer.from('export const amount = 2;\n') };
+  const baselineInventory = inventoryFromFiles(before);
+  const finalInventory = inventoryFromFiles(after);
+  const components = [
+    { id: 'LightningComponentBundle:tradingEditor', files: [bundle, descriptor], dependsOn: ['ApexClass:Example'] },
+    { id: 'ApexClass:Example', files: Object.keys(files), dependsOn: [] },
+  ];
+  const manifestBytes = packageXml(components.map(row => row.id));
+  const rawBaseline = { files: baselineInventory.files, inventoryHash: baselineInventory.inventoryHash };
+  const pinned = { [unrelated]: { ...rawBaseline.files[unrelated] } };
+  const paths = components.flatMap(row => row.files).sort();
+  const final = { projected: true, files: pinned, inventoryHash: projectedNativeInventoryHash(pinned, paths) };
+  const retrieval = { path: 'manifest/stable.xml', sha256: hash('stable'), metadata: { path: 'manifest/changed.xml', sha256: hash(manifestBytes) } };
+  const review = { schemaVersion: 1, releaseMode: REVIEWED_SALESFORCE_MODE, baselineMode: INVENTORY_BASELINE_MODE,
+    sourceTreeHash: finalInventory.sourceTreeHash, manifestSha256: hash(manifestBytes), baselineCommit: 'a'.repeat(40),
+    baselineSourceTreeHash: baselineInventory.sourceTreeHash, baselineInventoryHash: baselineInventory.inventoryHash,
+    components, dependencyReview: { complete: true, reviewer: 'reviewer', evidence: 'reviewed dependency fixture' },
+    testPlan: { level: 'RunSpecifiedTests', tests: ['ExampleTest'], minimumTests: 1 },
+    nativeProjection: 'schema-free-apex-lightning',
+    nativeInventories: Object.fromEntries(policy.environments.map(({ key, orgId }) => [key, { orgId, baseline: rawBaseline, final }])),
+    inventoryManifests: { [rawBaseline.inventoryHash]: retrieval, [final.inventoryHash]: retrieval },
+  };
+  const create = descriptor => createReviewedSalesforcePlan({ review: descriptor, baselineInventory, finalInventory, manifestBytes, policy });
+  const plan = create(review);
+  assert.deepEqual(plan.changedFiles, [bundle]);
+  assert.equal(plan.binding.bootstrapSha256, null);
+  assert.equal(plan.nativeInventories.devee.bootstrap, undefined);
+  assert.deepEqual(plan.nativeInventories.devee.final.projectionPaths, paths);
+  assert.deepEqual(plan.nativeInventories.devee.baseline.projectionPaths, []);
+  const altered = structuredClone(review);
+  altered.nativeInventories.devee.final = structuredClone(final);
+  altered.nativeInventories.devee.final.files[unrelated].sha256 = hash('changed outside the reviewed package');
+  const newHash = projectedNativeInventoryHash(altered.nativeInventories.devee.final.files, paths);
+  altered.nativeInventories.devee.final.inventoryHash = newHash;
+  altered.inventoryManifests[newHash] = retrieval;
+  assert.throws(() => create(altered), /outside the reviewed transition/u);
+  assert.throws(() => create({ ...review, nativeProjection: 'any-metadata' }), /explicit Lightning package/u);
+  const fakeBootstrap = structuredClone(review);
+  fakeBootstrap.nativeInventories.devee.bootstrap = rawBaseline;
+  assert.throws(() => create(fakeBootstrap), /matching post-write checkpoint modes/u);
+});
+
+test('approved continuation rechecks the mirror after schema-free Production validation and preserves the job on drift', async () => {
+  const f = fixture({ inventoryBaseline: true });
+  try {
+    const verifyMirror = f.provider.mirror;
+    let drift = true;
+    f.provider.mirror = async (...args) => {
+      if (drift && f.calls.some(([op, stage]) => op === 'validate' && stage === 'production')) {
+        throw Error('fixture mirror changed after validation');
+      }
+      return verifyMirror(...args);
+    };
+    await assert.rejects(f.run('approved-continuation', { authorization: f.authorization }), /mirror changed after validation/);
+    const preparation = f.journal.state.stages.production.preparation;
+    assert.equal(preparation.status, 'ready');
+    assert.ok(!f.calls.some(([op, stage]) => op === 'deploy' && stage === 'production'));
+    f.reopen();
+    f.calls.length = 0;
+    drift = false;
+    assert.equal((await f.run('apply', { authorization: f.authorization })).mode, 'applied');
+    assert.ok(f.calls.some(([op, stage, id]) => op === 'deploy' && stage === 'production' && id === preparation.validationJobId));
+    assert.ok(!f.calls.some(([op]) => ['bootstrap', 'validate', 'permission-write'].includes(op)));
+    assert.equal(f.checkpoints.filter(row => row.operation === 'preparation').length, 1);
+  } finally { f.cleanup(); }
+});

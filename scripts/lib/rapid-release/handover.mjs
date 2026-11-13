@@ -154,22 +154,47 @@ export function assertHandoverActivation({ plan, audit, deploymentId }) {
 async function externalAudit({ github, vercel }) {
   const pins = handoverPins(), identity = await github.identity();
   check(identity.login === pins.account && identity.repository === pins.repository, 'HANDOVER_GITHUB_IDENTITY_MISMATCH');
-  const variables = {}, workflows = {};
-  for (const name of OLD_RELEASE_VARIABLES) { const row = await github.get(`/repos/${pins.repository}/actions/variables/${name}`); variables[name] = row?.value ?? null; }
-  for (const name of OLD_RELEASE_WORKFLOWS) {
-    const row = await github.get(`/repos/${pins.repository}/actions/workflows/${name}`);
-    const runs = row ? await github.pages(`/repos/${pins.repository}/actions/workflows/${row.id}/runs?per_page=100`) : [];
-    workflows[name] = { id: row?.id || null, state: row?.state || 'absent', running: runs.filter(run => !['completed'].includes(run.status)).map(run => run.id) };
-  }
-  const project = await vercel.project(), production = await vercel.currentProduction();
-  check(project.id === pins.projectId && project.accountId === pins.teamId && project.autoAssignCustomDomains === false, 'HANDOVER_VERCEL_TARGET_OR_AUTO_ASSIGNMENT');
   check(typeof github.eventSubscribers === 'function', 'HANDOVER_DEPLOYMENT_SUBSCRIBER_INVENTORY_REQUIRED');
-  const subscribers = await github.eventSubscribers();
   check(typeof github.rapidJournalAudit === 'function', 'HANDOVER_RAPID_JOURNAL_AUDIT_REQUIRED');
-  const rapidJournal = await github.rapidJournalAudit();
-  check(digest(rapidJournal?.digest) && Number.isSafeInteger(rapidJournal.unresolvedProduction) && rapidJournal.unresolvedProduction >= 0, 'HANDOVER_RAPID_JOURNAL_AUDIT_REQUIRED');
   check(typeof github.activeHandover === 'function', 'HANDOVER_ACTIVE_PARENT_AUDIT_REQUIRED');
-  const activeHandover = await github.activeHandover();
+
+  const base = `/repos/${pins.repository}/actions`;
+  const variableReads = OLD_RELEASE_VARIABLES.map(name => async () => {
+    const row = await github.get(`${base}/variables/${name}`);
+    return [name, row?.value ?? null];
+  });
+  const workflowReads = OLD_RELEASE_WORKFLOWS.map(name => async () => {
+    const row = await github.get(`${base}/workflows/${name}`);
+    const runs = row ? await github.pages(`${base}/workflows/${row.id}/runs?per_page=100`) : [];
+    return [name, { id: row?.id || null, state: row?.state || 'absent', running: runs.filter(run => run.status !== 'completed').map(run => run.id) }];
+  });
+  const providerReads = [
+    async () => {
+      const project = await vercel.project();
+      check(project.id === pins.projectId && project.accountId === pins.teamId && project.autoAssignCustomDomains === false, 'HANDOVER_VERCEL_TARGET_OR_AUTO_ASSIGNMENT');
+      return vercel.currentProduction();
+    },
+    () => github.eventSubscribers(),
+    () => github.rapidJournalAudit(),
+    () => github.activeHandover(),
+  ];
+  const reads = [...variableReads, ...workflowReads, ...providerReads];
+  // Bound concurrent reads and drain each group before propagating a failure.
+  // A later phase must never start while part of an unsuccessful audit is live.
+  const results = [];
+  const concurrency = 4;
+  for (let start = 0; start < reads.length; start += concurrency) {
+    const group = await Promise.allSettled(reads.slice(start, start + concurrency).map(read => Promise.resolve().then(read)));
+    const failed = group.find(result => result.status === 'rejected');
+    if (failed) throw failed.reason;
+    results.push(...group.map(result => result.value));
+  }
+  const workflowStart = variableReads.length;
+  const providerStart = workflowStart + workflowReads.length;
+  const variables = Object.fromEntries(results.slice(0, workflowStart));
+  const workflows = Object.fromEntries(results.slice(workflowStart, providerStart));
+  const [production, subscribers, rapidJournal, activeHandover] = results.slice(providerStart);
+  check(digest(rapidJournal?.digest) && Number.isSafeInteger(rapidJournal.unresolvedProduction) && rapidJournal.unresolvedProduction >= 0, 'HANDOVER_RAPID_JOURNAL_AUDIT_REQUIRED');
   check(Array.isArray(subscribers?.inventory) && digest(subscribers.evidenceDigest), 'HANDOVER_DEPLOYMENT_SUBSCRIBER_INVENTORY_REQUIRED');
   return { variables, workflows, rapidJournal, activeHandover, subscribersDigest: handoverDigest(subscribers),
     ...(subscribers.applicationInventory ? { applicationInventoryReportDigest: subscribers.applicationInventory.reportDigest } : {}), productionId: production.id, retired: Object.values(variables).every(value => value !== 'true')

@@ -354,3 +354,24 @@ test('partial activation is typed recovery input only for the exact native plan;
     assert.equal((await readFinalizedHandover(f)).deploymentId, native.id);
   } finally { await f.db.close(); }
 });
+
+test('handover audits concurrent provider reads and rejects an old workflow still running', async () => {
+  const f = await fixture();
+  try {
+    const read = f.github.get;
+    let inFlight = 0, peak = 0;
+    f.github.get = async path => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      try {
+        await new Promise(resolve => setImmediate(resolve));
+        return await read(path);
+      } finally { inFlight--; }
+    };
+    assert.deepEqual((await auditHandover(f)).providers, f.audit.providers);
+    assert.ok(peak > 1 && peak <= 4);
+    f.github.pages = async path => path.includes('/workflows/1/runs') ? [{ id: 123, status: 'in_progress' }] : [];
+    await assert.rejects(preflightHandoverProviders(f), /OLD_WRITER_RUNNING_OR_PRODUCTION_MOVED/);
+    assert.equal(inFlight, 0);
+  } finally { await f.db.close(); }
+});

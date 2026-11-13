@@ -224,7 +224,10 @@ async function installGate(context, policy, onAuthRequest) {
 }
 async function routeRead(route, origin, path, body, expectedStatus = 200) {
   const url = `${origin}${path}`;
-  const options = { url, method: 'POST', postData: JSON.stringify(body), maxRedirects: 0, maxRetries: 0, timeout: 20000 };
+  const cashflow = path === moduleReaders.cashflow_forecast.path;
+  // The complete one-day forecast can reach the normal 20s staging deadline.
+  // Give only this reviewed read a larger window, with no added attempts.
+  const options = { url, method: 'POST', postData: JSON.stringify(body), maxRedirects: 0, maxRetries: 0, timeout: cashflow ? 45000 : 20000 };
   for (let attempt = 0; attempt < 2; attempt++) {
     let response;
     try {
@@ -237,7 +240,7 @@ async function routeRead(route, origin, path, body, expectedStatus = 200) {
     } catch (error) {
       // The bounded Cashflow read is safe to repeat once after a fetch timeout.
       // Once a response arrives, status, body and identity failures stay terminal.
-      if (response || error?.name !== 'TimeoutError' || path !== moduleReaders.cashflow_forecast.path || attempt !== 0) {
+      if (response || error?.name !== 'TimeoutError' || !cashflow || attempt !== 0) {
         throw fail('SMOKE_AUTHENTICATED_READ_FAILED');
       }
     } finally { await response?.dispose(); }
