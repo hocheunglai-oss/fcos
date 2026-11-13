@@ -61,11 +61,41 @@ function parseGrants(xml) {
   return { document, grants };
 }
 
+const unorderedGrants = {
+  classAccesses: 'apexClass',
+  customPermissions: 'name',
+};
+
+function normalizePermissionSetDefinition(xml, document, normalize) {
+  const [root] = tags(document);
+  root.children = root.children.filter(node => node.type !== 'comment');
+  const activation = tags(root).filter(node => node.name === 'hasActivationRequired');
+  if (activation.length > 1) invalid('contains duplicate activation settings.');
+  if (activation.length && grantValue(activation[0]) === 'false') {
+    root.children = root.children.filter(node => node !== activation[0]);
+  }
+  for (const [name, key] of Object.entries(unorderedGrants)) {
+    const group = tags(root).filter(node => node.name === name);
+    const byName = new Map();
+    for (const entry of group) {
+      const names = tags(entry).filter(node => node.name === key);
+      const target = names.length === 1 ? grantValue(names[0]) : null;
+      if (!target || byName.has(target)) invalid('contains an invalid or duplicate ' + name + ' grant.');
+      byName.set(target, entry);
+    }
+    const sorted = sortedEntries(byName).map(([, entry]) => entry);
+    let index = 0;
+    root.children = root.children.map(node => node.type === 'tag' && node.name === name ? sorted[index++] : node);
+  }
+  return normalize(xml, document);
+}
+
 export function comparePermissionSetDefinition({ name, source, native, normalize }) {
   if (!NAME.test(name)) invalid('has an invalid reviewed name.');
   const expected = parseGrants(source);
   const observed = parseGrants(native);
-  if (!same(normalize(source, expected.document), normalize(native, observed.document))) {
+  if (!same(normalizePermissionSetDefinition(source, expected.document, normalize),
+    normalizePermissionSetDefinition(native, observed.document, normalize))) {
     invalid(`differs from the reviewed non-grant definition for ${name}.`);
   }
   for (const [tag, entries] of observed.grants) {

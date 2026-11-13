@@ -141,7 +141,9 @@ export async function promoteRelease({ manifest, journal, provider, approval, pr
     await journal.assertNoUnresolvedOtherRelease();
     await provider.assertOwnership({ phase: 'prerequisites', manifest, manifestHash: digest(manifest) });
     requireCondition(typeof prerequisites === 'function', 'APPROVED_PREREQUISITES_REQUIRED');
-    let prerequisite = all.find(event => event.event === 'prerequisites.passed')?.data || phaseResult(records, 'prerequisites')?.result;
+    const prior = phaseResult(records, 'prerequisites');
+    requireCondition(!prior || prior.outcome === 'applied', 'PREREQUISITE_RELEASE_CLOSED');
+    let prerequisite = all.find(event => event.event === 'prerequisites.passed')?.data || prior?.result;
     if (!prerequisite) {
       const operationId = `${manifest.releaseId}-prerequisites`, request = { planDigest: digest(manifest.prerequisites), candidateSha: manifest.candidate.sha };
       const intent = all.find(event => event.event === 'prerequisites.intent')?.data;
