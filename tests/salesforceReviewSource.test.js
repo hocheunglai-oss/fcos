@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
-import { createManifest, digest, sourceSnapshot } from '../scripts/lib/rapid-release/contract.mjs';
+import { createManifest, digest, sourceSnapshot, validateManifest } from '../scripts/lib/rapid-release/contract.mjs';
 import { baselineGitInventory, loadReviewedSalesforcePlan } from '../scripts/deploy-salesforce-reviewed-manifest.mjs';
 import { readReviewedInventory } from '../scripts/lib/salesforce-reviewed-release.mjs';
 import { verifySalesforceReviewSource } from '../scripts/verify-salesforce-review-source.mjs';
@@ -34,7 +34,7 @@ test('candidate admission binds reviewed files and retrieval manifests to the tr
   const adapterDigest = digest(adapter);
   write(adapterPath, adapter);
   write('config/rapid-release-adapters.json', JSON.stringify({ adapters: [{
-    id: 'salesforce-reviewed-manifest', status: 'qualified', salesforce: true, database: false, path: adapterPath, sourceDigest: adapterDigest,
+    id: 'trading-fx-prerequisites', status: 'qualified', salesforce: true, database: true, path: adapterPath, sourceDigest: adapterDigest,
   }] }));
   const metadataRoot = 'force-app/main/default';
   const files = ['classes/Example.cls', 'classes/Example.cls-meta.xml'];
@@ -43,6 +43,7 @@ test('candidate admission binds reviewed files and retrieval manifests to the tr
   const baselineCommit = commit('baseline');
   const baseline = baselineGitInventory(cwd, baselineCommit);
   write(metadataRoot + '/' + files[0], 'class Example { String value; }\n');
+  write('supabase/migrations/20261113000000_fixture.sql', 'select 1;\n');
   const xml = '<Package><types><members>Example</members><name>ApexClass</name></types><version>67.0</version></Package>\n';
   const manifestPath = 'manifest/release.xml';
   const reviewPath = 'manifest/review.json';
@@ -58,19 +59,26 @@ test('candidate admission binds reviewed files and retrieval manifests to the tr
   };
   write(reviewPath, JSON.stringify(review));
   commit('candidate');
-  const check = (path = reviewPath) => {
+  const check = (path = reviewPath, locator = {}) => {
     const reviewed = loadReviewedSalesforcePlan({ cwd, manifestPath, reviewPath: path });
     const candidate = sourceSnapshot(cwd);
     const paths = git('diff', '--name-only', baselineCommit, 'HEAD').split('\n');
     const manifest = createManifest({ candidate, controllerSha: baselineCommit, paths, releaseId: 'review-source-fixture',
       previous: { sha: baselineCommit, deploymentId: 'dpl_fixture', configurationDigest: 'a'.repeat(64), schemaDigest: 'b'.repeat(64) },
       publicEnvironment: { VITE_SUPABASE_URL: 'https://pjforfvchygdyqfcgpmw.supabase.co', VITE_SUPABASE_ANON_KEY: 'sb_publishable_fixture_key_0000000000000' },
-      prerequisites: { adapter: 'salesforce-reviewed-manifest', adapterDigest, plan: { salesforceManifestPath: manifestPath, salesforceReviewPath: path,
-        salesforceFingerprint: reviewed.fingerprint, salesforceSourceTreeHash: reviewed.binding.sourceTreeHash, backwardCompatible: true } },
-    });
+      prerequisites: { adapter: 'trading-fx-prerequisites', adapterDigest, plan: { salesforceManifestPath: manifestPath, salesforceReviewPath: path,
+        salesforceFingerprint: reviewed.fingerprint, salesforceSourceTreeHash: reviewed.binding.sourceTreeHash, backwardCompatible: true, ...locator } },
+    }, { sourcePublicationOnly: true });
+    if (Object.keys(locator).length === 0) {
+      assert.throws(() => validateManifest(manifest), { code: 'TRADING_FX_XERO_QUALIFICATION_LOCATOR_REQUIRED' });
+    } else {
+      assert.equal(validateManifest(manifest), digest(manifest));
+    }
     return verifySalesforceReviewSource({ cwd, candidateSha: candidate.sha, manifest, verifierDirectory: cwd });
   };
   assert.equal(check().candidateSha, git('rev-parse', 'HEAD'));
+  assert.throws(() => check(reviewPath, { xeroQualificationDeploymentId: 1 }), { code: 'TRADING_FX_XERO_QUALIFICATION_LOCATOR_REQUIRED' });
+  assert.equal(check(reviewPath, { xeroQualificationDeploymentId: 1, xeroQualificationDigest: 'a'.repeat(64) }).candidateSha, git('rev-parse', 'HEAD'));
   const ignoredReview = '.fcos-cli/review.json';
   write(ignoredReview, JSON.stringify(review));
   assert.throws(() => check(ignoredReview), { code: 'SALESFORCE_REVIEW_SOURCE_UNTRACKED_INPUT' });
