@@ -242,6 +242,15 @@ test('posting-mode change clears old selection and requires a fresh mode-matched
   await expect(row.getByRole('checkbox')).not.toBeChecked();
 });
 
+test('verification mode opens the saved accounting review without live mapping or preview calls', async ({ page }) => {
+  await page.goto('/e2e/fixtures/xero-exception.html?gate=staging&stale=1');
+  await expect(page.getByRole('row').filter({ hasText: 'INV-EXCEPTION-1' })).toBeVisible();
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(page.getByRole('button', { name: 'Check everything' })).toBeDisabled();
+  expect(await page.evaluate(() => window.exceptionFixture.requests.map(request => request.name)))
+    .toEqual(['xeroFinancialSyncLatest']);
+});
+
 test('single-document approval follows the financial gate', async ({ page }) => {
   await page.goto('/e2e/fixtures/xero-exception.html?gate=off');
   await page.getByRole('button', { name: /Ready to sync/ }).click();

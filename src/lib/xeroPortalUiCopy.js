@@ -51,7 +51,7 @@ const EN = {
   },
   "tabs": {
     "contacts": "Contacts",
-    "accounting": "Salesforce → Xero",
+    "accounting": "Accounting",
     "receipts": "Receipts",
     "automation": "Auto-Created Contacts",
     "manual": "User Manual"

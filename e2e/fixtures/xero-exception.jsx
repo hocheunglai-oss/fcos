@@ -117,8 +117,10 @@ const preview = () => ({
   }),
   payments: { rows: paymentRows(), summary: { total: paymentRows().length, paymentApply: paymentReferenceFixture ? 1 : 0 } }, products: [{ id: 'prod-1', name: 'HSFO 380' }], mappingProposals: [],
 });
+const gate = new URLSearchParams(window.location.search).get('gate');
 const portalStatus = {
-  externalActions: { xero_financial_sync: { enabled: new URLSearchParams(window.location.search).get('gate') !== 'off' } },
+  externalActions: { xero_financial_sync: { enabled: !['off', 'staging'].includes(gate),
+    ...(gate === 'staging' ? { control: 'deployment_read_only' } : {}) } },
   xero: { connected: true, scopeFlags: { invoices: true, contacts: true, settingsRead: true, paymentsRead: true } },
 };
 window.exceptionFixture = { requests };

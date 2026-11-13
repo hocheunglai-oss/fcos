@@ -49,6 +49,8 @@ export default function XeroFinancialSync({ portalStatus }) {
   const financialCopy = copy.financial;
   const documentLabels = [financialCopy.salesforceDocument, copy.common.reason, copy.common.action, financialCopy.accountStem, copy.common.date, copy.common.total, 'Xero'];
   const flow = workflowCopy(language);
+  const financialGate = portalStatus?.externalActions?.xero_financial_sync;
+  const verificationOnly = financialGate?.control === 'deployment_read_only';
   const [mappings, setMappings] = useState(null);
   const [preview, setPreview] = useState(null);
   const [postingMode, setPostingMode] = useState('draft');
@@ -76,7 +78,7 @@ export default function XeroFinancialSync({ portalStatus }) {
   const [documentPage, setDocumentPage] = useState(0);
   const [paymentPage, setPaymentPage] = useState(0);
   const [mappingPage, setMappingPage] = useState(0);
-  const [busy, setBusy] = useState('mappings');
+  const [busy, setBusy] = useState(verificationOnly ? '' : 'mappings');
   const [error, setError] = useState('');
   const [dailyAllowance, setDailyAllowance] = useState(null);
   const captureDailyAllowance = useCallback((value) => {
@@ -97,7 +99,7 @@ export default function XeroFinancialSync({ portalStatus }) {
 
   useEffect(() => {
     let active = true;
-    loadMappings();
+    if (!verificationOnly) loadMappings();
     appClient.functions.invoke('xeroFinancialSyncLatest', {}, FORCE_OPTIONS).then((result) => {
       if (!active) return;
       captureDailyAllowance(result.data);
@@ -116,7 +118,7 @@ export default function XeroFinancialSync({ portalStatus }) {
       setSelectedPayments(sameRun ? restoreReviewSelection(saved.payments, result.data.preview.payments?.rows || [], 'payment') : new Set());
     }).catch(() => { if (active) setError('The last check could not be loaded. Run Check everything to retry.'); });
     return () => { active = false; };
-  }, [captureDailyAllowance, loadMappings]);
+  }, [captureDailyAllowance, loadMappings, verificationOnly]);
 
   useEffect(() => {
     if (!preview?.run?.id) return;
@@ -127,6 +129,7 @@ export default function XeroFinancialSync({ portalStatus }) {
 
   // Refresh on mount or return, without replacing a selection under active review.
   useEffect(() => {
+    if (verificationOnly) return;
     const refresh = () => {
       const explicitLinkSelected = (preview?.rows || []).some((row) => selected.has(row.id) && row.action === 'protected_legacy');
       if (document.visibilityState === 'visible' && !busy && !reviewOpen && !preservationOpen && !correctionsOpen && !campaignOpen && !paymentReferenceTarget && !fixMapping && !explicitLinkSelected && preview
@@ -138,7 +141,7 @@ export default function XeroFinancialSync({ portalStatus }) {
     window.addEventListener('focus', refresh);
     document.addEventListener('visibilitychange', refresh);
     return () => { window.removeEventListener('focus', refresh); document.removeEventListener('visibilitychange', refresh); };
-  }, [preview, busy, reviewOpen, preservationOpen, correctionsOpen, campaignOpen, paymentReferenceTarget, fixMapping, selected]);
+  }, [preview, busy, reviewOpen, preservationOpen, correctionsOpen, campaignOpen, paymentReferenceTarget, fixMapping, selected, verificationOnly]);
 
   const products = useMemo(() => preview?.products || [], [preview]);
   const productMappingIndex = useMemo(() => new Map((mappings?.productMappings || []).map((mapping) => [`${mapping.direction}:${mapping.salesforceProductId}`, mapping])), [mappings]);
@@ -184,7 +187,6 @@ export default function XeroFinancialSync({ portalStatus }) {
   const visibleDocuments = useMemo(() => orderedDocuments.slice(documentPage * PAGE_SIZE, (documentPage + 1) * PAGE_SIZE), [documentPage, orderedDocuments]);
   const visiblePayments = useMemo(() => orderedPayments.slice(paymentPage * PAGE_SIZE, (paymentPage + 1) * PAGE_SIZE), [orderedPayments, paymentPage]);
   const reconciliation = useMemo(() => summarizeXeroFinancialReconciliation({ documents: preview?.rows, payments: payments?.rows }), [payments, preview]);
-  const financialGate = portalStatus?.externalActions?.xero_financial_sync;
   const scopeFlags = portalStatus?.xero?.scopeFlags || {};
 
   function changePostingMode(mode) {
@@ -196,7 +198,7 @@ export default function XeroFinancialSync({ portalStatus }) {
   }
 
   async function runPreview(preserveSelection = false, checkChanges = false, keepReviewOpen = false) {
-    if (preservationOpen || requestBusy.current || correctionsOpen || campaignOpen || (checkChanges && backgroundCheckStopped.current)) return false;
+    if (verificationOnly || preservationOpen || requestBusy.current || correctionsOpen || campaignOpen || (checkChanges && backgroundCheckStopped.current)) return false;
     requestBusy.current = true;
     lastCheckAttemptAt.current = Date.now();
     previewGeneration.current += 1;
@@ -399,7 +401,7 @@ export default function XeroFinancialSync({ portalStatus }) {
             </select>
             <div className="flex flex-wrap justify-end gap-2"><Button type="button" variant="outline" onClick={() => { backgroundCheckStopped.current = true; setCampaignOpen(true); }} disabled={Boolean(busy) || preservationOpen || correctionsOpen || campaignOpen}>2026 reconciliation campaign</Button><Button type="button" variant="outline" onClick={() => { backgroundCheckStopped.current = true; setPreservationOpen(true); }} disabled={Boolean(busy) || correctionsOpen || campaignOpen || !portalStatus?.xero?.connected}>Preserve verified documents</Button>
               <Button type="button" variant="outline" onClick={() => { backgroundCheckStopped.current = true; setCorrectionsOpen(true); }} disabled={Boolean(busy) || preservationOpen || campaignOpen || !portalStatus?.xero?.connected || !scopeFlags.invoices}>Preview date and reference corrections</Button>
-              <Button type="button" onClick={() => runPreview()} disabled={Boolean(busy) || preservationOpen || correctionsOpen || campaignOpen || !portalStatus?.xero?.connected || !scopeFlags.invoices || !scopeFlags.contacts || !scopeFlags.settingsRead || !scopeFlags.paymentsRead}>
+              <Button type="button" onClick={() => runPreview()} disabled={verificationOnly || Boolean(busy) || preservationOpen || correctionsOpen || campaignOpen || !portalStatus?.xero?.connected || !scopeFlags.invoices || !scopeFlags.contacts || !scopeFlags.settingsRead || !scopeFlags.paymentsRead}>
               {actionIcon(busy === 'preview', ShieldCheck)}
               {busy === 'preview' ? financialCopy.checkingEverything : financialCopy.checkEverything}
             </Button></div>

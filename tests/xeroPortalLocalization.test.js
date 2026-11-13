@@ -6,7 +6,7 @@ test('legacy Chinese preferences retain English labels for preview, explicit bat
   const copy = xeroPortalUiCopy('zh-Hant');
   assert.equal(copy.header.refresh, 'Refresh');
   assert.equal(copy.header.connect, 'Connect Xero');
-  assert.equal(copy.tabs.accounting, 'Salesforce → Xero');
+  assert.equal(copy.tabs.accounting, 'Accounting');
   assert.equal(copy.contacts.preview, 'Preview');
   assert.equal(copy.contacts.applySelected, 'Apply selected');
   assert.equal(copy.financial.preview, 'Build read-only preview');
