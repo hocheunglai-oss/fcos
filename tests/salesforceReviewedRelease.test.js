@@ -1540,8 +1540,10 @@ test('native PermissionSet projection requires the full grants even when its XML
     const name = 'Reviewed';
     const file = `permissionsets/${name}.permissionset-meta.xml`;
     const root = content => `<PermissionSet xmlns="http://soap.sforce.com/2006/04/metadata"><label>Reviewed</label>${content}</PermissionSet>`;
-    const source = root('<fieldPermissions><editable>false</editable><field>Account.Example__c</field><readable>true</readable></fieldPermissions>');
-    let native = root('');
+
+    const apex = name => '<classAccesses><apexClass>' + name + '</apexClass><enabled>true</enabled></classAccesses>';
+    const source = root(apex('Second') + '<!-- Source-only rationale. -->' + apex('First') + '<fieldPermissions><editable>false</editable><field>Account.Example__c</field><readable>true</readable></fieldPermissions>');
+    let native = root(apex('First') + apex('Second') + '<hasActivationRequired>false</hasActivationRequired>');
     const target = path.join(cwd, policy.publication.sourceRoot, file);
     mkdirSync(path.dirname(target), { recursive: true });
     writeFileSync(target, source);
@@ -1586,6 +1588,12 @@ test('native PermissionSet projection requires the full grants even when its XML
     assert.deepEqual(receipt.permissionSets, [name]);
     assert.match(receipt.permissionGrantEvidenceSha256, /^[a-f0-9]{64}$/u);
     assert.equal(catalogReads, 3);
+    const equivalent = native;
+    native = equivalent.replace('<hasActivationRequired>false', '<hasActivationRequired>true');
+    assert.throws(verify, /differs from the reviewed non-grant definition/u);
+    native = equivalent.replace('Second', 'First');
+    assert.throws(verify, /duplicate classAccesses/u);
+    native = equivalent;
     fieldRows = [];
     assert.throws(verify, /catalog differs.*Account.Example__c/);
     fieldRows = [expectedGrant, { ...expectedGrant, Field: 'Account.Unreviewed__c' }];
@@ -1598,7 +1606,7 @@ test('native PermissionSet projection requires the full grants even when its XML
     incomplete = false;
     native = root('<userPermissions><enabled>true</enabled><name>ModifyAllData</name></userPermissions>');
     assert.throws(verify, /differs from the reviewed non-grant definition/);
-    native = root('<fieldPermissions><editable>true</editable><field>Account.Example__c</field><readable>true</readable></fieldPermissions>');
+    native = root(apex('First') + apex('Second') + '<fieldPermissions><editable>true</editable><field>Account.Example__c</field><readable>true</readable></fieldPermissions>');
     assert.throws(verify, /unexpected exported fieldPermissions/);
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
