@@ -170,6 +170,12 @@ export function equivalentNativeSerialization(source, native, type, defaults) {
     if (!entries.length) continue;
     if (value === 'standard-actions') {
       if (!matchesStandardActionOverrides(entries)) return false;
+    } else if (value === 'empty-record-action-list') {
+      const [entry] = entries;
+      const children = entry.children.filter(node => !whitespaceOnly(node));
+      if (entries.length !== 1 || Object.keys(entry.attribs).length || children.length !== 1
+        || children[0].type !== 'tag' || children[0].name !== 'actionListContext'
+        || !plainTextNode(children[0]) || children[0].children[0].data !== 'Record') return false;
     } else {
       const [entry] = entries;
       if (entries.length !== 1) return false;
@@ -218,9 +224,11 @@ function verifyNativeMetadataProjection({ root, sourceRoot, plan, projectionPath
       throw new Error(`Native CustomObject serialization differs from the exact reviewed source: ${name}`);
     }
     if (local === observed) continue;
+    if (/^layouts\/[^/]+\.layout-meta\.xml$/u.test(name)
+      && equivalentNativeSerialization(local, observed, 'Layout', [['platformActionList', 'empty-record-action-list']])) continue;
     if (name.endsWith('.xml') && JSON.stringify(normalizedMetadataDefinition(local)) === JSON.stringify(normalizedMetadataDefinition(observed))) continue;
     // Metadata API retrieval can omit one terminal newline from source files.
-    const nativeSourceFile = name.endsWith('.cls') || name.endsWith('.trigger') || /^lwc\/[^/]+\/[^/]+\.(?:js|html)$/u.test(name);
+    const nativeSourceFile = name.endsWith('.cls') || name.endsWith('.trigger') || /^lwc\/[^/]+\/[^/]+\.(?:js|html|css)$/u.test(name);
     if (nativeSourceFile && local.replace(/\n$/u, '') === observed.replace(/\n$/u, '')) continue;
     throw new Error(`Native metadata projection differs from the exact reviewed source: ${name}`);
   }

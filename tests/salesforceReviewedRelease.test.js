@@ -1670,7 +1670,7 @@ test('zero-test quick deploy requires native positive validation for the exact l
   } finally { f.cleanup(); }
 });
 
-test('mixed native readback allows one terminal newline difference in LWC JavaScript and templates only', () => {
+test('mixed native readback allows one terminal newline difference in LWC JavaScript, templates, and stylesheets', () => {
   const cwd = mkdtempSync(path.join(tmpdir(), 'fcos-native-lwc-fixture-'));
   const environment = policy.environments[0];
   const component = 'LightningComponentBundle:examplePanel';
@@ -1683,7 +1683,7 @@ test('mixed native readback allows one terminal newline difference in LWC JavaSc
     [css]: Buffer.from('div { color: black; }\n'),
   };
   const stable = { 'profiles/Example.profile-meta.xml': Buffer.from('<Profile/>') };
-  const native = { ...source, [js]: source[js].subarray(0, -1), [html]: source[html].subarray(0, -1) };
+  const native = { ...source, [js]: source[js].subarray(0, -1), [html]: source[html].subarray(0, -1), [css]: source[css].subarray(0, -1) };
   const manifest = packageXml(['Profile:Example']);
   const supplemental = packageXml([component]);
   const projectionPaths = Object.keys(source).sort();
@@ -1714,11 +1714,25 @@ test('mixed native readback allows one terminal newline difference in LWC JavaSc
     projectionPaths };
     assert.deepEqual(provider.verifyInventory(environment, request).verifiedProjectionPaths, projectionPaths);
     for (const [name, invalid] of [[js, 'export default class OtherPanel {}'], [html, '<template><div>Other</div></template>'],
-      [html, source[html].toString() + '\n'], [css, source[css].toString().slice(0, -1)]]) {
+      [html, source[html].toString() + '\n'], [css, 'div { color: red; }'], [css, source[css].toString() + '\n']]) {
       const before = native[name];
       native[name] = Buffer.from(invalid);
       assert.throws(() => provider.verifyInventory(environment, request), /Native metadata projection differs/);
       native[name] = before;
     }
   } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('native layouts may supply an empty Record action list while retaining reviewed layout behavior', () => {
+  const layout = body => `<Layout xmlns="http://soap.sforce.com/2006/04/metadata">${body}</Layout>`;
+  const section = '<layoutSections><label>Financial details</label></layoutSections>';
+  const emptyRecord = '<platformActionList><actionListContext>Record</actionListContext></platformActionList>';
+  const check = (native, source = layout(section)) => equivalentNativeSerialization(source, native, 'Layout',
+    [['platformActionList', 'empty-record-action-list']]);
+  assert.equal(check(layout(section + emptyRecord)), true);
+  assert.equal(check(layout(section + emptyRecord.replace('Record', 'Global'))), false);
+  assert.equal(check(layout(section + emptyRecord + emptyRecord)), false);
+  assert.equal(check(layout(section + emptyRecord.replace('</platformActionList>', '<platformActionListItems><actionName>Delete</actionName></platformActionListItems></platformActionList>'))), false);
+  assert.equal(check(layout(section.replace('Financial details', 'Changed') + emptyRecord)), false);
+  assert.equal(check(layout(section), layout(section + emptyRecord)), false);
 });
