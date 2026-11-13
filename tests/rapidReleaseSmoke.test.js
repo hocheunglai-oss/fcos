@@ -74,7 +74,7 @@ function browserFixture({ badIdentity = false, badRead = false, badDenial = fals
         fulfill: async ({ response }) => emit(response),
         fetch: async (overrides = {}) => {
           const url = overrides.url || request.url();
-          observations.reads.push({ url, method: overrides.method || request.method(), body: overrides.postData });
+          observations.reads.push({ url, method: overrides.method || request.method(), body: overrides.postData, timeout: overrides.timeout });
           if (url.endsWith('/authContext')) return apiResponse(url, auth(), 200, request);
           if (url.endsWith('/companyFxHistoryGet')) return apiResponse(url, { canSave: true, rows: companyFxRows });
           if (groupedBoundaryRegression && url.endsWith('/xeroFinancialDocumentPreservationRun')) return apiResponse(url, {});
@@ -489,6 +489,7 @@ test('Cashflow Forecast replays only a fetch timeout and retains the same authen
   const attempts = reads('cashflow_forecast', transient);
   assert.equal(attempts.length, 2);
   assert.deepEqual(attempts[0], attempts[1]);
+  assert.equal(attempts[0].timeout, 45000);
   assert.equal(proof.normalRoleEvidence.reads.find(item => item.module === 'cashflow_forecast').transportRetries, 1);
   assert.equal(proof.businessWrites, 0);
   for (const [module, options, count] of [
@@ -499,6 +500,7 @@ test('Cashflow Forecast replays only a fetch timeout and retains the same authen
     const fixture = browserFixture(options);
     await assert.rejects(run(module, fixture), { code: 'SMOKE_AUTHENTICATED_READ_FAILED', smokeModule: module, smokeSurface: 'read' });
     assert.equal(reads(module, fixture).length, count);
+    assert.ok(reads(module, fixture).every(read => read.timeout === (module === 'cashflow_forecast' ? 45000 : 20000)));
   }
 });
 
