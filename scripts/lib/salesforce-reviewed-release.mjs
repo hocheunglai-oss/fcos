@@ -570,7 +570,9 @@ export function assertReviewedMirror(result, plan, policy, deploymentJobId) {
  */
 export async function runReviewedSalesforceRelease({ plan, mode, policy, journal, provider, ownership, externalJournal,
   authorization = null, now = () => new Date(), assertUnchanged, replaceValidation = [], reconcile = {} }) {
-  if (!['prepare', 'apply'].includes(mode)) throw new Error('Choose prepare or apply.');
+  const approvedContinuation = mode === 'approved-continuation';
+  if (!['prepare', 'apply', 'approved-continuation'].includes(mode)) throw new Error('Choose prepare, apply or approved-continuation.');
+  if (approvedContinuation) assertProductionAuthorization(authorization, plan, now());
   if (journal.state.fingerprint !== plan.fingerprint || !same(journal.state.binding, plan.binding)) throw new Error('Reviewed workflow fingerprint changed; prepare a new release from DEVEE.');
   if (typeof ownership?.assert !== 'function' || typeof externalJournal?.checkpoint !== 'function') throw new Error('Salesforce writes require external release ownership and a durable checkpoint adapter; a local lock is not global serialization.');
   const timestamp = () => now().toISOString();
@@ -695,7 +697,7 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
       await reportJob(environment, entry.operation, record);
     }
     if (missingMirror) await mirror(missingMirror);
-    if (mode === 'apply' && !get('production', 'preparation')
+    if (mode !== 'prepare' && !get('production', 'preparation')
       && get('devee', 'deployment')?.status === 'Succeeded' && get('qat', 'deployment')?.status === 'Succeeded'
       && get('shared_mirror', 'publication')?.status === 'Succeeded') {
       const validationJobId = savedPreparation?.preparation?.validationJobId;
@@ -718,7 +720,7 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
     }
   }
   const preparation = get('production', 'preparation');
-  if (mode === 'apply' && (preparation?.fingerprint !== plan.fingerprint || !['ready', 'awaiting-authorized-bootstrap'].includes(preparation?.status))) {
+  if ((mode === 'apply' || approvedContinuation && preparation) && (preparation?.fingerprint !== plan.fingerprint || !['ready', 'awaiting-authorized-bootstrap'].includes(preparation?.status))) {
     throw new Error('Apply requires a successful prepare checkpoint for this exact unchanged reviewed fingerprint.');
   }
   async function job(environment, operation, submit, { validationJobId = null, prepare } = {}) {
@@ -849,6 +851,9 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
       const baseline = reviewedCheckpointInventory(plan, {}, environment.key);
       // Successful upstream jobs are reattested, preserving original completedAt and IDs.
       if (stage.deployment) {
+        if (approvedContinuation && environment.key === 'production' && !stage.preparation) {
+          throw new Error('Existing Production deployment lacks its durable preparation checkpoint.');
+        }
         if (!stage.validation) throw new Error('Deployment lacks its saved successful validation.');
         const validation = await runValidation(environment);
         await job(environment, 'deployment', () => provider.deploy(environment, validation.jobId, plan), { validationJobId: validation.jobId });
@@ -857,11 +862,13 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
         await permissions(environment, plan.binding.permissionSets);
         continue;
       }
-      if (environment.key === 'production' && mode === 'prepare' && plan.review.bootstrap && stage.bootstrap?.status !== 'Succeeded') {
+      const production = environment.key === 'production';
+      if (production && mode !== 'apply' && plan.review.bootstrap && stage.bootstrap?.status !== 'Succeeded'
+        && (!approvedContinuation || !get('production', 'preparation'))) {
         await verifyReviewedOrgInventory({ provider, environment, plan, expected: baseline, now });
         await persist('production', 'preparation', { status: 'awaiting-authorized-bootstrap', fingerprint: plan.fingerprint,
           bootstrapSha256: plan.binding.bootstrapSha256 });
-        return { mode: 'prepared', productionValidation: 'deferred-until-authorized-bootstrap', fingerprint: plan.fingerprint, journal: journal.file };
+        if (!approvedContinuation) return { mode: 'prepared', productionValidation: 'deferred-until-authorized-bootstrap', fingerprint: plan.fingerprint, journal: journal.file };
       }
       let predeploymentInventory = baseline;
       if (plan.review.bootstrap) {
@@ -874,9 +881,9 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
         await permissions(environment, plan.review.bootstrap.permissionSets || []);
       } else await verifyReviewedOrgInventory({ provider, environment, plan, expected: baseline, now });
       const validation = await runValidation(environment);
-      if (environment.key === 'production' && mode === 'prepare') {
+      if (production && (mode === 'prepare' || approvedContinuation && !get('production', 'preparation'))) {
         await persist('production', 'preparation', { status: 'ready', fingerprint: plan.fingerprint, validationJobId: validation.jobId });
-        return { mode: 'prepared', productionValidation: 'Succeeded', fingerprint: plan.fingerprint, journal: journal.file };
+        if (!approvedContinuation) return { mode: 'prepared', productionValidation: 'Succeeded', fingerprint: plan.fingerprint, journal: journal.file };
       }
       // Validation may run for hours; refresh unchanged metadata before consuming its job.
       await verifyReviewedOrgInventory({ provider, environment, plan, expected: predeploymentInventory, now });

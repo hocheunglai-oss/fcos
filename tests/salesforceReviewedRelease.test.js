@@ -1744,3 +1744,53 @@ test('native layouts may supply an empty Record action list while retaining revi
   assert.equal(check(layout(section.replace('Financial details', 'Changed') + emptyRecord)), false);
   assert.equal(check(layout(section), layout(section + emptyRecord)), false);
 });
+
+test('approved hosted continuation keeps the same durable checkpoints and submissions with fewer provider reads', async () => {
+  for (const bootstrap of [false, true]) {
+    const legacy = fixture({ bootstrap, inventoryBaseline: true });
+    const hosted = fixture({ bootstrap, inventoryBaseline: true });
+    try {
+      await assert.rejects(hosted.run('approved-continuation'), /unexpired exact/);
+      assert.equal(hosted.calls.length, 0);
+      const checkpoint = hosted.externalJournal.checkpoint;
+      const submitted = [];
+      hosted.externalJournal.checkpoint = async event => {
+        await checkpoint(event);
+        if (event.stage === 'production' && event.operation !== 'validation' && event.record.status === 'submitting') {
+          assert.ok(hosted.checkpoints.some(saved => saved.stage === 'production' && saved.operation === 'preparation'));
+          submitted.push(event.operation);
+        }
+      };
+      assert.equal((await legacy.run('prepare')).mode, 'prepared');
+      assert.equal((await legacy.run('apply', { authorization: legacy.authorization })).mode, 'applied');
+      assert.equal((await hosted.run('approved-continuation', { authorization: hosted.authorization })).mode, 'applied');
+      assert.ok(submitted.includes('deployment'));
+      assert.equal(submitted.includes('bootstrap'), bootstrap);
+      const effects = calls => calls.filter(([op, action]) =>
+        ['validate', 'deploy', 'bootstrap', 'permission-write'].includes(op) || op === 'mirror' && action === 'publish');
+      const count = (calls, kind) => calls.filter(([op, action]) => kind === 'mirror-check' ? op === 'mirror' && action === 'check' : op === kind).length;
+      assert.deepEqual(effects(hosted.calls), effects(legacy.calls));
+      assert.equal(count(legacy.calls, 'mirror-check') - count(hosted.calls, 'mirror-check'), 2);
+      assert.ok(count(hosted.calls, 'inventory') < count(legacy.calls, 'inventory'));
+      assert.ok(count(hosted.calls, 'report') < count(legacy.calls, 'report'));
+      assert.deepEqual(hosted.checkpoints.find(e => e.operation === 'preparation'), legacy.checkpoints.find(e => e.operation === 'preparation'));
+      console.log(JSON.stringify({ bootstrap, legacy: legacy.calls.length, hosted: hosted.calls.length,
+        inventory: [count(legacy.calls, 'inventory'), count(hosted.calls, 'inventory')],
+        reports: [count(legacy.calls, 'report'), count(hosted.calls, 'report')] }));
+    } finally { hosted.cleanup(); legacy.cleanup(); }
+  }
+});
+
+test('approved continuation cannot bootstrap Production if durable preparation fails', async () => {
+  const f = fixture({ bootstrap: true, inventoryBaseline: true });
+  try {
+    const checkpoint = f.externalJournal.checkpoint;
+    f.externalJournal.checkpoint = event => {
+      if (event.stage === 'production' && event.operation === 'preparation') throw Error('test preparation write refused');
+      return checkpoint(event);
+    };
+    await assert.rejects(f.run('approved-continuation', { authorization: f.authorization }), /preparation write refused/);
+    assert.ok(f.calls.some(([op, stage]) => op === 'deploy' && stage === 'qat'));
+    assert.ok(!f.calls.some(([op, stage]) => stage === 'production' && ['bootstrap', 'validate', 'deploy', 'permission-write'].includes(op)));
+  } finally { f.cleanup(); }
+});
