@@ -1,5 +1,6 @@
 import { assertAuthorization, digest, isDigest, requireCondition, targets, validateManifest } from './contract.mjs';
 import { DeploymentJournal, pendingOperations } from './journal.mjs';
+import { assertBuildReceipt, assertSmokeProof } from './engine.mjs';
 
 import { LOCAL_MIRROR_ENVIRONMENT, verifyLocalMirrorReceipt } from './local-mirror-handoff.mjs';
 import { assertFrozenWorkflow, nativeWorkflowPath } from './providers.mjs';
@@ -61,12 +62,76 @@ const same = (left, right) => digest(left ?? null) === digest(right ?? null);
 const reviewedSuccessorSha = 'd89595a87dd96667e1f2ae56a2730bd25aa77d65';
 const originalCandidateSha = '085c7ce8663d16d808771acbbcdc981b9d736b85';
 
+const afterManualSuccessorSha = '81be7291e2a999624307cf25284843f555c68f9d';
+const manualBaseline = {
+  sha: 'd2e5f1f94898ae99c6188831d071a77c337f31ae',
+  deploymentId: 'dpl_EybnQs2MEgz3z2M2kJH74i9yGw38',
+  manifestHash: '98fa7ae01015ef8d4386b0baedee42acb2e016940ee4729138ba06e3e95ac947',
+  releaseId: 'manual-on-demand-nomination-qualification',
+  runId: 43582562872,
+};
+
+export async function verifyTradingFxManualPredecessor({ manifest, previous, github, ownerId }) {
+  const live = manifest.previous;
+  requireCondition(manifest.candidate.sha === afterManualSuccessorSha
+    && live.sha === manualBaseline.sha && live.deploymentId === manualBaseline.deploymentId
+    && live.schemaDigest === previous.previous.schemaDigest
+    && live.configurationDigest === previous.previous.configurationDigest,
+  'TRADING_FX_MANUAL_PREDECESSOR_SCOPE_CHANGED');
+  const journal = new DeploymentJournal({ github: { ...github, candidateSha: manualBaseline.sha },
+    manifestHash: manualBaseline.manifestHash, releaseId: manualBaseline.releaseId, actorIds: [41898282] });
+  const records = await journal.read();
+  const expectedEvents = ['release.prepared', 'build.passed', 'stage.intent', 'stage.result', 'smoke.passed',
+    'approval.accepted', 'promote.intent', 'promote.result', 'live.passed', 'release.complete'];
+  requireCondition(same(records.map(row => row.payload.event), expectedEvents) && pendingOperations(records).length === 0,
+    'TRADING_FX_MANUAL_PREDECESSOR_NOT_COMPLETE');
+  const [prepared, build, , staged, smoke, approval, intent, promoted, observed, completed] = records;
+  const manual = prepared.payload.data.manifest;
+  requireCondition(validateManifest(manual) === manualBaseline.manifestHash && manual.candidate.sha === manualBaseline.sha
+    && same(manual.previous, previous.previous) && manual.prerequisites === null
+    && same(manual.build.publicEnvironment, manifest.build.publicEnvironment)
+    && manual.candidate.lockDigest === manifest.candidate.lockDigest
+    && !manual.selection.salesforce && !manual.selection.database,
+  'TRADING_FX_MANUAL_PREDECESSOR_SCOPE_CHANGED');
+
+  const stage = staged.payload.data.result;
+  assertBuildReceipt(build.payload.data, manual);
+  assertSmokeProof(smoke.payload.data, manual, stage);
+  const runtime = observed.payload.data, stageProof = smoke.payload.data;
+  const promotion = intent.payload.data;
+  const request = { deploymentId: manualBaseline.deploymentId, previousDeploymentId: manual.previous.deploymentId, buildId: manual.build.buildId };
+  requireCondition(staged.payload.data.outcome === 'applied' && stage.id === manualBaseline.deploymentId
+    && stage.sha === manualBaseline.sha && stage.buildId === manual.build.buildId
+    && stage.artifactDigest === build.payload.data.artifactDigest && stage.manifestHash === manualBaseline.manifestHash
+    && stageProof.deploymentId === stage.id && stageProof.buildId === stage.buildId && stageProof.passed === true
+    && stageProof.businessWrites === 0 && stageProof.normalRole === true
+    && approval.payload.data.runId === manualBaseline.runId
+    && promotion.operationId === manual.releaseId + '-promote'
+    && promotion.requestHash === digest(request) && same(promotion.request, request)
+    && promoted.payload.data.operationId === promotion.operationId && promoted.payload.data.outcome === 'applied'
+    && promoted.payload.data.result.id === stage.id && promoted.payload.data.result.sha === stage.sha
+    && promoted.payload.data.result.buildId === stage.buildId && promoted.payload.data.result.artifactDigest === stage.artifactDigest
+    && runtime.passed === true && runtime.observationMs >= 300000 && runtime.deploymentId === stage.id
+    && runtime.buildId === stage.buildId && runtime.businessWrites === 0
+    && completed.payload.data.deploymentId === stage.id,
+  'TRADING_FX_MANUAL_PREDECESSOR_NOT_COMPLETE');
+  assertAuthorization(approval.payload.data, manual, stage, Date.parse(approval.created_at));
+  const base = '/repos/' + targets().repository;
+  const run = await github.read(base + '/actions/runs/' + manualBaseline.runId);
+  requireCondition(run.id === manualBaseline.runId && run.repository?.full_name === targets().repository
+    && run.actor?.id === ownerId && run.event === 'workflow_dispatch'
+    && nativeWorkflowPath(run) === '.github/workflows/fcos-rapid-release.yml'
+    && run.status === 'completed' && run.conclusion === 'success'
+    && run.display_title === 'FCOS rapid resume ' + manualBaseline.manifestHash + ' ' + manualBaseline.sha,
+  'TRADING_FX_MANUAL_PREDECESSOR_NOT_COMPLETE');
+}
+
 export async function readFailedBootstrapSuccessor({ manifest, github, ownerId, readPostQatRecovery }) {
   validateManifest(manifest);
   const next = manifest.prerequisites?.plan;
   const receiptId = next?.tradingFxFailedBootstrapReceiptId;
   requireCondition(manifest.prerequisites?.adapter === 'trading-fx-prerequisites'
-    && manifest.candidate.sha === reviewedSuccessorSha && positiveId(receiptId), 'TRADING_FX_BOOTSTRAP_SUCCESSOR_SCOPE_CHANGED');
+    && [reviewedSuccessorSha, afterManualSuccessorSha].includes(manifest.candidate.sha) && positiveId(receiptId), 'TRADING_FX_BOOTSTRAP_SUCCESSOR_SCOPE_CHANGED');
   const base = '/repos/' + targets().repository;
   const deployment = id => github.read(base + '/deployments/' + id);
   const receipt = await deployment(receiptId);
@@ -101,10 +166,13 @@ export async function readFailedBootstrapSuccessor({ manifest, github, ownerId, 
     && pending.length === 2 && pending[0].event === 'prerequisites.intent' && pending[0].data.operationId === closure.operationId
     && old && validateManifest(previous) === event.manifestHash && previous.candidate.sha === originalCandidateSha
     && previous.controllerSha !== manifest.controllerSha && old.salesforceFingerprint === original.fingerprint
-    && previous.candidate.lockDigest === manifest.candidate.lockDigest && same(previous.previous, manifest.previous)
+    && previous.candidate.lockDigest === manifest.candidate.lockDigest
     && same(previous.build.publicEnvironment, manifest.build.publicEnvironment)
     && same(previous.moduleInventory, manifest.moduleInventory) && same(previous.selection, manifest.selection),
   'TRADING_FX_FAILED_BOOTSTRAP_JOURNAL_SCOPE_CHANGED');
+  if (manifest.candidate.sha === afterManualSuccessorSha) {
+    await verifyTradingFxManualPredecessor({ manifest, previous, github, ownerId });
+  } else requireCondition(same(previous.previous, manifest.previous), 'TRADING_FX_FAILED_BOOTSTRAP_JOURNAL_SCOPE_CHANGED');
   const { salesforceManifestPath: _oldManifest, salesforceReviewPath: _oldReview, salesforceSourceTreeHash: oldTree,
     salesforceFingerprint: oldFingerprint, bootstrapFingerprint: oldBootstrap, tradingFxPostQatRecoveryReceiptId: oldRecovery,
     ...oldRetained } = old;

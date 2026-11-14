@@ -60,3 +60,25 @@ test('terminal bootstrap closure refuses changed job, approval, baseline or roll
   input.chain[1].payload.data.request.candidateSha = 'f'.repeat(40);
   assert.throws(() => failedBootstrapClosure(input), /ORIGINAL_RELEASE_MISMATCH/);
 });
+
+test('Trading FX only bridges the completed, unchanged manual predecessor', async () => {
+  const { verifyTradingFxManualPredecessor } = await import('../scripts/lib/rapid-release/trading-fx-failed-bootstrap-closure.mjs');
+  const hash = 'a'.repeat(64), previous = { previous: {
+    sha: '91a5298b44c7cadb968a614ff79d3934a8f41c9c', deploymentId: 'dpl_nomination',
+    schemaDigest: hash, configurationDigest: hash,
+  } };
+  const manifest = { candidate: { sha: '81be7291e2a999624307cf25284843f555c68f9d' }, previous: {
+    ...previous.previous, sha: 'd2e5f1f94898ae99c6188831d071a77c337f31ae', deploymentId: 'dpl_EybnQs2MEgz3z2M2kJH74i9yGw38',
+  } };
+  let reads = 0;
+  const github = { pages: async () => { reads++; return []; } };
+  const input = { manifest, previous, github, ownerId: 7 };
+  await assert.rejects(verifyTradingFxManualPredecessor(input), /MANUAL_PREDECESSOR_NOT_COMPLETE/);
+  assert.equal(reads, 1);
+  for (const field of ['sha', 'deploymentId', 'configurationDigest', 'schemaDigest']) {
+    await assert.rejects(verifyTradingFxManualPredecessor({
+      ...input, manifest: { ...manifest, previous: { ...manifest.previous, [field]: 'different' } },
+    }), /MANUAL_PREDECESSOR_SCOPE_CHANGED/);
+  }
+  assert.equal(reads, 1);
+});
