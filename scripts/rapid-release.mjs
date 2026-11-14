@@ -108,7 +108,8 @@ async function rapidReleaseCommand(argv, env, runtime) {
   const { runStagedSmoke, observeLive } = await import('./lib/rapid-release/smoke.mjs');
   const smoke = values => runStagedSmoke({ ...values, env });
   const records = await journal.read(), staged = phaseResult(records, 'stage')?.result;
-  const compatibility = await nativeCompatibilityReader({ provider, env })({ manifest });
+  const readCompatibility = nativeCompatibilityReader({ provider, env });
+  const compatibility = await readCompatibility({ manifest });
   requireCondition(compatibility.currentDeploymentId === manifest.previous.deploymentId || staged?.id === compatibility.currentDeploymentId,
     'PRODUCTION_BASELINE_CHANGED');
   const priorPrerequisite = phaseResult(records, 'prerequisites')?.result;
@@ -124,7 +125,15 @@ async function rapidReleaseCommand(argv, env, runtime) {
     const jobs = await github.read(`/repos/${targets().repository}/actions/runs/${env.GITHUB_RUN_ID}/jobs?filter=all&per_page=100`);
     requireCondition(jobs.jobs?.some(job => job.name === 'quality' && job.conclusion === 'success'), 'NATIVE_QUALITY_JOB_REQUIRED');
     if (manifest.selection.salesforce || manifest.selection.database) await qualifiedAdapter({ manifest, controllerDirectory: controller });
-    result = await stageRelease({ manifest, journal, provider, build, smoke,
+    const verifyStageBaseline = async () => {
+      await journal.assertNoUnresolvedOtherRelease();
+      await provider.assertOwnership({ phase: 'stage' });
+      const confirmed = await readCompatibility({ manifest });
+      requireCondition(confirmed.currentDeploymentId === manifest.previous.deploymentId
+        && confirmed.sha === manifest.previous.sha && confirmed.configurationDigest === manifest.previous.configurationDigest
+        && confirmed.schemaDigest === manifest.previous.schemaDigest, 'STAGING_BASELINE_CHANGED');
+    };
+    result = await stageRelease({ manifest, journal, provider, build, smoke, verifyStageBaseline,
       beforeBootstrap: values => verifyBeforeBootstrap({ ...values, controllerDirectory: controller, env }) });
   } else {
     requireCondition(staged, 'STAGED_DEPLOYMENT_REQUIRED');

@@ -25,7 +25,7 @@ function fixture() {
     previousDeploymentId: 'dpl_old', environment: 'fcos-production-release', reviewer: targets().account,
     nativeReviewVerified: true, runId: 123, approvedAt: new Date().toISOString() };
   const observe = async () => ({ passed: true, deploymentId: staged.id, buildId: build.buildId, observationMs: 300000 });
-  return { manifest, build, staged, journal, provider, calls, smoke, approval, observe };
+  return { manifest, build, staged, journal, provider, calls, smoke, approval, observe, verifyStageBaseline: async () => {} };
 }
 test('frontend-only selection never enables Salesforce/mirror/schema work', () => {
   const result = selectChecks(['src/components/dashboard/Table.jsx']);
@@ -64,6 +64,20 @@ test('empty or ambiguous discovery preserves checkpoint and refuses duplicate su
 test('staged artifact digest mismatch blocks smoke and approval', async () => {
   const f = fixture(); f.provider.ready = async () => ({ ...f.staged, artifactDigest: '0'.repeat(64) });
   await assert.rejects(stageRelease(f), /STAGED_BUILD_NOT_READY/); assert.equal(f.journal.records.some(r => r.payload.event === 'smoke.passed'), false);
+});
+test('staging refuses a live deployment and retains an unaliased stage when baseline readback fails', async () => {
+  const alreadyLive = fixture();
+  alreadyLive.provider.currentProduction = async () => alreadyLive.staged;
+  alreadyLive.smoke = async () => assert.fail('Smoke would reach the live alias');
+  await assert.rejects(stageRelease(alreadyLive), /PRODUCTION_BASELINE_CHANGED/);
+  const f = fixture();
+  f.verifyStageBaseline = async () => { throw Error('STAGING_BASELINE_CHANGED'); };
+  await assert.rejects(stageRelease(f), /STAGING_BASELINE_CHANGED/);
+  const recorded = f.journal.records.map(r => r.payload.event);
+  assert.ok(recorded.includes('stage.result'));
+  assert.ok(!recorded.includes('smoke.passed'));
+  await assert.rejects(stageRelease(f), /STAGING_BASELINE_CHANGED/);
+  assert.equal(f.calls.filter(call => call === 'stage').length, 1);
 });
 test('missing module/normal-role coverage is a failure, not a passing smoke', async () => {
   const f = fixture(); f.smoke = async () => ({ passed: true, deploymentId: f.staged.id, buildId: f.build.buildId, login: true, restrictedAccess: true, businessWrites: 0, modules: [] });

@@ -82,9 +82,10 @@ export function assertPreBootstrapProof(proof, manifest, staged) {
       .every(check => proof.completedChecks.includes(check)), 'PREBOOTSTRAP_STAGE_PROOF_REQUIRED');
   requireCondition(tradingFxSmokeVerified(proof, manifest), 'SMOKE_TRADING_FX_BOUNDARY_REQUIRED');
 }
-export async function stageRelease({ manifest, journal, provider, build, smoke, beforeBootstrap }) {
+export async function stageRelease({ manifest, journal, provider, build, smoke, beforeBootstrap, verifyStageBaseline }) {
   validateManifest(manifest); assertBuildReceipt(build, manifest);
   await provider.assertOwnership({ phase: 'stage', manifest, manifestHash: digest(manifest) });
+  requireCondition(typeof verifyStageBaseline === 'function', 'STAGE_BASELINE_VERIFIER_REQUIRED');
   let records = await journal.read();
   if (!events(records).some(event => event.event === 'release.prepared')) await journal.append('release.prepared', { manifest });
   if (!events(records).some(event => event.event === 'build.passed')) await journal.append('build.passed', build);
@@ -104,16 +105,16 @@ export async function stageRelease({ manifest, journal, provider, build, smoke, 
   if (existing && (requiresSupplierBucketSmoke(manifest) || requiresGroupedPetroleumSmoke(manifest)
     || !deferred && requiresTradingFxSmoke(manifest))) assertSmokeProof(existing.data, manifest, ready);
   if (!existing) {
-    if (deferred) {
-      requireCondition(typeof beforeBootstrap === 'function', 'QUALIFIED_PREBOOTSTRAP_VERIFIER_REQUIRED');
-      const proof = await beforeBootstrap({ manifest, staged: ready });
-      assertPreBootstrapProof(proof, manifest, ready);
-      await journal.append(acceptanceEvent, proof);
-    } else {
-      const proof = await smoke({ manifest, staged: ready }); assertSmokeProof(proof, manifest, ready);
-      await journal.append(acceptanceEvent, proof);
-    }
-  }
+    const live = await provider.currentProduction();
+    requireCondition(live.id !== ready.id && live.id === manifest.previous.deploymentId, 'PRODUCTION_BASELINE_CHANGED');
+    const verifySmoke = deferred ? beforeBootstrap : smoke;
+    requireCondition(typeof verifySmoke === 'function', 'QUALIFIED_PREBOOTSTRAP_VERIFIER_REQUIRED');
+    const proof = await verifySmoke({ manifest, staged: ready });
+    if (deferred) assertPreBootstrapProof(proof, manifest, ready);
+    else assertSmokeProof(proof, manifest, ready);
+    await verifyStageBaseline();
+    await journal.append(acceptanceEvent, proof);
+  } else await verifyStageBaseline();
   return { state: deferred ? 'awaiting_authorized_bootstrap' : 'ready_for_decision', deferredChecks: deferred ? manifest.prerequisites.plan.deferredModules : [], manifestHash: digest(manifest), staged: ready,
     conditionalPrerequisites: manifest.selection.salesforce || manifest.selection.database };
 }

@@ -4,6 +4,20 @@
   "recipes": [],
   "observations": [
     {
+      "id": "stage-queue-blocked-by-go-live-review",
+      "cause": "Native GitHub concurrency grouped an unaliased manual stage behind an unrelated Trading FX job awaiting reviewer authorization.",
+      "correction": "Serialize unaliased staging separately from live writes and recheck deployment baseline and controller after smoke before stage acceptance.",
+      "verification": {
+        "observedWaitingRun": 43581828763,
+        "observedBlockedStageRun": 43582562872,
+        "focusedControllerTestsPassed": 85,
+        "providerWritesDuringLocalVerification": 0
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Workflow group separation, stale-baseline and same-deployment recovery fixtures, separate protected controller qualification before activation."
+    },
+    {
       "id": "staging-browser-package-mirror-dns",
       "cause": "FCOS run 43031230905 spent 424 seconds in Playwright system dependency installation and failed to resolve the Ubuntu archive before any stage provider operation.",
       "correction": "Install the pinned Chromium build and verify a headless desktop render with the runner libraries. Install system dependencies once only when readiness fails. Qualify the same installer on the hosted runner before activation.",
