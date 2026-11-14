@@ -277,21 +277,29 @@ public with sharing class FcosTradeProformaService {
 
     @AuraEnabled
     public static String generateDocument(Id documentId) {
-        requireAccess();Boolean buyer=documentId.getSObjectType()==Invoice__c.SObjectType;
+        requireAccess();
+        if(documentId==null) throw new AuraHandledException('Select a native proforma or final document.');
+        Boolean buyer=documentId.getSObjectType()==Invoice__c.SObjectType;
         if(!buyer && documentId.getSObjectType()!=Supplier_Invoice__c.SObjectType) throw new AuraHandledException('Select a native proforma or final document.');
         String fileField=buyer?'File__c':'Invoice_File__c';String objectName=documentId.getSObjectType().getDescribe().getName();
         String query='SELECT Id,Name,'+fileField+',Proforma__c,Final_Of_Proforma__c,Document_Currency__c,Document_FX_Side__c,Document_FX_Confirmed_At__c,Document_FX_Fingerprint__c FROM '+objectName+' WHERE Id=:documentId';
         SObject row=Database.query(query);
-        if(!FcosTradeDocumentService.isManagedDocument(row)) throw new AuraHandledException('A complete managed document snapshot is required.');
+        assertProformaDocument(row);
         if(!String.isBlank((String)row.get(fileField))) return (String)row.get(fileField);
         PageReference page=buyer?Page.FcosNativeInvoice:Page.FcosNativeCredit;page.getParameters().put('id',String.valueOf(documentId));
         Blob body=Test.isRunningTest()?Blob.valueOf('Native proforma integration PDF'):page.getContentAsPDF();
         // Rendering is a callout and must complete before the serialization lock.
         row=Database.query(query+' FOR UPDATE');
-        if(!FcosTradeDocumentService.isManagedDocument(row)) throw new AuraHandledException('A complete managed document snapshot is required.');
+        assertProformaDocument(row);
         if(!String.isBlank((String)row.get(fileField))) return (String)row.get(fileField);
         ContentVersion version=new ContentVersion(Title=(String)row.get('Name'),PathOnClient=(String)row.get('Name')+'.pdf',VersionData=body,FirstPublishLocationId=documentId);insert version;
         version=[SELECT ContentDocumentId FROM ContentVersion WHERE Id=:version.Id];String url=URL.getOrgDomainURL().toExternalForm()+'/'+version.ContentDocumentId;
         SObject updateRow=documentId.getSObjectType().newSObject(documentId);updateRow.put(fileField,url);update updateRow;return url;
+    }
+
+    private static void assertProformaDocument(SObject row) {
+        if(!FcosTradeDocumentService.isManagedDocument(row)
+                || (row.get('Proforma__c')!=true && row.get('Final_Of_Proforma__c')==null))
+            throw new AuraHandledException('Select a native proforma or its final document with a complete snapshot.');
     }
 }

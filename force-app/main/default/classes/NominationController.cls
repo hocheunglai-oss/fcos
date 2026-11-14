@@ -39,6 +39,7 @@ public class NominationController {
     @AuraEnabled
     public static void generateDocument(String nominationId, String fileUrl, String fileName, String reviewedFxFingerprint){
         FcosTradeDocumentService.DocumentReview fxReview=FcosTradeDocumentService.nomination((Id)nominationId);
+        requireTradingFxDocumentEntry(fxReview);
         if(fxReview.currencyCode=='HKD' && fxReview.fingerprint!=reviewedFxFingerprint) throw new AuraHandledException('The native confirmation changed. Review it again.');
         Nomination__c nomination = [SELECT Id, RecordTypeId, STEM__c, File__c, Replaced__c, Sent__c,Document_Currency__c,Document_FX_Fingerprint__c,Document_Content_Fingerprint__c,Saved_Inputs__c,Saved_Remarks__c FROM Nomination__c WHERE Id =: nominationId LIMIT 1];
         if(fxReview.currencyCode=='HKD') FcosNativeConfirmationService.assertPrepared(nomination,fxReview.fingerprint);
@@ -75,15 +76,21 @@ public class NominationController {
     @AuraEnabled
     public static void generateDocumentFromBlob(String body, String nominationId, String fileUrl, String fileName, String reviewedFxFingerprint){
         FcosTradeDocumentService.DocumentReview fxReview=FcosTradeDocumentService.nomination((Id)nominationId);
-        if(fxReview.currencyCode=='HKD' && fxReview.fingerprint!=reviewedFxFingerprint) throw new AuraHandledException('The native confirmation changed. Review it again.');
+        if(fxReview.currencyCode=='HKD') { generateDocument(nominationId,fileUrl,fileName,reviewedFxFingerprint);return; }
+        requireTradingFxDocumentEntry(fxReview);
         Nomination__c nomination = [
             SELECT Id, File__c, Replaced__c, Sent__c
             FROM Nomination__c
             WHERE Id = :nominationId
             LIMIT 1
         ];
-        if(fxReview.currencyCode=='HKD') { generateDocument(nominationId,fileUrl,fileName,reviewedFxFingerprint);return; }
         saveGeneratedDocument(EncodingUtil.base64Decode(body), nomination, fileName);
+    }
+
+    private static void requireTradingFxDocumentEntry(FcosTradeDocumentService.DocumentReview review) {
+        if((review.sideId!=null || review.reissueOfId!=null)
+                && (!FcosCompanyFxRateService.enabled() || !FeatureManagement.checkPermission('Fcos_Trading_FX_Entry')))
+            throw new AuraHandledException('Trading FX document entry is not enabled for this user.');
     }
 
     public static void generateDocument(String nominationId,String fileUrl,String fileName) { generateDocument(nominationId,fileUrl,fileName,null); }
