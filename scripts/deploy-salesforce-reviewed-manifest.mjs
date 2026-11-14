@@ -493,7 +493,9 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
         const observed = readReviewedInventory(root, { nativeExport, supplementalRoot, matchingSupplementalPaths });
         const inventoryMatches = projectedNativeInventory
           ? nativeBootstrap && projectionPaths.length > 0
-            && matchesProjectedNativeInventory(observed.files, expectedInventory, projectionPaths)
+            && matchesProjectedNativeInventory(observed.files, expectedInventory, projectionPaths, {
+              environmentKey: environment.key, fingerprint: plan.fingerprint,
+            })
             && projectedNativeInventoryHash(expectedInventory, projectionPaths) === expectedInventoryHash
           : observed.inventoryHash === expectedInventoryHash;
         if (!inventoryMatches || (expectedSourceTreeHash && observed.sourceTreeHash !== expectedSourceTreeHash)) {
