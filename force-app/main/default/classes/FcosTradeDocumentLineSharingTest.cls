@@ -57,8 +57,12 @@ private class FcosTradeDocumentLineSharingTest {
 
     @IsTest
     static void privateEvidenceIsReadOnlyThroughVisibleBusinessDocument() {
-        Invoice__c invoice = [SELECT Id, STEM__c FROM Invoice__c WHERE Name = 'DOCUMENT-LINE-SHARING' LIMIT 1];
+        Invoice__c invoice = [
+            SELECT Id, STEM__c, STEM__r.Account__c, STEM__r.Account__r.OwnerId
+            FROM Invoice__c WHERE Name = 'DOCUMENT-LINE-SHARING' LIMIT 1
+        ];
         User viewer = [SELECT Id FROM User WHERE LastName = :VIEWER_LAST_NAME LIMIT 1];
+        grantFixtureAccountReadIfNeeded(invoice, viewer);
 
         System.runAs(viewer) {
             System.assertEquals(1, [SELECT COUNT() FROM Invoice__c WHERE Id = :invoice.Id WITH USER_MODE],
@@ -84,6 +88,25 @@ private class FcosTradeDocumentLineSharingTest {
             } catch (AuraHandledException expected) {
                 System.assertNotEquals(null, expected.getMessage());
             }
+        }
+    }
+
+    private static void grantFixtureAccountReadIfNeeded(Invoice__c invoice, User viewer) {
+        Id accountId = invoice.STEM__r.Account__c;
+        Boolean hasAccountRead;
+        System.runAs(viewer) {
+            hasAccountRead = [SELECT COUNT() FROM Account WHERE Id = :accountId WITH USER_MODE] == 1;
+        }
+        if (hasAccountRead) return;
+
+        // Invoice and STEM inherit visibility from the test Account.
+        // Private Account sharing requires one explicit grant to the test viewer.
+        User accountOwner = new User(Id = invoice.STEM__r.Account__r.OwnerId);
+        System.runAs(accountOwner) {
+            insert new AccountShare(
+                AccountId = accountId, UserOrGroupId = viewer.Id, RowCause = Schema.AccountShare.RowCause.Manual,
+                AccountAccessLevel = 'Read', OpportunityAccessLevel = 'None', CaseAccessLevel = 'None'
+            );
         }
     }
 
