@@ -1425,6 +1425,60 @@ test('mixed native checkpoints pin exact org paths and preserve untouched bytes 
   } finally { f.cleanup(); }
 });
 
+test('native CustomObject retrieval retains only matching fields pinned in stable context', () => {
+  const cwd = mkdtempSync(path.join(tmpdir(), 'fcos-native-retained-field-'));
+  try {
+    const environment = policy.environments[0];
+    const object = 'objects/Settings__c/Settings__c.object-meta.xml';
+    const field = 'objects/Settings__c/fields/Legacy__c.field-meta.xml';
+    const setting = Buffer.from('<CustomObject><customSettingsType>Hierarchy</customSettingsType></CustomObject>');
+    const legacy = Buffer.from('<CustomField><type>Text</type></CustomField>');
+    const component = 'CustomObject:Settings__c';
+    const manifest = packageXml(['CustomField:Settings__c.Legacy__c']);
+    const metadata = packageXml([component]);
+    const { files: expectedInventory, inventoryHash: expectedInventoryHash } = inventoryFromFiles({ [field]: legacy, [object]: setting });
+    for (const [name, contents] of [['inventory.xml', manifest], ['metadata.xml', metadata], ['sfdx-project.json', '{}']]) {
+      writeFileSync(path.join(cwd, name), contents);
+    }
+    let stable = { [field]: legacy };
+    let supplemental = { [object]: setting, [field]: legacy };
+    const provider = cliSalesforceProvider({ cwd, run(_program, args, project) {
+      if (args[0] === 'org') return { id: environment.orgId, username: environment.username, connectedStatus: 'Connected' };
+      if (args[0] === 'data') return { records: [{ Id: environment.orgId, IsSandbox: environment.isSandbox }] };
+      const directory = args[args.indexOf('--output-dir') + 1];
+      for (const [name, bytes] of Object.entries(directory === 'metadata' ? supplemental : stable)) {
+        const file = path.join(project, directory, name);
+        mkdirSync(path.dirname(file), { recursive: true });
+        writeFileSync(file, bytes);
+      }
+      return { id: '09SHF000002gTFl2AM', status: 'Succeeded', done: true, success: true };
+    } });
+    const review = {
+      components: [{ id: component, files: [object] }],
+      nativeInventoryContext: { [environment.key]: [field] },
+      inventoryManifests: { [expectedInventoryHash]: { path: 'inventory.xml', sha256: hash(manifest),
+        metadata: { path: 'metadata.xml', sha256: hash(metadata) } } },
+    };
+    const verify = () => provider.verifyInventory(environment, {
+      plan: { review }, expectedInventory, expectedInventoryHash, nativeExport: true, nativeBootstrap: true,
+    });
+    assert.deepEqual(verify().supplementalDuplicates, [field]);
+    const shell = Buffer.from('<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata"/>');
+    stable[object] = shell;
+    assert.deepEqual(verify().stableObjectShells, { [object]: { sha256: hash(shell), size: shell.length } });
+    stable[object] = setting;
+    assert.throws(verify, /nonempty reviewed object descriptor/);
+    stable = {};
+    assert.throws(verify, /unexpected path set/);
+    stable = { [field]: legacy };
+    supplemental[field] = Buffer.from('<CustomField><type>Number</type></CustomField>');
+    assert.throws(verify, /conflicting bytes/);
+    supplemental[field] = legacy;
+    review.nativeInventoryContext[environment.key] = [];
+    assert.throws(verify, /unexpected path set/);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
 test('mixed native readback verifies reviewed definition content even when raw hashes match', () => {
   const cwd = mkdtempSync(path.join(tmpdir(), 'fcos-native-metadata-fixture-'));
   try {
