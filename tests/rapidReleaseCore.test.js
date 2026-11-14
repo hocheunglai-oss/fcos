@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createManifest, digest, selectChecks, targets, publicBuildEnvironment } from '../scripts/lib/rapid-release/contract.mjs';
 import { MemoryJournal, validateChain, assertPublicPayload, DeploymentJournal } from '../scripts/lib/rapid-release/journal.mjs';
-import { assertPreBootstrapProof, stageRelease, promoteRelease } from '../scripts/lib/rapid-release/engine.mjs';
+import { assertSmokeProof, assertPreBootstrapProof, stageRelease, promoteRelease } from '../scripts/lib/rapid-release/engine.mjs';
 import { selectedProductTests } from '../scripts/lib/rapid-release/build.mjs';
 
 const sha = 'a'.repeat(40), h = 'b'.repeat(64);
@@ -332,4 +332,13 @@ test('Trading FX preserves required role and desktop evidence on the pre-bootstr
   assert.doesNotThrow(() => assertPreBootstrapProof({ ...proof, tradingFx: {
     restrictedVerified: true, normalVerified: true, desktopVerified: true,
   } }, manifest, f.staged));
+});
+
+test('existing-draft release proof must include the held desktop state', () => {
+  const { manifest, staged } = fixture();
+  manifest.prerequisites = { adapter: 'existing-draft-migrations' };
+  const proof = { passed: true, deploymentId: staged.id, buildId: manifest.build.buildId,
+    login: true, restrictedAccess: true, businessWrites: 0, modules: manifest.selection.modules };
+  assert.throws(() => assertSmokeProof(proof, manifest, staged), { code: 'SMOKE_EXISTING_DRAFT_BOUNDARY_REQUIRED' });
+  assertSmokeProof({ ...proof, existingDraft: { desktopHeldVerified: true, restrictedVerified: true, normalVerified: true } }, manifest, staged);
 });

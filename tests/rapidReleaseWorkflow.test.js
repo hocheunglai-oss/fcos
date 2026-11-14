@@ -76,7 +76,7 @@ test('forged source under an old plan hash, changed dispatcher, and failed quali
  }finally{restore();if(original===undefined)delete process.env.RELEASE_MANIFEST;else process.env.RELEASE_MANIFEST=original;}
 });
 
-for(const [adapter,prefix] of [['company-fx-history','COMPANY_FX'],['supplier-bucket-migrations','SUPPLIER_BUCKET'],['grouped-petroleum-migration','GROUPED_PETROLEUM'],['outlook-filing-access','OUTLOOK_FILING']]){
+for(const [adapter,prefix] of [['company-fx-history','COMPANY_FX'],['supplier-bucket-migrations','SUPPLIER_BUCKET'],['grouped-petroleum-migration','GROUPED_PETROLEUM'],['outlook-filing-access','OUTLOOK_FILING'],['existing-draft-migrations','EXISTING_DRAFT']]){
  test(`${adapter} writer credentials are limited to the protected exact database adapter`, () => {
  const names=[`FCOS_RAPID_${prefix}_DB_ACCESS_TOKEN`,`FCOS_RAPID_${prefix}_GH_OWNER_TOKEN`];
  for(const [name,job] of Object.entries(workflow.jobs)){
