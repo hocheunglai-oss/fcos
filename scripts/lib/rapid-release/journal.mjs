@@ -4,7 +4,8 @@ export const EVENT_TYPES = Object.freeze(['release.prepared', 'quality.passed', 
   'smoke.passed', 'stage.pre_bootstrap_passed', 'approval.accepted', 'prerequisites.intent', 'prerequisites.database_submitting',
   'prerequisites.result', 'prerequisites.passed', 'prerequisites.smoke_passed', 'promote.intent', 'promote.result', 'live.passed',
   'rollback.intent', 'rollback.result', 'release.complete', 'obstacle.detected', 'repair.attempted', 'repair.verified',
-  'repair.disabled', 'release.waiting', 'salesforce.checkpoint', 'handover.completed']);
+  'repair.disabled', 'release.waiting', 'salesforce.checkpoint', 'handover.completed',
+  'signing_setup.intent', 'signing_setup.result', 'signing_provider.intent', 'signing_provider.result']);
 const forbiddenKeys = /(?:password|token|secret|cookie|authorizationheader|databaseurl|financialrecords|customeremail)/i;
 export function assertPublicPayload(value, depth = 0) {
   requireCondition(depth <= 20, 'JOURNAL_PAYLOAD_DEPTH');

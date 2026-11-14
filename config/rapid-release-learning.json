@@ -4,6 +4,71 @@
   "recipes": [],
   "observations": [
     {
+      "id": "trading-fx-xero-general-gate-inheritance",
+      "cause": "The existing Production-wide financial switch is enabled, and new Trading FX native draft and HKD payment writers otherwise inherited it.",
+      "correction": "Require a separate default-off switch before new native drafts or HKD payments can claim evidence or send. Keep existing USD and original-operation readback behavior.",
+      "verification": {
+        "candidate": "90cbbf0f1786f539037851760b40421ce0fc85d9",
+        "productionSwitchConfigured": true,
+        "focusedTests": 112,
+        "previewAndSubmissionTests": 13,
+        "stagingIsolationTests": 23,
+        "providerWrites": 0,
+        "regressionDigest": "b1c3f2aa276392ab691b2dc17b7e0e21b17e97cb81a15d01f958a71897936a61"
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Test general-switch-only refusal before any provider connection, claim or request, and keep exact native proof for the explicitly enabled path."
+    },
+    {
+      "id": "trading-fx-managed-document-permission",
+      "cause": "Existing ordinary Salesforce Apex class grants expose managed document writers. Review fingerprints did not enforce the Trading FX permission, and PDF issuance accepted another STEM’s line.",
+      "correction": "Check existing entry permission and feature state in each managed writer. Claim PDF lines only within the invoice STEM and reserve the proforma renderer for its own document type.",
+      "verification": {
+        "candidate": "3fc09bb1ed04eb1abcf001bf7436e8f351c7b182",
+        "deveeCheckOnly": "0AfHF000007Gix70AC",
+        "testsPassed": 523,
+        "components": 10,
+        "metadataWrites": 0,
+        "regressionDigest": "8fb03dbf2b718096931f7a2cb65866f123664f90a17dcdb8a1192169069fc50c"
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Keep cross-actor, cross-STEM, authorized native and legacy USD native regression fixtures."
+    },
+    {
+      "id": "trading-fx-signing-runtime-config-drift",
+      "cause": "A required Production callback setting changes the protected baseline digest. Historical recovery rejected any new configuration, even while original accounting evidence remained valid.",
+      "correction": "Verify just the documented additive runtime delta under an owner-recorded receipt and fresh native readbacks. Keep the generic baseline check, original recovery evidence and exact staged artifact.",
+      "verification": {
+        "offlineDeltaFixtures": 16,
+        "elapsedMs": 7,
+        "providerCalls": 0,
+        "regressionDigest": "204fcf8d2b09c128d71aa18d45a6e5fe8b585e277971bca1e11e20a95b15c9f2"
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Reject alias movement, unrelated configuration changes, linked variables and wrong public-key material before staging or promotion."
+    },
+    {
+      "id": "salesforce-legacy-document-apex-admission",
+      "cause": "Four legacy USD forms imported reads from an Apex class granted only by the separately administered Trading FX access set.",
+      "correction": "Use the existing legacy Apex entrypoints and narrowly projected reads. Keep the new native write behind the existing Trading FX permission.",
+      "verification": {
+        "oldCandidate": "5e223d917bcbbb065faf7f523556a868694e08bc",
+        "repairedCandidate": "d89595a87dd96667e1f2ae56a2730bd25aa77d65",
+        "deveeCheckOnlyId": "0AfHF000007GhGH0A0",
+        "deveeTestsPassed": 521,
+        "componentErrors": 0,
+        "oldReviewedPlanRejectedMs": 168.975,
+        "repairedReviewedPlanAdmittedMs": 129.208,
+        "preflightProviderCalls": 0
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Reject recurrence of the four exact direct-read imports in native package preflight, and retain the Sales Support success and managed-evidence denial regressions."
+    },
+    {
       "id": "staging-browser-package-mirror-dns",
       "cause": "FCOS run 43031230905 spent 424 seconds in Playwright system dependency installation and failed to resolve the Ubuntu archive before any stage provider operation.",
       "correction": "Install the pinned Chromium build and verify a headless desktop render with the runner libraries. Install system dependencies once only when readiness fails. Qualify the same installer on the hosted runner before activation.",

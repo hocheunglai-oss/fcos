@@ -30,6 +30,16 @@ The stage job uploads the exact verified prebuilt output with Production runtime
 
 The go-live job reads native approval, checks the live baseline again, promotes that same deployment ID and observes it for five minutes. Preparation targets 15 minutes; provider queue, approval wait, repair time, promotion and observation are measured separately. This target is a measurement goal, not a timeout that bypasses checks.
 
+## Trading FX signing setup
+
+The Trading FX signing setup uses a separate protected, exact-plan job. Qualify and activate the controller containing this workflow before running it. Close the original manual decision first. Use its verified five-minute live observation when approved or prove the held run terminated before a Production write with Nomination still serving. Pin the exact successor application, live deployment and build, complete environment catalog digest, schema digest and both provider principals.
+
+The exact setup permits an org-generated, non-exportable Salesforce Production key and the three reviewed Production-only Vercel configuration records. The ordinary Salesforce code and metadata promotion still follows DEVEE, verified mirror, QAT and Production. The protected setup does not change the domain alias, feature flags, accounting permissions or data. It requires its own exact review. The subsequent staged application retains its separate go-live decision.
+
+The native journal records the approved setup before any provider submit and retains the original intent for each provider. Only the same still-running invocation may confirm a missing journal acknowledgement before reaching its first submit. A later invocation with an outstanding provider intent reads the original outcome. The Salesforce proof uses the exact original creator, certificate definition, operation marker in the certificate label and native creation audit, plus a domain-separated possession challenge. Vercel uses one create-only request for the three rows and verifies the operation marker, exact creator and values, and complete unrelated scope. A failure in the same process before the provider request boundary records the affected step as never submitted and retains verified preceding work. A partial or unconfirmed provider response leaves the original setup pending. Preserve that checkpoint for verified readback or separately reviewed terminal closure. Never replay the original request or delete a partially installed configuration to recover it.
+
+Completion records the owner-created signing receipt required by the normal stage and go-live verifier. A successful signing setup confirms provider configuration only. Runtime callback verification still runs after the exact application promotion. Keep the previous application and approved compatibility controls available as before.
+
 ## Conditional prerequisites
 
 Frontend-only releases make **zero Salesforce metadata-deployment or mirror calls** and do not apply database migrations or verify Xero. Merely editing documentation/controller scripts cannot invalidate successful Salesforce source-tree jobs.

@@ -8,6 +8,7 @@ import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import { openSalesforcePromotionJournal, salesforcePromotionHash } from './lib/salesforce-promotion-journal.mjs';
 import { INVENTORY_BASELINE_MODE, NATIVE_CUSTOM_OBJECT_DEFAULTS, createReviewedSalesforcePlan, inventoryFromFiles, matchesProjectedNativeInventory, parseReviewedPackage, projectedNativeInventoryHash, readReviewedInventory, runReviewedSalesforceRelease, safeProjectFile } from './lib/salesforce-reviewed-release.mjs';
 import { proveSalesforceInventoryAbsence } from './lib/salesforce-inventory-absence.mjs';
+import { assertLegacySalesforceDocumentAdmission } from './lib/salesforce-legacy-document-admission.mjs';
 import { comparePermissionSetDefinition, verifyPermissionSetCatalog } from './lib/salesforce-permission-projection.mjs';
 import { supportsTradingFxFormulaWitness, verifyTradingFxFormulaWitnesses } from './lib/salesforce-trading-fx-formula-evidence.mjs';
 
@@ -105,6 +106,7 @@ export function loadReviewedSalesforcePlan({ cwd = ROOT, manifestPath, reviewPat
   const inputs = { review, manifestBytes: readFileSync(manifestAbsolute), bootstrapBytes: bootstrapAbsolute ? readFileSync(bootstrapAbsolute) : null,
     baselineWorkflow, baselineInventory, orgBaselineInventories, finalInventory: readReviewedInventory(sourceRoot), policy };
   const plan = createReviewedSalesforcePlan(inputs);
+  assertLegacySalesforceDocumentAdmission(cwd, plan, policy.publication.sourceRoot);
   return { ...plan, manifestPath, reviewPath, manifestAbsolute, reviewAbsolute, baselineWorkflowAbsolute, bootstrapAbsolute,
     inputDigests: { review: salesforcePromotionHash(readFileSync(reviewAbsolute)), baseline: baselineWorkflowAbsolute ? salesforcePromotionHash(readFileSync(baselineWorkflowAbsolute)) : null } };
 }
