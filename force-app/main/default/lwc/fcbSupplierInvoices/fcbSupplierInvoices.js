@@ -8,7 +8,7 @@ import { NavigationMixin } from "lightning/navigation";
 import { fireEvent } from 'c/pubsub';
 import { refreshApex } from "@salesforce/apex";
 import { updateRecord , createRecord} from "lightning/uiRecordApi";
-import previewTradeDocument from "@salesforce/apex/FcosTradeDocumentService.preview";
+import previewTradeDocument from "@salesforce/apex/VariableChargeInvoiceReadinessService.previewSupplierTradingDocument";
 import recordNativeSupplierInvoice from "@salesforce/apex/FcosTradeDocumentService.recordSupplierInvoice";
 import getSupplierVariableChargeReadiness from "@salesforce/apex/VariableChargeInvoiceReadinessService.getSupplierReadiness";
 import getSupplierMasterContractReadiness from "@salesforce/apex/MasterContractInvoiceReadinessService.getSupplierReadiness";
@@ -83,7 +83,7 @@ export default class FcbSupplierInvoices extends  NavigationMixin (
     if (!this.supplierValue || !this.selectedProducts?.length) { this.currencyReviewLoading = false; return; }
     this.currencyReviewLoading = true;
     try {
-      const review = await previewTradeDocument({ stemId: this.recordId, direction: 'Buy', supplierId: this.supplierValue, lineIds: [...this.selectedProducts] });
+      const review = await previewTradeDocument({ stemId: this.recordId, supplierId: this.supplierValue, lineIds: [...this.selectedProducts] });
       if (request !== this.currencyReviewRequest) return;
       this.currencyReview = review;
       if (review.currencyCode === 'HKD' || review.reissueOfId) this.invoiceAmountValue = Number(review.nativeTotal);
@@ -275,7 +275,7 @@ export default class FcbSupplierInvoices extends  NavigationMixin (
         return;
       }
       const reviewedCurrency = this.currencyReview;
-      const latest = await previewTradeDocument({ stemId: this.recordId, direction: 'Buy', supplierId: this.supplierValue, lineIds: [...this.selectedProducts] });
+      const latest = await previewTradeDocument({ stemId: this.recordId, supplierId: this.supplierValue, lineIds: [...this.selectedProducts] });
       this.currencyReview = latest;
       if (latest.currencyCode === 'HKD' || latest.reissueOfId) this.invoiceAmountValue = Number(latest.nativeTotal);
       if (!reviewedCurrency || latest.fingerprint !== reviewedCurrency.fingerprint) {

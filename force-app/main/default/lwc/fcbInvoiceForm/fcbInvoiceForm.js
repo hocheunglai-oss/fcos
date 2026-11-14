@@ -16,7 +16,7 @@ import generateInvoicePDF from "@salesforce/apex/InvoiceController.generateInvoi
 import upsertLastInvoiceForm from "@salesforce/apex/InvoiceController.upsertLastInvoiceForm";
 import getBDNBase64Strings from "@salesforce/apex/InvoiceController.getBDNBase64Strings";
 import getVariableChargeInvoiceReadiness from "@salesforce/apex/InvoiceController.getVariableChargeInvoiceReadiness";
-import getTradeDocument from "@salesforce/apex/FcosTradeDocumentService.preview";
+import getTradeDocument from "@salesforce/apex/InvoiceController.previewTradingDocument";
 import pdfLib from '@salesforce/resourceUrl/pdfLib';
 import { fireEvent } from 'c/pubsub';
 import { buildInvoiceVesselText, normalizeInvoiceVesselText } from './invoiceVesselText';
@@ -247,7 +247,7 @@ export default class FcbInvoiceForm extends LightningElement {
             .map(product => product.id)
             .filter(id => typeof id === 'string' && id.length > 7);
         try {
-            const review = await getTradeDocument({ stemId, direction: 'Sell', supplierId: null, lineIds });
+            const review = await getTradeDocument({ stemId, lineIds });
             if (loadSequence !== this.invoiceFormLoadSequence) return;
             this.applyTradeDocument(review);
         } catch (error) {

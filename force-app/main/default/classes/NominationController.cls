@@ -1,4 +1,9 @@
 public class NominationController {
+    @AuraEnabled
+    public static FcosTradeDocumentService.DocumentReview previewTradingDocument(Id nominationId) {
+        return FcosTradeDocumentService.nominationForLegacyController(nominationId);
+    }
+
 
 	@AuraEnabled
 	public static List<Nomination__c> getNominationTypesByOpportunityId(String enquiryId) {

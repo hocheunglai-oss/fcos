@@ -11,7 +11,7 @@ import generateDocument from "@salesforce/apex/NominationController.generateDocu
 import getStemSupplierInfo from "@salesforce/apex/NominationController.getStemSupplierInfo";
 import getSupplierPaymentTerms from "@salesforce/apex/NominationController.getSupplierPaymentTerms";
 import getNominationSpecialTerms from "@salesforce/apex/NominationController.getNominationSpecialTerms";
-import getTradeDocument from "@salesforce/apex/FcosTradeDocumentService.nomination";
+import getTradeDocument from "@salesforce/apex/NominationController.previewTradingDocument";
 import {updateRecord} from "lightning/uiRecordApi";
 import { fireEvent } from 'c/pubsub';
 import { ShowToastEvent } from "lightning/platformShowToastEvent";

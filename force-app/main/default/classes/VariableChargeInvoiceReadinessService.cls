@@ -75,6 +75,11 @@ public without sharing class VariableChargeInvoiceReadinessService {
         }
     }
 
+    @AuraEnabled
+    public static FcosTradeDocumentService.DocumentReview previewSupplierTradingDocument(Id stemId,Id supplierId,List<Id> lineIds) {
+        return FcosTradeDocumentService.previewForLegacyController(stemId,'Buy',supplierId,lineIds);
+    }
+
     public static Readiness evaluateSupplier(Id stemId, Id supplierId) {
         SupplierContext context = loadSupplierContext(stemId, supplierId);
         if (context == null || context.stem == null) return blocked('The STEM could not be found.', stemId, supplierId, true);

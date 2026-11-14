@@ -1,4 +1,9 @@
 public class InvoiceController {
+    @AuraEnabled
+    public static FcosTradeDocumentService.DocumentReview previewTradingDocument(Id stemId,List<Id> lineIds) {
+        return FcosTradeDocumentService.previewForLegacyController(stemId,'Sell',null,lineIds);
+    }
+
     @AuraEnabled(cacheable=false)
     public static VariableChargeInvoiceReadinessService.Readiness getVariableChargeInvoiceReadiness(String stemId) {
         return VariableChargeInvoiceReadinessService.getBuyerReadiness(stemId);

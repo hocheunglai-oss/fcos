@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "releaseMode": "reviewed-manifest-incremental-v1",
   "baselineMode": "read-only-owned-tree-inventory",
-  "sourceTreeHash": "fdce76ab6b45884d5ba52a5ef543f6dbcd2f82103a1fc625a84b45e096ea291e",
+  "sourceTreeHash": "caf319bdbc389b46b21a9f361a5f49512b11d8063681ad7aafb6665db756d82a",
   "manifestSha256": "09c057c8d098ceded9134e29720c351c7714b4c7439b71a73ae03a6fe469e04b",
   "baselineCommit": "91a5298b44c7cadb968a614ff79d3934a8f41c9c",
   "baselineSourceTreeHash": "4081568c88787e50f15a9d7d417ef5738df3b8cf3f004c0eaea2de2ceabf58d3",
@@ -460,7 +460,9 @@
         "classes/InvoiceController.cls",
         "classes/InvoiceController.cls-meta.xml"
       ],
-      "dependsOn": []
+      "dependsOn": [
+        "ApexClass:FcosTradeDocumentService"
+      ]
     },
     {
       "id": "ApexClass:InvoiceControllerTest",
@@ -492,7 +494,9 @@
         "classes/NominationController.cls",
         "classes/NominationController.cls-meta.xml"
       ],
-      "dependsOn": []
+      "dependsOn": [
+        "ApexClass:FcosTradeDocumentService"
+      ]
     },
     {
       "id": "ApexClass:PaidAmountService",
@@ -564,6 +568,7 @@
       ],
       "dependsOn": [
         "ApexClass:BuyerInvoiceApprovalService",
+        "ApexClass:FcosTradeDocumentService",
         "ApexClass:InvoiceController",
         "ApexClass:VariableChargeSupplierHandler"
       ]
@@ -2500,7 +2505,9 @@
         "lwc/fcbBuyerConfirmationForm/fcbBuyerConfirmationForm.js",
         "lwc/fcbBuyerConfirmationForm/fcbBuyerConfirmationForm.js-meta.xml"
       ],
-      "dependsOn": []
+      "dependsOn": [
+        "ApexClass:NominationController"
+      ]
     },
     {
       "id": "LightningComponentBundle:fcbEditStemLineItemModal",
@@ -2521,7 +2528,9 @@
         "lwc/fcbInvoiceForm/invoicePaymentTerms.js",
         "lwc/fcbInvoiceForm/invoiceVesselText.js"
       ],
-      "dependsOn": []
+      "dependsOn": [
+        "ApexClass:InvoiceController"
+      ]
     },
     {
       "id": "LightningComponentBundle:fcbSupplierBidExtraCosts",
@@ -2541,7 +2550,9 @@
         "lwc/fcbSupplierInvoices/fcbSupplierInvoices.js",
         "lwc/fcbSupplierInvoices/fcbSupplierInvoices.js-meta.xml"
       ],
-      "dependsOn": []
+      "dependsOn": [
+        "ApexClass:VariableChargeInvoiceReadinessService"
+      ]
     },
     {
       "id": "LightningComponentBundle:fcbSupplierNominationForm",
@@ -2552,7 +2563,9 @@
         "lwc/fcbSupplierNominationForm/fcbSupplierNominationForm.js-meta.xml",
         "lwc/fcbSupplierNominationForm/supplierPaymentTerms.js"
       ],
-      "dependsOn": []
+      "dependsOn": [
+        "ApexClass:NominationController"
+      ]
     },
     {
       "id": "LightningComponentBundle:fcosTradeCashEditor",
@@ -3172,7 +3185,7 @@
   "dependencyReview": {
     "complete": true,
     "reviewer": "Codex Salesforce package review",
-    "evidence": "Trading FX exact original dependency review plus certificate qualification 0AfHF000007Gg8v0AC and tracked native sandbox inventory readback."
+    "evidence": "Trading FX exact original dependency review plus certificate qualification 0AfHF000007Gg8v0AC and tracked native sandbox inventory readback. The legacy USD repair uses the existing invoice, nomination and supplier-readiness controller access, with no new metadata members or grants. DEVEE 0AfHF000007GhD30AK compiled all nine members and passed all 38 executed tests including Sales Support access; the selected-test run reported controller coverage thresholds below target and the same package was submitted for relevant-test coverage."
   },
   "testPlan": {
     "level": "RunLocalTests",

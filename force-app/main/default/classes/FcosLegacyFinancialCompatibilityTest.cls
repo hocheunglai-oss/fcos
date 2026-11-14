@@ -1,6 +1,7 @@
 @IsTest
 private class FcosLegacyFinancialCompatibilityTest {
     private static final String ACTOR_LAST_NAME='LegacyFinancialCompatibility';
+    private static final String LEGACY_OPERATOR_LAST_NAME='LegacyUsdDocumentOperator';
 
     private static void configure(Boolean enabled) {
         FcosCompanyFxRateService.settingsOverride=new Fcos_Trading_FX_Setting__c(Enabled__c=enabled);
@@ -12,12 +13,24 @@ private class FcosLegacyFinancialCompatibilityTest {
             Username='legacy-fx.'+UserInfo.getOrganizationId()+'.'+System.now().getTime()+'@example.invalid',
             EmailEncodingKey='UTF-8',LanguageLocaleKey='en_US',LocaleSidKey='en_US',
             TimeZoneSidKey='Asia/Hong_Kong',ProfileId=UserInfo.getProfileId());
-        insert actor;
+        Profile salesSupport=[SELECT Id,PermissionsViewAllData,PermissionsModifyAllData FROM Profile WHERE Name='Sales Support' LIMIT 1];
+        System.assertEquals(false,salesSupport.PermissionsViewAllData);
+        System.assertEquals(false,salesSupport.PermissionsModifyAllData);
+        User legacyUser=new User(Alias='legacyus',LastName=LEGACY_OPERATOR_LAST_NAME,Email='legacy-usd@example.invalid',
+            Username='legacy-usd.'+UserInfo.getOrganizationId()+'.'+System.now().getTime()+'@example.invalid',
+            EmailEncodingKey='UTF-8',LanguageLocaleKey='en_US',LocaleSidKey='en_US',
+            TimeZoneSidKey='Asia/Hong_Kong',ProfileId=salesSupport.Id);
+        insert new List<User>{actor,legacyUser};
         List<PermissionSetAssignment> assignments=new List<PermissionSetAssignment>();
-        for(PermissionSet permission:[SELECT Id FROM PermissionSet WHERE Name IN
-            ('Fcos_Trading_FX_Access','FCOS_Variable_Charges_User')])
+        for(PermissionSet permission:[SELECT Id,Name FROM PermissionSet WHERE Name IN
+            ('Fcos_Trading_FX_Access','FCOS_Variable_Charges_User')]) {
             assignments.add(new PermissionSetAssignment(AssigneeId=actor.Id,PermissionSetId=permission.Id));
-        System.assertEquals(2,assignments.size());insert assignments;
+            if(permission.Name=='FCOS_Variable_Charges_User') {
+                assignments.add(new PermissionSetAssignment(AssigneeId=legacyUser.Id,PermissionSetId=permission.Id));
+            }
+        }
+        System.assertEquals(3,assignments.size());
+        insert assignments;
 
         Test.startTest();
         try {
@@ -41,6 +54,87 @@ private class FcosLegacyFinancialCompatibilityTest {
             false,false,Date.today(),Date.today(),Date.today());
     }
     private static String legacyPdf() {return EncodingUtil.base64Encode(Blob.valueOf('legacy invoice PDF'));}
+
+    private static User legacyOperator() {return [SELECT Id FROM User WHERE LastName=:LEGACY_OPERATOR_LAST_NAME LIMIT 1];}
+
+    private static void assertLegacyReview(FcosTradeDocumentService.DocumentReview review) {
+        System.assertEquals('USD',review.currencyCode);
+        System.assertEquals(0,review.lines.size());
+        System.assertEquals(null,review.nativeTotal);
+        System.assertEquals(null,review.sideId);
+        System.assertEquals(null,review.reissueOfId);
+        System.assertEquals(null,review.rate);
+        System.assertEquals(null,review.rateId);
+        System.assertEquals(null,review.confirmedAt);
+    }
+
+    @IsTest
+    static void disabledTradingFxPreservesLegacyOperatorDocumentReads() {
+        STEM_Line_Item__c source=[SELECT Id,STEM__c,STEM__r.Account__c,Original_Supplier__c FROM STEM_Line_Item__c WHERE Cancelled__c=false LIMIT 1];
+        List<Nomination__c> nominations=[SELECT Id FROM Nomination__c WHERE STEM__c=:source.STEM__c ORDER BY RecordTypeId,Id];
+        System.assertEquals(2,nominations.size(),'The fixture needs the buyer confirmation and supplier nomination.');
+        List<Id> selected=new List<Id>{source.Id};
+        System.runAs(legacyOperator()) {
+            configure(false);
+            System.assertEquals(false,FeatureManagement.checkPermission('Fcos_Trading_FX_Entry'));
+            STEM_Line_Item__c visible=[SELECT Total_Cost__c FROM STEM_Line_Item__c WHERE Id=:source.Id WITH USER_MODE];
+            Test.startTest();
+            Integer initialWrites=Limits.getDmlStatements();
+            List<FcosTradeDocumentService.DocumentReview> legacyViews=new List<FcosTradeDocumentService.DocumentReview>{
+                InvoiceController.previewTradingDocument(source.STEM__c,selected)
+            };
+            for(Nomination__c nomination:nominations) legacyViews.add(NominationController.previewTradingDocument(nomination.Id));
+            FcosTradeDocumentService.DocumentReview supplier=VariableChargeInvoiceReadinessService.previewSupplierTradingDocument(
+                source.STEM__c,source.Original_Supplier__c,selected);
+            Boolean mismatchedSupplierDenied=false;
+            try {VariableChargeInvoiceReadinessService.previewSupplierTradingDocument(source.STEM__c,source.STEM__r.Account__c,selected);}
+            catch(AuraHandledException expected) {mismatchedSupplierDenied=true;}
+            System.assertEquals(true,mismatchedSupplierDenied,'A supplier invoice preview must refuse another counterparty\'s line.');
+            System.assertEquals(initialWrites,Limits.getDmlStatements());
+            Test.stopTest();
+
+            for(FcosTradeDocumentService.DocumentReview review:legacyViews) {
+                assertLegacyReview(review);
+                System.assertEquals(null,review.usdTotal);
+                System.assertEquals(null,review.fingerprint);
+            }
+            assertLegacyReview(supplier);
+            System.assertEquals(visible.Total_Cost__c==null?0:visible.Total_Cost__c.setScale(2,RoundingMode.HALF_UP),supplier.usdTotal);
+            System.assertEquals(64,supplier.fingerprint.length());
+        }
+    }
+
+    @IsTest
+    static void legacyDocumentWrapperRefusesManagedEvidenceWithoutTradingPermission() {
+        STEM_Line_Item__c source=line();
+        Id buyerNomination=[SELECT Id FROM Nomination__c WHERE STEM__c=:source.STEM__c AND RecordTypeId=:FCBStatic.NOMINATION_BUYER_RT_IT LIMIT 1].Id;
+        Test.startTest();
+        System.runAs(actor()) {
+            configure(true);
+            FcosCompanyFxRateService.Snapshot rate=new FcosCompanyFxRateService.Snapshot();
+            rate.rateId='legacy-operator-managed-rate';
+            rate.revision='1';
+            rate.usdHkdRate=7.8;
+            rate.effectiveAt=Datetime.newInstanceGmt(2026,9,10,0,0,0);
+            FcosTradeCurrencyService.Review review=FcosTradeCurrencyService.review(source.Id,'Sell',rate);
+            FcosTradeCurrencyService.save(source.Id,'Sell','HKD',780,review.fingerprint,rate,true);
+            FcosTradeDocumentService.DocumentReview allowed=InvoiceController.previewTradingDocument(source.STEM__c,new List<Id>{source.Id});
+            System.assertEquals('HKD',allowed.currencyCode);
+            System.assertEquals(rate.rateId,allowed.rateId);
+        }
+        System.runAs(legacyOperator()) {
+            configure(false);
+            System.assertEquals(false,FeatureManagement.checkPermission('Fcos_Trading_FX_Entry'));
+            Boolean invoiceDenied=false,confirmationDenied=false;
+            try {InvoiceController.previewTradingDocument(source.STEM__c,new List<Id>{source.Id});}
+            catch(AuraHandledException expected) {invoiceDenied=true;}
+            try {NominationController.previewTradingDocument(buyerNomination);}
+            catch(AuraHandledException expected) {confirmationDenied=true;}
+            System.assertEquals(true,invoiceDenied,'A managed invoice cannot use the legacy USD projection.');
+            System.assertEquals(true,confirmationDenied,'A managed confirmation cannot use the legacy USD projection.');
+        }
+        Test.stopTest();
+    }
 
     @IsTest
     static void disabledUnmanagedInvoiceGenerationKeepsAReserveQueryBudget() {

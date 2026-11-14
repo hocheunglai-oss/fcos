@@ -128,7 +128,17 @@ public with sharing class FcosTradeDocumentService {
     public static DocumentReview previewWithDepositTerms(Id stemId,String direction,Id supplierId,List<Id> lineIds) {
         return previewInternal(stemId,direction,supplierId,lineIds,true);
     }
+    public static DocumentReview previewForLegacyController(Id stemId,String direction,Id supplierId,List<Id> lineIds) {
+        if (lineIds==null || lineIds.isEmpty()) throw new AuraHandledException('Select the document lines.');
+        return previewInternal(stemId,direction,supplierId,lineIds,false,true,direction=='Buy');
+    }
+
     private static DocumentReview previewInternal(Id stemId,String direction,Id supplierId,List<Id> lineIds,Boolean hasReviewedDepositTerms) {
+        return previewInternal(stemId,direction,supplierId,lineIds,hasReviewedDepositTerms,false,false);
+    }
+
+    private static DocumentReview previewInternal(Id stemId,String direction,Id supplierId,List<Id> lineIds,
+            Boolean hasReviewedDepositTerms,Boolean legacyController,Boolean legacySupplierReceipt) {
         if (direction!='Buy' && direction!='Sell') throw new AuraHandledException('Select one buyer or supplier document side.');
         STEM__c stem=[SELECT Id,Account__c,Port__c,Partial_CIA__c FROM STEM__c WHERE Id=:stemId];
         Id partyId=direction=='Buy'?supplierId:stem.Account__c;
@@ -144,6 +154,13 @@ public with sharing class FcosTradeDocumentService {
         // Only the exact canonical snapshot is privileged; selected business rows were sharing-checked above.
         List<Trade_Currency_Side__c> sides=FcosTradeEvidenceStore.sidesByKeys(new Set<String>{key},false);
         Trade_Currency_Side__c side=sides.isEmpty()?null:sides[0];
+        Set<Id> originals=new Set<Id>();
+        for (SObject row : rows) if (row.get(lineageField)!=null) originals.add((Id)row.get(lineageField));
+        if (legacyController && (side!=null || !originals.isEmpty())
+                && !FeatureManagement.checkPermission('Fcos_Trading_FX_Entry')) {
+            throw new AuraHandledException('This document requires the Trading FX permission.');
+        }
+        if (legacyController && side==null && originals.isEmpty()) return legacyUsdReview(rows,direction,legacySupplierReceipt);
         DocumentReview result=new DocumentReview(); result.currencyCode=side==null?'USD':side.Currency__c;
         if (side!=null) { result.sideId=side.Id;result.rate=side.FX_Rate__c;result.rateId=side.FX_Revision__c;result.confirmedAt=side.Confirmed_At__c; }
 
@@ -158,8 +175,6 @@ public with sharing class FcosTradeDocumentService {
             FcosTradeCurrencyService.Review confirmation=FcosTradeCurrencyService.review(rows[0].Id,direction,null);
             if(confirmation.needsConfirmation || result.confirmedAt==null) throw new AuraHandledException('Confirm the current USD prices before generating this managed document.');
         }
-        Set<Id> originals=new Set<Id>();
-        for(SObject row:rows) if(row.get(lineageField)!=null) originals.add((Id)row.get(lineageField));
         if(originals.size()>1) throw new AuraHandledException('Reissue each original invoice separately.');
         Map<Id,Id> originalLineBySource=new Map<Id,Id>();
         if(!originals.isEmpty()) {
@@ -203,17 +218,69 @@ public with sharing class FcosTradeDocumentService {
         result.fingerprint=EncodingUtil.convertToHex(Crypto.generateDigest('SHA-256',Blob.valueOf(JSON.serialize(result))));
         return result;
     }
+
+    private static DocumentReview legacyUsdReview(List<SObject> rows,String direction,Boolean supplierReceipt) {
+        // Existing screens use their own USD inputs. The supplier form also compares
+        // the amount and source revisions it reviewed before saving.
+        DocumentReview result=new DocumentReview();
+        result.currencyCode='USD';
+        Set<Id> fuelIds=new Set<Id>(), chargeIds=new Set<Id>();
+        for (SObject row : rows) {
+            String rowCurrency=(String)row.get(direction+'_Currency__c');
+            if ((String.isNotBlank(rowCurrency) && rowCurrency!='USD') || row.get(direction+'_FX_Side__c')!=null
+                    || row.get(direction+'_FX_Rate__c')!=null || row.get(direction+'_FX_Revision__c')!=null) {
+                throw new AuraHandledException('The selected lines require their reviewed Trading FX evidence.');
+            }
+            if (row.getSObjectType()==STEM_Line_Item__c.SObjectType) fuelIds.add(row.Id);
+            else chargeIds.add(row.Id);
+        }
+        List<SObject> visibleRows=new List<SObject>();
+        String fuelFields=supplierReceipt?'Id,Total_Cost__c,SystemModstamp':'Id';
+        String chargeFields=supplierReceipt?'Id,Line_Total_Buy__c,SystemModstamp':'Id';
+        if (!fuelIds.isEmpty()) {
+            visibleRows.addAll(Database.query('SELECT '+fuelFields+' FROM STEM_Line_Item__c WHERE Id IN :fuelIds WITH USER_MODE'));
+        }
+        if (!chargeIds.isEmpty()) {
+            visibleRows.addAll(Database.query('SELECT '+chargeFields+' FROM STEM_Extra_Cost__c WHERE Id IN :chargeIds WITH USER_MODE'));
+        }
+        if (visibleRows.size()!=rows.size()) throw new AuraHandledException('The selected document lines must be readable.');
+        if (supplierReceipt) {
+            Decimal total=0;
+            List<String> evidence=new List<String>();
+            for (SObject row : visibleRows) {
+                Decimal amount=value(row,fuelIds.contains(row.Id)?'Total_Cost__c':'Line_Total_Buy__c');
+                total+=amount;
+                evidence.add(row.Id+':'+amount+':'+String.valueOf(row.get('SystemModstamp')));
+            }
+            evidence.sort();
+            result.usdTotal=total.setScale(2,RoundingMode.HALF_UP);
+            result.fingerprint=EncodingUtil.convertToHex(Crypto.generateDigest('SHA-256',Blob.valueOf(String.join(evidence,'|'))));
+        }
+        return result;
+    }
+
     @AuraEnabled
     public static DocumentReview nomination(Id nominationId) {
+        return nominationInternal(nominationId,false);
+    }
+
+    public static DocumentReview nominationForLegacyController(Id nominationId) {
+        return nominationInternal(nominationId,true);
+    }
+
+    private static DocumentReview nominationInternal(Id nominationId,Boolean legacyController) {
         Nomination__c nomination=[SELECT Id,STEM__c,Account__c,RecordTypeId,Payment_Term__c FROM Nomination__c WHERE Id=:nominationId];
         Boolean buyer=nomination.RecordTypeId==FCBStatic.NOMINATION_BUYER_RT_IT;
+        if (legacyController && !buyer && nomination.RecordTypeId!=FCBStatic.NOMINATION_SUPPLIER_RT_IT) {
+            throw new AuraHandledException('Select a buyer confirmation or supplier nomination.');
+        }
         List<Id> selected;
         if (!buyer) {
             selected=new List<Id>();
             for (STEM_Line_Item__c line:[SELECT Id FROM STEM_Line_Item__c WHERE STEM__c=:nomination.STEM__c AND Original_Supplier__c=:nomination.Account__c AND Payment_Term__c=:nomination.Payment_Term__c AND Cancelled__c=false]) selected.add(line.Id);
             for (STEM_Extra_Cost__c line:[SELECT Id FROM STEM_Extra_Cost__c WHERE STEM__c=:nomination.STEM__c AND Supplier__c=:nomination.Account__c AND Payment_Term__c=:nomination.Payment_Term__c AND Cancelled__c=false]) selected.add(line.Id);
         }
-        return preview(nomination.STEM__c,buyer?'Sell':'Buy',buyer?null:nomination.Account__c,selected);
+        return previewInternal(nomination.STEM__c,buyer?'Sell':'Buy',buyer?null:nomination.Account__c,selected,false,legacyController,false);
     }
     @AuraEnabled
     public static Id recordSupplierInvoice(Id stemId,Id supplierId,List<Id> lineIds,String reviewedFxFingerprint,Map<String,Object> invoiceFields) {
