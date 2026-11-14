@@ -2,6 +2,7 @@ import { assertOrdinaryRemittancePostingRow } from './_xeroOrdinaryRemittanceCas
 import { createHash, randomUUID } from 'node:crypto';
 import { claimReviewedGroupPayment, finishReviewedGroupPayment, groupBankProofMatches, hasGroupBankSourceEvidence } from './_xeroGroupPaymentPersistence.js';
 import { HKD_PAYMENT_WRITE_HOLD, isIssuedNativeHkdPostingRow, confirmedPaymentValues, matchPaymentResponses, paymentConfirmationErrors } from './_xeroPaymentIdentity.js';
+import { requireExternalActionGate } from './_externalActionGates.js';
 
 const hash = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const uuid = (value) => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
@@ -192,6 +193,7 @@ async function resolveNativeHkdPaymentClaim(client, claim, saved, payment, actor
 
 export async function postReviewedPaymentBatch(rows, { client, connection, actor, accountingFetch, options = {} }) {
   if (rows.some(row => row.currency === 'HKD' && !isIssuedNativeHkdPostingRow(row))) throw failure(HKD_PAYMENT_WRITE_HOLD, 'XERO_PAYMENT_FX_PERSISTENCE_REQUIRED');
+  if (rows.some(row => row.currency === 'HKD')) requireExternalActionGate('xero_trading_fx_writes', options.env);
   rows.forEach(assertOrdinaryRemittancePostingRow);
   if (!uuid(connection.tenantId)) throw failure('A verified Xero tenant is required.', 'XERO_PAYMENT_TENANT_INVALID');
   const claims = []; const outcomes = [];

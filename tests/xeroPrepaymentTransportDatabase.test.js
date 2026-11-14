@@ -429,7 +429,8 @@ test('native draft transport confirms an original acknowledged Xero ID with read
       },
     });
     const options = { client: adapter, accessContext: { profile: { id: actorId } }, getConnection: async () => connection,
-      env: { FCOS_ENABLE_XERO_FINANCIAL_SYNC: 'true' }, transportFor, readReview: async () => ({ privateReview: structuredClone(review) }) };
+      env: { FCOS_ENABLE_XERO_FINANCIAL_SYNC: 'true', FCOS_ENABLE_XERO_TRADING_FX_WRITES: 'true' },
+      transportFor, readReview: async () => ({ privateReview: structuredClone(review) }) };
     const body = { operationId, tenantId, sourceId, sourceObject, reviewed: true, reviewFingerprint: draft.reviewFingerprint };
     await assert.rejects(xeroNativeDocumentApply(body, options), { code: 'XERO_NATIVE_DOCUMENT_UNKNOWN' });
     const original = await ledger.get({ operationId, tenantId });

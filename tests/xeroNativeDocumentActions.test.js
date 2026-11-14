@@ -39,7 +39,7 @@ function fixture({ rounding = false, readError = false, badAccount = false } = {
     },
   };
   const options = {
-    env: { FCOS_ENABLE_XERO_FINANCIAL_SYNC: 'true', XERO_TENANT_ID: tenantId },
+    env: { FCOS_ENABLE_XERO_FINANCIAL_SYNC: 'true', FCOS_ENABLE_XERO_TRADING_FX_WRITES: 'true', XERO_TENANT_ID: tenantId },
     accessContext: { profile: { id: actorId } }, client: {},
     getConnection: async () => { calls.push('connect'); return { tenantId, scope: 'accounting.invoices' }; },
     ledgerFor: () => ledger,
@@ -102,6 +102,8 @@ test('recovery rejects another actor without credential refresh and verifies the
 test('native apply fails before journal or review for disabled posting, staged requests, and read-only invoice scope', async () => {
   const { calls, options } = fixture();
   await assert.rejects(xeroNativeDocumentApply(body, { ...options, env: {} }), { code: 'EXTERNAL_ACTION_GATE_DISABLED' });
+  await assert.rejects(xeroNativeDocumentApply(body, { ...options, env: { FCOS_ENABLE_XERO_FINANCIAL_SYNC: 'true' } }),
+    { code: 'EXTERNAL_ACTION_GATE_DISABLED' });
   await assert.rejects(xeroNativeDocumentReconcile(body, { ...options, env: { VERCEL_ENV: 'preview' } }), { code: 'FCOS_DEPLOYMENT_READ_ONLY' });
   await assert.rejects(xeroNativeDocumentApply({ ...body, reviewed: false }, options), { code: 'XERO_NATIVE_DOCUMENT_REVIEW_REQUIRED' });
   assert.deepEqual(calls, []);

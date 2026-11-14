@@ -1255,6 +1255,7 @@ export async function xeroFinancialPaymentApply(body = {}, dependencies = {}) {
       || !allocationReviews.get(row.salesforcePaymentId) || allocationReviews.get(row.salesforcePaymentId) !== row.reviewFingerprint));
   const staleIds = new Set(stale.map((row) => row.salesforcePaymentId));
   const eligible = preview.rows.filter((row) => selected.has(row.salesforcePaymentId) && !staleIds.has(row.salesforcePaymentId) && row.action === 'payment_apply' && row.status === 'eligible');
+  if (eligible.some(row => row.currency === 'HKD')) requireExternalActionGate('xero_trading_fx_writes', env);
   if (!eligible.length) throw financialError('No exact eligible payments were selected.', 400, 'XERO_FINANCIAL_NO_ELIGIBLE_PAYMENTS');
   for (const group of index(eligible, (row) => row.proposedPayment.Invoice.InvoiceID).values()) {
     const amount = group.reduce((sum, row) => sum + row.amount, 0);
@@ -1324,6 +1325,7 @@ export async function previewPayments(body, { accessContext, env, fetchImpl, cli
     paymentMappings: paymentMappings.data || [],
     currentDocumentById, organisation, bankAccounts, paymentPostingClaims, tenantId: connection.tenantId, groupPaymentControlsComplete: true,
     financialPostingEnabled: isExternalActionEnabled('xero_financial_sync', env),
+    nativeFxPostingEnabled: isExternalActionEnabled('xero_trading_fx_writes', env),
     paymentReviewer: actorFields(accessContext),
   }));
   blockRepeatedFinancialTargets(rows, (row) => row.xeroPaymentId, 'More than one Salesforce payment matches this Xero payment. Resolve the payment identity before linking.');
@@ -1462,7 +1464,7 @@ function classifyNativeHkdPayment(payment, context) {
         paymentId: match.PaymentID, plan }),
     };
   }
-  if (!plan || !context.financialPostingEnabled) blockers.push(HKD_PAYMENT_WRITE_HOLD);
+  if (!plan || !context.financialPostingEnabled || !context.nativeFxPostingEnabled) blockers.push(HKD_PAYMENT_WRITE_HOLD);
   if (existing || claim || match) blockers.push('An existing HKD payment or claim must be reconciled before a new posting.');
   if (plan && !existing && !claim && !match) {
     if (currentDocument.status !== 'AUTHORISED' || !Number.isFinite(currentDocument.amountDue) || currentDocument.amountDue < plan.amount) {

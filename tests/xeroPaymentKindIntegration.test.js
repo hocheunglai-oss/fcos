@@ -122,7 +122,7 @@ test('native HKD reviews bind the original invoice, bank and claim for posting o
   assert.equal(exact.status, 'blocked');
   assert.equal(exact.proposedPayment, null);
   const open = { ...document, status: 'AUTHORISED', amountDue: 900 };
-  const ready = { ...current, financialPostingEnabled: true, xeroPayments: [],
+  const ready = { ...current, financialPostingEnabled: true, nativeFxPostingEnabled: true, xeroPayments: [],
     currentDocumentById: new Map([[documentId, open]]) };
   for (const family of [{ Remittance__c: 'a0S000000000123AAA' }, { _groupBankEvidenceBlocker: 'missing parent' },
     { _ordinaryRemittanceFamily: { complete: false } }, { Cash_Event__c: 'a0S000000000124AAA' }]) {
@@ -165,7 +165,7 @@ test('native HKD reviews bind the original invoice, bank and claim for posting o
   assert.equal(classifyXeroFinancialPayment(source, { ...recoveryContext, paymentReviewer: {} }).status, 'blocked');
   const calls = [];
   const deps = {
-    env: { FCOS_ENABLE_XERO_FINANCIAL_SYNC: 'true' }, accessContext: { profile: actor },
+    env: { FCOS_ENABLE_XERO_FINANCIAL_SYNC: 'true', FCOS_ENABLE_XERO_TRADING_FX_WRITES: 'true' }, accessContext: { profile: actor },
     paymentPreview: async () => ({ tenantId, rows: [recovery] }),
     getConnection: async () => ({ tenantId, scope: 'accounting.payments.read accounting.invoices accounting.settings.read' }),
     client: { async rpc(name, args) { calls.push({ name, args }); return { data: { mappingId, reused: false } }; } },
@@ -185,6 +185,7 @@ test('native HKD reviews bind the original invoice, bank and claim for posting o
 
   for (const held of [
     { ...ready, financialPostingEnabled: false },
+    { ...ready, nativeFxPostingEnabled: false },
     { ...ready, organisation: { ...ready.organisation, periodLockDate: source.Date__c } },
     { ...ready, currentDocumentById: new Map([[documentId, { ...open, amountDue: 779.99 }]]) },
     { ...ready, xeroPayments: [{ ...actual, Status: 'DELETED' }] },
