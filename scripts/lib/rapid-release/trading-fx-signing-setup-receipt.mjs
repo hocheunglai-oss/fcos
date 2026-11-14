@@ -56,8 +56,7 @@ export function createSigningReceiptDriver({ github, ownerId, readEnvironment, v
       const request = await payload({...context,observedAt:context.intent.submittedAt});
       check(digest({...request,payload:{...request.payload,observedAt:null}}) === context.intent.requestDigest
         && !await find(context),'SIGNING_SETUP_RECEIPT_REQUEST_CHANGED');
-      await context.assertSubmission();
-      await github.write(base+'/deployments',request);
+      await context.submitOnce(() => github.write(base+'/deployments',request));
     },
     discover: find,
     async verify(context) { return digest(await find(context) ?? null) === digest(context.evidence); },

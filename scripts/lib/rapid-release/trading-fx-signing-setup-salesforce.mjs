@@ -145,8 +145,7 @@ export function createSigningSalesforceDriver({ cliEnv, authenticateIdentity, ve
       const connection = await absence(context);
       const certificate = signingCertificateDefinition(context.plan.operationId);
       check(context.intent.requestDigest === digest(certificate),'SIGNING_SETUP_SALESFORCE_REQUEST_CHANGED');
-      await context.assertSubmission();
-      await oneShotMetadataCreate({connection,version:connection.version,fetchImpl,certificate});
+      await oneShotMetadataCreate({connection,version:connection.version,fetchImpl:(url,options)=>context.submitOnce(()=>fetchImpl(url,options)),certificate});
     },
     async discover(context) { return (await inspect(context))?.evidence; },
     async verify(context) { return digest((await inspect(context))?.evidence ?? null) === digest(context.evidence); },

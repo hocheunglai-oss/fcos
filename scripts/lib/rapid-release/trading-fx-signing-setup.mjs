@@ -11,6 +11,7 @@ export const signedCallbackVariables = Object.freeze({
   FCOS_ENABLE_SALESFORCE_COMPANY_FX: 'true',
   SALESFORCE_COMPANY_FX_ENVIRONMENT: 'production',
 });
+const preSubmitEvidenceCodes = new Set(['SIGNING_SETUP_PROVIDER_PRECONDITION_CHANGED','SIGNING_SETUP_SUBMISSION_NOT_AUTHORIZED']);
 const exact = (value, keys) => value && Object.getPrototypeOf(value) === Object.prototype
   && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
 const same = (left, right) => digest(left ?? null) === digest(right ?? null);
@@ -77,14 +78,21 @@ function checkpoints(chain, operationId, planHash) {
     return row.sequence > setup[0]?.sequence && row.data.operationId === expectedSteps[phase]
       && row.data.planHash === planHash && row.data.provider === signingSetupProviders[phase]
       && row.event === (index % 2 ? 'signing_provider.result' : 'signing_provider.intent')
-      && (index % 2 ? exact(row.data,['operationId','planHash','provider','evidence','outcome']) && row.data.outcome === 'verified'
+      && (index % 2 ? exact(row.data,['operationId','planHash','provider','evidence','outcome'])
+        && (row.data.outcome === 'verified' || row.data.outcome === 'not_submitted'
+          && exact(row.data.evidence,['reason','requestDigest']) && preSubmitEvidenceCodes.has(row.data.evidence.reason)
+          && row.data.evidence.requestDigest === progress[index-1].data.requestDigest)
         : exact(row.data,['operationId','planHash','provider','requestDigest','submittedAt'])
           && iso(row.data.submittedAt) && isDigest(row.data.requestDigest));
   }), 'SIGNING_SETUP_PROVIDER_SEQUENCE_CHANGED');
+  const stopped = records.filter(row => row.event === 'signing_provider.result' && row.data.outcome === 'not_submitted');
+  check(stopped.length <= 1 && stopped.every(row => row === progress.at(-1)), 'SIGNING_SETUP_TERMINAL_PROVIDER_CHANGED');
   const closed = records.filter(row => row.event === 'signing_setup.result');
-  check(closed.length <= 1 && closed.every(row => progress.length === expectedSteps.length * 2 && row.sequence > progress.at(-1).sequence
+  check(closed.length <= 1 && closed.every(row => row.sequence > progress.at(-1)?.sequence
     && exact(row.data,['operationId','planHash','outcome','evidenceDigest']) && row.data.operationId === operationId
-    && row.data.planHash === planHash && row.data.outcome === 'verified'
+    && row.data.planHash === planHash
+    && (row.data.outcome === 'verified' && progress.length === expectedSteps.length*2 && stopped.length === 0
+      || row.data.outcome === 'stopped_before_provider_request' && stopped.length === 1)
     && row.data.evidenceDigest === digest(progress.filter(item => item.event.endsWith('.result')).map(item => item.data.evidence))),
   'SIGNING_SETUP_RESULT_CHANGED');
   return { setup: setup[0]?.data, closed: closed[0]?.data,
@@ -133,6 +141,15 @@ export async function executeSigningSetup({ plan, journal, admission, providers,
     check(state.setup, 'SIGNING_SETUP_INTENT_UNCONFIRMED');
   }
   const receipts = [], previousSteps = [];
+  async function closeBeforeSubmit(label, step, evidence) {
+    const evidenceDigest = digest([...receipts,evidence]);
+    if (!state.closed) {
+      await append('signing_setup.result',{operationId:plan.operationId,planHash,outcome:'stopped_before_provider_request',evidenceDigest});
+    }
+    check(get().closed?.evidenceDigest === evidenceDigest,'SIGNING_SETUP_RESULT_UNCONFIRMED');
+    return {state:'stopped_before_provider_request',provider:label,operationId:step.id,
+      completedProviders:previousSteps.map(item=>item.intent.provider),evidenceDigest,providerCallsResubmitted:0};
+  }
   function currentEvidence(label, evidence) {
     if (label === 'salesforce-certificate') {
       check(Date.parse(evidence.expiresAt) > Date.parse(clock())+minimumRemainingMs,'SIGNING_SETUP_CERTIFICATE_EXPIRES_TOO_SOON');
@@ -146,6 +163,7 @@ export async function executeSigningSetup({ plan, journal, admission, providers,
   for (const [index, label] of signingSetupProviders.entries()) {
     const driver = providers[label], step = state.steps[index];
     const context = { plan, planHash, originalOperationId: step.id, receipts: [...receipts], previousSteps: [...previousSteps] };
+    if (step.result?.outcome === 'not_submitted') return closeBeforeSubmit(label,step,step.result.evidence);
     if (step.result) {
       const evidence = currentEvidence(label,evidenceFor(label,step.result.evidence,plan.operationId,receipts));
       check(await driver.verify({...context,evidence,intent:step.intent}) === true,'SIGNING_SETUP_READBACK_CHANGED');
@@ -165,9 +183,27 @@ export async function executeSigningSetup({ plan, journal, admission, providers,
       await append('signing_provider.intent',intent);
       state = get();
       check(same(state.steps[index].intent,intent),'SIGNING_SETUP_SUBMISSION_INTENT_UNCONFIRMED');
-      const assertSubmission = async () => check((await authorize()).maySubmit, 'SIGNING_SETUP_SUBMISSION_NOT_AUTHORIZED');
-      await assertSubmission();
-      try { await driver.submit({...context,intent,assertSubmission}); } catch { /* Resolve the original operation below. */ }
+      let requestBoundaryReached = false;
+      const submitOnce = async submit => {
+        check(!requestBoundaryReached,'SIGNING_SETUP_DUPLICATE_PROVIDER_REQUEST');
+        check((await authorize()).maySubmit, 'SIGNING_SETUP_SUBMISSION_NOT_AUTHORIZED');
+        requestBoundaryReached = true;
+        return submit();
+      };
+      try {
+        await driver.submit({...context,intent,submitOnce});
+        check(requestBoundaryReached,'SIGNING_SETUP_PROVIDER_PRECONDITION_CHANGED');
+      }
+      catch (error) {
+        if (!requestBoundaryReached) {
+          const code = 'SIGNING_SETUP_SUBMISSION_NOT_AUTHORIZED';
+          const evidence = {reason:error?.code === code ? code : 'SIGNING_SETUP_PROVIDER_PRECONDITION_CHANGED',requestDigest};
+          await append('signing_provider.result',{operationId:step.id,planHash,provider:label,outcome:'not_submitted',evidence});
+          state = get();
+          return closeBeforeSubmit(label,step,evidence);
+        }
+        // A request entered the transport. Only original-operation readback can resolve it.
+      }
     }
     const found = await driver.discover({...context,intent});
     if (!found) return {state:'original_operation_unresolved',provider:label,operationId:step.id,providerCallsResubmitted:0};

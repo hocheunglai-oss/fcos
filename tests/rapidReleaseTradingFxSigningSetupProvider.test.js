@@ -53,7 +53,7 @@ function vercelFixture() {
 test('Vercel submits three exact create-only rows once and reads the original rows by operation marker', async () => {
   const {driver,context,calls,request,drift} = vercelFixture();
   const intent = {submittedAt:time,operationId:context.originalOperationId,requestDigest:await driver.preflight(context)};
-  await assert.rejects(driver.submit({...context,intent,assertSubmission:async()=>{}}),/Lost Vercel response/u);
+  await assert.rejects(driver.submit({...context,intent,submitOnce:async submit=>submit()}),/Lost Vercel response/u);
   assert.equal(calls(),1);
   assert.deepEqual(request().map(({key,value,type,target,comment})=>[key,value,type,target,comment]),[
     ['FCOS_ENABLE_SALESFORCE_COMPANY_FX','true','plain',['production'],intent.operationId],
@@ -71,10 +71,10 @@ test('Vercel submits three exact create-only rows once and reads the original ro
 test('partial provider result stays unresolved and is never fixed by an attempted upsert', async () => {
   const {driver,context,calls,clear} = vercelFixture();
   const intent = {submittedAt:time,operationId:context.originalOperationId,requestDigest:await driver.preflight(context)};
-  await assert.rejects(driver.submit({...context,intent,assertSubmission:async()=>{}}),/Lost Vercel response/u);
+  await assert.rejects(driver.submit({...context,intent,submitOnce:async submit=>submit()}),/Lost Vercel response/u);
   clear();
   assert.equal(await driver.discover({...context,intent}),undefined);
-  await assert.rejects(driver.submit({...context,intent,assertSubmission:async()=>{}}),{code:'SIGNING_SETUP_VERCEL_PREIMAGE_CHANGED'});
+  await assert.rejects(driver.submit({...context,intent,submitOnce:async submit=>submit()}),{code:'SIGNING_SETUP_VERCEL_PREIMAGE_CHANGED'});
   assert.equal(calls(),1);
 });
 
@@ -100,18 +100,18 @@ test('Salesforce writes one exact Metadata request after pinned read-only prefli
   });
   const scoped = {...plan,expectedSignerId:actorId};
   const intent = {requestDigest:await sf.preflight({plan:scoped}),submittedAt:time};
-  await assert.rejects(sf.submit({plan:scoped,intent,assertSubmission:async()=>{}}),/Salesforce response lost/u);
+  await assert.rejects(sf.submit({plan:scoped,intent,submitOnce:async submit=>submit()}),/Salesforce response lost/u);
   assert.equal(await sf.discover({plan:scoped,intent}),undefined);
   assert.equal(callCount,1);
   connection.metadata.read=async()=>({fullName:certificateName});
-  await assert.rejects(sf.submit({plan:scoped,intent,assertSubmission:async()=>{}}),{code:'SIGNING_SETUP_SALESFORCE_CERTIFICATE_EXISTS'});
+  await assert.rejects(sf.submit({plan:scoped,intent,submitOnce:async submit=>submit()}),{code:'SIGNING_SETUP_SALESFORCE_CERTIFICATE_EXISTS'});
   assert.equal(callCount,1);
 });
 
 test('owner-created immutable receipt is reused by the existing protected stage consumer', async () => {
   const mock = vercelFixture(), context = mock.context;
   const intent = {submittedAt:time,operationId:context.originalOperationId,requestDigest:await mock.driver.preflight(context)};
-  await assert.rejects(mock.driver.submit({...context,intent,assertSubmission:async()=>{}}));
+  await assert.rejects(mock.driver.submit({...context,intent,submitOnce:async submit=>submit()}));
   const post = await mock.driver.exactPostimage({...context,intent});
   const rows = [];
   const github = {pages:async()=>rows,
@@ -129,7 +129,7 @@ test('owner-created immutable receipt is reused by the existing protected stage 
     previousSteps:[...context.previousSteps,{intent,originalOperationId:intent.operationId,evidence:post.evidence}]};
   const receiptIntent = {operationId:contextReceipt.originalOperationId,submittedAt:time,
     requestDigest:await driver.preflight(contextReceipt)};
-  await assert.rejects(driver.submit({...contextReceipt,intent:receiptIntent,assertSubmission:async()=>{}}),/lost GitHub/u);
+  await assert.rejects(driver.submit({...contextReceipt,intent:receiptIntent,submitOnce:async submit=>submit()}),/lost GitHub/u);
   const receipt = await driver.discover({...contextReceipt,intent:receiptIntent});
   assert.equal(receipt.deploymentReceiptId,91);
   const proof = await verifyTradingFxSigningConfig({manifest:{candidate:{sha:plan.candidateSha,sourceDigest:plan.sourceDigest},
@@ -180,7 +180,7 @@ test('protected workflow admits a numeric native handover pointer before provide
 test('a provider recheck rejection stops the Vercel POST even after the prior staging checks passed', async () => {
   const {driver,context,calls} = vercelFixture();
   const intent = {submittedAt:time,operationId:context.originalOperationId,requestDigest:await driver.preflight(context)};
-  await assert.rejects(driver.submit({...context,intent,assertSubmission:async()=>{throw Error('exact approval no longer current');}}),
+  await assert.rejects(driver.submit({...context,intent,submitOnce:async()=>{throw Error('exact approval no longer current');}}),
     /exact approval no longer current/u);
   assert.equal(calls(),0);
 });

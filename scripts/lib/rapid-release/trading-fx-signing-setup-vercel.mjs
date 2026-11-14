@@ -127,11 +127,10 @@ export function createSigningVercelDriver({ env, vercel, readPublicKey, verifyPr
       check(digest(body) === context.intent.requestDigest && env.VERCEL_TOKEN,'SIGNING_SETUP_VERCEL_REQUEST_CHANGED');
       // The CLI's generic API command retries failed POSTs. Use exactly one
       // create-only, no-redirect request. Catalog readback is authoritative.
-      await context.assertSubmission();
-      const reply = await fetchImpl('https://api.vercel.com'+path+'?teamId='+pins.teamId,{
+      const reply = await context.submitOnce(() => fetchImpl('https://api.vercel.com'+path+'?teamId='+pins.teamId,{
         method:'POST',redirect:'error',signal:AbortSignal.timeout(30000),
         headers:{authorization:'Bearer '+env.VERCEL_TOKEN,'content-type':'application/json'},body:JSON.stringify(body),
-      });
+      }));
       await reply.body?.cancel();
       check(reply.ok && !reply.redirected,'SIGNING_SETUP_VERCEL_ACKNOWLEDGEMENT_UNCERTAIN');
     },

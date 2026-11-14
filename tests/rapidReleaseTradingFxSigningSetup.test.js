@@ -41,7 +41,7 @@ function fixture() {
   };
   const providers = Object.fromEntries(signingSetupProviders.map((name,index) => [name,{
     preflight: async ({originalOperationId}) => digest(originalOperationId),
-    async submit({intent}) { calls.push(name); native.set(intent.operationId,received[index]); },
+    async submit({intent,submitOnce}) {await submitOnce(() => {calls.push(name);native.set(intent.operationId,received[index]);});},
     discover: async ({intent}) => native.get(intent.operationId),
     async verify({intent,evidence}) { return digest(native.get(intent.operationId) ?? null) === digest(evidence); },
   }]));
@@ -78,7 +78,7 @@ test('lost provider acknowledgement resolves the original and never replays a co
 test('unknown original certificate blocks later writes and all competing releases', async () => {
   const {chain,calls,context,native} = fixture();
   const step = context.providers['salesforce-certificate'];
-  step.submit = async () => { calls.push('salesforce-certificate'); throw Error('lost'); };
+  step.submit = async ({submitOnce}) => submitOnce(() => {calls.push('salesforce-certificate');throw Error('lost');});
   const expected = await executeSigningSetup(context);
   assert.equal(expected.state,'original_operation_unresolved');
   assert.equal(expected.provider,'salesforce-certificate');
@@ -116,7 +116,7 @@ test('a missing journal acknowledgement and inconclusive readback starts no prov
 
 test('partial Vercel applies no later writes, and expired approval can only read back', async () => {
   const {chain,calls,context,native} = fixture();
-  context.providers['vercel-config'].submit = async () => { calls.push('vercel-config'); throw Error('partial'); };
+  context.providers['vercel-config'].submit = async ({submitOnce}) => submitOnce(() => {calls.push('vercel-config');throw Error('partial');});
   const partial = await executeSigningSetup(context);
   assert.equal(partial.provider,'vercel-config');
   native.set(partial.operationId,received[1]);
@@ -132,10 +132,10 @@ test('partial Vercel applies no later writes, and expired approval can only read
 
 test('provider result with a different key fails and leaves the original open', async () => {
   const {chain,calls,context,native} = fixture();
-  context.providers['vercel-config'].submit = async ({intent}) => {
+  context.providers['vercel-config'].submit = async ({intent,submitOnce}) => submitOnce(() => {
     calls.push('vercel-config');
     native.set(intent.operationId,{...received[1],keyDigest:hex('8')});
-  };
+  });
   await assert.rejects(executeSigningSetup(context),{code:'SIGNING_SETUP_VERCEL_EVIDENCE_INVALID'});
   assert.deepEqual(calls,['salesforce-certificate','vercel-config']);
   assert.deepEqual(pendingOperations(chain).map(row=>row.event),['signing_setup.intent','signing_provider.intent']);
@@ -143,7 +143,7 @@ test('provider result with a different key fails and leaves the original open', 
 
 test('an expired exact setup can complete readback for every previously submitted step', async () => {
   const {chain,calls,context,native} = fixture();
-  context.providers['owner-receipt'].submit = async () => { calls.push('owner-receipt'); throw Error('lost'); };
+  context.providers['owner-receipt'].submit = async ({submitOnce}) => submitOnce(() => {calls.push('owner-receipt');throw Error('lost');});
   const pending = await executeSigningSetup(context);
   assert.equal(pending.provider,'owner-receipt');
   context.admission = async () => ({runId:432,approvalHash:hex('7'),maySubmit:false});
@@ -151,4 +151,16 @@ test('an expired exact setup can complete readback for every previously submitte
   assert.equal((await executeSigningSetup(context)).state,'verified');
   assert.deepEqual(calls,signingSetupProviders);
   assert.deepEqual(pendingOperations(chain),[]);
+});
+
+test('a proven local refusal before provider entry closes the attempt and preserves upstream evidence', async () => {
+  const {chain,calls,context} = fixture();
+  context.providers['vercel-config'].submit = async () => { throw Error('precondition changed before transport'); };
+  const result = await executeSigningSetup(context);
+  assert.equal(result.state,'stopped_before_provider_request');
+  assert.deepEqual(result.completedProviders,['salesforce-certificate']);
+  assert.deepEqual(calls,['salesforce-certificate']);
+  assert.deepEqual(pendingOperations(chain),[]);
+  assert.deepEqual(await executeSigningSetup(context),result);
+  assert.deepEqual(calls,['salesforce-certificate']);
 });
