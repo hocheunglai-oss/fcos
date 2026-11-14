@@ -93,7 +93,7 @@ export function createSigningVercelDriver({ env, vercel, readPublicKey, verifyPr
 
   async function readback({ plan, intent, ...context }) {
     await verifyPredecessor(plan);
-    const request = await buildRequest(context);
+    const request = await buildRequest({plan,...context});
     check(digest(request) === intent.requestDigest,'SIGNING_SETUP_VERCEL_REQUEST_CHANGED');
     const snapshot = await catalog(plan);
     const rows = snapshot.environment.filter(row => allowed.has(row.key)).sort(byId);
