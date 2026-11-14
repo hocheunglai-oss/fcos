@@ -125,9 +125,9 @@ async function readPostQatRecovery({ manifest, plan, env }) {
     readQatRecovery: prior => readQatRecovery({ manifest: prior, plan: prior.prerequisites.plan, env }) });
 }
 
-async function readStoppedBootstrap({ manifest, env }) {
+async function readStoppedBootstrap({ manifest, env, provider }) {
   const github = githubClient({ token: env.GITHUB_TOKEN, candidateSha: manifest.candidate.sha });
-  return readFailedBootstrapSuccessor({ manifest, github, ownerId,
+  return readFailedBootstrapSuccessor({ manifest, github, ownerId, provider,
     readPostQatRecovery: previous => readPostQatRecovery({ manifest: previous, plan: previous.prerequisites.plan, env }) });
 }
 

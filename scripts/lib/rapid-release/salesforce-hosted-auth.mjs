@@ -12,9 +12,11 @@ export function assertHostedSalesforceRunner(env) {
     'SALESFORCE_HOSTED_RUNNER_REQUIRED');
 }
 
-export function authenticateHostedSalesforce({ directory, cwd, env = process.env, spawn = spawnSync, requireMirrorCredential = true }) {
+export function authenticateHostedSalesforce({ directory, cwd, env = process.env, spawn = spawnSync, requireMirrorCredential = true,
+  onlyProductionForSigningRead = false }) {
   assertHostedSalesforceRunner(env);
-  const credentials = environments.map(environment => {
+  const selected = onlyProductionForSigningRead ? environments.filter(environment => environment.key === 'production') : environments;
+  const credentials = selected.map(environment => {
     const prefix = 'FCOS_RAPID_SALESFORCE_' + environment.key.toUpperCase();
     const clientId = env[prefix + '_CLIENT_ID']?.trim();
     const privateKey = env[prefix + '_PRIVATE_KEY'];

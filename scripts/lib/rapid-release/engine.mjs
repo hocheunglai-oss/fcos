@@ -1,5 +1,6 @@
 import { requiresCompanyFxHistorySmoke, requiresSupplierBucketSmoke, requiresGroupedPetroleumSmoke, requiresTradingFxSmoke,
-  assertAuthorization, digest, requireCondition, validateManifest } from './contract.mjs';
+  assertAuthorization, digest, isDigest, requireCondition, validateManifest } from './contract.mjs';
+import { hasTradingFxSigningLocator } from './trading-fx-signing-config.mjs';
 
 const events = records => records.map(record => record.payload);
 export function phaseResult(records, phase) { return events(records).filter(event => event.event === `${phase}.result`).at(-1)?.data; }
@@ -137,6 +138,7 @@ export async function promoteRelease({ manifest, journal, provider, approval, pr
   await provider.verifyApproval(approval, { manifest, staged });
   if (all.some(event => event.event === 'release.complete')) return { state: 'complete', deploymentId: staged.id, reused: true };
   if (!all.some(event => event.event === 'approval.accepted')) await journal.append('approval.accepted', approval);
+  let signingRateDigest;
   if (manifest.selection.salesforce || manifest.selection.database) {
     await journal.assertNoUnresolvedOtherRelease();
     await provider.assertOwnership({ phase: 'prerequisites', manifest, manifestHash: digest(manifest) });
@@ -159,12 +161,16 @@ export async function promoteRelease({ manifest, journal, provider, approval, pr
     }
     const prerequisiteDigest = digest(prerequisite);
     const historyRequired = requiresCompanyFxHistorySmoke(manifest);
-    if (!events(await journal.read()).some(event => event.event === 'prerequisites.smoke_passed'
+    const signingRateRequired = hasTradingFxSigningLocator(manifest.prerequisites?.plan);
+    const savedSmoke = events(await journal.read()).find(event => event.event === 'prerequisites.smoke_passed'
       && event.data.prerequisiteDigest === prerequisiteDigest && event.data.deploymentId === staged.id
       && supplierBucketSmokeVerified(event.data, manifest)
       && groupedPetroleumSmokeVerified(event.data, manifest)
       && tradingFxSmokeVerified(event.data, manifest)
-      && (!historyRequired || event.data.companyFxHistory?.readVerified === true && event.data.companyFxHistory?.writeDenied === true))) {
+      && (!signingRateRequired || isDigest(event.data.signingRateDigest))
+      && (!historyRequired || event.data.companyFxHistory?.readVerified === true && event.data.companyFxHistory?.writeDenied === true));
+    if (savedSmoke) signingRateDigest = savedSmoke.data.signingRateDigest;
+    else {
       const currentStage = await provider.ready(staged.id);
       requireCondition(currentStage.id === staged.id && currentStage.state === 'READY' && currentStage.buildId === staged.buildId
         && currentStage.sha === staged.sha && currentStage.target === staged.target && currentStage.artifactDigest === staged.artifactDigest,
@@ -173,6 +179,8 @@ export async function promoteRelease({ manifest, journal, provider, approval, pr
       assertSmokeProof(acceptance, manifest, currentStage);
       requireCondition(!historyRequired || acceptance.companyFxHistory?.readVerified === true
         && acceptance.companyFxHistory?.writeDenied === true, 'SMOKE_COMPANY_FX_HISTORY_REQUIRED');
+      requireCondition(!signingRateRequired || isDigest(acceptance.signingRateDigest), 'SMOKE_TRADING_FX_CURRENT_RATE_UNVERIFIED');
+      signingRateDigest = acceptance.signingRateDigest;
       await journal.append('prerequisites.smoke_passed', { ...acceptance, prerequisiteDigest });
     }
   }
@@ -186,7 +194,7 @@ export async function promoteRelease({ manifest, journal, provider, approval, pr
   if (promoted.waiting) return promoted;
   requireCondition(promoted.id === staged.id, 'PROMOTED_DEPLOYMENT_MISMATCH');
   try {
-    const live = await observe({ manifest, staged, durationMs: 300000 });
+    const live = await observe({ manifest, staged, durationMs: 300000, ...(signingRateDigest ? { signingRateDigest } : {}) });
     requireCondition(live?.passed === true && live.deploymentId === staged.id && live.buildId === manifest.build.buildId
       && live.observationMs >= 300000, 'LIVE_VERIFICATION_FAILED');
     await journal.append('live.passed', live); await journal.append('release.complete', { deploymentId: staged.id });

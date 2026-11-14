@@ -9,6 +9,7 @@ import { canonicalFcosE2eCandidateUrl } from '../../verify-e2e-candidate.mjs';
 import { candidateAuthenticationState, writePrivateE2eState, removePrivateE2eState } from '../../e2e-private-state.mjs';
 import { candidateProtectionState } from '../../e2e-protection-state.mjs';
 import { digest, requiresCompanyFxHistorySmoke, requiresSupplierBucketSmoke, requiresGroupedPetroleumSmoke, requiresTradingFxSmoke } from './contract.mjs';
+import { hasTradingFxSigningLocator } from './trading-fx-signing-config.mjs';
 import { MODULE_READERS as moduleReaders, MODULE_SURFACES, NORMAL_NAVIGATION_READS, moduleReadBody, moduleReaderPayloadVerified as modulePayloadVerified } from './normal-role-readers.mjs';
 
 const issuer = new URL(FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation.issuer).origin;
@@ -339,6 +340,20 @@ async function verifyCompanyFxHistory(route, origin) {
   return { readVerified: true, writeDenied: true };
 }
 
+export function tradingFxCurrentRateDigest(settings, history) {
+  const { revision, usdHkdRate, updatedAt } = settings ?? {};
+  requireFact(settings?.canSave === true && history?.canSave === true
+    && Number.isSafeInteger(revision) && revision > 0 && Number.isFinite(usdHkdRate) && usdHkdRate > 0 && usdHkdRate <= 100
+    && Array.isArray(history.rows) && history.rows.length <= 100, 'SMOKE_TRADING_FX_CURRENT_RATE_UNVERIFIED');
+  const rows = history.rows.filter(row => row.revision === revision);
+  const [rate] = rows;
+  requireFact(rows.length === 1 && typeof rate.rateId === 'string' && /^[A-Za-z0-9-]+$/u.test(rate.rateId)
+    && rate.usdHkdRate === usdHkdRate && typeof updatedAt === 'string' && typeof rate.effectiveAt === 'string'
+    && Number.isFinite(Date.parse(updatedAt)) && Date.parse(rate.effectiveAt) === Date.parse(updatedAt),
+  'SMOKE_TRADING_FX_CURRENT_RATE_UNVERIFIED');
+  return digest(`${rate.rateId}|${revision}|${usdHkdRate.toFixed(6)}|${new Date(rate.effectiveAt).toISOString()}`);
+}
+
 async function verifySupplierBucketRoutes(route, origin, normal) {
   const probes = [
     { action: 'Read', status: normal ? 409 : 403,
@@ -412,7 +427,7 @@ async function verifyTradingFxRoutes(route, origin, normal) {
   return true;
 }
 
-async function browserRun({ origin, manifest, credentials, normal, modules, env, browserFactory, diagnostic, historyRequired, supplierBucketRequired, groupedPetroleumRequired, tradingFxRequired }) {
+async function browserRun({ origin, manifest, credentials, normal, modules, env, browserFactory, diagnostic, historyRequired, supplierBucketRequired, groupedPetroleumRequired, tradingFxRequired, signingRateRequired }) {
   async function checkModule(module, surface, check) {
     const start = performance.now();
     let receipt, code;
@@ -425,7 +440,7 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
     return receipt;
   }
   let phase = 'SETUP';
-  let browser, context, privateEnv, readNormalModules, companyFxHistory, supplierBucketVerified, groupedPetroleumVerified, tradingFxVerified, cleanupFailed = false;
+  let browser, context, privateEnv, readNormalModules, companyFxHistory, supplierBucketVerified, groupedPetroleumVerified, tradingFxVerified, signingRateDigest, cleanupFailed = false;
   let denialReceipts = [], extraReads = [], desktopChecks = [], authProbed = false, probeError, rejectProbe, resolveProbe;
   const probeFailure = new Promise((_, reject) => { rejectProbe = reject; });
   probeFailure.catch(() => {});
@@ -469,6 +484,13 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
           } finally { await denial?.dispose(); }
           readNormalModules = async () => {
             if (historyRequired) companyFxHistory = await verifyCompanyFxHistory(route, origin);
+            if (signingRateRequired) {
+              const [settings, history] = await Promise.all([
+                routeRead(route, origin, '/api/functions/variableChargesSettingsGet', {}),
+                routeRead(route, origin, '/api/functions/companyFxHistoryGet', {}),
+              ]);
+              signingRateDigest = tradingFxCurrentRateDigest(settings.response.data ?? settings.response, history.response.data ?? history.response);
+            }
             for (const module of modules.filter(value => !baselineModules.includes(value))) {
               const reader = moduleReaders[module];
               const receipt = await checkModule(module, 'read', async () => {
@@ -560,7 +582,7 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
     return { role: credentials.role, requiredModules: unique(modules), modules: unique(reads.map(read => read.module)), reads, desktopChecks, denialReceipts,
       ...gate.summary(), candidateSha: manifest.candidate.sha, ...(companyFxHistory ? { companyFxHistory } : {}),
       ...(supplierBucketVerified ? { supplierBucketVerified } : {}), ...(groupedPetroleumVerified ? { groupedPetroleumVerified } : {}),
-      ...(tradingFxVerified ? { tradingFxVerified } : {}) };
+      ...(tradingFxVerified ? { tradingFxVerified } : {}), ...(signingRateDigest ? { signingRateDigest } : {}) };
   } catch (error) {
     const cause = probeError || error;
     const failure = fail(/^(?:SMOKE_|NORMAL_ROLE_)[A-Z0-9_]+$/.test(cause?.code || '') ? cause.code : `SMOKE_BROWSER_${phase}_FAILED`);
@@ -641,10 +663,11 @@ async function stagedSmoke({ manifest, staged, env = process.env, fetchImpl = fe
   const ci = credentialsFor(env, false);
   const normal = normalRoleRequired ? credentialsFor(env, true) : null;
   const historyRequired = afterPrerequisites && requiresCompanyFxHistorySmoke(manifest);
+  const signingRateRequired = afterPrerequisites && hasTradingFxSigningLocator(manifest.prerequisites?.plan);
   const supplierBucketRequired = requiresSupplierBucketSmoke(manifest);
   const groupedPetroleumRequired = requiresGroupedPetroleumSmoke(manifest);
   const tradingFxRequired = requiresTradingFxSmoke(manifest);
-  requireFact(!historyRequired || normal?.role === 'general_manager', 'SMOKE_COMPANY_FX_HISTORY_GM_REQUIRED');
+  requireFact(!(historyRequired || signingRateRequired) || normal?.role === 'general_manager', 'SMOKE_COMPANY_FX_HISTORY_GM_REQUIRED');
   requireFact(!supplierBucketRequired || normal && normalModules.includes('xero_portal'), 'SMOKE_SUPPLIER_BUCKET_NORMAL_ROLE_REQUIRED');
   requireFact(!groupedPetroleumRequired || normal && normalModules.includes('xero_portal'), 'SMOKE_GROUPED_PETROLEUM_NORMAL_ROLE_REQUIRED');
   requireFact(!tradingFxRequired || normal && normalModules.includes('xero_portal'), 'SMOKE_TRADING_FX_NORMAL_ROLE_REQUIRED');
@@ -655,7 +678,7 @@ async function stagedSmoke({ manifest, staged, env = process.env, fetchImpl = fe
   const restricted = await browserRun({ origin, manifest, credentials: ci, normal: false, modules: baselineModules, env, browserFactory: launch,
     supplierBucketRequired, groupedPetroleumRequired, tradingFxRequired });
   const ordinary = normal ? await browserRun({ origin, manifest, credentials: normal, normal: true, modules: normalModules, env, browserFactory: launch,
-    diagnostic, historyRequired, supplierBucketRequired, groupedPetroleumRequired, tradingFxRequired }) : null;
+    diagnostic, historyRequired, supplierBucketRequired, groupedPetroleumRequired, tradingFxRequired, signingRateRequired }) : null;
   return { passed: true, deploymentId: staged.id, buildId: staged.buildId, login: true, restrictedAccess: true, businessWrites: 0,
     modules: unique([...restricted.modules, ...(ordinary?.modules || [])]), restrictedEvidence: restricted,
     ...(ordinary ? { normalRole: true, normalRoleEvidence: ordinary } : {}),
@@ -667,7 +690,8 @@ async function stagedSmoke({ manifest, staged, env = process.env, fetchImpl = fe
     ...(tradingFxRequired ? { tradingFx: { restrictedVerified: restricted.tradingFxVerified === true,
       normalVerified: ordinary?.tradingFxVerified === true,
       desktopVerified: ordinary?.desktopChecks.some(check => check.tradingFxPanel === true) === true } } : {}),
-    ...(ordinary?.companyFxHistory ? { companyFxHistory: ordinary.companyFxHistory } : {}) };
+    ...(ordinary?.companyFxHistory ? { companyFxHistory: ordinary.companyFxHistory } : {}),
+    ...(ordinary?.signingRateDigest ? { signingRateDigest: ordinary.signingRateDigest } : {}) };
 }
 
 export async function observeLive({ manifest, staged, durationMs = 300000, fetchImpl = fetch, now = Date.now,

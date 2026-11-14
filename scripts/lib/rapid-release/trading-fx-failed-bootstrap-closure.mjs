@@ -4,6 +4,7 @@ import { assertBuildReceipt, assertSmokeProof } from './engine.mjs';
 
 import { LOCAL_MIRROR_ENVIRONMENT, verifyLocalMirrorReceipt } from './local-mirror-handoff.mjs';
 import { assertFrozenWorkflow, nativeWorkflowPath } from './providers.mjs';
+import { hasTradingFxSigningLocator, verifyTradingFxSigningConfig } from './trading-fx-signing-config.mjs';
 
 export const TRADING_FX_FAILED_BOOTSTRAP = 'trading_fx_stopped_after_rolled_back_production_bootstrap';
 
@@ -59,10 +60,10 @@ const same = (left, right) => digest(left ?? null) === digest(right ?? null);
 
 // This frozen bridge admits the reviewed signing and legacy document repair.
 // A different application candidate requires independently reviewed evidence.
-const reviewedSuccessorSha = 'd89595a87dd96667e1f2ae56a2730bd25aa77d65';
+const reviewedSuccessorSha = '3fc09bb1ed04eb1abcf001bf7436e8f351c7b182';
 const originalCandidateSha = '085c7ce8663d16d808771acbbcdc981b9d736b85';
 
-const afterManualSuccessorSha = '81be7291e2a999624307cf25284843f555c68f9d';
+const afterManualSuccessorSha = '715e2688bf856553f4eaf88d1cc814ceeba659a4';
 const manualBaseline = {
   sha: 'd2e5f1f94898ae99c6188831d071a77c337f31ae',
   deploymentId: 'dpl_EybnQs2MEgz3z2M2kJH74i9yGw38',
@@ -71,12 +72,13 @@ const manualBaseline = {
   runId: 43582562872,
 };
 
-export async function verifyTradingFxManualPredecessor({ manifest, previous, github, ownerId }) {
+export async function verifyTradingFxManualPredecessor({ manifest, previous, github, ownerId, provider }) {
   const live = manifest.previous;
+  const hasSigningConfig = hasTradingFxSigningLocator(manifest.prerequisites?.plan);
   requireCondition(manifest.candidate.sha === afterManualSuccessorSha
     && live.sha === manualBaseline.sha && live.deploymentId === manualBaseline.deploymentId
     && live.schemaDigest === previous.previous.schemaDigest
-    && live.configurationDigest === previous.previous.configurationDigest,
+    && (hasSigningConfig || live.configurationDigest === previous.previous.configurationDigest),
   'TRADING_FX_MANUAL_PREDECESSOR_SCOPE_CHANGED');
   const journal = new DeploymentJournal({ github: { ...github, candidateSha: manualBaseline.sha },
     manifestHash: manualBaseline.manifestHash, releaseId: manualBaseline.releaseId, actorIds: [41898282] });
@@ -124,9 +126,12 @@ export async function verifyTradingFxManualPredecessor({ manifest, previous, git
     && run.status === 'completed' && run.conclusion === 'success'
     && run.display_title === 'FCOS rapid resume ' + manualBaseline.manifestHash + ' ' + manualBaseline.sha,
   'TRADING_FX_MANUAL_PREDECESSOR_NOT_COMPLETE');
+  if (hasSigningConfig) {
+    await verifyTradingFxSigningConfig({ manifest, previous: previous.previous, github, ownerId, provider });
+  }
 }
 
-export async function readFailedBootstrapSuccessor({ manifest, github, ownerId, readPostQatRecovery }) {
+export async function readFailedBootstrapSuccessor({ manifest, github, ownerId, readPostQatRecovery, provider }) {
   validateManifest(manifest);
   const next = manifest.prerequisites?.plan;
   const receiptId = next?.tradingFxFailedBootstrapReceiptId;
@@ -171,13 +176,14 @@ export async function readFailedBootstrapSuccessor({ manifest, github, ownerId, 
     && same(previous.moduleInventory, manifest.moduleInventory) && same(previous.selection, manifest.selection),
   'TRADING_FX_FAILED_BOOTSTRAP_JOURNAL_SCOPE_CHANGED');
   if (manifest.candidate.sha === afterManualSuccessorSha) {
-    await verifyTradingFxManualPredecessor({ manifest, previous, github, ownerId });
-  } else requireCondition(same(previous.previous, manifest.previous), 'TRADING_FX_FAILED_BOOTSTRAP_JOURNAL_SCOPE_CHANGED');
+    await verifyTradingFxManualPredecessor({ manifest, previous, github, ownerId, provider });
+  } else requireCondition(!hasTradingFxSigningLocator(next) && same(previous.previous, manifest.previous), 'TRADING_FX_FAILED_BOOTSTRAP_JOURNAL_SCOPE_CHANGED');
   const { salesforceManifestPath: _oldManifest, salesforceReviewPath: _oldReview, salesforceSourceTreeHash: oldTree,
     salesforceFingerprint: oldFingerprint, bootstrapFingerprint: oldBootstrap, tradingFxPostQatRecoveryReceiptId: oldRecovery,
     ...oldRetained } = old;
   const { salesforceManifestPath, salesforceReviewPath, salesforceSourceTreeHash, salesforceFingerprint,
-    bootstrapFingerprint, tradingFxFailedBootstrapReceiptId: _receiptId, ...nextRetained } = next;
+    bootstrapFingerprint, tradingFxFailedBootstrapReceiptId: _receiptId,
+    tradingFxSigningConfigReceiptId: _signingReceipt, tradingFxSigningConfigReceiptDigest: _signingDigest, ...nextRetained } = next;
   requireCondition(positiveId(oldRecovery) && same(oldRetained, nextRetained)
     && salesforceManifestPath === 'manifest/trading-fx-certificate-release.xml'
     && salesforceReviewPath === 'manifest/trading-fx-certificate-reviewed-release.json'

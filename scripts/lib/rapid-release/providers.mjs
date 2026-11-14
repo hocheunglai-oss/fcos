@@ -5,6 +5,7 @@ import { handoverDigest } from './handover.mjs';
 import { nativeCompatibilityReader, assertNativeHandoverState } from './compatibility.mjs';
 import { DeploymentJournal } from './journal.mjs';
 import { assertAuthorization, digest, isSha, requireCondition, targets } from './contract.mjs';
+import { hasTradingFxSigningLocator, TRADING_FX_SIGNING_BASELINE, verifyTradingFxSigningConfig } from './trading-fx-signing-config.mjs';
 
 export const nativeWorkflowPath = run => String(run?.path || '').split('@')[0];
 export async function assertFrozenWorkflow({ github, controllerSha, dispatcherSha, path = '.github/workflows/fcos-rapid-release.yml' }) {
@@ -164,6 +165,29 @@ export function vercelProvider({ manifest, github, env = process.env, execute = 
         environment: rows.filter(row => row.target?.includes('production')).map(row => ({ id: row.id, key: row.key,
           updatedAt: row.updatedAt, type: row.type, target: row.target.slice().sort() })).sort((a,b) => a.id.localeCompare(b.id)) };
     },
+    async tradingFxSigningEnvironment({ rows, keys }) {
+      await identity();
+      const catalog = get(`/v10/projects/${pins.projectId}/env?decrypt=false`);
+      const shared = get(`/v1/env?projectId=${pins.projectId}`);
+      // FCOS has no linked shared variables. Do not treat incomplete inventories as absence.
+      requireCondition(Array.isArray(catalog.envs) && catalog.pagination?.next == null
+        && Array.isArray(shared.data) && shared.data.length === 0 && shared.pagination?.next == null,
+      'TRADING_FX_SIGNING_EFFECTIVE_INVENTORY_CHANGED');
+      const matches = catalog.envs.filter(variable => keys.includes(variable.key));
+      requireCondition(matches.length === rows.length && rows.every(row => matches.some(variable => variable.id === row.id
+        && variable.key === row.key && variable.type === row.type && variable.updatedAt === row.updatedAt
+        && variable.target?.length === 1 && variable.target[0] === 'production'
+        && !variable.gitBranch && !variable.customEnvironmentIds?.length)),
+      'TRADING_FX_SIGNING_EFFECTIVE_INVENTORY_CHANGED');
+      return Object.fromEntries(rows.map(row => {
+        const value = get(`/v1/projects/${pins.projectId}/env/${row.id}`);
+        requireCondition(value.id === row.id && value.key === row.key
+          && value.updatedAt === row.updatedAt && value.type === row.type && typeof value.value === 'string'
+          && value.target?.length === 1 && value.target[0] === 'production',
+        'TRADING_FX_SIGNING_EFFECTIVE_VALUE_CHANGED');
+        return [row.key, value.value];
+      }));
+    },
     async previewConfiguration(branch) {
       requireCondition(typeof branch === 'string' && /^codex\/[A-Za-z0-9][A-Za-z0-9._/-]{0,190}$/.test(branch)
         && !branch.includes('..') && branch.split('/').every(part => part && !part.startsWith('.')
@@ -191,6 +215,10 @@ export function vercelProvider({ manifest, github, env = process.env, execute = 
       else {
         const execution = await verifyExecution({ github, manifest, env, phase });
         await assertNativeHandoverState({ handover: execution.handover, env });
+        if (['stage', 'promote'].includes(phase) && hasTradingFxSigningLocator(manifest.prerequisites?.plan)) {
+          await verifyTradingFxSigningConfig({ manifest, previous: TRADING_FX_SIGNING_BASELINE,
+            github, ownerId: execution.run.actor.id, provider });
+        }
       }
       await identity(); admitted = { phase, manifestHash: digest(manifest), observedAt: Date.now() };
     },
