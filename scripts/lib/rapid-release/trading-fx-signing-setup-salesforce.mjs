@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
 import { randomBytes, verify, X509Certificate } from 'node:crypto';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fcosSalesforceEnvironment } from '../../../config/fcosConnections.js';
@@ -12,6 +12,20 @@ const target = fcosSalesforceEnvironment('production');
 const namespace = 'http://soap.sforce.com/2006/04/metadata';
 const sfId = value => /^[A-Za-z0-9]{18}$/u.test(value || '');
 const timestamp = value => new Date(value).toISOString();
+
+export function loadSigningSalesforceConnection(npmRoot) {
+  check(npmRoot.startsWith('/') && !/[\r\n]/u.test(npmRoot), 'SIGNING_SETUP_SALESFORCE_CLI_MODULE_INVALID');
+  const packagePath = join(npmRoot, '@salesforce', 'cli', 'package.json');
+  try {
+    const metadata = JSON.parse(readFileSync(packagePath, 'utf8'));
+    check(metadata.name === '@salesforce/cli' && metadata.version === '2.145.6', 'SIGNING_SETUP_SALESFORCE_CLI_MODULE_INVALID');
+    const { Connection } = createRequire(packagePath)('@jsforce/jsforce-node');
+    check(typeof Connection === 'function', 'SIGNING_SETUP_SALESFORCE_CLI_MODULE_INVALID');
+    return Connection;
+  } catch {
+    check(false, 'SIGNING_SETUP_SALESFORCE_CLI_MODULE_INVALID');
+  }
+}
 const addResource = async (fetchImpl,url,options) => {
   const response = await fetchImpl(url,{...options,redirect:'error',signal:AbortSignal.timeout(30000)});
   check(response.ok && !response.redirected,'SIGNING_SETUP_SALESFORCE_RESPONSE_UNCONFIRMED');
@@ -52,10 +66,7 @@ export function createSigningSalesforceDriver({ cliEnv, authenticateIdentity, ve
   };
   const open = openConnection ?? (native => {
     const npmRoot = execute('npm',['root','-g'],{env:cliEnv,encoding:'utf8',timeout:15000,stdio:['ignore','pipe','pipe']}).trim();
-    check(npmRoot.startsWith('/') && !/[\r\n]/u.test(npmRoot),'SIGNING_SETUP_SALESFORCE_CLI_MODULE_INVALID');
-    const require = createRequire(join(npmRoot,'@salesforce','cli','package.json'));
-    check(require('@salesforce/cli/package.json').version === '2.145.6','SIGNING_SETUP_SALESFORCE_CLI_MODULE_INVALID');
-    const { Connection } = require('@jsforce/jsforce-node');
+    const Connection = loadSigningSalesforceConnection(npmRoot);
     return new Connection({ instanceUrl:target.instanceUrl,accessToken:native.accessToken,version:native.apiVersion });
   });
   const pinned = async plan => {
@@ -140,6 +151,7 @@ export function createSigningSalesforceDriver({ cliEnv, authenticateIdentity, ve
   }
 
   return {
+    async verifyAbsent(context) { await absence(context); },
     async preflight(context) { await absence(context);return digest(signingCertificateDefinition(context.plan.operationId)); },
     async submit(context) {
       const connection = await absence(context);

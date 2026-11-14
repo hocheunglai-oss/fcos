@@ -15,6 +15,10 @@ import { createSigningReceiptDriver } from './lib/rapid-release/trading-fx-signi
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
 
 const workflow = '.github/workflows/fcos-rapid-trading-fx-signing-setup.yml';
+const recoveryWorkflow = '.github/workflows/fcos-rapid-trading-fx-signing-closure.yml';
+const failedSigningRunId = 43614240379;
+const failedSigningRecordId = 7790693583;
+const failedSigningPlanHash = '8cab3897aceebf079408e9df709afd73657d59b277e2f65df8bd8bfa2c28f332';
 const ownerId = 265701760, botId = 41898282, repoId = 1278654816;
 const manualSha = 'd2e5f1f94898ae99c6188831d071a77c337f31ae';
 const manualReleaseId = 'manual-on-demand-nomination-qualification';
@@ -109,6 +113,71 @@ async function readNativeApproval({ plan, planHash, original, github, snapshot, 
     && (native.run_attempt === 1 || original?.runId === runId && original.approvalHash === approvalHash)};
 }
 
+async function closeFailedPreflight({plan, planHash, github, snapshot, env, nativeDb, journal, salesforce, environment}) {
+  const pins = targets(), base = '/repos/' + pins.repository;
+  const runId = Number(env.GITHUB_RUN_ID), currentPath = base+'/actions/runs/'+runId;
+  const originalPath = base+'/actions/runs/'+failedSigningRunId;
+  check(planHash === failedSigningPlanHash && env.GITHUB_ACTIONS === 'true' && env.RUNNER_ENVIRONMENT === 'github-hosted'
+    && env.GITHUB_REPOSITORY === pins.repository && Number.isSafeInteger(runId) && runId > 0,
+  'SIGNING_SETUP_CLOSURE_SCOPE_CHANGED');
+  const [{user,repo},current,original,main,enabled,pointer,protection,currentJobs,originalJobs,currentReviews,originalReviews,manual,chain] =
+    await Promise.all([github.identity(),github.read(currentPath),github.read(originalPath),github.read(base+'/branches/main'),
+      github.read(base+'/actions/variables/FCOS_RAPID_RELEASE_ENABLED'),github.read(base+'/actions/variables/FCOS_RAPID_RELEASE_HANDOVER_ID'),
+      github.read(base+'/environments/fcos-production-release'),github.read(currentPath+'/jobs'),github.read(originalPath+'/attempts/1/jobs'),
+      github.read(currentPath+'/approvals'),github.read(originalPath+'/approvals'),github.read(base+'/actions/runs/'+plan.manualRunId),journal.read()]);
+  const reviewed = rows => rows.filter(row => row.state === 'approved' && row.user?.id === ownerId
+    && row.user.login === pins.account && row.environments?.some(item => item.id === protection.id && item.name === protection.name));
+  const oneJob = ({jobs},name,status,conclusion) => jobs.filter(job => job.name === name && job.status === status
+    && (conclusion === undefined || job.conclusion === conclusion)).length === 1;
+  const native = run => run.repository?.id === repoId && run.actor?.id === ownerId && run.actor.login === pins.account
+    && run.triggering_actor?.id === ownerId && run.head_branch === repo.default_branch && run.event === 'workflow_dispatch';
+  check(user.id === ownerId && user.login === pins.account && repo.id === repoId && repo.permissions?.admin === true
+    && native(current) && current.id === runId && current.status === 'in_progress' && current.run_attempt === 1
+    && current.head_sha === env.GITHUB_SHA && main.protected && main.commit.sha === env.GITHUB_SHA
+    && git(resolve('recovery'), ['rev-parse','HEAD']) === env.GITHUB_SHA && !git(resolve('recovery'), ['status','--porcelain'])
+    && nativeWorkflowPath(current) === recoveryWorkflow && current.display_title === 'Close FCOS Trading FX signing 43614240379'
+    && enabled.value === 'true' && pointer.value === '7790141790' && protection.name === 'fcos-production-release'
+    && protection.can_admins_bypass === false && reviewed(currentReviews).length === 1
+    && oneJob(currentJobs,'close-signing-preflight','in_progress'),
+  'SIGNING_SETUP_CLOSURE_PROTECTION_CHANGED');
+  check(native(original) && original.id === failedSigningRunId && original.run_attempt === 1
+    && original.status === 'completed' && original.conclusion === 'failure' && nativeWorkflowPath(original) === workflow
+    && original.display_title === 'FCOS Trading FX signing '+planHash+' '+plan.candidateSha
+    && reviewed(originalReviews).length === 1 && oneJob(originalJobs,'signing-setup','completed','failure'),
+  'SIGNING_SETUP_CLOSURE_ORIGINAL_RUN_CHANGED');
+  const [intent,terminal] = chain;
+  check(chain.length >= 1 && chain.length <= 2 && intent.id === failedSigningRecordId && intent.creator?.id === ownerId
+    && intent.payload.event === 'signing_setup.intent' && intent.payload.data.runId === original.id
+    && intent.payload.data.planHash === planHash && intent.payload.data.operationId === plan.operationId
+    && (!terminal || terminal.creator?.id === ownerId && terminal.payload.event === 'signing_setup.result'
+      && terminal.payload.data.outcome === 'closed_before_provider_intent'
+      && terminal.payload.data.operationId === plan.operationId && terminal.payload.data.planHash === planHash)
+    && pendingOperations(chain).length === (terminal ? 0 : 1),
+  'SIGNING_SETUP_CLOSURE_PROVIDER_INTENT_PRESENT');
+  const review = reviewed(originalReviews)[0];
+  const approvalHash = digest({planHash,runId:original.id,ownerId,reviewId:review.id ?? null,state:review.state,
+    reviewer:review.user.id,environments:review.environments.map(({id,name})=>({id,name})).sort((a,b)=>a.id-b.id)});
+  check(intent.payload.data.approvalHash === approvalHash,'SIGNING_SETUP_CLOSURE_ORIGINAL_APPROVAL_CHANGED');
+  const handover = assertPermanentHandover(await github.read(base+'/deployments/'+pointer.value),plan,ownerId);
+  await Promise.all([nativeDb(handover),verifyTerminalManual({plan,github,snapshot,base,run:manual}),
+    assertFrozenWorkflow({github,controllerSha:plan.controllerSha,dispatcherSha:original.head_sha,path:workflow})]);
+  await journal.assertNoUnresolvedOtherRelease();
+  await Promise.all([environment.assertPreimage(plan),salesforce.verifyAbsent({plan})]);
+  const evidenceDigest = digest({planHash,originalRunId:original.id,originalHead:original.head_sha,
+    originalIntent:intent.payload.recordHash,approvalHash,salesforceCertificateAbsent:true,
+    vercelPreimage:plan.previous.fullEnvironmentDigest,previousDeploymentId:plan.previous.deploymentId});
+  const result = {operationId:plan.operationId,planHash,outcome:'closed_before_provider_intent',evidenceDigest};
+  if (!terminal) {
+    try { await journal.append('signing_setup.result',result,{expectedPreviousHash:intent.payload.recordHash}); }
+    catch { /* Read the original append without retrying it. */ }
+  }
+  const final = await journal.read();
+  check(final.length === 2 && final[1].payload.event === 'signing_setup.result'
+    && digest(final[1].payload.data) === digest(result) && pendingOperations(final).length === 0,
+  'SIGNING_SETUP_CLOSURE_READBACK_REQUIRED');
+  return {state:'verified',originalRunId:original.id,receiptId:final[1].id,evidenceDigest,providerWrites:0};
+}
+
 export async function runSigningSetup(env = process.env) {
   const plan = JSON.parse(env.FCOS_SIGNING_PLAN_JSON ?? '');
   validateSigningSetupPlan(plan);
@@ -129,8 +198,11 @@ export async function runSigningSetup(env = process.env) {
   };
   const nativeDb = handover => assertNativeHandoverState({handover,env});
   const protectedAdmission = args => readNativeApproval({...args,github,snapshot,env,assertReady:nativeDb});
-  await protectedAdmission({plan,planHash:digest(plan)});
-  await verifyPredecessor(plan);
+  const closing = env.FCOS_SIGNING_CLOSE_FAILED_PREFLIGHT === 'true';
+  if (!closing) {
+    await protectedAdmission({plan,planHash:digest(plan)});
+    await verifyPredecessor(plan);
+  }
   const privateDirectory = mkdtempSync(resolve(env.RUNNER_TEMP || tmpdir(),'fcos-signing-production-'));
   try {
     const cliEnv = authenticateHostedSalesforce({directory:privateDirectory,cwd:controller,env:{...env,HOME:privateDirectory},
@@ -144,6 +216,7 @@ export async function runSigningSetup(env = process.env) {
     };
     const salesforce = createSigningSalesforceDriver({cliEnv,authenticateIdentity,verifyPredecessor});
     const environment = createSigningVercelDriver({env,vercel,readPublicKey:salesforce.publicKey,verifyPredecessor});
+    if (closing) return await closeFailedPreflight({plan,planHash:digest(plan),github,snapshot,env,nativeDb,journal,salesforce,environment});
     const originalSalesforce = {...salesforce};
     salesforce.preflight = async context => {
       await environment.assertPreimage(plan);

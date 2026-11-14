@@ -88,12 +88,13 @@ function checkpoints(chain, operationId, planHash) {
   const stopped = records.filter(row => row.event === 'signing_provider.result' && row.data.outcome === 'not_submitted');
   check(stopped.length <= 1 && stopped.every(row => row === progress.at(-1)), 'SIGNING_SETUP_TERMINAL_PROVIDER_CHANGED');
   const closed = records.filter(row => row.event === 'signing_setup.result');
-  check(closed.length <= 1 && closed.every(row => row.sequence > progress.at(-1)?.sequence
+  check(closed.length <= 1 && closed.every(row => row.sequence > (progress.at(-1) ?? setup[0])?.sequence
     && exact(row.data,['operationId','planHash','outcome','evidenceDigest']) && row.data.operationId === operationId
     && row.data.planHash === planHash
-    && (row.data.outcome === 'verified' && progress.length === expectedSteps.length*2 && stopped.length === 0
+    && (row.data.outcome === 'closed_before_provider_intent' && progress.length === 0 && isDigest(row.data.evidenceDigest)
+      || (row.data.outcome === 'verified' && progress.length === expectedSteps.length*2 && stopped.length === 0
       || row.data.outcome === 'stopped_before_provider_request' && stopped.length === 1)
-    && row.data.evidenceDigest === digest(progress.filter(item => item.event.endsWith('.result')).map(item => item.data.evidence))),
+    && row.data.evidenceDigest === digest(progress.filter(item => item.event.endsWith('.result')).map(item => item.data.evidence)))),
   'SIGNING_SETUP_RESULT_CHANGED');
   return { setup: setup[0]?.data, closed: closed[0]?.data,
     steps: expectedSteps.map((id, index) => ({ id, intent:progress[2*index]?.data, result:progress[2*index+1]?.data })) };
@@ -124,6 +125,9 @@ export async function executeSigningSetup({ plan, journal, admission, providers,
     chain = await journal.read();
   }
   let state = get();
+  if (state.closed?.outcome === 'closed_before_provider_intent') {
+    return {state:'closed_before_provider_intent',evidenceDigest:state.closed.evidenceDigest,providerCallsResubmitted:0};
+  }
   const authorize = async () => {
     const approval = await admission({ plan, planHash, original:state.setup });
     check(exact(approval,['approvalHash','runId','maySubmit']) && isDigest(approval.approvalHash)
