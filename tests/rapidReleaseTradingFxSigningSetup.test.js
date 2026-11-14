@@ -59,6 +59,22 @@ test('signing setup pins certificate, public values, reviewed predecessor and di
   }
 });
 
+test('a protected terminal closure before provider intent prevents new requests on the original attempt', async () => {
+  const {chain,calls,context} = fixture();
+  const planHash = digest(plan);
+  await context.journal.append('signing_setup.intent', {operationId:plan.operationId,planHash,
+    approvalHash:hex('7'),runId:432},{expectedPreviousHash:null});
+  await context.journal.append('signing_setup.result', {operationId:plan.operationId,planHash,
+    outcome:'closed_before_provider_intent',evidenceDigest:hex('9')},{expectedPreviousHash:chain.at(-1).payload.recordHash});
+  assert.equal((await executeSigningSetup(context)).state,'closed_before_provider_intent');
+  assert.deepEqual(pendingOperations(chain),[]);
+  assert.deepEqual(calls,[]);
+  chain.splice(1,0,{payload:{event:'signing_provider.intent',sequence:1,data:{operationId:plan.operationId+':salesforce-certificate',
+    planHash,provider:'salesforce-certificate',requestDigest:hex('8'),submittedAt:'2026-11-14T12:00:00.000Z'}}});
+  chain[2].payload.sequence=2;
+  await assert.rejects(executeSigningSetup(context),{code:'SIGNING_SETUP_RESULT_CHANGED'});
+});
+
 test('lost provider acknowledgement resolves the original and never replays a completed setup', async () => {
   const {chain,calls,context} = fixture();
   const step = context.providers['salesforce-certificate'];
