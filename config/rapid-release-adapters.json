@@ -64,7 +64,7 @@
     {
       "id": "trading-fx-prerequisites",
       "status": "qualified",
-      "sourceDigest": "086b775ff0a87f5dae9b749b600fe1e6c713d190d7430935329b24aac478e26f",
+      "sourceDigest": "a71caea49578620d18ac59f9a32a8d171527ff9343a4d65f025c14831c50c011",
       "path": "scripts/lib/rapid-release/trading-fx-adapter.mjs",
       "salesforce": true,
       "database": true,
