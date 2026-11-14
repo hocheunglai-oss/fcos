@@ -6,7 +6,7 @@ import { sfRequest } from '../api/_salesforce.js';
 
 test('established FCOS integrations stay live while new actions remain UAT gated', () => {
   const gates = externalActionGates({});
-  assert.deepEqual(Object.values(gates).map((gate) => gate.enabled), [true, true, true, false, false, false, false, false, false, false]);
+  assert.deepEqual(Object.values(gates).map((gate) => gate.enabled), [true, true, true, false, false, false, false, false, false, false, false]);
   assert.equal(isExternalActionEnabled('salesforce_write', { FCOS_DISABLE_SALESFORCE_WRITE: 'TRUE' }), false);
   assert.equal(isExternalActionEnabled('salesforce_write', { FCOS_DISABLE_SALESFORCE_WRITE: 'yes' }), true);
   assert.equal(isExternalActionEnabled('outlook_calendar', {}), false);
@@ -20,6 +20,7 @@ test('established FCOS integrations stay live while new actions remain UAT gated
   assert.equal(gates.xero_financial_sync.expectedState, 'uat_gated');
   assert.equal(isExternalActionEnabled('xero_financial_sync', {}), false);
   assert.equal(isExternalActionEnabled('xero_financial_sync', { FCOS_ENABLE_XERO_FINANCIAL_SYNC: 'true' }), true);
+  assert.equal(isExternalActionEnabled('xero_trading_fx_writes', { FCOS_ENABLE_XERO_FINANCIAL_SYNC: 'true' }), false);
 });
 
 test('System Health does not report self-hosted interface fonts as an external connection', async () => {

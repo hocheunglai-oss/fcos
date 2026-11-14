@@ -62,6 +62,12 @@ const GATE_DEFINITIONS = Object.freeze({
     label: 'Salesforce-to-Xero financial synchronization',
     description: 'Finance-authorised creation or update of Xero accounting transactions and exact payment allocations.',
   },
+  xero_trading_fx_writes: {
+    envName: 'FCOS_ENABLE_XERO_TRADING_FX_WRITES',
+    defaultEnabled: false,
+    label: 'Trading FX Xero writes',
+    description: 'Separately authorised native Trading FX draft creation and HKD payment posting in Xero.',
+  },
 });
 
 function enabledValue(value) {

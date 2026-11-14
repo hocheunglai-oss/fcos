@@ -283,7 +283,10 @@ test('server-issued native HKD posting confirms the original claim and refuses a
     return { Payments: [{ ...confirmed(native), BankAmount: 97.5, CurrencyRate: 8,
       Account: { AccountID: bankId, CurrencyCode: 'USD' } }] };
   };
-  const deps = { client, connection: { tenantId: tenant }, actor, accountingFetch };
+  const deps = { client, connection: { tenantId: tenant }, actor, accountingFetch,
+    options: { env: { FCOS_ENABLE_XERO_TRADING_FX_WRITES: 'true' } } };
+  await assert.rejects(postReviewedPaymentBatch([native], { ...deps, options: { env: { FCOS_ENABLE_XERO_FINANCIAL_SYNC: 'true' } } }),
+    { code: 'EXTERNAL_ACTION_GATE_DISABLED' });
   for (const untrusted of [structuredClone(native), { ...native, salesforcePaymentId: 'a0P000000000002AAA' },
     { ...native, proposedPayment: { ...native.proposedPayment, Reference: 'changed' } }]) {
     await assert.rejects(postReviewedPaymentBatch([untrusted], deps), { code: 'XERO_PAYMENT_FX_PERSISTENCE_REQUIRED' });

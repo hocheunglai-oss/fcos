@@ -61,6 +61,7 @@ async function verifyRoundingAccount(policy, connection, dependencies, readSetti
 export async function xeroNativeDocumentApply(body = {}, options = {}) {
   const { operation, actorId, tenantId, accessContext, env, fetchImpl, connect } = setup(body, options);
   requireExternalActionGate('xero_financial_sync', env);
+  requireExternalActionGate('xero_trading_fx_writes', env);
   const client = options.client || xeroContactSyncServiceClient(env);
   const connection = await connect(client, true);
   const dependencies = { accessContext, client, connection, env, fetchImpl };
