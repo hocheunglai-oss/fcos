@@ -84,3 +84,43 @@ test('Trading FX requires the exact migration package and completed database rea
   await assert.rejects(adapter.applyReviewedPrerequisites(input), { code: 'TRADING_FX_DATABASE_PROOF_REQUIRED' });
   assert.deepEqual(calls, ['verify-xero', 'review-salesforce', 'apply-database']);
 });
+
+test('stopped-QAT successor retains the original Demo and database operation identities', async () => {
+  const { input } = fixture();
+  const priorPlan = { ...input.plan, xeroQualificationDeploymentId: 12 };
+  const prior = { candidate: { sha: 'c'.repeat(40), sourceDigest: 'd'.repeat(64) },
+    prerequisites: { plan: priorPlan } };
+  const recovery = { prior, database: { operationId: 'original-migrations' } };
+  const plan = { ...priorPlan, tradingFxQatRecoveryReceiptId: 20 };
+  const calls = [];
+  const adapter = createTradingFxPrerequisiteAdapter({
+    async readStoppedQatRecovery() { return recovery; },
+    async verifyXeroQualification(input) {
+      assert.equal(input.manifest, prior);
+      assert.equal(input.plan, priorPlan);
+      calls.push('demo');
+      return { verified: true, testCompany: true, candidateSha: prior.candidate.sha, sourceDigest: prior.candidate.sourceDigest,
+        migrationDigest: digest(TRADING_FX_MIGRATIONS), evidenceDigest: hash };
+    },
+    async verifyStage() { return 'verified stage'; },
+    prepareSalesforce(_input, options) {
+      assert.equal(options.tradingFxQatRecovery, recovery);
+      return async () => ({ passed: true, manifestHash: digest(input.manifest), backwardCompatible: true,
+        salesforce: { mirrorVerified: true, order: 'devee-mirror-qat-production', sourceTreeHash: hash, fingerprint: hash },
+        completedOperations: [] });
+    },
+    async applyDatabase({ originalDatabaseOperation }) {
+      assert.equal(originalDatabaseOperation, recovery.database);
+      calls.push('read original database');
+      return { passed: true, manifestHash: digest(input.manifest), backwardCompatible: true,
+        database: { readbackVerified: true, destructiveRollback: false, schemaDigest: hash }, completedOperations: [] };
+    },
+  });
+  assert.equal(await adapter.verifyPreBootstrapStage({ ...input, plan }), 'verified stage');
+  assert.equal((await adapter.applyReviewedPrerequisites({ ...input, plan })).passed, true);
+  await assert.rejects(adapter.verifyPreBootstrapStage({ ...input, plan: { ...plan, xeroQualificationDeploymentId: 13 } }),
+    { code: 'TRADING_FX_QAT_XERO_QUALIFICATION_CHANGED' });
+  await assert.rejects(adapter.verifyPreBootstrapStage({ ...input, plan: { ...plan, tradingFxRecoveryReceiptId: 21 } }),
+    { code: 'TRADING_FX_RECOVERY_LOCATOR_INVALID' });
+  assert.deepEqual(calls, ['demo', 'demo', 'read original database']);
+});
