@@ -4,6 +4,30 @@
   "recipes": [],
   "observations": [
     {
+      "id": "trading-fx-local-postgresql-locale-and-concurrency",
+      "cause": "Native PostgreSQL 17 on the local macOS host stopped during startup under the stripped test locale, while the candidate passed hosted Linux quality.",
+      "correction": "Use LC_ALL=C for local disposable PostgreSQL timing and keep the exact candidate, assertions and skip conditions unchanged.",
+      "verification": {
+        "candidate": "b495d1bde6d06834c32212982c4597e20e6c7fe0",
+        "platform": "darwin",
+        "node": "v24.18.0",
+        "resolvedNativePostgresStartup": true,
+        "files": 445,
+        "passed": 5661,
+        "failed": 0,
+        "skipped": 48,
+        "baselineConcurrency": 4,
+        "newConcurrency": 8,
+        "baselineMs": 66698,
+        "newMs": 45312,
+        "providerWrites": 0,
+        "regressionDigest": "045f96af3ee7289a1a40c2917eb0c4343f194096935f409e81b82defdda56d0d"
+      },
+      "measuredTimeSavedMs": 21386,
+      "measuredCallsSaved": 0,
+      "prevention": "Match the local fixture environment before measuring. Retain hosted runner defaults until the same workload proves a safe improvement there."
+    },
+    {
       "id": "stage-queue-blocked-by-go-live-review",
       "cause": "Native GitHub concurrency grouped an unaliased manual stage behind an unrelated Trading FX job awaiting reviewer authorization.",
       "correction": "Serialize unaliased staging separately from live writes, keep one workflow per release ID, and use transaction advisory exclusion for stage submissions and handover. Recheck baseline before stage acceptance.",
