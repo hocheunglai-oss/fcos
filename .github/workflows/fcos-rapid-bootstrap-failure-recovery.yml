@@ -1,0 +1,46 @@
+name: FCOS Trading FX failed bootstrap recovery
+run-name: Close FCOS Trading FX bootstrap 43569803059
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fcos-production-release
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  close-bootstrap:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && github.ref_protected && github.actor == 'hocheunglai-oss' && github.repository == 'hocheunglai-oss/fcos'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    environment: fcos-production-release
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: 085c7ce8663d16d808771acbbcdc981b9d736b85
+          path: original-application
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm install --global vercel@54.20.1 @salesforce/cli@2.145.6 --ignore-scripts --no-audit --no-fund
+      - name: Reconcile original operation and append terminal receipts
+        run: |
+          node --input-type=module -e 'import fs from "node:fs";fs.writeFileSync(process.env.FCOS_RAPID_DATABASE_CA,process.env.FCOS_CA,{mode:0o600})'
+          node scripts/rapid-release-bootstrap-failure-recovery.mjs
+        env:
+          FCOS_RAPID_CLOSURE_GITHUB_TOKEN: ${{ secrets.FCOS_RAPID_HANDOVER_GITHUB_TOKEN || secrets.FCOS_RELEASE_GH_TOKEN }}
+          VERCEL_TOKEN: ${{ secrets.FCOS_RELEASE_VERCEL_TOKEN }}
+          FCOS_RAPID_DATABASE_URL: ${{ secrets.FCOS_RAPID_READONLY_DATABASE_URL }}
+          FCOS_RAPID_DATABASE_CA: ${{ runner.temp }}/bootstrap-closure-ca.pem
+          FCOS_CA: ${{ secrets.FCOS_RAPID_DATABASE_CA }}
+          FCOS_RAPID_SALESFORCE_PRODUCTION_PRIVATE_KEY: ${{ secrets.FCOS_RAPID_SALESFORCE_PRODUCTION_PRIVATE_KEY }}
+          FCOS_RAPID_SALESFORCE_PRODUCTION_CLIENT_ID: ${{ secrets.FCOS_RAPID_SALESFORCE_PRODUCTION_CLIENT_ID }}
