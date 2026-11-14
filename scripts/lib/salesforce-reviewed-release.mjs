@@ -578,7 +578,7 @@ export function assertReviewedMirror(result, plan, policy, deploymentJobId) {
  * An uncertain submission is reconciled by an owner-supplied job ID, never blind resubmission.
  */
 export async function runReviewedSalesforceRelease({ plan, mode, policy, journal, provider, ownership, externalJournal,
-  authorization = null, now = () => new Date(), assertUnchanged, replaceValidation = [], reconcile = {} }) {
+  authorization = null, now = () => new Date(), assertUnchanged, retainedDeveeInventory, replaceValidation = [], reconcile = {} }) {
   const approvedContinuation = mode === 'approved-continuation';
   if (!['prepare', 'apply', 'approved-continuation'].includes(mode)) throw new Error('Choose prepare, apply or approved-continuation.');
   if (approvedContinuation) assertProductionAuthorization(authorization, plan, now());
@@ -728,6 +728,14 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
       }
     }
   }
+  const verifyBeforeDeployment = (environment, expected) => {
+    // Only the qualified recovery adapter supplies an old DEVEE inventory.
+    // After a deployment, the corrected candidate always supplies the proof.
+    if (environment.key === 'devee' && retainedDeveeInventory && !get('devee', 'deployment')) {
+      return verifyReviewedOrgInventory({ ...retainedDeveeInventory, environment, now });
+    }
+    return verifyReviewedOrgInventory({ provider, environment, plan, expected, now });
+  };
   const preparation = get('production', 'preparation');
   if ((mode === 'apply' || approvedContinuation && preparation) && (preparation?.fingerprint !== plan.fingerprint || !['ready', 'awaiting-authorized-bootstrap'].includes(preparation?.status))) {
     throw new Error('Apply requires a successful prepare checkpoint for this exact unchanged reviewed fingerprint.');
@@ -845,7 +853,7 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
             { validationJobId: operation === 'deployment' ? saved.validation?.jobId || null : null });
         }
         const expected = reviewedCheckpointInventory(plan, journal.state.stages[environment.key], environment.key);
-        const receipt = await verifyReviewedOrgInventory({ provider, environment, plan, expected, now });
+        const receipt = await verifyBeforeDeployment(environment, expected);
         await persist(environment.key, 'inventory-checkpoint', { baselineMode: INVENTORY_BASELINE_MODE, orgId: environment.orgId,
           inventoryHash: receipt.inventoryHash, sourceTreeHash: receipt.sourceTreeHash, verifiedAt: receipt.verifiedAt,
           evidenceSha256: receipt.evidenceSha256, ...(expected.nativeExport ? { nativeSourceTreeHash: receipt.nativeSourceTreeHash,
@@ -886,7 +894,7 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
           prepare: provider.prepareBootstrap ? () => provider.prepareBootstrap(environment, plan) : undefined,
         });
         predeploymentInventory = reviewedCheckpointInventory(plan, journal.state.stages[environment.key], environment.key);
-        await verifyReviewedOrgInventory({ provider, environment, plan, expected: predeploymentInventory, now });
+        await verifyBeforeDeployment(environment, predeploymentInventory);
         await permissions(environment, plan.review.bootstrap.permissionSets || []);
       } else await verifyReviewedOrgInventory({ provider, environment, plan, expected: baseline, now });
       const validation = await runValidation(environment);
@@ -898,7 +906,7 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
         if (!plan.review.bootstrap) await mirror();
       }
       // Validation may run for hours; refresh unchanged metadata before consuming its job.
-      await verifyReviewedOrgInventory({ provider, environment, plan, expected: predeploymentInventory, now });
+      await verifyBeforeDeployment(environment, predeploymentInventory);
       await job(environment, 'deployment', () => provider.deploy(environment, validation.jobId, plan), { validationJobId: validation.jobId });
       await verifyReviewedOrgInventory({ provider, environment, plan,
         expected: reviewedCheckpointInventory(plan, { deployment: { status: 'Succeeded' } }, environment.key), now });

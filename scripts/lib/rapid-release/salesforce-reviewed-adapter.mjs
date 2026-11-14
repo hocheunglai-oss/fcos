@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
@@ -230,7 +231,7 @@ export async function applyReviewedPrerequisites(input) {
 
 export function prepareReviewedSalesforcePrerequisites({
   manifest, approval, plan, salesforce, salesforceCandidateDirectory: cwd, env = process.env,
-}, { withDatabase = false, tradingFxRecovery } = {}) {
+}, { withDatabase = false, tradingFxRecovery, tradingFxQatRecovery } = {}) {
   const manifestHash = digest(manifest);
   const databaseSelected = withDatabase ? manifest.selection.database === true : !manifest.selection.database;
   requireCondition(manifest.selection.salesforce && databaseSelected && plan.backwardCompatible === true
@@ -265,8 +266,12 @@ export function prepareReviewedSalesforcePrerequisites({
       && adoption === undefined && promotionReceiptId === undefined
       && tradingFxRecovery.receipt?.id === plan.tradingFxRecoveryReceiptId,
   'SALESFORCE_TRADING_FX_DEVEE_ADOPTION_INVALID');
+  requireCondition(tradingFxQatRecovery === undefined ? plan.tradingFxQatRecoveryReceiptId === undefined
+    : withDatabase && schemaBootstrap && localMirror && !tradingFxRecovery && adoption === undefined
+      && promotionReceiptId === undefined && tradingFxQatRecovery.receipt?.id === plan.tradingFxQatRecoveryReceiptId,
+  'SALESFORCE_TRADING_FX_QAT_ADOPTION_INVALID');
   return () => applyPreparedSalesforce({ manifest, manifestHash, approval, salesforce, cwd, env, reviewed, schemaBootstrap,
-    localMirror, adoption, promotionReceiptId, tradingFxRecovery });
+    localMirror, adoption, promotionReceiptId, tradingFxRecovery, tradingFxQatRecovery });
 }
 
 async function hostedLocalMirrorTransport({ manifest, approval, env, reviewed, salesforce }) {
@@ -309,8 +314,77 @@ async function hostedLocalMirrorTransport({ manifest, approval, env, reviewed, s
   };
 }
 
+export async function recoverTradingFxSandboxBootstraps({ recovery, reviewed, priorReviewed, provider, priorProvider,
+  saved = [], now = () => new Date() }) {
+  requireCondition(priorReviewed.fingerprint === recovery.prior.prerequisites.plan.salesforceFingerprint
+    && reviewed.binding.bootstrapSha256 === priorReviewed.binding.bootstrapSha256
+    && reviewed.binding.manifestSha256 === priorReviewed.binding.manifestSha256
+    && digest(reviewed.nativeInventories) === digest(priorReviewed.nativeInventories),
+  'SALESFORCE_TRADING_FX_QAT_REVIEW_CHANGED');
+  const { sourceTreeHash: priorTree, ...priorReview } = priorReviewed.review;
+  const { sourceTreeHash: nextTree, ...nextReview } = reviewed.review;
+  requireCondition(priorTree !== nextTree && digest(priorReview) === digest(nextReview),
+    'SALESFORCE_TRADING_FX_QAT_REVIEW_CHANGED');
+
+  if (!saved.some(item => item.stage === 'qat' && item.operation === 'bootstrap')) {
+    const qat = policy.environments.find(item => item.key === 'qat');
+    const failed = recovery.failedQatValidation.payload.data.job;
+    await provider.verifyIdentity(qat);
+    const report = await provider.report(qat, failed.id);
+    requireCondition(report.id === failed.id && report.done === true && report.status === 'Failed'
+      && report.checkOnly === true && report.rollbackOnError === true
+      && Date.parse(report.completedDate) >= Date.parse(failed.submittedAt),
+    'SALESFORCE_TRADING_FX_QAT_FAILED_VALIDATION_REQUIRED');
+  }
+  const records = [];
+  for (const { payload: { data } } of recovery.bootstrap) {
+    const environment = policy.environments.find(item => item.key === data.stage);
+    const existing = saved.find(item => item.stage === data.stage && item.operation === 'bootstrap');
+    if (existing) {
+      requireCondition(existing.outcome === 'resolved' && digest(existing.job) === digest(data.job),
+        'SALESFORCE_TRADING_FX_QAT_ADOPTION_CHANGED');
+      continue;
+    }
+    requireCondition(environment?.isSandbox === true && data.job.validationId === null,
+      'SALESFORCE_TRADING_FX_QAT_BOOTSTRAP_SCOPE_INVALID');
+    await provider.verifyIdentity(environment);
+    const prepared = await provider.prepareBootstrap(environment, reviewed);
+    try {
+      requireCondition(prepared.packageSha256 === data.job.packageSha256, 'SALESFORCE_TRADING_FX_QAT_BOOTSTRAP_PACKAGE_CHANGED');
+    } finally { await prepared.cleanup(); }
+    const report = await provider.report(environment, data.job.id);
+    const proof = assertReviewedJobReport(report, { environment, jobId: data.job.id,
+      ...reviewedJobExpectations(reviewed, environment, 'bootstrap') });
+    const completed = Date.parse(proof.completedAt);
+    requireCondition(completed >= Date.parse(data.job.submittedAt) - 30_000 && completed <= now().getTime() + 30_000,
+      'SALESFORCE_HOSTED_ORIGINAL_JOB_TIMING_INVALID');
+    const inventory = await verifyReviewedOrgInventory({ provider: priorProvider, environment, plan: priorReviewed,
+      expected: priorReviewed.nativeInventories[environment.key][environment.key === 'devee' ? 'final' : 'bootstrap'], now });
+    records.push({ stage: environment.key, operation: 'bootstrap', record: { ...proof, fingerprint: reviewed.fingerprint,
+      validationJobId: null, submittedAt: data.job.submittedAt, packageSha256: data.job.packageSha256,
+      verifiedAt: inventory.verifiedAt, recoveredEvidenceDigest: digest({ receiptId: recovery.receipt.id, checkpoint: data.evidenceDigest,
+        report: proof.reportSha256, inventory: inventory.evidenceSha256 }) } });
+  }
+  for (const { payload: { data } } of recovery.permissions) {
+    const environment = policy.environments.find(item => item.key === data.stage);
+    const { name, orgId, prestate } = data.permission;
+    requireCondition(environment?.isSandbox && environment.orgId === orgId && reviewed.binding.permissionSets.includes(name)
+      && data.operation === 'permission:' + name && typeof prestate === 'boolean', 'SALESFORCE_TRADING_FX_QAT_PERMISSION_SCOPE_INVALID');
+    requireCondition(await provider.permissionAssigned(environment, name) === true, 'SALESFORCE_TRADING_FX_QAT_PERMISSION_DRIFT');
+    const existing = saved.find(item => item.stage === data.stage && item.operation === data.operation);
+    if (existing) {
+      requireCondition(existing.outcome === 'resolved' && digest(existing.permission) === digest(data.permission),
+        'SALESFORCE_TRADING_FX_QAT_ADOPTION_CHANGED');
+      continue;
+    }
+    records.push({ stage: environment.key, operation: data.operation, record: { status: 'Succeeded', name, orgId, prestate,
+      addedByRelease: !prestate, recoveredEvidenceDigest: data.evidenceDigest, verifiedAt: now().toISOString() } });
+  }
+  return records;
+}
+
 async function applyPreparedSalesforce({ manifest, manifestHash, approval, salesforce, cwd, env, reviewed, schemaBootstrap, localMirror,
-  adoption, promotionReceiptId, tradingFxRecovery }) {
+  adoption, promotionReceiptId, tradingFxRecovery, tradingFxQatRecovery }) {
   const saved = await salesforce.journal.readCheckpoints();
   const localTransport = localMirror ? await hostedLocalMirrorTransport({ manifest, approval, env, reviewed, salesforce }) : null;
   const directory = mkdtempSync(join(tmpdir(), 'fcos-salesforce-hosted-'));
@@ -330,6 +404,30 @@ async function applyPreparedSalesforce({ manifest, manifestHash, approval, sales
         await assertReviewedInputsUnchanged(reviewed, { cwd, policy });
         const savedBootstrap = journal.update('devee', 'bootstrap', record);
         await salesforce.journal.checkpoint({ fingerprint: reviewed.fingerprint, stage: 'devee', operation: 'bootstrap', record: savedBootstrap });
+      }
+      let retainedDeveeInventory;
+      if (tradingFxQatRecovery) {
+        const priorDirectory = join(directory, 'prior-source');
+        const gitWorktree = args => execFileSync('git', args, { cwd, stdio: ['ignore', 'ignore', 'ignore'], timeout: 30000 });
+        try {
+          gitWorktree(['worktree', 'add', '--detach', priorDirectory, tradingFxQatRecovery.prior.candidate.sha]);
+          const priorReviewed = hostedReviewedPlan(priorDirectory, tradingFxQatRecovery.prior.prerequisites.plan);
+          const priorProvider = cliSalesforceProvider({ cwd: priorDirectory, policy, commandEnvironment });
+          const completeDevee = saved.some(item => item.stage === 'devee' && item.operation === 'deployment');
+          const adopted = await recoverTradingFxSandboxBootstraps({ recovery: tradingFxQatRecovery, reviewed, priorReviewed,
+            provider, priorProvider, saved });
+          if (!completeDevee) retainedDeveeInventory = {
+            expected: priorReviewed.nativeInventories.devee.final, provider: priorProvider, plan: priorReviewed,
+          };
+          // The old checkout is needed for repeated native predeployment readback.
+          for (const { stage, operation, record } of adopted) {
+            await salesforce.journal.checkpoint({ fingerprint: reviewed.fingerprint, stage, operation,
+              record: journal.update(stage, operation, record) });
+          }
+        } catch (error) {
+          try { gitWorktree(['worktree', 'remove', priorDirectory]); } catch { /* temporary directory cleanup follows */ }
+          throw error;
+        }
       }
       const tradingFxCheckpoints = tradingFxRecovery ? [...tradingFxRecovery.jobs, ...tradingFxRecovery.permissions] : [];
       for (const { payload: { data: original } } of tradingFxCheckpoints) {
@@ -390,7 +488,7 @@ async function applyPreparedSalesforce({ manifest, manifestHash, approval, sales
         && (item.preparation?.validationJobId || item.preparation?.status === 'awaiting-authorized-bootstrap'));
       const result = await runReviewedSalesforceRelease({ plan: reviewed, mode: hasPreparation ? 'apply' : 'approved-continuation',
         policy, journal, provider,
-        ownership, externalJournal: salesforce.journal, authorization,
+        ownership, externalJournal: salesforce.journal, authorization, retainedDeveeInventory,
         assertUnchanged: () => assertReviewedInputsUnchanged(reviewed, { cwd, policy }) });
       requireCondition(result.mode === 'applied', 'SALESFORCE_HOSTED_APPLY_REQUIRED');
       const completedOperations = (await salesforce.journal.readCheckpoints()).filter(item => item.outcome === 'resolved'
@@ -409,6 +507,12 @@ async function applyPreparedSalesforce({ manifest, manifestHash, approval, sales
         salesforce: { order: 'devee-mirror-qat-production', mirrorVerified: true,
           sourceTreeHash: reviewed.binding.sourceTreeHash, fingerprint: reviewed.fingerprint } };
     } finally {
+      if (tradingFxQatRecovery) {
+        try {
+          execFileSync('git', ['worktree', 'remove', join(directory, 'prior-source')],
+            { cwd, stdio: ['ignore', 'ignore', 'ignore'], timeout: 30000 });
+        } catch { /* temporary directory cleanup follows */ }
+      }
       journal.close();
     }
   } finally {
