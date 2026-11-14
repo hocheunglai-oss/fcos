@@ -342,3 +342,26 @@ test('existing-draft release proof must include the held desktop state', () => {
   assert.throws(() => assertSmokeProof(proof, manifest, staged), { code: 'SMOKE_EXISTING_DRAFT_BOUNDARY_REQUIRED' });
   assertSmokeProof({ ...proof, existingDraft: { desktopHeldVerified: true, restrictedVerified: true, normalVerified: true } }, manifest, staged);
 });
+
+test('existing-draft resume refreshes deficient post-migration evidence without replaying the migration', async () => {
+  const f = fixture();
+  f.manifest = createManifest({ candidate: f.manifest.candidate, controllerSha: f.manifest.controllerSha,
+    previous: f.manifest.previous, paths: ['supabase/migrations/20990101000000_fixture.sql'],
+    publicEnvironment: f.manifest.build.publicEnvironment, releaseId: f.manifest.releaseId,
+    prerequisites: { adapter: 'existing-draft-migrations', adapterDigest: h, plan: {} } });
+  f.approval.manifestHash = digest(f.manifest);
+  const originalSmoke = f.smoke;
+  const proof = { ...await originalSmoke(), modules: f.manifest.selection.modules, normalRole: true,
+    existingDraft: { desktopHeldVerified: true, restrictedVerified: true, normalVerified: true } };
+  f.smoke = async () => proof;
+  await stageRelease(f);
+  const prerequisite = { passed: true, manifestHash: digest(f.manifest), backwardCompatible: true };
+  await f.journal.append('prerequisites.passed', prerequisite);
+  await f.journal.append('prerequisites.smoke_passed', { ...proof,
+    existingDraft: { ...proof.existingDraft, normalVerified: false }, prerequisiteDigest: digest(prerequisite) });
+  f.prerequisites = async () => assert.fail('Completed prerequisite must be reused');
+  let refreshes = 0;
+  f.smoke = async ({ afterPrerequisites }) => { assert.equal(afterPrerequisites, true); refreshes++; return proof; };
+  assert.equal((await promoteRelease(f)).state, 'complete');
+  assert.equal(refreshes, 1);
+});

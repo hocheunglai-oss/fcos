@@ -53,6 +53,11 @@ function tradingFxSmokeVerified(proof, manifest) {
     || proof?.tradingFx?.restrictedVerified === true && proof.tradingFx.normalVerified === true
       && proof.tradingFx.desktopVerified === true;
 }
+function existingDraftSmokeVerified(proof, manifest) {
+  return !requiresExistingDraftSmoke(manifest)
+    || proof?.existingDraft?.desktopHeldVerified === true
+      && proof.existingDraft.normalVerified === true && proof.existingDraft.restrictedVerified === true;
+}
 export function assertSmokeProof(proof, manifest, staged) {
   requireCondition(proof?.passed === true && proof.deploymentId === staged.id && proof.buildId === manifest.build.buildId
     && proof.login === true && proof.restrictedAccess === true && proof.businessWrites === 0
@@ -61,9 +66,7 @@ export function assertSmokeProof(proof, manifest, staged) {
   requireCondition(supplierBucketSmokeVerified(proof, manifest), 'SMOKE_SUPPLIER_BUCKET_ROUTE_BOUNDARY_FAILED');
   requireCondition(groupedPetroleumSmokeVerified(proof, manifest), 'SMOKE_GROUPED_PETROLEUM_BOUNDARY_REQUIRED');
   requireCondition(tradingFxSmokeVerified(proof, manifest), 'SMOKE_TRADING_FX_BOUNDARY_REQUIRED');
-  requireCondition(!requiresExistingDraftSmoke(manifest) || proof.existingDraft?.desktopHeldVerified === true
-    && proof.existingDraft.normalVerified === true && proof.existingDraft.restrictedVerified === true,
-    'SMOKE_EXISTING_DRAFT_BOUNDARY_REQUIRED');
+  requireCondition(existingDraftSmokeVerified(proof, manifest), 'SMOKE_EXISTING_DRAFT_BOUNDARY_REQUIRED');
 }
 export function assertPreBootstrapProof(proof, manifest, staged) {
   const plan = manifest.prerequisites?.plan;
@@ -167,6 +170,7 @@ export async function promoteRelease({ manifest, journal, provider, approval, pr
       && supplierBucketSmokeVerified(event.data, manifest)
       && groupedPetroleumSmokeVerified(event.data, manifest)
       && tradingFxSmokeVerified(event.data, manifest)
+      && existingDraftSmokeVerified(event.data, manifest)
       && (!historyRequired || event.data.companyFxHistory?.readVerified === true && event.data.companyFxHistory?.writeDenied === true))) {
       const currentStage = await provider.ready(staged.id);
       requireCondition(currentStage.id === staged.id && currentStage.state === 'READY' && currentStage.buildId === staged.buildId
