@@ -56,9 +56,9 @@ export function failedBootstrapClosure({ chain, manifest, runId, report, invento
 const positiveId = id => Number.isSafeInteger(id) && id > 0;
 const same = (left, right) => digest(left ?? null) === digest(right ?? null);
 
-// This frozen bridge is deliberately limited to the reviewed signing repair.
-// Broader changes require new financial qualification and a new reviewed bridge.
-const reviewedSuccessorSha = '5e223d917bcbbb065faf7f523556a868694e08bc';
+// This frozen bridge admits the reviewed signing and legacy document repair.
+// A different application candidate requires independently reviewed evidence.
+const reviewedSuccessorSha = 'd89595a87dd96667e1f2ae56a2730bd25aa77d65';
 const originalCandidateSha = '085c7ce8663d16d808771acbbcdc981b9d736b85';
 
 export async function readFailedBootstrapSuccessor({ manifest, github, ownerId, readPostQatRecovery }) {
