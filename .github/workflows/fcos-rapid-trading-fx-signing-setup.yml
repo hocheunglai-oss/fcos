@@ -1,0 +1,101 @@
+name: FCOS Trading FX signing setup
+run-name: FCOS Trading FX signing ${{ inputs.plan_hash }} ${{ inputs.candidate_sha }}
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Frozen Trading FX application SHA
+        required: true
+        type: string
+      plan_json:
+        description: Exact reviewed certificate and Vercel setup plan
+        required: true
+        type: string
+      plan_hash:
+        description: Canonical SHA256 of that setup plan
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  deployments: read
+
+concurrency:
+  group: fcos-production-release
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  signing-setup:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && github.ref_protected && github.actor == 'hocheunglai-oss' && github.triggering_actor == 'hocheunglai-oss' && github.repository == 'hocheunglai-oss/fcos'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: fcos-production-release
+    steps:
+      - uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea
+        id: admit
+        env:
+          FCOS_SIGNING_PLAN_JSON: ${{ inputs.plan_json }}
+          FCOS_SIGNING_PLAN_HASH: ${{ inputs.plan_hash }}
+          FCOS_SIGNING_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          FCOS_RAPID_RELEASE_ENABLED: ${{ vars.FCOS_RAPID_RELEASE_ENABLED }}
+          FCOS_RAPID_RELEASE_HANDOVER_ID: ${{ vars.FCOS_RAPID_RELEASE_HANDOVER_ID }}
+        with:
+          script: |
+            const crypto = require('node:crypto');
+            const need = value => { if (!value) throw Error('SIGNING_SETUP_NATIVE_WORKFLOW_ADMISSION'); };
+            const exactSha = value => /^[a-f0-9]{40}$/.test(value || '');
+            const base = context.repo;
+            const plan = JSON.parse(process.env.FCOS_SIGNING_PLAN_JSON);
+            const hash = crypto.createHash('sha256').update(JSON.stringify(plan,(_,item) =>
+              item && typeof item === 'object' && !Array.isArray(item)
+                ? Object.fromEntries(Object.entries(item).sort(([a],[b])=>a.localeCompare(b))) : item)).digest('hex');
+            const path = '.github/workflows/fcos-rapid-trading-fx-signing-setup.yml';
+            need(exactSha(plan.controllerSha) && exactSha(plan.candidateSha) && plan.candidateSha === process.env.FCOS_SIGNING_CANDIDATE_SHA
+              && hash === process.env.FCOS_SIGNING_PLAN_HASH && plan.repository === base.owner+'/'+base.repo
+              && plan.financialAuthority === false && process.env.FCOS_RAPID_RELEASE_ENABLED === 'true'
+              && /^[1-9][0-9]*$/.test(process.env.FCOS_RAPID_RELEASE_HANDOVER_ID || ''));
+            const id = Number(process.env.FCOS_RAPID_RELEASE_HANDOVER_ID);
+            const [record,frozen,current] = await Promise.all([
+              github.rest.repos.getDeployment({...base,deployment_id:id}),
+              github.rest.repos.getContent({...base,path,ref:plan.controllerSha}),
+              github.rest.repos.getContent({...base,path,ref:context.sha}),
+            ]);
+            const active = record.data, proof = active.payload;
+            need(active.id === id && active.creator?.login === base.owner && proof?.kind === 'fcos_rapid_release_handover'
+              && proof.controllerSha === plan.controllerSha && proof.plan?.controllerSha === plan.controllerSha
+              && proof.oldWritersRetired === true && proof.hostedQualificationPassed === true
+              && frozen.data.type === 'file' && current.data.type === 'file' && exactSha(frozen.data.sha) && frozen.data.sha === current.data.sha);
+            core.setOutput('controller',plan.controllerSha);
+            core.setOutput('candidate',plan.candidateSha);
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ steps.admit.outputs.controller }}
+          path: controller
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ steps.admit.outputs.candidate }}
+          path: candidate
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - name: Install trusted dependencies and provider CLI
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund --prefix controller
+          npm install --global vercel@54.20.1 @salesforce/cli@2.145.6 --ignore-scripts --no-audit --no-fund
+      - name: Verify and apply the exact protected signing setup
+        run: |
+          node --input-type=module -e 'import fs from "node:fs";fs.writeFileSync(process.env.FCOS_RAPID_DATABASE_CA,process.env.FCOS_CA,{mode:0o600,flag:"wx"})'
+          node controller/scripts/rapid-release-trading-fx-signing-setup.mjs
+        env:
+          FCOS_SIGNING_PLAN_JSON: ${{ inputs.plan_json }}
+          FCOS_SIGNING_PLAN_HASH: ${{ inputs.plan_hash }}
+          FCOS_SIGNING_OWNER_TOKEN: ${{ secrets.FCOS_RAPID_HANDOVER_GITHUB_TOKEN || secrets.FCOS_RELEASE_GH_TOKEN }}
+          VERCEL_TOKEN: ${{ secrets.FCOS_RELEASE_VERCEL_TOKEN }}
+          FCOS_RAPID_DATABASE_URL: ${{ secrets.FCOS_RAPID_READONLY_DATABASE_URL }}
+          FCOS_RAPID_DATABASE_CA: ${{ runner.temp }}/trading-fx-signing-ca.pem
+          FCOS_CA: ${{ secrets.FCOS_RAPID_DATABASE_CA }}
+          FCOS_RAPID_SALESFORCE_PRODUCTION_PRIVATE_KEY: ${{ secrets.FCOS_RAPID_SALESFORCE_PRODUCTION_PRIVATE_KEY }}
+          FCOS_RAPID_SALESFORCE_PRODUCTION_CLIENT_ID: ${{ secrets.FCOS_RAPID_SALESFORCE_PRODUCTION_CLIENT_ID }}

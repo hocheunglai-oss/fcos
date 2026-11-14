@@ -12,6 +12,7 @@ import { githubClient, nativeApproval, verifyExecution, vercelProvider, assertNa
 import { runPrerequisites, verifyBeforeBootstrap, qualifiedAdapter } from './lib/rapid-release/prerequisites.mjs';
 import { readCandidateModuleInventory } from './lib/rapid-release/modules.mjs';
 import { nativeCompatibilityReader } from './lib/rapid-release/compatibility.mjs';
+import { hasTradingFxSigningLocator, TRADING_FX_SIGNING_BASELINE, verifyTradingFxSigningConfig } from './lib/rapid-release/trading-fx-signing-config.mjs';
 
 const read = path => JSON.parse(readFileSync(resolve(path), 'utf8'));
 const write = (path, value) => { mkdirSync(resolve(path, '..'), { recursive: true }); writeFileSync(resolve(path), `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 }); };
@@ -102,7 +103,7 @@ async function rapidReleaseCommand(argv, env, runtime) {
       registry: read(opts.registry || join(controller, 'config/rapid-release-learning.json')) });
   }
   requireCondition(['stage', 'promote', 'resume'].includes(command), 'CLI_COMMAND_INVALID');
-  await verifyExecution({ github, manifest, env, phase: command });
+  const execution = await verifyExecution({ github, manifest, env, phase: command });
   const provider = vercelProvider({ manifest, github, env, outputDirectory: opts['artifact-directory'] && resolve(opts['artifact-directory']) });
   runtime.provider = provider;
   const { runStagedSmoke, observeLive } = await import('./lib/rapid-release/smoke.mjs');
@@ -125,12 +126,21 @@ async function rapidReleaseCommand(argv, env, runtime) {
     requireCondition(jobs.jobs?.some(job => job.name === 'quality' && job.conclusion === 'success'), 'NATIVE_QUALITY_JOB_REQUIRED');
     if (manifest.selection.salesforce || manifest.selection.database) await qualifiedAdapter({ manifest, controllerDirectory: controller });
     result = await stageRelease({ manifest, journal, provider, build, smoke,
-      beforeBootstrap: values => verifyBeforeBootstrap({ ...values, controllerDirectory: controller, env }) });
+      beforeBootstrap: values => verifyBeforeBootstrap({ ...values, controllerDirectory: controller, env, provider }) });
   } else {
     requireCondition(staged, 'STAGED_DEPLOYMENT_REQUIRED');
     const approval = await nativeApproval({ github, manifest, staged, env });
     result = await promoteRelease({ manifest, journal, provider, approval, smoke,
-      observe: values => observeLive({ ...values, env }),
+      observe: async values => {
+        if (hasTradingFxSigningLocator(manifest.prerequisites?.plan)) {
+          await verifyTradingFxSigningConfig({ manifest, previous: TRADING_FX_SIGNING_BASELINE,
+            github, ownerId: execution.run.actor.id, provider });
+          const { verifyTradingFxCanonicalSigning } = await import('./lib/rapid-release/trading-fx-signing-probe.mjs');
+          const signing = await verifyTradingFxCanonicalSigning({ ...values, provider, env, expectedRateDigest: values.signingRateDigest });
+          return { ...await observeLive({ ...values, env }), signing };
+        }
+        return observeLive({ ...values, env });
+      },
       prerequisites: values => runPrerequisites({ ...values, staged, journal, provider, controllerDirectory: controller, env }) });
   }
   if (opts.output) write(opts.output, result);
