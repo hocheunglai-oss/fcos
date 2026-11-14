@@ -4,6 +4,24 @@
   "recipes": [],
   "observations": [
     {
+      "id": "salesforce-legacy-document-apex-admission",
+      "cause": "Four legacy USD forms imported reads from an Apex class granted only by the separately administered Trading FX access set.",
+      "correction": "Use the existing legacy Apex entrypoints and narrowly projected reads. Keep the new native write behind the existing Trading FX permission.",
+      "verification": {
+        "oldCandidate": "5e223d917bcbbb065faf7f523556a868694e08bc",
+        "repairedCandidate": "d89595a87dd96667e1f2ae56a2730bd25aa77d65",
+        "deveeCheckOnlyId": "0AfHF000007GhGH0A0",
+        "deveeTestsPassed": 521,
+        "componentErrors": 0,
+        "oldReviewedPlanRejectedMs": 168.975,
+        "repairedReviewedPlanAdmittedMs": 129.208,
+        "preflightProviderCalls": 0
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Reject recurrence of the four exact direct-read imports in native package preflight, and retain the Sales Support success and managed-evidence denial regressions."
+    },
+    {
       "id": "staging-browser-package-mirror-dns",
       "cause": "FCOS run 43031230905 spent 424 seconds in Playwright system dependency installation and failed to resolve the Ubuntu archive before any stage provider operation.",
       "correction": "Install the pinned Chromium build and verify a headless desktop render with the runner libraries. Install system dependencies once only when readiness fails. Qualify the same installer on the hosted runner before activation.",
