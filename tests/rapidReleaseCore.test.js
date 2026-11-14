@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createManifest, digest, selectChecks, targets, publicBuildEnvironment } from '../scripts/lib/rapid-release/contract.mjs';
 import { MemoryJournal, validateChain, assertPublicPayload, DeploymentJournal } from '../scripts/lib/rapid-release/journal.mjs';
-import { assertPreBootstrapProof, stageRelease, promoteRelease } from '../scripts/lib/rapid-release/engine.mjs';
+import { assertSmokeProof, assertPreBootstrapProof, stageRelease, promoteRelease } from '../scripts/lib/rapid-release/engine.mjs';
 import { selectedProductTests } from '../scripts/lib/rapid-release/build.mjs';
 
 const sha = 'a'.repeat(40), h = 'b'.repeat(64);
@@ -25,7 +25,7 @@ function fixture() {
     previousDeploymentId: 'dpl_old', environment: 'fcos-production-release', reviewer: targets().account,
     nativeReviewVerified: true, runId: 123, approvedAt: new Date().toISOString() };
   const observe = async () => ({ passed: true, deploymentId: staged.id, buildId: build.buildId, observationMs: 300000 });
-  return { manifest, build, staged, journal, provider, calls, smoke, approval, observe };
+  return { manifest, build, staged, journal, provider, calls, smoke, approval, observe, verifyStageBaseline: async () => {} };
 }
 test('frontend-only selection never enables Salesforce/mirror/schema work', () => {
   const result = selectChecks(['src/components/dashboard/Table.jsx']);
@@ -64,6 +64,39 @@ test('empty or ambiguous discovery preserves checkpoint and refuses duplicate su
 test('staged artifact digest mismatch blocks smoke and approval', async () => {
   const f = fixture(); f.provider.ready = async () => ({ ...f.staged, artifactDigest: '0'.repeat(64) });
   await assert.rejects(stageRelease(f), /STAGED_BUILD_NOT_READY/); assert.equal(f.journal.records.some(r => r.payload.event === 'smoke.passed'), false);
+});
+test('stage intent, submission and final acceptance take ownership without holding it over smoke', async () => {
+  const f = fixture(), append = f.journal.append.bind(f.journal), deploy = f.provider.stage.bind(f.provider);
+  let held = false, scopes = 0;
+  f.withStageOwnership = async work => {
+    assert.equal(held, false);
+    held = true;
+    scopes++;
+    try { return await work(); } finally { held = false; }
+  };
+  f.journal.append = async (event, data) => { assert.equal(held, true, event); return append(event, data); };
+  f.provider.stage = async input => { assert.equal(held, true); return deploy(input); };
+  const smoke = f.smoke;
+  f.smoke = async () => { assert.equal(held, false); return smoke(); };
+  f.verifyStageBaseline = async () => { assert.equal(held, true); };
+  await stageRelease(f);
+  assert.equal(scopes, 2);
+  assert.equal(held, false);
+});
+
+test('staging refuses a live deployment and retains an unaliased stage when baseline readback fails', async () => {
+  const alreadyLive = fixture();
+  alreadyLive.provider.currentProduction = async () => alreadyLive.staged;
+  alreadyLive.smoke = async () => assert.fail('Smoke would reach the live alias');
+  await assert.rejects(stageRelease(alreadyLive), /PRODUCTION_BASELINE_CHANGED/);
+  const f = fixture();
+  f.verifyStageBaseline = async () => { throw Error('STAGING_BASELINE_CHANGED'); };
+  await assert.rejects(stageRelease(f), /STAGING_BASELINE_CHANGED/);
+  const recorded = f.journal.records.map(r => r.payload.event);
+  assert.ok(recorded.includes('stage.result'));
+  assert.ok(!recorded.includes('smoke.passed'));
+  await assert.rejects(stageRelease(f), /STAGING_BASELINE_CHANGED/);
+  assert.equal(f.calls.filter(call => call === 'stage').length, 1);
 });
 test('missing module/normal-role coverage is a failure, not a passing smoke', async () => {
   const f = fixture(); f.smoke = async () => ({ passed: true, deploymentId: f.staged.id, buildId: f.build.buildId, login: true, restrictedAccess: true, businessWrites: 0, modules: [] });
@@ -332,4 +365,36 @@ test('Trading FX preserves required role and desktop evidence on the pre-bootstr
   assert.doesNotThrow(() => assertPreBootstrapProof({ ...proof, tradingFx: {
     restrictedVerified: true, normalVerified: true, desktopVerified: true,
   } }, manifest, f.staged));
+});
+
+test('existing-draft release proof must include the held desktop state', () => {
+  const { manifest, staged } = fixture();
+  manifest.prerequisites = { adapter: 'existing-draft-migrations' };
+  const proof = { passed: true, deploymentId: staged.id, buildId: manifest.build.buildId,
+    login: true, restrictedAccess: true, businessWrites: 0, modules: manifest.selection.modules };
+  assert.throws(() => assertSmokeProof(proof, manifest, staged), { code: 'SMOKE_EXISTING_DRAFT_BOUNDARY_REQUIRED' });
+  assertSmokeProof({ ...proof, existingDraft: { desktopHeldVerified: true, restrictedVerified: true, normalVerified: true } }, manifest, staged);
+});
+
+test('existing-draft resume refreshes deficient post-migration evidence without replaying the migration', async () => {
+  const f = fixture();
+  f.manifest = createManifest({ candidate: f.manifest.candidate, controllerSha: f.manifest.controllerSha,
+    previous: f.manifest.previous, paths: ['supabase/migrations/20990101000000_fixture.sql'],
+    publicEnvironment: f.manifest.build.publicEnvironment, releaseId: f.manifest.releaseId,
+    prerequisites: { adapter: 'existing-draft-migrations', adapterDigest: h, plan: {} } });
+  f.approval.manifestHash = digest(f.manifest);
+  const originalSmoke = f.smoke;
+  const proof = { ...await originalSmoke(), modules: f.manifest.selection.modules, normalRole: true,
+    existingDraft: { desktopHeldVerified: true, restrictedVerified: true, normalVerified: true } };
+  f.smoke = async () => proof;
+  await stageRelease(f);
+  const prerequisite = { passed: true, manifestHash: digest(f.manifest), backwardCompatible: true };
+  await f.journal.append('prerequisites.passed', prerequisite);
+  await f.journal.append('prerequisites.smoke_passed', { ...proof,
+    existingDraft: { ...proof.existingDraft, normalVerified: false }, prerequisiteDigest: digest(prerequisite) });
+  f.prerequisites = async () => assert.fail('Completed prerequisite must be reused');
+  let refreshes = 0;
+  f.smoke = async ({ afterPrerequisites }) => { assert.equal(afterPrerequisites, true); refreshes++; return proof; };
+  assert.equal((await promoteRelease(f)).state, 'complete');
+  assert.equal(refreshes, 1);
 });
