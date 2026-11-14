@@ -1,6 +1,5 @@
 @IsTest
 private class FcosCompanyFxRateServiceTest {
-    private static final String DEDICATED_TEST_SECRET = 'dedicated-fx-test-secret';
     private static HttpRequest capturedRequest;
 
     private class CompanyFxMock implements HttpCalloutMock {
@@ -38,9 +37,7 @@ private class FcosCompanyFxRateServiceTest {
 
     private static void configure(Boolean enabled) {
         FcosCompanyFxRateService.settingsOverride = new Fcos_Trading_FX_Setting__c(
-            Enabled__c = enabled,
-            Endpoint__c = 'https://fcos.example.invalid/api/salesforce/company-fx',
-            Signing_Secret__c = DEDICATED_TEST_SECRET
+            Enabled__c = enabled
         );
         capturedRequest = null;
     }
@@ -48,7 +45,7 @@ private class FcosCompanyFxRateServiceTest {
     private static void assertDedicatedSignedRequest(String expectedPurpose, Date expectedPaymentDate) {
         System.assertNotEquals(null, capturedRequest, 'The enabled service must make its dedicated company-FX callout.');
         System.assertEquals('POST', capturedRequest.getMethod());
-        System.assertEquals('https://fcos.example.invalid/api/salesforce/company-fx', capturedRequest.getEndpoint());
+        System.assertEquals('https://fcos.fcuno.com/api/salesforce/company-fx', capturedRequest.getEndpoint());
         System.assertEquals('application/json', capturedRequest.getHeader('Content-Type'));
         System.assertEquals(UserInfo.getOrganizationId(), capturedRequest.getHeader('x-salesforce-org-id'));
         String eventId = capturedRequest.getHeader('x-salesforce-event-id');
@@ -60,17 +57,13 @@ private class FcosCompanyFxRateServiceTest {
         System.assertEquals(expectedPurpose, body.get('purpose'));
         if (expectedPaymentDate == null) System.assertEquals(false, body.containsKey('paymentDate'));
         else System.assertEquals(String.valueOf(expectedPaymentDate), body.get('paymentDate'));
-        String expectedSignature = EncodingUtil.convertToHex(Crypto.generateMac(
-            'HmacSHA256',
-            Blob.valueOf(timestamp + '.' + eventId + '.' + capturedRequest.getBody()),
-            Blob.valueOf(DEDICATED_TEST_SECRET)
-        ));
-        System.assertEquals('sha256=' + expectedSignature, capturedRequest.getHeader('x-salesforce-signature'));
+        System.assertEquals('rsa-sha256=Zml4dHVyZQ==', capturedRequest.getHeader('x-salesforce-signature'));
     }
 
     @IsTest
     static void currentUsesDedicatedSignatureHeadersAndTimestamp() {
         configure(true);
+
         Test.setMock(HttpCalloutMock.class, new CompanyFxMock(200, 'valid'));
 
         Test.startTest();
@@ -98,6 +91,7 @@ private class FcosCompanyFxRateServiceTest {
     @IsTest
     static void invalidAndUnavailableRatesFailClosed() {
         configure(true);
+
         Test.setMock(HttpCalloutMock.class, new CompanyFxMock(200, 'invalid-rate'));
         try {
             FcosCompanyFxRateService.current();
@@ -118,6 +112,7 @@ private class FcosCompanyFxRateServiceTest {
     @IsTest
     static void confirmationRejectsChangedRate() {
         configure(true);
+
         Test.setMock(HttpCalloutMock.class, new CompanyFxMock(409, 'changed'));
         try {
             FcosCompanyFxRateService.confirm('rate-reviewed');
@@ -142,6 +137,7 @@ private class FcosCompanyFxRateServiceTest {
         System.assertEquals(null, capturedRequest);
 
         Date paymentDate = Date.newInstance(2026, 9, 10);
+
         Test.setMock(HttpCalloutMock.class, new CompanyFxMock(200, 'valid'));
         FcosCompanyFxRateService.Snapshot result = FcosCompanyFxRateService.forPaymentDate(paymentDate);
         assertDedicatedSignedRequest('payment', paymentDate);

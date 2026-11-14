@@ -36,10 +36,9 @@ private class FcosTradeCashIntegrationTest {
 
     private static void configure(Boolean missingHistorical) {
         FcosCompanyFxRateService.settingsOverride=new Fcos_Trading_FX_Setting__c(
-            Enabled__c=true,Cash_Enabled__c=true,
-            Endpoint__c='https://fcos.example.invalid/api/salesforce/company-fx',
-            Signing_Secret__c='dedicated-cash-integration-test-secret'
+            Enabled__c=true,Cash_Enabled__c=true
         );
+
         Test.setMock(HttpCalloutMock.class,new RateMock(missingHistorical));
     }
 
@@ -67,8 +66,7 @@ private class FcosTradeCashIntegrationTest {
                 Fcos_Trading_FX_Setting__c setting=Fcos_Trading_FX_Setting__c.getOrgDefaults();
                 if(setting==null) setting=new Fcos_Trading_FX_Setting__c(SetupOwnerId=UserInfo.getOrganizationId());
                 setting.Enabled__c=true;setting.Cash_Enabled__c=true;
-                setting.Endpoint__c='https://fcos.example.invalid/api/salesforce/company-fx';
-                setting.Signing_Secret__c='dedicated-cash-integration-test-secret';upsert setting;
+                upsert setting;
 
                 TestDataFactory.prepareDataForNominationConfirmationFlow();
                 STEM_Line_Item__c base=[SELECT Id,Name,STEM__c,STEM__r.Port__c,STEM__r.Account__c,

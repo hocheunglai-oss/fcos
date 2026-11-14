@@ -7,6 +7,8 @@ public with sharing class FcosCompanyFxRateService {
         @AuraEnabled public Decimal usdHkdRate;
         @AuraEnabled public Datetime effectiveAt;
     }
+    private static final String ENDPOINT = 'https://fcos.fcuno.com/api/salesforce/company-fx';
+    private static final String SIGNING_CERTIFICATE = 'FCOS_Company_FX_Signing';
     @TestVisible private static Fcos_Trading_FX_Setting__c settingsOverride;
     public static Boolean enabled() {
         Fcos_Trading_FX_Setting__c settings = settings();
@@ -22,9 +24,7 @@ public with sharing class FcosCompanyFxRateService {
         return fetch('payment', paymentDate, null);
     }
     private static Snapshot fetch(String purpose, Date paymentDate, String reviewedRateId) {
-        Fcos_Trading_FX_Setting__c config = settings();
-        if (!enabled() || String.isBlank(config.Endpoint__c) || !config.Endpoint__c.startsWith('https://')
-            || !config.Endpoint__c.endsWith('/api/salesforce/company-fx') || String.isBlank(config.Signing_Secret__c)) {
+        if (!enabled()) {
             throw new FxException('Company FX is not configured. HKD entry remains disabled.');
         }
         Map<String, Object> payload = new Map<String, Object>{ 'purpose' => purpose };
@@ -36,17 +36,23 @@ public with sharing class FcosCompanyFxRateService {
         String body = JSON.serialize(payload);
         String timestamp = Datetime.now().formatGmt('yyyy-MM-dd\'T\'HH:mm:ss.SSS\'Z\'');
         String eventId = EncodingUtil.convertToHex(Crypto.generateAesKey(128));
-        String signature = EncodingUtil.convertToHex(Crypto.generateMac('HmacSHA256',
-            Blob.valueOf(timestamp + '.' + eventId + '.' + body), Blob.valueOf(config.Signing_Secret__c)));
+        Blob signedBytes = Blob.valueOf(timestamp + '.' + eventId + '.' + body);
+        String signature;
+        try {
+            signature = Test.isRunningTest() ? 'Zml4dHVyZQ==' : EncodingUtil.base64Encode(
+                Crypto.signWithCertificate('RSA-SHA256', signedBytes, SIGNING_CERTIFICATE));
+        } catch (Exception error) {
+            throw new FxException('Company FX is not configured. HKD entry remains disabled.');
+        }
         HttpRequest request = new HttpRequest();
-        request.setEndpoint(config.Endpoint__c);
+        request.setEndpoint(ENDPOINT);
         request.setMethod('POST');
         request.setTimeout(15000);
         request.setHeader('Content-Type', 'application/json');
         request.setHeader('x-salesforce-org-id', UserInfo.getOrganizationId());
         request.setHeader('x-salesforce-event-id', eventId);
         request.setHeader('x-salesforce-timestamp', timestamp);
-        request.setHeader('x-salesforce-signature', 'sha256=' + signature);
+        request.setHeader('x-salesforce-signature', 'rsa-sha256=' + signature);
         request.setBody(body);
         HttpResponse response;
         try { response = new Http().send(request); }

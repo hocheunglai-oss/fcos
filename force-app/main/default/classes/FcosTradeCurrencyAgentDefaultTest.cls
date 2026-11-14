@@ -1,6 +1,5 @@
 @IsTest
 private class FcosTradeCurrencyAgentDefaultTest {
-    private static final String FX_SECRET = 'agent-default-fx-test-secret';
 
     private class CurrentRateMock implements HttpCalloutMock {
         public HttpResponse respond(HttpRequest request) {
@@ -27,8 +26,7 @@ private class FcosTradeCurrencyAgentDefaultTest {
         Fcos_Trading_FX_Setting__c setting = Fcos_Trading_FX_Setting__c.getOrgDefaults();
         if (setting == null) setting = new Fcos_Trading_FX_Setting__c(SetupOwnerId=UserInfo.getOrganizationId());
         setting.Enabled__c = true;
-        setting.Endpoint__c = 'https://fcos.example.invalid/api/salesforce/company-fx';
-        setting.Signing_Secret__c = FX_SECRET;
+
         upsert setting;
 
         User actor = new User(Alias='agfx',LastName='AgentCurrencyDefault',Email='agent-fx@example.com',
@@ -106,6 +104,7 @@ private class FcosTradeCurrencyAgentDefaultTest {
             System.assertEquals(true,extra.Buy_Agent_Currency_Pending__c,
                 'Only the creation guard may establish the agent HKD proposal marker.');
             System.assertEquals(true,FcosTradeCurrencyService.isInitialAgentHkdDefault(extra.Id,'Buy'));
+
             Test.setMock(HttpCalloutMock.class,new CurrentRateMock());
 
             Test.startTest();
@@ -128,6 +127,7 @@ private class FcosTradeCurrencyAgentDefaultTest {
     static void independentSellSaveRetainsPendingBuyProposal() {
         System.runAs(actor()) {
             STEM_Extra_Cost__c extra = pendingExtra();
+
             Test.setMock(HttpCalloutMock.class,new CurrentRateMock());
             Test.startTest();
             FcosTradeCurrencyService.Review sell = FcosTradeCurrencyController.preview(extra.Id,'Sell');

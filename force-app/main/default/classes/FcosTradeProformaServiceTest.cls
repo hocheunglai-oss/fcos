@@ -31,13 +31,13 @@ private class FcosTradeProformaServiceTest {
             DBS_Bank__c bank=DBS_Bank__c.getOrgDefaults();bank.SetupOwnerId=UserInfo.getOrganizationId();bank.Beneficiary_Bank__c='Synthetic test bank';
             bank.Beneficiary__c='FRATELLI COSULICH BUNKERS (HK) LTD';bank.Account_No__c='SYNTHETIC-NOT-A-BANK-ACCOUNT';upsert bank;
             Fcos_Trading_FX_Setting__c setting=Fcos_Trading_FX_Setting__c.getOrgDefaults();setting.SetupOwnerId=UserInfo.getOrganizationId();setting.Enabled__c=true;
-            setting.Cash_Enabled__c=true;setting.Endpoint__c='https://fcos.example.invalid/api/salesforce/company-fx';setting.Signing_Secret__c='native-proforma-test-secret';upsert setting;
+            setting.Cash_Enabled__c=true;upsert setting;
             System.enqueueJob(new SeedBuyerProforma(line.Id));
         }} finally {Test.stopTest();}
     }
     private static User actor(){return [SELECT Id FROM User WHERE LastName=:ACTOR_LAST_NAME LIMIT 1];}
     private static STEM_Line_Item__c line(){return [SELECT Id,STEM__c,Original_Supplier__c,Buyer_Invoice__c,Supplier_Invoice__c,Issued__c,Supplier_Issued__c FROM STEM_Line_Item__c WHERE Cancelled__c=false LIMIT 1];}
-    private static void configure(){FcosCompanyFxRateService.settingsOverride=new Fcos_Trading_FX_Setting__c(Enabled__c=true,Cash_Enabled__c=true,Endpoint__c='https://fcos.example.invalid/api/salesforce/company-fx',Signing_Secret__c='native-proforma-test-secret');Test.setMock(HttpCalloutMock.class,new RateMock());}
+    private static void configure(){FcosCompanyFxRateService.settingsOverride=new Fcos_Trading_FX_Setting__c(Enabled__c=true,Cash_Enabled__c=true);Test.setMock(HttpCalloutMock.class,new RateMock());}
     private static void confirm(Id lineId,String direction){
         FcosTradeCurrencyService.Review review=FcosTradeCurrencyController.previewCurrency(lineId,direction,'HKD');
         FcosTradeCurrencyController.saveDraft(lineId,direction,'HKD',Decimal.valueOf('780.00000000'),review.fingerprint,review.rateId,true);

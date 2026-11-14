@@ -1,6 +1,5 @@
 @IsTest
 private class FcosUsdReissuePaymentIntegrationTest {
-    private static final String FX_SECRET = 'usd-reissue-integration-test-secret';
 
     private static FcosCompanyFxRateService.Snapshot lockedRate() {
         FcosCompanyFxRateService.Snapshot rate = new FcosCompanyFxRateService.Snapshot();
@@ -13,9 +12,7 @@ private class FcosUsdReissuePaymentIntegrationTest {
 
     private static void configureFx() {
         FcosCompanyFxRateService.settingsOverride = new Fcos_Trading_FX_Setting__c(
-            Enabled__c = true,
-            Endpoint__c = 'https://fcos.example.invalid/api/salesforce/company-fx',
-            Signing_Secret__c = FX_SECRET
+            Enabled__c = true
         );
     }
 

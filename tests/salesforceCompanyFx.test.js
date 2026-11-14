@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { generateKeyPairSync, sign } from 'node:crypto';
 import { Readable } from 'node:stream';
 import test from 'node:test';
 import { runWithDeploymentRequestSafety } from '../api/_deploymentReadOnly.js';
@@ -173,4 +174,20 @@ test('streamed signed bytes survive chunking and the outer request scope takes p
   await runWithDeploymentRequestSafety(canonicalRequest,
     () => handleSalesforceCompanyFx(canonicalRequest, staged, dependencies), { VERCEL_ENV: 'preview' });
   assert.equal(staged.statusCode, 404);
+});
+
+test('certificate mode verifies exact signed bytes and refuses legacy authentication', () => {
+  const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const body = '{"purpose":"preview"}';
+  const headers = signedHeaders({ body });
+  const signed = Buffer.from(`${headers['x-salesforce-timestamp']}.${headers['x-salesforce-event-id']}.${body}`);
+  const signature = sign('RSA-SHA256', signed, privateKey).toString('base64');
+  const runtime = { ...env, SALESFORCE_COMPANY_FX_SIGNING_PUBLIC_KEY: publicKey.export({ type: 'spki', format: 'pem' }) };
+  const request = { headers: { ...headers, 'x-salesforce-signature': 'rsa-sha256=' + signature }, rawBody: body, env: runtime, now };
+  assert.equal(verifySalesforceCompanyFxRequest(request).environment.key, 'production');
+  assert.throws(() => verifySalesforceCompanyFxRequest({ ...request, rawBody: body + ' ' }), { code: 'SALESFORCE_COMPANY_FX_INVALID_SIGNATURE' });
+  assert.throws(() => verifySalesforceCompanyFxRequest({ ...request, headers }), { code: 'SALESFORCE_COMPANY_FX_INVALID_SIGNATURE' });
+  assert.throws(() => verifySalesforceCompanyFxRequest({ ...request, env: {
+    ...runtime, SALESFORCE_COMPANY_FX_SIGNING_PUBLIC_KEY: privateKey.export({ type: 'pkcs8', format: 'pem' }),
+  } }), { code: 'SALESFORCE_COMPANY_FX_PUBLIC_KEY_INVALID' });
 });

@@ -91,10 +91,9 @@ private class FcosNativeEntryIntegrationTest {
 
     private static void configureCompanyRate() {
         FcosCompanyFxRateService.settingsOverride = new Fcos_Trading_FX_Setting__c(
-            Enabled__c = true,
-            Endpoint__c = 'https://fcos.example.invalid/api/salesforce/company-fx',
-            Signing_Secret__c = 'native-entry-integration-test-secret'
+            Enabled__c = true
         );
+
         Test.setMock(HttpCalloutMock.class, new CompanyRateMock());
     }
 

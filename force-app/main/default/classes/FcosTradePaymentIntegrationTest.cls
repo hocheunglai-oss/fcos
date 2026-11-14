@@ -15,8 +15,8 @@ private class FcosTradePaymentIntegrationTest {
         }
     }
     private static void configure(Boolean available) {
-        FcosCompanyFxRateService.settingsOverride=new Fcos_Trading_FX_Setting__c(Enabled__c=true,
-            Endpoint__c='https://fcos.example.invalid/api/salesforce/company-fx',Signing_Secret__c='dedicated-payment-integration-test-secret');
+        FcosCompanyFxRateService.settingsOverride=new Fcos_Trading_FX_Setting__c(Enabled__c=true);
+
         Test.setMock(HttpCalloutMock.class,new RateMock(available));
     }
     @TestSetup static void fixtures() {
@@ -71,8 +71,7 @@ private class FcosTradePaymentIntegrationTest {
         private final Id lineId;
         SeedIssuedDocuments(Id lineId) {this.lineId=lineId;}
         public void execute(QueueableContext context) {
-            FcosCompanyFxRateService.settingsOverride=new Fcos_Trading_FX_Setting__c(Enabled__c=true,
-                Endpoint__c='https://fcos.example.invalid/api/salesforce/company-fx',Signing_Secret__c='dedicated-payment-integration-test-secret');
+            FcosCompanyFxRateService.settingsOverride=new Fcos_Trading_FX_Setting__c(Enabled__c=true);
             STEM_Line_Item__c line=[SELECT Id,STEM__c,Original_Supplier__c FROM STEM_Line_Item__c WHERE Id=:lineId];
             FcosCompanyFxRateService.Snapshot invoiceRate=new FcosCompanyFxRateService.Snapshot();
             invoiceRate.rateId='invoice-rate';invoiceRate.usdHkdRate=7.8;invoiceRate.effectiveAt=Datetime.newInstanceGmt(2026,9,1,0,0,0);

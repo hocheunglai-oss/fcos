@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, createPublicKey, timingSafeEqual, verify } from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
 import { loadCompanyFxRateForDate, loadCurrentCompanyFxRate } from './_companyFxRates.js';
@@ -68,15 +68,16 @@ export function salesforceCompanyFxSignature({ secret, timestamp, requestId, raw
 }
 
 export function verifySalesforceCompanyFxRequest({ headers, rawBody, env = process.env, now = Date.now }) {
+  const certificate = nonBlank(env.SALESFORCE_COMPANY_FX_SIGNING_PUBLIC_KEY);
   const secret = nonBlank(env.SALESFORCE_COMPANY_FX_SIGNING_SECRET);
-  if (!secret) {
-    throw companyFxRequestError('SALESFORCE_COMPANY_FX_SIGNING_SECRET is not configured.', 500, 'SALESFORCE_COMPANY_FX_SECRET_MISSING', false);
+  if (!certificate && !secret) {
+    throw companyFxRequestError('Company FX signing is not configured.', 500, 'SALESFORCE_COMPANY_FX_SECRET_MISSING', false);
   }
   const environment = configuredSalesforceCompanyFxEnvironment(env);
   const orgId = headerValue(headers, 'x-salesforce-org-id');
   const requestId = headerValue(headers, 'x-salesforce-event-id');
   const timestamp = headerValue(headers, 'x-salesforce-timestamp');
-  const signature = normalizedSignature(headerValue(headers, 'x-salesforce-signature'));
+  const signature = headerValue(headers, 'x-salesforce-signature');
   const timestampMs = Date.parse(timestamp);
 
   if (orgId !== environment.orgId) {
@@ -88,8 +89,26 @@ export function verifySalesforceCompanyFxRequest({ headers, rawBody, env = proce
   if (!Number.isFinite(timestampMs) || Math.abs(currentNow(now) - timestampMs) > MAX_REQUEST_AGE_MS) {
     throw companyFxRequestError('Salesforce request timestamp is missing or stale.', 401, 'SALESFORCE_COMPANY_FX_STALE_TIMESTAMP');
   }
-  const expected = salesforceCompanyFxSignature({ secret, timestamp, requestId, rawBody });
-  if (!timingSafeHexEqual(signature, expected)) {
+  let authenticated;
+  if (certificate) {
+    let key;
+    try {
+      if (!/^-----BEGIN (?:PUBLIC KEY|CERTIFICATE)-----\r?\n/.test(certificate)) throw new Error('Public material required');
+      key = createPublicKey(certificate);
+      if (key.asymmetricKeyType !== 'rsa' || key.asymmetricKeyDetails.modulusLength < 2048) throw new Error('RSA key required');
+    } catch {
+      throw companyFxRequestError('Company FX signing public key is invalid.', 500, 'SALESFORCE_COMPANY_FX_PUBLIC_KEY_INVALID', false);
+    }
+    const match = /^rsa-sha256=([A-Za-z0-9+/]+={0,2})$/.exec(signature);
+    const signed = match ? Buffer.from(match[1], 'base64') : Buffer.alloc(0);
+    const payload = Buffer.concat([Buffer.from(`${timestamp}.${requestId}.`), Buffer.from(rawBody)]);
+    authenticated = signed.length === Math.ceil(key.asymmetricKeyDetails.modulusLength / 8)
+      && signed.toString('base64') === match[1] && verify('RSA-SHA256', payload, key, signed);
+  } else {
+    const expected = salesforceCompanyFxSignature({ secret, timestamp, requestId, rawBody });
+    authenticated = timingSafeHexEqual(normalizedSignature(signature), expected);
+  }
+  if (!authenticated) {
     throw companyFxRequestError('Salesforce request signature is invalid.', 401, 'SALESFORCE_COMPANY_FX_INVALID_SIGNATURE');
   }
   return { environment, orgId, requestId, timestamp };
