@@ -7,6 +7,7 @@ import { reviewedMigrationAdapter } from './reviewed-migration-adapter.mjs';
 import { prepareReviewedSalesforcePrerequisites, verifyPreBootstrapStage as verifySalesforceStage } from './salesforce-reviewed-adapter.mjs';
 import { TRADING_FX_MIGRATIONS } from './trading-fx-migrations.mjs';
 import { runTradingFxTransaction } from './trading-fx-transaction.mjs';
+import { readTradingFxQatRecovery } from './trading-fx-qat-recovery.mjs';
 import { verifyTradingFxXeroQualification } from './trading-fx-xero-qualification.mjs';
 
 const workflowPaths = ['api/_xeroNativeDocumentActions.js', 'api/_xeroPaymentPosting.js'];
@@ -110,14 +111,20 @@ export async function readTradingFxRecovery({ manifest, plan, env }, { github = 
   };
 }
 
+async function readQatRecovery({ manifest, plan, env }) {
+  const github = githubClient({ token: env.GITHUB_TOKEN, candidateSha: manifest.candidate.sha });
+  return readTradingFxQatRecovery({ manifest, github, receiptId: plan.tradingFxQatRecoveryReceiptId, ownerId,
+    readOriginalRecovery: prior => readTradingFxRecovery({ manifest: prior, plan: prior.prerequisites.plan, env }) });
+}
+
 export function createTradingFxPrerequisiteAdapter({
   verifyXeroQualification, applyDatabase = applyTradingFxDatabase,
   prepareSalesforce = prepareReviewedSalesforcePrerequisites, verifyStage = verifySalesforceStage,
-  readRecovery = readTradingFxRecovery,
+  readRecovery = readTradingFxRecovery, readStoppedQatRecovery = readQatRecovery,
 } = {}) {
   requireCondition(typeof verifyXeroQualification === 'function', 'TRADING_FX_XERO_VERIFIER_REQUIRED');
 
-  async function verifyScope(input) {
+  async function verifyScope(input, prior) {
     const { manifest, plan } = input;
     requireCondition(manifest.selection.salesforce === true && manifest.selection.database === true
       && manifest.selection.normalRole === true && manifest.selection.modules.includes('xero_portal')
@@ -128,26 +135,43 @@ export function createTradingFxPrerequisiteAdapter({
       && workflowPaths.every(path => manifest.paths.includes(path))
       && digest(manifest.paths.filter(path => path.startsWith('supabase/migrations/'))) === digest(migrationPaths)
       && isDigest(plan.xeroQualificationDigest), 'TRADING_FX_REVIEWED_PLAN_REQUIRED');
-    const qualification = await verifyXeroQualification(input);
+    // The stopped-QAT reader proves that the successor changed only the Apex
+    // test fixture and reviewed source hash. Reverify the original Demo receipt
+    // against its own candidate and keep its original evidence identity.
+    const qualifiedManifest = prior || manifest;
+    const qualifiedPlan = qualifiedManifest.prerequisites?.plan || plan;
+    requireCondition(!prior || (plan.xeroQualificationDeploymentId === qualifiedPlan.xeroQualificationDeploymentId
+      && plan.xeroQualificationDigest === qualifiedPlan.xeroQualificationDigest),
+    'TRADING_FX_QAT_XERO_QUALIFICATION_CHANGED');
+    const qualification = await verifyXeroQualification({ ...input, manifest: qualifiedManifest, plan: qualifiedPlan });
     requireCondition(qualification?.verified === true && qualification.testCompany === true
-      && qualification.candidateSha === manifest.candidate.sha && qualification.sourceDigest === manifest.candidate.sourceDigest
+      && qualification.candidateSha === qualifiedManifest.candidate.sha && qualification.sourceDigest === qualifiedManifest.candidate.sourceDigest
       && qualification.migrationDigest === migrationDigest && qualification.evidenceDigest === plan.xeroQualificationDigest,
     'TRADING_FX_XERO_QUALIFICATION_REQUIRED');
   }
 
+  async function recoveryFor(input) {
+    const original = Object.hasOwn(input.plan, 'tradingFxRecoveryReceiptId');
+    const stoppedQat = Object.hasOwn(input.plan, 'tradingFxQatRecoveryReceiptId');
+    requireCondition(!(original && stoppedQat), 'TRADING_FX_RECOVERY_LOCATOR_INVALID');
+    if (stoppedQat) return { qat: await readStoppedQatRecovery(input) };
+    return { original: original ? await readRecovery(input) : undefined };
+  }
+
   return {
     async verifyPreBootstrapStage(input) {
-      await verifyScope(input);
-      if (Object.hasOwn(input.plan, 'tradingFxRecoveryReceiptId')) await readRecovery(input);
+      const recovery = await recoveryFor(input);
+      await verifyScope(input, recovery.qat?.prior);
       return verifyStage(input, { withDatabase: true });
     },
     async applyReviewedPrerequisites(input) {
-      await verifyScope(input);
-      const recovery = Object.hasOwn(input.plan, 'tradingFxRecoveryReceiptId') ? await readRecovery(input) : undefined;
-      const applySalesforce = prepareSalesforce(input, { withDatabase: true, tradingFxRecovery: recovery });
+      const recovery = await recoveryFor(input);
+      await verifyScope(input, recovery.qat?.prior);
+      const applySalesforce = prepareSalesforce(input, { withDatabase: true, tradingFxRecovery: recovery.original,
+        tradingFxQatRecovery: recovery.qat });
       // The reviewed DB additions are backward compatible. Complete and
       // verify them before Salesforce can expose any native financial records.
-      const database = await applyDatabase({ ...input, originalDatabaseOperation: recovery?.database });
+      const database = await applyDatabase({ ...input, originalDatabaseOperation: (recovery.qat || recovery.original)?.database });
       const manifestHash = digest(input.manifest);
       requireCondition(database?.passed === true && database.manifestHash === manifestHash && database.backwardCompatible === true
         && database.database?.readbackVerified === true && database.database.destructiveRollback === false
