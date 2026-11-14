@@ -67,7 +67,7 @@ test('Trading FX only bridges the completed, unchanged manual predecessor', asyn
     sha: '91a5298b44c7cadb968a614ff79d3934a8f41c9c', deploymentId: 'dpl_nomination',
     schemaDigest: hash, configurationDigest: hash,
   } };
-  const manifest = { candidate: { sha: '5cf3813aaf9ebc1e2fbbf95c5f3acbc9b2211846' }, previous: {
+  const manifest = { candidate: { sha: 'b495d1bde6d06834c32212982c4597e20e6c7fe0' }, previous: {
     ...previous.previous, sha: 'd2e5f1f94898ae99c6188831d071a77c337f31ae', deploymentId: 'dpl_EybnQs2MEgz3z2M2kJH74i9yGw38',
   } };
   let reads = 0;

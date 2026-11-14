@@ -8,9 +8,10 @@
       "cause": "The existing Production-wide financial switch is enabled, and new Trading FX native draft and HKD payment writers otherwise inherited it.",
       "correction": "Require a separate default-off switch before new native drafts or HKD payments can claim evidence or send. Keep existing USD and original-operation readback behavior.",
       "verification": {
-        "candidate": "e571838697be1e74c55c88315b9b3e93b1d0a5d7",
+        "candidate": "90cbbf0f1786f539037851760b40421ce0fc85d9",
         "productionSwitchConfigured": true,
         "focusedTests": 112,
+        "previewAndSubmissionTests": 13,
         "stagingIsolationTests": 23,
         "providerWrites": 0,
         "regressionDigest": "b1c3f2aa276392ab691b2dc17b7e0e21b17e97cb81a15d01f958a71897936a61"

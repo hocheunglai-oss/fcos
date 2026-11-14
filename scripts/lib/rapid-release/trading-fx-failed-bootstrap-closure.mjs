@@ -60,10 +60,10 @@ const same = (left, right) => digest(left ?? null) === digest(right ?? null);
 
 // This frozen bridge admits the reviewed signing and legacy document repair.
 // A different application candidate requires independently reviewed evidence.
-const reviewedSuccessorSha = 'e571838697be1e74c55c88315b9b3e93b1d0a5d7';
+const reviewedSuccessorSha = '90cbbf0f1786f539037851760b40421ce0fc85d9';
 const originalCandidateSha = '085c7ce8663d16d808771acbbcdc981b9d736b85';
 
-const afterManualSuccessorSha = '5cf3813aaf9ebc1e2fbbf95c5f3acbc9b2211846';
+const afterManualSuccessorSha = 'b495d1bde6d06834c32212982c4597e20e6c7fe0';
 const manualBaseline = {
   sha: 'd2e5f1f94898ae99c6188831d071a77c337f31ae',
   deploymentId: 'dpl_EybnQs2MEgz3z2M2kJH74i9yGw38',
