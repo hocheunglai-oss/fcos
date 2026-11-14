@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import * as manualIndex from '../src/lib/pageUserManualIndex.js';
+import * as manualSource from '../src/lib/pageUserManuals.js';
 import test from 'node:test';
 import {
   ACCOUNT_MANAGERS_USER_MANUAL,
@@ -45,7 +47,9 @@ test('the shared user manual is responsive and performs no page-data request', (
   assert.match(component, /<details/);
   assert.match(component, /Start here/);
   assert.match(component, /Common tasks/);
-  assert.doesNotMatch(component, /appClient|fetch\(|functions\.invoke/);
+  assert.doesNotMatch(component, /appClient|functions\.invoke/);
+  assert.match(component, /if \(!open \|\| !contentUrl \|\| !contentKey\)/);
+  assert.match(component, /fetch\(contentUrl, \{ signal: controller\.signal \}\)/);
 });
 
 test('the requested workspaces expose the shared user manual', () => {
@@ -64,4 +68,17 @@ test('the requested workspaces expose the shared user manual', () => {
   assert.match(read('src/pages/PaymentCollections.jsx'), /activeTab === 'variable-charges' \? <PageUserManual/);
   assert.match(read('src/pages/AccountManagers.jsx'), /userManual=\{ACCOUNT_MANAGERS_USER_MANUAL\}/);
   assert.match(read('src/components/account-managers/BuyerPicReferences.jsx'), /<PageUserManual \{\.\.\.userManual\} \/>/);
+});
+
+test('static user manual bodies preserve source text and each descriptor points to its own manual', () => {
+  const documents = JSON.parse(read('src/content/page-user-manuals.json'));
+  assert.deepEqual(documents, { ...manualSource });
+  assert.deepEqual(Object.keys(manualIndex).sort(), Object.keys(manualSource).sort());
+  for (const [name, descriptor] of Object.entries(manualIndex)) {
+    assert.deepEqual(Object.keys(descriptor).sort(), ['contentKey', 'contentUrl', 'description', 'title']);
+    assert.equal(descriptor.contentKey, name);
+    assert.equal(descriptor.title, documents[name].title);
+    assert.equal(descriptor.description, documents[name].description);
+    assert.match(descriptor.contentUrl, /page-user-manuals\.json$/);
+  }
 });

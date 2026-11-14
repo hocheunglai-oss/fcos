@@ -31,7 +31,7 @@ import {
 } from '@/lib/disputeWorkflowDefaults';
 import { DISPUTE_BUYER_CLOSE_REASONS, DISPUTE_SUPPLIER_CLOSE_REASONS } from '@/lib/disputeWorkflowOptions';
 import { DISPUTE_WORKFLOW_METHODOLOGY } from '@/lib/pageMethodologyIndex';
-import { DISPUTE_WORKFLOW_USER_MANUAL } from '@/lib/pageUserManuals';
+import { DISPUTE_WORKFLOW_USER_MANUAL } from '@/lib/pageUserManualIndex';
 import { useAuth } from '@/lib/AuthContext';
 import { cn } from '@/lib/utils';
 import { DISPUTE_STAGES, disputeStage, disputeNextAction, disputeStatusLabel, remainingDisputeRequirements, isFinalSettlement } from '@/lib/disputeWorkflowPresentation';

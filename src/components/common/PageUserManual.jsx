@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { CheckCircle2, CircleHelp, Lightbulb } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -15,14 +15,39 @@ const EMPTY_ITEMS = Object.freeze([]);
 export default function PageUserManual({
   title,
   description,
-  startHere = EMPTY_ITEMS,
-  tasks = EMPTY_ITEMS,
-  reminders = EMPTY_ITEMS,
+  startHere: inlineStart = EMPTY_ITEMS,
+  tasks: inlineTasks = EMPTY_ITEMS,
+  reminders: inlineReminders = EMPTY_ITEMS,
+  contentUrl,
+  contentKey,
   className,
   iconOnly = false,
   triggerLabel = 'User Manual',
 }) {
   const [open, setOpen] = useState(false);
+  const [content, setContent] = useState(null);
+  const [loadError, setLoadError] = useState(false);
+  const [retry, setRetry] = useState(0);
+
+  useEffect(() => {
+    if (!open || !contentUrl || !contentKey) return undefined;
+    const controller = new AbortController();
+    setContent(null);
+    setLoadError(false);
+    fetch(contentUrl, { signal: controller.signal }).then(async (response) => {
+      if (!response.ok) throw new Error('Manual unavailable');
+      const manuals = await response.json();
+      if (!manuals[contentKey]) throw new Error('Manual unavailable');
+      if (!controller.signal.aborted) setContent(manuals[contentKey]);
+    }).catch(() => { if (!controller.signal.aborted) setLoadError(true); });
+    return () => controller.abort();
+  }, [open, contentUrl, contentKey, retry]);
+
+  const startHere = content?.startHere ?? inlineStart;
+  const tasks = content?.tasks ?? inlineTasks;
+  const reminders = content?.reminders ?? inlineReminders;
+  const waitingForContent = contentUrl && contentKey && !content;
+
 
   return (
     <>
@@ -48,7 +73,10 @@ export default function PageUserManual({
             <DialogDescription>{description}</DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-5 text-sm text-foreground">
+          {waitingForContent ? (
+            loadError ? <p role="alert">User manual could not be loaded. <button type="button" className="text-primary underline" onClick={() => setRetry(value => value + 1)}>Retry</button></p>
+              : <p role="status">Loading user manual…</p>
+          ) : <div className="space-y-5 text-sm text-foreground">
             {startHere.length ? (
               <section className="rounded-xl border border-blue-200 bg-blue-50/70 p-4">
                 <h3 className="flex items-center gap-2 font-semibold text-blue-950">
@@ -97,7 +125,7 @@ export default function PageUserManual({
                 </ul>
               </section>
             ) : null}
-          </div>
+          </div>}
         </DialogContent>
       </Dialog>
     </>

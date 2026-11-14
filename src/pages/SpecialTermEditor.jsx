@@ -11,7 +11,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { SPECIAL_TERMS_METHODOLOGY } from '@/lib/pageMethodologyIndex';
-import { SPECIAL_TERMS_USER_MANUAL } from '@/lib/pageUserManuals';
+import { SPECIAL_TERMS_USER_MANUAL } from '@/lib/pageUserManualIndex';
 import { useSpecialTermUnsavedGuard } from '@/lib/useSpecialTermUnsavedGuard';
 import { invalidateSpecialTermDetail, prefetchSpecialTermDetail } from '@/lib/specialTermDetailPrefetch';
 

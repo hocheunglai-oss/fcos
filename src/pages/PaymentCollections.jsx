@@ -26,7 +26,7 @@ import SalesforceSyncBadge from '@/components/common/SalesforceSyncBadge';
 import StemDetailLink from '@/components/common/StemDetailLink';
 import WorkspaceViewBar from '@/components/common/WorkspaceViewBar';
 import { PAYMENT_COLLECTIONS_METHODOLOGIES } from '@/lib/pageMethodologyIndex';
-import { VARIABLE_CHARGES_USER_MANUAL } from '@/lib/pageUserManuals';
+import { VARIABLE_CHARGES_USER_MANUAL } from '@/lib/pageUserManualIndex';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
 import VariableCharges from '@/components/payments/VariableCharges';
 import LegacyPaymentDataAudit from '@/components/payments/LegacyPaymentDataAudit';
