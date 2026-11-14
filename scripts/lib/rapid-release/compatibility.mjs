@@ -5,6 +5,7 @@ import { digest, git, isSha, requireCondition } from './contract.mjs';
 import { openPinnedDatabase } from './database-connection.mjs';
 import { openPinnedReadonlyDatabase } from './readonly-database.mjs';
 import { fcosConnectionIdentifier } from '../../../config/fcosConnections.js';
+import { lockStagingTransition } from './staging-ownership.mjs';
 
 // Catalog state only: no application, financial or credential rows leave PostgreSQL.
 export const SCHEMA_FINGERPRINT_SQL = `select encode(sha256(convert_to(jsonb_build_object(
@@ -28,7 +29,7 @@ export const SCHEMA_FINGERPRINT_SQL = `select encode(sha256(convert_to(jsonb_bui
  'constraints',(select coalesce(jsonb_agg(jsonb_build_array(n.nspname,c.relname,pg_get_constraintdef(k.oid)) order by n.nspname,c.relname,k.conname),'[]') from pg_constraint k join pg_class c on c.oid=k.conrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname in ('public','auth','storage')),
  'triggers',(select coalesce(jsonb_agg(pg_get_triggerdef(t.oid) order by t.oid),'[]') from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname in ('public','auth','storage') and not t.tgisinternal)
  )::text,'UTF8')),'hex') as digest`;
-export async function withPinnedReadOnlyDatabase({ env = process.env, createClient, openDatabase, createIntentStore, github }, callback) {
+export async function withPinnedReadOnlyDatabase({ env = process.env, createClient, openDatabase, createIntentStore, github, lockStage = false }, callback) {
   let db, connection;
   if (openDatabase) {
     requireCondition(typeof openDatabase === 'function', 'NATIVE_COMPATIBILITY_CONNECTION_REQUIRED');
@@ -63,8 +64,9 @@ export async function withPinnedReadOnlyDatabase({ env = process.env, createClie
   let transaction = false;
   try {
     assertHandoverConnection(connection);
-    await db.query('begin isolation level repeatable read read only');
+    await db.query(lockStage ? 'begin isolation level read committed read only' : 'begin isolation level repeatable read read only');
     transaction = true;
+    if (lockStage) await lockStagingTransition(db, { staging: true });
     const identity=(await db.query("select session_user,current_user,current_database() as database,current_setting('transaction_read_only') as read_only")).rows[0];
     assertHandoverDatabaseIdentity(identity, connection, { readOnly: true, context: 'compatibility' });
     const result=await callback(db);await db.query('commit');transaction=false;return result;

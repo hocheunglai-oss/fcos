@@ -11,7 +11,7 @@ import { stageRelease, promoteRelease, phaseResult } from './lib/rapid-release/e
 import { githubClient, nativeApproval, verifyExecution, vercelProvider, assertNativeQualityProducer, assertFrozenWorkflow } from './lib/rapid-release/providers.mjs';
 import { runPrerequisites, verifyBeforeBootstrap, qualifiedAdapter } from './lib/rapid-release/prerequisites.mjs';
 import { readCandidateModuleInventory } from './lib/rapid-release/modules.mjs';
-import { nativeCompatibilityReader } from './lib/rapid-release/compatibility.mjs';
+import { nativeCompatibilityReader, verifyNativeHandoverDatabase, withPinnedReadOnlyDatabase } from './lib/rapid-release/compatibility.mjs';
 
 const read = path => JSON.parse(readFileSync(resolve(path), 'utf8'));
 const write = (path, value) => { mkdirSync(resolve(path, '..'), { recursive: true }); writeFileSync(resolve(path), `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 }); };
@@ -102,13 +102,14 @@ async function rapidReleaseCommand(argv, env, runtime) {
       registry: read(opts.registry || join(controller, 'config/rapid-release-learning.json')) });
   }
   requireCondition(['stage', 'promote', 'resume'].includes(command), 'CLI_COMMAND_INVALID');
-  await verifyExecution({ github, manifest, env, phase: command });
+  const execution = await verifyExecution({ github, manifest, env, phase: command });
   const provider = vercelProvider({ manifest, github, env, outputDirectory: opts['artifact-directory'] && resolve(opts['artifact-directory']) });
   runtime.provider = provider;
   const { runStagedSmoke, observeLive } = await import('./lib/rapid-release/smoke.mjs');
   const smoke = values => runStagedSmoke({ ...values, env });
   const records = await journal.read(), staged = phaseResult(records, 'stage')?.result;
-  const compatibility = await nativeCompatibilityReader({ provider, env })({ manifest });
+  const readCompatibility = nativeCompatibilityReader({ provider, env });
+  const compatibility = await readCompatibility({ manifest });
   requireCondition(compatibility.currentDeploymentId === manifest.previous.deploymentId || staged?.id === compatibility.currentDeploymentId,
     'PRODUCTION_BASELINE_CHANGED');
   const priorPrerequisite = phaseResult(records, 'prerequisites')?.result;
@@ -119,12 +120,25 @@ async function rapidReleaseCommand(argv, env, runtime) {
       : hasPrerequisiteIntent || compatibility.schemaDigest === manifest.previous.schemaDigest), 'BASELINE_NATIVE_FINGERPRINT_CHANGED');
   let result;
   if (command === 'stage' || command === 'resume' && !staged) {
+    runtime.phase = 'stage';
     requireCondition(opts.build && opts['artifact-directory'], 'STAGE_ARTIFACT_REQUIRED');
     const build = read(opts.build); assertBuildArtifact(resolve(opts['artifact-directory']), build, manifest);
     const jobs = await github.read(`/repos/${targets().repository}/actions/runs/${env.GITHUB_RUN_ID}/jobs?filter=all&per_page=100`);
     requireCondition(jobs.jobs?.some(job => job.name === 'quality' && job.conclusion === 'success'), 'NATIVE_QUALITY_JOB_REQUIRED');
     if (manifest.selection.salesforce || manifest.selection.database) await qualifiedAdapter({ manifest, controllerDirectory: controller });
-    result = await stageRelease({ manifest, journal, provider, build, smoke,
+    const withStageOwnership = async work => withPinnedReadOnlyDatabase({ env, lockStage: true }, async db => {
+      await verifyNativeHandoverDatabase(db, execution.handover);
+      return work();
+    });
+    runtime.stageOwnership = withStageOwnership;
+    const verifyStageBaseline = async () => {
+      await journal.assertNoUnresolvedOtherRelease();
+      const confirmed = await readCompatibility({ manifest });
+      requireCondition(confirmed.currentDeploymentId === manifest.previous.deploymentId
+        && confirmed.sha === manifest.previous.sha && confirmed.configurationDigest === manifest.previous.configurationDigest
+        && confirmed.schemaDigest === manifest.previous.schemaDigest, 'STAGING_BASELINE_CHANGED');
+    };
+    result = await stageRelease({ manifest, journal, provider, build, smoke, verifyStageBaseline, withStageOwnership,
       beforeBootstrap: values => verifyBeforeBootstrap({ ...values, controllerDirectory: controller, env }) });
   } else {
     requireCondition(staged, 'STAGED_DEPLOYMENT_REQUIRED');
@@ -138,21 +152,29 @@ async function rapidReleaseCommand(argv, env, runtime) {
 }
 export async function rapidReleaseMain(argv, env = process.env) {
   const runtime = {}, started = Date.now();
+  const recordObstacle = async (phase, error) => {
+    const registry = read(join(runtime.controllerDirectory, 'config/rapid-release-learning.json'));
+    const input = { ...runtime, phase, error, elapsedMs: Date.now() - started, registry };
+    if (phase !== 'stage') return handleReleaseObstacle(input);
+    // Keep stage diagnostics out of the shared journal when a handover already
+    // owns the coordinator, while preserving the original provider intent.
+    if (runtime.stageOwnership) {
+      try { return await runtime.stageOwnership(() => handleReleaseObstacle(input)); }
+      catch { /* A fenced stage can retain only local diagnostic evidence. */ }
+    }
+    return handleReleaseObstacle({ ...input, journal: undefined, provider: undefined });
+  };
   try {
     const result = await rapidReleaseCommand(argv, env, runtime);
-    if (result.waiting && runtime.manifest) result.improvement = await handleReleaseObstacle({ ...runtime,
-      phase: result.operationId?.endsWith('-stage') ? 'stage' : runtime.phase,
-      error: { code: result.code }, elapsedMs: Date.now() - started,
-      registry: read(join(runtime.controllerDirectory, 'config/rapid-release-learning.json')) });
+    if (result.waiting && runtime.manifest) result.improvement = await recordObstacle(
+      result.operationId?.endsWith('-stage') ? 'stage' : runtime.phase, { code: result.code });
     if (['quality', 'stage'].includes(runtime.phase) && Date.now() - started > 900000 && runtime.manifest)
-      result.performanceReview = await handleReleaseObstacle({ ...runtime, error: { code: 'PHASE_PERFORMANCE_BUDGET_EXCEEDED' },
-        elapsedMs: Date.now() - started, registry: read(join(runtime.controllerDirectory, 'config/rapid-release-learning.json')) });
+      result.performanceReview = await recordObstacle(runtime.phase, { code: 'PHASE_PERFORMANCE_BUDGET_EXCEEDED' });
     return result;
   } catch (error) {
     if (runtime.manifest) {
       try {
-        const improvement = await handleReleaseObstacle({ ...runtime, error, elapsedMs: Date.now() - started,
-          registry: read(join(runtime.controllerDirectory, 'config/rapid-release-learning.json')) });
+        const improvement = await recordObstacle(runtime.phase, error);
         return { state: 'checkpoint_preserved', waiting: true, code: improvement.incident.code, improvement };
       } catch { /* Capture failure must preserve the original error and checkpoint. */ }
     }

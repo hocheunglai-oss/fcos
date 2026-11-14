@@ -26,6 +26,11 @@ on:
         required: true
         type: string
 
+# Keep one append-only journal writer per release across its stage and go-live jobs.
+concurrency:
+  group: ${{ inputs.mode == 'qualify' && format('fcos-quality-{0}', github.run_id) || format('fcos-release-{0}', fromJSON(inputs.manifest_json).releaseId) }}
+  cancel-in-progress: false
+  queue: max
 permissions:
   contents: read
 jobs:
@@ -122,7 +127,7 @@ jobs:
       deployments: write
       id-token: write
     concurrency:
-      group: fcos-production-release
+      group: fcos-unaliased-staging
       cancel-in-progress: false
       queue: max
     steps:

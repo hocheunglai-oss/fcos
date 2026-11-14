@@ -30,10 +30,13 @@ function setup({ forgedPlan = false, changedWorkflow = false, successful = true,
  return{github,context:{repo:{owner,repo},actor:owner,sha:dispatcherSha},manifest:{targets:{repository:`${owner}/${repo}`,account:owner},controllerSha}};
 }
 test('three ordinary jobs keep credential-free preparation independent and serialize only provider execution',()=>{
- assert.deepEqual(Object.keys(workflow.jobs),['quality','stage-and-smoke','go-live']);assert.equal(workflow.concurrency,undefined);
+ assert.deepEqual(Object.keys(workflow.jobs),['quality','stage-and-smoke','go-live']);
+ assert.match(workflow.concurrency.group,/mode == 'qualify'.*github\.run_id.*fromJSON\(inputs\.manifest_json\)\.releaseId/);
+ assert.equal(workflow.concurrency['cancel-in-progress'],false);
+ assert.equal(workflow.concurrency.queue,'max');
  assert.equal(workflow.jobs.quality.permissions.deployments,undefined);
  for(const name of ['stage-and-smoke','go-live']){
-  const job=workflow.jobs[name];assert.equal(job.concurrency.group,'fcos-production-release');assert.equal(job.concurrency['cancel-in-progress'],false);assert.equal(job.concurrency.queue,'max');
+  const job=workflow.jobs[name];assert.equal(job.concurrency.group,name==='go-live'?'fcos-production-release':'fcos-unaliased-staging');assert.equal(job.concurrency['cancel-in-progress'],false);assert.equal(job.concurrency.queue,'max');
   const admission=job.steps.findIndex(step=>step.id==='admit-controller');const checkout=job.steps.findIndex(step=>step.uses?.startsWith('actions/checkout@'));
   assert.ok(admission>=0&&checkout>admission);assert.match(job.steps[checkout].with.ref,/admit-controller.outputs.controller_sha/);
   for(const [index,step] of job.steps.entries())if(step.env?.VERCEL_TOKEN)assert.ok(index>checkout);
