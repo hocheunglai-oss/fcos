@@ -39,7 +39,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
 import { accountClKeyLabel, accountSearchDisplayText } from '@/lib/accountDisplay';
 import { UNOFFICIAL_COMPENSATION_METHODOLOGY } from '@/lib/pageMethodologyIndex';
-import { UNOFFICIAL_COMPENSATION_USER_MANUAL } from '@/lib/pageUserManuals';
+import { UNOFFICIAL_COMPENSATION_USER_MANUAL } from '@/lib/pageUserManualIndex';
 import { unofficialCompensationClaimIssues, unofficialCompensationRecoveryIssues } from '@/lib/workflowValidation';
 
 const EMPTY_CLAIM = { accountId: '', contactId: '__none__', amount: '', deadlineDate: '', pic: '', description: '' };

@@ -46,7 +46,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
 import { accountClKeyLabel, accountSearchDisplayText } from '@/lib/accountDisplay';
 import { ACCOUNT_MANAGERS_METHODOLOGY } from '@/lib/pageMethodologyIndex';
-import { ACCOUNT_MANAGERS_USER_MANUAL } from '@/lib/pageUserManuals';
+import { ACCOUNT_MANAGERS_USER_MANUAL } from '@/lib/pageUserManualIndex';
 
 const PAGE_SIZE = 100;
 const UNASSIGNED_FILTER = '__unassigned__';

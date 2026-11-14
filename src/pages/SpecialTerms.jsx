@@ -21,7 +21,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import { SPECIAL_TERMS_METHODOLOGY } from '@/lib/pageMethodologyIndex';
-import { SPECIAL_TERMS_USER_MANUAL } from '@/lib/pageUserManuals';
+import { SPECIAL_TERMS_USER_MANUAL } from '@/lib/pageUserManualIndex';
 import { prefetchSpecialTermDetail } from '@/lib/specialTermDetailPrefetch';
 
 const ClauseBankPanel = lazy(() => import('@/components/special-terms/ClauseBankPanel'));
