@@ -45,6 +45,7 @@ const ownedCodes = Object.freeze({
   PROVIDER_ACKNOWLEDGEMENT_MISSING: 'write_uncertain', DEPLOYMENT_ACK_UNCERTAIN: 'write_uncertain', JOURNAL_WRITE_UNCERTAIN: 'write_uncertain',
   PRIOR_OPERATION_FAILED: 'known_job_failed', EXACT_PRODUCTION_AUTHORIZATION_REQUIRED: 'authorization_required',
   NATIVE_PRODUCTION_REVIEW_REQUIRED: 'authorization_required', GOVERNED_CI_CREDENTIALS_MISSING: 'credential_entry_required',
+  SALESFORCE_PRODUCTION_PROTECTED_CUSTOM_SETTING: 'source_mismatch',
   SALESFORCE_HOSTED_MIRROR_CREDENTIAL_REQUIRED: 'credential_entry_required',
   SALESFORCE_HOSTED_CREDENTIAL_REQUIRED_DEVEE: 'credential_entry_required',
   SALESFORCE_HOSTED_CREDENTIAL_REQUIRED_QAT: 'credential_entry_required',

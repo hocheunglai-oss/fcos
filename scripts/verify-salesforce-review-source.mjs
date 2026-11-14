@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import { changedPaths, digest, git, isSha, requireCondition, sourceSnapshot, validateManifest } from './lib/rapid-release/contract.mjs';
-import { loadReviewedSalesforcePlan } from './deploy-salesforce-reviewed-manifest.mjs';
+import { assertSalesforceProductionSettingCompatibility, loadReviewedSalesforcePlan } from './deploy-salesforce-reviewed-manifest.mjs';
 import { safeProjectFile } from './lib/salesforce-reviewed-release.mjs';
 
 export function verifySalesforceReviewSource({ cwd, candidateSha, manifest, verifierDirectory }) {
@@ -48,6 +48,7 @@ export function verifySalesforceReviewSource({ cwd, candidateSha, manifest, veri
   const reviewed = loadReviewedSalesforcePlan({ cwd, manifestPath: plan.salesforceManifestPath, reviewPath: plan.salesforceReviewPath });
   requireCondition(reviewed.fingerprint === plan.salesforceFingerprint && reviewed.binding.sourceTreeHash === plan.salesforceSourceTreeHash
     && plan.backwardCompatible === true, 'SALESFORCE_REVIEW_SOURCE_INVENTORY_MISMATCH');
+  assertSalesforceProductionSettingCompatibility(cwd, reviewed);
   return { candidateSha, controllerSha, manifestHash: digest(manifest), salesforceFingerprint: reviewed.fingerprint };
 }
 

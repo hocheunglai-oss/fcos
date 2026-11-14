@@ -160,3 +160,40 @@ test('post-QAT continuation retains the original Demo receipt and database opera
   assert.equal((await adapter.applyReviewedPrerequisites({ ...input, plan })).passed, true);
   assert.deepEqual(calls, ['read stopped run', 'verify original demo', 'read original database']);
 });
+test('failed-bootstrap successor reuses original database and Demo evidence and prepares fresh Salesforce jobs', async () => {
+  const { input } = fixture();
+  const qualificationManifest = { ...input.manifest, candidate: { sha: 'c'.repeat(40), sourceDigest: 'd'.repeat(64) },
+    prerequisites: { plan: input.plan } };
+  const database = { operationId: 'original' };
+  const calls = [];
+  const adapter = createTradingFxPrerequisiteAdapter({
+    async readStoppedBootstrapRecovery() { calls.push('read closure'); return { database, qualificationManifest }; },
+    async verifyXeroQualification({ manifest }) {
+      assert.equal(manifest, qualificationManifest);
+      calls.push('verify original Demo');
+      return { verified: true, testCompany: true, candidateSha: manifest.candidate.sha, sourceDigest: manifest.candidate.sourceDigest,
+        migrationDigest: digest(TRADING_FX_MIGRATIONS), evidenceDigest: hash };
+    },
+    prepareSalesforce(_input, { tradingFxRecovery, tradingFxQatRecovery, tradingFxPostQatRecovery }) {
+      assert.deepEqual([tradingFxRecovery, tradingFxQatRecovery, tradingFxPostQatRecovery], [undefined, undefined, undefined]);
+      return async () => {
+        calls.push('apply new Salesforce tree');
+        return { passed: true, manifestHash: digest(input.manifest), backwardCompatible: true,
+          salesforce: { mirrorVerified: true, order: 'devee-mirror-qat-production', sourceTreeHash: hash, fingerprint: hash },
+          completedOperations: [] };
+      };
+    },
+    async applyDatabase({ originalDatabaseOperation }) {
+      assert.equal(originalDatabaseOperation, database);
+      calls.push('read original database');
+      return { passed: true, manifestHash: digest(input.manifest), backwardCompatible: true,
+        database: { readbackVerified: true, destructiveRollback: false, schemaDigest: hash }, completedOperations: [] };
+    },
+  });
+  const plan = { ...input.plan, tradingFxFailedBootstrapReceiptId: 42 };
+  await assert.rejects(adapter.applyReviewedPrerequisites({ ...input, plan: { ...plan, tradingFxPostQatRecoveryReceiptId: 43 } }),
+    { code: 'TRADING_FX_RECOVERY_LOCATOR_INVALID' });
+  assert.deepEqual(calls, []);
+  assert.equal((await adapter.applyReviewedPrerequisites({ ...input, plan })).passed, true);
+  assert.deepEqual(calls, ['read closure', 'verify original Demo', 'read original database', 'apply new Salesforce tree']);
+});
