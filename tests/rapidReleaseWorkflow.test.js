@@ -30,7 +30,10 @@ function setup({ forgedPlan = false, changedWorkflow = false, successful = true,
  return{github,context:{repo:{owner,repo},actor:owner,sha:dispatcherSha},manifest:{targets:{repository:`${owner}/${repo}`,account:owner},controllerSha}};
 }
 test('three ordinary jobs keep credential-free preparation independent and serialize only provider execution',()=>{
- assert.deepEqual(Object.keys(workflow.jobs),['quality','stage-and-smoke','go-live']);assert.equal(workflow.concurrency,undefined);
+ assert.deepEqual(Object.keys(workflow.jobs),['quality','stage-and-smoke','go-live']);
+ assert.match(workflow.concurrency.group,/mode == 'qualify'.*github\.run_id.*fromJSON\(inputs\.manifest_json\)\.releaseId/);
+ assert.equal(workflow.concurrency['cancel-in-progress'],false);
+ assert.equal(workflow.concurrency.queue,'max');
  assert.equal(workflow.jobs.quality.permissions.deployments,undefined);
  for(const name of ['stage-and-smoke','go-live']){
   const job=workflow.jobs[name];assert.equal(job.concurrency.group,name==='go-live'?'fcos-production-release':'fcos-unaliased-staging');assert.equal(job.concurrency['cancel-in-progress'],false);assert.equal(job.concurrency.queue,'max');
