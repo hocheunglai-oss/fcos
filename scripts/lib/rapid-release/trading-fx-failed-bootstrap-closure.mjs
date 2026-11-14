@@ -175,10 +175,14 @@ export async function readFailedBootstrapSuccessor({ manifest, github, ownerId, 
     && same(previous.build.publicEnvironment, manifest.build.publicEnvironment)
     && same(previous.moduleInventory, manifest.moduleInventory) && same(previous.selection, manifest.selection),
   'TRADING_FX_FAILED_BOOTSTRAP_JOURNAL_SCOPE_CHANGED');
+  requireCondition(hasTradingFxSigningLocator(next), 'TRADING_FX_SIGNING_CONFIG_REQUIRED_FOR_STAGE');
   if (manifest.candidate.sha === afterManualSuccessorSha) {
     await verifyTradingFxManualPredecessor({ manifest, previous, github, ownerId, provider });
-  } else requireCondition(!hasTradingFxSigningLocator(next) && same(previous.previous, manifest.previous), 'TRADING_FX_FAILED_BOOTSTRAP_JOURNAL_SCOPE_CHANGED');
-  requireCondition(hasTradingFxSigningLocator(next), 'TRADING_FX_SIGNING_CONFIG_REQUIRED_FOR_STAGE');
+  } else {
+    requireCondition(same(previous.previous, { ...manifest.previous, configurationDigest: previous.previous.configurationDigest }),
+      'TRADING_FX_FAILED_BOOTSTRAP_JOURNAL_SCOPE_CHANGED');
+    await verifyTradingFxSigningConfig({ manifest, previous: previous.previous, github, ownerId, provider });
+  }
   const { salesforceManifestPath: _oldManifest, salesforceReviewPath: _oldReview, salesforceSourceTreeHash: oldTree,
     salesforceFingerprint: oldFingerprint, bootstrapFingerprint: oldBootstrap, tradingFxPostQatRecoveryReceiptId: oldRecovery,
     ...oldRetained } = old;
