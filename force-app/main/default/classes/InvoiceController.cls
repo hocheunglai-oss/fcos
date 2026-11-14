@@ -78,6 +78,7 @@ public class InvoiceController {
             throw new AuraHandledException('Native proforma finalization is not enabled. Use the confirmed native invoice workflow.');
         FcosTradeDocumentService.DocumentReview nativeReview;
         if(managedSelection) {
+            requireTradingFxInvoiceEntry();
             if(isCreditNote==true) throw new AuraHandledException('Select the original HKD invoice in the native credit workflow so its original rate is retained.');
             if(String.isBlank(reviewedFxFingerprint) || extraIds==null || extraIds.isEmpty())
                 throw new AuraHandledException('Review the exact native invoice lines before creating the invoice.');
@@ -279,6 +280,7 @@ public class InvoiceController {
         Blob documentBody;
         if(managedDocument) {
             if(!String.isBlank(sourceInvoice.File__c)) return;
+            requireTradingFxInvoiceEntry();
             PageReference nativePage=Page.FcosNativeInvoice;nativePage.getParameters().put('id',invoiceId);
             documentBody=Test.isRunningTest()?Blob.valueOf('Native invoice test PDF'):nativePage.getContentAsPDF();
         } else documentBody=EncodingUtil.base64Decode(body);
@@ -297,6 +299,16 @@ public class InvoiceController {
             if(!String.isBlank(lockedInvoice.File__c)) return;
             assertNativeGenerationReview(sourceInvoice,lockedInvoice,fxReview,reviewedFxFingerprint,createProforma);
         }
+        List<STEM_Line_Item__c> productLines=[
+            SELECT Id, Input__c, Issued__c, Total_Price__c, Buyer_Invoice__c FROM STEM_Line_Item__c
+            WHERE STEM__c=:invoiceStemId AND Id IN :fxLineIds
+        ];
+        List<STEM_Extra_Cost__c> chargeLines=[
+            SELECT Id, Input__c, Issued__c, Line_Total__c, Buyer_Invoice__c FROM STEM_Extra_Cost__c
+            WHERE STEM__c=:invoiceStemId AND Id IN :fxLineIds
+        ];
+        if(productLines.size()+chargeLines.size()!=fxLineIds.size())
+            throw new AuraHandledException('Every invoice line must belong to this STEM.');
         MasterContractInvoiceReadinessService.assertPersistedInvoicesAllowed(new Set<Id>{Id.valueOf(invoiceId)});
         VariableChargeInvoiceReadinessService.assertPersistedInvoicesAllowed(new Set<Id>{Id.valueOf(invoiceId)});
         ContentVersion contentVersion = new ContentVersion();
@@ -313,7 +325,7 @@ public class InvoiceController {
         }
         insert extraLinks;
         //Setting File refference for Invoice record
-        Decimal totalAmount = updateStemLineItemandExtraCosts(extraIds, invoiceId, createProforma);
+        Decimal totalAmount = linkInvoiceLines(productLines, chargeLines, invoiceId, createProforma);
         Invoice__c invoice = new Invoice__c(Id = invoiceId, File__c = Url.getOrgDomainURL().toExternalForm() + '/' + cdl.ContentDocumentId, Amount__c = totalAmount);
         if (managedDocument) {
             invoice.Amount__c=fxReview.usdTotal;
@@ -321,6 +333,11 @@ public class InvoiceController {
         }
         update invoice;
         if(managedDocument) FcosTradeDocumentLineService.persist(invoice,fxReview);
+    }
+
+    private static void requireTradingFxInvoiceEntry() {
+        if(!FcosCompanyFxRateService.enabled() || !FeatureManagement.checkPermission('Fcos_Trading_FX_Entry'))
+            throw new AuraHandledException('Trading FX invoice entry is not enabled for this user.');
     }
 
     @TestVisible private static void assertNativeGenerationReview(Invoice__c sourceInvoice, Invoice__c lockedInvoice,
@@ -334,9 +351,9 @@ public class InvoiceController {
                 throw new AuraHandledException('The saved native invoice no longer matches the reviewed lines and document type. Refresh the document workflow before generating.');
     }
 
-    public static Decimal updateStemLineItemandExtraCosts(List<String> extraId, String invoiceId, Boolean createProforma){
+    private static Decimal linkInvoiceLines(List<STEM_Line_Item__c> stemLineItems,
+            List<STEM_Extra_Cost__c> stemExtraCosts, String invoiceId, Boolean createProforma) {
         Decimal totalAmount = 0;
-        List<STEM_Line_Item__c> stemLineItems = [SELECT Id, Input__c, Issued__c, Total_Price__c, Buyer_Invoice__c FROM STEM_Line_Item__c WHERE Id IN: extraId];
         for(STEM_Line_Item__c stemLineItem : stemLineItems){
             totalAmount += stemLineItem.Total_Price__c;
             stemLineItem.Input__c = createProforma ? '🟠' : '🟢';
@@ -347,15 +364,17 @@ public class InvoiceController {
         update stemLineItems;
         ContextManager.avoidSTEMLineItemFiring = false;
 
-        List<STEM_Extra_Cost__c> stemExtraCosts = [SELECT Id, Input__c, Issued__c, RecordTypeId, Line_Total__c, Buyer_Invoice__c FROM STEM_Extra_Cost__c WHERE Id In: extraId AND Line_Total__c != null];
+        List<STEM_Extra_Cost__c> pricedCharges = new List<STEM_Extra_Cost__c>();
         for(STEM_Extra_Cost__c stemExtraCost : stemExtraCosts){
+            if(stemExtraCost.Line_Total__c==null) continue;
             totalAmount += stemExtraCost.Line_Total__c;
             stemExtraCost.Input__c = createProforma ? '🟠' : '🟢';
             stemExtraCost.Buyer_Invoice__c = invoiceId;
             stemExtraCost.Issued__c = true;
+            pricedCharges.add(stemExtraCost);
         }
         ContextManager.avoidSTEMExtraCostFiring = true;
-        update stemExtraCosts;
+        update pricedCharges;
         ContextManager.avoidSTEMExtraCostFiring = false;
         return totalAmount;
     }

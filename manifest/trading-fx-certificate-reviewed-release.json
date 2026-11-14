@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "releaseMode": "reviewed-manifest-incremental-v1",
   "baselineMode": "read-only-owned-tree-inventory",
-  "sourceTreeHash": "caf319bdbc389b46b21a9f361a5f49512b11d8063681ad7aafb6665db756d82a",
+  "sourceTreeHash": "d9b6781881a241020eac6e1dc51071037a2574ae6d742e5f5e440108e411f72c",
   "manifestSha256": "09c057c8d098ceded9134e29720c351c7714b4c7439b71a73ae03a6fe469e04b",
   "baselineCommit": "91a5298b44c7cadb968a614ff79d3934a8f41c9c",
   "baselineSourceTreeHash": "4081568c88787e50f15a9d7d417ef5738df3b8cf3f004c0eaea2de2ceabf58d3",
@@ -62,7 +62,12 @@
         "classes/FcosLegacyFinancialCompatibilityTest.cls",
         "classes/FcosLegacyFinancialCompatibilityTest.cls-meta.xml"
       ],
-      "dependsOn": []
+      "dependsOn": [
+        "ApexClass:FcosNativeConfirmationService",
+        "ApexClass:FcosTradeProformaService",
+        "ApexClass:InvoiceController",
+        "ApexClass:NominationController"
+      ]
     },
     {
       "id": "ApexClass:FcosNativeConfirmationService",
@@ -461,7 +466,9 @@
         "classes/InvoiceController.cls-meta.xml"
       ],
       "dependsOn": [
-        "ApexClass:FcosTradeDocumentService"
+        "ApexClass:FcosCompanyFxRateService",
+        "ApexClass:FcosTradeDocumentService",
+        "CustomPermission:Fcos_Trading_FX_Entry"
       ]
     },
     {
@@ -495,7 +502,9 @@
         "classes/NominationController.cls-meta.xml"
       ],
       "dependsOn": [
-        "ApexClass:FcosTradeDocumentService"
+        "ApexClass:FcosCompanyFxRateService",
+        "ApexClass:FcosTradeDocumentService",
+        "CustomPermission:Fcos_Trading_FX_Entry"
       ]
     },
     {
@@ -3185,7 +3194,7 @@
   "dependencyReview": {
     "complete": true,
     "reviewer": "Codex Salesforce package review",
-    "evidence": "Trading FX exact original dependency review plus certificate qualification 0AfHF000007Gg8v0AC and tracked native sandbox inventory readback. The legacy USD repair uses the existing invoice, nomination and supplier-readiness controller access, with no new metadata members or grants. DEVEE 0AfHF000007GhD30AK compiled all nine members and passed all 38 executed tests including Sales Support access; the selected-test run reported controller coverage thresholds below target and the same package was submitted for relevant-test coverage."
+    "evidence": "Trading FX exact original dependency review plus certificate qualification 0AfHF000007Gg8v0AC and tracked native sandbox inventory readback. The legacy USD repair uses the existing invoice, nomination and supplier-readiness controller access, with no new metadata members or grants. DEVEE 0AfHF000007GhD30AK compiled all nine members and passed all 38 executed tests including Sales Support access; the selected-test run reported controller coverage thresholds below target and the same package was submitted for relevant-test coverage. Salesforce DEVEE check-only 0AfHF000007Gix70AC passed 523 tests and all ten directly reviewed components, including exact cross-actor and split-STEM negative cases. The repair preserves legacy USD, retains the permission-set grants, and binds native document writes to the existing release switch and custom permission."
   },
   "testPlan": {
     "level": "RunLocalTests",

@@ -137,6 +137,128 @@ private class FcosLegacyFinancialCompatibilityTest {
     }
 
     @IsTest
+    static void legacyOperatorCannotUseAnotherUsersManagedInvoiceReview() {
+        STEM_Line_Item__c source=line();
+        Id buyerNomination=[SELECT Id FROM Nomination__c WHERE STEM__c=:source.STEM__c
+            AND RecordTypeId=:FCBStatic.NOMINATION_BUYER_RT_IT LIMIT 1].Id;
+        List<String> selected=new List<String>{String.valueOf(source.Id)};
+        String reviewedFingerprint;
+        String nominationFingerprint;
+        Invoice__c invoice;
+        System.runAs(actor()) {
+            configure(true);
+            STEM__c stem=[SELECT Id,Account__c FROM STEM__c WHERE Id=:source.STEM__c];
+            update new Account(Id=stem.Account__c,Banking_Preference__c='DBS');
+            update new STEM__c(Id=stem.Id,Partial_CIA__c=false);
+            DBS_Bank__c bank=DBS_Bank__c.getOrgDefaults();
+            bank.SetupOwnerId=UserInfo.getOrganizationId();
+            bank.Beneficiary_Bank__c='Synthetic test bank';
+            bank.Beneficiary__c='FRATELLI COSULICH BUNKERS (HK) LTD';
+            bank.Account_No__c='SYNTHETIC-NOT-A-BANK-ACCOUNT';
+            upsert bank;
+            FcosCompanyFxRateService.Snapshot rate=new FcosCompanyFxRateService.Snapshot();
+            rate.rateId='legacy-operator-write-rate';
+            rate.revision='1';
+            rate.usdHkdRate=7.8;
+            rate.effectiveAt=Datetime.newInstanceGmt(2026,9,10,0,0,0);
+            FcosTradeCurrencyService.Review review=FcosTradeCurrencyService.review(source.Id,'Sell',rate);
+            FcosTradeCurrencyService.save(source.Id,'Sell','HKD',780,review.fingerprint,rate,true);
+            reviewedFingerprint=InvoiceController.previewTradingDocument(source.STEM__c,new List<Id>{source.Id}).fingerprint;
+            System.assertEquals(64,reviewedFingerprint.length());
+            nominationFingerprint=NominationController.previewTradingDocument(buyerNomination).fingerprint;
+            System.assertNotEquals(null,FcosNativeConfirmationService.prepare(buyerNomination,nominationFingerprint).contentFingerprint);
+        }
+        Test.startTest();
+        System.runAs(legacyOperator()) {
+            System.assertEquals(false,FeatureManagement.checkPermission('Fcos_Trading_FX_Entry'));
+            Integer initialWrites=Limits.getDmlStatements();
+            Boolean denied=false;
+            try {
+                InvoiceController.createReviewedInvoice(String.valueOf(source.STEM__c),selected,
+                    false,false,Date.today(),Date.today(),Date.today(),reviewedFingerprint);
+            } catch(AuraHandledException expected) {denied=true;}
+            System.assertEquals(true,denied,'An exact review from the entitled user does not grant invoice entry.');
+            System.assertEquals(initialWrites,Limits.getDmlStatements());
+        }
+        System.runAs(actor()) {
+            invoice=InvoiceController.createReviewedInvoice(String.valueOf(source.STEM__c),selected,
+                false,false,Date.today(),Date.today(),Date.today(),reviewedFingerprint);
+            System.assertEquals(reviewedFingerprint,
+                [SELECT Document_FX_Fingerprint__c FROM Invoice__c WHERE Id=:invoice.Id].Document_FX_Fingerprint__c);
+            FcosCompanyFxRateService.settingsOverride.Cash_Enabled__c=true;
+            Integer initialWrites=Limits.getDmlStatements();
+            Boolean denied=false;
+            try {FcosTradeProformaService.generateDocument(invoice.Id);}
+            catch(AuraHandledException expected) {denied=true;}
+            System.assertEquals(true,denied,'The proforma generator must refuse an ordinary native invoice.');
+            System.assertEquals(initialWrites,Limits.getDmlStatements());
+        }
+        System.runAs(legacyOperator()) {
+            Integer initialWrites=Limits.getDmlStatements();
+            Boolean denied=false;
+            try {
+                InvoiceController.generateInvoicePDF(invoice.Id,invoice.Name,selected,null,false,reviewedFingerprint);
+            } catch(AuraHandledException expected) {denied=true;}
+            System.assertEquals(true,denied,'A valid saved review does not grant PDF generation.');
+            denied=false;
+            try {NominationController.generateDocument(buyerNomination,null,'Buyer confirmation',nominationFingerprint);}
+            catch(AuraHandledException expected) {denied=true;}
+            System.assertEquals(true,denied,'Prepared confirmation evidence does not grant server PDF generation.');
+            denied=false;
+            try {NominationController.generateDocumentFromBlob(legacyPdf(),buyerNomination,null,'Buyer confirmation',nominationFingerprint);}
+            catch(AuraHandledException expected) {denied=true;}
+            System.assertEquals(true,denied,'Prepared confirmation evidence does not grant PDF upload.');
+            System.assertEquals(initialWrites,Limits.getDmlStatements());
+        }
+        Test.stopTest();
+        System.assertEquals(null,[SELECT File__c FROM Invoice__c WHERE Id=:invoice.Id].File__c);
+        System.assertEquals(null,[SELECT File__c FROM Nomination__c WHERE Id=:buyerNomination].File__c);
+    }
+
+    @IsTest
+    static void legacyInvoiceCannotAttachAnotherStemsManagedLine() {
+        STEM_Line_Item__c source=line();
+        Id ordinaryInvoiceId;
+        System.runAs(actor()) {
+            configure(true);
+            FcosCompanyFxRateService.Snapshot rate=new FcosCompanyFxRateService.Snapshot();
+            rate.rateId='foreign-managed-rate';
+            rate.revision='1';
+            rate.usdHkdRate=7.8;
+            rate.effectiveAt=Datetime.newInstanceGmt(2026,9,10,0,0,0);
+            FcosTradeCurrencyService.Review review=FcosTradeCurrencyService.review(source.Id,'Sell',rate);
+            FcosTradeCurrencyService.save(source.Id,'Sell','HKD',780,review.fingerprint,rate,true);
+            STEM__c originalStem=[SELECT Account__c,Port__c,Vessel__c
+                FROM STEM__c WHERE Id=:source.STEM__c];
+            Opportunity otherEnquiry=TestDataFactory.createTestEnquiry('Different STEM invoice test',originalStem.Account__c,
+                originalStem.Vessel__c,'Offer Sent & Negotiation',Date.today(),true,Time.newInstance(1,2,3,4),10000);
+            Id historicalType=Schema.SObjectType.STEM__c.getRecordTypeInfosByDeveloperName().get('Historical').getRecordTypeId();
+            STEM__c otherStem=new STEM__c(Name='Different STEM invoice test',RecordTypeId=historicalType,Account__c=originalStem.Account__c,
+                Enquiry__c=otherEnquiry.Id,Port__c=originalStem.Port__c,Vessel__c=originalStem.Vessel__c,
+                Delivery_Date__c=Date.today(),Stem_Date__c=Date.today());
+            ContextManager.skipTriggers=true;
+            try {insert otherStem;}
+            finally {ContextManager.skipTriggers=false;}
+            ordinaryInvoiceId=InvoiceController.createInvoice(otherStem.Id,new List<String>(),false,false,
+                Date.today(),Date.today(),Date.today()).Id;
+        }
+        Test.startTest();
+        System.runAs(legacyOperator()) {
+            Integer initialWrites=Limits.getDmlStatements();
+            Boolean denied=false;
+            try {
+                InvoiceController.generateInvoicePDF(ordinaryInvoiceId,'Foreign line',
+                    new List<String>{String.valueOf(source.Id)},legacyPdf(),false);
+            } catch(AuraHandledException expected) {denied=true;}
+            System.assertEquals(true,denied,'An ordinary invoice must refuse a line from another STEM.');
+            System.assertEquals(initialWrites,Limits.getDmlStatements());
+        }
+        Test.stopTest();
+        System.assertEquals(null,[SELECT File__c FROM Invoice__c WHERE Id=:ordinaryInvoiceId].File__c);
+        System.assertEquals(null,[SELECT Buyer_Invoice__c FROM STEM_Line_Item__c WHERE Id=:source.Id].Buyer_Invoice__c);
+    }
+
+    @IsTest
     static void disabledUnmanagedInvoiceGenerationKeepsAReserveQueryBudget() {
         System.runAs(actor()) {
             configure(false);STEM_Line_Item__c source=line();Integer generationQueries;
