@@ -8,7 +8,7 @@ import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import { createSalesforceWorkflowState, updateSalesforceEnvironmentState, SALESFORCE_RELEASE_MODE } from '../scripts/salesforce-workflow-state.mjs';
 import { openSalesforcePromotionJournal, salesforcePromotionHash as hash } from '../scripts/lib/salesforce-promotion-journal.mjs';
 import { INVENTORY_BASELINE_MODE, REVIEWED_SALESFORCE_MODE, createReviewedSalesforcePlan, inventoryFromFiles, matchesProjectedNativeInventory, matchesSalesforceCheckpoint, parseReviewedPackage, projectedNativeInventoryHash, reviewedCheckpointInventory, verifyReviewedOrgInventory, runReviewedSalesforceRelease, assertReviewedJobReport, assertProductionAuthorization } from '../scripts/lib/salesforce-reviewed-release.mjs';
-import { assertReviewedInputsUnchanged, baselineGitInventory, cliSalesforceProvider, equivalentNativeSerialization, loadReviewedSalesforcePlan, reviewedSalesforceOptions } from '../scripts/deploy-salesforce-reviewed-manifest.mjs';
+import { assertSalesforceProductionSettingCompatibility, assertReviewedInputsUnchanged, baselineGitInventory, cliSalesforceProvider, equivalentNativeSerialization, loadReviewedSalesforcePlan, reviewedSalesforceOptions } from '../scripts/deploy-salesforce-reviewed-manifest.mjs';
 import { reviewedDeveePublicationProof } from '../scripts/sync-salesforce-reviewed-repository.mjs';
 import { applyReviewedPrerequisites, verifyPreBootstrapStage } from '../scripts/lib/rapid-release/salesforce-reviewed-adapter.mjs';
 import { digest, targets } from '../scripts/lib/rapid-release/contract.mjs';
@@ -876,6 +876,27 @@ test('native inventory retrieval binds manifest, org, and observed bytes and rem
   }
 });
 
+test('Production preflight denies a Protected unmanaged hierarchy setting before provider I/O', t => {
+  const cwd = mkdtempSync(path.join(tmpdir(), 'fcos-custom-setting-fixture-'));
+  t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  const descriptor = 'objects/Fx__c/Fx__c.object-meta.xml';
+  const file = path.join(cwd, policy.publication.sourceRoot, descriptor);
+  mkdirSync(path.dirname(file), { recursive: true });
+  const plan = { review: { components: [{ id: 'CustomObject:Fx__c', files: [descriptor] }] } };
+  const setting = '<customSettingsType>Hierarchy</customSettingsType>';
+  const write = contents => writeFileSync(file, `<CustomObject>${contents}</CustomObject>\n`);
+  for (const field of ['visibility', 'customSettingsVisibility']) {
+    write(setting + `<${field}>Protected</${field}>`);
+    assert.throws(() => assertSalesforceProductionSettingCompatibility(cwd, plan), {
+      code: 'SALESFORCE_PRODUCTION_PROTECTED_CUSTOM_SETTING',
+    });
+  }
+  write(setting + '<visibility>Public</visibility>');
+  assert.doesNotThrow(() => assertSalesforceProductionSettingCompatibility(cwd, plan));
+  write('<visibility>Protected</visibility>');
+  assert.doesNotThrow(() => assertSalesforceProductionSettingCompatibility(cwd, plan));
+});
+
 test('native bootstrap stages only exact reviewed files in a temporary project', () => {
   const f = fixture({ bootstrap: true, validationRule: true });
   const cwd = mkdtempSync(path.join(tmpdir(), 'fcos-bootstrap-fixture-'));
@@ -1402,6 +1423,60 @@ test('mixed native checkpoints pin exact org paths and preserve untouched bytes 
     preinstalledReview.nativeInventories.devee.presentComponents = [apex.id, 'CustomField:Demo__c.Unreviewed__c'];
     assert.throws(() => createReviewedSalesforcePlan({ ...inputs, review: preinstalledReview }), /exact already-present reviewed components/);
   } finally { f.cleanup(); }
+});
+
+test('native CustomObject retrieval retains only matching fields pinned in stable context', () => {
+  const cwd = mkdtempSync(path.join(tmpdir(), 'fcos-native-retained-field-'));
+  try {
+    const environment = policy.environments[0];
+    const object = 'objects/Settings__c/Settings__c.object-meta.xml';
+    const field = 'objects/Settings__c/fields/Legacy__c.field-meta.xml';
+    const setting = Buffer.from('<CustomObject><customSettingsType>Hierarchy</customSettingsType></CustomObject>');
+    const legacy = Buffer.from('<CustomField><type>Text</type></CustomField>');
+    const component = 'CustomObject:Settings__c';
+    const manifest = packageXml(['CustomField:Settings__c.Legacy__c']);
+    const metadata = packageXml([component]);
+    const { files: expectedInventory, inventoryHash: expectedInventoryHash } = inventoryFromFiles({ [field]: legacy, [object]: setting });
+    for (const [name, contents] of [['inventory.xml', manifest], ['metadata.xml', metadata], ['sfdx-project.json', '{}']]) {
+      writeFileSync(path.join(cwd, name), contents);
+    }
+    let stable = { [field]: legacy };
+    let supplemental = { [object]: setting, [field]: legacy };
+    const provider = cliSalesforceProvider({ cwd, run(_program, args, project) {
+      if (args[0] === 'org') return { id: environment.orgId, username: environment.username, connectedStatus: 'Connected' };
+      if (args[0] === 'data') return { records: [{ Id: environment.orgId, IsSandbox: environment.isSandbox }] };
+      const directory = args[args.indexOf('--output-dir') + 1];
+      for (const [name, bytes] of Object.entries(directory === 'metadata' ? supplemental : stable)) {
+        const file = path.join(project, directory, name);
+        mkdirSync(path.dirname(file), { recursive: true });
+        writeFileSync(file, bytes);
+      }
+      return { id: '09SHF000002gTFl2AM', status: 'Succeeded', done: true, success: true };
+    } });
+    const review = {
+      components: [{ id: component, files: [object] }],
+      nativeInventoryContext: { [environment.key]: [field] },
+      inventoryManifests: { [expectedInventoryHash]: { path: 'inventory.xml', sha256: hash(manifest),
+        metadata: { path: 'metadata.xml', sha256: hash(metadata) } } },
+    };
+    const verify = () => provider.verifyInventory(environment, {
+      plan: { review }, expectedInventory, expectedInventoryHash, nativeExport: true, nativeBootstrap: true,
+    });
+    assert.deepEqual(verify().supplementalDuplicates, [field]);
+    const shell = Buffer.from('<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata"/>');
+    stable[object] = shell;
+    assert.deepEqual(verify().stableObjectShells, { [object]: { sha256: hash(shell), size: shell.length } });
+    stable[object] = setting;
+    assert.throws(verify, /nonempty reviewed object descriptor/);
+    stable = {};
+    assert.throws(verify, /unexpected path set/);
+    stable = { [field]: legacy };
+    supplemental[field] = Buffer.from('<CustomField><type>Number</type></CustomField>');
+    assert.throws(verify, /conflicting bytes/);
+    supplemental[field] = legacy;
+    review.nativeInventoryContext[environment.key] = [];
+    assert.throws(verify, /unexpected path set/);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
 
 test('mixed native readback verifies reviewed definition content even when raw hashes match', () => {

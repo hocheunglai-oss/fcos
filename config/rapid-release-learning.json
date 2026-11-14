@@ -459,6 +459,27 @@
       "measuredTimeSavedMs": null,
       "measuredCallsSaved": null,
       "prevention": "Check both exact profile digests, org and release fingerprint. Reject changed paths, baseline-phase drift and incomplete or mismatched historical receipts."
+    },
+    {
+      "id": "salesforce-retained-setting-field-native-readback",
+      "cause": "Salesforce returned installed fields alongside the reviewed setting and an empty object descriptor alongside the stable field retrieval.",
+      "correction": "Require an exact stable manifest entry, pinned inventory bytes and identical duplicate field bytes. Remove only the verified empty stable descriptor and retain its digest.",
+      "verification": {
+        "controllerTestsPassed": 59,
+        "deveeRetrievalIds": [
+          "09SHF000002hOvZ2AU",
+          "09SHF000002hOp82AE"
+        ],
+        "qatRetrievalIds": [
+          "09SBh000003KWzhMAG",
+          "09SBh000003KWjaMAG"
+        ],
+        "rehearsalMs": 9354,
+        "providerWrites": 0
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": 4,
+      "prevention": "Replay the original native responses and reject an absent stable field, changed bytes, unlisted fields and nonempty overlapping descriptors."
     }
   ]
 }

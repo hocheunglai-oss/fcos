@@ -65,6 +65,27 @@ export function baselineGitInventory(cwd, commit, run = localCommand) {
   return inventoryFromFiles(files);
 }
 
+// An unmanaged protected setting is rejected by the pinned Production org.
+export function assertSalesforceProductionSettingCompatibility(cwd, plan, policy = POLICY) {
+  const root = path.join(cwd, policy.publication.sourceRoot);
+  for (const { id, files } of plan.review.components) {
+    if (!id.startsWith('CustomObject:')) continue;
+    const descriptor = files.find(file => file.endsWith('.object-meta.xml'));
+    if (!descriptor) continue;
+    const xml = readFileSync(safeProjectFile(root, descriptor), 'utf8');
+    const object = parseDocument(xml, { xmlMode: true, decodeEntities: true }).children
+      .find(node => node.type === 'tag' && node.name === 'CustomObject');
+    const elements = object?.children.filter(node => node.type === 'tag') || [];
+    const isSetting = elements.some(node => node.name === 'customSettingsType');
+    const isProtected = elements.some(node => ['visibility', 'customSettingsVisibility'].includes(node.name)
+      && node.children.map(child => child.data).join('').trim() === 'Protected');
+    if (isSetting && isProtected) {
+      throw Object.assign(new Error(`Salesforce Production cannot deploy unmanaged Protected custom setting ${id}.`),
+        { code: 'SALESFORCE_PRODUCTION_PROTECTED_CUSTOM_SETTING' });
+    }
+  }
+}
+
 export function loadReviewedSalesforcePlan({ cwd = ROOT, manifestPath, reviewPath, policy = POLICY }) {
   const reviewAbsolute = safeProjectFile(cwd, reviewPath), manifestAbsolute = safeProjectFile(cwd, manifestPath);
   const review = JSON.parse(readFileSync(reviewAbsolute, 'utf8'));
@@ -316,10 +337,12 @@ function assertConvertedPackage(converted, roundTrip, members, files, sourceRoot
   }
 }
 
-function inspectNativeSupplementalFiles(root, reviewed, { allowObjectShells = false } = {}) {
+const EMPTY_NATIVE_OBJECT = /^\s*(?:<\?xml version="1\.0" encoding="UTF-8"\?>\s*)?<CustomObject xmlns="http:\/\/soap\.sforce\.com\/2006\/04\/metadata"\s*(?:\/>|>\s*<\/CustomObject>)\s*$/u;
+
+function inspectNativeSupplementalFiles(root, reviewed, { allowObjectShells = false, retainedFields = new Set() } = {}) {
   const expected = new Set(reviewed.flatMap(({ files }) => files));
   const observed = readReviewedInventory(root, { nativeExport: true });
-  const extra = Object.keys(observed.files).filter(name => !expected.has(name));
+  const extra = Object.keys(observed.files).filter(name => !expected.has(name) && !retainedFields.has(name));
   const possibleShells = new Set(allowObjectShells ? reviewed.flatMap(({ id }) => {
     const child = /^(?:CustomField|ValidationRule):([A-Za-z][A-Za-z0-9_]*)\.[A-Za-z][A-Za-z0-9_]*$/u.exec(id);
     return child ? [`objects/${child[1]}/${child[1]}.object-meta.xml`] : [];
@@ -332,8 +355,7 @@ function inspectNativeSupplementalFiles(root, reviewed, { allowObjectShells = fa
   for (const name of extra) {
     const file = safeProjectFile(root, name);
     const source = readFileSync(file, 'utf8');
-    const valid = /^\s*(?:<\?xml version="1\.0" encoding="UTF-8"\?>\s*)?<CustomObject xmlns="http:\/\/soap\.sforce\.com\/2006\/04\/metadata"\s*(?:\/>|>\s*<\/CustomObject>)\s*$/u;
-    if (!valid.test(source)) throw new Error(`Native metadata retrieval returned an unexpected nonempty object descriptor: ${name}`);
+    if (!EMPTY_NATIVE_OBJECT.test(source)) throw new Error(`Native metadata retrieval returned an unexpected nonempty object descriptor: ${name}`);
     shells[name] = observed.files[name];
     rmSync(file);
   }
@@ -444,6 +466,7 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
       const bytes = readFileSync(safeProjectFile(cwd, manifest.path));
       if (salesforcePromotionHash(bytes) !== manifest.sha256) throw new Error('Salesforce inventory retrieval manifest digest mismatch.');
       const presentComponents = parseReviewedPackage(bytes.toString('utf8'), { inventory: true });
+      const stableMembers = new Set(presentComponents);
       const supplementalManifest = nativeBootstrap ? manifest.metadata : manifest.apex;
       const presentReviewed = nativeExport
         ? plan.review.components.filter(({ id }) => !expectedAbsentComponents.includes(id)) : [];
@@ -486,10 +509,32 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
         const supplementalJobId = supplementalBytes ? retrieve(supplementalBytes, `${supplementalName}.xml`, supplementalName) : null;
         const root = path.join(project, 'retrieved');
         const supplementalRoot = supplementalJobId ? path.join(project, supplementalName) : null;
+        // A reviewed Custom Setting retrieval can also export installed fields
+        // excluded from the package. Keep them only as exact stable inventory context.
+        const reviewedObjects = new Set(presentReviewed.filter(({ id }) => id.startsWith('CustomObject:')).map(({ id }) => id));
+        const retainedFields = new Set(nativeBootstrap ? (plan.review.nativeInventoryContext?.[environment.key] || []).filter(name => {
+          const field = /^objects\/([A-Za-z][A-Za-z0-9_]*)\/fields\/([A-Za-z][A-Za-z0-9_]*)\.field-meta\.xml$/u.exec(name);
+          return field && reviewedObjects.has('CustomObject:' + field[1])
+            && stableMembers.has('CustomField:' + field[1] + '.' + field[2])
+            && Object.hasOwn(expectedInventory || {}, name) && existsSync(path.join(root, name));
+        }) : []);
         const supplementalObjectShells = supplementalRoot
-          ? inspectNativeSupplementalFiles(supplementalRoot, presentReviewed, { allowObjectShells: nativeBootstrap }) : {};
+          ? inspectNativeSupplementalFiles(supplementalRoot, presentReviewed, { allowObjectShells: nativeBootstrap, retainedFields }) : {};
+        const stableObjectShells = {};
+        for (const { id, files } of presentReviewed) {
+          if (!nativeBootstrap || !id.startsWith('CustomObject:')) continue;
+          const object = files.find(name => name.endsWith('.object-meta.xml'));
+          const folder = object && path.posix.dirname(object) + '/fields/';
+          if (!folder || ![...retainedFields].some(name => name.startsWith(folder)) || !existsSync(path.join(root, object))) continue;
+          const file = safeProjectFile(root, object);
+          const bytes = readFileSync(file);
+          if (!EMPTY_NATIVE_OBJECT.test(bytes.toString('utf8'))) throw new Error('Stable Salesforce field retrieval returned a nonempty reviewed object descriptor.');
+          stableObjectShells[object] = { sha256: salesforcePromotionHash(bytes), size: bytes.length };
+          rmSync(file);
+        }
         const matchingSupplementalPaths = nativeBootstrap
-          ? new Set(presentReviewed.filter(({ id }) => id.startsWith('CustomField:')).flatMap(({ files }) => files)) : null;
+          ? new Set([...presentReviewed.filter(({ id }) => id.startsWith('CustomField:')).flatMap(({ files }) => files),
+            ...retainedFields]) : null;
         const observed = readReviewedInventory(root, { nativeExport, supplementalRoot, matchingSupplementalPaths });
         const inventoryMatches = projectedNativeInventory
           ? nativeBootstrap && projectionPaths.length > 0
@@ -522,14 +567,14 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
           ...(projectedNativeInventory ? { observedNativeInventoryHash: observed.inventoryHash } : {}),
           ...(supplementalJobId ? (nativeBootstrap ? { metadataJobId: supplementalJobId, metadataManifestSha256: supplementalManifest.sha256 }
             : { apexJobId: supplementalJobId, apexManifestSha256: supplementalManifest.sha256 }) : {}),
-          ...(nativeBootstrap ? { verifiedProjectionPaths: projectionPaths, supplementalObjectShells, supplementalDuplicates: observed.supplementalDuplicates } : {}),
+          ...(nativeBootstrap ? { verifiedProjectionPaths: projectionPaths, supplementalObjectShells, ...(Object.keys(stableObjectShells).length ? { stableObjectShells } : {}), supplementalDuplicates: observed.supplementalDuplicates } : {}),
           ...metadataEvidence,
           ...(nativeExport ? { nativeSourceTreeHash: observed.sourceTreeHash, apexProjectionVerified: verifyApexProjection } : {}), ...absence });
         return { orgId: identity.orgId, identity, verifiedAt, sourceTreeHash, inventoryHash: expectedInventoryHash,
           ...(projectedNativeInventory ? { observedNativeInventoryHash: observed.inventoryHash } : {}),
           evidenceSha256, observedInventory: observed.files,
           ...(nativeExport ? { nativeSourceTreeHash: observed.sourceTreeHash, apexProjectionVerified: verifyApexProjection } : {}),
-          ...(nativeBootstrap ? { verifiedProjectionPaths: projectionPaths, supplementalObjectShells, supplementalDuplicates: observed.supplementalDuplicates } : {}),
+          ...(nativeBootstrap ? { verifiedProjectionPaths: projectionPaths, supplementalObjectShells, ...(Object.keys(stableObjectShells).length ? { stableObjectShells } : {}), supplementalDuplicates: observed.supplementalDuplicates } : {}),
           ...metadataEvidence,
           verificationMethod: nativeExport ? 'metadata-api-reviewed-native-byte-inventory' : 'metadata-api-owned-tree-inventory',
           scope: 'force-app/main/default', ...absence };
@@ -543,6 +588,7 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
 export async function main(argv = process.argv.slice(2), { cwd = ROOT, policy = POLICY } = {}) {
   const options = reviewedSalesforceOptions(argv);
   const plan = loadReviewedSalesforcePlan({ cwd, policy, manifestPath: options['--manifest'], reviewPath: options['--review'] });
+  assertSalesforceProductionSettingCompatibility(cwd, plan, policy);
   const module = await import(pathToFileURL(safeProjectFile(cwd, options['--adapter'])).href);
   if (typeof module.createSalesforceAdapter !== 'function') throw new Error('The release adapter must export createSalesforceAdapter({cwd,plan,policy}).');
   const adapter = await module.createSalesforceAdapter({ cwd, plan, policy });
