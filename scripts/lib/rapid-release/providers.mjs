@@ -9,7 +9,7 @@ import { hasTradingFxSigningLocator, TRADING_FX_SIGNING_BASELINE, verifyTradingF
 
 export const nativeWorkflowPath = run => String(run?.path || '').split('@')[0];
 export async function assertFrozenWorkflow({ github, controllerSha, dispatcherSha, path = '.github/workflows/fcos-rapid-release.yml' }) {
-  requireCondition(isSha(controllerSha) && isSha(dispatcherSha) && ['.github/workflows/fcos-rapid-release.yml','.github/workflows/fcos-rapid-handover.yml'].includes(path), 'FROZEN_WORKFLOW_IDENTITY_REQUIRED');
+  requireCondition(isSha(controllerSha) && isSha(dispatcherSha) && ['.github/workflows/fcos-rapid-release.yml','.github/workflows/fcos-rapid-handover.yml','.github/workflows/fcos-rapid-trading-fx-signing-setup.yml'].includes(path), 'FROZEN_WORKFLOW_IDENTITY_REQUIRED');
   const lookup = ref => github.read(`/repos/${targets().repository}/contents/${path}?ref=${ref}`);
   const [frozen,current] = controllerSha === dispatcherSha ? await lookup(controllerSha).then(value => [value,value]) : await Promise.all([lookup(controllerSha),lookup(dispatcherSha)]);
   requireCondition(frozen.type === 'file' && current.type === 'file' && isSha(frozen.sha) && frozen.sha === current.sha, 'DISPATCHER_WORKFLOW_CHANGED');
