@@ -1,4 +1,4 @@
-import { requiresCompanyFxHistorySmoke, requiresSupplierBucketSmoke, requiresGroupedPetroleumSmoke, requiresTradingFxSmoke,
+import { requiresCompanyFxHistorySmoke, requiresSupplierBucketSmoke, requiresGroupedPetroleumSmoke, requiresTradingFxSmoke, requiresExistingDraftSmoke,
   assertAuthorization, digest, requireCondition, validateManifest } from './contract.mjs';
 
 const events = records => records.map(record => record.payload);
@@ -53,6 +53,11 @@ function tradingFxSmokeVerified(proof, manifest) {
     || proof?.tradingFx?.restrictedVerified === true && proof.tradingFx.normalVerified === true
       && proof.tradingFx.desktopVerified === true;
 }
+function existingDraftSmokeVerified(proof, manifest) {
+  return !requiresExistingDraftSmoke(manifest)
+    || proof?.existingDraft?.desktopHeldVerified === true
+      && proof.existingDraft.normalVerified === true && proof.existingDraft.restrictedVerified === true;
+}
 export function assertSmokeProof(proof, manifest, staged) {
   requireCondition(proof?.passed === true && proof.deploymentId === staged.id && proof.buildId === manifest.build.buildId
     && proof.login === true && proof.restrictedAccess === true && proof.businessWrites === 0
@@ -61,6 +66,7 @@ export function assertSmokeProof(proof, manifest, staged) {
   requireCondition(supplierBucketSmokeVerified(proof, manifest), 'SMOKE_SUPPLIER_BUCKET_ROUTE_BOUNDARY_FAILED');
   requireCondition(groupedPetroleumSmokeVerified(proof, manifest), 'SMOKE_GROUPED_PETROLEUM_BOUNDARY_REQUIRED');
   requireCondition(tradingFxSmokeVerified(proof, manifest), 'SMOKE_TRADING_FX_BOUNDARY_REQUIRED');
+  requireCondition(existingDraftSmokeVerified(proof, manifest), 'SMOKE_EXISTING_DRAFT_BOUNDARY_REQUIRED');
 }
 export function assertPreBootstrapProof(proof, manifest, staged) {
   const plan = manifest.prerequisites?.plan;
@@ -102,7 +108,7 @@ export async function stageRelease({ manifest, journal, provider, build, smoke, 
   const existing = events(records).find(event => event.event === acceptanceEvent && event.data.deploymentId === ready.id);
   if (existing && deferred) assertPreBootstrapProof(existing.data, manifest, ready);
   if (existing && (requiresSupplierBucketSmoke(manifest) || requiresGroupedPetroleumSmoke(manifest)
-    || !deferred && requiresTradingFxSmoke(manifest))) assertSmokeProof(existing.data, manifest, ready);
+    || requiresExistingDraftSmoke(manifest) || !deferred && requiresTradingFxSmoke(manifest))) assertSmokeProof(existing.data, manifest, ready);
   if (!existing) {
     if (deferred) {
       requireCondition(typeof beforeBootstrap === 'function', 'QUALIFIED_PREBOOTSTRAP_VERIFIER_REQUIRED');
@@ -127,7 +133,7 @@ export async function promoteRelease({ manifest, journal, provider, approval, pr
   requireCondition(stagedReference && (deferred ? preBootstrap : fullStage), 'STAGED_ACCEPTANCE_REQUIRED');
   if (deferred) assertPreBootstrapProof(preBootstrap, manifest, stagedReference);
   if (requiresSupplierBucketSmoke(manifest) || requiresGroupedPetroleumSmoke(manifest)
-    || !deferred && requiresTradingFxSmoke(manifest)) assertSmokeProof(fullStage?.data, manifest, stagedReference);
+    || requiresExistingDraftSmoke(manifest) || !deferred && requiresTradingFxSmoke(manifest)) assertSmokeProof(fullStage?.data, manifest, stagedReference);
   assertBuildReceipt(build, manifest);
   const staged = await provider.ready(stagedReference.id);
   requireCondition(staged.id === stagedReference.id && staged.state === 'READY' && staged.buildId === manifest.build.buildId
@@ -164,6 +170,7 @@ export async function promoteRelease({ manifest, journal, provider, approval, pr
       && supplierBucketSmokeVerified(event.data, manifest)
       && groupedPetroleumSmokeVerified(event.data, manifest)
       && tradingFxSmokeVerified(event.data, manifest)
+      && existingDraftSmokeVerified(event.data, manifest)
       && (!historyRequired || event.data.companyFxHistory?.readVerified === true && event.data.companyFxHistory?.writeDenied === true))) {
       const currentStage = await provider.ready(staged.id);
       requireCondition(currentStage.id === staged.id && currentStage.state === 'READY' && currentStage.buildId === staged.buildId
