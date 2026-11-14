@@ -70,6 +70,15 @@
       "database": true,
       "databaseWrite": true,
       "supportsDeferredStage": true
+    },
+    {
+      "id": "existing-draft-migrations",
+      "status": "qualified",
+      "sourceDigest": "0dbc95a8a389c92af90016a507792b888d4dfbc19195d6d64c587ee406a8288b",
+      "path": "scripts/lib/rapid-release/existing-draft-adapter.mjs",
+      "salesforce": false,
+      "database": true,
+      "databaseWrite": true
     }
   ]
 }
