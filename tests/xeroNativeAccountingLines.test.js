@@ -182,6 +182,10 @@ test('Finance preview builds one native document without opening the broad workf
   assert.equal(privateReview.accountingUsd, 1);
   assert.equal(privateReview.draft.payload.Status, 'DRAFT');
   assert.equal(privateReview.draft.reviewFingerprint, nativeDocument.draftPreview.reviewFingerprint);
+  const held = await readNativeFinancialDocumentReview(selection, {
+    ...deps, connection, env: { FCOS_ENABLE_XERO_FINANCIAL_SYNC: 'true' },
+  });
+  assert.equal(held.nativeDocument.draftPreview.writeEnabled, false);
   assert.deepEqual(await xeroFinancialSyncPreview({ nativeDocument: selection }, deps), { nativeDocument });
 });
 
