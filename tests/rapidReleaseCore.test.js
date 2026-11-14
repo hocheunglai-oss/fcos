@@ -65,6 +65,25 @@ test('staged artifact digest mismatch blocks smoke and approval', async () => {
   const f = fixture(); f.provider.ready = async () => ({ ...f.staged, artifactDigest: '0'.repeat(64) });
   await assert.rejects(stageRelease(f), /STAGED_BUILD_NOT_READY/); assert.equal(f.journal.records.some(r => r.payload.event === 'smoke.passed'), false);
 });
+test('stage intent, submission and final acceptance take ownership without holding it over smoke', async () => {
+  const f = fixture(), append = f.journal.append.bind(f.journal), deploy = f.provider.stage.bind(f.provider);
+  let held = false, scopes = 0;
+  f.withStageOwnership = async work => {
+    assert.equal(held, false);
+    held = true;
+    scopes++;
+    try { return await work(); } finally { held = false; }
+  };
+  f.journal.append = async (event, data) => { assert.equal(held, true, event); return append(event, data); };
+  f.provider.stage = async input => { assert.equal(held, true); return deploy(input); };
+  const smoke = f.smoke;
+  f.smoke = async () => { assert.equal(held, false); return smoke(); };
+  f.verifyStageBaseline = async () => { assert.equal(held, true); };
+  await stageRelease(f);
+  assert.equal(scopes, 2);
+  assert.equal(held, false);
+});
+
 test('staging refuses a live deployment and retains an unaliased stage when baseline readback fails', async () => {
   const alreadyLive = fixture();
   alreadyLive.provider.currentProduction = async () => alreadyLive.staged;

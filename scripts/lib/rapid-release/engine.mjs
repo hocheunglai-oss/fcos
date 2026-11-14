@@ -82,22 +82,24 @@ export function assertPreBootstrapProof(proof, manifest, staged) {
       .every(check => proof.completedChecks.includes(check)), 'PREBOOTSTRAP_STAGE_PROOF_REQUIRED');
   requireCondition(tradingFxSmokeVerified(proof, manifest), 'SMOKE_TRADING_FX_BOUNDARY_REQUIRED');
 }
-export async function stageRelease({ manifest, journal, provider, build, smoke, beforeBootstrap, verifyStageBaseline }) {
+export async function stageRelease({ manifest, journal, provider, build, smoke, beforeBootstrap, verifyStageBaseline, withStageOwnership = work => work() }) {
   validateManifest(manifest); assertBuildReceipt(build, manifest);
-  await provider.assertOwnership({ phase: 'stage', manifest, manifestHash: digest(manifest) });
   requireCondition(typeof verifyStageBaseline === 'function', 'STAGE_BASELINE_VERIFIER_REQUIRED');
-  let records = await journal.read();
-  if (!events(records).some(event => event.event === 'release.prepared')) await journal.append('release.prepared', { manifest });
-  if (!events(records).some(event => event.event === 'build.passed')) await journal.append('build.passed', build);
-  const request = { buildId: build.buildId, artifactDigest: build.artifactDigest, candidateSha: manifest.candidate.sha,
-    previousDeploymentId: manifest.previous.deploymentId, target: 'production', skipDomain: true };
-  const staged = await executeOperation({ phase: 'stage', manifest, journal, provider, request,
-    submit: context => provider.stage({ manifest, build, ...context }) });
+  const staged = await withStageOwnership(async () => {
+    await provider.assertOwnership({ phase: 'stage', manifest, manifestHash: digest(manifest) });
+    const records = await journal.read();
+    if (!events(records).some(event => event.event === 'release.prepared')) await journal.append('release.prepared', { manifest });
+    if (!events(records).some(event => event.event === 'build.passed')) await journal.append('build.passed', build);
+    const request = { buildId: build.buildId, artifactDigest: build.artifactDigest, candidateSha: manifest.candidate.sha,
+      previousDeploymentId: manifest.previous.deploymentId, target: 'production', skipDomain: true };
+    return executeOperation({ phase: 'stage', manifest, journal, provider, request,
+      submit: context => provider.stage({ manifest, build, ...context }) });
+  });
   if (staged.waiting) return staged;
   const ready = await provider.ready(staged.id);
   requireCondition(ready.id === staged.id && ready.state === 'READY' && ready.buildId === build.buildId
     && ready.artifactDigest === build.artifactDigest && ready.sha === manifest.candidate.sha && ready.target === 'production', 'STAGED_BUILD_NOT_READY');
-  records = await journal.read();
+  const records = await journal.read();
   const deferred = (manifest.selection.salesforce || manifest.selection.database) && manifest.prerequisites?.plan?.deferSchemaDependentSmoke === true;
   const acceptanceEvent = deferred ? 'stage.pre_bootstrap_passed' : 'smoke.passed';
   const existing = events(records).find(event => event.event === acceptanceEvent && event.data.deploymentId === ready.id);
@@ -112,9 +114,11 @@ export async function stageRelease({ manifest, journal, provider, build, smoke, 
     const proof = await verifySmoke({ manifest, staged: ready });
     if (deferred) assertPreBootstrapProof(proof, manifest, ready);
     else assertSmokeProof(proof, manifest, ready);
-    await verifyStageBaseline();
-    await journal.append(acceptanceEvent, proof);
-  } else await verifyStageBaseline();
+    await withStageOwnership(async () => {
+      await verifyStageBaseline();
+      await journal.append(acceptanceEvent, proof);
+    });
+  } else await withStageOwnership(verifyStageBaseline);
   return { state: deferred ? 'awaiting_authorized_bootstrap' : 'ready_for_decision', deferredChecks: deferred ? manifest.prerequisites.plan.deferredModules : [], manifestHash: digest(manifest), staged: ready,
     conditionalPrerequisites: manifest.selection.salesforce || manifest.selection.database };
 }

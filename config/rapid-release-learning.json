@@ -6,11 +6,12 @@
     {
       "id": "stage-queue-blocked-by-go-live-review",
       "cause": "Native GitHub concurrency grouped an unaliased manual stage behind an unrelated Trading FX job awaiting reviewer authorization.",
-      "correction": "Serialize unaliased staging separately from live writes and recheck deployment baseline and controller after smoke before stage acceptance.",
+      "correction": "Serialize unaliased staging separately from live writes, keep one workflow per release ID, and use transaction advisory exclusion for stage submissions and handover. Recheck baseline before stage acceptance.",
       "verification": {
         "observedWaitingRun": 43581828763,
         "observedBlockedStageRun": 43582562872,
-        "focusedControllerTestsPassed": 85,
+        "localRapidReleaseTestsPassed": 283,
+        "postgresAdvisoryContentionVerified": true,
         "providerWritesDuringLocalVerification": 0
       },
       "measuredTimeSavedMs": null,
