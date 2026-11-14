@@ -124,3 +124,39 @@ test('stopped-QAT successor retains the original Demo and database operation ide
     { code: 'TRADING_FX_RECOVERY_LOCATOR_INVALID' });
   assert.deepEqual(calls, ['demo', 'demo', 'read original database']);
 });
+
+test('post-QAT continuation retains the original Demo receipt and database operation', async () => {
+  const { input } = fixture();
+  const prior = { ...input.manifest, candidate: { sha: 'c'.repeat(40), sourceDigest: 'd'.repeat(64) },
+    prerequisites: { plan: input.plan } };
+  const recovered = { nested: { prior }, database: { operationId: 'original' } };
+  const calls = [];
+  const adapter = createTradingFxPrerequisiteAdapter({
+    async readStoppedPostQatRecovery() { calls.push('read stopped run'); return recovered; },
+    async verifyXeroQualification({ manifest }) {
+      assert.equal(manifest, prior);
+      calls.push('verify original demo');
+      return { verified: true, testCompany: true, candidateSha: prior.candidate.sha, sourceDigest: prior.candidate.sourceDigest,
+        migrationDigest: digest(TRADING_FX_MIGRATIONS), evidenceDigest: hash };
+    },
+    prepareSalesforce(_input, options) {
+      assert.equal(options.tradingFxPostQatRecovery, recovered);
+      assert.equal(options.tradingFxQatRecovery, undefined);
+      return async () => ({ passed: true, manifestHash: digest(input.manifest), backwardCompatible: true,
+        salesforce: { mirrorVerified: true, order: 'devee-mirror-qat-production', sourceTreeHash: hash, fingerprint: hash },
+        completedOperations: [] });
+    },
+    async applyDatabase({ originalDatabaseOperation }) {
+      assert.equal(originalDatabaseOperation, recovered.database);
+      calls.push('read original database');
+      return { passed: true, manifestHash: digest(input.manifest), backwardCompatible: true,
+        database: { readbackVerified: true, destructiveRollback: false, schemaDigest: hash }, completedOperations: [] };
+    },
+  });
+  const plan = { ...input.plan, tradingFxPostQatRecoveryReceiptId: 42 };
+  await assert.rejects(adapter.applyReviewedPrerequisites({ ...input, plan: { ...plan, tradingFxQatRecoveryReceiptId: 43 } }),
+    { code: 'TRADING_FX_RECOVERY_LOCATOR_INVALID' });
+  assert.deepEqual(calls, []);
+  assert.equal((await adapter.applyReviewedPrerequisites({ ...input, plan })).passed, true);
+  assert.deepEqual(calls, ['read stopped run', 'verify original demo', 'read original database']);
+});

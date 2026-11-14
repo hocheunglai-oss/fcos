@@ -443,6 +443,22 @@
       "measuredTimeSavedMs": null,
       "measuredCallsSaved": null,
       "prevention": "Regression tests refuse changed formula behavior, grant drift, replay of a closed release and successor writes for already committed migrations."
+    },
+    {
+      "id": "trading-fx-qat-deny-profile-readback",
+      "cause": "QAT exported two explicit deny entries for the reviewed FX adjustment fields after deployment. The unchanged-profile byte check correctly held Production.",
+      "correction": "Accept the exact QAT profile hash pair only for the original final projection and Salesforce review. Carry the six original sandbox jobs, the strict mirror and the committed database operation into a separately authorized successor.",
+      "verification": {
+        "originalRunId": 43560418480,
+        "closureReceiptId": 7783739041,
+        "mirrorReceiptId": 7783497034,
+        "sandboxJobsReverified": 6,
+        "readbackProviderWrites": 0,
+        "controllerTestsPassed": 333
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Check both exact profile digests, org and release fingerprint. Reject changed paths, baseline-phase drift and incomplete or mismatched historical receipts."
     }
   ]
 }

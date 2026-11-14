@@ -7,6 +7,7 @@ import { reviewedMigrationAdapter } from './reviewed-migration-adapter.mjs';
 import { prepareReviewedSalesforcePrerequisites, verifyPreBootstrapStage as verifySalesforceStage } from './salesforce-reviewed-adapter.mjs';
 import { TRADING_FX_MIGRATIONS } from './trading-fx-migrations.mjs';
 import { runTradingFxTransaction } from './trading-fx-transaction.mjs';
+import { readTradingFxPostQatRecovery } from './trading-fx-post-qat-recovery.mjs';
 import { readTradingFxQatRecovery } from './trading-fx-qat-recovery.mjs';
 import { verifyTradingFxXeroQualification } from './trading-fx-xero-qualification.mjs';
 
@@ -117,10 +118,17 @@ async function readQatRecovery({ manifest, plan, env }) {
     readOriginalRecovery: prior => readTradingFxRecovery({ manifest: prior, plan: prior.prerequisites.plan, env }) });
 }
 
+async function readPostQatRecovery({ manifest, plan, env }) {
+  const github = githubClient({ token: env.GITHUB_TOKEN, candidateSha: manifest.candidate.sha });
+  return readTradingFxPostQatRecovery({ manifest, github, receiptId: plan.tradingFxPostQatRecoveryReceiptId, ownerId,
+    readQatRecovery: prior => readQatRecovery({ manifest: prior, plan: prior.prerequisites.plan, env }) });
+}
+
 export function createTradingFxPrerequisiteAdapter({
   verifyXeroQualification, applyDatabase = applyTradingFxDatabase,
   prepareSalesforce = prepareReviewedSalesforcePrerequisites, verifyStage = verifySalesforceStage,
   readRecovery = readTradingFxRecovery, readStoppedQatRecovery = readQatRecovery,
+  readStoppedPostQatRecovery = readPostQatRecovery,
 } = {}) {
   requireCondition(typeof verifyXeroQualification === 'function', 'TRADING_FX_XERO_VERIFIER_REQUIRED');
 
@@ -153,7 +161,9 @@ export function createTradingFxPrerequisiteAdapter({
   async function recoveryFor(input) {
     const original = Object.hasOwn(input.plan, 'tradingFxRecoveryReceiptId');
     const stoppedQat = Object.hasOwn(input.plan, 'tradingFxQatRecoveryReceiptId');
-    requireCondition(!(original && stoppedQat), 'TRADING_FX_RECOVERY_LOCATOR_INVALID');
+    const postQat = Object.hasOwn(input.plan, 'tradingFxPostQatRecoveryReceiptId');
+    requireCondition(Number(original) + Number(stoppedQat) + Number(postQat) <= 1, 'TRADING_FX_RECOVERY_LOCATOR_INVALID');
+    if (postQat) return { postQat: await readStoppedPostQatRecovery(input) };
     if (stoppedQat) return { qat: await readStoppedQatRecovery(input) };
     return { original: original ? await readRecovery(input) : undefined };
   }
@@ -161,17 +171,17 @@ export function createTradingFxPrerequisiteAdapter({
   return {
     async verifyPreBootstrapStage(input) {
       const recovery = await recoveryFor(input);
-      await verifyScope(input, recovery.qat?.prior);
+      await verifyScope(input, (recovery.qat || recovery.postQat?.nested)?.prior);
       return verifyStage(input, { withDatabase: true });
     },
     async applyReviewedPrerequisites(input) {
       const recovery = await recoveryFor(input);
-      await verifyScope(input, recovery.qat?.prior);
+      await verifyScope(input, (recovery.qat || recovery.postQat?.nested)?.prior);
       const applySalesforce = prepareSalesforce(input, { withDatabase: true, tradingFxRecovery: recovery.original,
-        tradingFxQatRecovery: recovery.qat });
+        tradingFxQatRecovery: recovery.qat, tradingFxPostQatRecovery: recovery.postQat });
       // The reviewed DB additions are backward compatible. Complete and
       // verify them before Salesforce can expose any native financial records.
-      const database = await applyDatabase({ ...input, originalDatabaseOperation: (recovery.qat || recovery.original)?.database });
+      const database = await applyDatabase({ ...input, originalDatabaseOperation: (recovery.postQat || recovery.qat || recovery.original)?.database });
       const manifestHash = digest(input.manifest);
       requireCondition(database?.passed === true && database.manifestHash === manifestHash && database.backwardCompatible === true
         && database.database?.readbackVerified === true && database.database.destructiveRollback === false
