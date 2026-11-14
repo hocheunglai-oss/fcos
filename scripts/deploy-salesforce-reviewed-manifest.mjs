@@ -65,6 +65,27 @@ export function baselineGitInventory(cwd, commit, run = localCommand) {
   return inventoryFromFiles(files);
 }
 
+// An unmanaged protected setting is rejected by the pinned Production org.
+export function assertSalesforceProductionSettingCompatibility(cwd, plan, policy = POLICY) {
+  const root = path.join(cwd, policy.publication.sourceRoot);
+  for (const { id, files } of plan.review.components) {
+    if (!id.startsWith('CustomObject:')) continue;
+    const descriptor = files.find(file => file.endsWith('.object-meta.xml'));
+    if (!descriptor) continue;
+    const xml = readFileSync(safeProjectFile(root, descriptor), 'utf8');
+    const object = parseDocument(xml, { xmlMode: true, decodeEntities: true }).children
+      .find(node => node.type === 'tag' && node.name === 'CustomObject');
+    const elements = object?.children.filter(node => node.type === 'tag') || [];
+    const isSetting = elements.some(node => node.name === 'customSettingsType');
+    const isProtected = elements.some(node => ['visibility', 'customSettingsVisibility'].includes(node.name)
+      && node.children.map(child => child.data).join('').trim() === 'Protected');
+    if (isSetting && isProtected) {
+      throw Object.assign(new Error(`Salesforce Production cannot deploy unmanaged Protected custom setting ${id}.`),
+        { code: 'SALESFORCE_PRODUCTION_PROTECTED_CUSTOM_SETTING' });
+    }
+  }
+}
+
 export function loadReviewedSalesforcePlan({ cwd = ROOT, manifestPath, reviewPath, policy = POLICY }) {
   const reviewAbsolute = safeProjectFile(cwd, reviewPath), manifestAbsolute = safeProjectFile(cwd, manifestPath);
   const review = JSON.parse(readFileSync(reviewAbsolute, 'utf8'));
@@ -543,6 +564,7 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
 export async function main(argv = process.argv.slice(2), { cwd = ROOT, policy = POLICY } = {}) {
   const options = reviewedSalesforceOptions(argv);
   const plan = loadReviewedSalesforcePlan({ cwd, policy, manifestPath: options['--manifest'], reviewPath: options['--review'] });
+  assertSalesforceProductionSettingCompatibility(cwd, plan, policy);
   const module = await import(pathToFileURL(safeProjectFile(cwd, options['--adapter'])).href);
   if (typeof module.createSalesforceAdapter !== 'function') throw new Error('The release adapter must export createSalesforceAdapter({cwd,plan,policy}).');
   const adapter = await module.createSalesforceAdapter({ cwd, plan, policy });

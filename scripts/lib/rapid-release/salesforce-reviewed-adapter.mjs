@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { FCOS_CONNECTION_POLICY } from '../../../config/fcosConnections.js';
-import { assertReviewedInputsUnchanged, cliSalesforceProvider, loadReviewedSalesforcePlan } from '../../deploy-salesforce-reviewed-manifest.mjs';
+import { assertSalesforceProductionSettingCompatibility, assertReviewedInputsUnchanged, cliSalesforceProvider, loadReviewedSalesforcePlan } from '../../deploy-salesforce-reviewed-manifest.mjs';
 import { runReviewedMirror } from '../../sync-salesforce-reviewed-repository.mjs';
 import { preflightSharedMirrorPublication } from '../../sync-salesforce-shared-repository.mjs';
 import { openSalesforcePromotionJournal } from '../salesforce-promotion-journal.mjs';
@@ -222,6 +222,7 @@ export async function verifyPreBootstrapStage({ manifest, staged, plan, salesfor
     'SALESFORCE_HOSTED_BOOTSTRAP_PLAN_REQUIRED');
   requireCondition(plan.mirrorPublication === undefined || usesLocalCollaboratorMirror(manifest), 'SALESFORCE_MIRROR_MODE_INVALID');
   const reviewed = hostedReviewedPlan(cwd, plan);
+  assertSalesforceProductionSettingCompatibility(cwd, reviewed, policy);
   return runPreBootstrapSmoke({ manifest, staged, env }, reviewedBootstrapFingerprint(reviewed, plan));
 }
 
@@ -240,6 +241,7 @@ export function prepareReviewedSalesforcePrerequisites({
     && approval.nativeReviewVerified === true && approval.reviewer === targets().account,
   'SALESFORCE_HOSTED_REVIEW_REQUIRED');
   const reviewed = hostedReviewedPlan(cwd, plan);
+  assertSalesforceProductionSettingCompatibility(cwd, reviewed, policy);
   const schemaBootstrap = Boolean(reviewed.review.bootstrap);
   if (schemaBootstrap || plan.deferSchemaDependentSmoke) {
     // Salesforce-only schema can qualify the full application before approval
