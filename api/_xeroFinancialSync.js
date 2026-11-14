@@ -560,6 +560,7 @@ export async function readNativeFinancialDocumentReview(selection, {
     reviewFingerprint: draft.reviewFingerprint, summary: draft.summary,
     lines: draft.payload.LineItems.map(nativeReviewedLineView),
     writeEnabled: isExternalActionEnabled('xero_financial_sync', env)
+      && isExternalActionEnabled('xero_trading_fx_writes', env)
       && scopeAllowed(splitScopes(connection.scope || ''), 'accounting.invoices'),
   });
   const accountingUsd = Number(sourceObject === 'Invoice__c' ? record.Amount__c : record.Invoice_Amount__c);
