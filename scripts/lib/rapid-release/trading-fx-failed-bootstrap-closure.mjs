@@ -178,6 +178,7 @@ export async function readFailedBootstrapSuccessor({ manifest, github, ownerId, 
   if (manifest.candidate.sha === afterManualSuccessorSha) {
     await verifyTradingFxManualPredecessor({ manifest, previous, github, ownerId, provider });
   } else requireCondition(!hasTradingFxSigningLocator(next) && same(previous.previous, manifest.previous), 'TRADING_FX_FAILED_BOOTSTRAP_JOURNAL_SCOPE_CHANGED');
+  requireCondition(hasTradingFxSigningLocator(next), 'TRADING_FX_SIGNING_CONFIG_REQUIRED_FOR_STAGE');
   const { salesforceManifestPath: _oldManifest, salesforceReviewPath: _oldReview, salesforceSourceTreeHash: oldTree,
     salesforceFingerprint: oldFingerprint, bootstrapFingerprint: oldBootstrap, tradingFxPostQatRecoveryReceiptId: oldRecovery,
     ...oldRetained } = old;
