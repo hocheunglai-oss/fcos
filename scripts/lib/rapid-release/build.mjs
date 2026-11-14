@@ -48,7 +48,7 @@ export function assertBuildArtifact(directory, receipt, manifest) {
   const version = JSON.parse(readFileSync(join(root, 'static/app-version.json'), 'utf8'));
   requireCondition(version.buildId === manifest.build.buildId && version.commit === manifest.candidate.sha
     && version.sourceDigest === manifest.candidate.sourceDigest, 'BUILT_IDENTITY_MISMATCH');
-  return { inventory: artifactInventory(root), version };
+  return { inventory, version };
 }
 export function credentialFreeBuildEnvironment(manifest, env = process.env) {
   return { PATH: env.PATH, HOME: env.FCOS_RAPID_BUILD_HOME, TMPDIR: env.TMPDIR || '/tmp', CI: '1', NO_COLOR: '1',

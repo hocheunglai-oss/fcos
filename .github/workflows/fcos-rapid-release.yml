@@ -26,6 +26,11 @@ on:
         required: true
         type: string
 
+# Keep one append-only journal writer per release across its stage and go-live jobs.
+concurrency:
+  group: ${{ inputs.mode == 'qualify' && format('fcos-quality-{0}', github.run_id) || format('fcos-release-{0}', fromJSON(inputs.manifest_json).releaseId) }}
+  cancel-in-progress: false
+  queue: max
 permissions:
   contents: read
 jobs:
@@ -122,7 +127,7 @@ jobs:
       deployments: write
       id-token: write
     concurrency:
-      group: fcos-production-release
+      group: fcos-unaliased-staging
       cancel-in-progress: false
       queue: max
     steps:
@@ -329,6 +334,8 @@ jobs:
           FCOS_RAPID_SUPPLIER_BUCKET_GH_OWNER_TOKEN: ${{ fromJSON(inputs.manifest_json).selection.database && !fromJSON(inputs.manifest_json).selection.salesforce && fromJSON(inputs.manifest_json).prerequisites.adapter == 'supplier-bucket-migrations' && (secrets.FCOS_RAPID_HANDOVER_GITHUB_TOKEN || secrets.FCOS_RELEASE_GH_TOKEN) || '' }}
           FCOS_RAPID_GROUPED_PETROLEUM_DB_ACCESS_TOKEN: ${{ fromJSON(inputs.manifest_json).selection.database && !fromJSON(inputs.manifest_json).selection.salesforce && fromJSON(inputs.manifest_json).prerequisites.adapter == 'grouped-petroleum-migration' && secrets.FCOS_RAPID_SUPABASE_ACCESS_TOKEN || '' }}
           FCOS_RAPID_GROUPED_PETROLEUM_GH_OWNER_TOKEN: ${{ fromJSON(inputs.manifest_json).selection.database && !fromJSON(inputs.manifest_json).selection.salesforce && fromJSON(inputs.manifest_json).prerequisites.adapter == 'grouped-petroleum-migration' && (secrets.FCOS_RAPID_HANDOVER_GITHUB_TOKEN || secrets.FCOS_RELEASE_GH_TOKEN) || '' }}
+          FCOS_RAPID_EXISTING_DRAFT_DB_ACCESS_TOKEN: ${{ fromJSON(inputs.manifest_json).selection.database && !fromJSON(inputs.manifest_json).selection.salesforce && fromJSON(inputs.manifest_json).prerequisites.adapter == 'existing-draft-migrations' && secrets.FCOS_RAPID_SUPABASE_ACCESS_TOKEN || '' }}
+          FCOS_RAPID_EXISTING_DRAFT_GH_OWNER_TOKEN: ${{ fromJSON(inputs.manifest_json).selection.database && !fromJSON(inputs.manifest_json).selection.salesforce && fromJSON(inputs.manifest_json).prerequisites.adapter == 'existing-draft-migrations' && (secrets.FCOS_RAPID_HANDOVER_GITHUB_TOKEN || secrets.FCOS_RELEASE_GH_TOKEN) || '' }}
           FCOS_RAPID_TRADING_FX_DB_ACCESS_TOKEN: ${{ fromJSON(inputs.manifest_json).selection.database && fromJSON(inputs.manifest_json).selection.salesforce && fromJSON(inputs.manifest_json).prerequisites.adapter == 'trading-fx-prerequisites' && secrets.FCOS_RAPID_SUPABASE_ACCESS_TOKEN || '' }}
           FCOS_RAPID_TRADING_FX_GH_OWNER_TOKEN: ${{ fromJSON(inputs.manifest_json).selection.database && fromJSON(inputs.manifest_json).selection.salesforce && fromJSON(inputs.manifest_json).prerequisites.adapter == 'trading-fx-prerequisites' && (secrets.FCOS_RAPID_HANDOVER_GITHUB_TOKEN || secrets.FCOS_RELEASE_GH_TOKEN) || '' }}
           FCOS_RAPID_OUTLOOK_FILING_DB_ACCESS_TOKEN: ${{ fromJSON(inputs.manifest_json).selection.database && !fromJSON(inputs.manifest_json).selection.salesforce && fromJSON(inputs.manifest_json).prerequisites.adapter == 'outlook-filing-access' && secrets.FCOS_RAPID_SUPABASE_ACCESS_TOKEN || '' }}

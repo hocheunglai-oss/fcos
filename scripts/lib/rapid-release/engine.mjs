@@ -1,5 +1,5 @@
 import { requiresCompanyFxHistorySmoke, requiresSupplierBucketSmoke, requiresGroupedPetroleumSmoke, requiresTradingFxSmoke,
-  assertAuthorization, digest, isDigest, requireCondition, validateManifest } from './contract.mjs';
+  requiresExistingDraftSmoke, assertAuthorization, digest, isDigest, requireCondition, validateManifest } from './contract.mjs';
 import { hasTradingFxSigningLocator } from './trading-fx-signing-config.mjs';
 
 const events = records => records.map(record => record.payload);
@@ -54,6 +54,11 @@ function tradingFxSmokeVerified(proof, manifest) {
     || proof?.tradingFx?.restrictedVerified === true && proof.tradingFx.normalVerified === true
       && proof.tradingFx.desktopVerified === true;
 }
+function existingDraftSmokeVerified(proof, manifest) {
+  return !requiresExistingDraftSmoke(manifest)
+    || proof?.existingDraft?.desktopHeldVerified === true
+      && proof.existingDraft.normalVerified === true && proof.existingDraft.restrictedVerified === true;
+}
 export function assertSmokeProof(proof, manifest, staged) {
   requireCondition(proof?.passed === true && proof.deploymentId === staged.id && proof.buildId === manifest.build.buildId
     && proof.login === true && proof.restrictedAccess === true && proof.businessWrites === 0
@@ -62,6 +67,7 @@ export function assertSmokeProof(proof, manifest, staged) {
   requireCondition(supplierBucketSmokeVerified(proof, manifest), 'SMOKE_SUPPLIER_BUCKET_ROUTE_BOUNDARY_FAILED');
   requireCondition(groupedPetroleumSmokeVerified(proof, manifest), 'SMOKE_GROUPED_PETROLEUM_BOUNDARY_REQUIRED');
   requireCondition(tradingFxSmokeVerified(proof, manifest), 'SMOKE_TRADING_FX_BOUNDARY_REQUIRED');
+  requireCondition(existingDraftSmokeVerified(proof, manifest), 'SMOKE_EXISTING_DRAFT_BOUNDARY_REQUIRED');
 }
 export function assertPreBootstrapProof(proof, manifest, staged) {
   const plan = manifest.prerequisites?.plan;
@@ -83,38 +89,43 @@ export function assertPreBootstrapProof(proof, manifest, staged) {
       .every(check => proof.completedChecks.includes(check)), 'PREBOOTSTRAP_STAGE_PROOF_REQUIRED');
   requireCondition(tradingFxSmokeVerified(proof, manifest), 'SMOKE_TRADING_FX_BOUNDARY_REQUIRED');
 }
-export async function stageRelease({ manifest, journal, provider, build, smoke, beforeBootstrap }) {
+export async function stageRelease({ manifest, journal, provider, build, smoke, beforeBootstrap, verifyStageBaseline, withStageOwnership = work => work() }) {
   validateManifest(manifest); assertBuildReceipt(build, manifest);
-  await provider.assertOwnership({ phase: 'stage', manifest, manifestHash: digest(manifest) });
-  let records = await journal.read();
-  if (!events(records).some(event => event.event === 'release.prepared')) await journal.append('release.prepared', { manifest });
-  if (!events(records).some(event => event.event === 'build.passed')) await journal.append('build.passed', build);
-  const request = { buildId: build.buildId, artifactDigest: build.artifactDigest, candidateSha: manifest.candidate.sha,
-    previousDeploymentId: manifest.previous.deploymentId, target: 'production', skipDomain: true };
-  const staged = await executeOperation({ phase: 'stage', manifest, journal, provider, request,
-    submit: context => provider.stage({ manifest, build, ...context }) });
+  requireCondition(typeof verifyStageBaseline === 'function', 'STAGE_BASELINE_VERIFIER_REQUIRED');
+  const staged = await withStageOwnership(async () => {
+    await provider.assertOwnership({ phase: 'stage', manifest, manifestHash: digest(manifest) });
+    const records = await journal.read();
+    if (!events(records).some(event => event.event === 'release.prepared')) await journal.append('release.prepared', { manifest });
+    if (!events(records).some(event => event.event === 'build.passed')) await journal.append('build.passed', build);
+    const request = { buildId: build.buildId, artifactDigest: build.artifactDigest, candidateSha: manifest.candidate.sha,
+      previousDeploymentId: manifest.previous.deploymentId, target: 'production', skipDomain: true };
+    return executeOperation({ phase: 'stage', manifest, journal, provider, request,
+      submit: context => provider.stage({ manifest, build, ...context }) });
+  });
   if (staged.waiting) return staged;
   const ready = await provider.ready(staged.id);
   requireCondition(ready.id === staged.id && ready.state === 'READY' && ready.buildId === build.buildId
     && ready.artifactDigest === build.artifactDigest && ready.sha === manifest.candidate.sha && ready.target === 'production', 'STAGED_BUILD_NOT_READY');
-  records = await journal.read();
+  const records = await journal.read();
   const deferred = (manifest.selection.salesforce || manifest.selection.database) && manifest.prerequisites?.plan?.deferSchemaDependentSmoke === true;
   const acceptanceEvent = deferred ? 'stage.pre_bootstrap_passed' : 'smoke.passed';
   const existing = events(records).find(event => event.event === acceptanceEvent && event.data.deploymentId === ready.id);
   if (existing && deferred) assertPreBootstrapProof(existing.data, manifest, ready);
   if (existing && (requiresSupplierBucketSmoke(manifest) || requiresGroupedPetroleumSmoke(manifest)
-    || !deferred && requiresTradingFxSmoke(manifest))) assertSmokeProof(existing.data, manifest, ready);
+    || requiresExistingDraftSmoke(manifest) || !deferred && requiresTradingFxSmoke(manifest))) assertSmokeProof(existing.data, manifest, ready);
   if (!existing) {
-    if (deferred) {
-      requireCondition(typeof beforeBootstrap === 'function', 'QUALIFIED_PREBOOTSTRAP_VERIFIER_REQUIRED');
-      const proof = await beforeBootstrap({ manifest, staged: ready });
-      assertPreBootstrapProof(proof, manifest, ready);
+    const live = await provider.currentProduction();
+    requireCondition(live.id !== ready.id && live.id === manifest.previous.deploymentId, 'PRODUCTION_BASELINE_CHANGED');
+    const verifySmoke = deferred ? beforeBootstrap : smoke;
+    requireCondition(typeof verifySmoke === 'function', 'QUALIFIED_PREBOOTSTRAP_VERIFIER_REQUIRED');
+    const proof = await verifySmoke({ manifest, staged: ready });
+    if (deferred) assertPreBootstrapProof(proof, manifest, ready);
+    else assertSmokeProof(proof, manifest, ready);
+    await withStageOwnership(async () => {
+      await verifyStageBaseline();
       await journal.append(acceptanceEvent, proof);
-    } else {
-      const proof = await smoke({ manifest, staged: ready }); assertSmokeProof(proof, manifest, ready);
-      await journal.append(acceptanceEvent, proof);
-    }
-  }
+    });
+  } else await withStageOwnership(verifyStageBaseline);
   return { state: deferred ? 'awaiting_authorized_bootstrap' : 'ready_for_decision', deferredChecks: deferred ? manifest.prerequisites.plan.deferredModules : [], manifestHash: digest(manifest), staged: ready,
     conditionalPrerequisites: manifest.selection.salesforce || manifest.selection.database };
 }
@@ -128,7 +139,7 @@ export async function promoteRelease({ manifest, journal, provider, approval, pr
   requireCondition(stagedReference && (deferred ? preBootstrap : fullStage), 'STAGED_ACCEPTANCE_REQUIRED');
   if (deferred) assertPreBootstrapProof(preBootstrap, manifest, stagedReference);
   if (requiresSupplierBucketSmoke(manifest) || requiresGroupedPetroleumSmoke(manifest)
-    || !deferred && requiresTradingFxSmoke(manifest)) assertSmokeProof(fullStage?.data, manifest, stagedReference);
+    || requiresExistingDraftSmoke(manifest) || !deferred && requiresTradingFxSmoke(manifest)) assertSmokeProof(fullStage?.data, manifest, stagedReference);
   assertBuildReceipt(build, manifest);
   const staged = await provider.ready(stagedReference.id);
   requireCondition(staged.id === stagedReference.id && staged.state === 'READY' && staged.buildId === manifest.build.buildId
@@ -167,6 +178,7 @@ export async function promoteRelease({ manifest, journal, provider, approval, pr
       && supplierBucketSmokeVerified(event.data, manifest)
       && groupedPetroleumSmokeVerified(event.data, manifest)
       && tradingFxSmokeVerified(event.data, manifest)
+      && existingDraftSmokeVerified(event.data, manifest)
       && (!signingRateRequired || isDigest(event.data.signingRateDigest))
       && (!historyRequired || event.data.companyFxHistory?.readVerified === true && event.data.companyFxHistory?.writeDenied === true));
     if (savedSmoke) signingRateDigest = savedSmoke.data.signingRateDigest;
