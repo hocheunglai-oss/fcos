@@ -605,6 +605,23 @@
       "measuredTimeSavedMs": null,
       "measuredCallsSaved": 4,
       "prevention": "Replay the original native responses and reject an absent stable field, changed bytes, unlisted fields and nonempty overlapping descriptors."
+    },
+    {
+      "id": "salesforce-signing-cli-package-export-preflight",
+      "cause": "The pinned Salesforce CLI package does not export package.json. The local copy reproduced Node package export rejection on this resolution path. The original hosted preflight reported only a generic failure code.",
+      "correction": "Validate the installed package name and version and resolve its JSforce driver from the verified absolute metadata path before the protected step gets provider credentials. Close the original fenced intent only after independent native readback proves no provider submission or effect.",
+      "verification": {
+        "cliVersion": "2.145.6",
+        "originalRunId": 43614240379,
+        "sourceQualityRunId": 43618457425,
+        "frozenRepair": "d7e269328d399967aaa09be51406c9b7cc4a43d6",
+        "combinedControllerChecksPassed": 309,
+        "reconciliationSha256": "a0c660c01acc5eefeec7e68934fee12b303581d0ca8710d2c4058d6804acea0e",
+        "regressionSha256": "fd8d442718affc4505efe72124270b7969daf2c0ca5ad4572c691bd855b67014"
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Exercise the pinned module loader on the hosted runner before credentials are passed. Preserve original journal evidence and require exact new authorization for a replacement signing run."
     }
   ]
 }
