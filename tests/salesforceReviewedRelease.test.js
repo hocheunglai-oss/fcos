@@ -7,7 +7,7 @@ import test from 'node:test';
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import { createSalesforceWorkflowState, updateSalesforceEnvironmentState, SALESFORCE_RELEASE_MODE } from '../scripts/salesforce-workflow-state.mjs';
 import { openSalesforcePromotionJournal, salesforcePromotionHash as hash } from '../scripts/lib/salesforce-promotion-journal.mjs';
-import { INVENTORY_BASELINE_MODE, REVIEWED_SALESFORCE_MODE, createReviewedSalesforcePlan, inventoryFromFiles, matchesSalesforceCheckpoint, parseReviewedPackage, projectedNativeInventoryHash, reviewedCheckpointInventory, verifyReviewedOrgInventory, runReviewedSalesforceRelease, assertReviewedJobReport, assertProductionAuthorization } from '../scripts/lib/salesforce-reviewed-release.mjs';
+import { INVENTORY_BASELINE_MODE, REVIEWED_SALESFORCE_MODE, createReviewedSalesforcePlan, inventoryFromFiles, matchesProjectedNativeInventory, matchesSalesforceCheckpoint, parseReviewedPackage, projectedNativeInventoryHash, reviewedCheckpointInventory, verifyReviewedOrgInventory, runReviewedSalesforceRelease, assertReviewedJobReport, assertProductionAuthorization } from '../scripts/lib/salesforce-reviewed-release.mjs';
 import { assertReviewedInputsUnchanged, baselineGitInventory, cliSalesforceProvider, equivalentNativeSerialization, loadReviewedSalesforcePlan, reviewedSalesforceOptions } from '../scripts/deploy-salesforce-reviewed-manifest.mjs';
 import { reviewedDeveePublicationProof } from '../scripts/sync-salesforce-reviewed-repository.mjs';
 import { applyReviewedPrerequisites, verifyPreBootstrapStage } from '../scripts/lib/rapid-release/salesforce-reviewed-adapter.mjs';
@@ -1866,4 +1866,32 @@ test('approved continuation rechecks the mirror after schema-free Production val
     assert.ok(!f.calls.some(([op]) => ['bootstrap', 'validate', 'permission-write'].includes(op)));
     assert.equal(f.checkpoints.filter(row => row.operation === 'preparation').length, 1);
   } finally { f.cleanup(); }
+});
+
+
+test('Trading FX accepts only the exact deny-only QAT profile export at the final checkpoint', () => {
+  const profile = 'profiles/Sales Support.profile-meta.xml';
+  const fields = ['Payable', 'Receivable'].map(side => `objects/STEM__c/fields/${side}_FX_Adjustment_USD__c.field-meta.xml`);
+  const pinned = {
+    [profile]: { sha256: 'ccb5e5df9eeabec2b76ea7627b92339199187aaf59ce5ed0c427fa10a7872ef3', size: 107617 },
+    'classes/Unchanged.cls': { sha256: 'a'.repeat(64), size: 30 },
+  };
+  const observed = {
+    ...pinned,
+    ...Object.fromEntries(fields.map(path => [path, { sha256: 'b'.repeat(64), size: 110 }])),
+    [profile]: { sha256: '0e48b7b8dcfe4b62755644f281da79809f4e29228d2612c9a99c65444245c1a0', size: 107974 },
+  };
+  const context = { environmentKey: 'qat', fingerprint: 'b44d06ef8630a194dbbf68005486fd2bf9263edec8d4d209843a65f4ca8b68b5' };
+  const matches = (actual = observed, baseline = pinned, projection = fields, scope = context) =>
+    matchesProjectedNativeInventory(actual, baseline, projection, scope);
+  assert.equal(matches(), true);
+  assert.equal(matches({ ...observed, [profile]: pinned[profile] }), true);
+  assert.equal(matches(observed, pinned, fields, { ...context, environmentKey: 'production' }), false);
+  assert.equal(matches(observed, pinned, fields, { ...context, fingerprint: 'c'.repeat(64) }), false);
+  const { [fields[1]]: _absent, ...bootstrap } = observed;
+  assert.equal(matches(bootstrap, pinned, fields.slice(0, 1)), false);
+  assert.equal(matches({ ...observed, [profile]: { ...observed[profile], sha256: 'd'.repeat(64) } }), false);
+  assert.equal(matches({ ...observed, [profile]: { ...observed[profile], size: 107975 } }), false);
+  assert.equal(matches({ ...observed, 'classes/Unchanged.cls': observed[fields[0]] }), false);
+  assert.equal(matches(observed, { ...pinned, [profile]: { ...pinned[profile], size: 107618 } }), false);
 });

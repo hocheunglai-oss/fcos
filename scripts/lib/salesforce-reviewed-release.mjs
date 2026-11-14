@@ -105,10 +105,31 @@ export function projectedNativeInventoryHash(files, projectionPaths) {
   return hash({ files, projectionPaths });
 }
 
-export function matchesProjectedNativeInventory(observed, pinned, projectionPaths) {
+// Salesforce QAT emitted two explicit deny entries in this profile when the
+// reviewed FX adjustment fields were deployed. Native retrieval proved that
+// deleting only those two entries restores the full pinned profile byte for byte.
+const tradingFxQatProfile = {
+  path: 'profiles/Sales Support.profile-meta.xml',
+  baseline: { sha256: 'ccb5e5df9eeabec2b76ea7627b92339199187aaf59ce5ed0c427fa10a7872ef3', size: 107617 },
+  deployed: { sha256: '0e48b7b8dcfe4b62755644f281da79809f4e29228d2612c9a99c65444245c1a0', size: 107974 },
+  fields: ['Payable', 'Receivable'].map(side => `objects/STEM__c/fields/${side}_FX_Adjustment_USD__c.field-meta.xml`),
+};
+
+function exactQatProfileDenyEntries({ name, observed, pinned, projectionPaths, environmentKey, fingerprint }) {
+  return environmentKey === 'qat'
+    && fingerprint === 'b44d06ef8630a194dbbf68005486fd2bf9263edec8d4d209843a65f4ca8b68b5'
+    && name === tradingFxQatProfile.path
+    && pinned?.sha256 === tradingFxQatProfile.baseline.sha256 && pinned.size === tradingFxQatProfile.baseline.size
+    && observed.sha256 === tradingFxQatProfile.deployed.sha256 && observed.size === tradingFxQatProfile.deployed.size
+    && tradingFxQatProfile.fields.every(field => projectionPaths.includes(field));
+}
+
+export function matchesProjectedNativeInventory(observed, pinned, projectionPaths, { environmentKey, fingerprint } = {}) {
   return Boolean(observed) && same(sorted(Object.keys(observed)), sorted([...Object.keys(pinned), ...projectionPaths]))
     && Object.entries(observed).every(([name, pin]) => HASH.test(pin?.sha256 || '') && Number.isSafeInteger(pin.size) && pin.size >= 0
-      && (!Object.hasOwn(pinned, name) || same(pin, pinned[name])));
+      && (!Object.hasOwn(pinned, name) || same(pin, pinned[name]) || exactQatProfileDenyEntries({
+        name, observed: pin, pinned: pinned[name], projectionPaths, environmentKey, fingerprint,
+      })));
 }
 
 function reviewedProjectedInventories(review, policy, baselineInventory, orgBaselineInventories, finalInventory, components) {
@@ -508,7 +529,9 @@ export async function verifyReviewedOrgInventory({ provider, environment, plan, 
       return permission ? [permission[1]] : [];
     }).sort();
     const inventoryMatches = expected.projectedNativeInventory
-      ? matchesProjectedNativeInventory(observed, expected.files, expected.projectionPaths)
+      ? matchesProjectedNativeInventory(observed, expected.files, expected.projectionPaths, {
+        environmentKey: environment.key, fingerprint: plan.fingerprint,
+      })
         && receipt.observedNativeInventoryHash === hash(observed)
       : Boolean(observed) && same(observed, expected.files) && hash(observed) === expected.inventoryHash;
     if (receipt.verificationMethod !== method || receipt.scope !== 'force-app/main/default'

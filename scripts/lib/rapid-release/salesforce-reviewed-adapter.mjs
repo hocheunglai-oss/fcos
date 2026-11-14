@@ -7,7 +7,7 @@ import { assertReviewedInputsUnchanged, cliSalesforceProvider, loadReviewedSales
 import { runReviewedMirror } from '../../sync-salesforce-reviewed-repository.mjs';
 import { preflightSharedMirrorPublication } from '../../sync-salesforce-shared-repository.mjs';
 import { openSalesforcePromotionJournal } from '../salesforce-promotion-journal.mjs';
-import { assertReviewedJobReport, matchesSalesforceCheckpoint, reviewedJobExpectations, runReviewedSalesforceRelease, safeProjectFile, verifyReviewedOrgInventory } from '../salesforce-reviewed-release.mjs';
+import { assertReviewedMirror, assertReviewedJobReport, matchesSalesforceCheckpoint, reviewedJobExpectations, runReviewedSalesforceRelease, safeProjectFile, verifyReviewedOrgInventory } from '../salesforce-reviewed-release.mjs';
 import { assertHostedSalesforceRunner, authenticateHostedSalesforce } from './salesforce-hosted-auth.mjs';
 import { digest, git, isDigest, requireCondition, targets } from './contract.mjs';
 import { awaitLocalMirrorReceipt, createLocalMirrorRequest, usesLocalCollaboratorMirror } from './local-mirror-handoff.mjs';
@@ -114,11 +114,11 @@ export async function recoverReviewedDeveePromotion({ receiptId, manifest, revie
     && new Set(references).size === 3 && references.every(id => Number.isSafeInteger(id) && id > 0),
   'SALESFORCE_DEVEE_PROMOTION_RECEIPT_REQUIRED');
   const originals = await Promise.all(references.map(id => github.read(endpoint + id)));
-  return verifyDeveePromotionJobs({ receipt, references, originals, reviewed, provider, now });
+  return verifySandboxPromotionJobs({ receipt, references, originals, reviewed, provider, now });
 }
 
-async function verifyDeveePromotionJobs({ receipt, references, originals, reviewed, provider, now }) {
-  const environment = policy.environments[0];
+async function verifySandboxPromotionJobs({ receipt, references, originals, reviewed, provider, now,
+  environment = policy.environments[0] }) {
   const operations = ['bootstrap', 'validation', 'deployment'];
   const jobs = originals.map((original, index) => {
     const checkpoint = original?.payload?.data;
@@ -128,7 +128,7 @@ async function verifyDeveePromotionJobs({ receipt, references, originals, review
       && original.creator.login === 'github-actions[bot]' && original.environment === receipt.environment
       && original.sha === receipt.sha && original.payload?.kind === receipt.payload.kind
       && original.payload.releaseId === receipt.payload.releaseId && original.payload.manifestHash === receipt.payload.manifestHash
-      && original.payload.event === 'salesforce.checkpoint' && checkpoint?.stage === 'devee'
+      && original.payload.event === 'salesforce.checkpoint' && checkpoint?.stage === environment.key
       && checkpoint.operation === operation && checkpoint.outcome === 'resolved'
       && checkpoint.fingerprint === reviewed.fingerprint && isDigest(checkpoint.evidenceDigest)
       && /^0Af[A-Za-z0-9]{15}$/u.test(job?.id || '') && Number.isFinite(Date.parse(job.submittedAt))
@@ -149,7 +149,7 @@ async function verifyDeveePromotionJobs({ receipt, references, originals, review
   await provider.verifyIdentity(environment);
   const reports = await Promise.all(jobs.map(job => provider.report(environment, job.id)));
   const inventory = await verifyReviewedOrgInventory({ provider, environment, plan: reviewed,
-    expected: reviewed.nativeInventories.devee.final, now });
+    expected: reviewed.nativeInventories[environment.key].final, now });
   return jobs.map((job, index) => {
     const operation = operations[index];
     const proof = assertReviewedJobReport(reports[index], { environment, jobId: job.id,
@@ -185,7 +185,7 @@ export async function recoverTradingFxDeveePromotion({ recovery, reviewed, provi
     return { operation, record: { ...permission, status: 'Succeeded', addedByRelease: !permission.prestate,
       recoveredEvidenceDigest: checkpoint.evidenceDigest } };
   });
-  const jobRecords = await verifyDeveePromotionJobs({ receipt, references, originals, reviewed, provider, now });
+  const jobRecords = await verifySandboxPromotionJobs({ receipt, references, originals, reviewed, provider, now });
   await Promise.all(recovered.map(async ({ record }) => {
     requireCondition(await provider.permissionAssigned(environment, record.name) === true, 'SALESFORCE_DEVEE_RECOVERY_PERMISSION_DRIFT');
     record.verifiedAt = now().toISOString();
@@ -231,7 +231,7 @@ export async function applyReviewedPrerequisites(input) {
 
 export function prepareReviewedSalesforcePrerequisites({
   manifest, approval, plan, salesforce, salesforceCandidateDirectory: cwd, env = process.env,
-}, { withDatabase = false, tradingFxRecovery, tradingFxQatRecovery } = {}) {
+}, { withDatabase = false, tradingFxRecovery, tradingFxQatRecovery, tradingFxPostQatRecovery } = {}) {
   const manifestHash = digest(manifest);
   const databaseSelected = withDatabase ? manifest.selection.database === true : !manifest.selection.database;
   requireCondition(manifest.selection.salesforce && databaseSelected && plan.backwardCompatible === true
@@ -270,8 +270,12 @@ export function prepareReviewedSalesforcePrerequisites({
     : withDatabase && schemaBootstrap && localMirror && !tradingFxRecovery && adoption === undefined
       && promotionReceiptId === undefined && tradingFxQatRecovery.receipt?.id === plan.tradingFxQatRecoveryReceiptId,
   'SALESFORCE_TRADING_FX_QAT_ADOPTION_INVALID');
+  requireCondition(tradingFxPostQatRecovery === undefined ? plan.tradingFxPostQatRecoveryReceiptId === undefined
+    : withDatabase && schemaBootstrap && localMirror && !tradingFxRecovery && !tradingFxQatRecovery
+      && adoption === undefined && promotionReceiptId === undefined && tradingFxPostQatRecovery.receipt?.id === plan.tradingFxPostQatRecoveryReceiptId,
+  'SALESFORCE_TRADING_FX_POST_QAT_ADOPTION_INVALID');
   return () => applyPreparedSalesforce({ manifest, manifestHash, approval, salesforce, cwd, env, reviewed, schemaBootstrap,
-    localMirror, adoption, promotionReceiptId, tradingFxRecovery, tradingFxQatRecovery });
+    localMirror, adoption, promotionReceiptId, tradingFxRecovery, tradingFxQatRecovery, tradingFxPostQatRecovery });
 }
 
 async function hostedLocalMirrorTransport({ manifest, approval, env, reviewed, salesforce }) {
@@ -383,8 +387,52 @@ export async function recoverTradingFxSandboxBootstraps({ recovery, reviewed, pr
   return records;
 }
 
+export async function recoverTradingFxPostQat({ recovery, reviewed, provider, saved, now = () => new Date() }) {
+  const records = [];
+  for (const environment of policy.environments.filter(item => item.isSandbox)) {
+    const stage = environment.key;
+    const originals = recovery.jobs.filter(row => row.payload.data.stage === stage);
+    requireCondition(originals.length === 3, 'SALESFORCE_POST_QAT_JOB_SCOPE_INVALID');
+    const adopted = await verifySandboxPromotionJobs({ receipt: recovery.receipt, references: originals.map(row => row.id),
+      originals, reviewed, provider, now, environment });
+    records.push(...adopted.map(entry => ({ stage, ...entry })));
+    for (const { payload: { data } } of recovery.permissions.filter(row => row.payload.data.stage === stage)) {
+      const { permission, operation } = data;
+      requireCondition(permission.orgId === environment.orgId && reviewed.binding.permissionSets.includes(permission.name)
+        && await provider.permissionAssigned(environment, permission.name) === true, 'SALESFORCE_POST_QAT_PERMISSION_DRIFT');
+      records.push({ stage, operation, record: { ...permission, status: 'Succeeded', addedByRelease: !permission.prestate,
+        verifiedAt: now().toISOString(), recoveredEvidenceDigest: data.evidenceDigest } });
+    }
+  }
+  const { receipt, checkpoint } = recovery.mirror;
+  const devee = records.find(({ stage, operation }) => stage === 'devee' && operation === 'deployment');
+  const result = assertReviewedMirror(receipt.payload.proof, reviewed, policy, devee.record.jobId);
+  requireCondition(records.filter(({ operation }) => operation.startsWith('permission:')).length
+    === policy.environments.filter(({ isSandbox }) => isSandbox).length * reviewed.binding.permissionSets.length,
+  'SALESFORCE_POST_QAT_PERMISSION_SCOPE_INVALID');
+  requireCondition(checkpoint.payload.data.mirror.commit === result.commit
+    && checkpoint.payload.data.mirror.pullRequest === result.pullRequest.number, 'SALESFORCE_POST_QAT_MIRROR_CHANGED');
+  records.push({ stage: 'shared_mirror', operation: 'publication', record: { status: 'Succeeded', result,
+    verifiedAt: now().toISOString(), recoveredEvidenceDigest: checkpoint.payload.data.evidenceDigest } });
+
+  for (const { stage, operation, record } of records) {
+    const existing = saved.find(item => item.stage === stage && item.operation === operation);
+    if (!existing) continue;
+    const matching = record.jobId
+      ? existing.job?.id === record.jobId && existing.job.validationId === record.validationJobId
+        && existing.job.submittedAt === record.submittedAt && existing.job.packageSha256 === record.packageSha256
+      : record.result
+        ? existing.mirror?.commit === record.result.commit && existing.mirror.pullRequest === record.result.pullRequest.number
+        : existing.permission?.name === record.name && existing.permission.orgId === record.orgId
+          && existing.permission.prestate === record.prestate;
+    requireCondition(matching && existing.fingerprint === reviewed.fingerprint && existing.outcome === 'resolved'
+      && isDigest(existing.evidenceDigest), 'SALESFORCE_POST_QAT_CHECKPOINT_CHANGED');
+  }
+  return records;
+}
+
 async function applyPreparedSalesforce({ manifest, manifestHash, approval, salesforce, cwd, env, reviewed, schemaBootstrap, localMirror,
-  adoption, promotionReceiptId, tradingFxRecovery, tradingFxQatRecovery }) {
+  adoption, promotionReceiptId, tradingFxRecovery, tradingFxQatRecovery, tradingFxPostQatRecovery }) {
   const saved = await salesforce.journal.readCheckpoints();
   const localTransport = localMirror ? await hostedLocalMirrorTransport({ manifest, approval, env, reviewed, salesforce }) : null;
   const directory = mkdtempSync(join(tmpdir(), 'fcos-salesforce-hosted-'));
@@ -404,6 +452,17 @@ async function applyPreparedSalesforce({ manifest, manifestHash, approval, sales
         await assertReviewedInputsUnchanged(reviewed, { cwd, policy });
         const savedBootstrap = journal.update('devee', 'bootstrap', record);
         await salesforce.journal.checkpoint({ fingerprint: reviewed.fingerprint, stage: 'devee', operation: 'bootstrap', record: savedBootstrap });
+      }
+      if (tradingFxPostQatRecovery) {
+        const adopted = await recoverTradingFxPostQat({ recovery: tradingFxPostQatRecovery, reviewed, provider, saved });
+        await assertReviewedInputsUnchanged(reviewed, { cwd, policy });
+        for (const { stage, operation, record } of adopted) {
+          const current = saved.find(item => item.stage === stage && item.operation === operation);
+          if (!current) {
+            const local = journal.update(stage, operation, record);
+            await salesforce.journal.checkpoint({ fingerprint: reviewed.fingerprint, stage, operation, record: local });
+          }
+        }
       }
       let retainedDeveeInventory;
       if (tradingFxQatRecovery) {
