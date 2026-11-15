@@ -84,7 +84,7 @@ export async function verifyExecution({ github, manifest, env = process.env, pha
     && run.status === 'in_progress' && run.head_branch === repo.default_branch && run.actor?.login === targets().account
     && Number.isSafeInteger(run.run_attempt) && run.run_attempt >= 1
     && new RegExp(`^FCOS rapid (release|resume) ${digest(manifest)} ${manifest.candidate.sha}$`).test(run.display_title || ''), 'WORKFLOW_IDENTITY_MISMATCH');
-  await assertFrozenWorkflow({ github, controllerSha: manifest.controllerSha, dispatcherSha: run.head_sha });
+  const workflowProof = await assertFrozenWorkflow({ github, controllerSha: manifest.controllerSha, dispatcherSha: run.head_sha });
   requireCondition(env.FCOS_RAPID_RELEASE_ENABLED === 'true', 'RAPID_RELEASE_NOT_ACTIVATED');
   const handoverId = env.FCOS_RAPID_RELEASE_HANDOVER_ID;
   requireCondition(/^[1-9][0-9]*$/.test(handoverId || '') && Number.isSafeInteger(Number(handoverId)), 'RAPID_RELEASE_HANDOVER_POINTER_REQUIRED');
@@ -93,7 +93,7 @@ export async function verifyExecution({ github, manifest, env = process.env, pha
   const p = assertPermanentHandover(handover, manifest, run.actor.id);
   const frozenSetup = await github.read(`/repos/${targets().repository}/contents/${p.nativeReview.workflowPath}?ref=${manifest.controllerSha}`);
   requireCondition(frozenSetup.type === 'file' && frozenSetup.sha === p.nativeReview.workflowBlobSha, 'NATIVE_HANDOVER_SOURCE_MISMATCH');
-  return { user, repo, run, phase, handover: p, handoverDeploymentId: handover.id };
+  return { user, repo, run, phase, handover: p, handoverDeploymentId: handover.id, workflowProof };
 }
 export async function nativeApproval({ github, manifest, staged, env = process.env }) {
   const { run } = await verifyExecution({ github, manifest, env, phase: 'promote' });

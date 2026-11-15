@@ -65,7 +65,7 @@ export class DeploymentJournal {
   async checkpoint({ fingerprint, stage, operation, record }) {
     requireCondition(/^[a-f0-9]{64}$/.test(fingerprint || '')
       && ['devee', 'shared_mirror', 'qat', 'production'].includes(stage)
-      && /^(?:validation|deployment|bootstrap|sales-support-correction|publication|inventory-checkpoint|preparation|restoration-checkpoint|permission:[A-Za-z][A-Za-z0-9_]*)$/.test(operation || '')
+      && /^(?:validation|deployment|bootstrap|sales-support-correction|publication|inventory-checkpoint|native-desktop-smoke|preparation|restoration-checkpoint|permission:[A-Za-z][A-Za-z0-9_]*)$/.test(operation || '')
       && (operation !== 'sales-support-correction' || stage !== 'shared_mirror')
       && record && typeof record === 'object' && !Array.isArray(record), 'SALESFORCE_CHECKPOINT_INVALID');
     const providerOperation = /^(?:validation|deployment|bootstrap|sales-support-correction|publication|permission:)/.test(operation);
@@ -83,6 +83,17 @@ export class DeploymentJournal {
         : 'pending';
     const data = { fingerprint, stage, operation, outcome, evidenceDigest: digest(record),
       ...(correctionTerminal ? { terminalOutcome: record.terminalOutcome, reportDigest: record.reportDigest } : {}) };
+    if (operation === 'native-desktop-smoke') {
+      const { runId, runAttempt, requestId, requestDigest, proofId, proofDigest, sourceTreeHash, inventoryHash,
+        installedInventoryHash, finalInventoryReceiptDigest, caseSetDigest } = record;
+      requireCondition(stage === 'devee' && status === 'observed'
+        && [runId, runAttempt, requestId, proofId].every(id => Number.isSafeInteger(id) && id > 0)
+        && requestId !== proofId
+        && [requestDigest, proofDigest, sourceTreeHash, inventoryHash, installedInventoryHash, finalInventoryReceiptDigest, caseSetDigest]
+          .every(hash => /^[a-f0-9]{64}$/u.test(hash || '')), 'DEVEE_DESKTOP_CHECKPOINT_INVALID');
+      data.desktop = { runId, runAttempt, requestId, requestDigest, proofId, proofDigest, sourceTreeHash, inventoryHash,
+        installedInventoryHash, finalInventoryReceiptDigest, caseSetDigest };
+    }
     if (['validation', 'deployment', 'bootstrap', 'sales-support-correction'].includes(operation) && Object.hasOwn(record, 'jobId')) {
       const validJob = value => typeof value === 'string' && /^0Af[A-Za-z0-9]{12}(?:[A-Za-z0-9]{3})?$/u.test(value);
       const { jobId, validationJobId, submittedAt } = record;

@@ -29,7 +29,7 @@
     {
       "id": "salesforce-reviewed-manifest",
       "status": "qualified",
-      "sourceDigest": "250a432895fcb2381b87d8314e16386b9f4c2eb96c26807c9cb01d60d26bdf08",
+      "sourceDigest": "9682e91167a567140a9642e0fc28d050186235204c9183af2a93b3103f7cf8ad",
       "path": "scripts/lib/rapid-release/salesforce-reviewed-adapter.mjs",
       "salesforce": true,
       "database": false

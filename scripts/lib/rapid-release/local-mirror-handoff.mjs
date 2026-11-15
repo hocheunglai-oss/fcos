@@ -3,6 +3,7 @@ import { FCOS_CONNECTION_POLICY } from '../../../config/fcosConnections.js';
 import { assertReviewedMirror } from '../salesforce-reviewed-release.mjs';
 import { digest, isDigest, requireCondition, targets } from './contract.mjs';
 import { assertPublicPayload } from './journal.mjs';
+import { DEVEE_DESKTOP_RECEIPT_KIND, DEVEE_DESKTOP_REQUEST_KIND } from './salesforce-devee-desktop-checkpoint.mjs';
 
 export const LOCAL_MIRROR_ENVIRONMENT = 'fcos-release-mirror-handoff-v1';
 export const LOCAL_MIRROR_WINDOW_MS = 5 * 60_000;
@@ -128,7 +129,8 @@ export async function readLocalMirrorDeployments(github, candidateSha) {
 // earlier submission can only be read back until its outcome is resolved.
 export async function recordLocalMirrorDeployment({ github, candidateSha, actorId, payload, readbackOnly = false }) {
   requireCondition(sha(candidateSha) && positiveId(actorId)
-    && ['fcos_local_mirror_request', 'fcos_local_mirror_receipt'].includes(payload?.kind), 'LOCAL_MIRROR_RECORD_INVALID');
+    && ['fcos_local_mirror_request', 'fcos_local_mirror_receipt', DEVEE_DESKTOP_REQUEST_KIND, DEVEE_DESKTOP_RECEIPT_KIND]
+      .includes(payload?.kind), 'LOCAL_MIRROR_RECORD_INVALID');
   assertPublicPayload(payload);
   const lookup = async () => {
     const records = await readLocalMirrorDeployments(github, candidateSha);
