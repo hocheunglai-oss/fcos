@@ -696,6 +696,25 @@
       "measuredTimeSavedMs": null,
       "measuredCallsSaved": null,
       "prevention": "Exercise the pinned module loader on the hosted runner before credentials are passed. Preserve original journal evidence and require exact new authorization for a replacement signing run."
+    },
+    {
+      "id": "fcuno-pinned-public-inputs-in-build-quality",
+      "cause": "Trading FX quality run 43772303818 first stopped at FCUNO contract verification without a nested cause. The exact older verifier took an anonymous GitHub API path for four already-pinned public files. An unchanged native retry passed.",
+      "correction": "Use reviewed, byte-identical Git blobs for the pinned FCUNO provider commit. Compare the candidate source pin with the controller pin, then pass the trusted directory to the existing isolated aggregate and per-file verifier.",
+      "verification": {
+        "originalQualityRunId": 43772303818,
+        "failedAttemptMs": 349950,
+        "sameRunAttemptPassing": 2,
+        "providerCommit": "9d8e05cd338e6105b6a495d68512f63692d3a48c",
+        "providerContractDigest": "7fc54e7c3bd79fb014ad81dc6d9190d021549d9428486ef85ed78fdff95d7cc2",
+        "pairedExactCandidateLocalRuns": 7,
+        "localMockedGitHubFetchesBeforePerRun": 4,
+        "localGitHubFetchesAfterPerRun": 0,
+        "focusedChecksPassed": 27
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": 4,
+      "prevention": "Verify the unchanged pinned contract during quality with the local reviewed inputs. Refuse missing or drifting files and candidate changes to the provider pin. The measured call difference was reproduced locally using mocked fetches, and original hosted cause and latency savings remain unconfirmed."
     }
   ]
 }
