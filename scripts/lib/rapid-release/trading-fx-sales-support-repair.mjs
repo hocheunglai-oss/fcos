@@ -18,6 +18,11 @@ export const salesSupportRepairFields = Object.freeze([
   'STEM__c.Sell_Currency__c',
   'STEM__c.Sell_FX_Side__c',
 ].sort());
+export const salesSupportPaymentAdjustmentField = 'Payment__c.Carrying_Adjustment_USD__c';
+export const salesSupportFinalFormulaFields = Object.freeze([
+  'STEM__c.Payable_FX_Adjustment_USD__c',
+  'STEM__c.Receivable_FX_Adjustment_USD__c',
+]);
 export const salesSupportViewAllFieldsObjects = Object.freeze(['STEM_Extra_Cost__c', 'STEM__c']);
 
 export function salesSupportRepairPackage() {
@@ -52,7 +57,7 @@ export function salesSupportViewAllFieldsRepairPackage() {
 
 // The native caller must pin the org and confirm ParentId is the single
 // PermissionSet Salesforce generates for the Sales Support profile.
-export function salesSupportFieldSnapshot({ rows, done, parentId }) {
+export function salesSupportFieldSnapshot({ rows, done, parentId, finalPackageApplied = false }) {
   requireCondition(done === true && Array.isArray(rows) && /^[A-Za-z0-9]{18}$/u.test(parentId),
     'TRADING_FX_SALES_SUPPORT_CATALOG_INCOMPLETE');
   const reviewed = new Set(salesSupportRepairFields);
@@ -62,6 +67,13 @@ export function salesSupportFieldSnapshot({ rows, done, parentId }) {
       && typeof row.PermissionsRead === 'boolean' && typeof row.PermissionsEdit === 'boolean',
     'TRADING_FX_SALES_SUPPORT_CATALOG_INVALID');
     fields.set(row.Field, { read: row.PermissionsRead, edit: row.PermissionsEdit });
+  }
+  if (finalPackageApplied) {
+    for (const field of salesSupportFinalFormulaFields) {
+      const grant = fields.get(field);
+      requireCondition(!grant || (grant.read === false && grant.edit === false), 'TRADING_FX_SALES_SUPPORT_FINAL_FORMULA_DENIAL_UNVERIFIED');
+      fields.delete(field);
+    }
   }
   const unchangedRows = [...fields].filter(([field]) => !reviewed.has(field)).sort(([a], [b]) => a.localeCompare(b));
   const target = salesSupportRepairFields.map(field => ({ field, ...(fields.get(field) || { read: false, edit: false }) }));

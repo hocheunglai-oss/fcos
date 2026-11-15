@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { join, resolve } from 'node:path';
 import { changedPaths, digest, git, isSha, requireCondition, sourceSnapshot, validateManifest } from './lib/rapid-release/contract.mjs';
+import { paymentSalesSupportRepairParent, verifyPaymentSalesSupportRepairSource } from './lib/rapid-release/trading-fx-payment-profile-repair.mjs';
 import { verifySalesSupportRepairSource } from './lib/rapid-release/trading-fx-sales-support-source.mjs';
 import { assertSalesforceProductionSettingCompatibility, loadReviewedSalesforcePlan } from './deploy-salesforce-reviewed-manifest.mjs';
 import { safeProjectFile } from './lib/salesforce-reviewed-release.mjs';
@@ -52,13 +53,18 @@ function verifyReviewedApplication({ cwd, manifest, verifierDirectory }) {
 }
 
 function verifyReviewedCorrection({ cwd, candidateSha, manifest, verifierDirectory }) {
-  const { adapter, plan: { salesSupportRepair: repair } } = manifest.prerequisites;
+  const { adapter, plan: { salesSupportRepair, paymentRepair, tradingFxFinalPosteffectClosureReceiptId } } = manifest.prerequisites;
+  const repair = paymentRepair ?? salesSupportRepair;
+  const parent = paymentRepair ? paymentSalesSupportRepairParent : manifest.candidate.sha;
   const commonDirectory = dir => git(dir, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
   requireCondition(adapter === 'trading-fx-prerequisites' && repair?.sourceCommit === candidateSha
+    && (!paymentRepair || (salesSupportRepair.sourceCommit === parent
+      && Number.isSafeInteger(tradingFxFinalPosteffectClosureReceiptId) && tradingFxFinalPosteffectClosureReceiptId > 0))
     && commonDirectory(cwd) === commonDirectory(verifierDirectory)
-    && git(cwd, ['rev-list', '--parents', '-n', '1', 'HEAD']) === `${candidateSha} ${manifest.candidate.sha}`,
+    && git(cwd, ['rev-list', '--parents', '-n', '1', 'HEAD']) === `${candidateSha} ${parent}`,
   'SALESFORCE_REVIEW_CORRECTION_SCOPE_MISMATCH');
-  verifySalesSupportRepairSource({ cwd, repair });
+  if (paymentRepair) verifyPaymentSalesSupportRepairSource({ cwd, repair });
+  else verifySalesSupportRepairSource({ cwd, repair });
 
   // Reuse the ordinary application gate with the original bytes. The independent
   // Profile overlay cannot change the legacy review, adapter or application manifest.

@@ -5,6 +5,7 @@ import { readLocalMirrorDeployments } from './local-mirror-handoff.mjs';
 import { githubClient } from './providers.mjs';
 import { reviewedMigrationAdapter } from './reviewed-migration-adapter.mjs';
 import { prepareReviewedSalesforcePrerequisites, verifyPreBootstrapStage as verifySalesforceStage } from './salesforce-reviewed-adapter.mjs';
+import { applyTradingFxPaymentSuccessor, readTradingFxPaymentSuccessor } from './trading-fx-payment-successor.mjs';
 import { TRADING_FX_MIGRATIONS } from './trading-fx-migrations.mjs';
 import { runTradingFxTransaction } from './trading-fx-transaction.mjs';
 import { readTradingFxProductionBootstrapClosure } from './trading-fx-production-bootstrap-checkpoint.mjs';
@@ -214,13 +215,28 @@ export function createTradingFxPrerequisiteAdapter({
     return { original: original ? await readRecovery(input) : undefined };
   }
 
+  const paymentContext = input => {
+    const github = githubClient({ token: input.env.GITHUB_TOKEN, candidateSha: input.manifest.candidate.sha });
+    return { github, load: () => readTradingFxPaymentSuccessor({ manifest: input.manifest, github }) };
+  };
   return {
     async verifyPreBootstrapStage(input) {
+      if (input.plan.paymentRepair) {
+        const verified = await paymentContext(input).load();
+        const original = { ...input, manifest: verified.manifest, plan: verified.manifest.prerequisites.plan };
+        const recovered = await readStoppedProductionBootstrap(original, readStoppedBootstrapRecovery);
+        await verifyScope(input, recovered.qualificationManifest);
+        return verifyStage(input, { withDatabase: true });
+      }
       const recovery = await recoveryFor(input);
       await verifyScope(input, (recovery.productionBootstrap || recovery.failedBootstrap)?.qualificationManifest || (recovery.qat || recovery.postQat?.nested)?.prior);
       return verifyStage(input, { withDatabase: true });
     },
     async applyReviewedPrerequisites(input) {
+      if (input.plan.paymentRepair) {
+        const payment = paymentContext(input);
+        return applyTradingFxPaymentSuccessor({ input, verified: await payment.load(), github: payment.github });
+      }
       const recovery = await recoveryFor(input);
       await verifyScope(input, (recovery.productionBootstrap || recovery.failedBootstrap)?.qualificationManifest || (recovery.qat || recovery.postQat?.nested)?.prior);
       const applySalesforce = prepareSalesforce(input, { withDatabase: true, tradingFxRecovery: recovery.original,

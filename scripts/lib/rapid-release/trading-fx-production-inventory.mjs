@@ -1,5 +1,5 @@
 import { digest, requireCondition } from './contract.mjs';
-import { salesSupportRepairFields, salesSupportViewAllFieldsObjects } from './trading-fx-sales-support-repair.mjs';
+import { salesSupportFinalFormulaFields, salesSupportRepairFields, salesSupportViewAllFieldsObjects } from './trading-fx-sales-support-repair.mjs';
 
 const fingerprint = 'c13101bbdc7796ec98e22b0b0848c25c03bbace805c33d4c139e7871645314c3';
 export const tradingFxSalesSupportPath = 'profiles/Sales Support.profile-meta.xml';
@@ -28,7 +28,7 @@ const same = (left, right) => left?.sha256 === right.sha256 && left?.size === ri
 
 export function tradingFxProductionInventoryScope(environmentKey, reviewedFingerprint, mode) {
   return environmentKey === 'production' && reviewedFingerprint === fingerprint
-    && ['before-correction', 'after-correction', 'after-view-all-fields-correction'].includes(mode);
+    && ['before-correction', 'after-correction', 'after-view-all-fields-correction', 'after-final-view-all-fields-correction'].includes(mode);
 }
 
 export function matchesTradingFxProductionProjection({ name, observed, pinned, environmentKey, fingerprint, mode }) {
@@ -42,10 +42,10 @@ export function matchesTradingFxProductionProjection({ name, observed, pinned, e
 
 // Native metadata retrieval can serialize denied field entries explicitly. Remove only
 // the reviewed false/false entries, and require the complete pinned original profile.
-export function normalizeTradingFxDeniedProfile(bytes, pinned, mode) {
-  if (!same(pinned, profileExpected)) return null;
+export function projectTradingFxSalesSupportProfile(bytes, mode) {
   const xml = bytes.toString('utf8');
-  const reviewed = new Set(salesSupportRepairFields);
+  const final = mode === 'after-final-view-all-fields-correction';
+  const reviewed = new Set(final ? [...salesSupportRepairFields, ...salesSupportFinalFormulaFields] : salesSupportRepairFields);
   const captured = new Set();
   let normalizedText = xml.replace(
     /^    <fieldPermissions>\n        <editable>false<\/editable>\n        <field>([^<>]+)<\/field>\n        <readable>false<\/readable>\n    <\/fieldPermissions>\n/gmu,
@@ -56,7 +56,8 @@ export function normalizeTradingFxDeniedProfile(bytes, pinned, mode) {
       return '';
     },
   );
-  const override = mode === 'after-view-all-fields-correction';
+  if (final && salesSupportFinalFormulaFields.some(field => !captured.has(field))) return null;
+  const override = final || mode === 'after-view-all-fields-correction';
   if (override) {
     for (const object of salesSupportViewAllFieldsObjects) {
       const row = '    <objectPermissions>\n        <allowCreate>true</allowCreate>\n'
@@ -68,6 +69,11 @@ export function normalizeTradingFxDeniedProfile(bytes, pinned, mode) {
       normalizedText = normalizedText.replace(row, row.replace('<viewAllFields>false</viewAllFields>', '<viewAllFields>true</viewAllFields>'));
     }
   }
-  const normalized = Buffer.from(normalizedText);
-  return (override || captured.size > 0) && same({ sha256: digest(normalized), size: normalized.length }, pinned) ? pinned : null;
+  return override || captured.size > 0 ? Buffer.from(normalizedText) : null;
+}
+
+export function normalizeTradingFxDeniedProfile(bytes, pinned, mode) {
+  if (!same(pinned, profileExpected)) return null;
+  const normalized = projectTradingFxSalesSupportProfile(bytes, mode);
+  return normalized && same({ sha256: digest(normalized), size: normalized.length }, pinned) ? pinned : null;
 }

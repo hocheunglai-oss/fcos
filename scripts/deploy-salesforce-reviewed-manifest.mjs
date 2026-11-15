@@ -561,7 +561,11 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
             && projectedNativeInventoryHash(expectedInventory, projectionPaths) === expectedInventoryHash
           : observed.inventoryHash === expectedInventoryHash;
         if (!inventoryMatches || (expectedSourceTreeHash && observed.sourceTreeHash !== expectedSourceTreeHash)) {
-          throw new Error('Native Salesforce retrieval differs from the exact reviewed inventory.');
+          const error = new Error('Native Salesforce retrieval differs from the exact reviewed inventory.');
+          if (tradingFxProductionInventoryScope(environment.key, plan.fingerprint, profileRecovery)) {
+            error.code = 'TRADING_FX_FINAL_NATIVE_INVENTORY_CHANGED';
+          }
+          throw error;
         }
         if (verifyApexProjection) verifyNativeApexProjection({ root: supplementalRoot, sourceRoot: path.join(cwd, policy.publication.sourceRoot), plan });
         const metadataEvidence = nativeBootstrap && projectionPaths.length
