@@ -41,7 +41,8 @@ export function createLocalMirrorRequest({ manifest, approval, reviewed, deploym
   const manifestHash = digest(manifest);
   const deadline = Date.parse(expiresAt);
   const approvedAt = Date.parse(approval?.approvedAt);
-  const repair = manifest.prerequisites?.plan?.salesSupportRepair;
+  const plan = manifest.prerequisites?.plan;
+  const repair = plan?.paymentRepair ?? plan?.salesSupportRepair;
   const correction = repair?.correctionFingerprint === reviewed?.fingerprint && sha(repair?.sourceCommit)
     && repair.sourceTreeHash === reviewed.binding?.sourceTreeHash;
   requireCondition(approval?.manifestHash === manifestHash && approval.nativeReviewVerified === true

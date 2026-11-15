@@ -600,6 +600,25 @@
       "measuredTimeSavedMs": null,
       "measuredCallsSaved": null,
       "prevention": "Model object permission overrides in the DEVEE positive control before approval. Preserve separate permission-set assignments and refuse an unexpected preimage or postimage."
+    },
+    {
+      "id": "trading-fx-final-package-sales-support-payment-grant",
+      "cause": "The final Trading FX package installed two STEM formula fields whose expected denials were newly serialized in the Sales Support Profile retrieval. Separately, the Production Payment object had View All Fields enabled and Salesforce added a direct read for Carrying Adjustment USD.",
+      "correction": "Verify the final inventory with exact typed formula-denial normalization and a separate native permission check. Close the original stopped prerequisite with the single remaining grant recorded and preserve its successful validation and deployment IDs. Qualify a separate Payment Profile overlay with the six retained object flags.",
+      "verification": {
+        "originalRunId": 43747330923,
+        "productionValidationJobId": "0Affu000001AHobCAG",
+        "productionDeploymentJobId": "0Affu000001AHqDCAW",
+        "productionNativeInventoryReadElapsedMs": 39509,
+        "productionNativeInventoryReadCalls": 14,
+        "paymentDirectGrantDelta": 1,
+        "paymentPositiveControlJobId": "0AfHF000007HA5N0AW",
+        "paymentCheckOnlyJobId": "0AfHF000007H9Vu0AK",
+        "unchangedFixtureFieldRows": 28
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Before allowing application promotion, compare the full catalog after the final package as well as after the individual Profile correction. A normalized metadata export never substitutes for native access proof. A typed final inventory failure is diagnosed separately from native permission drift."
     }
   ]
 }

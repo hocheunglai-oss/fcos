@@ -29,7 +29,7 @@
     {
       "id": "salesforce-reviewed-manifest",
       "status": "qualified",
-      "sourceDigest": "afe1fec354f98505ee85768c28193a9b996a545b11c21ea8ac5c83d8c4a4ca57",
+      "sourceDigest": "250a432895fcb2381b87d8314e16386b9f4c2eb96c26807c9cb01d60d26bdf08",
       "path": "scripts/lib/rapid-release/salesforce-reviewed-adapter.mjs",
       "salesforce": true,
       "database": false
@@ -64,7 +64,7 @@
     {
       "id": "trading-fx-prerequisites",
       "status": "qualified",
-      "sourceDigest": "81c16ed2484e925c9631b39a543f9adcfcfd7674dd2dbe85f17260ec45fa26f8",
+      "sourceDigest": "2823319f945701cdf1933aa87c6a81bc3a6cb0534a21fcbcbd784b3860aaeb96",
       "path": "scripts/lib/rapid-release/trading-fx-adapter.mjs",
       "salesforce": true,
       "database": true,

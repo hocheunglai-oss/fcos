@@ -1,0 +1,65 @@
+name: FCOS Trading FX final Salesforce readback closure
+run-name: Close stopped FCOS Trading FX final Salesforce run 43747330923
+on:
+  workflow_dispatch:
+    inputs:
+      mirror_evidence_id:
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  deployments: write
+
+concurrency:
+  group: fcos-production-release
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  close-applied-salesforce:
+    if: github.ref == 'refs/heads/main' && github.ref_protected && github.actor == 'hocheunglai-oss' && github.repository == 'hocheunglai-oss/fcos'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: fcos-production-release
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: b495d1bde6d06834c32212982c4597e20e6c7fe0
+          path: original-application
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: b5beaefb6abddb861b110e21e07878e25bec940f
+          path: original-correction
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm install --global vercel@54.20.1 @salesforce/cli@2.145.6 --ignore-scripts --no-audit --no-fund
+      - name: Verify exact native operations and record the remaining grant
+        run: |
+          node --input-type=module -e 'import fs from "node:fs";fs.writeFileSync(process.env.FCOS_RAPID_DATABASE_CA,process.env.FCOS_CA,{mode:0o600})'
+          node scripts/rapid-release-trading-fx-final-posteffect.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_RAPID_RELEASE_ENABLED: ${{ vars.FCOS_RAPID_RELEASE_ENABLED }}
+          FCOS_RAPID_RELEASE_HANDOVER_ID: ${{ vars.FCOS_RAPID_RELEASE_HANDOVER_ID }}
+          FCOS_FINAL_MIRROR_EVIDENCE_ID: ${{ inputs.mirror_evidence_id }}
+          VERCEL_TOKEN: ${{ secrets.FCOS_RELEASE_VERCEL_TOKEN }}
+          FCOS_RAPID_DATABASE_URL: ${{ secrets.FCOS_RAPID_READONLY_DATABASE_URL }}
+          FCOS_RAPID_DATABASE_CA: ${{ runner.temp }}/final-posteffect-ca.pem
+          FCOS_CA: ${{ secrets.FCOS_RAPID_DATABASE_CA }}
+          FCOS_RAPID_SALESFORCE_DEVEE_PRIVATE_KEY: ${{ secrets.FCOS_RAPID_SALESFORCE_DEVEE_PRIVATE_KEY }}
+          FCOS_RAPID_SALESFORCE_DEVEE_CLIENT_ID: ${{ secrets.FCOS_RAPID_SALESFORCE_DEVEE_CLIENT_ID }}
+          FCOS_RAPID_SALESFORCE_QAT_PRIVATE_KEY: ${{ secrets.FCOS_RAPID_SALESFORCE_QAT_PRIVATE_KEY }}
+          FCOS_RAPID_SALESFORCE_QAT_CLIENT_ID: ${{ secrets.FCOS_RAPID_SALESFORCE_QAT_CLIENT_ID }}
+          FCOS_RAPID_SALESFORCE_PRODUCTION_PRIVATE_KEY: ${{ secrets.FCOS_RAPID_SALESFORCE_PRODUCTION_PRIVATE_KEY }}
+          FCOS_RAPID_SALESFORCE_PRODUCTION_CLIENT_ID: ${{ secrets.FCOS_RAPID_SALESFORCE_PRODUCTION_CLIENT_ID }}
