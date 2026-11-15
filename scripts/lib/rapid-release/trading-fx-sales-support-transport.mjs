@@ -81,7 +81,8 @@ function nativeCatalog(sf, viewAllFields, finalPackageApplied, readPaymentDrift 
   check(profile?.done === true && profile.records.length === 1 && profile.records[0].IsOwnedByProfile === true
     && /^0PS[A-Za-z0-9]{15}$/u.test(parentId || ''), 'PROFILE_CHANGED');
   const grants = query("SELECT Field, ParentId, PermissionsRead, PermissionsEdit FROM FieldPermissions WHERE ParentId = '" + parentId + "'");
-  const native = salesSupportFieldSnapshot({ rows: grants?.records, done: grants?.done, parentId, finalPackageApplied });
+  const native = salesSupportFieldSnapshot({ rows: grants?.records, done: grants?.done, parentId, finalPackageApplied,
+    paymentAdjustmentDenied: paymentViewAllFields === false });
   if (readPaymentDrift) {
     const added = grants.records.filter(row => row.Field === salesSupportPaymentAdjustmentField);
     check(added.length === 1 && added[0].PermissionsRead === true && added[0].PermissionsEdit === false,

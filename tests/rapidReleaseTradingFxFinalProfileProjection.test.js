@@ -35,4 +35,7 @@ test('native final catalog verifies both new formulas and retains any other new 
   const changed = snapshot([...original, row('Payment__c.Carrying_Adjustment_USD__c', true)]);
   assert.equal(changed.unrelatedCount, snapshot(original).unrelatedCount + 1);
   assert.notEqual(changed.unrelatedDigest, snapshot(original).unrelatedDigest);
+  const payment = rows => salesSupportFieldSnapshot({ rows, done: true, parentId, paymentAdjustmentDenied: true });
+  assert.deepEqual(payment([...original, row('Payment__c.Carrying_Adjustment_USD__c')]), payment(original));
+  assert.throws(() => payment([...original, row('Payment__c.Carrying_Adjustment_USD__c', true)]), /PAYMENT_DENIAL_UNVERIFIED/u);
 });

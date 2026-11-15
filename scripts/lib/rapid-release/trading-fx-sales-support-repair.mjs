@@ -57,7 +57,7 @@ export function salesSupportViewAllFieldsRepairPackage() {
 
 // The native caller must pin the org and confirm ParentId is the single
 // PermissionSet Salesforce generates for the Sales Support profile.
-export function salesSupportFieldSnapshot({ rows, done, parentId, finalPackageApplied = false }) {
+export function salesSupportFieldSnapshot({ rows, done, parentId, finalPackageApplied = false, paymentAdjustmentDenied = false }) {
   requireCondition(done === true && Array.isArray(rows) && /^[A-Za-z0-9]{18}$/u.test(parentId),
     'TRADING_FX_SALES_SUPPORT_CATALOG_INCOMPLETE');
   const reviewed = new Set(salesSupportRepairFields);
@@ -74,6 +74,11 @@ export function salesSupportFieldSnapshot({ rows, done, parentId, finalPackageAp
       requireCondition(!grant || (grant.read === false && grant.edit === false), 'TRADING_FX_SALES_SUPPORT_FINAL_FORMULA_DENIAL_UNVERIFIED');
       fields.delete(field);
     }
+  }
+  if (paymentAdjustmentDenied) {
+    const grant = fields.get(salesSupportPaymentAdjustmentField);
+    requireCondition(!grant || (grant.read === false && grant.edit === false), 'TRADING_FX_SALES_SUPPORT_PAYMENT_DENIAL_UNVERIFIED');
+    fields.delete(salesSupportPaymentAdjustmentField);
   }
   const unchangedRows = [...fields].filter(([field]) => !reviewed.has(field)).sort(([a], [b]) => a.localeCompare(b));
   const target = salesSupportRepairFields.map(field => ({ field, ...(fields.get(field) || { read: false, edit: false }) }));
