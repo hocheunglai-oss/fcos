@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { digest, git, isDigest, isSha, requireCondition, sourceSnapshot } from './contract.mjs';
 import { readReviewedInventory } from '../salesforce-reviewed-release.mjs';
-import { salesSupportRepairPackage } from './trading-fx-sales-support-repair.mjs';
+import { fieldBoundDenialDigests, salesSupportRepairPackage } from './trading-fx-sales-support-repair.mjs';
 
 const profilePath = 'force-app/main/default/profiles/Sales Support.profile-meta.xml';
 const originalCommit = 'b495d1bde6d06834c32212982c4597e20e6c7fe0';
@@ -20,7 +20,9 @@ export function salesSupportRepairSourceProfile(before) {
 export function assertSalesSupportRepairBinding(repair) {
   const { sourceCommit, sourceTreeHash, sourceProfileDigest, profileDigest, manifestDigest, correctionFingerprint } = repair ?? {};
   const packet = salesSupportRepairPackage();
-  const expected = { sourceCommit, sourceTreeHash, sourceProfileDigest, profileDigest, manifestDigest };
+  const fieldBound = Object.hasOwn(repair ?? {}, 'fieldBoundPackageSha256') || Object.hasOwn(repair ?? {}, 'fieldBoundManifestDigest');
+  const expected = { sourceCommit, sourceTreeHash, sourceProfileDigest, profileDigest, manifestDigest,
+    ...(fieldBound ? fieldBoundDenialDigests : {}) };
   requireCondition(isSha(sourceCommit) && isDigest(sourceTreeHash) && isDigest(sourceProfileDigest)
     && profileDigest === packet.profileDigest && manifestDigest === packet.manifestDigest
     && correctionFingerprint === digest(expected)
@@ -41,7 +43,8 @@ export function verifySalesSupportRepairSource({ cwd, repair }) {
   const changed = readFileSync(join(cwd, profilePath), 'utf8');
   const { profileDigest, manifestDigest } = salesSupportRepairPackage();
   const observed = { sourceCommit, sourceTreeHash: readReviewedInventory(join(cwd, 'force-app/main/default')).sourceTreeHash,
-    sourceProfileDigest: digest(changed), profileDigest, manifestDigest };
+    sourceProfileDigest: digest(changed), profileDigest, manifestDigest,
+    ...(repair.fieldBoundPackageSha256 ? fieldBoundDenialDigests : {}) };
   requireCondition(changed === salesSupportRepairSourceProfile(before)
     && digest(repair) === digest({ ...observed, correctionFingerprint: digest(observed) }),
   'TRADING_FX_SALES_SUPPORT_SOURCE_BINDING_CHANGED');

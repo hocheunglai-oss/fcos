@@ -1,6 +1,10 @@
 import { digest, requireCondition } from './contract.mjs';
 
 export const salesSupportProfile = 'Sales Support';
+export const fieldBoundDenialDigests = Object.freeze({
+  fieldBoundPackageSha256: 'a4fdb1289fdc2f76e36e15d0e8953a1fe7d428755bbe633e00388de020bb0527',
+  fieldBoundManifestDigest: 'ed26fbb48118795d0e4a5900c6bb24c5d2bfe52712c0a5265eaa6a54a00e33cc',
+});
 const extraCostFields = [
   ...['Buy', 'Sell'].flatMap(side => [
     'Currency', 'FX_Confirmed_At', 'FX_Rate', 'FX_Revision', 'FX_Side',

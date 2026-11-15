@@ -86,3 +86,15 @@ test('the correction rereads the exact mirror head after QAT before touching Pro
   assert.ok(events.includes('qat'));
   assert.ok(!events.includes('production'));
 });
+
+
+test('renewed mirror evidence binds the unchanged closed draft and the new DEVEE deployment', async () => {
+  const { options, events } = fixture();
+  options.retainedMirror = { ...corrected, sourceDeploymentJobId: '0AfHF000007H5Yj0AK' };
+  assert.equal((await promoteSalesSupportCorrection(options)).operations.length, 4);
+  const wrongHead = fixture();
+  wrongHead.options.retainedMirror = { ...corrected, commit: 'a'.repeat(40) };
+  await assert.rejects(promoteSalesSupportCorrection(wrongHead.options), /MIRROR_CHANGED/u);
+  assert.ok(events.includes('production'));
+  assert.ok(!wrongHead.events.includes('qat'));
+});

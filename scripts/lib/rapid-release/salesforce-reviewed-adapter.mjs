@@ -607,13 +607,14 @@ async function applyPreparedSalesforce({ manifest, manifestHash, approval, sales
           await assertReviewedInputsUnchanged(reviewed, { cwd, policy });
           ({ operations: corrections, verifyMirror: verifyCorrectedMirror } = await promoteSalesSupportCorrection({
             fingerprint: repair.correctionFingerprint, sourceTreeHash: repair.sourceTreeHash,
+            retainedMirror: tradingFxProductionBootstrapRecovery.fieldBoundClosure?.checkpoint.mirror,
             verifySource, context, mirror: correctionMirror, originalMirror,
             verifySandbox: stage => verifyReviewedOrgInventory({ provider, plan: reviewed,
               environment: policy.environments.find(environment => environment.key === stage),
               expected: reviewed.nativeInventories[stage].final }),
             sandbox: stage => applyTradingFxSalesSupportSandboxCorrection({ ...context, stage, cwd: correctionDirectory,
-              commandEnvironment, fingerprint: repair.correctionFingerprint }),
-            production: () => applyTradingFxSalesSupportCorrection({ ...context, cwd: correctionDirectory, commandEnvironment,
+              commandEnvironment, repair, fingerprint: repair.correctionFingerprint }),
+            production: () => applyTradingFxSalesSupportCorrection({ ...context, cwd: correctionDirectory, commandEnvironment, repair,
               fingerprint: repair.correctionFingerprint }),
           }));
           await assertReviewedInputsUnchanged(reviewed, { cwd, policy });
