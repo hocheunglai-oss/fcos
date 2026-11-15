@@ -8,7 +8,7 @@ import { prepareReviewedSalesforcePrerequisites, verifyPreBootstrapStage as veri
 import { TRADING_FX_MIGRATIONS } from './trading-fx-migrations.mjs';
 import { runTradingFxTransaction } from './trading-fx-transaction.mjs';
 import { readTradingFxProductionBootstrapClosure } from './trading-fx-production-bootstrap-checkpoint.mjs';
-import { assertTradingFxFieldBoundCorrectionSuccessor, assertTradingFxProductionBootstrapSuccessor } from './trading-fx-production-bootstrap-successor.mjs';
+import { assertTradingFxFieldBoundCorrectionSuccessor, assertTradingFxProductionBootstrapSuccessor, assertTradingFxViewAllFieldsCorrectionSuccessor } from './trading-fx-production-bootstrap-successor.mjs';
 import { readFailedBootstrapSuccessor } from './trading-fx-failed-bootstrap-closure.mjs';
 import { readTradingFxPostQatRecovery } from './trading-fx-post-qat-recovery.mjs';
 import { readTradingFxQatRecovery } from './trading-fx-qat-recovery.mjs';
@@ -141,17 +141,24 @@ async function readStoppedProductionBootstrap(input, readHistorical) {
   });
   const { prior } = recovery.checkpoint;
   assertTradingFxProductionBootstrapSuccessor(manifest, prior);
-  let fieldBoundClosure;
+  let fieldBoundClosure, viewAllFieldsClosure;
   if (plan.tradingFxFieldBoundCorrectionClosureReceiptId !== undefined) {
     const { readTradingFxSalesSupportNoEffectClosure } = await import('./trading-fx-sales-support-no-effect-checkpoint.mjs');
     fieldBoundClosure = await readTradingFxSalesSupportNoEffectClosure({ github, receiptId: plan.tradingFxFieldBoundCorrectionClosureReceiptId });
-    assertTradingFxFieldBoundCorrectionSuccessor(manifest, fieldBoundClosure.checkpoint.prior);
+    if (plan.tradingFxViewAllFieldsClosureReceiptId !== undefined) {
+      const { readTradingFxFieldBoundNoEffectClosure } = await import('./trading-fx-field-bound-no-effect-checkpoint.mjs');
+      viewAllFieldsClosure = await readTradingFxFieldBoundNoEffectClosure({ github, receiptId: plan.tradingFxViewAllFieldsClosureReceiptId });
+      assertTradingFxFieldBoundCorrectionSuccessor(viewAllFieldsClosure.checkpoint.prior, fieldBoundClosure.checkpoint.prior);
+      assertTradingFxViewAllFieldsCorrectionSuccessor(manifest, viewAllFieldsClosure.checkpoint.prior);
+    } else {
+      assertTradingFxFieldBoundCorrectionSuccessor(manifest, fieldBoundClosure.checkpoint.prior);
+    }
   }
   const historical = await readHistorical({ ...input, manifest: prior, plan: prior.prerequisites.plan, provider });
   requireCondition(historical?.database?.schemaDigest === manifest.previous.schemaDigest
     && isDigest(historical.database.operationDigest) && historical.qualificationManifest,
   'TRADING_FX_PRODUCTION_BOOTSTRAP_DATABASE_HISTORY_CHANGED');
-  return { ...recovery, fieldBoundClosure, database: historical.database, qualificationManifest: historical.qualificationManifest };
+  return { ...recovery, fieldBoundClosure, viewAllFieldsClosure, database: historical.database, qualificationManifest: historical.qualificationManifest };
 }
 
 export function createTradingFxPrerequisiteAdapter({
@@ -197,7 +204,8 @@ export function createTradingFxPrerequisiteAdapter({
     const productionBootstrap = Object.hasOwn(input.plan, 'tradingFxProductionBootstrapRecoveryReceiptId');
     requireCondition(!productionBootstrap || failedBootstrap, 'TRADING_FX_RECOVERY_LOCATOR_INVALID');
     requireCondition(productionBootstrap || !Object.hasOwn(input.plan, 'salesSupportRepair'), 'TRADING_FX_RECOVERY_LOCATOR_INVALID');
-    requireCondition(productionBootstrap || !Object.hasOwn(input.plan, 'tradingFxFieldBoundCorrectionClosureReceiptId'),
+    requireCondition(productionBootstrap || (!Object.hasOwn(input.plan, 'tradingFxFieldBoundCorrectionClosureReceiptId')
+      && !Object.hasOwn(input.plan, 'tradingFxViewAllFieldsClosureReceiptId')),
       'TRADING_FX_RECOVERY_LOCATOR_INVALID');
     if (productionBootstrap) return { productionBootstrap: await readStoppedProductionBootstrap(input, readStoppedBootstrapRecovery) };
     if (failedBootstrap) return { failedBootstrap: await readStoppedBootstrapRecovery(input) };

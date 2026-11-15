@@ -596,7 +596,7 @@ async function applyPreparedSalesforce({ manifest, manifestHash, approval, sales
       if (tradingFxProductionBootstrapRecovery) {
         const repair = manifest.prerequisites.plan.salesSupportRepair;
         const verifySource = () => verifySalesSupportRepairSource({ cwd: correctionDirectory, repair });
-        const originalMirror = retainedTradingFxMirror;
+        const originalMirror = tradingFxProductionBootstrapRecovery.viewAllFieldsClosure?.checkpoint.mirror ?? retainedTradingFxMirror;
         const context = salesforce.correction;
         const correctionReview = { fingerprint: repair.correctionFingerprint,
           binding: { sourceTreeHash: repair.sourceTreeHash, orgIds: reviewed.binding.orgIds } };
@@ -607,7 +607,7 @@ async function applyPreparedSalesforce({ manifest, manifestHash, approval, sales
           await assertReviewedInputsUnchanged(reviewed, { cwd, policy });
           ({ operations: corrections, verifyMirror: verifyCorrectedMirror } = await promoteSalesSupportCorrection({
             fingerprint: repair.correctionFingerprint, sourceTreeHash: repair.sourceTreeHash,
-            retainedMirror: tradingFxProductionBootstrapRecovery.fieldBoundClosure?.checkpoint.mirror,
+            retainedMirror: repair.viewAllFieldsCorrection ? undefined : tradingFxProductionBootstrapRecovery.fieldBoundClosure?.checkpoint.mirror,
             verifySource, context, mirror: correctionMirror, originalMirror,
             verifySandbox: stage => verifyReviewedOrgInventory({ provider, plan: reviewed,
               environment: policy.environments.find(environment => environment.key === stage),
@@ -625,12 +625,13 @@ async function applyPreparedSalesforce({ manifest, manifestHash, approval, sales
       const result = await runReviewedSalesforceRelease({ plan: reviewed, mode: hasPreparation ? 'apply' : 'approved-continuation',
         policy, journal, provider,
         ownership, externalJournal: salesforce.journal, authorization, retainedDeveeInventory, retainedTradingFxMirror, repairProductionSalesSupport,
+        salesSupportViewAllFieldsCorrection: manifest.prerequisites.plan.salesSupportRepair?.viewAllFieldsCorrection === true,
         assertUnchanged: () => assertReviewedInputsUnchanged(reviewed, { cwd, policy }) });
       requireCondition(result.mode === 'applied', 'SALESFORCE_HOSTED_APPLY_REQUIRED');
       if (repairProductionSalesSupport) {
         requireCondition(corrections?.length === 4 && corrections.every(item => item.verified && item.intentRecorded),
           'SALESFORCE_TRADING_FX_SALES_SUPPORT_CORRECTION_REQUIRED');
-        await verifyTradingFxSalesSupportReadGrants({ cwd, commandEnvironment, read: false });
+        await verifyTradingFxSalesSupportReadGrants({ cwd, commandEnvironment, read: false, repair: manifest.prerequisites.plan.salesSupportRepair });
         await verifyCorrectedMirror();
       }
       const completedOperations = (await salesforce.journal.readCheckpoints()).filter(item => item.outcome === 'resolved'
