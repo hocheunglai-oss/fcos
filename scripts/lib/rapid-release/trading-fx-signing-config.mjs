@@ -82,14 +82,20 @@ export async function verifyTradingFxSigningConfig({ manifest, previous, github,
   return { verified: true, receiptId: id, proofDigest, configurationDigest: proof.configurationDigest };
 }
 
+export async function tradingFxSigningRecoveryManifest({ manifest, github }, { readPaymentSuccessor } = {}) {
+  if (!manifest.prerequisites?.plan?.paymentRepair) return manifest;
+  const read = readPaymentSuccessor ?? (await import('./trading-fx-payment-successor.mjs')).readTradingFxPaymentSuccessor;
+  return (await read({ manifest, github })).manifest;
+}
+
 export async function verifyTradingFxReleaseSigningConfig({ manifest, github, ownerId, provider }) {
-  const receiptId = manifest.prerequisites?.plan?.tradingFxProductionBootstrapRecoveryReceiptId;
-  let signingManifest = manifest;
+  let signingManifest = await tradingFxSigningRecoveryManifest({ manifest, github });
+  const receiptId = signingManifest.prerequisites?.plan?.tradingFxProductionBootstrapRecoveryReceiptId;
   if (receiptId !== undefined) {
     const { readTradingFxProductionBootstrapClosure } = await import('./trading-fx-production-bootstrap-checkpoint.mjs');
     const { assertTradingFxProductionBootstrapSuccessor } = await import('./trading-fx-production-bootstrap-successor.mjs');
     const { checkpoint } = await readTradingFxProductionBootstrapClosure({ github, receiptId });
-    assertTradingFxProductionBootstrapSuccessor(manifest, checkpoint.prior);
+    assertTradingFxProductionBootstrapSuccessor(signingManifest, checkpoint.prior);
     signingManifest = checkpoint.prior;
   }
   return verifyTradingFxSigningConfig({ manifest: signingManifest, previous: TRADING_FX_SIGNING_BASELINE,

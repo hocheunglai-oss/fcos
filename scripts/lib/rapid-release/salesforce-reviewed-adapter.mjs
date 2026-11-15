@@ -290,7 +290,7 @@ export function prepareReviewedSalesforcePrerequisites({
     localMirror, adoption, promotionReceiptId, tradingFxRecovery, tradingFxQatRecovery, tradingFxPostQatRecovery, tradingFxProductionBootstrapRecovery });
 }
 
-async function hostedLocalMirrorTransport({ manifest, approval, env, reviewed, salesforce }) {
+export async function hostedLocalMirrorTransport({ manifest, approval, env, reviewed, salesforce }) {
   const github = githubClient({ token: env.GITHUB_TOKEN, candidateSha: manifest.candidate.sha, actions: true });
   const { user, repo } = await github.identity();
   const runAttempt = Number(env.GITHUB_RUN_ATTEMPT);

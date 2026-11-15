@@ -3,6 +3,7 @@ import { resolve, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { assertAuthorization, digest, git, isDigest, requireCondition, requiresTradingFxSmoke, sourceSnapshot } from './contract.mjs';
 import { assertSalesSupportRepairBinding, verifySalesSupportRepairSource } from './trading-fx-sales-support-source.mjs';
+import { assertPaymentSalesSupportRepairBinding, verifyPaymentSalesSupportRepairSource } from './trading-fx-payment-profile-repair.mjs';
 import { assertPreBootstrapProof } from './engine.mjs';
 import { FCOS_CONNECTION_POLICY } from '../../../config/fcosConnections.js';
 
@@ -38,7 +39,12 @@ function protectedSalesforceContext({ manifest, approval, staged, journal, provi
   const policy = FCOS_CONNECTION_POLICY.providers.find(item => item.id === 'salesforce');
   const hasCorrection = manifest.prerequisites.adapter === 'trading-fx-prerequisites'
     && Number.isSafeInteger(plan.tradingFxProductionBootstrapRecoveryReceiptId) && plan.tradingFxProductionBootstrapRecoveryReceiptId > 0;
-  const correctionFingerprint = hasCorrection ? assertSalesSupportRepairBinding(plan.salesSupportRepair).correctionFingerprint : undefined;
+  const legacyCorrection = hasCorrection ? assertSalesSupportRepairBinding(plan.salesSupportRepair) : undefined;
+  if (plan.paymentRepair !== undefined) requireCondition(legacyCorrection?.viewAllFieldsCorrection === true
+    && Number.isSafeInteger(plan.tradingFxFinalPosteffectClosureReceiptId) && plan.tradingFxFinalPosteffectClosureReceiptId > 0,
+  'SALESFORCE_PROTECTED_OPERATION_MISMATCH');
+  const correctionFingerprint = plan.paymentRepair
+    ? assertPaymentSalesSupportRepairBinding(plan.paymentRepair).correctionFingerprint : legacyCorrection?.correctionFingerprint;
   const allowedOperation = /^(?:validation|deployment|bootstrap|sales-support-correction|shared-publication|permission:[A-Za-z][A-Za-z0-9_]*)$/;
   const scoped = (scope, correction) => ({
     ownership: {
@@ -96,7 +102,9 @@ function verifiedCorrectionCandidate({ manifest, root, env }) {
   requireCondition(env.FCOS_RAPID_SALESFORCE_CORRECTION_CANDIDATE, 'SALESFORCE_CORRECTION_SOURCE_REQUIRED');
   const cwd = realpathSync(env.FCOS_RAPID_SALESFORCE_CORRECTION_CANDIDATE);
   requireCondition(cwd !== root, 'SALESFORCE_CORRECTION_SOURCE_REQUIRED');
-  verifySalesSupportRepairSource({ cwd, repair });
+  const paymentRepair = manifest.prerequisites.plan.paymentRepair;
+  if (paymentRepair) verifyPaymentSalesSupportRepairSource({ cwd, repair: paymentRepair });
+  else verifySalesSupportRepairSource({ cwd, repair });
   return cwd;
 }
 
@@ -136,7 +144,7 @@ export async function runPrerequisites({ manifest, approval, staged, journal, pr
       && result.salesforce.fingerprint === descriptor.plan.salesforceFingerprint)
     && (!manifest.selection.database || result.database?.destructiveRollback === false && result.database.readbackVerified === true)
     && (!databaseWriter || isDigest(result.database?.schemaDigest)), 'PREREQUISITE_VERIFICATION_REQUIRED');
-  const repair = descriptor.plan.salesSupportRepair;
+  const repair = descriptor.plan.paymentRepair ?? descriptor.plan.salesSupportRepair;
   if (repair) {
     const correction = result.salesforce?.correction;
     const required = ['devee', 'shared_mirror', 'qat', 'production'].map(stage => 'salesforce:' + stage + ':sales-support-correction');

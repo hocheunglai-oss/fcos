@@ -141,7 +141,10 @@ async function rapidReleaseCommand(argv, env, runtime) {
         }
         return observeLive({ ...values, env });
       },
-      reverifyPrerequisites: () => verifyHostedTradingFxSalesSupportDenial({ cwd: controller, env, repair: manifest.prerequisites?.plan?.salesSupportRepair }),
+      reverifyPrerequisites: () => verifyHostedTradingFxSalesSupportDenial({ cwd: controller, env,
+        repair: manifest.prerequisites?.plan?.salesSupportRepair,
+        finalPackageApplied: Boolean(manifest.prerequisites?.plan?.paymentRepair),
+        paymentAdjustmentCorrection: Boolean(manifest.prerequisites?.plan?.paymentRepair) }),
       prerequisites: values => runPrerequisites({ ...values, staged, journal, provider, controllerDirectory: controller, env }) });
   }
   if (opts.output) write(opts.output, result);
