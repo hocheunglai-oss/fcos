@@ -50,7 +50,7 @@ test('correction verifies both sandbox inventories and complete mirror before th
     ['devee', 'shared_mirror', 'qat', 'production'].map(stage => evidence(stage).operationId));
   await result.verifyMirror();
   assert.deepEqual(events, ['source', 'devee', 'inventory:devee', 'source', 'journal:submitting',
-    'mirror:publish', 'journal:Succeeded', 'source', 'qat', 'inventory:qat', 'source', 'production', 'mirror:check']);
+    'mirror:publish', 'journal:Succeeded', 'source', 'qat', 'inventory:qat', 'mirror:check', 'source', 'production', 'mirror:check']);
 });
 
 test('uncertain publication triggers exact readback and never submits another mirror publication', async () => {
@@ -73,4 +73,16 @@ test('mirror drift or missing QAT verification prevents the Production overlay',
   };
   await assert.rejects(promoteSalesSupportCorrection(second.options), /unexpected profile drift/u);
   assert.ok(!second.events.includes('production'));
+});
+
+test('the correction rereads the exact mirror head after QAT before touching Production', async () => {
+  const { options, events } = fixture();
+  const mirror = options.mirror;
+  options.mirror = mode => {
+    const result = mirror(mode);
+    return mode === 'check' ? { ...result, commit: 'a'.repeat(40) } : result;
+  };
+  await assert.rejects(promoteSalesSupportCorrection(options), /MIRROR_CHANGED/u);
+  assert.ok(events.includes('qat'));
+  assert.ok(!events.includes('production'));
 });

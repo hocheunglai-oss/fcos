@@ -197,6 +197,24 @@ test('Salesforce checkpoints retain the original job locator without copying pro
     /SALESFORCE_CHECKPOINT_PREPARATION_INVALID/);
 });
 
+test('the Sales Support correction retains a verified terminal non-success separately from success', async () => {
+  const records = [];
+  const github = { candidateSha: sha, async pages() { return records; }, async write(_path, body) {
+    records.push({ id: records.length + 1, creator: { id: 7 }, payload: body.payload });
+  } };
+  const journal = new DeploymentJournal({ github, releaseId: 'salesforce', manifestHash: h, actorIds: [7] });
+  const context = { fingerprint: h, stage: 'qat', operation: 'sales-support-correction' };
+  const record = { status: 'Failed', jobId: '0AfHF00000702c50AA', validationJobId: null,
+    submittedAt: '2026-11-08T12:00:00.000Z', reportDigest: digest('original native report') };
+  await assert.rejects(journal.checkpoint({ ...context, record }), /SALESFORCE_CORRECTION_TERMINAL_INVALID/u);
+  await journal.checkpoint({ ...context, record: { ...record, terminalOutcome: 'failed_rolled_back' } });
+  const [saved] = await journal.readSalesforceCheckpoints(h);
+  assert.equal(saved.outcome, 'resolved');
+  assert.equal(saved.terminalOutcome, 'failed_rolled_back');
+  assert.equal(saved.reportDigest, record.reportDigest);
+  assert.equal(saved.job.id, record.jobId);
+});
+
 test('Salesforce journal keeps ambiguous provider operations pending across release chains', async () => {
   const records = [];
   const github = { candidateSha: sha, async pages() { return records; }, async write(_path, body) {

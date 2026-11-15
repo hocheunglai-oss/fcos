@@ -50,7 +50,8 @@ function harness(stage = 'production') {
       checkpoint({ fingerprint, stage, operation, record }) {
         calls.push(record.status);
         checkpoints.push({ record, checkpoint: { fingerprint, stage, operation,
-          outcome: record.status === 'Succeeded' ? 'resolved' : 'pending', evidenceDigest: digest(record),
+          outcome: record.status === 'Succeeded' || record.terminalOutcome ? 'resolved' : 'pending', evidenceDigest: digest(record),
+          ...(record.terminalOutcome ? { terminalOutcome: record.terminalOutcome, reportDigest: record.reportDigest } : {}),
           job: { id: record.jobId, submittedAt: record.submittedAt, validationId: record.validationJobId,
             packageSha256: record.packageSha256 } } });
       },
@@ -71,11 +72,15 @@ function harness(stage = 'production') {
         if (query.includes('FROM DeployRequest')) {
           assert.equal(args.includes('--use-tooling-api'), true);
           assert.match(query, new RegExp(creatorId, 'u'));
-          calls.push('discover');
-          const records = scenario.discovered ? scenario.discovered.map(Id => ({
-            Id, CreatedDate: date, CreatedById: creatorId, CheckOnly: false, RollbackOnError: true,
-            TestLevel: scenario.discoveredTestLevel ?? testLevel,
-          })) : [];
+          const byId = query.endsWith(" AND Id = '" + jobId + "'");
+          calls.push(byId ? 'lookup' : 'discover');
+          const ids = scenario.discovered ?? (byId ? [jobId] : []);
+          const records = ids.map(Id => ({
+            Id, CreatedDate: date, CreatedById: creatorId,
+            Status: (byId ? scenario.toolingStatus : scenario.discoveryStatus) ?? scenario.reportOverrides.status ?? 'Succeeded',
+            CheckOnly: false, RollbackOnError: true, TestLevel: scenario.discoveredTestLevel ?? testLevel,
+            ...scenario.toolingOverrides,
+          }));
           return { records, done: true, totalSize: records.length };
         }
         if (query.includes('FROM Organization')) {
@@ -111,8 +116,7 @@ function harness(stage = 'production') {
       assert.ok([jobId, null].includes(checkpoints.at(-1).record.jobId));
       calls.push('report');
       if (scenario.reportUnavailable) throw new Error('unavailable original job report');
-      scenario.grantEffect = true;
-      return {
+      const report = {
         id: jobId, status: 'Succeeded', success: true, done: true, checkOnly: false, rollbackOnError: true,
         numberComponentsTotal: 1, numberComponentsDeployed: 1, numberComponentErrors: 0,
         numberTestsTotal: 0, numberTestsCompleted: 0, numberTestErrors: 0, completedDate: date,
@@ -123,6 +127,8 @@ function harness(stage = 'production') {
         ] },
         ...scenario.reportOverrides,
       };
+      scenario.grantEffect = report.status === 'Succeeded' || scenario.partialEffect === true;
+      return report;
     },
   };
   return { calls, checkpoints, scenario, options, apply: () => runSalesSupportCorrection(options, reviewedCatalog, stage) };
@@ -273,4 +279,63 @@ test('the sandbox job verifier refuses a changed package and a check-only job wi
   assert.throws(() => verifyTradingFxSalesSupportSandboxJob({ ...options, stage: 'devee', job }), /ORIGINAL_JOB_UNVERIFIED/u);
   assert.deepEqual(calls.slice(start), ['identity', 'report']);
   assert.equal(calls.filter(call => call === 'submit').length, 1);
+});
+
+test('records a proved Production rollback and keeps the exact operation closed on re-entry', async () => {
+  const { apply, calls, checkpoints, scenario } = harness();
+  scenario.reportOverrides = { status: 'Failed', success: false, numberComponentErrors: 1 };
+  await assert.rejects(apply(), /ORIGINAL_JOB_FAILED_ROLLED_BACK/u);
+  const { record, checkpoint } = checkpoints.at(-1);
+  assert.equal(record.status, 'Failed');
+  assert.equal(record.terminalOutcome, 'failed_rolled_back');
+  assert.equal(record.orgId, fcosSalesforceEnvironment('production').orgId);
+  assert.equal(record.rollbackOnError, true);
+  assert.equal(record.preimageDigest, checkpoints[0].record.beforeDigest);
+  assert.equal(checkpoint.outcome, 'resolved');
+  assert.equal(checkpoint.terminalOutcome, record.terminalOutcome);
+  assert.equal(checkpoint.reportDigest, record.reportDigest);
+  assert.equal(checkpoint.job.id, jobId);
+  assert.deepEqual(calls.slice(-5), ['report', 'identity', 'lookup', 'catalog', 'Failed']);
+  const start = calls.length;
+  await assert.rejects(apply(), /ORIGINAL_JOB_FAILED_ROLLED_BACK/u);
+  assert.deepEqual(calls.slice(start), ['lease']);
+  assert.equal(calls.filter(call => call === 'submit').length, 1);
+});
+
+test('closes a canceled original sandbox job after a lost ID and status movement, with one total submission', async () => {
+  const { apply, calls, checkpoints, scenario } = harness('qat');
+  scenario.loseAcknowledgment = true;
+  await assert.rejects(apply(), /ORIGINAL_SUBMISSION_UNKNOWN/u);
+  assert.equal(checkpoints.at(-1).checkpoint.job.id, null);
+  scenario.discovered = [jobId];
+  scenario.discoveryStatus = 'InProgress';
+  scenario.reportOverrides = { status: 'Canceled', success: false };
+  await assert.rejects(apply(), /ORIGINAL_JOB_CANCELED_ROLLED_BACK/u);
+  assert.equal(checkpoints.at(-1).checkpoint.terminalOutcome, 'canceled_rolled_back');
+  assert.deepEqual(checkpoints.map(({ record }) => record.jobId), [null, jobId]);
+  assert.deepEqual(calls.slice(-6), ['discover', 'report', 'identity', 'lookup', 'catalog', 'Canceled']);
+  assert.equal(calls.filter(call => call === 'submit').length, 1);
+});
+
+test('keeps partial, ambiguous, check-only or drifted terminal jobs pending', async () => {
+  for (const [changes, error] of [
+    [{ reportOverrides: { rollbackOnError: false } }, /ORIGINAL_TERMINAL_JOB_UNVERIFIED/u],
+    [{ reportOverrides: { checkOnly: true } }, /ORIGINAL_TERMINAL_JOB_UNVERIFIED/u],
+    [{ reportOverrides: { done: false } }, /ORIGINAL_TERMINAL_JOB_UNVERIFIED/u],
+    [{ reportOverrides: { id: otherJob } }, /ORIGINAL_TERMINAL_JOB_UNVERIFIED/u],
+    [{ reportOverrides: { completedDate: '2026-11-15T08:00:00.000Z' } }, /ORIGINAL_JOB_TIME_CHANGED/u],
+    [{ toolingStatus: 'InProgress' }, /ORIGINAL_TERMINAL_JOB_UNVERIFIED/u],
+    [{ toolingOverrides: { CreatedById: '005000000000000000' } }, /ORIGINAL_SUBMISSION_UNKNOWN/u],
+    [{ partialEffect: true }, /PREIMAGE_CHANGED/u],
+    [{ partialEffect: true, afterAllowed: true, afterUnrelated: row(unrelated.Field, false) }, /UNRELATED_GRANTS_CHANGED/u],
+  ]) {
+    const { apply, calls, checkpoints, scenario } = harness();
+    const { reportOverrides, ...state } = changes;
+    Object.assign(scenario, state);
+    scenario.reportOverrides = { status: 'Failed', success: false, ...reportOverrides };
+    await assert.rejects(apply(), error);
+    assert.equal(checkpoints.at(-1).checkpoint.outcome, 'pending');
+    assert.equal(checkpoints.at(-1).checkpoint.terminalOutcome, undefined);
+    assert.equal(calls.filter(call => call === 'submit').length, 1);
+  }
 });

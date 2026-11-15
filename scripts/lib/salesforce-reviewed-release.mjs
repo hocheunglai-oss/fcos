@@ -745,7 +745,7 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
     if (missingMirror) await mirror(missingMirror);
     if (mode !== 'prepare' && !get('production', 'preparation')
       && get('devee', 'deployment')?.status === 'Succeeded' && get('qat', 'deployment')?.status === 'Succeeded'
-      && get('shared_mirror', 'publication')?.status === 'Succeeded') {
+      && (retainedTradingFxMirror || get('shared_mirror', 'publication')?.status === 'Succeeded')) {
       const validationJobId = savedPreparation?.preparation?.validationJobId;
       const ready = JOB_ID.test(validationJobId || '') && get('production', 'validation')?.jobId === validationJobId
         && get('production', 'validation')?.status === 'Succeeded'

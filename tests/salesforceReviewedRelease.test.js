@@ -1995,3 +1995,33 @@ test('Trading FX Production recovery accepts only the pinned currency projection
   assert.equal(matchesProjectedNativeInventory(observed, pinned, [], { ...before, fingerprint: 'b'.repeat(64) }), false);
   assert.equal(matchesProjectedNativeInventory(observed, pinned, [], { ...before, environmentKey: 'qat' }), false);
 });
+
+test('Trading FX resumes exact Production preparation after correction supersedes the historical mirror', async () => {
+  const f = fixture({ bootstrap: true, inventoryBaseline: true });
+  try {
+    const originalOwnership = f.ownership.assert;
+    f.ownership.assert = async binding => {
+      if (binding.stage === 'production' && binding.operation === 'deployment') throw Error('interrupted before deploy');
+      return originalOwnership(binding);
+    };
+    await assert.rejects(f.run('approved-continuation', { authorization: f.authorization }), /interrupted before deploy/u);
+    const historical = f.journal.state.stages.shared_mirror.publication.result;
+    const validationJobId = f.journal.state.stages.production.validation.jobId;
+    delete f.journal.state.stages.shared_mirror.publication;
+    delete f.journal.state.stages.production.preparation;
+    f.externalJournal.readCheckpoints = async () => [
+      { fingerprint: f.plan.fingerprint, stage: 'shared_mirror', operation: 'publication', outcome: 'resolved',
+        mirror: { commit: historical.commit, pullRequest: historical.pullRequest.number } },
+      { fingerprint: f.plan.fingerprint, stage: 'production', operation: 'preparation', outcome: 'evidence',
+        preparation: { validationJobId } },
+    ];
+    f.ownership.assert = originalOwnership;
+    f.calls.length = 0;
+    const result = await f.run('apply', { authorization: f.authorization, retainedTradingFxMirror: historical,
+      repairProductionSalesSupport: () => f.calls.push(['correction', 'verified']) });
+    assert.equal(result.mode, 'applied');
+    assert.equal(f.journal.state.stages.production.preparation.validationJobId, validationJobId);
+    assert.ok(f.calls.findIndex(([op]) => op === 'correction') < f.calls.findIndex(([op, stage]) => op === 'deploy' && stage === 'production'));
+    assert.ok(!f.calls.some(([op]) => ['mirror', 'validate', 'bootstrap'].includes(op)));
+  } finally { f.cleanup(); }
+});

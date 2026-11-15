@@ -177,7 +177,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Fetch the reviewed Salesforce correction source as data
-        if: ${{ fromJSON(inputs.manifest_json).prerequisites.plan.salesSupportRepair.sourceCommit != '' }}
+        if: ${{ fromJSON(inputs.manifest_json).prerequisites.adapter == 'trading-fx-prerequisites' && fromJSON(inputs.manifest_json).prerequisites.plan.salesSupportRepair.sourceCommit != '' }}
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: ${{ fromJSON(inputs.manifest_json).prerequisites.plan.salesSupportRepair.sourceCommit }}
@@ -306,7 +306,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Fetch the reviewed Salesforce correction source as data
-        if: ${{ fromJSON(inputs.manifest_json).prerequisites.plan.salesSupportRepair.sourceCommit != '' }}
+        if: ${{ fromJSON(inputs.manifest_json).prerequisites.adapter == 'trading-fx-prerequisites' && fromJSON(inputs.manifest_json).prerequisites.plan.salesSupportRepair.sourceCommit != '' }}
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: ${{ fromJSON(inputs.manifest_json).prerequisites.plan.salesSupportRepair.sourceCommit }}

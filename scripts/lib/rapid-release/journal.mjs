@@ -70,12 +70,19 @@ export class DeploymentJournal {
       && record && typeof record === 'object' && !Array.isArray(record), 'SALESFORCE_CHECKPOINT_INVALID');
     const providerOperation = /^(?:validation|deployment|bootstrap|sales-support-correction|publication|permission:)/.test(operation);
     const status = record.status;
+    const correctionTerminal = operation === 'sales-support-correction' && ['Failed', 'Canceled'].includes(status);
+    if (correctionTerminal) {
+      requireCondition(record.terminalOutcome === (status === 'Failed' ? 'failed_rolled_back' : 'canceled_rolled_back')
+        && /^[a-f0-9]{64}$/u.test(record.reportDigest || '') && record.validationJobId === null
+        && /^0Af[A-Za-z0-9]{15}$/u.test(record.jobId || ''), 'SALESFORCE_CORRECTION_TERMINAL_INVALID');
+    }
     const outcome = !providerOperation || !status || ['observed', 'ready', 'awaiting-authorized-bootstrap', 'review-required'].includes(status)
       ? 'evidence'
-      : status === 'Succeeded' || (operation === 'validation' && ['Failed', 'Canceled', 'Expired'].includes(status))
+      : status === 'Succeeded' || correctionTerminal || (operation === 'validation' && ['Failed', 'Canceled', 'Expired'].includes(status))
         ? 'resolved'
         : 'pending';
-    const data = { fingerprint, stage, operation, outcome, evidenceDigest: digest(record) };
+    const data = { fingerprint, stage, operation, outcome, evidenceDigest: digest(record),
+      ...(correctionTerminal ? { terminalOutcome: record.terminalOutcome, reportDigest: record.reportDigest } : {}) };
     if (['validation', 'deployment', 'bootstrap', 'sales-support-correction'].includes(operation) && Object.hasOwn(record, 'jobId')) {
       const validJob = value => typeof value === 'string' && /^0Af[A-Za-z0-9]{12}(?:[A-Za-z0-9]{3})?$/u.test(value);
       const { jobId, validationJobId, submittedAt } = record;

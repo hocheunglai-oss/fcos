@@ -30,6 +30,7 @@ const sandboxCatalogs = {
 const profileDigest = '03b415858374db416c71f81783c7880ba2f23d4952937b12cc09e9dedc7f4d9c';
 const manifestDigest = '85ea97f7edebcc629d9c8615b44bc169df7a11247a57d8d4725bb433ebd6453a';
 const packageSha256 = digest({ profileDigest, manifestDigest });
+const terminalOutcomes = { Failed: 'failed_rolled_back', Canceled: 'canceled_rolled_back' };
 const check = (value, code) => requireCondition(value, 'TRADING_FX_SALES_SUPPORT_' + code);
 
 function correctionSandbox(stage) {
@@ -105,12 +106,16 @@ function assertReport(report, jobId, submittedAt, now, target) {
     && report.numberComponentErrors === 0 && report.numberTestErrors === 0
     && Number.isSafeInteger(tests) && tests >= 0 && report.numberTestsCompleted === tests && (!target.isSandbox || tests === 0)
     && (warnings == null || (Array.isArray(warnings) && warnings.length === 0)), 'ORIGINAL_JOB_SCOPE_CHANGED');
+  return assertReportTime(report, submittedAt, now);
+}
+
+function assertReportTime(report, submittedAt, now) {
   const completedAt = Date.parse(report.completedDate);
   check(completedAt >= Date.parse(submittedAt) - 30000 && completedAt <= now().getTime() + 30000, 'ORIGINAL_JOB_TIME_CHANGED');
   return report.completedDate;
 }
 
-function discoverOriginalJob(sf, submittedAt, target, testLevel) {
+function findOriginalJob(sf, { submittedAt, target, testLevel, id }) {
   const principal = sf(['data', 'query', '--query', "SELECT Id FROM User WHERE Username = '" + target.username + "'"]);
   const creatorId = principal.records?.[0]?.Id;
   check(principal.done === true && principal.records?.length === 1 && /^005[A-Za-z0-9]{15}$/u.test(creatorId || ''),
@@ -119,16 +124,17 @@ function discoverOriginalJob(sf, submittedAt, target, testLevel) {
   const from = new Date(submitted - 30_000).toISOString();
   const through = new Date(submitted + 120_000).toISOString();
   const discovery = sf(['data', 'query', '--use-tooling-api', '--query',
-    'SELECT Id, CreatedById, CreatedDate, CheckOnly, RollbackOnError, TestLevel FROM DeployRequest'
-      + " WHERE CreatedById = '" + creatorId + "' AND CreatedDate >= " + from + ' AND CreatedDate <= ' + through]);
+    'SELECT Id, CreatedById, CreatedDate, Status, CheckOnly, RollbackOnError, TestLevel FROM DeployRequest'
+      + " WHERE CreatedById = '" + creatorId + "' AND CreatedDate >= " + from + ' AND CreatedDate <= ' + through
+      + (id ? " AND Id = '" + id + "'" : '')]);
   const records = discovery.records;
   const job = records?.[0];
   const createdAt = Date.parse(job?.CreatedDate);
-  check(discovery.done === true && records?.length === 1 && discovery.totalSize === 1 && jobPattern.test(job.Id)
+  check(discovery.done === true && records?.length === 1 && discovery.totalSize === 1 && jobPattern.test(job?.Id || '') && (!id || job.Id === id)
     && job.CreatedById === creatorId && createdAt >= Date.parse(from) && createdAt <= Date.parse(through)
     && job.CheckOnly === false && job.TestLevel === testLevel && job.RollbackOnError === true,
     'ORIGINAL_SUBMISSION_UNKNOWN');
-  return job.Id;
+  return job;
 }
 
 function isExactCorrectionJob(job) {
@@ -136,11 +142,31 @@ function isExactCorrectionJob(job) {
     && Number.isFinite(Date.parse(job.submittedAt)) && new Date(job.submittedAt).toISOString() === job.submittedAt;
 }
 
-function readCorrectionResult({ sf, cwd, target, reviewedCatalog, jobId, submittedAt, now }) {
-  const report = sf(['project', 'deploy', 'report', '--job-id', jobId, '--wait', '15'], cwd, 16 * 60000);
+function readCorrectionReport(sf, cwd, jobId) {
+  return sf(['project', 'deploy', 'report', '--job-id', jobId, '--wait', '15'], cwd, 16 * 60000);
+}
+
+function verifyCorrectionResult({ sf, report, target, reviewedCatalog, jobId, submittedAt, now }) {
   const completedAt = assertReport(report, jobId, submittedAt, now, target);
   verifyIdentity(sf, target);
   return { completedAt, reportDigest: digest(report), after: snapshot(sf, false, reviewedCatalog) };
+}
+
+function verifyTerminalCorrectionResult({ sf, report, originalJob, target, reviewedCatalog, readBefore, jobId, submittedAt, testLevel, now }) {
+  check(report.id === jobId && report.done === true && report.success === false
+    && report.checkOnly === false && report.rollbackOnError === true, 'ORIGINAL_TERMINAL_JOB_UNVERIFIED');
+  const completedAt = assertReportTime(report, submittedAt, now);
+  verifyIdentity(sf, target);
+  const job = originalJob?.Status === report.status ? originalJob : findOriginalJob(sf, { submittedAt, target, testLevel, id: jobId });
+  check(job.Status === report.status && Date.parse(completedAt) >= Date.parse(job.CreatedDate), 'ORIGINAL_TERMINAL_JOB_UNVERIFIED');
+  const preimageDigest = digest(snapshot(sf, readBefore, reviewedCatalog));
+  return { status: report.status, terminalOutcome: terminalOutcomes[report.status], orgId: target.orgId,
+    jobId, submittedAt, validationJobId: null, packageSha256, completedAt, profileDigest, manifestDigest,
+    reportDigest: digest(report), nativeJobDigest: digest(job), checkOnly: false, rollbackOnError: true, preimageDigest };
+}
+
+function stopTerminalCorrection(outcome) {
+  check(false, 'ORIGINAL_JOB_' + outcome.toUpperCase());
 }
 
 function writePackage(folder) {
@@ -185,7 +211,8 @@ export function verifyTradingFxSalesSupportSandboxJob({
   check(isExactCorrectionJob(job) && jobPattern.test(job.id), 'CHECKPOINT_CHANGED');
   const sf = nativeConnection(cwd, commandEnvironment, run, target);
   verifyIdentity(sf, target);
-  const { completedAt, reportDigest, after } = readCorrectionResult({ sf, cwd, target, reviewedCatalog: sandboxCatalogs[stage],
+  const report = readCorrectionReport(sf, cwd, job.id);
+  const { completedAt, reportDigest, after } = verifyCorrectionResult({ sf, report, target, reviewedCatalog: sandboxCatalogs[stage],
     jobId: job.id, submittedAt: job.submittedAt, now });
   return { orgId: target.orgId, jobId: job.id, submittedAt: job.submittedAt, completedAt, packageSha256, reportDigest,
     proof: assertSalesSupportRepair({ before: after, after, expectedPreimage: 'denied' }) };
@@ -220,7 +247,9 @@ export async function runSalesSupportCorrection({
     const [row] = records, { job } = row;
     check(row.fingerprint === fingerprint && ['pending', 'resolved'].includes(row.outcome)
       && isDigest(row.evidenceDigest) && isExactCorrectionJob(job)
-      && (job.id === null && row.outcome === 'pending' || jobPattern.test(job.id || '')),
+      && (job.id === null && row.outcome === 'pending' || jobPattern.test(job.id || ''))
+      && (row.terminalOutcome === undefined || (row.outcome === 'resolved' && isDigest(row.reportDigest)
+        && Object.values(terminalOutcomes).includes(row.terminalOutcome))),
     'CHECKPOINT_CHANGED');
     return row;
   }
@@ -228,7 +257,8 @@ export async function runSalesSupportCorrection({
     await journal.checkpoint({ fingerprint, stage, operation, record });
     const row = await current();
     check(row?.job.id === record.jobId && row.job.submittedAt === record.submittedAt
-      && row.outcome === (record.status === 'Succeeded' ? 'resolved' : 'pending')
+      && row.outcome === (record.status === 'Succeeded' || record.terminalOutcome ? 'resolved' : 'pending')
+      && row.terminalOutcome === record.terminalOutcome && (!record.terminalOutcome || row.reportDigest === record.reportDigest)
       && row.evidenceDigest === digest(record), 'CHECKPOINT_NOT_DURABLE');
     return row;
   }
@@ -237,6 +267,7 @@ export async function runSalesSupportCorrection({
     && lease.operation === operation && isDigest(lease.receiptId)
     && Date.parse(lease.expiresAt) > now().getTime(), 'OWNERSHIP_EXPIRED');
   let saved = await current();
+  if (saved?.terminalOutcome) stopTerminalCorrection(saved.terminalOutcome);
   verifyIdentity(sf, target);
   let before;
   if (!saved) {
@@ -263,8 +294,17 @@ export async function runSalesSupportCorrection({
 
   // Only the durable original job may be polled. This branch never submits.
   const { id, submittedAt } = saved.job;
-  const jobId = id ?? discoverOriginalJob(sf, submittedAt, target, testLevel);
-  const { completedAt, reportDigest, after } = readCorrectionResult({ sf, cwd, target, reviewedCatalog, jobId, submittedAt, now });
+  const originalJob = id ? undefined : findOriginalJob(sf, { submittedAt, target, testLevel });
+  const jobId = id ?? originalJob.Id;
+  const report = readCorrectionReport(sf, cwd, jobId);
+  if (Object.hasOwn(terminalOutcomes, report?.status)) {
+    check(saved.outcome === 'pending', 'CHECKPOINT_CHANGED');
+    const terminal = verifyTerminalCorrectionResult({ sf, report, originalJob, target, reviewedCatalog,
+      readBefore, jobId, submittedAt, testLevel, now });
+    await save(terminal);
+    stopTerminalCorrection(terminal.terminalOutcome);
+  }
+  const { completedAt, reportDigest, after } = verifyCorrectionResult({ sf, report, target, reviewedCatalog, jobId, submittedAt, now });
   // On a resumed attempt the native receipt and reviewed catalog preimage are
   // the reference. The target reads must still be denied on every re-entry.
   const reviewedBefore = before ?? { ...after, target: salesSupportRepairFields.map(field => ({ field, read: readBefore, edit: false })) };

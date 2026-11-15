@@ -137,12 +137,11 @@ async function main() {
     operation: 'shared-publication', expiresAt: request.expiresAt,
     receiptId: digest({ manifestHash, runId: request.runId, fingerprint: mirrorReview.fingerprint, stage: 'devee',
       orgId: request.deveeOrgId, operation: 'shared-publication' }) };
-  const assertCurrent = async () => {
+  const assertCurrent = () => {
     verifyLocalMirrorRequest({ request, requestDeployment: nativeRequest, workflowActorId: bot.id });
-    const [currentRun, jobs, currentPointer] = await Promise.all([
-      github.read(runPath), github.read(`${runPath}/attempts/${request.runAttempt}/jobs?per_page=100`),
-      github.read(`${base}/actions/variables/FCOS_RAPID_RELEASE_HANDOVER_ID`),
-    ]);
+    const currentRun = github.read(runPath);
+    const jobs = github.read(`${runPath}/attempts/${request.runAttempt}/jobs?per_page=100`);
+    const currentPointer = github.read(`${base}/actions/variables/FCOS_RAPID_RELEASE_HANDOVER_ID`);
     requireCondition(currentRun.status === 'in_progress' && currentRun.run_attempt === request.runAttempt
       && currentPointer.value === pointer.value && jobs.jobs?.some(job => job.name === 'go-live' && job.status === 'in_progress'),
     'LOCAL_MIRROR_HOSTED_LEASE_ENDED');
@@ -159,10 +158,21 @@ async function main() {
     const claim = github.write(`${base}/git/refs`, { ref, sha: manifest.candidate.sha });
     requireCondition(claim.ref === ref && claim.object?.sha === manifest.candidate.sha, 'LOCAL_MIRROR_CLAIM_ACK_UNCERTAIN');
   };
-  const mode = !recovery && request.mode === 'publish' ? 'publish' : 'check';
+  let mode = !recovery && request.mode === 'publish' ? 'publish' : 'check';
   if (mode === 'check' && request.mode !== 'check') {
-    const claim = github.read(base + '/git/ref/' + tagRoot.slice('refs/'.length) + '/publication');
-    requireCondition(claim.object?.sha === manifest.candidate.sha, 'LOCAL_MIRROR_ORIGINAL_CLAIM_REQUIRED');
+    const publicationRef = tagRoot.slice('refs/'.length) + '/publication';
+    if (correction && !recovery && request.mode === 'recover') {
+      // Confirm there has never been a write claim. Another operator racing
+      // this read still has to win the same atomic GitHub ref creation.
+      const claims = github.read(base + '/git/matching-refs/' + publicationRef);
+      requireCondition(Array.isArray(claims) && (claims.length === 0 || (claims.length === 1
+        && claims[0].ref === 'refs/' + publicationRef && claims[0].object?.sha === manifest.candidate.sha)),
+      'LOCAL_MIRROR_ORIGINAL_CLAIM_REQUIRED');
+      if (!claims.length) mode = 'publish';
+    } else {
+      const claim = github.read(base + '/git/ref/' + publicationRef);
+      requireCondition(claim.object?.sha === manifest.candidate.sha, 'LOCAL_MIRROR_ORIGINAL_CLAIM_REQUIRED');
+    }
   }
   if (mode === 'publish') {
     await assertCurrent();
@@ -188,6 +198,7 @@ async function main() {
   if (correction) {
     await assertCurrent();
     const assertPublicationCurrent = () => {
+      if (mode === 'publish') assertCurrent();
       requireCondition(Date.parse(receipt.expiresAt) > Date.now(), 'LOCAL_MIRROR_HOSTED_LEASE_ENDED');
       verifySalesSupportRepairSource({ cwd: correctionPath, repair });
     };

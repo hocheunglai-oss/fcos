@@ -41,16 +41,17 @@ export async function promoteSalesSupportCorrection({ fingerprint, sourceTreeHas
     'TRADING_FX_SALES_SUPPORT_MIRROR_CHECKPOINT_CHANGED');
   const mirrorProof = completed({ operationId: 'salesforce:shared_mirror:sales-support-correction',
     evidenceDigest: checkpoint.evidenceDigest, verified: true, intentRecorded: true });
+  const verifyMirror = async () => {
+    const current = await mirror('check', deployment);
+    requireCondition(current?.commit === checked.commit && current.sourceTreeHash === sourceTreeHash
+      && current.sourceDeploymentJobId === devee.jobId && current.pullRequest?.number === checked.pullRequest.number,
+    'TRADING_FX_SALES_SUPPORT_MIRROR_CHANGED');
+  };
   await verifySource();
   const qat = completed(await sandbox('qat'));
   await verifySandbox('qat');
+  await verifyMirror();
   await verifySource();
   const prod = completed(await production());
-  return { operations: [deveeProof, mirrorProof, qat, prod],
-    async verifyMirror() {
-      const current = await mirror('check', deployment);
-      requireCondition(current?.commit === checked.commit && current.sourceTreeHash === sourceTreeHash
-        && current.sourceDeploymentJobId === devee.jobId && current.pullRequest?.number === checked.pullRequest.number,
-      'TRADING_FX_SALES_SUPPORT_MIRROR_CHANGED');
-    } };
+  return { operations: [deveeProof, mirrorProof, qat, prod], verifyMirror };
 }
