@@ -10,7 +10,8 @@ import { verifySalesSupportRepairSource } from './lib/rapid-release/trading-fx-s
 import { verifyTradingFxSalesSupportSandboxJob } from './lib/rapid-release/trading-fx-sales-support-transport.mjs';
 import { readTradingFxProductionBootstrapClosure } from './lib/rapid-release/trading-fx-production-bootstrap-checkpoint.mjs';
 import { readTradingFxSalesSupportNoEffectClosure } from './lib/rapid-release/trading-fx-sales-support-no-effect-checkpoint.mjs';
-import { assertTradingFxFieldBoundCorrectionSuccessor, assertTradingFxProductionBootstrapSuccessor } from './lib/rapid-release/trading-fx-production-bootstrap-successor.mjs';
+import { readTradingFxFieldBoundNoEffectClosure } from './lib/rapid-release/trading-fx-field-bound-no-effect-checkpoint.mjs';
+import { assertTradingFxFieldBoundCorrectionSuccessor, assertTradingFxProductionBootstrapSuccessor, assertTradingFxViewAllFieldsCorrectionSuccessor } from './lib/rapid-release/trading-fx-production-bootstrap-successor.mjs';
 import { runReviewedMirror } from './sync-salesforce-reviewed-repository.mjs';
 import { assertAuthorization, digest, git, requireCondition, sourceSnapshot, targets, validateManifest } from './lib/rapid-release/contract.mjs';
 import { DeploymentJournal } from './lib/rapid-release/journal.mjs';
@@ -67,7 +68,8 @@ async function main() {
   'LOCAL_MIRROR_GITHUB_IDENTITY_MISMATCH');
   const request = nativeRequest.payload;
   const repair = plan.salesSupportRepair;
-  const fieldBoundCorrection = Object.hasOwn(plan ?? {}, 'tradingFxFieldBoundCorrectionClosureReceiptId');
+  const fieldBoundCorrection = Boolean(repair?.fieldBoundPackageSha256);
+  const viewAllFieldsCorrection = repair?.viewAllFieldsCorrection === true;
   const correction = request?.correctionSourceSha !== undefined;
   let mirrorReview = reviewed;
   let correctionPath;
@@ -78,7 +80,7 @@ async function main() {
     verifySalesSupportRepairSource({ cwd: correctionPath, repair });
     mirrorReview = { fingerprint: repair.correctionFingerprint, binding: { sourceTreeHash: repair.sourceTreeHash, orgIds: reviewed.binding.orgIds } };
   }
-  requireCondition(!fieldBoundCorrection || correction, 'LOCAL_MIRROR_CORRECTION_SOURCE_REQUIRED');
+  requireCondition((!fieldBoundCorrection && !viewAllFieldsCorrection) || correction, 'LOCAL_MIRROR_CORRECTION_SOURCE_REQUIRED');
   requireCondition(nativeRequest.id === requestId && request?.manifestHash === manifestHash && request.controllerSha === manifest.controllerSha
     && request.candidateSha === manifest.candidate.sha && request.fingerprint === mirrorReview.fingerprint
     && request.sourceTreeHash === mirrorReview.binding.sourceTreeHash && request.deveeOrgId === reviewed.binding.orgIds.devee
@@ -126,7 +128,12 @@ async function main() {
     && mirror.outcome === (request.mode === 'check' ? 'resolved' : 'pending'), 'LOCAL_MIRROR_ORIGINAL_CHECKPOINT_REQUIRED');
   let originalMirror;
   if (correction) {
-    if (fieldBoundCorrection) {
+    if (viewAllFieldsCorrection) {
+      const { checkpoint } = await readTradingFxFieldBoundNoEffectClosure({ github,
+        receiptId: plan.tradingFxViewAllFieldsClosureReceiptId });
+      assertTradingFxViewAllFieldsCorrectionSuccessor(manifest, checkpoint.prior);
+      originalMirror = checkpoint.mirror;
+    } else if (fieldBoundCorrection) {
       const { checkpoint } = await readTradingFxSalesSupportNoEffectClosure({ github,
         receiptId: plan.tradingFxFieldBoundCorrectionClosureReceiptId });
       assertTradingFxFieldBoundCorrectionSuccessor(manifest, checkpoint.prior);
@@ -163,13 +170,14 @@ async function main() {
     await verifyReviewedOrgInventory({ provider, environment: devee, plan: reviewed, expected: reviewed.nativeInventories.devee.final });
   }
   const tagRoot = 'refs/tags/fcos-local-mirror/' + manifestHash
-    + (fieldBoundCorrection ? '/sales-support-field-bound-correction' : correction ? '/sales-support-correction' : '');
+    + (viewAllFieldsCorrection ? '/sales-support-view-all-fields-correction'
+      : fieldBoundCorrection ? '/sales-support-field-bound-correction' : correction ? '/sales-support-correction' : '');
   const claimRef = suffix => {
     const ref = tagRoot + '/' + suffix;
     const claim = github.write(`${base}/git/refs`, { ref, sha: manifest.candidate.sha });
     requireCondition(claim.ref === ref && claim.object?.sha === manifest.candidate.sha, 'LOCAL_MIRROR_CLAIM_ACK_UNCERTAIN');
   };
-  let mode = fieldBoundCorrection ? 'check' : !recovery && request.mode === 'publish' ? 'publish' : 'check';
+  let mode = !fieldBoundCorrection && !recovery && request.mode === 'publish' ? 'publish' : 'check';
   if (!fieldBoundCorrection && mode === 'check' && request.mode !== 'check') {
     const publicationRef = tagRoot.slice('refs/'.length) + '/publication';
     if (correction && !recovery && request.mode === 'recover') {
@@ -227,6 +235,8 @@ async function main() {
     report = await runReviewedMirror({ mode, cwd, plan: reviewed, state, policy, provider, ownership: { assert: assertCurrent } });
   }
   requireCondition(!fieldBoundCorrection || (report.commit === originalMirror.commit
+    && report.pullRequest?.number === originalMirror.pullRequest?.number), 'LOCAL_MIRROR_HEAD_CHANGED');
+  requireCondition(!viewAllFieldsCorrection || (report.commit !== originalMirror.commit
     && report.pullRequest?.number === originalMirror.pullRequest?.number), 'LOCAL_MIRROR_HEAD_CHANGED');
   requireCondition(request.mode !== 'check' || (mirror.mirror?.commit === report.commit && mirror.mirror?.pullRequest === report.pullRequest.number),
     'LOCAL_MIRROR_HEAD_CHANGED');

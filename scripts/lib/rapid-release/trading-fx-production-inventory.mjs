@@ -1,5 +1,5 @@
 import { digest, requireCondition } from './contract.mjs';
-import { salesSupportRepairFields } from './trading-fx-sales-support-repair.mjs';
+import { salesSupportRepairFields, salesSupportViewAllFieldsObjects } from './trading-fx-sales-support-repair.mjs';
 
 const fingerprint = 'c13101bbdc7796ec98e22b0b0848c25c03bbace805c33d4c139e7871645314c3';
 export const tradingFxSalesSupportPath = 'profiles/Sales Support.profile-meta.xml';
@@ -28,7 +28,7 @@ const same = (left, right) => left?.sha256 === right.sha256 && left?.size === ri
 
 export function tradingFxProductionInventoryScope(environmentKey, reviewedFingerprint, mode) {
   return environmentKey === 'production' && reviewedFingerprint === fingerprint
-    && ['before-correction', 'after-correction'].includes(mode);
+    && ['before-correction', 'after-correction', 'after-view-all-fields-correction'].includes(mode);
 }
 
 export function matchesTradingFxProductionProjection({ name, observed, pinned, environmentKey, fingerprint, mode }) {
@@ -42,12 +42,12 @@ export function matchesTradingFxProductionProjection({ name, observed, pinned, e
 
 // Native metadata retrieval can serialize denied field entries explicitly. Remove only
 // the reviewed false/false entries, and require the complete pinned original profile.
-export function normalizeTradingFxDeniedProfile(bytes, pinned) {
+export function normalizeTradingFxDeniedProfile(bytes, pinned, mode) {
   if (!same(pinned, profileExpected)) return null;
   const xml = bytes.toString('utf8');
   const reviewed = new Set(salesSupportRepairFields);
   const captured = new Set();
-  const normalized = Buffer.from(xml.replace(
+  let normalizedText = xml.replace(
     /^    <fieldPermissions>\n        <editable>false<\/editable>\n        <field>([^<>]+)<\/field>\n        <readable>false<\/readable>\n    <\/fieldPermissions>\n/gmu,
     (entry, field) => {
       if (!reviewed.has(field)) return entry;
@@ -55,7 +55,19 @@ export function normalizeTradingFxDeniedProfile(bytes, pinned) {
       captured.add(field);
       return '';
     },
-  ));
-  return captured.size > 0 && same({ sha256: digest(normalized), size: normalized.length }, pinned)
-    ? pinned : null;
+  );
+  const override = mode === 'after-view-all-fields-correction';
+  if (override) {
+    for (const object of salesSupportViewAllFieldsObjects) {
+      const row = '    <objectPermissions>\n        <allowCreate>true</allowCreate>\n'
+        + '        <allowDelete>true</allowDelete>\n        <allowEdit>true</allowEdit>\n'
+        + '        <allowRead>true</allowRead>\n        <modifyAllRecords>true</modifyAllRecords>\n'
+        + '        <object>' + object + '</object>\n        <viewAllFields>false</viewAllFields>\n'
+        + '        <viewAllRecords>true</viewAllRecords>\n    </objectPermissions>\n';
+      if (normalizedText.split(row).length !== 2) return null;
+      normalizedText = normalizedText.replace(row, row.replace('<viewAllFields>false</viewAllFields>', '<viewAllFields>true</viewAllFields>'));
+    }
+  }
+  const normalized = Buffer.from(normalizedText);
+  return (override || captured.size > 0) && same({ sha256: digest(normalized), size: normalized.length }, pinned) ? pinned : null;
 }
