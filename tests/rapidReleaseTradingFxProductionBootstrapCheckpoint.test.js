@@ -3,7 +3,10 @@ import test from 'node:test';
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import { createManifest, digest, targets } from '../scripts/lib/rapid-release/contract.mjs';
 import { LOCAL_MIRROR_ENVIRONMENT } from '../scripts/lib/rapid-release/local-mirror-handoff.mjs';
-import { readTradingFxProductionBootstrapCheckpoint, verifyTradingFxProductionBootstrapCheckpoint } from '../scripts/lib/rapid-release/trading-fx-production-bootstrap-checkpoint.mjs';
+import {
+  buildTradingFxProductionBootstrapClosure, readTradingFxProductionBootstrapCheckpoint, readTradingFxProductionBootstrapClosure,
+  TRADING_FX_PRODUCTION_BOOTSTRAP_PREIMAGE_DIGEST, verifyTradingFxProductionBootstrapCheckpoint, verifyTradingFxProductionBootstrapClosure,
+} from '../scripts/lib/rapid-release/trading-fx-production-bootstrap-checkpoint.mjs';
 
 const repository = targets().repository;
 const salesforce = FCOS_CONNECTION_POLICY.providers.find(({ id }) => id === 'salesforce');
@@ -49,11 +52,11 @@ function fixture() {
   const intent = (phase, request, id) => append(`${phase}.intent`, { operationId: `${releaseId}-${phase}`, requestHash: digest(request), request }, id);
   const checkpoint = (stage, operation, outcome, details = {}, id) =>
     append('salesforce.checkpoint', { stage, operation, outcome, fingerprint, evidenceDigest: digest([stage, operation, outcome, details]), ...details }, id);
-  const job = (stage, operation, id, validationId, packageSha256) => {
+  const job = (stage, operation, id, validationId, packageSha256, resolvedId) => {
     const submitted = { id, validationId, submittedAt: time(records.length + 20), ...(packageSha256 ? { packageSha256 } : {}) };
     checkpoint(stage, operation, 'pending', { job: { ...submitted, id: null } });
     checkpoint(stage, operation, 'pending', { job: submitted });
-    checkpoint(stage, operation, 'resolved', { job: submitted });
+    checkpoint(stage, operation, 'resolved', { job: submitted }, resolvedId);
   };
   const permission = stage => {
     const name = 'Fcos_Trading_FX_Data';
@@ -107,7 +110,7 @@ function fixture() {
   job('qat', 'deployment', '0AfBh000006jyZGKAY', qatValidation);
   const check = mirror('check', 2, 7800733557, 7800752026, publication.row);
   checkpoint('production', 'preparation', 'evidence', { preparation: { status: 'awaiting-authorized-bootstrap' } });
-  job('production', 'bootstrap', '0Affu000001AFzhCAG', null, bootstrapPackage);
+  job('production', 'bootstrap', '0Affu000001AFzhCAG', null, bootstrapPackage, 7800775625);
   checkpoint('production', 'restoration-checkpoint', 'evidence', {}, 7800779913);
 
   const run = { id: runId, run_attempt: runAttempt, repository: { id: 1278654816, full_name: repository }, actor: owner, triggering_actor: owner,
@@ -183,4 +186,49 @@ test('native reader refuses a reconstructed journal with a different original ma
     return rows.find(row => path === `/repos/${repository}/deployments/${row.id}`);
   }, write: () => assert.fail('Read-only verifier attempted a provider write') };
   await assert.rejects(readTradingFxProductionBootstrapCheckpoint({ github }), /MANIFEST_CHANGED/);
+  await assert.rejects(readTradingFxProductionBootstrapClosure({ github, receiptId: 500 }), /MANIFEST_CHANGED/);
+});
+
+function closureFixture() {
+  const f = fixture();
+  const checkpoint = verifyTradingFxProductionBootstrapCheckpoint(f);
+  const proposal = buildTradingFxProductionBootstrapClosure({
+    checkpoint, productionPreimageEvidenceDigest: TRADING_FX_PRODUCTION_BOOTSTRAP_PREIMAGE_DIGEST,
+  });
+  const receipt = f.append('prerequisites.result', proposal.result, 500);
+  Object.assign(receipt, { creator: owner, task: 'fcos-release-journal', ref: sha, created_at: time(63) });
+  return { ...f, checkpoint, proposal, receipt, receiptId: receipt.id };
+}
+
+test('the closure requires reviewed five-path preimage evidence and records a terminal partial outcome', () => {
+  const f = closureFixture();
+  const { checkpoint, proposal: { result, expectedPreviousHash } } = f;
+  assert.throws(() => buildTradingFxProductionBootstrapClosure({ checkpoint }), /PREIMAGE_REQUIRED/);
+  assert.throws(() => buildTradingFxProductionBootstrapClosure({ checkpoint, productionPreimageEvidenceDigest: digest('unreviewed') }),
+    /PREIMAGE_REQUIRED/);
+  assert.equal(expectedPreviousHash, checkpoint.lastRecordHash);
+  assert.equal(result.productionPreimageEvidenceDigest, TRADING_FX_PRODUCTION_BOOTSTRAP_PREIMAGE_DIGEST);
+  assert.equal(result.bootstrapJob, '0Affu000001AFzhCAG');
+  assert.match(result.outcome, /stopped_after_successful_production_bootstrap/);
+  assert.equal(result.result, undefined);
+  assert.equal(verifyTradingFxProductionBootstrapClosure({ ...f, records: [...f.records].reverse() }), f.receipt);
+  assert.throws(() => verifyTradingFxProductionBootstrapCheckpoint(f), /JOURNAL_CHANGED/);
+});
+
+test('the closure refuses an untrusted, early, modified or nonterminal owner row', () => {
+  const invalid = [
+    f => { f.receipt.creator = bot; },
+    f => { f.receipt.created_at = f.checkpoint.lastRecord.created_at; },
+    f => { f.receipt.ref = 'main'; },
+    f => { f.receipt.payload.data.productionPreimageEvidenceDigest = digest('different proof'); rehash(f.records); },
+    f => { f.receipt.payload.data.outcome = 'applied'; rehash(f.records); },
+    f => { f.records[39].payload.data.evidenceDigest = digest('replaced prefix evidence'); rehash(f.records); },
+    f => { f.records[39].creator = owner; },
+    f => { f.append('promote.intent', { operationId: 'unexpected' }); },
+  ];
+  for (const change of invalid) {
+    const f = closureFixture();
+    change(f);
+    assert.throws(() => verifyTradingFxProductionBootstrapClosure(f), /CLOSURE_(?:CHECKPOINT_CHANGED|CHANGED|REQUIRED)/);
+  }
 });

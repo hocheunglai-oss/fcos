@@ -216,7 +216,16 @@ export function vercelProvider({ manifest, github, env = process.env, execute = 
         const execution = await verifyExecution({ github, manifest, env, phase });
         await assertNativeHandoverState({ handover: execution.handover, env });
         if (['stage', 'promote'].includes(phase) && hasTradingFxSigningLocator(manifest.prerequisites?.plan)) {
-          await verifyTradingFxSigningConfig({ manifest, previous: TRADING_FX_SIGNING_BASELINE,
+          let signingManifest = manifest;
+          const recoveryId = manifest.prerequisites.plan.tradingFxProductionBootstrapRecoveryReceiptId;
+          if (recoveryId !== undefined) {
+            const { readTradingFxProductionBootstrapClosure } = await import('./trading-fx-production-bootstrap-checkpoint.mjs');
+            const { assertTradingFxProductionBootstrapSuccessor } = await import('./trading-fx-production-bootstrap-successor.mjs');
+            const { checkpoint } = await readTradingFxProductionBootstrapClosure({ github, receiptId: recoveryId });
+            assertTradingFxProductionBootstrapSuccessor(manifest, checkpoint.prior);
+            signingManifest = checkpoint.prior;
+          }
+          await verifyTradingFxSigningConfig({ manifest: signingManifest, previous: TRADING_FX_SIGNING_BASELINE,
             github, ownerId: execution.run.actor.id, provider });
         }
       }

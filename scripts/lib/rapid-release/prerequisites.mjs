@@ -35,13 +35,17 @@ function protectedSalesforceContext({ manifest, approval, staged, journal, provi
     && typeof provider?.assertOwnership === 'function' && typeof provider?.verifyApproval === 'function',
   'SALESFORCE_PROTECTED_OWNERSHIP_REQUIRED');
   const policy = FCOS_CONNECTION_POLICY.providers.find(item => item.id === 'salesforce');
-  const allowedOperation = /^(?:validation|deployment|bootstrap|shared-publication|permission:[A-Za-z][A-Za-z0-9_]*)$/;
+  const allowedOperation = /^(?:validation|deployment|bootstrap|sales-support-correction|shared-publication|permission:[A-Za-z][A-Za-z0-9_]*)$/;
   return {
     ownership: {
       async assert(binding) {
         const { stage, orgId, operation } = binding;
         requireCondition(binding.fingerprint === fingerprint && allowedOperation.test(operation || '')
           && policy.environments.some(environment => environment.key === stage && environment.orgId === orgId)
+          && (operation !== 'sales-support-correction' || (stage === 'production'
+            && manifest.prerequisites.adapter === 'trading-fx-prerequisites'
+            && Number.isSafeInteger(plan.tradingFxProductionBootstrapRecoveryReceiptId)
+            && plan.tradingFxProductionBootstrapRecoveryReceiptId > 0 && plan.salesSupportRepair))
           && (operation !== 'shared-publication' || stage === 'devee'), 'SALESFORCE_PROTECTED_OPERATION_MISMATCH');
         assertAuthorization(approval, manifest, staged);
         await provider.verifyApproval(approval, { manifest, staged });

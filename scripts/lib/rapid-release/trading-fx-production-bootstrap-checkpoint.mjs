@@ -12,6 +12,11 @@ const repositoryId = 1278654816;
 const environment = 'fcos-release-journal-v1';
 const workflowPath = '.github/workflows/fcos-rapid-release.yml';
 const permissionName = 'Fcos_Trading_FX_Data';
+const checkpointLength = 41;
+export const TRADING_FX_PRODUCTION_BOOTSTRAP_STOPPED = 'trading_fx_stopped_after_successful_production_bootstrap_with_verified_partial_effects';
+// Canonical digest of the reviewed Production inventory delta, native profile
+// grants, and exact RecordType projection reports from the stopped attempt.
+export const TRADING_FX_PRODUCTION_BOOTSTRAP_PREIMAGE_DIGEST = '0f9c7fc66c73dabaf626141a2816e07ff09f4c2e363bdaa49897760f5245e982';
 const expected = {
   runId: 43623944312, runAttempt: 2, releaseId: 'trading-fx-signed-after-manual-43620608639',
   manifestHash: 'c2d77a57ca70d953b19bb3605e52afe306a99971461b79d26e45e697a6aa2fad',
@@ -40,6 +45,7 @@ const mirrorPins = [
 const data = row => row?.payload?.data;
 const time = row => Date.parse(row?.created_at);
 const same = (left, right) => digest(left ?? null) === digest(right ?? null);
+const positiveId = value => Number.isSafeInteger(value) && value > 0;
 const isOwner = person => person?.id === ownerId && person.login === targets().account;
 const isBot = person => person?.id === botId && person.login === 'github-actions[bot]';
 const orgId = stage => salesforce.environments.find(item => item.key === stage).orgId;
@@ -47,6 +53,10 @@ const event = (row, name, id) => row?.payload?.event === name && (id === undefin
 const isCheckpoint = (row, stage, operation, outcome) => event(row, 'salesforce.checkpoint')
   && data(row)?.fingerprint === expected.fingerprint && isDigest(data(row).evidenceDigest)
   && data(row).stage === stage && data(row).operation === operation && data(row).outcome === outcome;
+
+function journalIdentityDigest(records) {
+  return digest(records.map(row => [row.id, row.created_at, row.creator?.id, row.creator?.login, row.sha, row.environment]));
+}
 
 function verifyMirror({ pair, pin, manifestHash, intent, checkpoint, after, jobs }) {
   const { request, receipt } = pair ?? {};
@@ -80,10 +90,10 @@ export function verifyTradingFxProductionBootstrapCheckpoint({ originalManifest,
   'TRADING_FX_PRODUCTION_BOOTSTRAP_MANIFEST_CHANGED');
 
   const chain = validateChain(records, manifestHash, prior.releaseId);
-  requireCondition(records.length === 41 && chain.length === records.length
+  requireCondition(records.length === checkpointLength && chain.length === records.length
     && new Set(chain.map(row => row.id)).size === chain.length
     && chain.every((row, index) => isBot(row.creator) && row.sha === prior.candidate.sha
-      && row.environment === environment && Number.isSafeInteger(row.id) && row.id > 0
+      && row.environment === environment && positiveId(row.id)
       && Number.isFinite(time(row)) && (!index || time(chain[index - 1]) <= time(row))),
   'TRADING_FX_PRODUCTION_BOOTSTRAP_JOURNAL_CHANGED');
   const [prepared, build, stageIntent, stageResult, staging, approval, prerequisite] = chain;
@@ -172,12 +182,69 @@ export function verifyTradingFxProductionBootstrapCheckpoint({ originalManifest,
   return {
     prior, manifestHash, runId, runAttempt, salesforceOperations, permissions, mirror: { publication, check },
     staged, staging, historicalApproval: approval, prerequisite, prerequisiteIntentId: prerequisite.id,
-    lastRecord: ended, lastRecordHash: ended.payload.recordHash,
+    lastRecord: ended, lastRecordHash: ended.payload.recordHash, journalIdentityDigest: journalIdentityDigest(chain),
+    goLiveCompletedAt: jobs.jobs.find(job => job.name === 'go-live').completed_at,
     nextSalesforcePhase: 'production-restoration-and-permission-readback',
   };
 }
 
-export async function readTradingFxProductionBootstrapCheckpoint({ github, originalManifest }) {
+// This closes only the original prerequisite fence. It neither reports an
+// applied release nor grants authority to continue Production writes.
+export function buildTradingFxProductionBootstrapClosure({ checkpoint, productionPreimageEvidenceDigest }) {
+  const { prior, manifestHash, runId, runAttempt, salesforceOperations, mirror, historicalApproval, prerequisite,
+    lastRecord, lastRecordHash, staged } = checkpoint;
+  const production = salesforceOperations?.at(-1);
+  const operationId = data(prerequisite)?.operationId;
+  requireCondition(manifestHash === validateManifest(prior) && prior.releaseId === expected.releaseId
+    && prior.candidate.sha === expected.candidateSha && prior.controllerSha === expected.controllerSha
+    && runId === expected.runId && runAttempt === expected.runAttempt
+    && event(prerequisite, 'prerequisites.intent', 7800349222) && operationId === `${prior.releaseId}-prerequisites`
+    && event(historicalApproval, 'approval.accepted', 7800347765) && staged?.id === expected.stagedId
+    && isCheckpoint(lastRecord, 'production', 'restoration-checkpoint', 'evidence')
+    && lastRecord.id === 7800779913 && isDigest(lastRecordHash) && lastRecordHash === lastRecord.payload.recordHash
+    && isDigest(checkpoint.journalIdentityDigest)
+    && isCheckpoint(production?.resolved, 'production', 'bootstrap', 'resolved')
+    && production.resolved.id === 7800775625 && data(production.resolved).job?.id === jobPins.at(-1)[3]
+    && mirror?.publication?.receipt?.id === mirrorPins[0].receiptId && mirror?.check?.receipt?.id === mirrorPins[1].receiptId,
+  'TRADING_FX_PRODUCTION_BOOTSTRAP_CLOSURE_CHECKPOINT_CHANGED');
+  requireCondition(productionPreimageEvidenceDigest === TRADING_FX_PRODUCTION_BOOTSTRAP_PREIMAGE_DIGEST,
+    'TRADING_FX_PRODUCTION_BOOTSTRAP_PREIMAGE_REQUIRED');
+  const evidence = {
+    originalRunId: runId, originalRunAttempt: runAttempt, originalIntent: prerequisite.id, approval: historicalApproval.id,
+    originalJournalHead: lastRecordHash, originalJournalIdentityDigest: checkpoint.journalIdentityDigest, stagedDeploymentId: staged.id,
+    bootstrapJob: data(production.resolved).job.id, bootstrapCheckpoint: production.resolved.id, restorationCheckpoint: lastRecord.id,
+    salesforceFingerprint: expected.fingerprint, salesforceSourceTreeHash: expected.sourceTreeHash,
+    mirrorPublicationReceipt: mirror.publication.receipt.id, mirrorCheckReceipt: mirror.check.receipt.id,
+    productionPreimageEvidenceDigest,
+  };
+  return {
+    expectedPreviousHash: lastRecordHash,
+    result: { operationId, outcome: TRADING_FX_PRODUCTION_BOOTSTRAP_STOPPED, ...evidence, evidenceDigest: digest(evidence) },
+  };
+}
+
+export function verifyTradingFxProductionBootstrapClosure({ checkpoint, records, receiptId }) {
+  requireCondition(positiveId(receiptId) && records.length === checkpointLength + 1, 'TRADING_FX_PRODUCTION_BOOTSTRAP_CLOSURE_REQUIRED');
+  const chain = validateChain(records, checkpoint.manifestHash, checkpoint.prior.releaseId);
+  const closure = chain.at(-1);
+  const prefix = chain.slice(0, -1);
+  const prefixEnd = chain.at(-2);
+  const { result, expectedPreviousHash } = buildTradingFxProductionBootstrapClosure({
+    checkpoint, productionPreimageEvidenceDigest: TRADING_FX_PRODUCTION_BOOTSTRAP_PREIMAGE_DIGEST,
+  });
+  requireCondition(chain.length === records.length && prefixEnd?.id === checkpoint.lastRecord.id
+    && journalIdentityDigest(prefix) === checkpoint.journalIdentityDigest
+    && prefixEnd.payload.recordHash === expectedPreviousHash && event(closure, 'prerequisites.result', receiptId)
+    && !prefix.some(row => row.id === receiptId) && isOwner(closure.creator)
+    && closure.environment === environment && closure.task === 'fcos-release-journal'
+    && closure.sha === expected.candidateSha && closure.ref === expected.candidateSha
+    && time(closure) >= Math.max(time(prefixEnd), Date.parse(checkpoint.goLiveCompletedAt))
+    && closure.payload.previousHash === expectedPreviousHash && same(data(closure), result)
+    && pendingOperations(chain).length === 0, 'TRADING_FX_PRODUCTION_BOOTSTRAP_CLOSURE_CHANGED');
+  return closure;
+}
+
+async function readNativeCheckpoint({ github, originalManifest, allowClosure = false }) {
   const repo = `/repos/${targets().repository}`;
   const nativeRun = `${repo}/actions/runs/${expected.runId}`;
   const [records, run, jobs, reviews, ...pairs] = await Promise.all([
@@ -194,10 +261,23 @@ export async function readTradingFxProductionBootstrapCheckpoint({ github, origi
   const original = data(own.find(row => row.id === 7791612280))?.manifest;
   requireCondition(original && digest(original) === expected.manifestHash
     && (originalManifest === undefined || same(original, originalManifest)), 'TRADING_FX_PRODUCTION_BOOTSTRAP_MANIFEST_CHANGED');
-  const result = verifyTradingFxProductionBootstrapCheckpoint({
-    originalManifest: original, records: own, run, jobs, reviews, mirrorPublication: pairs[0], mirrorCheck: pairs[1],
+  const prefix = allowClosure ? own.filter(row => row.payload.sequence < checkpointLength) : own;
+  const checkpoint = verifyTradingFxProductionBootstrapCheckpoint({
+    originalManifest: original, records: prefix, run, jobs, reviews, mirrorPublication: pairs[0], mirrorCheck: pairs[1],
   });
-  requireCondition(result.lastRecordHash === expected.terminalRecordHash, 'TRADING_FX_PRODUCTION_BOOTSTRAP_JOURNAL_CHANGED');
+  requireCondition(checkpoint.lastRecordHash === expected.terminalRecordHash, 'TRADING_FX_PRODUCTION_BOOTSTRAP_JOURNAL_CHANGED');
   await assertFrozenWorkflow({ github, controllerSha: expected.controllerSha, dispatcherSha: run.head_sha });
-  return result;
+  return { checkpoint, records: own };
+}
+
+export async function readTradingFxProductionBootstrapCheckpoint({ github, originalManifest }) {
+  const { checkpoint } = await readNativeCheckpoint({ github, originalManifest });
+  return checkpoint;
+}
+
+export async function readTradingFxProductionBootstrapClosure({ github, receiptId }) {
+  requireCondition(positiveId(receiptId), 'TRADING_FX_PRODUCTION_BOOTSTRAP_CLOSURE_REQUIRED');
+  const { checkpoint, records } = await readNativeCheckpoint({ github, allowClosure: true });
+  const receipt = verifyTradingFxProductionBootstrapClosure({ checkpoint, records, receiptId });
+  return { checkpoint, receipt };
 }

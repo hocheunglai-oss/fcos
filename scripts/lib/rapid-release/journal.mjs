@@ -65,9 +65,10 @@ export class DeploymentJournal {
   async checkpoint({ fingerprint, stage, operation, record }) {
     requireCondition(/^[a-f0-9]{64}$/.test(fingerprint || '')
       && ['devee', 'shared_mirror', 'qat', 'production'].includes(stage)
-      && /^(?:validation|deployment|bootstrap|publication|inventory-checkpoint|preparation|restoration-checkpoint|permission:[A-Za-z][A-Za-z0-9_]*)$/.test(operation || '')
+      && /^(?:validation|deployment|bootstrap|sales-support-correction|publication|inventory-checkpoint|preparation|restoration-checkpoint|permission:[A-Za-z][A-Za-z0-9_]*)$/.test(operation || '')
+      && (operation !== 'sales-support-correction' || stage === 'production')
       && record && typeof record === 'object' && !Array.isArray(record), 'SALESFORCE_CHECKPOINT_INVALID');
-    const providerOperation = /^(?:validation|deployment|bootstrap|publication|permission:)/.test(operation);
+    const providerOperation = /^(?:validation|deployment|bootstrap|sales-support-correction|publication|permission:)/.test(operation);
     const status = record.status;
     const outcome = !providerOperation || !status || ['observed', 'ready', 'awaiting-authorized-bootstrap', 'review-required'].includes(status)
       ? 'evidence'
@@ -75,7 +76,7 @@ export class DeploymentJournal {
         ? 'resolved'
         : 'pending';
     const data = { fingerprint, stage, operation, outcome, evidenceDigest: digest(record) };
-    if (['validation', 'deployment', 'bootstrap'].includes(operation) && Object.hasOwn(record, 'jobId')) {
+    if (['validation', 'deployment', 'bootstrap', 'sales-support-correction'].includes(operation) && Object.hasOwn(record, 'jobId')) {
       const validJob = value => typeof value === 'string' && /^0Af[A-Za-z0-9]{12}(?:[A-Za-z0-9]{3})?$/u.test(value);
       const { jobId, validationJobId, submittedAt } = record;
       const submitted = Date.parse(submittedAt);

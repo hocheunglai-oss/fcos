@@ -10,6 +10,7 @@ import { INVENTORY_BASELINE_MODE, NATIVE_CUSTOM_OBJECT_DEFAULTS, createReviewedS
 import { proveSalesforceInventoryAbsence } from './lib/salesforce-inventory-absence.mjs';
 import { assertLegacySalesforceDocumentAdmission } from './lib/salesforce-legacy-document-admission.mjs';
 import { comparePermissionSetDefinition, verifyPermissionSetCatalog } from './lib/salesforce-permission-projection.mjs';
+import { normalizeTradingFxDeniedProfile, tradingFxProductionInventoryScope, tradingFxSalesSupportPath } from './lib/rapid-release/trading-fx-production-inventory.mjs';
 import { supportsTradingFxFormulaWitness, verifyTradingFxFormulaWitnesses } from './lib/salesforce-trading-fx-formula-evidence.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -462,7 +463,7 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
     reconcile: adapter.reconcileSalesforceJob,
     verifyInventory: adapter.verifySalesforceInventory || function (environment, { plan, expectedInventory, expectedInventoryHash, expectedSourceTreeHash,
       expectedAbsentComponents = [], nativeExport = false, verifyApexProjection = false,
-      nativeBootstrap = false, projectionPaths = [], projectedNativeInventory = false }) {
+      nativeBootstrap = false, projectionPaths = [], projectedNativeInventory = false, profileRecovery }) {
       const manifest = plan.review.inventoryManifests?.[expectedInventoryHash];
       if (!manifest) throw new Error('Current Salesforce inventory requires an exact reviewed retrieval manifest.');
       const bytes = readFileSync(safeProjectFile(cwd, manifest.path));
@@ -538,10 +539,24 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
           ? new Set([...presentReviewed.filter(({ id }) => id.startsWith('CustomField:')).flatMap(({ files }) => files),
             ...retainedFields]) : null;
         const observed = readReviewedInventory(root, { nativeExport, supplementalRoot, matchingSupplementalPaths });
+        let inventoryFiles = observed.files;
+        let rawProfileEvidence;
+        if (projectedNativeInventory && tradingFxProductionInventoryScope(environment.key, plan.fingerprint, profileRecovery)) {
+          const known = expectedInventory[tradingFxSalesSupportPath];
+          const found = observed.files[tradingFxSalesSupportPath];
+          if (known && found && found.sha256 !== known.sha256) {
+            const normalized = normalizeTradingFxDeniedProfile(readFileSync(safeProjectFile(root, tradingFxSalesSupportPath)), known);
+            if (normalized) {
+              rawProfileEvidence = { rawProfileDigest: found.sha256, rawInventoryDigest: observed.inventoryHash };
+              inventoryFiles = { ...observed.files, [tradingFxSalesSupportPath]: normalized };
+            }
+          }
+        }
+        const observedNativeInventoryHash = rawProfileEvidence ? salesforcePromotionHash(inventoryFiles) : observed.inventoryHash;
         const inventoryMatches = projectedNativeInventory
           ? nativeBootstrap && projectionPaths.length > 0
-            && matchesProjectedNativeInventory(observed.files, expectedInventory, projectionPaths, {
-              environmentKey: environment.key, fingerprint: plan.fingerprint,
+            && matchesProjectedNativeInventory(inventoryFiles, expectedInventory, projectionPaths, {
+              environmentKey: environment.key, fingerprint: plan.fingerprint, profileRecovery,
             })
             && projectedNativeInventoryHash(expectedInventory, projectionPaths) === expectedInventoryHash
           : observed.inventoryHash === expectedInventoryHash;
@@ -566,15 +581,15 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
         const sourceTreeHash = expectedSourceTreeHash ? observed.sourceTreeHash : null;
         const evidenceSha256 = salesforcePromotionHash({ jobId, manifestSha256: manifest.sha256,
           identity, verifiedAt, inventoryHash: expectedInventoryHash, sourceTreeHash,
-          ...(projectedNativeInventory ? { observedNativeInventoryHash: observed.inventoryHash } : {}),
+          ...(projectedNativeInventory ? { observedNativeInventoryHash, ...rawProfileEvidence } : {}),
           ...(supplementalJobId ? (nativeBootstrap ? { metadataJobId: supplementalJobId, metadataManifestSha256: supplementalManifest.sha256 }
             : { apexJobId: supplementalJobId, apexManifestSha256: supplementalManifest.sha256 }) : {}),
           ...(nativeBootstrap ? { verifiedProjectionPaths: projectionPaths, supplementalObjectShells, ...(Object.keys(stableObjectShells).length ? { stableObjectShells } : {}), supplementalDuplicates: observed.supplementalDuplicates } : {}),
           ...metadataEvidence,
           ...(nativeExport ? { nativeSourceTreeHash: observed.sourceTreeHash, apexProjectionVerified: verifyApexProjection } : {}), ...absence });
         return { orgId: identity.orgId, identity, verifiedAt, sourceTreeHash, inventoryHash: expectedInventoryHash,
-          ...(projectedNativeInventory ? { observedNativeInventoryHash: observed.inventoryHash } : {}),
-          evidenceSha256, observedInventory: observed.files,
+          ...(projectedNativeInventory ? { observedNativeInventoryHash, ...rawProfileEvidence } : {}),
+          evidenceSha256, observedInventory: inventoryFiles,
           ...(nativeExport ? { nativeSourceTreeHash: observed.sourceTreeHash, apexProjectionVerified: verifyApexProjection } : {}),
           ...(nativeBootstrap ? { verifiedProjectionPaths: projectionPaths, supplementalObjectShells, ...(Object.keys(stableObjectShells).length ? { stableObjectShells } : {}), supplementalDuplicates: observed.supplementalDuplicates } : {}),
           ...metadataEvidence,
