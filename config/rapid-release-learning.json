@@ -545,6 +545,26 @@
       "measuredTimeSavedMs": null,
       "measuredCallsSaved": 4,
       "prevention": "Replay the original native responses and reject an absent stable field, changed bytes, unlisted fields and nonempty overlapping descriptors."
+    },
+    {
+      "id": "trading-fx-production-bootstrap-profile-deny",
+      "cause": "After the Trading FX Production bootstrap, Salesforce exported four record types with the intended currency choices and a Sales Support profile with 23 unexpected direct read grants. The FieldPermissions catalog confirmed those grants in Production and their absence in both sandboxes.",
+      "correction": "Keep the reviewed inventory guard. Qualify an explicit profile overlay for those 23 fields, and require zero direct read and edit grants plus unchanged unrelated entries. Retain the original terminal provider operations for a reviewed successor.",
+      "verification": {
+        "originalRunId": 43623944312,
+        "originalAttempt": 2,
+        "productionBootstrapId": "0Affu000001AFzhCAG",
+        "productionBootstrapReceiptId": 7800775625,
+        "deveeCheckOnlyJobId": "0AfHF000007GzzZ0AS",
+        "invalidFieldRejectedJobId": "0AfHF000007H0E50AK",
+        "reviewedDenials": 23,
+        "unchangedDeveeFieldPermissions": 1152,
+        "qualifiedTransportEvidenceSha256": "fdad2efcb92c8b760cc9b9c6f5015671222d1edce70de56adaa17e3c944e136b",
+        "providerWritesDuringQualification": 0
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Compare native profile field grants before and after bootstrap separately from exact record-type projections. The check-only package does not attest effective Production revocation."
     }
   ]
 }

@@ -1970,3 +1970,58 @@ test('Trading FX accepts only the exact deny-only QAT profile export at the fina
   assert.equal(matches({ ...observed, 'classes/Unchanged.cls': observed[fields[0]] }), false);
   assert.equal(matches(observed, { ...pinned, [profile]: { ...pinned[profile], size: 107618 } }), false);
 });
+
+test('Trading FX Production recovery accepts only the pinned currency projections and stops accepting readable profile exports after correction', () => {
+  const profile = 'profiles/Sales Support.profile-meta.xml';
+  const recordType = 'objects/STEM__c/recordTypes/Originated.recordType-meta.xml';
+  const pinned = {
+    [profile]: { sha256: '6721634e64a272df62c18f19f6adc8ee268c728213fcbfb150ed81ab46c82825', size: 104168 },
+    [recordType]: { sha256: '72f63a3504a9f22f2ce2071259f3c05f77a270fb73bdffebedcce81baf8f1efb', size: 7346 },
+    'classes/Unchanged.cls': { sha256: 'a'.repeat(64), size: 30 },
+  };
+  const observed = {
+    ...pinned,
+    [profile]: { sha256: '52635af25b7503a8d46820008650f6ed305ed4504f64be3c3e41012c76442dd7', size: 108267 },
+    [recordType]: { sha256: '00da4924a578719e8f59326c11357f33d7e63aae6c33700b686dfd120ac929ab', size: 7652 },
+  };
+  const context = { environmentKey: 'production', fingerprint: 'c13101bbdc7796ec98e22b0b0848c25c03bbace805c33d4c139e7871645314c3' };
+  const before = { ...context, profileRecovery: 'before-correction' };
+  const after = { ...context, profileRecovery: 'after-correction' };
+  assert.equal(matchesProjectedNativeInventory(observed, pinned, [], context), false);
+  assert.equal(matchesProjectedNativeInventory(observed, pinned, [], before), true);
+  assert.equal(matchesProjectedNativeInventory(observed, pinned, [], after), false);
+  assert.equal(matchesProjectedNativeInventory({ ...observed, [profile]: pinned[profile] }, pinned, [], after), true);
+  assert.equal(matchesProjectedNativeInventory({ ...observed, 'classes/Unchanged.cls': observed[profile] }, pinned, [], before), false);
+  assert.equal(matchesProjectedNativeInventory(observed, pinned, [], { ...before, fingerprint: 'b'.repeat(64) }), false);
+  assert.equal(matchesProjectedNativeInventory(observed, pinned, [], { ...before, environmentKey: 'qat' }), false);
+});
+
+test('Trading FX resumes exact Production preparation after correction supersedes the historical mirror', async () => {
+  const f = fixture({ bootstrap: true, inventoryBaseline: true });
+  try {
+    const originalOwnership = f.ownership.assert;
+    f.ownership.assert = async binding => {
+      if (binding.stage === 'production' && binding.operation === 'deployment') throw Error('interrupted before deploy');
+      return originalOwnership(binding);
+    };
+    await assert.rejects(f.run('approved-continuation', { authorization: f.authorization }), /interrupted before deploy/u);
+    const historical = f.journal.state.stages.shared_mirror.publication.result;
+    const validationJobId = f.journal.state.stages.production.validation.jobId;
+    delete f.journal.state.stages.shared_mirror.publication;
+    delete f.journal.state.stages.production.preparation;
+    f.externalJournal.readCheckpoints = async () => [
+      { fingerprint: f.plan.fingerprint, stage: 'shared_mirror', operation: 'publication', outcome: 'resolved',
+        mirror: { commit: historical.commit, pullRequest: historical.pullRequest.number } },
+      { fingerprint: f.plan.fingerprint, stage: 'production', operation: 'preparation', outcome: 'evidence',
+        preparation: { validationJobId } },
+    ];
+    f.ownership.assert = originalOwnership;
+    f.calls.length = 0;
+    const result = await f.run('apply', { authorization: f.authorization, retainedTradingFxMirror: historical,
+      repairProductionSalesSupport: () => f.calls.push(['correction', 'verified']) });
+    assert.equal(result.mode, 'applied');
+    assert.equal(f.journal.state.stages.production.preparation.validationJobId, validationJobId);
+    assert.ok(f.calls.findIndex(([op]) => op === 'correction') < f.calls.findIndex(([op, stage]) => op === 'deploy' && stage === 'production'));
+    assert.ok(!f.calls.some(([op]) => ['mirror', 'validate', 'bootstrap'].includes(op)));
+  } finally { f.cleanup(); }
+});

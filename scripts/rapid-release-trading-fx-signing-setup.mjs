@@ -178,6 +178,65 @@ async function closeFailedPreflight({plan, planHash, github, snapshot, env, nati
   return {state:'verified',originalRunId:original.id,receiptId:final[1].id,evidenceDigest,providerWrites:0};
 }
 
+const receiptRecoveryRunId = 43620608639;
+const receiptRecoveryHash = '6fb68b5db025ad84cc0f557488914cf097e23af634bf22ed14beb21105405db0';
+const receiptRecoveryWorkflow = '.github/workflows/fcos-rapid-trading-fx-signing-recovery.yml';
+
+async function recoverSigningReceipt({plan, github, snapshot, env, nativeDb, journal, salesforce, environment, receipt}) {
+  const pins = targets(), base = '/repos/' + pins.repository;
+  const runId = Number(env.GITHUB_RUN_ID);
+  const currentPath = base + '/actions/runs/' + runId;
+  const originalPath = base + '/actions/runs/' + receiptRecoveryRunId;
+  const planHash = digest(plan);
+  check(planHash === receiptRecoveryHash && env.GITHUB_ACTIONS === 'true'
+    && env.RUNNER_ENVIRONMENT === 'github-hosted' && env.GITHUB_REPOSITORY === pins.repository
+    && Number.isSafeInteger(runId) && runId > 0, 'SIGNING_SETUP_RECEIPT_RECOVERY_SCOPE_CHANGED');
+  const admit = async () => {
+    const [{user,repo},current,original,main,pointer,enabled,protection,jobs,reviews,oldReviews,manual,chain] =
+      await Promise.all([github.identity(),github.read(currentPath),github.read(originalPath),github.read(base+'/branches/main'),
+        github.read(base+'/actions/variables/FCOS_RAPID_RELEASE_HANDOVER_ID'),
+        github.read(base+'/actions/variables/FCOS_RAPID_RELEASE_ENABLED'),github.read(base+'/environments/fcos-production-release'),
+        github.read(currentPath+'/jobs'),github.read(currentPath+'/approvals'),github.read(originalPath+'/approvals'),
+        github.read(base+'/actions/runs/'+plan.manualRunId),journal.read()]);
+    const native = run => run.repository?.id === repoId && run.actor?.id === ownerId && run.actor.login === pins.account
+      && run.triggering_actor?.id === ownerId && run.head_branch === repo.default_branch && run.event === 'workflow_dispatch';
+    const reviewed = rows => rows.filter(row => row.state === 'approved' && row.user?.id === ownerId
+      && row.user.login === pins.account && row.environments?.some(item => item.id === protection.id && item.name === protection.name));
+    check(user.id === ownerId && user.login === pins.account && repo.id === repoId && repo.permissions?.admin === true
+      && native(current) && current.id === runId && current.status === 'in_progress' && current.run_attempt === 1
+      && current.head_sha === env.GITHUB_SHA && main.protected && main.commit.sha === env.GITHUB_SHA
+      && git(resolve('recovery'), ['rev-parse','HEAD']) === env.GITHUB_SHA && !git(resolve('recovery'), ['status','--porcelain'])
+      && nativeWorkflowPath(current) === receiptRecoveryWorkflow && current.display_title === 'Recover FCOS Trading FX signing 43620608639'
+      && enabled.value === 'true' && pointer.value === '7791036696' && protection.name === 'fcos-production-release'
+      && protection.can_admins_bypass === false && reviewed(reviews).length === 1
+      && jobs.jobs.filter(job => job.name === 'recover-signing-receipt' && job.status === 'in_progress').length === 1,
+    'SIGNING_SETUP_RECEIPT_RECOVERY_PROTECTION_CHANGED');
+    check(native(original) && original.id === receiptRecoveryRunId && original.run_attempt === 2
+      && original.status === 'completed' && original.conclusion === 'failure' && nativeWorkflowPath(original) === workflow
+      && original.display_title === 'FCOS Trading FX signing '+planHash+' '+plan.candidateSha && reviewed(oldReviews).length === 1,
+    'SIGNING_SETUP_RECEIPT_RECOVERY_ORIGINAL_CHANGED');
+    const review = reviewed(oldReviews)[0];
+    const approvalHash = digest({planHash,runId:original.id,ownerId,reviewId:review.id ?? null,state:review.state,
+      reviewer:review.user.id,environments:review.environments.map(({id,name})=>({id,name})).sort((a,b)=>a.id-b.id)});
+    const expected = [7791175046,7791185010,7791196780,7791207367];
+    check(expected.every((id,index) => chain[index]?.id === id)
+      && chain[0].payload.data.runId === original.id && chain[0].payload.data.approvalHash === approvalHash
+      && chain[2].payload.event === 'signing_provider.result' && chain[2].payload.data.provider === 'salesforce-certificate'
+      && chain[2].payload.data.outcome === 'verified'
+      && chain[3].payload.event === 'signing_provider.intent' && chain[3].payload.data.provider === 'vercel-config',
+    'SIGNING_SETUP_RECEIPT_RECOVERY_JOURNAL_CHANGED');
+    const handover = assertPermanentHandover(await github.read(base+'/deployments/'+pointer.value),plan,ownerId);
+    await Promise.all([nativeDb(handover),verifyTerminalManual({plan,github,snapshot,base,run:manual}),
+      assertFrozenWorkflow({github,controllerSha:plan.controllerSha,dispatcherSha:original.head_sha,path:workflow})]);
+    return {approvalHash,runId:original.id,maySubmit:true};
+  };
+  const rejectWrite = async () => check(false,'SIGNING_SETUP_RECEIPT_RECOVERY_FORBIDS_PROVIDER_WRITE');
+  const readOnly = driver => ({...driver,preflight:rejectWrite,submit:rejectWrite});
+  return executeSigningSetup({plan,journal,admission:admit,providers:{
+    'salesforce-certificate':readOnly(salesforce),'vercel-config':readOnly(environment),'owner-receipt':receipt,
+  }});
+}
+
 export async function runSigningSetup(env = process.env) {
   const plan = JSON.parse(env.FCOS_SIGNING_PLAN_JSON ?? '');
   validateSigningSetupPlan(plan);
@@ -199,7 +258,8 @@ export async function runSigningSetup(env = process.env) {
   const nativeDb = handover => assertNativeHandoverState({handover,env});
   const protectedAdmission = args => readNativeApproval({...args,github,snapshot,env,assertReady:nativeDb});
   const closing = env.FCOS_SIGNING_CLOSE_FAILED_PREFLIGHT === 'true';
-  if (!closing) {
+  const recovering = env.FCOS_SIGNING_RECOVER_RECEIPT === 'true';
+  if (!closing && !recovering) {
     await protectedAdmission({plan,planHash:digest(plan)});
     await verifyPredecessor(plan);
   }
@@ -227,6 +287,7 @@ export async function runSigningSetup(env = process.env) {
       return originalSalesforce.submit(context);
     };
     const receipt = createSigningReceiptDriver({github,ownerId,readEnvironment:environment.exactPostimage,verifyPredecessor});
+    if (recovering) return await recoverSigningReceipt({plan,github,snapshot,env,nativeDb,journal,salesforce,environment,receipt});
     return await executeSigningSetup({plan,journal,admission:protectedAdmission,
       providers:{'salesforce-certificate':salesforce,'vercel-config':environment,'owner-receipt':receipt}});
   } finally {rmSync(privateDirectory,{recursive:true,force:true});}

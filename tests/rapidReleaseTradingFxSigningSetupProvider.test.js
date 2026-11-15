@@ -31,7 +31,10 @@ function vercelFixture() {
     assert.equal(rows.length,3);
     return values;
   }};
-  const driver = createSigningVercelDriver({env,vercel,verifyPredecessor,readPublicKey:async()=>key,
+  const driver = createSigningVercelDriver({env,vercel,verifyPredecessor,readPublicKey:async ({plan: signingPlan}) => {
+      assert.equal(signingPlan,plan);
+      return key;
+    },
     readCatalog:async () => ({actorId:'fixture-actor',environment:normalizedSigningEnvironment(project,raw,[])}),
     async fetchImpl(url,options) {
       calls++;

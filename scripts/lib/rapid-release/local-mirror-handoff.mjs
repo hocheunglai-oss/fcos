@@ -41,13 +41,17 @@ export function createLocalMirrorRequest({ manifest, approval, reviewed, deploym
   const manifestHash = digest(manifest);
   const deadline = Date.parse(expiresAt);
   const approvedAt = Date.parse(approval?.approvedAt);
+  const repair = manifest.prerequisites?.plan?.salesSupportRepair;
+  const correction = repair?.correctionFingerprint === reviewed?.fingerprint && sha(repair?.sourceCommit)
+    && repair.sourceTreeHash === reviewed.binding?.sourceTreeHash;
   requireCondition(approval?.manifestHash === manifestHash && approval.nativeReviewVerified === true
     && ['publish', 'check', 'recover'].includes(mode) && positiveId(sequence)
     && positiveId(approval.runId) && positiveId(runAttempt) && sha(manifest.controllerSha) && sha(manifest.candidate?.sha)
     && isDigest(reviewed?.fingerprint) && isDigest(reviewed.binding?.sourceTreeHash) && isDigest(intentHash)
     && deployment?.status === 'Succeeded' && deployment.fingerprint === reviewed.fingerprint
     && deployment.orgId === reviewed.binding.orgIds?.devee && salesforceJob(deployment.jobId)
-    && salesforceJob(deployment.validationJobId) && deployment.jobId !== deployment.validationJobId
+    && (correction ? deployment.validationJobId === null
+      : salesforceJob(deployment.validationJobId) && deployment.jobId !== deployment.validationJobId)
     && approvedAt <= now && deadline <= approvedAt + 86_400_000
     && deadline > now && deadline <= now + LOCAL_MIRROR_WINDOW_MS,
   'LOCAL_MIRROR_REQUEST_INVALID');
@@ -56,6 +60,7 @@ export function createLocalMirrorRequest({ manifest, approval, reviewed, deploym
     runId: approval.runId, runAttempt, mode, sequence, fingerprint: reviewed.fingerprint, sourceTreeHash: reviewed.binding.sourceTreeHash,
     deveeOrgId: deployment.orgId, deploymentJobId: deployment.jobId, validationJobId: deployment.validationJobId,
     repository: publication.repository, repositoryId: publication.repositoryId,
+    ...(correction ? { correctionSourceSha: repair.sourceCommit } : {}),
     intentHash, expiresAt: new Date(deadline).toISOString(),
   };
 }

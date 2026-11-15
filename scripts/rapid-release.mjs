@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { verifyHostedTradingFxSalesSupportDenial } from './lib/rapid-release/trading-fx-sales-support-transport.mjs';
 import { fileURLToPath } from 'node:url';
 import { resolve, join } from 'node:path';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, cpSync } from 'node:fs';
@@ -12,7 +13,7 @@ import { githubClient, nativeApproval, verifyExecution, vercelProvider, assertNa
 import { runPrerequisites, verifyBeforeBootstrap, qualifiedAdapter } from './lib/rapid-release/prerequisites.mjs';
 import { readCandidateModuleInventory } from './lib/rapid-release/modules.mjs';
 import { nativeCompatibilityReader } from './lib/rapid-release/compatibility.mjs';
-import { hasTradingFxSigningLocator, TRADING_FX_SIGNING_BASELINE, verifyTradingFxSigningConfig } from './lib/rapid-release/trading-fx-signing-config.mjs';
+import { hasTradingFxSigningLocator, verifyTradingFxReleaseSigningConfig } from './lib/rapid-release/trading-fx-signing-config.mjs';
 
 const read = path => JSON.parse(readFileSync(resolve(path), 'utf8'));
 const write = (path, value) => { mkdirSync(resolve(path, '..'), { recursive: true }); writeFileSync(resolve(path), `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 }); };
@@ -133,14 +134,14 @@ async function rapidReleaseCommand(argv, env, runtime) {
     result = await promoteRelease({ manifest, journal, provider, approval, smoke,
       observe: async values => {
         if (hasTradingFxSigningLocator(manifest.prerequisites?.plan)) {
-          await verifyTradingFxSigningConfig({ manifest, previous: TRADING_FX_SIGNING_BASELINE,
-            github, ownerId: execution.run.actor.id, provider });
+          await verifyTradingFxReleaseSigningConfig({ manifest, github, ownerId: execution.run.actor.id, provider });
           const { verifyTradingFxCanonicalSigning } = await import('./lib/rapid-release/trading-fx-signing-probe.mjs');
           const signing = await verifyTradingFxCanonicalSigning({ ...values, provider, env, expectedRateDigest: values.signingRateDigest });
           return { ...await observeLive({ ...values, env }), signing };
         }
         return observeLive({ ...values, env });
       },
+      reverifyPrerequisites: () => verifyHostedTradingFxSalesSupportDenial({ cwd: controller, env }),
       prerequisites: values => runPrerequisites({ ...values, staged, journal, provider, controllerDirectory: controller, env }) });
   }
   if (opts.output) write(opts.output, result);
