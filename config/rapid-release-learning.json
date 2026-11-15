@@ -565,6 +565,24 @@
       "measuredTimeSavedMs": null,
       "measuredCallsSaved": null,
       "prevention": "Compare native profile field grants before and after bootstrap separately from exact record-type projections. The check-only package does not attest effective Production revocation."
+    },
+    {
+      "id": "trading-fx-profile-only-succeeded-with-grants-retained",
+      "cause": "The native Production report accepted the Sales Support profile-only package while the catalog still recorded all 23 direct reads.",
+      "correction": "Bind the same explicit denials and all 23 unchanged field definitions in the package. Stop on missing, extra, created or deleted fields and verify effective field permissions before resuming Production validation.",
+      "verification": {
+        "originalRunId": 43717634836,
+        "profileOnlyProductionJob": "0Affu000001AGpJCAW",
+        "observedReadsAfterReport": 23,
+        "unrelatedFieldRows": 1363,
+        "fieldBoundDeveeCheckOnlyJob": "0AfHF000007H5ld0AC",
+        "fieldBoundPackageComponents": 24,
+        "fieldBoundCheckOnlyElapsedMs": 11532,
+        "offlineConverterElapsedMs": 1007
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Require exact field definitions at package construction and preserve the catalog postcondition. The DEVEE check-only job confirms acceptance of package scope. Actual removal needs a verified applied result."
     }
   ]
 }

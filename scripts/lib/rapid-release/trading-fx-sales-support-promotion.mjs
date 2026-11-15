@@ -5,7 +5,7 @@ const operation = 'publication';
 const stage = 'shared_mirror';
 
 export async function promoteSalesSupportCorrection({ fingerprint, sourceTreeHash, verifySource, verifySandbox, context,
-  sandbox, mirror, originalMirror, production }) {
+  sandbox, mirror, originalMirror, retainedMirror, production }) {
   const orgId = fcosSalesforceEnvironment('devee').orgId;
   const completed = result => {
     requireCondition(result?.verified === true && result.intentRecorded === true && isDigest(result.evidenceDigest),
@@ -31,7 +31,9 @@ export async function promoteSalesSupportCorrection({ fingerprint, sourceTreeHas
   const mode = intent ? 'publish' : checkpoint.outcome === 'resolved' ? 'check' : 'recover';
   const checked = await mirror(mode, deployment, intent);
   requireCondition(checked?.sourceTreeHash === sourceTreeHash && checked.sourceDeploymentJobId === devee.jobId
-    && checked.pullRequest?.number === originalMirror.pullRequest.number && checked.commit !== originalMirror.commit,
+    && checked.pullRequest?.number === originalMirror.pullRequest.number && checked.commit !== originalMirror.commit
+    && (!retainedMirror || (checked.commit === retainedMirror.commit && retainedMirror.sourceTreeHash === sourceTreeHash
+      && retainedMirror.pullRequest?.number === checked.pullRequest.number)),
   'TRADING_FX_SALES_SUPPORT_MIRROR_CHANGED');
   if (!checkpoint || checkpoint.outcome !== 'resolved') {
     await context.journal.checkpoint({ fingerprint, stage, operation, record: { status: 'Succeeded', result: checked } });

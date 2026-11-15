@@ -5,7 +5,7 @@ import test from 'node:test';
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
 import { digest } from '../scripts/lib/rapid-release/contract.mjs';
 import {
-  salesSupportFieldSnapshot, salesSupportRepairFields, salesSupportRepairPackage,
+  fieldBoundDenialDigests, salesSupportFieldSnapshot, salesSupportRepairFields, salesSupportRepairPackage,
 } from '../scripts/lib/rapid-release/trading-fx-sales-support-repair.mjs';
 import {
   applyTradingFxSalesSupportCorrection, applyTradingFxSalesSupportSandboxCorrection, runSalesSupportCorrection,
@@ -40,7 +40,7 @@ function harness(stage = 'production') {
     now: () => new Date(date),
     ownership: {
       assert(binding) {
-        assert.deepEqual(binding, { fingerprint, stage, orgId: target.orgId, operation });
+        assert.deepEqual(binding, { fingerprint: options.fingerprint, stage, orgId: target.orgId, operation });
         calls.push('lease');
         return { ...binding, receiptId, expiresAt: '2026-11-15T12:00:00.000Z' };
       },
@@ -337,5 +337,38 @@ test('keeps partial, ambiguous, check-only or drifted terminal jobs pending', as
     assert.equal(checkpoints.at(-1).checkpoint.outcome, 'pending');
     assert.equal(checkpoints.at(-1).checkpoint.terminalOutcome, undefined);
     assert.equal(calls.filter(call => call === 'submit').length, 1);
+  }
+});
+
+
+test('field-bound readback accepts only the exact existing 24 components and denies all original grants', async () => {
+  const packets = [undefined, 'duplicate-field', 'field-created', 'grant-still-present', 'prior-package'];
+  for (const variant of packets) {
+    const { apply, calls, options, scenario, checkpoints } = harness();
+    const source = { sourceCommit: 'a'.repeat(40), sourceTreeHash: digest('corrected source'),
+      sourceProfileDigest: digest('corrected profile'), profileDigest: packet.profileDigest,
+      manifestDigest: packet.manifestDigest, ...fieldBoundDenialDigests };
+    options.repair = { ...source, correctionFingerprint: digest(source) };
+    options.fingerprint = options.repair.correctionFingerprint;
+    options.journal.checkpoint({ fingerprint: options.fingerprint, stage: 'production', operation, record: {
+      status: 'submitted', jobId, submittedAt: date, validationJobId: null, packageSha256: variant === 'prior-package'
+        ? digest({ profileDigest: packet.profileDigest, manifestDigest: packet.manifestDigest }) : source.fieldBoundPackageSha256,
+    } });
+    const fields = salesSupportRepairFields.map((Field, index) => ({
+      componentType: 'CustomField', fullName: variant === 'duplicate-field' && index === 0 ? salesSupportRepairFields[1] : Field,
+      success: true, created: variant === 'field-created' && index === 0, deleted: false,
+    }));
+    scenario.afterAllowed = variant === 'grant-still-present';
+    scenario.reportOverrides = { numberComponentsTotal: 24, numberComponentsDeployed: 24, details: { componentSuccesses: [
+      ...fields, { componentType: 'Profile', fullName: 'Sales Support', fileName: 'zip/profiles/Sales Support.profile', success: true },
+    ] } };
+    if (!variant) {
+      assert.equal((await apply()).record.manifestDigest, source.fieldBoundManifestDigest);
+      assert.equal(checkpoints.at(-1).record.proof.fields, 23);
+    } else {
+      await assert.rejects(apply(), /ORIGINAL_JOB_SCOPE_CHANGED|DENY_UNVERIFIED|CHECKPOINT_CHANGED/u, variant);
+      assert.equal(checkpoints.at(-1).record.status, 'submitted');
+    }
+    assert.equal(calls.includes('submit'), false);
   }
 });
