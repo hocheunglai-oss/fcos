@@ -281,3 +281,11 @@ export async function readTradingFxProductionBootstrapClosure({ github, receiptI
   const receipt = verifyTradingFxProductionBootstrapClosure({ checkpoint, records, receiptId });
   return { checkpoint, receipt };
 }
+
+export async function readTradingFxProductionBootstrapClosureState({ github }) {
+  const { checkpoint, records } = await readNativeCheckpoint({ github, allowClosure: true });
+  const suffix = records.filter(row => row.payload.sequence >= checkpointLength);
+  if (!suffix.length) return { checkpoint };
+  requireCondition(suffix.length === 1, 'TRADING_FX_PRODUCTION_BOOTSTRAP_CLOSURE_CHANGED');
+  return { checkpoint, receipt: verifyTradingFxProductionBootstrapClosure({ checkpoint, records, receiptId: suffix[0].id }) };
+}

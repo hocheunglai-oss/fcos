@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -8,7 +8,7 @@ import { assertPermanentHandover, githubClient, nativeWorkflowPath, vercelProvid
 import { assertNativeHandoverState, nativeCompatibilityReader } from './lib/rapid-release/compatibility.mjs';
 import { DeploymentJournal } from './lib/rapid-release/journal.mjs';
 import {
-  buildTradingFxProductionBootstrapClosure, readTradingFxProductionBootstrapCheckpoint,
+  buildTradingFxProductionBootstrapClosure, readTradingFxProductionBootstrapClosureState,
   readTradingFxProductionBootstrapClosure, TRADING_FX_PRODUCTION_BOOTSTRAP_PREIMAGE_DIGEST,
 } from './lib/rapid-release/trading-fx-production-bootstrap-checkpoint.mjs';
 import { verifyTradingFxSalesSupportReadGrants } from './lib/rapid-release/trading-fx-sales-support-transport.mjs';
@@ -27,20 +27,40 @@ async function main(env) {
   const { user, repo } = await github.identity();
   check(user.id === ownerId && user.login === targets().account && repo.id === 1278654816 && repo.permissions.admin,
     'BOOTSTRAP_CLOSURE_OWNER_REQUIRED');
-  const [native, branch, pointer, history, checkpoint] = await Promise.all([
+  const [native, branch, pointer, history, state] = await Promise.all([
     github.read(base + '/actions/runs/' + env.GITHUB_RUN_ID),
     github.read(base + '/branches/main'),
     github.read(base + '/actions/variables/FCOS_RAPID_RELEASE_HANDOVER_ID'),
     github.read(base + '/actions/workflows/' + workflow.split('/').at(-1) + '/runs?event=workflow_dispatch&per_page=100'),
-    readTradingFxProductionBootstrapCheckpoint({ github }),
+    readTradingFxProductionBootstrapClosureState({ github }),
   ]);
   check(native.status === 'in_progress' && nativeWorkflowPath(native) === workflow
     && native.actor?.id === ownerId && native.triggering_actor?.id === ownerId
     && native.event === 'workflow_dispatch' && native.repository.id === repo.id && native.head_branch === repo.default_branch
     && native.head_sha === env.GITHUB_SHA && branch.protected && branch.commit.sha === env.GITHUB_SHA
-    && native.run_attempt === 1 && git(process.cwd(), ['rev-parse', 'HEAD']) === env.GITHUB_SHA
+    && String(native.run_attempt) === env.GITHUB_RUN_ATTEMPT && git(process.cwd(), ['rev-parse', 'HEAD']) === env.GITHUB_SHA
     && pointer.value === '7791036696' && history.total_count === 1 && history.workflow_runs?.[0]?.id === native.id,
   'BOOTSTRAP_CLOSURE_EXECUTION_IDENTITY_MISMATCH');
+
+  const { checkpoint, receipt: existing } = state;
+  if (existing) return { originalRunId: checkpoint.runId, receiptId: existing.id, closedPartialOutcome: true, providerBusinessWrites: 0 };
+  const stampPath = join(env.RUNNER_TEMP, 'fcos-trading-fx-bootstrap-preflight-' + native.id + '-' + native.run_attempt + '.json');
+  const stamp = { nativeRunId: native.id, nativeAttempt: native.run_attempt, source: env.GITHUB_SHA,
+    manifestHash: checkpoint.manifestHash, journalHead: checkpoint.lastRecordHash };
+  if (env.FCOS_CLOSURE_PHASE === 'append') {
+    const { verifiedAt, ...record } = JSON.parse(readFileSync(stampPath, 'utf8'));
+    check(digest(record) === digest(stamp) && Number.isFinite(Date.parse(verifiedAt))
+      && Date.now() - Date.parse(verifiedAt) < 180000 && Date.now() >= Date.parse(verifiedAt),
+    'BOOTSTRAP_CLOSURE_PREFLIGHT_REQUIRED');
+    return appendClosure({ github, checkpoint });
+  }
+  check(env.FCOS_CLOSURE_PHASE === 'preflight', 'BOOTSTRAP_CLOSURE_PHASE_REQUIRED');
+  for (let attempt = 1; attempt < native.run_attempt; attempt++) {
+    const previous = await github.read(base + '/actions/runs/' + native.id + '/attempts/' + attempt + '/jobs?per_page=100');
+    const job = previous.jobs?.find(job => job.name === 'close-partial-bootstrap' && job.run_attempt === attempt);
+    const step = job?.steps?.find(item => item.name === 'Append terminal partial outcome');
+    check(job?.status === 'completed' && step?.conclusion === 'skipped', 'BOOTSTRAP_CLOSURE_ACKNOWLEDGEMENT_UNCERTAIN');
+  }
 
   const manifest = checkpoint.prior;
   const handover = assertPermanentHandover(await github.read(base + '/deployments/' + pointer.value), manifest, ownerId);
@@ -97,7 +117,12 @@ async function main(env) {
     rmSync(directory, { recursive: true, force: true });
   }
 
-  const journal = new DeploymentJournal({ github, releaseId: manifest.releaseId, manifestHash: checkpoint.manifestHash,
+  writeFileSync(stampPath, JSON.stringify({ ...stamp, verifiedAt: new Date().toISOString() }), { mode: 0o600, flag: 'wx' });
+  return { originalRunId: checkpoint.runId, preflightVerified: true, providerBusinessWrites: 0 };
+}
+
+async function appendClosure({ github, checkpoint }) {
+  const journal = new DeploymentJournal({ github, releaseId: checkpoint.prior.releaseId, manifestHash: checkpoint.manifestHash,
     actorIds: [ownerId, 41898282] });
   const { result, expectedPreviousHash } = buildTradingFxProductionBootstrapClosure({
     checkpoint, productionPreimageEvidenceDigest: TRADING_FX_PRODUCTION_BOOTSTRAP_PREIMAGE_DIGEST,

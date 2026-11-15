@@ -15,6 +15,7 @@ import {
 const production = fcosSalesforceEnvironment('production');
 const jobId = '0Affu000001AFzhCAG';
 const otherJob = '0Affu000001XYZhCAG';
+const creatorId = '005123456789012ABC';
 const parentId = '0PS123456789012ABC';
 const operation = salesSupportCorrectionOperation;
 const fingerprint = digest('compiled review');
@@ -61,7 +62,17 @@ function harness() {
         return { id, username, instanceUrl, connectedStatus: 'Connected', ...scenario.identityOverrides };
       }
       if (args[0] === 'data') {
-        const query = args[3];
+        const query = args[args.indexOf('--query') + 1];
+        if (query.includes('FROM User')) return { done: true, records: [{ Id: creatorId }] };
+        if (query.includes('FROM DeployRequest')) {
+          assert.equal(args.includes('--use-tooling-api'), true);
+          assert.match(query, new RegExp(creatorId, 'u'));
+          calls.push('discover');
+          const records = scenario.discovered ? scenario.discovered.map(Id => ({
+            Id, CreatedDate: date, CreatedById: creatorId, CheckOnly: false, RollbackOnError: true, TestLevel: 'RunRelevantTests',
+          })) : [];
+          return { records, done: true, totalSize: records.length };
+        }
         if (query.includes('FROM Organization')) {
           return { done: true, records: [{ Id: production.orgId, IsSandbox: false }] };
         }
@@ -91,7 +102,7 @@ function harness() {
         return { id: jobId };
       }
       assert.deepEqual(args.slice(0, 7), ['project', 'deploy', 'report', '--job-id', jobId, '--wait', '15']);
-      assert.equal(checkpoints.at(-1).record.jobId, jobId);
+      assert.ok([jobId, null].includes(checkpoints.at(-1).record.jobId));
       calls.push('report');
       if (scenario.reportUnavailable) throw new Error('unavailable original job report');
       scenario.grantEffect = true;
@@ -137,14 +148,20 @@ test('a lost report resumes through the durable original job without a second su
   assert.equal(calls.filter(call => call === 'submit').length, 1);
 });
 
-test('an unknown submission ID fences all retries before provider access', async () => {
+test('an unknown submission ID permits only unique original-job discovery and readback', async () => {
   const { apply, calls, scenario, checkpoints } = harness();
   scenario.loseAcknowledgment = true;
   await assert.rejects(apply(), /ORIGINAL_SUBMISSION_UNKNOWN/u);
   assert.equal(checkpoints.at(-1).record.jobId, null);
   const priorCalls = calls.length;
   await assert.rejects(apply(), /ORIGINAL_SUBMISSION_UNKNOWN/u);
-  assert.deepEqual(calls.slice(priorCalls), ['lease']);
+  assert.deepEqual(calls.slice(priorCalls), ['lease', 'identity', 'discover']);
+  scenario.discovered = [jobId, otherJob];
+  await assert.rejects(apply(), /ORIGINAL_SUBMISSION_UNKNOWN/u);
+  scenario.discovered = [jobId];
+  assert.equal((await apply()).jobId, jobId);
+  assert.equal(calls.filter(call => call === 'submit').length, 1);
+  assert.deepEqual(checkpoints.map(({ record }) => record.jobId), [null, jobId]);
 });
 
 test('checks the exact organization, projected grants, and unrelated grants before submission', async () => {

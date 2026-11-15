@@ -32,11 +32,12 @@ jobs:
           node-version: 24.18.0
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: npm install --global vercel@54.20.1 @salesforce/cli@2.145.6 --ignore-scripts --no-audit --no-fund
-      - name: Reconcile original operation and append terminal receipts
+      - name: Verify original operation and current Production
         run: |
           node --input-type=module -e 'import fs from "node:fs";fs.writeFileSync(process.env.FCOS_RAPID_DATABASE_CA,process.env.FCOS_CA,{mode:0o600})'
           node scripts/rapid-release-trading-fx-partial-bootstrap-closure.mjs
         env:
+          FCOS_CLOSURE_PHASE: preflight
           FCOS_RAPID_CLOSURE_GITHUB_TOKEN: ${{ secrets.FCOS_RAPID_HANDOVER_GITHUB_TOKEN || secrets.FCOS_RELEASE_GH_TOKEN }}
           VERCEL_TOKEN: ${{ secrets.FCOS_RELEASE_VERCEL_TOKEN }}
           FCOS_RAPID_DATABASE_URL: ${{ secrets.FCOS_RAPID_READONLY_DATABASE_URL }}
@@ -44,3 +45,8 @@ jobs:
           FCOS_CA: ${{ secrets.FCOS_RAPID_DATABASE_CA }}
           FCOS_RAPID_SALESFORCE_PRODUCTION_PRIVATE_KEY: ${{ secrets.FCOS_RAPID_SALESFORCE_PRODUCTION_PRIVATE_KEY }}
           FCOS_RAPID_SALESFORCE_PRODUCTION_CLIENT_ID: ${{ secrets.FCOS_RAPID_SALESFORCE_PRODUCTION_CLIENT_ID }}
+      - name: Append terminal partial outcome
+        run: node scripts/rapid-release-trading-fx-partial-bootstrap-closure.mjs
+        env:
+          FCOS_CLOSURE_PHASE: append
+          FCOS_RAPID_CLOSURE_GITHUB_TOKEN: ${{ secrets.FCOS_RAPID_HANDOVER_GITHUB_TOKEN || secrets.FCOS_RELEASE_GH_TOKEN }}

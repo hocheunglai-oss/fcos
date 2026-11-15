@@ -3,8 +3,8 @@ import { salesSupportRepairFields } from './trading-fx-sales-support-repair.mjs'
 
 const fingerprint = 'c13101bbdc7796ec98e22b0b0848c25c03bbace805c33d4c139e7871645314c3';
 export const tradingFxSalesSupportPath = 'profiles/Sales Support.profile-meta.xml';
-const profileExpected = {"sha256": "6721634e64a272df62c18f19f6adc8ee268c728213fcbfb150ed81ab46c82825", "size": 104168};
-const profileObserved = {"sha256": "52635af25b7503a8d46820008650f6ed305ed4504f64be3c3e41012c76442dd7", "size": 108267};
+const profileExpected = { sha256: '6721634e64a272df62c18f19f6adc8ee268c728213fcbfb150ed81ab46c82825', size: 104168 };
+const profileObserved = { sha256: '52635af25b7503a8d46820008650f6ed305ed4504f64be3c3e41012c76442dd7', size: 108267 };
 const recordTypes = {
   'objects/STEM_Extra_Cost__c/recordTypes/Product_Charge.recordType-meta.xml': {
     expected: { sha256: '93d9b29f81954807861730ecc710c945f92142fa96714ebf611fbce1d677354c', size: 3308 },

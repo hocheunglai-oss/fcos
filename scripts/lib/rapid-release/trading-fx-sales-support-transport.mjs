@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fcosSalesforceEnvironment } from '../../../config/fcosConnections.js';
 import { assertSuccessfulSalesforceReport } from '../salesforce-promotion-journal.mjs';
+import { authenticateHostedSalesforce } from './salesforce-hosted-auth.mjs';
 import { digest, isDigest, requireCondition } from './contract.mjs';
 import {
   assertSalesSupportRepair, salesSupportFieldSnapshot, salesSupportProfile, salesSupportRepairFields, salesSupportRepairPackage,
@@ -22,13 +23,18 @@ const packageSha256 = digest({ profileDigest, manifestDigest });
 const check = (value, code) => requireCondition(value, 'TRADING_FX_SALES_SUPPORT_' + code);
 
 function command(program, args, cwd, { env, timeout }) {
-  const raw = execFileSync(program, args, { cwd, env, timeout, maxBuffer: 12 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+  let raw;
   try {
+    raw = execFileSync(program, args, { cwd, env, timeout, maxBuffer: 12 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
     const result = JSON.parse(raw);
     check(result?.status === 0, 'NATIVE_COMMAND_REFUSED');
     return result.result;
+  } catch (error) {
+    if (Buffer.isBuffer(error.stdout)) error.stdout.fill(0);
+    if (Buffer.isBuffer(error.stderr)) error.stderr.fill(0);
+    check(false, 'NATIVE_COMMAND_REFUSED');
   } finally {
-    raw.fill(0);
+    raw?.fill(0);
   }
 }
 
@@ -75,14 +81,37 @@ function assertReport(report, jobId, submittedAt, now) {
   const profiles = successes.filter(item => item.success === true && item.componentType === 'Profile' && item.fullName === salesSupportProfile
     && ['profiles/Sales Support.profile', 'zip/profiles/Sales Support.profile'].includes(item.fileName)
     && item.created !== true && item.deleted !== true);
-  const tests = Number(report.numberTestsTotal);
-  check(Number(report.numberComponentsTotal) === 1 && Number(report.numberComponentsDeployed) === 1 && profiles.length === 1
+  const tests = report.numberTestsTotal;
+  const warnings = report.details?.runTestResult?.codeCoverageWarnings;
+  check(report.numberComponentsTotal === 1 && report.numberComponentsDeployed === 1 && profiles.length === 1
     && descriptors.length <= 1 && successes.length === profiles.length + descriptors.length
-    && Number.isSafeInteger(tests) && tests >= 0 && Number(report.numberTestsCompleted) === tests
-    && !report.details?.runTestResult?.codeCoverageWarnings?.length, 'ORIGINAL_JOB_SCOPE_CHANGED');
+    && report.numberComponentErrors === 0 && report.numberTestErrors === 0
+    && Number.isSafeInteger(tests) && tests >= 0 && report.numberTestsCompleted === tests
+    && (warnings == null || (Array.isArray(warnings) && warnings.length === 0)), 'ORIGINAL_JOB_SCOPE_CHANGED');
   const completedAt = Date.parse(report.completedDate);
   check(completedAt >= Date.parse(submittedAt) - 30000 && completedAt <= now().getTime() + 30000, 'ORIGINAL_JOB_TIME_CHANGED');
   return report.completedDate;
+}
+
+function discoverOriginalJob(sf, submittedAt) {
+  const principal = sf(['data', 'query', '--query', "SELECT Id FROM User WHERE Username = '" + target.username + "'"]);
+  const creatorId = principal.records?.[0]?.Id;
+  check(principal.done === true && principal.records?.length === 1 && /^005[A-Za-z0-9]{15}$/u.test(creatorId || ''),
+    'ORIGINAL_SUBMISSION_PRINCIPAL_UNKNOWN');
+  const submitted = Date.parse(submittedAt);
+  const from = new Date(submitted - 30_000).toISOString();
+  const through = new Date(submitted + 120_000).toISOString();
+  const discovery = sf(['data', 'query', '--use-tooling-api', '--query',
+    'SELECT Id, CreatedById, CreatedDate, CheckOnly, RollbackOnError, TestLevel FROM DeployRequest'
+      + " WHERE CreatedById = '" + creatorId + "' AND CreatedDate >= " + from + ' AND CreatedDate <= ' + through]);
+  const records = discovery.records;
+  const job = records?.[0];
+  const createdAt = Date.parse(job?.CreatedDate);
+  check(discovery.done === true && records?.length === 1 && discovery.totalSize === 1 && jobPattern.test(job.Id)
+    && job.CreatedById === creatorId && createdAt >= Date.parse(from) && createdAt <= Date.parse(through)
+    && job.CheckOnly === false && job.TestLevel === 'RunRelevantTests' && job.RollbackOnError === true,
+    'ORIGINAL_SUBMISSION_UNKNOWN');
+  return job.Id;
 }
 
 function writePackage(folder) {
@@ -151,7 +180,6 @@ export async function runSalesSupportCorrection({
     && lease.operation === operation && isDigest(lease.receiptId)
     && Date.parse(lease.expiresAt) > now().getTime(), 'OWNERSHIP_EXPIRED');
   let saved = await current();
-  check(saved?.job.id !== null, 'ORIGINAL_SUBMISSION_UNKNOWN');
   verifyIdentity(sf);
   let before;
   if (!saved) {
@@ -177,7 +205,8 @@ export async function runSalesSupportCorrection({
   }
 
   // Only the durable original job may be polled. This branch never submits.
-  const { id: jobId, submittedAt } = saved.job;
+  const { id, submittedAt } = saved.job;
+  const jobId = id ?? discoverOriginalJob(sf, submittedAt);
   const report = sf(['project', 'deploy', 'report', '--job-id', jobId, '--wait', '15'], cwd, 16 * 60000);
   const completedAt = assertReport(report, jobId, submittedAt, now);
   verifyIdentity(sf);
@@ -191,4 +220,16 @@ export async function runSalesSupportCorrection({
   if (saved.outcome === 'pending') saved = await save(record);
   return { operationId: 'salesforce:production:' + operation, evidenceDigest: saved.evidenceDigest, record,
     jobId, verified: true, intentRecorded: true };
+}
+
+
+export function verifyHostedTradingFxSalesSupportDenial({ cwd, env }) {
+  const directory = mkdtempSync(join(tmpdir(), 'fcos-sales-support-readback-'));
+  try {
+    const commandEnvironment = authenticateHostedSalesforce({ directory, cwd, env: { ...env, HOME: directory },
+      onlyProductionForSigningRead: true, requireMirrorCredential: false });
+    return verifyTradingFxSalesSupportReadGrants({ cwd, commandEnvironment, read: false });
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 }
