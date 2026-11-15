@@ -4,66 +4,6 @@
   "recipes": [],
   "observations": [
     {
-      "id": "artifact-verification-repeats-inventory",
-      "cause": "Artifact verification hashed the entire tree again when returning the inventory it had already checked.",
-      "correction": "Return the inventory that passed digest, reference and build identity checks.",
-      "verification": {
-        "candidate": "b495d1bde6d06834c32212982c4597e20e6c7fe0",
-        "artifactDigest": "c51ad1e162d7d83317d665998f844be1640ac5031533c9880548dd4eeba93a00",
-        "platform": "darwin",
-        "node": "v24.18.0",
-        "verifiedFiles": 3604,
-        "iterationsPerVariant": 11,
-        "baselineMedianMs": 199.776,
-        "newMedianMs": 103.206,
-        "duplicateFileHashesAvoided": 3604,
-        "wrongDigestRefused": true,
-        "providerWrites": 0
-      },
-      "measuredTimeSavedMs": 96.57,
-      "measuredCallsSaved": 0,
-      "prevention": "Use the verified inventory for the return value and retain digest, external reference and build identity regression checks."
-    },
-    {
-      "id": "trading-fx-local-postgresql-locale-and-concurrency",
-      "cause": "Native PostgreSQL 17 on the local macOS host stopped during startup under the stripped test locale, while the candidate passed hosted Linux quality.",
-      "correction": "Use LC_ALL=C for local disposable PostgreSQL timing and keep the exact candidate, assertions and skip conditions unchanged.",
-      "verification": {
-        "candidate": "b495d1bde6d06834c32212982c4597e20e6c7fe0",
-        "platform": "darwin",
-        "node": "v24.18.0",
-        "resolvedNativePostgresStartup": true,
-        "files": 445,
-        "passed": 5661,
-        "failed": 0,
-        "skipped": 48,
-        "baselineConcurrency": 4,
-        "newConcurrency": 8,
-        "baselineMs": 66698,
-        "newMs": 45312,
-        "providerWrites": 0,
-        "regressionDigest": "045f96af3ee7289a1a40c2917eb0c4343f194096935f409e81b82defdda56d0d"
-      },
-      "measuredTimeSavedMs": 21386,
-      "measuredCallsSaved": 0,
-      "prevention": "Match the local fixture environment before measuring. Retain hosted runner defaults until the same workload proves a safe improvement there."
-    },
-    {
-      "id": "stage-queue-blocked-by-go-live-review",
-      "cause": "Native GitHub concurrency grouped an unaliased manual stage behind an unrelated Trading FX job awaiting reviewer authorization.",
-      "correction": "Serialize unaliased staging separately from live writes, keep one workflow per release ID, and use transaction advisory exclusion for stage submissions and handover. Recheck baseline before stage acceptance.",
-      "verification": {
-        "observedWaitingRun": 43581828763,
-        "observedBlockedStageRun": 43582562872,
-        "localRapidReleaseTestsPassed": 283,
-        "postgresAdvisoryContentionVerified": true,
-        "providerWritesDuringLocalVerification": 0
-      },
-      "measuredTimeSavedMs": null,
-      "measuredCallsSaved": null,
-      "prevention": "Workflow group separation, stale-baseline and same-deployment recovery fixtures, separate protected controller qualification before activation."
-    },
-    {
       "id": "trading-fx-xero-general-gate-inheritance",
       "cause": "The existing Production-wide financial switch is enabled, and new Trading FX native draft and HKD payment writers otherwise inherited it.",
       "correction": "Require a separate default-off switch before new native drafts or HKD payments can claim evidence or send. Keep existing USD and original-operation readback behavior.",
@@ -625,6 +565,101 @@
       "measuredTimeSavedMs": null,
       "measuredCallsSaved": null,
       "prevention": "Compare native profile field grants before and after bootstrap separately from exact record-type projections. The check-only package does not attest effective Production revocation."
+    },
+    {
+      "id": "trading-fx-profile-only-succeeded-with-grants-retained",
+      "cause": "The native Production report accepted the Sales Support profile-only package while the catalog still recorded all 23 direct reads.",
+      "correction": "Bind the same explicit denials and all 23 unchanged field definitions in the package. Stop on missing, extra, created or deleted fields and verify effective field permissions before resuming Production validation.",
+      "verification": {
+        "originalRunId": 43717634836,
+        "profileOnlyProductionJob": "0Affu000001AGpJCAW",
+        "observedReadsAfterReport": 23,
+        "unrelatedFieldRows": 1363,
+        "fieldBoundDeveeCheckOnlyJob": "0AfHF000007H5ld0AC",
+        "fieldBoundPackageComponents": 24,
+        "fieldBoundCheckOnlyElapsedMs": 11532,
+        "offlineConverterElapsedMs": 1007
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Require exact field definitions at package construction and preserve the catalog postcondition. The DEVEE check-only job confirms acceptance of package scope. Actual removal needs a verified applied result."
+    },
+    {
+      "id": "trading-fx-sales-support-view-all-fields-override",
+      "cause": "Production Sales Support had View All Fields on STEM and STEM Extra Cost. DEVEE and QAT did not have those overrides, so the original dry runs could not demonstrate Production revocation.",
+      "correction": "Pin the object permission rows and the field catalog before applying the profile overlay. Clear only those two overrides, require all 23 direct denials and verify the unrelated catalog again before promoting the application.",
+      "verification": {
+        "originalRunId": 43736325989,
+        "ineffectiveProductionJobId": "0Affu000001AH8fCAG",
+        "deveePositiveControlJobId": "0AfHF000007H7kD0AS",
+        "deveePositiveControlElapsedMs": 14807,
+        "unchangedFixtureFieldRows": 206,
+        "deveeExactCheckOnlyJobId": "0AfHF000007H7KR0A0",
+        "deveeExactCheckOnlyElapsedMs": 7766
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Model object permission overrides in the DEVEE positive control before approval. Preserve separate permission-set assignments and refuse an unexpected preimage or postimage."
+    },
+    {
+      "id": "artifact-verification-repeats-inventory",
+      "cause": "Artifact verification hashed the entire tree again when returning the inventory it had already checked.",
+      "correction": "Return the inventory that passed digest, reference and build identity checks.",
+      "verification": {
+        "candidate": "b495d1bde6d06834c32212982c4597e20e6c7fe0",
+        "artifactDigest": "c51ad1e162d7d83317d665998f844be1640ac5031533c9880548dd4eeba93a00",
+        "platform": "darwin",
+        "node": "v24.18.0",
+        "verifiedFiles": 3604,
+        "iterationsPerVariant": 11,
+        "baselineMedianMs": 199.776,
+        "newMedianMs": 103.206,
+        "duplicateFileHashesAvoided": 3604,
+        "wrongDigestRefused": true,
+        "providerWrites": 0
+      },
+      "measuredTimeSavedMs": 96.57,
+      "measuredCallsSaved": 0,
+      "prevention": "Use the verified inventory for the return value and retain digest, external reference and build identity regression checks."
+    },
+    {
+      "id": "trading-fx-local-postgresql-locale-and-concurrency",
+      "cause": "Native PostgreSQL 17 on the local macOS host stopped during startup under the stripped test locale, while the candidate passed hosted Linux quality.",
+      "correction": "Use LC_ALL=C for local disposable PostgreSQL timing and keep the exact candidate, assertions and skip conditions unchanged.",
+      "verification": {
+        "candidate": "b495d1bde6d06834c32212982c4597e20e6c7fe0",
+        "platform": "darwin",
+        "node": "v24.18.0",
+        "resolvedNativePostgresStartup": true,
+        "files": 445,
+        "passed": 5661,
+        "failed": 0,
+        "skipped": 48,
+        "baselineConcurrency": 4,
+        "newConcurrency": 8,
+        "baselineMs": 66698,
+        "newMs": 45312,
+        "providerWrites": 0,
+        "regressionDigest": "045f96af3ee7289a1a40c2917eb0c4343f194096935f409e81b82defdda56d0d"
+      },
+      "measuredTimeSavedMs": 21386,
+      "measuredCallsSaved": 0,
+      "prevention": "Match the local fixture environment before measuring. Retain hosted runner defaults until the same workload proves a safe improvement there."
+    },
+    {
+      "id": "stage-queue-blocked-by-go-live-review",
+      "cause": "Native GitHub concurrency grouped an unaliased manual stage behind an unrelated Trading FX job awaiting reviewer authorization.",
+      "correction": "Serialize unaliased staging separately from live writes, keep one workflow per release ID, and use transaction advisory exclusion for stage submissions and handover. Recheck baseline before stage acceptance.",
+      "verification": {
+        "observedWaitingRun": 43581828763,
+        "observedBlockedStageRun": 43582562872,
+        "localRapidReleaseTestsPassed": 283,
+        "postgresAdvisoryContentionVerified": true,
+        "providerWritesDuringLocalVerification": 0
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Workflow group separation, stale-baseline and same-deployment recovery fixtures, separate protected controller qualification before activation."
     },
     {
       "id": "salesforce-signing-cli-package-export-preflight",

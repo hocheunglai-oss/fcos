@@ -604,7 +604,7 @@ export function assertReviewedMirror(result, plan, policy, deploymentJobId) {
  * An uncertain submission is reconciled by an owner-supplied job ID, never blind resubmission.
  */
 export async function runReviewedSalesforceRelease({ plan, mode, policy, journal, provider, ownership, externalJournal,
-  authorization = null, now = () => new Date(), assertUnchanged, retainedDeveeInventory, retainedTradingFxMirror, repairProductionSalesSupport, replaceValidation = [], reconcile = {} }) {
+  authorization = null, now = () => new Date(), assertUnchanged, retainedDeveeInventory, retainedTradingFxMirror, repairProductionSalesSupport, salesSupportViewAllFieldsCorrection, replaceValidation = [], reconcile = {} }) {
   const approvedContinuation = mode === 'approved-continuation';
   if (!['prepare', 'apply', 'approved-continuation'].includes(mode)) throw new Error('Choose prepare, apply or approved-continuation.');
   if (retainedTradingFxMirror && typeof repairProductionSalesSupport !== 'function') {
@@ -913,7 +913,7 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
           throw new Error('Sales Support correction requires the authorized, verified Production bootstrap.');
         }
         await repairProductionSalesSupport();
-        profileRecovery = 'after-correction';
+        profileRecovery = salesSupportViewAllFieldsCorrection ? 'after-view-all-fields-correction' : 'after-correction';
       }
       const stage = journal.state.stages[environment.key] || {};
       const baseline = reviewedCheckpointInventory(plan, {}, environment.key);

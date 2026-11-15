@@ -1,6 +1,10 @@
 import { digest, requireCondition } from './contract.mjs';
 
 export const salesSupportProfile = 'Sales Support';
+export const fieldBoundDenialDigests = Object.freeze({
+  fieldBoundPackageSha256: 'a4fdb1289fdc2f76e36e15d0e8953a1fe7d428755bbe633e00388de020bb0527',
+  fieldBoundManifestDigest: 'ed26fbb48118795d0e4a5900c6bb24c5d2bfe52712c0a5265eaa6a54a00e33cc',
+});
 const extraCostFields = [
   ...['Buy', 'Sell'].flatMap(side => [
     'Currency', 'FX_Confirmed_At', 'FX_Rate', 'FX_Revision', 'FX_Side',
@@ -14,6 +18,7 @@ export const salesSupportRepairFields = Object.freeze([
   'STEM__c.Sell_Currency__c',
   'STEM__c.Sell_FX_Side__c',
 ].sort());
+export const salesSupportViewAllFieldsObjects = Object.freeze(['STEM_Extra_Cost__c', 'STEM__c']);
 
 export function salesSupportRepairPackage() {
   const header = '<?xml version="1.0" encoding="UTF-8"?>\n';
@@ -26,6 +31,23 @@ export function salesSupportRepairPackage() {
     + '        <members>Sales Support</members>\n        <name>Profile</name>\n'
     + '    </types>\n    <version>67.0</version>\n</Package>\n';
   return { profile, manifest, profileDigest: digest(profile), manifestDigest: digest(manifest) };
+}
+
+export function salesSupportViewAllFieldsRepairPackage() {
+  const packet = salesSupportRepairPackage();
+  const objectPermissions = salesSupportViewAllFieldsObjects.map(object => `    <objectPermissions>
+        <allowCreate>true</allowCreate>
+        <allowDelete>true</allowDelete>
+        <allowEdit>true</allowEdit>
+        <allowRead>true</allowRead>
+        <modifyAllRecords>true</modifyAllRecords>
+        <object>${object}</object>
+        <viewAllFields>false</viewAllFields>
+        <viewAllRecords>true</viewAllRecords>
+    </objectPermissions>
+`).join('');
+  const profile = packet.profile.replace('</Profile>', objectPermissions + '</Profile>');
+  return { ...packet, profile, profileDigest: digest(profile) };
 }
 
 // The native caller must pin the org and confirm ParentId is the single

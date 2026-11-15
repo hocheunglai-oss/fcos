@@ -155,7 +155,7 @@ async function rapidReleaseCommand(argv, env, runtime) {
         }
         return observeLive({ ...values, env });
       },
-      reverifyPrerequisites: () => verifyHostedTradingFxSalesSupportDenial({ cwd: controller, env }),
+      reverifyPrerequisites: () => verifyHostedTradingFxSalesSupportDenial({ cwd: controller, env, repair: manifest.prerequisites?.plan?.salesSupportRepair }),
       prerequisites: values => runPrerequisites({ ...values, staged, journal, provider, controllerDirectory: controller, env }) });
   }
   if (opts.output) write(opts.output, result);

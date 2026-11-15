@@ -9,7 +9,9 @@ import { REVIEWED_SALESFORCE_MODE, verifyReviewedOrgInventory } from './lib/sale
 import { verifySalesSupportRepairSource } from './lib/rapid-release/trading-fx-sales-support-source.mjs';
 import { verifyTradingFxSalesSupportSandboxJob } from './lib/rapid-release/trading-fx-sales-support-transport.mjs';
 import { readTradingFxProductionBootstrapClosure } from './lib/rapid-release/trading-fx-production-bootstrap-checkpoint.mjs';
-import { assertTradingFxProductionBootstrapSuccessor } from './lib/rapid-release/trading-fx-production-bootstrap-successor.mjs';
+import { readTradingFxSalesSupportNoEffectClosure } from './lib/rapid-release/trading-fx-sales-support-no-effect-checkpoint.mjs';
+import { readTradingFxFieldBoundNoEffectClosure } from './lib/rapid-release/trading-fx-field-bound-no-effect-checkpoint.mjs';
+import { assertTradingFxFieldBoundCorrectionSuccessor, assertTradingFxProductionBootstrapSuccessor, assertTradingFxViewAllFieldsCorrectionSuccessor } from './lib/rapid-release/trading-fx-production-bootstrap-successor.mjs';
 import { runReviewedMirror } from './sync-salesforce-reviewed-repository.mjs';
 import { assertAuthorization, digest, git, requireCondition, sourceSnapshot, targets, validateManifest } from './lib/rapid-release/contract.mjs';
 import { DeploymentJournal } from './lib/rapid-release/journal.mjs';
@@ -66,6 +68,8 @@ async function main() {
   'LOCAL_MIRROR_GITHUB_IDENTITY_MISMATCH');
   const request = nativeRequest.payload;
   const repair = plan.salesSupportRepair;
+  const fieldBoundCorrection = Boolean(repair?.fieldBoundPackageSha256);
+  const viewAllFieldsCorrection = repair?.viewAllFieldsCorrection === true;
   const correction = request?.correctionSourceSha !== undefined;
   let mirrorReview = reviewed;
   let correctionPath;
@@ -76,6 +80,7 @@ async function main() {
     verifySalesSupportRepairSource({ cwd: correctionPath, repair });
     mirrorReview = { fingerprint: repair.correctionFingerprint, binding: { sourceTreeHash: repair.sourceTreeHash, orgIds: reviewed.binding.orgIds } };
   }
+  requireCondition((!fieldBoundCorrection && !viewAllFieldsCorrection) || correction, 'LOCAL_MIRROR_CORRECTION_SOURCE_REQUIRED');
   requireCondition(nativeRequest.id === requestId && request?.manifestHash === manifestHash && request.controllerSha === manifest.controllerSha
     && request.candidateSha === manifest.candidate.sha && request.fingerprint === mirrorReview.fingerprint
     && request.sourceTreeHash === mirrorReview.binding.sourceTreeHash && request.deveeOrgId === reviewed.binding.orgIds.devee
@@ -123,12 +128,24 @@ async function main() {
     && mirror.outcome === (request.mode === 'check' ? 'resolved' : 'pending'), 'LOCAL_MIRROR_ORIGINAL_CHECKPOINT_REQUIRED');
   let originalMirror;
   if (correction) {
-    const { checkpoint } = await readTradingFxProductionBootstrapClosure({ github,
-      receiptId: plan.tradingFxProductionBootstrapRecoveryReceiptId });
-    assertTradingFxProductionBootstrapSuccessor(manifest, checkpoint.prior);
-    originalMirror = checkpoint.mirror.publication.proof;
+    if (viewAllFieldsCorrection) {
+      const { checkpoint } = await readTradingFxFieldBoundNoEffectClosure({ github,
+        receiptId: plan.tradingFxViewAllFieldsClosureReceiptId });
+      assertTradingFxViewAllFieldsCorrectionSuccessor(manifest, checkpoint.prior);
+      originalMirror = checkpoint.mirror;
+    } else if (fieldBoundCorrection) {
+      const { checkpoint } = await readTradingFxSalesSupportNoEffectClosure({ github,
+        receiptId: plan.tradingFxFieldBoundCorrectionClosureReceiptId });
+      assertTradingFxFieldBoundCorrectionSuccessor(manifest, checkpoint.prior);
+      originalMirror = checkpoint.mirror;
+    } else {
+      const { checkpoint } = await readTradingFxProductionBootstrapClosure({ github,
+        receiptId: plan.tradingFxProductionBootstrapRecoveryReceiptId });
+      assertTradingFxProductionBootstrapSuccessor(manifest, checkpoint.prior);
+      originalMirror = checkpoint.mirror.publication.proof;
+    }
     await verifyTradingFxSalesSupportSandboxJob({ stage: 'devee', cwd: correctionPath,
-      commandEnvironment: process.env, job: deployment.job });
+      commandEnvironment: process.env, job: deployment.job, repair });
   }
   const live = await fetch(`${targets().origin}/app-version.json`, { cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(12_000) });
   requireCondition(live.ok && (await live.json()).commit === manifest.previous.sha, 'LOCAL_MIRROR_PRODUCTION_BASELINE_CHANGED');
@@ -152,14 +169,16 @@ async function main() {
     const devee = policy.environments.find(item => item.key === 'devee');
     await verifyReviewedOrgInventory({ provider, environment: devee, plan: reviewed, expected: reviewed.nativeInventories.devee.final });
   }
-  const tagRoot = 'refs/tags/fcos-local-mirror/' + manifestHash + (correction ? '/sales-support-correction' : '');
+  const tagRoot = 'refs/tags/fcos-local-mirror/' + manifestHash
+    + (viewAllFieldsCorrection ? '/sales-support-view-all-fields-correction'
+      : fieldBoundCorrection ? '/sales-support-field-bound-correction' : correction ? '/sales-support-correction' : '');
   const claimRef = suffix => {
     const ref = tagRoot + '/' + suffix;
     const claim = github.write(`${base}/git/refs`, { ref, sha: manifest.candidate.sha });
     requireCondition(claim.ref === ref && claim.object?.sha === manifest.candidate.sha, 'LOCAL_MIRROR_CLAIM_ACK_UNCERTAIN');
   };
-  let mode = !recovery && request.mode === 'publish' ? 'publish' : 'check';
-  if (mode === 'check' && request.mode !== 'check') {
+  let mode = !fieldBoundCorrection && !recovery && request.mode === 'publish' ? 'publish' : 'check';
+  if (!fieldBoundCorrection && mode === 'check' && request.mode !== 'check') {
     const publicationRef = tagRoot.slice('refs/'.length) + '/publication';
     if (correction && !recovery && request.mode === 'recover') {
       // Confirm there has never been a write claim. Another operator racing
@@ -204,7 +223,7 @@ async function main() {
     };
     report = executeSharedMirror({
       mode, metadataRoot: resolve(correctionPath, publication.sourceRoot), assertPublicationCurrent,
-      ...(mode === 'publish' ? { expectedHead: { commit: originalMirror.commit, pullRequest: originalMirror.pullRequest.number } } : {}),
+      ...(mode === 'publish' || fieldBoundCorrection ? { expectedHead: { commit: originalMirror.commit, pullRequest: originalMirror.pullRequest.number } } : {}),
       proofResolver(inventory) {
         assertPublicationCurrent();
         requireCondition(inventory.sourceTreeHash === repair.sourceTreeHash, 'LOCAL_MIRROR_CORRECTION_SCOPE_CHANGED');
@@ -215,6 +234,10 @@ async function main() {
     await assertCurrent();
     report = await runReviewedMirror({ mode, cwd, plan: reviewed, state, policy, provider, ownership: { assert: assertCurrent } });
   }
+  requireCondition(!fieldBoundCorrection || (report.commit === originalMirror.commit
+    && report.pullRequest?.number === originalMirror.pullRequest?.number), 'LOCAL_MIRROR_HEAD_CHANGED');
+  requireCondition(!viewAllFieldsCorrection || (report.commit !== originalMirror.commit
+    && report.pullRequest?.number === originalMirror.pullRequest?.number), 'LOCAL_MIRROR_HEAD_CHANGED');
   requireCondition(request.mode !== 'check' || (mirror.mirror?.commit === report.commit && mirror.mirror?.pullRequest === report.pullRequest.number),
     'LOCAL_MIRROR_HEAD_CHANGED');
   await assertCurrent();

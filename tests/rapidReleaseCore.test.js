@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { createManifest, digest, selectChecks, targets, publicBuildEnvironment } from '../scripts/lib/rapid-release/contract.mjs';
 import { MemoryJournal, validateChain, assertPublicPayload, DeploymentJournal } from '../scripts/lib/rapid-release/journal.mjs';
 import { assertSmokeProof, assertPreBootstrapProof, stageRelease, promoteRelease } from '../scripts/lib/rapid-release/engine.mjs';
@@ -27,6 +28,15 @@ function fixture() {
   const observe = async () => ({ passed: true, deploymentId: staged.id, buildId: build.buildId, observationMs: 300000 });
   return { manifest, build, staged, journal, provider, calls, smoke, approval, observe, verifyStageBaseline: async () => {} };
 }
+test('qualified prerequisite adapter pins match the controller source bytes', () => {
+  const root = new URL('../', import.meta.url);
+  const registry = JSON.parse(readFileSync(new URL('config/rapid-release-adapters.json', root), 'utf8'));
+  const qualified = registry.adapters.filter(adapter => adapter.status === 'qualified');
+  assert.ok(qualified.length > 0);
+  for (const adapter of qualified) {
+    assert.equal(digest(readFileSync(new URL(adapter.path, root))), adapter.sourceDigest, adapter.id);
+  }
+});
 test('frontend-only selection never enables Salesforce/mirror/schema work', () => {
   const result = selectChecks(['src/components/dashboard/Table.jsx']);
   assert.equal(result.salesforce, false); assert.equal(result.database, false); assert.deepEqual(result.modules, ['dashboard']);
