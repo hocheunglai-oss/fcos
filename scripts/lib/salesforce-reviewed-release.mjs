@@ -604,9 +604,12 @@ export function assertReviewedMirror(result, plan, policy, deploymentJobId) {
  * An uncertain submission is reconciled by an owner-supplied job ID, never blind resubmission.
  */
 export async function runReviewedSalesforceRelease({ plan, mode, policy, journal, provider, ownership, externalJournal,
-  authorization = null, now = () => new Date(), assertUnchanged, retainedDeveeInventory, repairProductionSalesSupport, replaceValidation = [], reconcile = {} }) {
+  authorization = null, now = () => new Date(), assertUnchanged, retainedDeveeInventory, retainedTradingFxMirror, repairProductionSalesSupport, replaceValidation = [], reconcile = {} }) {
   const approvedContinuation = mode === 'approved-continuation';
   if (!['prepare', 'apply', 'approved-continuation'].includes(mode)) throw new Error('Choose prepare, apply or approved-continuation.');
+  if (retainedTradingFxMirror && typeof repairProductionSalesSupport !== 'function') {
+    throw new Error('A retained mirror requires the Trading FX correction promotion.');
+  }
   if (approvedContinuation) assertProductionAuthorization(authorization, plan, now());
   if (journal.state.fingerprint !== plan.fingerprint || !same(journal.state.binding, plan.binding)) throw new Error('Reviewed workflow fingerprint changed; prepare a new release from DEVEE.');
   if (typeof ownership?.assert !== 'function' || typeof externalJournal?.checkpoint !== 'function') throw new Error('Salesforce writes require external release ownership and a durable checkpoint adapter; a local lock is not global serialization.');
@@ -678,6 +681,13 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
       if (!['pending', 'resolved'].includes(entry.outcome)) continue;
       const local = get(entry.stage, entry.operation);
       if (local && digestCheckpoint(local) === entry.evidenceDigest) continue;
+      if (retainedTradingFxMirror && entry.stage === 'shared_mirror' && entry.operation === 'publication') {
+        if (entry.outcome !== 'resolved' || entry.mirror?.commit !== retainedTradingFxMirror.commit
+          || entry.mirror?.pullRequest !== retainedTradingFxMirror.pullRequest.number) {
+          throw new Error('Historical Trading FX mirror does not match the retained result.');
+        }
+        continue;
+      }
       if (!local && entry.stage === 'shared_mirror' && entry.operation === 'publication'
         && entry.outcome === 'resolved' && /^[a-f0-9]{40}$/u.test(entry.mirror?.commit || '')
         && Number.isSafeInteger(entry.mirror.pullRequest) && entry.mirror.pullRequest > 0) {
@@ -847,6 +857,11 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
     await unchanged();
     const deployment = get('devee', 'deployment');
     if (deployment?.status !== 'Succeeded') throw new Error('Verified DEVEE deployment is required before the complete derived source mirror.');
+    if (retainedTradingFxMirror) {
+      // This result is the immutable historical publication. The corrected
+      // tree must be independently published and checked by the recovery hook.
+      return assertReviewedMirror(retainedTradingFxMirror, plan, policy, deployment.jobId);
+    }
     let saved = get('shared_mirror', 'publication');
     const action = saved || original ? 'check' : 'publish';
     if (action === 'publish') {

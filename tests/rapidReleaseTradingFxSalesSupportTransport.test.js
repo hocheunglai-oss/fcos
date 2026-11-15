@@ -8,11 +8,11 @@ import {
   salesSupportFieldSnapshot, salesSupportRepairFields, salesSupportRepairPackage,
 } from '../scripts/lib/rapid-release/trading-fx-sales-support-repair.mjs';
 import {
-  applyTradingFxSalesSupportCorrection, runSalesSupportCorrection, salesSupportCorrectionOperation,
-  verifyTradingFxSalesSupportReadGrants,
+  applyTradingFxSalesSupportCorrection, applyTradingFxSalesSupportSandboxCorrection, runSalesSupportCorrection,
+  salesSupportCorrectionOperation, verifyTradingFxSalesSupportReadGrants, verifyTradingFxSalesSupportSandboxDenial,
+  verifyTradingFxSalesSupportSandboxJob,
 } from '../scripts/lib/rapid-release/trading-fx-sales-support-transport.mjs';
 
-const production = fcosSalesforceEnvironment('production');
 const jobId = '0Affu000001AFzhCAG';
 const otherJob = '0Affu000001XYZhCAG';
 const creatorId = '005123456789012ABC';
@@ -27,16 +27,20 @@ const unrelated = row('Account.Other__c', true, true);
 const reviewedCatalog = salesSupportFieldSnapshot({ rows: [unrelated], done: true, parentId });
 const packet = salesSupportRepairPackage();
 
-function harness() {
+function harness(stage = 'production') {
+  const target = fcosSalesforceEnvironment(stage);
+  const testLevel = target.isSandbox ? 'NoTestRun' : 'RunRelevantTests';
   const checkpoints = [];
   const calls = [];
-  const scenario = { beforeAllowed: true, afterAllowed: false, unrelated, submitted: false, grantEffect: false, reportOverrides: {} };
+  const scenario = {
+    beforeAllowed: !target.isSandbox, afterAllowed: false, unrelated, submitted: false, grantEffect: false, reportOverrides: {},
+  };
   const options = {
     cwd: process.cwd(), commandEnvironment: { PATH: '/pinned/sf/bin' }, fingerprint,
     now: () => new Date(date),
     ownership: {
       assert(binding) {
-        assert.deepEqual(binding, { fingerprint, stage: 'production', orgId: production.orgId, operation });
+        assert.deepEqual(binding, { fingerprint, stage, orgId: target.orgId, operation });
         calls.push('lease');
         return { ...binding, receiptId, expiresAt: '2026-11-15T12:00:00.000Z' };
       },
@@ -55,10 +59,10 @@ function harness() {
       assert.equal(program, 'sf');
       assert.equal(cwd, options.cwd);
       assert.equal(env, options.commandEnvironment);
-      assert.deepEqual(args.slice(-3), ['--target-org', production.alias, '--json']);
+      assert.deepEqual(args.slice(-3), ['--target-org', target.alias, '--json']);
       if (args[0] === 'org') {
         calls.push('identity');
-        const { orgId: id, username, instanceUrl } = production;
+        const { orgId: id, username, instanceUrl } = target;
         return { id, username, instanceUrl, connectedStatus: 'Connected', ...scenario.identityOverrides };
       }
       if (args[0] === 'data') {
@@ -69,12 +73,13 @@ function harness() {
           assert.match(query, new RegExp(creatorId, 'u'));
           calls.push('discover');
           const records = scenario.discovered ? scenario.discovered.map(Id => ({
-            Id, CreatedDate: date, CreatedById: creatorId, CheckOnly: false, RollbackOnError: true, TestLevel: 'RunRelevantTests',
+            Id, CreatedDate: date, CreatedById: creatorId, CheckOnly: false, RollbackOnError: true,
+            TestLevel: scenario.discoveredTestLevel ?? testLevel,
           })) : [];
           return { records, done: true, totalSize: records.length };
         }
         if (query.includes('FROM Organization')) {
-          return { done: true, records: [{ Id: production.orgId, IsSandbox: false }] };
+          return { done: true, records: [{ Id: target.orgId, IsSandbox: target.isSandbox, ...scenario.organizationOverrides }] };
         }
         if (query.includes('FROM PermissionSet')) {
           assert.match(query, /IsOwnedByProfile = true AND Profile.Name = 'Sales Support'/u);
@@ -84,7 +89,8 @@ function harness() {
         calls.push('catalog');
         const read = scenario.grantEffect ? scenario.afterAllowed : scenario.beforeAllowed;
         const grants = read ? salesSupportRepairFields.map(field => row(field, true)) : [];
-        return { done: true, records: [scenario.unrelated, ...grants] };
+        const unrelated = scenario.grantEffect && scenario.afterUnrelated ? scenario.afterUnrelated : scenario.unrelated;
+        return { done: true, records: [unrelated, ...grants] };
       }
       if (args[2] === 'start') {
         calls.push('submit');
@@ -96,7 +102,7 @@ function harness() {
         assert.deepEqual(readdirSync(join(directory, 'profiles')), ['Sales Support.profile']);
         assert.equal(readFileSync(join(directory, 'profiles', 'Sales Support.profile'), 'utf8'), packet.profile);
         assert.equal(readFileSync(join(directory, 'package.xml'), 'utf8'), packet.manifest);
-        assert.deepEqual(args.slice(5, 10), ['--api-version', '67.0', '--test-level', 'RunRelevantTests', '--async']);
+        assert.deepEqual(args.slice(5, 10), ['--api-version', '67.0', '--test-level', testLevel, '--async']);
         scenario.submitted = true;
         if (scenario.loseAcknowledgment) throw new Error('unavailable response');
         return { id: jobId };
@@ -119,7 +125,7 @@ function harness() {
       };
     },
   };
-  return { calls, checkpoints, scenario, options, apply: () => runSalesSupportCorrection(options, reviewedCatalog) };
+  return { calls, checkpoints, scenario, options, apply: () => runSalesSupportCorrection(options, reviewedCatalog, stage) };
 }
 
 test('persists exact intent and native job before readback and verifies the scoped denial', async () => {
@@ -198,4 +204,73 @@ test('protected entry points enforce the pinned Production catalog', async () =>
   assert.throws(() => verifyTradingFxSalesSupportReadGrants({ ...options, read: false }), /UNRELATED_GRANTS_CHANGED/u);
   assert.throws(() => verifyTradingFxSalesSupportReadGrants(options), /PROTECTED_CONTEXT_REQUIRED/u);
   assert.equal(calls.includes('submit'), false);
+});
+
+test('runs the compiled deny-only package in each sandbox after confirming the denied preimage and catalog', async () => {
+  for (const stage of ['devee', 'qat']) {
+    const { apply, calls, checkpoints } = harness(stage);
+    const result = await apply();
+    assert.equal(result.operationId, 'salesforce:' + stage + ':' + operation);
+    assert.equal(result.record.proof.fields, 23);
+    assert.equal(result.record.proof.unrelatedDigest, reviewedCatalog.unrelatedDigest);
+    assert.equal(checkpoints.at(-1).checkpoint.stage, stage);
+    assert.equal(checkpoints.at(-1).checkpoint.outcome, 'resolved');
+    assert.ok(calls.indexOf('catalog') < calls.indexOf('submitting'));
+    assert.ok(calls.lastIndexOf('catalog') > calls.indexOf('report'));
+    assert.equal((await apply()).evidenceDigest, result.evidenceDigest);
+    assert.equal(calls.filter(call => call === 'submit').length, 1);
+  }
+});
+
+test('a sandbox correction rejects an unexpected read grant, a wrong org type and unrelated post-deploy drift', async () => {
+  const readable = harness('devee');
+  readable.scenario.beforeAllowed = true;
+  await assert.rejects(readable.apply(), /DENY_UNVERIFIED/u);
+  assert.equal(readable.calls.includes('submit'), false);
+  const notSandbox = harness('qat');
+  notSandbox.scenario.organizationOverrides = { IsSandbox: false };
+  await assert.rejects(notSandbox.apply(), /ORG_CHANGED/u);
+  assert.equal(notSandbox.calls.includes('submit'), false);
+  const unrelatedChanged = harness('qat');
+  unrelatedChanged.scenario.afterUnrelated = row(unrelated.Field, false);
+  await assert.rejects(unrelatedChanged.apply(), /UNRELATED_GRANTS_CHANGED/u);
+  assert.equal(unrelatedChanged.checkpoints.at(-1).checkpoint.outcome, 'pending');
+});
+
+test('a sandbox recovers the original job after a lost ID only at the pinned test level', async () => {
+  const { apply, calls, scenario, checkpoints } = harness('devee');
+  scenario.loseAcknowledgment = true;
+  await assert.rejects(apply(), /ORIGINAL_SUBMISSION_UNKNOWN/u);
+  assert.equal(checkpoints.at(-1).checkpoint.job.id, null);
+  scenario.discovered = [jobId];
+  scenario.discoveredTestLevel = 'RunRelevantTests';
+  await assert.rejects(apply(), /ORIGINAL_SUBMISSION_UNKNOWN/u);
+  assert.equal(calls.includes('report'), false);
+  scenario.discoveredTestLevel = 'NoTestRun';
+  assert.equal((await apply()).jobId, jobId);
+  assert.equal(calls.filter(call => call === 'submit').length, 1);
+  assert.deepEqual(checkpoints.map(({ record }) => record.jobId), [null, jobId]);
+});
+
+test('sandbox entry points require a pinned sandbox and deny any caller catalog override', async () => {
+  const { options, calls } = harness('qat');
+  assert.throws(() => applyTradingFxSalesSupportSandboxCorrection({ ...options, stage: 'production' }), /SANDBOX_REQUIRED/u);
+  await assert.rejects(applyTradingFxSalesSupportSandboxCorrection({ ...options, stage: 'qat', reviewedCatalog }), /UNRELATED_GRANTS_CHANGED/u);
+  assert.throws(() => verifyTradingFxSalesSupportSandboxDenial({ ...options, stage: 'production' }), /SANDBOX_REQUIRED/u);
+  assert.throws(() => verifyTradingFxSalesSupportSandboxDenial({ ...options, stage: 'qat', reviewedCatalog }), /UNRELATED_GRANTS_CHANGED/u);
+  assert.equal(calls.includes('submit'), false);
+});
+
+test('the sandbox job verifier refuses a changed package and a check-only job without submitting', async () => {
+  const { apply, options, calls, checkpoints, scenario } = harness('devee');
+  await apply();
+  const job = checkpoints.at(-1).checkpoint.job;
+  const start = calls.length;
+  assert.throws(() => verifyTradingFxSalesSupportSandboxJob({ ...options, stage: 'devee',
+    job: { ...job, packageSha256: digest('unexpected package') } }), /CHECKPOINT_CHANGED/u);
+  assert.equal(calls.length, start);
+  scenario.reportOverrides = { checkOnly: true };
+  assert.throws(() => verifyTradingFxSalesSupportSandboxJob({ ...options, stage: 'devee', job }), /ORIGINAL_JOB_UNVERIFIED/u);
+  assert.deepEqual(calls.slice(start), ['identity', 'report']);
+  assert.equal(calls.filter(call => call === 'submit').length, 1);
 });

@@ -66,7 +66,7 @@ export class DeploymentJournal {
     requireCondition(/^[a-f0-9]{64}$/.test(fingerprint || '')
       && ['devee', 'shared_mirror', 'qat', 'production'].includes(stage)
       && /^(?:validation|deployment|bootstrap|sales-support-correction|publication|inventory-checkpoint|preparation|restoration-checkpoint|permission:[A-Za-z][A-Za-z0-9_]*)$/.test(operation || '')
-      && (operation !== 'sales-support-correction' || stage === 'production')
+      && (operation !== 'sales-support-correction' || stage !== 'shared_mirror')
       && record && typeof record === 'object' && !Array.isArray(record), 'SALESFORCE_CHECKPOINT_INVALID');
     const providerOperation = /^(?:validation|deployment|bootstrap|sales-support-correction|publication|permission:)/.test(operation);
     const status = record.status;

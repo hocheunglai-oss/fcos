@@ -12,7 +12,9 @@ import { assertHostedSalesforceRunner, authenticateHostedSalesforce } from './sa
 import { digest, git, isDigest, requireCondition, targets } from './contract.mjs';
 import { awaitLocalMirrorReceipt, createLocalMirrorRequest, usesLocalCollaboratorMirror } from './local-mirror-handoff.mjs';
 import { githubClient } from './providers.mjs';
-import { applyTradingFxSalesSupportCorrection, verifyTradingFxSalesSupportReadGrants } from './trading-fx-sales-support-transport.mjs';
+import { applyTradingFxSalesSupportCorrection, applyTradingFxSalesSupportSandboxCorrection, verifyTradingFxSalesSupportReadGrants } from './trading-fx-sales-support-transport.mjs';
+import { verifySalesSupportRepairSource } from './trading-fx-sales-support-source.mjs';
+import { promoteSalesSupportCorrection } from './trading-fx-sales-support-promotion.mjs';
 import { runPreBootstrapSmoke } from './smoke.mjs';
 
 const policy = FCOS_CONNECTION_POLICY.providers.find(item => item.id === 'salesforce');
@@ -232,7 +234,7 @@ export async function applyReviewedPrerequisites(input) {
 }
 
 export function prepareReviewedSalesforcePrerequisites({
-  manifest, approval, plan, salesforce, salesforceCandidateDirectory: cwd, env = process.env,
+  manifest, approval, plan, salesforce, salesforceCandidateDirectory: cwd, correctionDirectory, env = process.env,
 }, { withDatabase = false, tradingFxRecovery, tradingFxQatRecovery, tradingFxPostQatRecovery, tradingFxProductionBootstrapRecovery } = {}) {
   const manifestHash = digest(manifest);
   const databaseSelected = withDatabase ? manifest.selection.database === true : !manifest.selection.database;
@@ -281,10 +283,10 @@ export function prepareReviewedSalesforcePrerequisites({
     ? plan.tradingFxProductionBootstrapRecoveryReceiptId === undefined
     : withDatabase && schemaBootstrap && localMirror && !tradingFxRecovery && !tradingFxQatRecovery && !tradingFxPostQatRecovery
       && !adoption && !promotionReceiptId
-      && reviewed.nativeInventories?.production?.bootstrap
+      && correctionDirectory && salesforce.correction && reviewed.nativeInventories?.production?.bootstrap
       && tradingFxProductionBootstrapRecovery.receipt?.id === plan.tradingFxProductionBootstrapRecoveryReceiptId,
   'SALESFORCE_TRADING_FX_PRODUCTION_BOOTSTRAP_ADOPTION_INVALID');
-  return () => applyPreparedSalesforce({ manifest, manifestHash, approval, salesforce, cwd, env, reviewed, schemaBootstrap,
+  return () => applyPreparedSalesforce({ manifest, manifestHash, approval, salesforce, cwd, correctionDirectory, env, reviewed, schemaBootstrap,
     localMirror, adoption, promotionReceiptId, tradingFxRecovery, tradingFxQatRecovery, tradingFxPostQatRecovery, tradingFxProductionBootstrapRecovery });
 }
 
@@ -473,7 +475,7 @@ export async function recoverTradingFxProductionReadbacks({ recovery, reviewed, 
   } }];
 }
 
-async function applyPreparedSalesforce({ manifest, manifestHash, approval, salesforce, cwd, env, reviewed, schemaBootstrap, localMirror,
+async function applyPreparedSalesforce({ manifest, manifestHash, approval, salesforce, cwd, correctionDirectory, env, reviewed, schemaBootstrap, localMirror,
   adoption, promotionReceiptId, tradingFxRecovery, tradingFxQatRecovery, tradingFxPostQatRecovery, tradingFxProductionBootstrapRecovery }) {
   const saved = await salesforce.journal.readCheckpoints();
   const localTransport = localMirror ? await hostedLocalMirrorTransport({ manifest, approval, env, reviewed, salesforce }) : null;
@@ -587,23 +589,33 @@ async function applyPreparedSalesforce({ manifest, manifestHash, approval, sales
           return salesforce.ownership.assert(binding);
         },
       };
-      let correction;
+      const retainedTradingFxMirror = tradingFxProductionBootstrapRecovery?.checkpoint.mirror.publication.proof;
+      let corrections;
+      let verifyCorrectedMirror;
       let repairProductionSalesSupport;
       if (tradingFxProductionBootstrapRecovery) {
-        const productionBootstrap = tradingFxProductionBootstrapRecovery.checkpoint;
-        const originalMirror = productionBootstrap.mirror.publication.proof;
-        const mirror = provider.mirror;
-        provider.mirror = async (mode, context) => {
-          requireCondition(mode === 'check', 'SALESFORCE_TRADING_FX_ORIGINAL_MIRROR_PUBLICATION_REQUIRED');
-          const verified = await mirror(mode, context);
-          requireCondition(verified.commit === originalMirror.commit && verified.pullRequest?.number === originalMirror.pullRequest.number,
-            'SALESFORCE_TRADING_FX_ORIGINAL_MIRROR_CHANGED');
-          return verified;
-        };
+        const repair = manifest.prerequisites.plan.salesSupportRepair;
+        const verifySource = () => verifySalesSupportRepairSource({ cwd: correctionDirectory, repair });
+        const originalMirror = retainedTradingFxMirror;
+        const context = salesforce.correction;
+        const correctionReview = { fingerprint: repair.correctionFingerprint,
+          binding: { sourceTreeHash: repair.sourceTreeHash, orgIds: reviewed.binding.orgIds } };
+        const correctionMirror = await hostedLocalMirrorTransport({
+          manifest, approval, env, reviewed: correctionReview, salesforce: context,
+        });
         repairProductionSalesSupport = async () => {
           await assertReviewedInputsUnchanged(reviewed, { cwd, policy });
-          correction = await applyTradingFxSalesSupportCorrection({ cwd, commandEnvironment, fingerprint: reviewed.fingerprint,
-            ownership, journal: salesforce.journal });
+          ({ operations: corrections, verifyMirror: verifyCorrectedMirror } = await promoteSalesSupportCorrection({
+            fingerprint: repair.correctionFingerprint, sourceTreeHash: repair.sourceTreeHash,
+            verifySource, context, mirror: correctionMirror, originalMirror,
+            verifySandbox: stage => verifyReviewedOrgInventory({ provider, plan: reviewed,
+              environment: policy.environments.find(environment => environment.key === stage),
+              expected: reviewed.nativeInventories[stage].final }),
+            sandbox: stage => applyTradingFxSalesSupportSandboxCorrection({ ...context, stage, cwd: correctionDirectory,
+              commandEnvironment, fingerprint: repair.correctionFingerprint }),
+            production: () => applyTradingFxSalesSupportCorrection({ ...context, cwd: correctionDirectory, commandEnvironment,
+              fingerprint: repair.correctionFingerprint }),
+          }));
           await assertReviewedInputsUnchanged(reviewed, { cwd, policy });
         };
       }
@@ -611,17 +623,20 @@ async function applyPreparedSalesforce({ manifest, manifestHash, approval, sales
         && (item.preparation?.validationJobId || item.preparation?.status === 'awaiting-authorized-bootstrap'));
       const result = await runReviewedSalesforceRelease({ plan: reviewed, mode: hasPreparation ? 'apply' : 'approved-continuation',
         policy, journal, provider,
-        ownership, externalJournal: salesforce.journal, authorization, retainedDeveeInventory, repairProductionSalesSupport,
+        ownership, externalJournal: salesforce.journal, authorization, retainedDeveeInventory, retainedTradingFxMirror, repairProductionSalesSupport,
         assertUnchanged: () => assertReviewedInputsUnchanged(reviewed, { cwd, policy }) });
       requireCondition(result.mode === 'applied', 'SALESFORCE_HOSTED_APPLY_REQUIRED');
       if (repairProductionSalesSupport) {
-        requireCondition(correction?.verified === true && correction.intentRecorded === true,
+        requireCondition(corrections?.length === 4 && corrections.every(item => item.verified && item.intentRecorded),
           'SALESFORCE_TRADING_FX_SALES_SUPPORT_CORRECTION_REQUIRED');
         await verifyTradingFxSalesSupportReadGrants({ cwd, commandEnvironment, read: false });
+        await verifyCorrectedMirror();
       }
       const completedOperations = (await salesforce.journal.readCheckpoints()).filter(item => item.outcome === 'resolved'
-        && journal.state.stages[item.stage]?.[item.operation]?.status === 'Succeeded'
-        && matchesSalesforceCheckpoint(journal.state.stages[item.stage][item.operation], item))
+        && (retainedTradingFxMirror && item.stage === 'shared_mirror' && item.operation === 'publication'
+          && item.mirror?.commit === retainedTradingFxMirror.commit && item.mirror?.pullRequest === retainedTradingFxMirror.pullRequest.number
+          || journal.state.stages[item.stage]?.[item.operation]?.status === 'Succeeded'
+          && matchesSalesforceCheckpoint(journal.state.stages[item.stage][item.operation], item)))
         .map(item => ({ operationId: `salesforce:${item.stage}:${item.operation}`, evidenceDigest: item.evidenceDigest,
           verified: true, intentRecorded: true }));
       const completedIds = new Set(completedOperations.map(item => item.operationId));
@@ -630,14 +645,16 @@ async function applyPreparedSalesforce({ manifest, manifestHash, approval, sales
         && (!schemaBootstrap || completedIds.has(`salesforce:${key}:bootstrap`))
         && reviewed.binding.permissionSets.every(name => completedIds.has(`salesforce:${key}:permission:${name}`))),
       'SALESFORCE_HOSTED_COMPLETION_EVIDENCE_REQUIRED');
-      if (correction) {
-        const { operationId, evidenceDigest, verified, intentRecorded } = correction;
-        completedOperations.push({ operationId, evidenceDigest, verified, intentRecorded });
-      }
+      if (corrections) completedOperations.push(...corrections);
       finished = true;
       return { passed: true, manifestHash, backwardCompatible: true, completedOperations,
         salesforce: { order: 'devee-mirror-qat-production', mirrorVerified: true,
-          sourceTreeHash: reviewed.binding.sourceTreeHash, fingerprint: reviewed.fingerprint } };
+          sourceTreeHash: reviewed.binding.sourceTreeHash, fingerprint: reviewed.fingerprint,
+          ...(corrections ? { correction: {
+            fingerprint: manifest.prerequisites.plan.salesSupportRepair.correctionFingerprint,
+            sourceTreeHash: manifest.prerequisites.plan.salesSupportRepair.sourceTreeHash,
+            order: 'devee-mirror-qat-production',
+          } } : {}) } };
     } finally {
       if (tradingFxQatRecovery) {
         try {

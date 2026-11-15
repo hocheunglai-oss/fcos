@@ -508,7 +508,7 @@ function publish(checkout, branch, expectedRemoteHead, pullRequest, inventory, a
   return { changed: true, branch, commit, pullRequest };
 }
 
-export function executeSharedMirror({ mode, metadataRoot = sourceRoot, proofResolver, assertPublicationCurrent = () => {} }) {
+export function executeSharedMirror({ mode, metadataRoot = sourceRoot, proofResolver, assertPublicationCurrent = () => {}, expectedHead }) {
   if (!['check', 'publish'].includes(mode)) {
     throw new Error('Choose exactly one mode: --check or --publish.');
   }
@@ -518,6 +518,9 @@ export function executeSharedMirror({ mode, metadataRoot = sourceRoot, proofReso
   const manifest = expectedManifest(inventory);
   const selected = publicationBranch(mode);
   const initialRemoteHead = remoteBranchHead(selected.branch);
+  if (expectedHead && (initialRemoteHead !== expectedHead.commit || selected.pullRequest?.number !== expectedHead.pullRequest)) {
+    throw new Error('Shared Salesforce draft does not match the previously verified publication.');
+  }
   if (selected.pullRequest && selected.pullRequest.headRefOid !== initialRemoteHead) {
     throw new Error('The shared Salesforce draft pull request head changed before publication verification.');
   }

@@ -4,6 +4,12 @@ import { resolve } from 'node:path';
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import { githubConfigDirectory } from './fcos-connections.mjs';
 import { cliSalesforceProvider, loadReviewedSalesforcePlan } from './deploy-salesforce-reviewed-manifest.mjs';
+import { executeSharedMirror } from './sync-salesforce-shared-repository.mjs';
+import { REVIEWED_SALESFORCE_MODE, verifyReviewedOrgInventory } from './lib/salesforce-reviewed-release.mjs';
+import { verifySalesSupportRepairSource } from './lib/rapid-release/trading-fx-sales-support-source.mjs';
+import { verifyTradingFxSalesSupportSandboxJob } from './lib/rapid-release/trading-fx-sales-support-transport.mjs';
+import { readTradingFxProductionBootstrapClosure } from './lib/rapid-release/trading-fx-production-bootstrap-checkpoint.mjs';
+import { assertTradingFxProductionBootstrapSuccessor } from './lib/rapid-release/trading-fx-production-bootstrap-successor.mjs';
 import { runReviewedMirror } from './sync-salesforce-reviewed-repository.mjs';
 import { assertAuthorization, digest, git, requireCondition, sourceSnapshot, targets, validateManifest } from './lib/rapid-release/contract.mjs';
 import { DeploymentJournal } from './lib/rapid-release/journal.mjs';
@@ -59,9 +65,20 @@ async function main() {
     && repo.full_name === targets().repository && repo.permissions?.admin === true && repo.default_branch === 'main' && !repo.archived,
   'LOCAL_MIRROR_GITHUB_IDENTITY_MISMATCH');
   const request = nativeRequest.payload;
+  const repair = plan.salesSupportRepair;
+  const correction = request?.correctionSourceSha !== undefined;
+  let mirrorReview = reviewed;
+  let correctionPath;
+  if (correction) {
+    requireCondition(repair?.sourceCommit === request.correctionSourceSha && request.validationJobId === null
+      && process.env.FCOS_RAPID_SALESFORCE_CORRECTION_CANDIDATE, 'LOCAL_MIRROR_CORRECTION_SOURCE_REQUIRED');
+    correctionPath = resolve(process.env.FCOS_RAPID_SALESFORCE_CORRECTION_CANDIDATE);
+    verifySalesSupportRepairSource({ cwd: correctionPath, repair });
+    mirrorReview = { fingerprint: repair.correctionFingerprint, binding: { sourceTreeHash: repair.sourceTreeHash, orgIds: reviewed.binding.orgIds } };
+  }
   requireCondition(nativeRequest.id === requestId && request?.manifestHash === manifestHash && request.controllerSha === manifest.controllerSha
-    && request.candidateSha === manifest.candidate.sha && request.fingerprint === reviewed.fingerprint
-    && request.sourceTreeHash === reviewed.binding.sourceTreeHash && request.deveeOrgId === reviewed.binding.orgIds.devee
+    && request.candidateSha === manifest.candidate.sha && request.fingerprint === mirrorReview.fingerprint
+    && request.sourceTreeHash === mirrorReview.binding.sourceTreeHash && request.deveeOrgId === reviewed.binding.orgIds.devee
     && ['publish', 'check', 'recover'].includes(request.mode), 'LOCAL_MIRROR_REQUEST_SCOPE_MISMATCH');
   verifyLocalMirrorRequest({ request, requestDeployment: nativeRequest, workflowActorId: bot.id });
 
@@ -95,21 +112,30 @@ async function main() {
   await journal.assertNoUnresolvedOtherRelease();
 
   const checkpoints = chain.filter(record => record.creator?.id === bot.id && record.payload.event === 'salesforce.checkpoint'
-    && record.payload.data.fingerprint === reviewed.fingerprint).map(record => record.payload.data);
+    && record.payload.data.fingerprint === mirrorReview.fingerprint).map(record => record.payload.data);
   const latest = (stage, operation) => checkpoints.findLast(item => item.stage === stage && item.operation === operation);
   const validation = latest('devee', 'validation');
-  const deployment = latest('devee', 'deployment');
+  const deployment = latest('devee', correction ? 'sales-support-correction' : 'deployment');
   const mirror = latest('shared_mirror', 'publication');
-  requireCondition(validation?.outcome === 'resolved' && validation.job?.id === request.validationJobId
+  requireCondition((correction || (validation?.outcome === 'resolved' && validation.job?.id === request.validationJobId))
     && deployment?.outcome === 'resolved' && deployment.job?.id === request.deploymentJobId
     && deployment.job.validationId === request.validationJobId && mirror?.evidenceDigest === request.intentHash
     && mirror.outcome === (request.mode === 'check' ? 'resolved' : 'pending'), 'LOCAL_MIRROR_ORIGINAL_CHECKPOINT_REQUIRED');
+  let originalMirror;
+  if (correction) {
+    const { checkpoint } = await readTradingFxProductionBootstrapClosure({ github,
+      receiptId: plan.tradingFxProductionBootstrapRecoveryReceiptId });
+    assertTradingFxProductionBootstrapSuccessor(manifest, checkpoint.prior);
+    originalMirror = checkpoint.mirror.publication.proof;
+    await verifyTradingFxSalesSupportSandboxJob({ stage: 'devee', cwd: correctionPath,
+      commandEnvironment: process.env, job: deployment.job });
+  }
   const live = await fetch(`${targets().origin}/app-version.json`, { cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(12_000) });
   requireCondition(live.ok && (await live.json()).commit === manifest.previous.sha, 'LOCAL_MIRROR_PRODUCTION_BASELINE_CHANGED');
 
-  const receipt = { fingerprint: reviewed.fingerprint, stage: 'devee', orgId: request.deveeOrgId,
+  const receipt = { fingerprint: mirrorReview.fingerprint, stage: 'devee', orgId: request.deveeOrgId,
     operation: 'shared-publication', expiresAt: request.expiresAt,
-    receiptId: digest({ manifestHash, runId: request.runId, fingerprint: reviewed.fingerprint, stage: 'devee',
+    receiptId: digest({ manifestHash, runId: request.runId, fingerprint: mirrorReview.fingerprint, stage: 'devee',
       orgId: request.deveeOrgId, operation: 'shared-publication' }) };
   const assertCurrent = async () => {
     verifyLocalMirrorRequest({ request, requestDeployment: nativeRequest, workflowActorId: bot.id });
@@ -122,14 +148,20 @@ async function main() {
     'LOCAL_MIRROR_HOSTED_LEASE_ENDED');
     return receipt;
   };
+  const provider = cliSalesforceProvider({ cwd, policy });
+  if (correction) {
+    const devee = policy.environments.find(item => item.key === 'devee');
+    await verifyReviewedOrgInventory({ provider, environment: devee, plan: reviewed, expected: reviewed.nativeInventories.devee.final });
+  }
+  const tagRoot = 'refs/tags/fcos-local-mirror/' + manifestHash + (correction ? '/sales-support-correction' : '');
   const claimRef = suffix => {
-    const ref = `refs/tags/fcos-local-mirror/${manifestHash}/${suffix}`;
+    const ref = tagRoot + '/' + suffix;
     const claim = github.write(`${base}/git/refs`, { ref, sha: manifest.candidate.sha });
     requireCondition(claim.ref === ref && claim.object?.sha === manifest.candidate.sha, 'LOCAL_MIRROR_CLAIM_ACK_UNCERTAIN');
   };
   const mode = !recovery && request.mode === 'publish' ? 'publish' : 'check';
   if (mode === 'check' && request.mode !== 'check') {
-    const claim = github.read(`${base}/git/ref/tags/fcos-local-mirror/${manifestHash}/publication`);
+    const claim = github.read(base + '/git/ref/' + tagRoot.slice('refs/'.length) + '/publication');
     requireCondition(claim.object?.sha === manifest.candidate.sha, 'LOCAL_MIRROR_ORIGINAL_CLAIM_REQUIRED');
   }
   if (mode === 'publish') {
@@ -152,13 +184,30 @@ async function main() {
       },
     },
   };
-  const provider = cliSalesforceProvider({ cwd, policy });
-  await assertCurrent();
-  const report = await runReviewedMirror({ mode, cwd, plan: reviewed, state, policy, provider, ownership: { assert: assertCurrent } });
+  let report;
+  if (correction) {
+    await assertCurrent();
+    const assertPublicationCurrent = () => {
+      requireCondition(Date.parse(receipt.expiresAt) > Date.now(), 'LOCAL_MIRROR_HOSTED_LEASE_ENDED');
+      verifySalesSupportRepairSource({ cwd: correctionPath, repair });
+    };
+    report = executeSharedMirror({
+      mode, metadataRoot: resolve(correctionPath, publication.sourceRoot), assertPublicationCurrent,
+      ...(mode === 'publish' ? { expectedHead: { commit: originalMirror.commit, pullRequest: originalMirror.pullRequest.number } } : {}),
+      proofResolver(inventory) {
+        assertPublicationCurrent();
+        requireCondition(inventory.sourceTreeHash === repair.sourceTreeHash, 'LOCAL_MIRROR_CORRECTION_SCOPE_CHANGED');
+        return { releaseMode: REVIEWED_SALESFORCE_MODE, deploymentJobId: deployment.job.id };
+      },
+    });
+  } else {
+    await assertCurrent();
+    report = await runReviewedMirror({ mode, cwd, plan: reviewed, state, policy, provider, ownership: { assert: assertCurrent } });
+  }
   requireCondition(request.mode !== 'check' || (mirror.mirror?.commit === report.commit && mirror.mirror?.pullRequest === report.pullRequest.number),
     'LOCAL_MIRROR_HEAD_CHANGED');
   await assertCurrent();
-  const payload = createLocalMirrorReceipt({ request, requestId, reviewed, report });
+  const payload = createLocalMirrorReceipt({ request, requestId, reviewed: mirrorReview, report });
   let readbackOnly = false;
   try { claimRef(`receipt-${requestId}`); }
   catch { readbackOnly = true; }

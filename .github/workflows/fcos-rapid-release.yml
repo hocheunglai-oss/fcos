@@ -176,6 +176,14 @@ jobs:
           path: salesforce-candidate
           fetch-depth: 0
           persist-credentials: false
+      - name: Fetch the reviewed Salesforce correction source as data
+        if: ${{ fromJSON(inputs.manifest_json).prerequisites.plan.salesSupportRepair.sourceCommit != '' }}
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ fromJSON(inputs.manifest_json).prerequisites.plan.salesSupportRepair.sourceCommit }}
+          path: salesforce-correction
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 24.18.0
@@ -204,6 +212,7 @@ jobs:
           FCOS_RAPID_RELEASE_HANDOVER_ID: ${{ steps.admit-controller.outputs.handover_id }}
           VERCEL_TOKEN: ${{ secrets.FCOS_RAPID_VERCEL_STAGE_TOKEN || secrets.FCOS_HOSTED_VERCEL_TOKEN }}
           FCOS_RAPID_SALESFORCE_CANDIDATE: ${{ github.workspace }}/salesforce-candidate
+          FCOS_RAPID_SALESFORCE_CORRECTION_CANDIDATE: ${{ github.workspace }}/salesforce-correction
           FCOS_RAPID_DATABASE_URL: ${{ secrets.FCOS_RAPID_READONLY_DATABASE_URL }}
           FCOS_RAPID_DATABASE_CA: ${{ runner.temp }}/rapid-database-ca.pem
           FCOS_E2E_VERCEL_BYPASS: ${{ secrets.FCOS_E2E_VERCEL_BYPASS }}
@@ -296,6 +305,14 @@ jobs:
           path: salesforce-candidate
           fetch-depth: 0
           persist-credentials: false
+      - name: Fetch the reviewed Salesforce correction source as data
+        if: ${{ fromJSON(inputs.manifest_json).prerequisites.plan.salesSupportRepair.sourceCommit != '' }}
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ fromJSON(inputs.manifest_json).prerequisites.plan.salesSupportRepair.sourceCommit }}
+          path: salesforce-correction
+          fetch-depth: 0
+          persist-credentials: false
       - name: Install governed browser for conditional prerequisite smoke
         if: fromJSON(inputs.manifest_json).selection.salesforce || fromJSON(inputs.manifest_json).selection.database
         run: bash scripts/rapid-release-browser.sh
@@ -316,6 +333,7 @@ jobs:
           FCOS_RAPID_RELEASE_HANDOVER_ID: ${{ steps.admit-controller.outputs.handover_id }}
           VERCEL_TOKEN: ${{ secrets.FCOS_RELEASE_VERCEL_TOKEN }}
           FCOS_RAPID_SALESFORCE_CANDIDATE: ${{ github.workspace }}/salesforce-candidate
+          FCOS_RAPID_SALESFORCE_CORRECTION_CANDIDATE: ${{ github.workspace }}/salesforce-correction
           FCOS_RAPID_SALESFORCE_MIRROR_TOKEN: ${{ fromJSON(inputs.manifest_json).selection.salesforce && secrets.FCOS_RAPID_SALESFORCE_MIRROR_TOKEN || '' }}
           FCOS_RAPID_SALESFORCE_PRODUCTION_PRIVATE_KEY: ${{ fromJSON(inputs.manifest_json).selection.salesforce && secrets.FCOS_RAPID_SALESFORCE_PRODUCTION_PRIVATE_KEY || '' }}
           FCOS_RAPID_SALESFORCE_PRODUCTION_CLIENT_ID: ${{ fromJSON(inputs.manifest_json).selection.salesforce && secrets.FCOS_RAPID_SALESFORCE_PRODUCTION_CLIENT_ID || '' }}

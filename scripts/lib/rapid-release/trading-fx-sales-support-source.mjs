@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { digest, git, requireCondition } from './contract.mjs';
+import { digest, git, isDigest, isSha, requireCondition, sourceSnapshot } from './contract.mjs';
 import { readReviewedInventory } from '../salesforce-reviewed-release.mjs';
 import { salesSupportRepairPackage } from './trading-fx-sales-support-repair.mjs';
 
@@ -17,10 +17,24 @@ export function salesSupportRepairSourceProfile(before) {
   return before.replace(anchor, anchor + entries);
 }
 
+export function assertSalesSupportRepairBinding(repair) {
+  const { sourceCommit, sourceTreeHash, sourceProfileDigest, profileDigest, manifestDigest, correctionFingerprint } = repair ?? {};
+  const packet = salesSupportRepairPackage();
+  const expected = { sourceCommit, sourceTreeHash, sourceProfileDigest, profileDigest, manifestDigest };
+  requireCondition(isSha(sourceCommit) && isDigest(sourceTreeHash) && isDigest(sourceProfileDigest)
+    && profileDigest === packet.profileDigest && manifestDigest === packet.manifestDigest
+    && correctionFingerprint === digest(expected)
+    && digest(repair ?? null) === digest({ ...expected, correctionFingerprint }),
+  'TRADING_FX_SALES_SUPPORT_SOURCE_BINDING_CHANGED');
+  return repair;
+}
+
 export function verifySalesSupportRepairSource({ cwd, repair }) {
-  const sourceCommit = git(cwd, ['rev-parse', 'HEAD']);
-  requireCondition(sourceCommit === repair.sourceCommit && git(cwd, ['status', '--porcelain']) === ''
-    && git(cwd, ['rev-parse', 'HEAD^']) === originalCommit
+  assertSalesSupportRepairBinding(repair);
+  const { sha: sourceCommit } = sourceSnapshot(cwd);
+  requireCondition(!git(cwd, ['ls-files', '--others', '--ignored', '--exclude-standard', '--', 'force-app/main/default']),
+    'SALESFORCE_REVIEW_SOURCE_UNTRACKED_INPUT');
+  requireCondition(sourceCommit === repair.sourceCommit && git(cwd, ['rev-list', '--parents', '-n', '1', 'HEAD']) === sourceCommit + ' ' + originalCommit
     && git(cwd, ['diff', '--name-only', originalCommit, 'HEAD']) === profilePath,
   'TRADING_FX_SALES_SUPPORT_SOURCE_SCOPE_CHANGED');
   const before = git(cwd, ['show', originalCommit + ':' + profilePath]) + '\n';

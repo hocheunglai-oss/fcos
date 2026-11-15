@@ -1,11 +1,11 @@
 import { digest, requireCondition, validateManifest } from './contract.mjs';
-import { salesSupportRepairPackage } from './trading-fx-sales-support-repair.mjs';
+import { assertSalesSupportRepairBinding } from './trading-fx-sales-support-source.mjs';
 
 export function assertTradingFxProductionBootstrapSuccessor(manifest, prior) {
   validateManifest(manifest);
   const { tradingFxProductionBootstrapRecoveryReceiptId: receiptId, salesSupportRepair, ...retainedPlan } =
     manifest.prerequisites?.plan ?? {};
-  const { profileDigest, manifestDigest } = salesSupportRepairPackage();
+  assertSalesSupportRepairBinding(salesSupportRepair);
   const { releaseId, controllerSha, createdAt, prerequisites, ...retainedManifest } = manifest;
   const { releaseId: priorReleaseId, controllerSha: priorControllerSha, createdAt: _priorCreatedAt,
     prerequisites: priorPrerequisites, ...priorRetainedManifest } = prior;
@@ -16,7 +16,6 @@ export function assertTradingFxProductionBootstrapSuccessor(manifest, prior) {
     && prerequisites.adapter === 'trading-fx-prerequisites' && prerequisites.adapter === priorPrerequisites.adapter
     && prerequisites.adapterDigest !== priorPrerequisites.adapterDigest
     && digest(retainedManifest) === digest(priorRetainedManifest)
-    && digest(retainedPlan) === digest(priorPrerequisites.plan)
-    && digest(salesSupportRepair ?? null) === digest({ profileDigest, manifestDigest }),
+    && digest(retainedPlan) === digest(priorPrerequisites.plan),
   'TRADING_FX_PRODUCTION_BOOTSTRAP_SUCCESSOR_SCOPE_CHANGED');
 }
