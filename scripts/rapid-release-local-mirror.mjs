@@ -68,7 +68,7 @@ async function main() {
   'LOCAL_MIRROR_GITHUB_IDENTITY_MISMATCH');
   const request = nativeRequest.payload;
   const repair = plan.salesSupportRepair;
-  const fieldBoundCorrection = Object.hasOwn(plan ?? {}, 'tradingFxFieldBoundCorrectionClosureReceiptId');
+  const fieldBoundCorrection = Boolean(repair?.fieldBoundPackageSha256);
   const viewAllFieldsCorrection = repair?.viewAllFieldsCorrection === true;
   const correction = request?.correctionSourceSha !== undefined;
   let mirrorReview = reviewed;
@@ -177,8 +177,8 @@ async function main() {
     const claim = github.write(`${base}/git/refs`, { ref, sha: manifest.candidate.sha });
     requireCondition(claim.ref === ref && claim.object?.sha === manifest.candidate.sha, 'LOCAL_MIRROR_CLAIM_ACK_UNCERTAIN');
   };
-  let mode = fieldBoundCorrection && !viewAllFieldsCorrection ? 'check' : !recovery && request.mode === 'publish' ? 'publish' : 'check';
-  if ((!fieldBoundCorrection || viewAllFieldsCorrection) && mode === 'check' && request.mode !== 'check') {
+  let mode = !fieldBoundCorrection && !recovery && request.mode === 'publish' ? 'publish' : 'check';
+  if (!fieldBoundCorrection && mode === 'check' && request.mode !== 'check') {
     const publicationRef = tagRoot.slice('refs/'.length) + '/publication';
     if (correction && !recovery && request.mode === 'recover') {
       // Confirm there has never been a write claim. Another operator racing
@@ -234,7 +234,9 @@ async function main() {
     await assertCurrent();
     report = await runReviewedMirror({ mode, cwd, plan: reviewed, state, policy, provider, ownership: { assert: assertCurrent } });
   }
-  requireCondition(!(fieldBoundCorrection && !viewAllFieldsCorrection) || (report.commit === originalMirror.commit
+  requireCondition(!fieldBoundCorrection || (report.commit === originalMirror.commit
+    && report.pullRequest?.number === originalMirror.pullRequest?.number), 'LOCAL_MIRROR_HEAD_CHANGED');
+  requireCondition(!viewAllFieldsCorrection || (report.commit !== originalMirror.commit
     && report.pullRequest?.number === originalMirror.pullRequest?.number), 'LOCAL_MIRROR_HEAD_CHANGED');
   requireCondition(request.mode !== 'check' || (mirror.mirror?.commit === report.commit && mirror.mirror?.pullRequest === report.pullRequest.number),
     'LOCAL_MIRROR_HEAD_CHANGED');
