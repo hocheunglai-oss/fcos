@@ -17,6 +17,7 @@ const ownedCodes = Object.freeze({
   QUALITY_COMPATIBILITY_FAILED: 'test_failure', QUALITY_GRAPH_ONLY_FAILED: 'test_failure', QUALITY_FCUNO_CONTRACT_FAILED: 'test_failure',
   SOURCE_BYTES_CHANGED: 'source_mismatch', SOURCE_NOT_CLEAN: 'source_mismatch', MANIFEST_CHANGED: 'source_mismatch',
   SOURCE_SHA_INVALID: 'source_mismatch', BUILD_RECEIPT_MISMATCH: 'stale_evidence', STAGED_BUILD_NOT_READY: 'stale_evidence',
+  STAGING_BASELINE_CHANGED: 'stale_evidence', RAPID_STAGING_HANDOVER_OVERLAP: 'stale_evidence',
   SMOKE_BROWSER_BASELINE_DASHBOARD_FAILED: 'test_failure', SMOKE_BROWSER_BASELINE_MARKETS_FAILED: 'test_failure',
   SMOKE_BASELINE_NAVIGATION_FAILED: 'test_failure', SMOKE_BASELINE_RESPONSE_FAILED: 'test_failure',
   SMOKE_BASELINE_RESPONSE_TIMEOUT: 'test_failure',

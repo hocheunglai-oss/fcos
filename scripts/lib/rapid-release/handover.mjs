@@ -6,6 +6,7 @@ import { assertNativeBootstrapAdmission, verifyLockedBootstrap } from './bootstr
 import { verifyLockedBootstrapSuccessor } from './bootstrap-successor.mjs';
 import { digest as releaseDigest } from './contract.mjs';
 import { isNativeReadonlyConnection, assertReadonlyDatabaseIdentity, installReadonlyHandoverPolicy } from './readonly-database.mjs';
+import { lockStagingTransition } from './staging-ownership.mjs';
 
 const canonical = value => JSON.stringify(value, (_, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort()) : item);
 export const handoverDigest = value => createHash('sha256').update(typeof value === 'string' ? value : canonical(value)).digest('hex');
@@ -317,6 +318,10 @@ export async function applyHandover({ phase, plan, db, connection, github, verce
       && staged.meta?.fcosRapidArtifactDigest === plan.artifactDigest && staged.meta?.fcosHandoverPlanHash === planHash, 'HANDOVER_REAL_STAGED_QUALIFICATION_REQUIRED');
   }
   const result = await transaction(db, connection, false, async () => {
+    await lockStagingTransition(db);
+    const currentJournal = await github.rapidJournalAudit();
+    check(currentJournal.unresolvedProduction === 0 && canonical(currentJournal) === canonical(plan.rapidJournal),
+      'HANDOVER_RAPID_OPERATION_OR_JOURNAL_CHANGED');
     let state = await snapshot(db, true);
     if (plan.bootstrap) {
       assertNativeBootstrapAdmission(bootstrapAdmission, { controllerSha: plan.controllerSha, reference: plan.bootstrap.reference });

@@ -48,7 +48,7 @@ const readPayloads = {
 
 // Fixtures replace browser/provider transports. They simulate the app-owned
 // bootstrap response and actual response events; they never establish live proof.
-function browserFixture({ badIdentity = false, badRead = false, badDenial = false, unexpected = false, missingModule = false, background = false, optionalRequest = null, badPayload = false, badDesktop = false, deniedModule = null, role = 'manager', companyFxRows = undefined, supplierBoundaryRegression = null, groupedBoundaryRegression = false, groupedDesktopMissing = false, tradingFxRouteRegression = false, tradingFxActionVisible = false, marketReadTimeouts = 0, marketResponseStatus = 200, moduleReadTimeouts = {} } = {}) {
+function browserFixture({ badIdentity = false, badRead = false, badDenial = false, unexpected = false, missingModule = false, background = false, optionalRequest = null, badPayload = false, badDesktop = false, deniedModule = null, role = 'manager', companyFxRows = undefined, supplierBoundaryRegression = null, groupedBoundaryRegression = false, groupedDesktopMissing = false, tradingFxRouteRegression = false, tradingFxActionVisible = false, existingDraftActionVisible = false, existingDraftRouteRegression = false, marketReadTimeouts = 0, marketResponseStatus = 200, moduleReadTimeouts = {} } = {}) {
   const observations = { launches: [], reads: [], contextsClosed: 0, browsersClosed: 0, nativeAborts: 0 };
   const remainingTimeouts = { ...moduleReadTimeouts };
   const browserFactory = async options => {
@@ -79,6 +79,7 @@ function browserFixture({ badIdentity = false, badRead = false, badDenial = fals
           if (url.endsWith('/companyFxHistoryGet')) return apiResponse(url, { canSave: true, rows: companyFxRows });
           if (groupedBoundaryRegression && url.endsWith('/xeroFinancialDocumentPreservationRun')) return apiResponse(url, {});
           if (tradingFxRouteRegression && email !== ci.email && url.endsWith('/xeroNativeDocumentApply')) return apiResponse(url, {});
+          if (existingDraftRouteRegression && url.endsWith('/xeroExistingDraftAuthorisationApply')) return apiResponse(url, {});
           const supplierAction = /\/xeroSupplierFinancialBucket(Read|Preview|Apply)$/.exec(url)?.[1];
           if (supplierAction) {
             const restricted = email === ci.email;
@@ -101,7 +102,16 @@ function browserFixture({ badIdentity = false, badRead = false, badDenial = fals
     };
     const locator = (role, name) => ({
       first() { return this; },
-      getByRole: () => ({ count: async () => tradingFxActionVisible ? 1 : 0 }),
+      getByRole: childRole => {
+        if (childRole === 'status' && name === 'Existing draft status authorisation') return {
+          filter({ hasText }) {
+            assert.match('Draft authorisation is disabled on this deployment.', hasText);
+            return { async waitFor({ state }) { assert.equal(state, 'visible'); } };
+          },
+        };
+        return { count: async () => name === 'Existing draft status authorisation'
+          ? Number(existingDraftActionVisible) : Number(tradingFxActionVisible) };
+      },
       waitFor: async () => {
         if (groupedDesktopMissing && name === 'Preserve verified documents') throw Error('MISSING_PRESERVATION_CONTROL');
       },
@@ -588,4 +598,21 @@ test('Trading FX verifies fixed Finance route denials and the inactive desktop p
     bootstrapFingerprint), { code: 'SMOKE_TRADING_FX_ROUTE_NOT_DENIED' });
   await assert.rejects(runStagedSmoke({ ...options, browserFactory: browserFixture({ tradingFxActionVisible: true }).browserFactory }),
     { code: 'SMOKE_TRADING_FX_DESKTOP_ACTION_VISIBLE' });
+});
+
+test('existing draft smoke requires the held desktop and denies each execution route for both roles', async () => {
+  const candidate = { ...manifest({ normalRole: true, modules: ['xero_portal'] }),
+    prerequisites: { adapter: 'existing-draft-migrations' } };
+  const fixture = browserFixture();
+  const options = { manifest: candidate, staged, env, fetchImpl: publicFetch(), browserFactory: fixture.browserFactory };
+  const result = await runStagedSmoke(options);
+  assert.deepEqual(result.existingDraft, { restrictedVerified: true, normalVerified: true, desktopHeldVerified: true });
+  assert.equal(result.businessWrites, 0);
+  const calls = fixture.observations.reads.filter(({ url }) => url.includes('/xeroExistingDraftAuthorisation'));
+  assert.equal(calls.length, 6);
+  assert.ok(calls.every(({ body, method }) => body === '{}' && method === 'POST'));
+  await assert.rejects(runStagedSmoke({ ...options, browserFactory: browserFixture({ existingDraftActionVisible: true }).browserFactory }),
+    { code: 'SMOKE_EXISTING_DRAFT_DESKTOP_ACTION_VISIBLE' });
+  await assert.rejects(runStagedSmoke({ ...options, browserFactory: browserFixture({ existingDraftRouteRegression: true }).browserFactory }),
+    { code: 'SMOKE_EXISTING_DRAFT_ROUTE_NOT_DENIED' });
 });
