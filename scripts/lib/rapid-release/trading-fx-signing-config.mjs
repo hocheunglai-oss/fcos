@@ -81,3 +81,17 @@ export async function verifyTradingFxSigningConfig({ manifest, previous, github,
   'TRADING_FX_SIGNING_KEY_INVALID');
   return { verified: true, receiptId: id, proofDigest, configurationDigest: proof.configurationDigest };
 }
+
+export async function verifyTradingFxReleaseSigningConfig({ manifest, github, ownerId, provider }) {
+  const receiptId = manifest.prerequisites?.plan?.tradingFxProductionBootstrapRecoveryReceiptId;
+  let signingManifest = manifest;
+  if (receiptId !== undefined) {
+    const { readTradingFxProductionBootstrapClosure } = await import('./trading-fx-production-bootstrap-checkpoint.mjs');
+    const { assertTradingFxProductionBootstrapSuccessor } = await import('./trading-fx-production-bootstrap-successor.mjs');
+    const { checkpoint } = await readTradingFxProductionBootstrapClosure({ github, receiptId });
+    assertTradingFxProductionBootstrapSuccessor(manifest, checkpoint.prior);
+    signingManifest = checkpoint.prior;
+  }
+  return verifyTradingFxSigningConfig({ manifest: signingManifest, previous: TRADING_FX_SIGNING_BASELINE,
+    github, ownerId, provider });
+}

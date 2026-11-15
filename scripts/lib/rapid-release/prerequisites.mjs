@@ -2,6 +2,7 @@ import { readFileSync, realpathSync } from 'node:fs';
 import { resolve, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { assertAuthorization, digest, git, isDigest, requireCondition, requiresTradingFxSmoke, sourceSnapshot } from './contract.mjs';
+import { assertSalesSupportRepairBinding, verifySalesSupportRepairSource } from './trading-fx-sales-support-source.mjs';
 import { assertPreBootstrapProof } from './engine.mjs';
 import { FCOS_CONNECTION_POLICY } from '../../../config/fcosConnections.js';
 
@@ -35,13 +36,17 @@ function protectedSalesforceContext({ manifest, approval, staged, journal, provi
     && typeof provider?.assertOwnership === 'function' && typeof provider?.verifyApproval === 'function',
   'SALESFORCE_PROTECTED_OWNERSHIP_REQUIRED');
   const policy = FCOS_CONNECTION_POLICY.providers.find(item => item.id === 'salesforce');
-  const allowedOperation = /^(?:validation|deployment|bootstrap|shared-publication|permission:[A-Za-z][A-Za-z0-9_]*)$/;
-  return {
+  const hasCorrection = manifest.prerequisites.adapter === 'trading-fx-prerequisites'
+    && Number.isSafeInteger(plan.tradingFxProductionBootstrapRecoveryReceiptId) && plan.tradingFxProductionBootstrapRecoveryReceiptId > 0;
+  const correctionFingerprint = hasCorrection ? assertSalesSupportRepairBinding(plan.salesSupportRepair).correctionFingerprint : undefined;
+  const allowedOperation = /^(?:validation|deployment|bootstrap|sales-support-correction|shared-publication|permission:[A-Za-z][A-Za-z0-9_]*)$/;
+  const scoped = (scope, correction) => ({
     ownership: {
       async assert(binding) {
         const { stage, orgId, operation } = binding;
-        requireCondition(binding.fingerprint === fingerprint && allowedOperation.test(operation || '')
+        requireCondition(binding.fingerprint === scope && allowedOperation.test(operation || '')
           && policy.environments.some(environment => environment.key === stage && environment.orgId === orgId)
+          && (correction ? ['sales-support-correction', 'shared-publication'].includes(operation) : operation !== 'sales-support-correction')
           && (operation !== 'shared-publication' || stage === 'devee'), 'SALESFORCE_PROTECTED_OPERATION_MISMATCH');
         assertAuthorization(approval, manifest, staged);
         await provider.verifyApproval(approval, { manifest, staged });
@@ -49,18 +54,21 @@ function protectedSalesforceContext({ manifest, approval, staged, journal, provi
         await provider.assertOwnership({ phase: 'prerequisites' });
         assertAuthorization(approval, manifest, staged);
         const expiresAt = new Date(Math.min(Date.now() + 300_000, Date.parse(approval.approvedAt) + 86_400_000)).toISOString();
-        const receiptId = digest({ manifestHash: approval.manifestHash, runId: approval.runId, fingerprint, stage, orgId, operation });
-        return { fingerprint, stage, orgId, operation, receiptId, expiresAt };
+        const receiptId = digest({ manifestHash: approval.manifestHash, runId: approval.runId, fingerprint: scope, stage, orgId, operation });
+        return { fingerprint: scope, stage, orgId, operation, receiptId, expiresAt };
       },
     },
     journal: {
-      readCheckpoints() { return journal.readSalesforceCheckpoints(fingerprint); },
+      readCheckpoints() { return journal.readSalesforceCheckpoints(scope); },
       checkpoint(event) {
-        requireCondition(event.fingerprint === fingerprint, 'SALESFORCE_PROTECTED_OPERATION_MISMATCH');
+        requireCondition(event.fingerprint === scope && (!correction
+          || event.operation === (event.stage === 'shared_mirror' ? 'publication' : 'sales-support-correction')),
+        'SALESFORCE_PROTECTED_OPERATION_MISMATCH');
         return journal.checkpoint(event);
       },
     },
-  };
+  });
+  return { ...scoped(fingerprint, false), ...(correctionFingerprint ? { correction: scoped(correctionFingerprint, true) } : {}) };
 }
 
 function protectedDatabaseContext({ manifest, approval, staged, journal, provider }) {
@@ -82,6 +90,16 @@ function protectedDatabaseContext({ manifest, approval, staged, journal, provide
 
 // Only adapters reviewed into the trusted controller may receive provider credentials.
 // Candidate files and provider responses are data, never executable repair adapters.
+function verifiedCorrectionCandidate({ manifest, root, env }) {
+  const repair = manifest.prerequisites?.plan?.salesSupportRepair;
+  if (!repair) return undefined;
+  requireCondition(env.FCOS_RAPID_SALESFORCE_CORRECTION_CANDIDATE, 'SALESFORCE_CORRECTION_SOURCE_REQUIRED');
+  const cwd = realpathSync(env.FCOS_RAPID_SALESFORCE_CORRECTION_CANDIDATE);
+  requireCondition(cwd !== root, 'SALESFORCE_CORRECTION_SOURCE_REQUIRED');
+  verifySalesSupportRepairSource({ cwd, repair });
+  return cwd;
+}
+
 function verifiedSalesforceCandidate({ manifest, root, env }) {
   if (!manifest.selection.salesforce) return undefined;
   requireCondition(env.FCOS_RAPID_SALESFORCE_CANDIDATE, 'SALESFORCE_CANDIDATE_SOURCE_REQUIRED');
@@ -107,7 +125,8 @@ export async function runPrerequisites({ manifest, approval, staged, journal, pr
     ? protectedDatabaseContext({ manifest, approval, staged, journal, provider })
     : undefined;
   const result = await adapter.applyReviewedPrerequisites({ manifest, approval, journal, controllerDirectory: root, env,
-    provider: signingConfigurationReader(provider), salesforce, salesforceCandidateDirectory, databaseWriter,
+    provider: signingConfigurationReader(provider), salesforce, salesforceCandidateDirectory,
+    correctionDirectory: verifiedCorrectionCandidate({ manifest, root, env }), databaseWriter,
     plan: descriptor.plan, authorization: { manifestHash: digest(manifest), nativeReview: approval } });
   requireCondition(result?.passed === true && result.manifestHash === digest(manifest)
     && result.backwardCompatible === true && Array.isArray(result.completedOperations)
@@ -117,6 +136,15 @@ export async function runPrerequisites({ manifest, approval, staged, journal, pr
       && result.salesforce.fingerprint === descriptor.plan.salesforceFingerprint)
     && (!manifest.selection.database || result.database?.destructiveRollback === false && result.database.readbackVerified === true)
     && (!databaseWriter || isDigest(result.database?.schemaDigest)), 'PREREQUISITE_VERIFICATION_REQUIRED');
+  const repair = descriptor.plan.salesSupportRepair;
+  if (repair) {
+    const correction = result.salesforce?.correction;
+    const required = ['devee', 'shared_mirror', 'qat', 'production'].map(stage => 'salesforce:' + stage + ':sales-support-correction');
+    requireCondition(correction?.fingerprint === repair.correctionFingerprint && correction.sourceTreeHash === repair.sourceTreeHash
+      && correction.order === 'devee-mirror-qat-production'
+      && required.every(operationId => result.completedOperations.filter(row => row.operationId === operationId).length === 1),
+    'SALESFORCE_CORRECTION_COMPLETION_REQUIRED');
+  }
   // Private adapter evidence stays in its private store; publish only typed checkpoint metadata.
   const operations = result.completedOperations.map(operation => {
     requireCondition(/^[A-Za-z0-9][A-Za-z0-9_.:-]{1,119}$/.test(operation.operationId || '')
@@ -124,7 +152,8 @@ export async function runPrerequisites({ manifest, approval, staged, journal, pr
     return { operationId: operation.operationId, evidenceDigest: operation.evidenceDigest, verified: true, intentRecorded: true };
   });
   return { passed: true, manifestHash: digest(manifest), backwardCompatible: true, completedOperations: operations,
-    ...(result.salesforce ? { salesforce: { order: result.salesforce.order, mirrorVerified: true, sourceTreeHash: result.salesforce.sourceTreeHash } } : {}),
+    ...(result.salesforce ? { salesforce: { order: result.salesforce.order, mirrorVerified: true, sourceTreeHash: result.salesforce.sourceTreeHash,
+      ...(repair ? { correction: result.salesforce.correction } : {}) } } : {}),
     ...(result.database ? { database: { destructiveRollback: false, readbackVerified: true,
       ...(databaseWriter ? { schemaDigest: result.database.schemaDigest } : {}) } } : {}) };
 }
@@ -137,7 +166,7 @@ export async function verifyBeforeBootstrap({ manifest, staged, controllerDirect
     && entry.supportsDeferredStage === true && typeof adapter.verifyPreBootstrapStage === 'function', 'QUALIFIED_PREBOOTSTRAP_VERIFIER_REQUIRED');
   const salesforceCandidateDirectory = verifiedSalesforceCandidate({ manifest, root, env });
   const proof = await adapter.verifyPreBootstrapStage({ manifest, staged, plan: descriptor.plan, controllerDirectory: root,
-    salesforceCandidateDirectory, env, provider: signingConfigurationReader(provider) });
+    salesforceCandidateDirectory, correctionDirectory: verifiedCorrectionCandidate({ manifest, root, env }), env, provider: signingConfigurationReader(provider) });
   assertPreBootstrapProof(proof, manifest, staged);
   requireCondition(proof.completedChecks.every(check => /^[a-z][a-z0-9_]{1,80}$/.test(check)), 'PREBOOTSTRAP_STAGE_PROOF_REQUIRED');
   return { passed: true, mode: 'pre_bootstrap', deploymentId: proof.deploymentId, buildId: proof.buildId,

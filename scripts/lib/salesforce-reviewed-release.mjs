@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync, lstatSync } from 'node:fs';
 import path from 'node:path';
 import { digest as digestCheckpoint } from './rapid-release/contract.mjs';
+import { matchesTradingFxProductionProjection } from './rapid-release/trading-fx-production-inventory.mjs';
 import { salesforcePromotionHash as hash, assertSuccessfulSalesforceReport } from './salesforce-promotion-journal.mjs';
 
 export const REVIEWED_SALESFORCE_MODE = 'reviewed-manifest-incremental-v1';
@@ -124,11 +125,13 @@ function exactQatProfileDenyEntries({ name, observed, pinned, projectionPaths, e
     && tradingFxQatProfile.fields.every(field => projectionPaths.includes(field));
 }
 
-export function matchesProjectedNativeInventory(observed, pinned, projectionPaths, { environmentKey, fingerprint } = {}) {
+export function matchesProjectedNativeInventory(observed, pinned, projectionPaths, { environmentKey, fingerprint, profileRecovery } = {}) {
   return Boolean(observed) && same(sorted(Object.keys(observed)), sorted([...Object.keys(pinned), ...projectionPaths]))
     && Object.entries(observed).every(([name, pin]) => HASH.test(pin?.sha256 || '') && Number.isSafeInteger(pin.size) && pin.size >= 0
       && (!Object.hasOwn(pinned, name) || same(pin, pinned[name]) || exactQatProfileDenyEntries({
         name, observed: pin, pinned: pinned[name], projectionPaths, environmentKey, fingerprint,
+      }) || matchesTradingFxProductionProjection({
+        name, observed: pin, pinned: pinned[name], environmentKey, fingerprint, mode: profileRecovery,
       })));
 }
 
@@ -507,14 +510,14 @@ export async function verifyReviewedJobPair({ provider, environment, validationJ
   });
 }
 
-export async function verifyReviewedOrgInventory({ provider, environment, plan, expected, now = () => new Date() }) {
+export async function verifyReviewedOrgInventory({ provider, environment, plan, expected, profileRecovery, now = () => new Date() }) {
   if (typeof provider.verifyInventory !== 'function') throw new Error('Current Salesforce org inventory verification is required; a historical successful deployment is not current baseline proof.');
   const receipt = await provider.verifyInventory(environment, { plan, expectedInventory: expected.files,
     expectedSourceTreeHash: expected.sourceTreeHash || null, expectedInventoryHash: expected.inventoryHash,
     expectedAbsentComponents: expected.absentComponents || [],
     ...(expected.nativeExport ? { nativeExport: true, verifyApexProjection: expected.verifyApexProjection === true } : {}),
     ...(expected.nativeBootstrap ? { nativeBootstrap: true, projectionPaths: expected.projectionPaths,
-      ...(expected.projectedNativeInventory ? { projectedNativeInventory: true } : {}) } : {}) });
+      ...(expected.projectedNativeInventory ? { projectedNativeInventory: true, profileRecovery } : {}) } : {}) });
   const verifiedAt = Date.parse(receipt?.verifiedAt);
   if (receipt?.orgId !== environment.orgId || receipt?.sourceTreeHash !== (expected.sourceTreeHash || null)
     || receipt?.inventoryHash !== expected.inventoryHash || !HASH.test(receipt?.evidenceSha256 || '')
@@ -530,7 +533,7 @@ export async function verifyReviewedOrgInventory({ provider, environment, plan, 
     }).sort();
     const inventoryMatches = expected.projectedNativeInventory
       ? matchesProjectedNativeInventory(observed, expected.files, expected.projectionPaths, {
-        environmentKey: environment.key, fingerprint: plan.fingerprint,
+        environmentKey: environment.key, fingerprint: plan.fingerprint, profileRecovery,
       })
         && receipt.observedNativeInventoryHash === hash(observed)
       : Boolean(observed) && same(observed, expected.files) && hash(observed) === expected.inventoryHash;
@@ -601,9 +604,12 @@ export function assertReviewedMirror(result, plan, policy, deploymentJobId) {
  * An uncertain submission is reconciled by an owner-supplied job ID, never blind resubmission.
  */
 export async function runReviewedSalesforceRelease({ plan, mode, policy, journal, provider, ownership, externalJournal,
-  authorization = null, now = () => new Date(), assertUnchanged, retainedDeveeInventory, replaceValidation = [], reconcile = {} }) {
+  authorization = null, now = () => new Date(), assertUnchanged, retainedDeveeInventory, retainedTradingFxMirror, repairProductionSalesSupport, replaceValidation = [], reconcile = {} }) {
   const approvedContinuation = mode === 'approved-continuation';
   if (!['prepare', 'apply', 'approved-continuation'].includes(mode)) throw new Error('Choose prepare, apply or approved-continuation.');
+  if (retainedTradingFxMirror && typeof repairProductionSalesSupport !== 'function') {
+    throw new Error('A retained mirror requires the Trading FX correction promotion.');
+  }
   if (approvedContinuation) assertProductionAuthorization(authorization, plan, now());
   if (journal.state.fingerprint !== plan.fingerprint || !same(journal.state.binding, plan.binding)) throw new Error('Reviewed workflow fingerprint changed; prepare a new release from DEVEE.');
   if (typeof ownership?.assert !== 'function' || typeof externalJournal?.checkpoint !== 'function') throw new Error('Salesforce writes require external release ownership and a durable checkpoint adapter; a local lock is not global serialization.');
@@ -671,9 +677,17 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
       if (entry.stage === 'production' && entry.operation === 'preparation' && entry.outcome === 'evidence') {
         savedPreparation = entry;
       }
+      if (repairProductionSalesSupport && entry.stage === 'production' && entry.operation === 'sales-support-correction') continue;
       if (!['pending', 'resolved'].includes(entry.outcome)) continue;
       const local = get(entry.stage, entry.operation);
       if (local && digestCheckpoint(local) === entry.evidenceDigest) continue;
+      if (retainedTradingFxMirror && entry.stage === 'shared_mirror' && entry.operation === 'publication') {
+        if (entry.outcome !== 'resolved' || entry.mirror?.commit !== retainedTradingFxMirror.commit
+          || entry.mirror?.pullRequest !== retainedTradingFxMirror.pullRequest.number) {
+          throw new Error('Historical Trading FX mirror does not match the retained result.');
+        }
+        continue;
+      }
       if (!local && entry.stage === 'shared_mirror' && entry.operation === 'publication'
         && entry.outcome === 'resolved' && /^[a-f0-9]{40}$/u.test(entry.mirror?.commit || '')
         && Number.isSafeInteger(entry.mirror.pullRequest) && entry.mirror.pullRequest > 0) {
@@ -731,7 +745,7 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
     if (missingMirror) await mirror(missingMirror);
     if (mode !== 'prepare' && !get('production', 'preparation')
       && get('devee', 'deployment')?.status === 'Succeeded' && get('qat', 'deployment')?.status === 'Succeeded'
-      && get('shared_mirror', 'publication')?.status === 'Succeeded') {
+      && (retainedTradingFxMirror || get('shared_mirror', 'publication')?.status === 'Succeeded')) {
       const validationJobId = savedPreparation?.preparation?.validationJobId;
       const ready = JOB_ID.test(validationJobId || '') && get('production', 'validation')?.jobId === validationJobId
         && get('production', 'validation')?.status === 'Succeeded'
@@ -751,13 +765,15 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
       }
     }
   }
+  let profileRecovery = repairProductionSalesSupport ? 'before-correction' : undefined;
   const verifyBeforeDeployment = (environment, expected) => {
     // Only the qualified recovery adapter supplies an old DEVEE inventory.
     // After a deployment, the corrected candidate always supplies the proof.
     if (environment.key === 'devee' && retainedDeveeInventory && !get('devee', 'deployment')) {
       return verifyReviewedOrgInventory({ ...retainedDeveeInventory, environment, now });
     }
-    return verifyReviewedOrgInventory({ provider, environment, plan, expected, now });
+    return verifyReviewedOrgInventory({ provider, environment, plan, expected, now,
+      profileRecovery: environment.key === 'production' ? profileRecovery : undefined });
   };
   const preparation = get('production', 'preparation');
   if ((mode === 'apply' || approvedContinuation && preparation) && (preparation?.fingerprint !== plan.fingerprint || !['ready', 'awaiting-authorized-bootstrap'].includes(preparation?.status))) {
@@ -841,6 +857,11 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
     await unchanged();
     const deployment = get('devee', 'deployment');
     if (deployment?.status !== 'Succeeded') throw new Error('Verified DEVEE deployment is required before the complete derived source mirror.');
+    if (retainedTradingFxMirror) {
+      // This result is the immutable historical publication. The corrected
+      // tree must be independently published and checked by the recovery hook.
+      return assertReviewedMirror(retainedTradingFxMirror, plan, policy, deployment.jobId);
+    }
     let saved = get('shared_mirror', 'publication');
     const action = saved || original ? 'check' : 'publish';
     if (action === 'publish') {
@@ -887,6 +908,13 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
     }
     for (const environment of policy.environments) {
       if (environment.key !== 'devee') await mirror();
+      if (environment.key === 'production' && repairProductionSalesSupport) {
+        if (mode === 'prepare' || get('production', 'bootstrap')?.status !== 'Succeeded') {
+          throw new Error('Sales Support correction requires the authorized, verified Production bootstrap.');
+        }
+        await repairProductionSalesSupport();
+        profileRecovery = 'after-correction';
+      }
       const stage = journal.state.stages[environment.key] || {};
       const baseline = reviewedCheckpointInventory(plan, {}, environment.key);
       // Successful upstream jobs are reattested, preserving original completedAt and IDs.
@@ -897,8 +925,8 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
         if (!stage.validation) throw new Error('Deployment lacks its saved successful validation.');
         const validation = await runValidation(environment);
         await job(environment, 'deployment', () => provider.deploy(environment, validation.jobId, plan), { validationJobId: validation.jobId });
-        await verifyReviewedOrgInventory({ provider, environment, plan,
-          expected: reviewedCheckpointInventory(plan, { deployment: { status: 'Succeeded' } }, environment.key), now });
+        await verifyBeforeDeployment(environment,
+          reviewedCheckpointInventory(plan, { deployment: { status: 'Succeeded' } }, environment.key));
         await permissions(environment, plan.binding.permissionSets);
         continue;
       }
@@ -931,8 +959,8 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
       // Validation may run for hours; refresh unchanged metadata before consuming its job.
       await verifyBeforeDeployment(environment, predeploymentInventory);
       await job(environment, 'deployment', () => provider.deploy(environment, validation.jobId, plan), { validationJobId: validation.jobId });
-      await verifyReviewedOrgInventory({ provider, environment, plan,
-        expected: reviewedCheckpointInventory(plan, { deployment: { status: 'Succeeded' } }, environment.key), now });
+      await verifyBeforeDeployment(environment,
+        reviewedCheckpointInventory(plan, { deployment: { status: 'Succeeded' } }, environment.key));
       await permissions(environment, plan.binding.permissionSets);
     }
     await mirror();

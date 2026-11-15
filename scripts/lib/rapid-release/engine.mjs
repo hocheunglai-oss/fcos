@@ -118,7 +118,7 @@ export async function stageRelease({ manifest, journal, provider, build, smoke, 
   return { state: deferred ? 'awaiting_authorized_bootstrap' : 'ready_for_decision', deferredChecks: deferred ? manifest.prerequisites.plan.deferredModules : [], manifestHash: digest(manifest), staged: ready,
     conditionalPrerequisites: manifest.selection.salesforce || manifest.selection.database };
 }
-export async function promoteRelease({ manifest, journal, provider, approval, prerequisites, smoke, observe }) {
+export async function promoteRelease({ manifest, journal, provider, approval, prerequisites, reverifyPrerequisites, smoke, observe }) {
   validateManifest(manifest);
   const records = await journal.read(), all = events(records), stagedReference = phaseResult(records, 'stage')?.result;
   const preBootstrap = all.find(event => event.event === 'stage.pre_bootstrap_passed' && event.data.deploymentId === stagedReference?.id)?.data;
@@ -138,7 +138,7 @@ export async function promoteRelease({ manifest, journal, provider, approval, pr
   await provider.verifyApproval(approval, { manifest, staged });
   if (all.some(event => event.event === 'release.complete')) return { state: 'complete', deploymentId: staged.id, reused: true };
   if (!all.some(event => event.event === 'approval.accepted')) await journal.append('approval.accepted', approval);
-  let signingRateDigest;
+  let signingRateDigest, reusedPrerequisites;
   if (manifest.selection.salesforce || manifest.selection.database) {
     await journal.assertNoUnresolvedOtherRelease();
     await provider.assertOwnership({ phase: 'prerequisites', manifest, manifestHash: digest(manifest) });
@@ -146,6 +146,7 @@ export async function promoteRelease({ manifest, journal, provider, approval, pr
     const prior = phaseResult(records, 'prerequisites');
     requireCondition(!prior || prior.outcome === 'applied', 'PREREQUISITE_RELEASE_CLOSED');
     let prerequisite = all.find(event => event.event === 'prerequisites.passed')?.data || prior?.result;
+    reusedPrerequisites = Boolean(prerequisite);
     if (!prerequisite) {
       const operationId = `${manifest.releaseId}-prerequisites`, request = { planDigest: digest(manifest.prerequisites), candidateSha: manifest.candidate.sha };
       const intent = all.find(event => event.event === 'prerequisites.intent')?.data;
@@ -188,6 +189,11 @@ export async function promoteRelease({ manifest, journal, provider, approval, pr
   const current = await provider.currentProduction();
   requireCondition(current.id === manifest.previous.deploymentId || previousResult?.result?.id === current.id
     || events(await journal.read()).some(event => event.event === 'promote.intent') && current.id === staged.id, 'PRODUCTION_BASELINE_CHANGED');
+  if (reusedPrerequisites && current.id === manifest.previous.deploymentId
+    && manifest.prerequisites?.plan?.tradingFxProductionBootstrapRecoveryReceiptId !== undefined) {
+    requireCondition(typeof reverifyPrerequisites === 'function', 'TRADING_FX_SALES_SUPPORT_READBACK_REQUIRED');
+    await reverifyPrerequisites();
+  }
   const promoted = await executeOperation({ phase: 'promote', manifest, journal, provider,
     request: { deploymentId: staged.id, previousDeploymentId: manifest.previous.deploymentId, buildId: manifest.build.buildId },
     submit: context => provider.promote({ manifest, staged, approval, ...context }) });

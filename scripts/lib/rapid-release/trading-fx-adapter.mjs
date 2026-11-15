@@ -7,6 +7,8 @@ import { reviewedMigrationAdapter } from './reviewed-migration-adapter.mjs';
 import { prepareReviewedSalesforcePrerequisites, verifyPreBootstrapStage as verifySalesforceStage } from './salesforce-reviewed-adapter.mjs';
 import { TRADING_FX_MIGRATIONS } from './trading-fx-migrations.mjs';
 import { runTradingFxTransaction } from './trading-fx-transaction.mjs';
+import { readTradingFxProductionBootstrapClosure } from './trading-fx-production-bootstrap-checkpoint.mjs';
+import { assertTradingFxProductionBootstrapSuccessor } from './trading-fx-production-bootstrap-successor.mjs';
 import { readFailedBootstrapSuccessor } from './trading-fx-failed-bootstrap-closure.mjs';
 import { readTradingFxPostQatRecovery } from './trading-fx-post-qat-recovery.mjs';
 import { readTradingFxQatRecovery } from './trading-fx-qat-recovery.mjs';
@@ -131,6 +133,21 @@ async function readStoppedBootstrap({ manifest, env, provider }) {
     readPostQatRecovery: previous => readPostQatRecovery({ manifest: previous, plan: previous.prerequisites.plan, env }) });
 }
 
+async function readStoppedProductionBootstrap(input, readHistorical) {
+  const { manifest, env, plan, provider } = input;
+  const github = githubClient({ token: env.GITHUB_TOKEN, candidateSha: manifest.candidate.sha });
+  const recovery = await readTradingFxProductionBootstrapClosure({
+    github, receiptId: plan.tradingFxProductionBootstrapRecoveryReceiptId,
+  });
+  const { prior } = recovery.checkpoint;
+  assertTradingFxProductionBootstrapSuccessor(manifest, prior);
+  const historical = await readHistorical({ ...input, manifest: prior, plan: prior.prerequisites.plan, provider });
+  requireCondition(historical?.database?.schemaDigest === manifest.previous.schemaDigest
+    && isDigest(historical.database.operationDigest) && historical.qualificationManifest,
+  'TRADING_FX_PRODUCTION_BOOTSTRAP_DATABASE_HISTORY_CHANGED');
+  return { ...recovery, database: historical.database, qualificationManifest: historical.qualificationManifest };
+}
+
 export function createTradingFxPrerequisiteAdapter({
   verifyXeroQualification, applyDatabase = applyTradingFxDatabase,
   prepareSalesforce = prepareReviewedSalesforcePrerequisites, verifyStage = verifySalesforceStage,
@@ -171,6 +188,10 @@ export function createTradingFxPrerequisiteAdapter({
     const postQat = Object.hasOwn(input.plan, 'tradingFxPostQatRecoveryReceiptId');
     const failedBootstrap = Object.hasOwn(input.plan, 'tradingFxFailedBootstrapReceiptId');
     requireCondition(Number(original) + Number(stoppedQat) + Number(postQat) + Number(failedBootstrap) <= 1, 'TRADING_FX_RECOVERY_LOCATOR_INVALID');
+    const productionBootstrap = Object.hasOwn(input.plan, 'tradingFxProductionBootstrapRecoveryReceiptId');
+    requireCondition(!productionBootstrap || failedBootstrap, 'TRADING_FX_RECOVERY_LOCATOR_INVALID');
+    requireCondition(productionBootstrap || !Object.hasOwn(input.plan, 'salesSupportRepair'), 'TRADING_FX_RECOVERY_LOCATOR_INVALID');
+    if (productionBootstrap) return { productionBootstrap: await readStoppedProductionBootstrap(input, readStoppedBootstrapRecovery) };
     if (failedBootstrap) return { failedBootstrap: await readStoppedBootstrapRecovery(input) };
     if (postQat) return { postQat: await readStoppedPostQatRecovery(input) };
     if (stoppedQat) return { qat: await readStoppedQatRecovery(input) };
@@ -180,17 +201,18 @@ export function createTradingFxPrerequisiteAdapter({
   return {
     async verifyPreBootstrapStage(input) {
       const recovery = await recoveryFor(input);
-      await verifyScope(input, recovery.failedBootstrap?.qualificationManifest || (recovery.qat || recovery.postQat?.nested)?.prior);
+      await verifyScope(input, (recovery.productionBootstrap || recovery.failedBootstrap)?.qualificationManifest || (recovery.qat || recovery.postQat?.nested)?.prior);
       return verifyStage(input, { withDatabase: true });
     },
     async applyReviewedPrerequisites(input) {
       const recovery = await recoveryFor(input);
-      await verifyScope(input, recovery.failedBootstrap?.qualificationManifest || (recovery.qat || recovery.postQat?.nested)?.prior);
+      await verifyScope(input, (recovery.productionBootstrap || recovery.failedBootstrap)?.qualificationManifest || (recovery.qat || recovery.postQat?.nested)?.prior);
       const applySalesforce = prepareSalesforce(input, { withDatabase: true, tradingFxRecovery: recovery.original,
-        tradingFxQatRecovery: recovery.qat, tradingFxPostQatRecovery: recovery.postQat });
+        tradingFxQatRecovery: recovery.qat, tradingFxPostQatRecovery: recovery.postQat,
+        tradingFxProductionBootstrapRecovery: recovery.productionBootstrap });
       // The reviewed DB additions are backward compatible. Complete and
       // verify them before Salesforce can expose any native financial records.
-      const database = await applyDatabase({ ...input, originalDatabaseOperation: (recovery.failedBootstrap || recovery.postQat || recovery.qat || recovery.original)?.database });
+      const database = await applyDatabase({ ...input, originalDatabaseOperation: (recovery.productionBootstrap || recovery.failedBootstrap || recovery.postQat || recovery.qat || recovery.original)?.database });
       const manifestHash = digest(input.manifest);
       requireCondition(database?.passed === true && database.manifestHash === manifestHash && database.backwardCompatible === true
         && database.database?.readbackVerified === true && database.database.destructiveRollback === false
