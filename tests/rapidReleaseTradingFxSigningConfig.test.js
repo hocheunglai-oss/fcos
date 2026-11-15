@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import test from 'node:test';
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
 import { digest, targets } from '../scripts/lib/rapid-release/contract.mjs';
-import { TRADING_FX_SIGNING_ENVIRONMENT, TRADING_FX_SIGNING_TASK, verifyTradingFxSigningConfig } from '../scripts/lib/rapid-release/trading-fx-signing-config.mjs';
+import { TRADING_FX_SIGNING_ENVIRONMENT, TRADING_FX_SIGNING_TASK, tradingFxSigningRecoveryManifest, verifyTradingFxSigningConfig } from '../scripts/lib/rapid-release/trading-fx-signing-config.mjs';
 
 const signingKey = 'SALESFORCE_COMPANY_FX_SIGNING_PUBLIC_KEY';
 const publicKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).publicKey.export({ type: 'spki', format: 'pem' });
@@ -140,4 +140,24 @@ test('Trading FX digest uses the unique current Company FX revision and exact ti
     assert.throws(()=>tradingFxCurrentRateDigest(settings,{...history,rows}),/CURRENT_RATE_UNVERIFIED/);
   }
   assert.throws(()=>tradingFxCurrentRateDigest({...settings,canSave:false},history),/CURRENT_RATE_UNVERIFIED/);
+});
+
+
+test('Payment successor uses the verified original manifest for the signing receipt', async () => {
+  const { manifest: original, context: { github } } = fixture();
+  const successor = { ...original, prerequisites: { plan: { ...original.prerequisites.plan,
+    paymentRepair: { sourceCommit: 'e'.repeat(40) }, tradingFxFinalPosteffectClosureReceiptId: 123 } } };
+  let calls = 0;
+  const options = { readPaymentSuccessor: async input => {
+    assert.deepEqual(input, { manifest: successor, github });
+    calls++;
+    return { manifest: original };
+  } };
+  assert.equal(await tradingFxSigningRecoveryManifest({ manifest: original, github }, options), original);
+  assert.equal(calls, 0);
+  assert.equal(await tradingFxSigningRecoveryManifest({ manifest: successor, github }, options), original);
+  assert.equal(calls, 1);
+  await assert.rejects(tradingFxSigningRecoveryManifest({ manifest: successor, github }, {
+    readPaymentSuccessor: async () => { throw Error('PAYMENT_SUCCESSOR_SCOPE_CHANGED'); },
+  }), /PAYMENT_SUCCESSOR_SCOPE_CHANGED/u);
 });
