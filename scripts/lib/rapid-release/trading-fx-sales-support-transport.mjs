@@ -10,6 +10,7 @@ import { assertSalesSupportRepairBinding } from './trading-fx-sales-support-sour
 import { digest, isDigest, requireCondition } from './contract.mjs';
 import {
   assertSalesSupportRepair, salesSupportFieldSnapshot, salesSupportProfile, salesSupportRepairFields, salesSupportRepairPackage,
+  salesSupportViewAllFieldsObjects, salesSupportViewAllFieldsRepairPackage,
 } from './trading-fx-sales-support-repair.mjs';
 
 export const salesSupportCorrectionOperation = 'sales-support-correction';
@@ -31,7 +32,6 @@ const sandboxCatalogs = {
 };
 const profileDigest = '03b415858374db416c71f81783c7880ba2f23d4952937b12cc09e9dedc7f4d9c';
 const manifestDigest = '85ea97f7edebcc629d9c8615b44bc169df7a11247a57d8d4725bb433ebd6453a';
-const packageSha256 = digest({ profileDigest, manifestDigest });
 const terminalOutcomes = { Failed: 'failed_rolled_back', Canceled: 'canceled_rolled_back' };
 const check = (value, code) => requireCondition(value, 'TRADING_FX_SALES_SUPPORT_' + code);
 
@@ -73,18 +73,28 @@ function verifyIdentity(sf, target) {
     && org.records[0].IsSandbox === target.isSandbox, 'ORG_CHANGED');
 }
 
-function nativeCatalog(sf) {
+function nativeCatalog(sf, viewAllFields) {
   const query = sql => sf(['data', 'query', '--query', sql]);
   const profile = query("SELECT Id, IsOwnedByProfile FROM PermissionSet WHERE IsOwnedByProfile = true AND Profile.Name = 'Sales Support'");
   const parentId = profile?.records?.[0]?.Id;
   check(profile?.done === true && profile.records.length === 1 && profile.records[0].IsOwnedByProfile === true
     && /^0PS[A-Za-z0-9]{15}$/u.test(parentId || ''), 'PROFILE_CHANGED');
   const grants = query("SELECT Field, ParentId, PermissionsRead, PermissionsEdit FROM FieldPermissions WHERE ParentId = '" + parentId + "'");
-  return salesSupportFieldSnapshot({ rows: grants?.records, done: grants?.done, parentId });
+  const native = salesSupportFieldSnapshot({ rows: grants?.records, done: grants?.done, parentId });
+  if (viewAllFields === undefined) return native;
+  const objects = query('SELECT ParentId, SobjectType, PermissionsCreate, PermissionsDelete, PermissionsEdit, PermissionsRead, '
+    + 'PermissionsModifyAllRecords, PermissionsViewAllFields, PermissionsViewAllRecords FROM ObjectPermissions WHERE ParentId = '
+    + "'" + parentId + "' AND SobjectType IN ('" + salesSupportViewAllFieldsObjects.join("','") + "')");
+  const rows = objects?.records?.map(({ attributes, ...row }) => row).sort((a, b) => a.SobjectType.localeCompare(b.SobjectType));
+  const expected = [...salesSupportViewAllFieldsObjects].sort((a, b) => a.localeCompare(b)).map(SobjectType => ({ ParentId: parentId, SobjectType,
+    PermissionsCreate: true, PermissionsDelete: true, PermissionsEdit: true, PermissionsRead: true, PermissionsModifyAllRecords: true,
+    PermissionsViewAllFields: viewAllFields, PermissionsViewAllRecords: true }));
+  check(objects?.done === true && digest(rows ?? null) === digest(expected), 'OBJECT_PERMISSIONS_CHANGED');
+  return { ...native, objectPermissions: rows };
 }
 
-const snapshot = (sf, read, reviewedCatalog) => {
-  const current = nativeCatalog(sf);
+const snapshot = (sf, read, reviewedCatalog, viewAllFields) => {
+  const current = nativeCatalog(sf, viewAllFields);
   check(current.unrelatedDigest === reviewedCatalog.unrelatedDigest
     && current.unrelatedCount === reviewedCatalog.unrelatedCount, 'UNRELATED_GRANTS_CHANGED');
   check(current.target.every(row => row.read === read && row.edit === false), read ? 'PREIMAGE_CHANGED' : 'DENY_UNVERIFIED');
@@ -156,7 +166,7 @@ function readCorrectionReport(sf, cwd, jobId) {
 function verifyCorrectionResult({ sf, report, target, reviewedCatalog, jobId, submittedAt, now, binding }) {
   const completedAt = assertReport(report, jobId, submittedAt, now, target, binding);
   verifyIdentity(sf, target);
-  return { completedAt, reportDigest: digest(report), after: snapshot(sf, false, reviewedCatalog) };
+  return { completedAt, reportDigest: digest(report), after: snapshot(sf, false, reviewedCatalog, binding.override ? false : undefined) };
 }
 
 function verifyTerminalCorrectionResult({ sf, report, originalJob, target, reviewedCatalog, readBefore, jobId, submittedAt, testLevel, now, binding }) {
@@ -166,7 +176,7 @@ function verifyTerminalCorrectionResult({ sf, report, originalJob, target, revie
   verifyIdentity(sf, target);
   const job = originalJob?.Status === report.status ? originalJob : findOriginalJob(sf, { submittedAt, target, testLevel, id: jobId });
   check(job.Status === report.status && Date.parse(completedAt) >= Date.parse(job.CreatedDate), 'ORIGINAL_TERMINAL_JOB_UNVERIFIED');
-  const preimageDigest = digest(snapshot(sf, readBefore, reviewedCatalog));
+  const preimageDigest = digest(snapshot(sf, readBefore, reviewedCatalog, binding.override ? readBefore : undefined));
   return { status: report.status, terminalOutcome: terminalOutcomes[report.status], orgId: target.orgId,
     jobId, submittedAt, validationJobId: null, packageSha256: binding.packageSha256, completedAt,
     profileDigest: binding.profileDigest, manifestDigest: binding.manifestDigest,
@@ -180,13 +190,16 @@ function stopTerminalCorrection(outcome) {
 function correctionPackageBinding(repair) {
   if (repair) assertSalesSupportRepairBinding(repair);
   const fieldBound = Boolean(repair?.fieldBoundPackageSha256);
-  return { fieldBound, profileDigest, packageSha256: fieldBound ? repair.fieldBoundPackageSha256 : packageSha256,
-    manifestDigest: fieldBound ? repair.fieldBoundManifestDigest : manifestDigest };
+  const override = repair?.viewAllFieldsCorrection === true;
+  const packet = override ? salesSupportViewAllFieldsRepairPackage() : { profileDigest, manifestDigest };
+  return { fieldBound, override, profileDigest: packet.profileDigest,
+    packageSha256: fieldBound ? repair.fieldBoundPackageSha256 : digest({ profileDigest: packet.profileDigest, manifestDigest: packet.manifestDigest }),
+    manifestDigest: fieldBound ? repair.fieldBoundManifestDigest : packet.manifestDigest };
 }
 
-function writePackage(folder) {
-  const packet = salesSupportRepairPackage();
-  check(packet.profileDigest === profileDigest && packet.manifestDigest === manifestDigest, 'PACKAGE_CHANGED');
+function writePackage(folder, binding) {
+  const packet = binding.override ? salesSupportViewAllFieldsRepairPackage() : salesSupportRepairPackage();
+  check(packet.profileDigest === binding.profileDigest && packet.manifestDigest === binding.manifestDigest, 'PACKAGE_CHANGED');
   const directory = join(folder, 'mdapi');
   const profiles = join(directory, 'profiles');
   mkdirSync(profiles, { recursive: true, mode: 0o700 });
@@ -198,16 +211,16 @@ function writePackage(folder) {
     verify() {
       check(readdirSync(directory).sort().join('|') === 'package.xml|profiles'
         && readdirSync(profiles).join('|') === 'Sales Support.profile'
-        && digest(readFileSync(manifest)) === manifestDigest && digest(readFileSync(profile)) === profileDigest, 'PACKAGE_CHANGED');
+        && digest(readFileSync(manifest)) === binding.manifestDigest && digest(readFileSync(profile)) === binding.profileDigest, 'PACKAGE_CHANGED');
     },
   };
 }
 
-export function verifyTradingFxSalesSupportReadGrants({ cwd, commandEnvironment, read, run = command }) {
+export function verifyTradingFxSalesSupportReadGrants({ cwd, commandEnvironment, read, repair, run = command }) {
   check(typeof cwd === 'string' && commandEnvironment?.PATH && typeof read === 'boolean', 'PROTECTED_CONTEXT_REQUIRED');
   const sf = nativeConnection(cwd, commandEnvironment, run, production);
   verifyIdentity(sf, production);
-  return snapshot(sf, read, productionCatalog);
+  return snapshot(sf, read, productionCatalog, correctionPackageBinding(repair).override ? read : undefined);
 }
 
 export function verifyTradingFxSalesSupportSandboxDenial({ stage, cwd, commandEnvironment, run = command }) {
@@ -289,13 +302,13 @@ export async function runSalesSupportCorrection({
   verifyIdentity(sf, target);
   let before;
   if (!saved) {
-    before = snapshot(sf, readBefore, reviewedCatalog);
+    before = snapshot(sf, readBefore, reviewedCatalog, binding.override ? readBefore : undefined);
     const folder = mkdtempSync(join(tmpdir(), 'fcos-sales-support-correction-'));
     try {
       const prepared = binding.fieldBound ? prepareTradingFxFieldBoundDenialPackage({
         cwd, project: folder, repair, convert: (args, project) => run('sf', [...args, '--json'], project,
           { env: commandEnvironment, timeout: 30000 }),
-      }) : writePackage(folder);
+      }) : writePackage(folder, binding);
       const intent = { status: 'submitting', jobId: null, validationJobId: null, submittedAt: now().toISOString(), packageSha256: binding.packageSha256,
         beforeDigest: digest(before), receiptId: lease.receiptId };
       await save(intent);
@@ -338,12 +351,12 @@ export async function runSalesSupportCorrection({
 }
 
 
-export function verifyHostedTradingFxSalesSupportDenial({ cwd, env }) {
+export function verifyHostedTradingFxSalesSupportDenial({ cwd, env, repair }) {
   const directory = mkdtempSync(join(tmpdir(), 'fcos-sales-support-readback-'));
   try {
     const commandEnvironment = authenticateHostedSalesforce({ directory, cwd, env: { ...env, HOME: directory },
       onlyProductionForSigningRead: true, requireMirrorCredential: false });
-    return verifyTradingFxSalesSupportReadGrants({ cwd, commandEnvironment, read: false });
+    return verifyTradingFxSalesSupportReadGrants({ cwd, commandEnvironment, read: false, repair });
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

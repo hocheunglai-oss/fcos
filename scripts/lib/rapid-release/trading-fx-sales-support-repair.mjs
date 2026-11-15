@@ -18,6 +18,7 @@ export const salesSupportRepairFields = Object.freeze([
   'STEM__c.Sell_Currency__c',
   'STEM__c.Sell_FX_Side__c',
 ].sort());
+export const salesSupportViewAllFieldsObjects = Object.freeze(['STEM_Extra_Cost__c', 'STEM__c']);
 
 export function salesSupportRepairPackage() {
   const header = '<?xml version="1.0" encoding="UTF-8"?>\n';
@@ -30,6 +31,23 @@ export function salesSupportRepairPackage() {
     + '        <members>Sales Support</members>\n        <name>Profile</name>\n'
     + '    </types>\n    <version>67.0</version>\n</Package>\n';
   return { profile, manifest, profileDigest: digest(profile), manifestDigest: digest(manifest) };
+}
+
+export function salesSupportViewAllFieldsRepairPackage() {
+  const packet = salesSupportRepairPackage();
+  const objectPermissions = salesSupportViewAllFieldsObjects.map(object => `    <objectPermissions>
+        <allowCreate>true</allowCreate>
+        <allowDelete>true</allowDelete>
+        <allowEdit>true</allowEdit>
+        <allowRead>true</allowRead>
+        <modifyAllRecords>true</modifyAllRecords>
+        <object>${object}</object>
+        <viewAllFields>false</viewAllFields>
+        <viewAllRecords>true</viewAllRecords>
+    </objectPermissions>
+`).join('');
+  const profile = packet.profile.replace('</Profile>', objectPermissions + '</Profile>');
+  return { ...packet, profile, profileDigest: digest(profile) };
 }
 
 // The native caller must pin the org and confirm ParentId is the single

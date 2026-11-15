@@ -583,6 +583,23 @@
       "measuredTimeSavedMs": null,
       "measuredCallsSaved": null,
       "prevention": "Require exact field definitions at package construction and preserve the catalog postcondition. The DEVEE check-only job confirms acceptance of package scope. Actual removal needs a verified applied result."
+    },
+    {
+      "id": "trading-fx-sales-support-view-all-fields-override",
+      "cause": "Production Sales Support had View All Fields on STEM and STEM Extra Cost. DEVEE and QAT did not have those overrides, so the original dry runs could not demonstrate Production revocation.",
+      "correction": "Pin the object permission rows and the field catalog before applying the profile overlay. Clear only those two overrides, require all 23 direct denials and verify the unrelated catalog again before promoting the application.",
+      "verification": {
+        "originalRunId": 43736325989,
+        "ineffectiveProductionJobId": "0Affu000001AH8fCAG",
+        "deveePositiveControlJobId": "0AfHF000007H7kD0AS",
+        "deveePositiveControlElapsedMs": 14807,
+        "unchangedFixtureFieldRows": 206,
+        "deveeExactCheckOnlyJobId": "0AfHF000007H7KR0A0",
+        "deveeExactCheckOnlyElapsedMs": 7766
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Model object permission overrides in the DEVEE positive control before approval. Preserve separate permission-set assignments and refuse an unexpected preimage or postimage."
     }
   ]
 }

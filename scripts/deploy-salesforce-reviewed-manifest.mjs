@@ -545,7 +545,7 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
           const known = expectedInventory[tradingFxSalesSupportPath];
           const found = observed.files[tradingFxSalesSupportPath];
           if (known && found && found.sha256 !== known.sha256) {
-            const normalized = normalizeTradingFxDeniedProfile(readFileSync(safeProjectFile(root, tradingFxSalesSupportPath)), known);
+            const normalized = normalizeTradingFxDeniedProfile(readFileSync(safeProjectFile(root, tradingFxSalesSupportPath)), known, profileRecovery);
             if (normalized) {
               rawProfileEvidence = { rawProfileDigest: found.sha256, rawInventoryDigest: observed.inventoryHash };
               inventoryFiles = { ...observed.files, [tradingFxSalesSupportPath]: normalized };
