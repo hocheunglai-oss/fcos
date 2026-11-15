@@ -276,7 +276,7 @@ function verifyNativeMetadataProjection({ root, sourceRoot, plan, projectionPath
   };
 }
 
-function assertConvertedPackage(converted, roundTrip, members, files, sourceRoot, apiVersion, operation) {
+export function assertConvertedPackage(converted, roundTrip, members, files, sourceRoot, apiVersion, operation) {
   const packageBytes = readFileSync(safeProjectFile(converted, 'package.xml'), 'utf8');
   const actualMembers = parseReviewedPackage(packageBytes);
   const versions = [...packageBytes.matchAll(/<version>\s*(\d+\.0)\s*<\/version>/gu)];
