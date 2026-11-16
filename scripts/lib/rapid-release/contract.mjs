@@ -109,6 +109,10 @@ export function requiresGroupedPetroleumSmoke(manifest) {
   return manifest.prerequisites?.adapter === 'grouped-petroleum-migration';
 }
 
+export function requiresExistingDraftSmoke(manifest) {
+  return manifest.prerequisites?.adapter === 'existing-draft-migrations';
+}
+
 export function requiresTradingFxSmoke(manifest) {
   return manifest.prerequisites?.adapter === 'trading-fx-prerequisites';
 }
