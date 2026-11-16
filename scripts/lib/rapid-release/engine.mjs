@@ -1,6 +1,7 @@
 import { requiresCompanyFxHistorySmoke, requiresSupplierBucketSmoke, requiresGroupedPetroleumSmoke, requiresTradingFxSmoke,
   requiresExistingDraftSmoke, assertAuthorization, digest, isDigest, requireCondition, validateManifest } from './contract.mjs';
 import { hasTradingFxSigningLocator } from './trading-fx-signing-config.mjs';
+import { requiresDeveeDesktopCheckpoint } from './salesforce-devee-desktop-checkpoint.mjs';
 
 const events = records => records.map(record => record.payload);
 export function phaseResult(records, phase) { return events(records).filter(event => event.event === `${phase}.result`).at(-1)?.data; }
@@ -148,7 +149,8 @@ export async function promoteRelease({ manifest, journal, provider, approval, pr
   assertAuthorization(approval, manifest, staged);
   await provider.verifyApproval(approval, { manifest, staged });
   if (all.some(event => event.event === 'release.complete')) return { state: 'complete', deploymentId: staged.id, reused: true };
-  if (!all.some(event => event.event === 'approval.accepted')) await journal.append('approval.accepted', approval);
+  if (requiresDeveeDesktopCheckpoint(manifest)) await recordDeveeDesktopApproval({ journal, approval });
+  else if (!all.some(event => event.event === 'approval.accepted')) await journal.append('approval.accepted', approval);
   let signingRateDigest, reusedPrerequisites;
   if (manifest.selection.salesforce || manifest.selection.database) {
     await journal.assertNoUnresolvedOtherRelease();
@@ -230,4 +232,33 @@ export async function promoteRelease({ manifest, journal, provider, approval, pr
     await provider.verifyRollback({ manifest, previous: manifest.previous });
     return { state: 'rolled_back', deploymentId: manifest.previous.deploymentId };
   }
+}
+
+async function recordDeveeDesktopApproval({ journal, approval }) {
+  const trusted = row => row.creator?.id === 41898282 && row.creator.login === 'github-actions[bot]';
+  const current = records => {
+    const matching = records.filter(row => ['approval.accepted', 'approval.reconfirmed'].includes(row.payload.event)
+      && row.payload.data.runId === approval.runId);
+    requireCondition(matching.length <= 1 && (!matching.length || trusted(matching[0])
+      && digest(matching[0].payload.data) === digest(approval)), 'DEVEE_DESKTOP_APPROVAL_JOURNAL_CONFLICT');
+    return matching[0];
+  };
+  const chain = await journal.read();
+  const initial = chain.filter(row => row.payload.event === 'approval.accepted');
+  requireCondition(initial.length <= 1 && (!initial.length || trusted(initial[0]))
+    && (initial.length === 1 || !chain.some(row => row.payload.event === 'approval.reconfirmed')),
+  'DEVEE_DESKTOP_APPROVAL_JOURNAL_CONFLICT');
+  if (current(chain)) return;
+  const event = initial.length ? 'approval.reconfirmed' : 'approval.accepted';
+  const previousHash = chain.at(-1)?.payload.recordHash ?? null;
+  let saved;
+  try {
+    saved = await journal.append(event, approval, { expectedPreviousHash: previousHash });
+  } catch (error) {
+    // Resolve this exact append before prerequisite dispatch. The protected runner never reposts it.
+    saved = current(await journal.read());
+    if (!saved) throw error;
+  }
+  requireCondition(saved && trusted(saved) && saved.payload.event === event && saved.payload.sequence === chain.length
+    && saved.payload.previousHash === previousHash && digest(saved.payload.data) === digest(approval), 'DEVEE_DESKTOP_APPROVAL_JOURNAL_CONFLICT');
 }
