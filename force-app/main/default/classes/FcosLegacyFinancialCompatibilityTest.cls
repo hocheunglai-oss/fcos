@@ -57,6 +57,47 @@ private class FcosLegacyFinancialCompatibilityTest {
 
     private static User legacyOperator() {return [SELECT Id FROM User WHERE LastName=:LEGACY_OPERATOR_LAST_NAME LIMIT 1];}
 
+    @IsTest
+    static void salesSupportCanSendOrdinaryUsdWithoutReadingPrivateFxLookup() {
+        User operator = legacyOperator();
+        System.runAs(operator) {
+            // Supply the readiness fields available to Sales Support in Production.
+            PermissionSet readiness = [SELECT Id FROM PermissionSet WHERE Name = 'FCOS_Master_Contracts_Data'];
+            insert new PermissionSetAssignment(AssigneeId = operator.Id, PermissionSetId = readiness.Id);
+        }
+        Invoice__c invoice;
+        Id stemId;
+        System.runAs(actor()) {
+            configure(false);
+            STEM_Line_Item__c source = line();
+            stemId = source.STEM__c;
+            invoice = draftLegacyInvoice(source);
+            Id invoiceId = invoice.Id;
+            System.assertEquals(null,
+                [SELECT Buyer_Charge_Snapshot__c FROM Invoice__c WHERE Id = :invoiceId].Buyer_Charge_Snapshot__c);
+        }
+        Id invoiceId = invoice.Id;
+        Test.startTest();
+        System.runAs(operator) {
+            Boolean fxReadDenied = false;
+            try {
+                Database.query('SELECT Document_FX_Side__c FROM Invoice__c WHERE Id = :invoiceId', AccessLevel.USER_MODE);
+            } catch (QueryException expected) {
+                fxReadDenied = true;
+            }
+            System.assert(fxReadDenied, 'The invoice operator must lack access to the private FX lookup.');
+            EmailInvoiceController.EmailData email = new EmailInvoiceController.EmailData();
+            email.stemId = String.valueOf(stemId);
+            email.toAddress = 'invoice@example.invalid';
+            email.subject = 'Synthetic legacy invoice';
+            email.textBody = 'Salesforce Apex test email';
+            EmailInvoiceController.sendEmail(email, new List<Invoice__c>{new Invoice__c(Id = invoiceId)}, new List<String>());
+            System.assertEquals(1, Limits.getEmailInvocations());
+        }
+        Test.stopTest();
+        System.assertEquals(true, [SELECT Sent__c FROM Invoice__c WHERE Id = :invoiceId].Sent__c);
+    }
+
     private static void assertLegacyReview(FcosTradeDocumentService.DocumentReview review) {
         System.assertEquals('USD',review.currencyCode);
         System.assertEquals(0,review.lines.size());
@@ -196,6 +237,11 @@ private class FcosLegacyFinancialCompatibilityTest {
         System.runAs(legacyOperator()) {
             Integer initialWrites=Limits.getDmlStatements();
             Boolean denied=false;
+            try {
+                BuyerInvoiceApprovalService.assertPersistedInvoicesCanSend(new Set<Id>{invoice.Id});
+            } catch(QueryException expected) {denied=true;}
+            System.assertEquals(true,denied,'Restricted FX evidence must still prevent an unentitled managed invoice send.');
+            denied=false;
             try {
                 InvoiceController.generateInvoicePDF(invoice.Id,invoice.Name,selected,null,false,reviewedFingerprint);
             } catch(AuraHandledException expected) {denied=true;}

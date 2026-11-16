@@ -147,24 +147,73 @@ public without sharing class BuyerInvoiceApprovalService {
 
     public static void assertPersistedInvoicesCanSend(Set<Id> invoiceIds) {
         if (invoiceIds == null || invoiceIds.isEmpty()) return;
-        List<String> invoiceFields = queryFieldsWithFx(INVOICE_FIELDS, FX_INVOICE_FIELDS, Invoice__c.SObjectType);
-        List<Invoice__c> invoices = Database.query('SELECT Proforma__c, Deprecated__c,'
-            + 'Buyer_Charge_Snapshot__c,' + String.join(invoiceFields, ',')
-            + ' FROM Invoice__c WHERE Id IN :invoiceIds');
+        String selected = 'SELECT Proforma__c, Deprecated__c,';
+        List<String> invoiceFields = queryFields(INVOICE_FIELDS, Invoice__c.SObjectType);
+        List<Invoice__c> invoices = Database.query(selected + String.join(invoiceFields, ',')
+            + ' FROM Invoice__c WHERE Id IN :invoiceIds', AccessLevel.USER_MODE);
         if (invoices.size() != invoiceIds.size()) throw blocked('Invoice approval could not be checked.');
-        for (Invoice__c invoice : invoices) assertCanSend(invoice);
+
+        Set<Id> authorizedIds = new Map<Id, Invoice__c>(invoices).keySet();
+        Set<Id> fxReadIds = invoicesRequiringFullRead(authorizedIds);
+        Map<Id, Invoice__c> fullInvoices = new Map<Id, Invoice__c>();
+        if (!fxReadIds.isEmpty()) {
+            List<String> fullFields = queryFieldsWithFx(INVOICE_FIELDS, FX_INVOICE_FIELDS, Invoice__c.SObjectType);
+            List<Invoice__c> fullRows = Database.query(selected + 'Buyer_Charge_Snapshot__c,' + String.join(fullFields, ',')
+                + ' FROM Invoice__c WHERE Id IN :fxReadIds', AccessLevel.USER_MODE);
+            fullInvoices.putAll(fullRows);
+            if (fullInvoices.size() != fxReadIds.size()) throw blocked('Invoice approval could not be checked.');
+        }
+        for (Invoice__c invoice : invoices) {
+            if (fullInvoices.containsKey(invoice.Id)) assertCanSend(fullInvoices.get(invoice.Id));
+            else assertCanSend(invoice, null);
+        }
+    }
+
+    private static Set<Id> invoicesRequiringFullRead(Set<Id> authorizedIds) {
+        Set<Id> result = new Set<Id>();
+        List<String> fields = new List<String>(FX_INVOICE_FIELDS);
+        fields.addAll(new List<String>{
+            'Document_FX_Fingerprint__c', 'Reissue_Of_Invoice__c', 'Original_Invoice__c', 'Final_Of_Proforma__c'
+        });
+        List<String> markers = optionalQueryFields(fields, Invoice__c.SObjectType);
+        List<String> columns = new List<String>{'Id', 'Buyer_Charge_Snapshot__c'};
+        columns.addAll(markers);
+        // The initial user-mode query established access to each of these invoice IDs.
+        // Use the private evidence solely to select the approval checks that apply.
+        List<Invoice__c> evidence = Database.query('SELECT ' + String.join(columns, ',')
+            + ' FROM Invoice__c WHERE Id IN :authorizedIds', AccessLevel.SYSTEM_MODE);
+        if (evidence.size() != authorizedIds.size()) throw blocked('Invoice approval could not be checked.');
+        for (Invoice__c invoice : evidence) {
+            if (String.isNotBlank(invoice.Buyer_Charge_Snapshot__c)) {
+                result.add(invoice.Id);
+                continue;
+            }
+            for (String marker : markers) {
+                Object value = invoice.get(marker);
+                if (value != null && (marker != 'Document_Currency__c' || value != 'USD')) {
+                    result.add(invoice.Id);
+                    break;
+                }
+            }
+        }
+        return result;
     }
 
     public static void assertCanSend(Invoice__c invoice) {
         if (!isFinal(invoice)) return;
+        assertCanSend(invoice, invoice.Buyer_Charge_Snapshot__c);
+    }
+
+    private static void assertCanSend(Invoice__c invoice, String savedSnapshot) {
+        if (!isFinal(invoice)) return;
         if (invoice.Deprecated__c == true) throw blocked('This invoice has been replaced. Select the current invoice version.');
-        if (String.isBlank(invoice.Buyer_Charge_Snapshot__c)) {
+        if (String.isBlank(savedSnapshot)) {
             // Older invoices have no issuance snapshot. Preserve their existing
             // approval requirement; never manufacture historical approval.
             VariableChargeInvoiceReadinessService.assertFinalBuyerInvoiceAllowed(invoice.STEM__c);
             return;
         }
-        if (invoice.Buyer_Charge_Snapshot__c != snapshot(invoice)) {
+        if (savedSnapshot != snapshot(invoice)) {
             throw blocked('Buyer charges or invoice details changed after this invoice was generated. '
                 + 'Review the changes in FCOS and generate the corrected invoice before sending. '
                 + VariableChargeInvoiceReadinessService.FCOS_URL_PREFIX + invoice.STEM__c);
