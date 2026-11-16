@@ -14,6 +14,9 @@ const BASE_SHA = 'c'.repeat(40);
 const reviewRef = 'refs/heads/codex/fcos-salesforce-review/' + LOCAL_SHA;
 const ordinaryPush = `refs/heads/topic ${LOCAL_SHA} refs/heads/topic ${ZERO_SHA}\n`;
 const reviewedPush = `refs/heads/topic ${LOCAL_SHA} ${reviewRef} ${ZERO_SHA}\n`;
+const anchorRef = 'refs/heads/codex/trading-fx-payment-verified-baseline';
+const anchorSha = '6299e728d8b1c9f948f2f0cfdc3c11267dc21ac2';
+const anchorPush = `refs/heads/topic ${anchorSha} ${anchorRef} ${ZERO_SHA}\n`;
 
 const gitMock = `#!/bin/sh
 case "$1" in
@@ -70,7 +73,7 @@ async function makeExecutable(filename, source) {
 }
 
 async function runHook(t, { account = 'hocheunglai-oss', repository = 'hocheunglai-oss/fcos:1278654816',
-  changedPaths = 'src/App.jsx', npmStatus = 0, nodeStatus = 0, input = ordinaryPush, reviewManifest = '',
+  changedPaths = 'src/App.jsx', npmStatus = 0, nodeStatus = 0, input = ordinaryPush, reviewManifest = '', anchorManifest = '',
   candidateHook = false, verifierSha = MAIN_SHA, verifierAttached = false, verifierChanges = '' } = {}) {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'fcos-pre-push-')));
   const repo = path.join(root, 'repo');
@@ -118,6 +121,7 @@ async function runHook(t, { account = 'hocheunglai-oss', repository = 'hocheungl
       MOCK_NODE_CALLED: nodeCalled,
       MOCK_NODE_STATUS: String(nodeStatus),
       FCOS_SALESFORCE_REVIEW_RELEASE_MANIFEST: reviewManifest,
+      FCOS_TRADING_FX_PAYMENT_ANCHOR_MANIFEST: anchorManifest,
     },
   });
   return { result, ghEnv, npmCalled, nodeCalled, repo };
@@ -194,6 +198,35 @@ test('an ordinary Salesforce push still requires the mirror with a review manife
   assert.equal(result.status, 1);
   assert.equal(await readFile(npmCalled, 'utf8'), 'called');
   await assert.rejects(() => readFile(nodeCalled, 'utf8'));
+});
+
+test('the exact Trading FX anchor admits only one create-only push after frozen verification', async t => {
+  const anchorManifest = '/tmp/immutable payment release.json';
+  const passed = await runHook(t, { input: anchorPush, anchorManifest, npmStatus: 1, changedPaths: 'force-app/main/default/a' });
+  assert.equal(passed.result.status, 0, passed.result.stderr);
+  const [script, directory, sha, manifest] = (await readFile(passed.nodeCalled, 'utf8')).trimEnd().split('\n');
+  assert.match(script, /verify-trading-fx-payment-source-anchor\.mjs$/u);
+  assert.deepEqual([directory, sha, manifest], [passed.repo, anchorSha, anchorManifest]);
+  await assert.rejects(() => readFile(passed.npmCalled, 'utf8'));
+  for (const input of [anchorPush.replace(anchorSha, LOCAL_SHA), anchorPush.replace(ZERO_SHA, BASE_SHA),
+    anchorPush.replace(anchorSha, ZERO_SHA), anchorPush + ordinaryPush]) {
+    const rejected = await runHook(t, { input, anchorManifest });
+    assert.equal(rejected.result.status, 1);
+    await assert.rejects(() => readFile(rejected.nodeCalled, 'utf8'));
+  }
+});
+
+test('Trading FX anchor refuses a mutable verifier, wrong repository or failed native proof', async t => {
+  for (const change of [{ verifierAttached: true }, { verifierSha: BASE_SHA }, { verifierChanges: ' M verifier' },
+    { candidateHook: true }, { repository: 'hocheunglai-oss/fcos:1' }, { anchorManifest: 'relative.json' }, { nodeStatus: 1 }]) {
+    const rejected = await runHook(t, { input: anchorPush, anchorManifest: '/tmp/immutable.json', ...change });
+    assert.equal(rejected.result.status, 1);
+  }
+  const ordinary = await runHook(t, { input: ordinaryPush, anchorManifest: '/tmp/immutable.json',
+    changedPaths: 'force-app/main/default/a', npmStatus: 1 });
+  assert.equal(ordinary.result.status, 1);
+  assert.equal(await readFile(ordinary.npmCalled, 'utf8'), 'called');
+  await assert.rejects(() => readFile(ordinary.nodeCalled, 'utf8'));
 });
 
 test('review source never executes a verifier from the candidate or a mutable checkout', async t => {
