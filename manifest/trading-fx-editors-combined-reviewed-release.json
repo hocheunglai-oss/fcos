@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "releaseMode": "reviewed-manifest-incremental-v1",
   "baselineMode": "read-only-owned-tree-inventory",
-  "sourceTreeHash": "e3d07ffc1d5667e2efa2a84657625ac40fae5f23413de4665ecdaa7c699d00aa",
+  "sourceTreeHash": "5b9ab99ceb1ca8b7d1529bfd379a0e8afe5994243733dde8bcb9e1059e810329",
   "manifestSha256": "8ae5bc3a2d711fd7c48d9f44bdc27152ee280543c0cbc3aea2a84ffb0649ee50",
   "baselineCommit": "30f3675994af711f029bdb3ba9bcebc25ba08f93",
   "baselineSourceTreeHash": "765eb19ffe75552f697ddebcb302034f1e5e7743ef245986e5e8020354587905",
@@ -472,8 +472,8 @@
             "size": 174
           },
           "classes/FcosTradeCurrencyService.cls": {
-            "sha256": "e7d9013e1cd2c0238e8508bc197a04fd28cecfa118f8c6702fb3f0c361b26ad4",
-            "size": 26834
+            "sha256": "ac4e070cfdc7c263b9991cc13a85f68db65b8841bf5cc9083b4841fb0ed90883",
+            "size": 27049
           },
           "classes/FcosTradeCurrencyService.cls-meta.xml": {
             "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
@@ -1312,12 +1312,12 @@
             "size": 253
           },
           "lwc/fcbEditOfferLineItemModal/fcbEditOfferLineItemModal.html": {
-            "sha256": "71df045a0d1d75d2b8f04df01007a07512e5a92754ea461056a1143088aaf4c8",
-            "size": 14536
+            "sha256": "a4cdf8ae7e2d2fbd39b44b03d49e991ce03b9719ca1685ca14a31b87b2063597",
+            "size": 15386
           },
           "lwc/fcbEditOfferLineItemModal/fcbEditOfferLineItemModal.js": {
-            "sha256": "46eafd79908b366ea6050566ce3e83116bdca575095f32ca0631050cc1cd574d",
-            "size": 20599
+            "sha256": "bf7458c5a19c35e97eecdf20f33fb5ddbbc0ebeec9d4840746eca6fad2c4cb59",
+            "size": 22502
           },
           "lwc/fcbEditOfferLineItemModal/fcbEditOfferLineItemModal.js-meta.xml": {
             "sha256": "facac1b383dbf5f67c7fba58bdc8a771ba99166184fd5b9e3cf77eb26e992f4a",
@@ -1344,12 +1344,12 @@
             "size": 172
           },
           "lwc/fcbEditSupplierBidModal/fcbEditSupplierBidModal.html": {
-            "sha256": "c8b59198560ed043d822721c20df4c5bd22f187f0dd5c39e8238e285f1006b6a",
-            "size": 11156
+            "sha256": "2b3b5ad4324d6ceec8cfe1f062b2bc31c8f12aaa84e60dafa97acde8d6365b7e",
+            "size": 11509
           },
           "lwc/fcbEditSupplierBidModal/fcbEditSupplierBidModal.js": {
-            "sha256": "697f3d68ea0a00868d8eed6f7628f4ac66e4fc4dd6a186efb7ce34d9c0873ef8",
-            "size": 18051
+            "sha256": "975da73198dd814e5357affe906193f8a8f662ff34ebfe6f4abd4f921af5831c",
+            "size": 19579
           },
           "lwc/fcbEditSupplierBidModal/fcbEditSupplierBidModal.js-meta.xml": {
             "sha256": "75c472b1559f1b2b64262aaf768b247ffc13613741e699fe87f0c828c5910205",
@@ -1452,8 +1452,8 @@
             "size": 22463
           },
           "lwc/fcbPromotedOfferLineItemExtraCosts/fcbPromotedOfferLineItemExtraCosts.js": {
-            "sha256": "a66218b962b995ac3a1a3b8362c6087830d2064a87108ec9ad474f33c43f43f9",
-            "size": 69345
+            "sha256": "873031dfd7b9c50fa7274db1cab40d67afe6d077941a5ef717546f31fd34f552",
+            "size": 70611
           },
           "lwc/fcbPromotedOfferLineItemExtraCosts/fcbPromotedOfferLineItemExtraCosts.js-meta.xml": {
             "sha256": "0865a63bdc35f991c10cb58cee0a395dbf3c01e5d319506ce50117fb2033696e",
@@ -1516,8 +1516,8 @@
             "size": 295
           },
           "lwc/fcbSupplierBidExtraCosts/fcbSupplierBidExtraCosts.html": {
-            "sha256": "271ee8ba2729cf59e914409b12a1d542fd466390e1426d416d2b1fa61e96a632",
-            "size": 18908
+            "sha256": "5c26d93bf6477a146a0eee20c6ea25247c6a36d575554c1d97c2cf75391cce3b",
+            "size": 18904
           },
           "lwc/fcbSupplierBidExtraCosts/fcbSupplierBidExtraCosts.js": {
             "sha256": "e69479aa422edb2f21329675ffbee2313f52a6b5077e1ba8a464435d1075f77a",
@@ -1600,8 +1600,8 @@
             "size": 6713
           },
           "lwc/fcosTradeCurrencyEditor/fcosTradeCurrencyEditor.js": {
-            "sha256": "981aa497ce2ede3148ac2d0fe38ae1e48db5765dc54ea2636b95f5085d3e1b72",
-            "size": 12322
+            "sha256": "2ed80da3b0e5a1fb0f114ab8346b72f36ddd8e69baad49fddd2aa4914e1d561e",
+            "size": 13312
           },
           "lwc/fcosTradeCurrencyEditor/fcosTradeCurrencyEditor.js-meta.xml": {
             "sha256": "a1559fe03fcf9799fce9460c5cfc3b43110f8f820fda3c1fa4b93d986bfa86a8",
@@ -5244,7 +5244,7 @@
             "size": 178
           }
         },
-        "inventoryHash": "33dfaeeca291c6cc12c8f3c4ee402ecfcb57670f529599c534bf671b1d7272f9"
+        "inventoryHash": "4e90295c2039fbaf1c6f6176539caef8341ca28b1f7d776625d0147c3d6452ec"
       },
       "final": {
         "files": {
@@ -31769,14 +31769,6 @@
     ]
   },
   "inventoryManifests": {
-    "33dfaeeca291c6cc12c8f3c4ee402ecfcb57670f529599c534bf671b1d7272f9": {
-      "path": "manifest/trading-fx-editors-combined-stable.xml",
-      "sha256": "fdf8f96b0de870754bcb8890f2fb5fe0d6f9443a47c7b528f340f64f3268b3f4",
-      "metadata": {
-        "path": "manifest/trading-fx-editors-combined.xml",
-        "sha256": "8ae5bc3a2d711fd7c48d9f44bdc27152ee280543c0cbc3aea2a84ffb0649ee50"
-      }
-    },
     "e1f8f9768417c88f2f3fc34cee5fd00bb835c37a212b014496afafe46939f436": {
       "path": "manifest/trading-fx-editors-combined-stable.xml",
       "sha256": "fdf8f96b0de870754bcb8890f2fb5fe0d6f9443a47c7b528f340f64f3268b3f4",
@@ -31810,6 +31802,14 @@
       }
     },
     "201a409b661c72c566084a3ccdee698b3e42e348f6fb988170c27a6dd589df3e": {
+      "path": "manifest/trading-fx-editors-combined-stable.xml",
+      "sha256": "fdf8f96b0de870754bcb8890f2fb5fe0d6f9443a47c7b528f340f64f3268b3f4",
+      "metadata": {
+        "path": "manifest/trading-fx-editors-combined.xml",
+        "sha256": "8ae5bc3a2d711fd7c48d9f44bdc27152ee280543c0cbc3aea2a84ffb0649ee50"
+      }
+    },
+    "4e90295c2039fbaf1c6f6176539caef8341ca28b1f7d776625d0147c3d6452ec": {
       "path": "manifest/trading-fx-editors-combined-stable.xml",
       "sha256": "fdf8f96b0de870754bcb8890f2fb5fe0d6f9443a47c7b528f340f64f3268b3f4",
       "metadata": {
