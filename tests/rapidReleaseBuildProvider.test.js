@@ -6,9 +6,13 @@ import { join } from 'node:path';
 import { artifactDigest, assertBuildArtifact, credentialFreeBuildEnvironment } from '../scripts/lib/rapid-release/build.mjs';
 import { createManifest, digest, targets } from '../scripts/lib/rapid-release/contract.mjs';
 import { githubClient, verifyExecution, nativeApproval, vercelProvider, assertNativeQualityProducer, assertFrozenWorkflow } from '../scripts/lib/rapid-release/providers.mjs';
+import { editorDesktopCaseSetDigest } from '../scripts/lib/rapid-release/salesforce-devee-desktop-checkpoint.mjs';
 const h = 'b'.repeat(64), sha = 'a'.repeat(40);
-function manifest() { return createManifest({candidate:{sha,sourceDigest:h,lockDigest:h},controllerSha:'c'.repeat(40),
- previous:{deploymentId:'dpl_old',sha:'d'.repeat(40),schemaDigest:h,configurationDigest:h},paths:['src/components/dashboard/Table.jsx'],
+function manifest(desktop = false) { return createManifest({candidate:{sha,sourceDigest:h,lockDigest:h},controllerSha:'c'.repeat(40),
+ previous:{deploymentId:'dpl_old',sha:'d'.repeat(40),schemaDigest:h,configurationDigest:h},
+ paths:desktop?['force-app/main/default/classes/FcosTradeCurrencyService.cls']:['src/components/dashboard/Table.jsx'],
+ ...(desktop?{prerequisites:{adapter:'salesforce-reviewed-manifest',adapterDigest:h,
+   plan:{mirrorPublication:'local-collaborator',deveeDesktopCaseSetDigest:editorDesktopCaseSetDigest}}}:{}),
  publicEnvironment:{VITE_SUPABASE_URL:`https://${targets().supabaseProject}.supabase.co`,VITE_SUPABASE_PUBLISHABLE_KEY:`sb_publishable_${'p'.repeat(25)}`},releaseId:'rapid-provider-tests'}); }
 test('credential-free builder drops provider and private variables',()=>{
  const m=manifest(), env=credentialFreeBuildEnvironment(m,{PATH:'/bin',FCOS_RAPID_BUILD_HOME:'/tmp/private-home',VERCEL_TOKEN:'hidden',GITHUB_TOKEN:'hidden',SUPABASE_SERVICE_ROLE_KEY:'hidden',VITE_SECRET:'hidden'});
@@ -31,8 +35,8 @@ test('self-contained prebuilt references are bound; traversal/external reference
   }
  } finally {rmSync(root,{recursive:true,force:true});}
 });
-function nativeFixture() {
- const m=manifest(),p=targets(),review={state:'approved',user:{login:p.account},environments:[{id:9,name:'fcos-production-release'}]};
+function nativeFixture(desktop = false) {
+ const m=manifest(desktop),p=targets(),review={state:'approved',user:{login:p.account},environments:[{id:9,name:'fcos-production-release'}]};
  const plan={controllerSha:m.controllerSha,candidateSha:sha,handoverId:'native-fixture'};
  const setup={plan,attestationContract:'fcos-owner-recorded-handover/v1',qualificationPublisher:{account:p.account,method:'protected_controller_api'},handoverId:'native-fixture',databaseReceiptId:1,qualificationDigest:h,kind:'fcos_rapid_release_handover',controllerSha:m.controllerSha,candidateSha:sha,repository:p.repository,projectId:p.projectId,teamId:p.teamId,
  unresolvedProductionOperations:0,oldWritersRetired:true,hostedQualificationPassed:true,eventSubscribersReviewed:true,inventoryDigest:h,nativeCoordinatorReadbackDigest:h,
@@ -45,12 +49,12 @@ function nativeFixture() {
   if(path.endsWith('/runs/88'))return run;
   if(path.endsWith('/runs/77'))return{id:77,head_sha:m.controllerSha,path:'.github/workflows/fcos-rapid-handover.yml',event:'workflow_dispatch',actor:{login:p.account},conclusion:'success',run_attempt:1,display_title:`FCOS rapid handover ${setup.planHash} ${sha}`};
   if(path.includes('/runs/77/jobs'))return{jobs:[{id:78,name:'handover-apply',conclusion:'success'}]};
-  if(path.includes('/runs/88/jobs'))return{jobs:[{name:'go-live',status:'in_progress',started_at:new Date().toISOString()}]};
+  if(path.includes('/runs/88/jobs'))return{jobs:[{name:'go-live',status:'in_progress',started_at:new Date().toISOString(),run_id:run.id,run_attempt:run.run_attempt}]};
   if(path.endsWith('/approvals'))return[review];
   if(path.includes('/environments/'))return environment;
   throw Error(`unexpected native read ${path}`);
  }};
- return{m,gh,run,setup,env:{FCOS_RAPID_RELEASE_ENABLED:'true',FCOS_RAPID_RELEASE_HANDOVER_ID:'100',GITHUB_ACTIONS:'true',GITHUB_RUN_ID:'88',GITHUB_REPOSITORY:p.repository,GITHUB_SHA:m.controllerSha}};
+ return{m,gh,run,setup,env:{FCOS_RAPID_RELEASE_ENABLED:'true',FCOS_RAPID_RELEASE_HANDOVER_ID:'100',GITHUB_ACTIONS:'true',GITHUB_RUN_ID:'88',GITHUB_RUN_ATTEMPT:'1',GITHUB_REPOSITORY:p.repository,GITHUB_SHA:m.controllerSha}};
 }
 test('trusted activation values require the exact native Deployment ID', async () => {
  const fixture=nativeFixture();
@@ -85,6 +89,20 @@ test('valid durable native approval survives a job interruption without refreshi
  f.gh.pages=async()=>[{creator:{id:1},payload:{...content,recordHash:digest(content)}}];f.run.run_attempt=2;
  const actual=await nativeApproval({github:f.gh,manifest:f.m,staged:{id:'dpl_new'},env:f.env});
  assert.equal(actual.approvedAt,approvedAt);assert.deepEqual(actual,saved);
+});
+test('DEVEE desktop verifies the entire native receipt and blocks attempt two even with saved approval', async () => {
+ const f = nativeFixture(true), staged = { id: 'dpl_new' };
+ f.env.VERCEL_TOKEN = 'fixture-only';
+ const provider = vercelProvider({ github: f.gh, manifest: f.m, env: f.env });
+ const native = await nativeApproval({ github: f.gh, manifest: f.m, env: f.env, staged });
+ await provider.verifyApproval(native, { staged });
+ await assert.rejects(provider.verifyApproval({ ...native, approvedAt: new Date(Date.now() - 60_000).toISOString() }, { staged }), /APPROVAL_CHANGED/);
+ const content = { schemaVersion: 1, kind: 'fcos_rapid_release_event', releaseId: f.m.releaseId, manifestHash: digest(f.m),
+   sequence: 0, previousHash: null, event: 'approval.accepted', data: native };
+ f.gh.pages = async () => [{ creator: { id: 1 }, payload: { ...content, recordHash: digest(content) } }];
+ f.run.run_attempt = 2;
+ f.env.GITHUB_RUN_ATTEMPT = '2';
+ await assert.rejects(provider.verifyApproval(native, { staged }), /FRESH_NATIVE_APPROVAL_REQUIRED/);
 });
 test('successful quality survives downstream failure or cancellation; failed quality is never reused',async()=>{
  const f=nativeFixture();f.run.status='completed';f.run.path += '@main';
