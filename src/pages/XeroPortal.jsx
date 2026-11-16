@@ -56,6 +56,7 @@ const STATUS_FILTERS = ['eligible', 'blocked', 'kept', 'not-selected', 'updated'
 
 const RECEIPT_CURRENCIES = ['HKD', 'USD', 'SGD', 'CNY', 'EUR', 'GBP', 'AUD', 'NZD', 'CAD', 'JPY'];
 const XeroFinancialSync = lazy(() => import('@/components/xero/XeroFinancialSync'));
+const XeroExistingDraftAuthorisationPanel = lazy(() => import('@/components/xero/XeroExistingDraftAuthorisationPanel'));
 const XeroNativeDocumentPreview = lazy(() => import('@/components/xero/XeroNativeDocumentPreview'));
 const XeroCreditAllocationActions = lazy(() => import('@/components/xero/XeroCreditAllocationActions'));
 const XeroPrepaymentActions = lazy(() => import('@/components/xero/XeroPrepaymentActions'));
@@ -692,6 +693,7 @@ export default function XeroPortal() {
           <TabsContent value="accounting" className="space-y-4">
             <Suspense fallback={<StateBlock icon={Loader2} title={copy.financial.loadingTitle} description={copy.financial.loadingDescription} />}>
               <XeroFinancialSync portalStatus={status} language="en" />
+              <XeroExistingDraftAuthorisationPanel />
               {canViewIntegrity && status?.externalActions?.xero_financial_sync?.control === 'deployment_read_only'
                 && <XeroNativeDocumentPreview verificationOnly />}
               {canViewIntegrity && status?.xero?.connected

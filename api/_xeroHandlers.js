@@ -35,6 +35,8 @@ import { xeroContactIdentitySave } from './_xeroContactIdentity.js';
 import { xeroContactRepairApply } from './_xeroContactRepair.js';
 import { xeroContactRestoreApply } from './_xeroContactRestore.js';
 import { xeroFinancialDocumentPreservationPreview, xeroFinancialDocumentPreservationRun } from './_xeroIssuedSupplierWorkflow.js';
+import { existingDraftAuthorisationApprovedScope } from './_xeroExistingDraftAuthorisationScope.js';
+import { existingDraftAuthorisationPreview, existingDraftAuthorisationRead, existingDraftAuthorisationApply, existingDraftAuthorisationRecover } from './_xeroExistingDraftAuthorisation.js';
 import { supplierFinancialBucketApply, supplierFinancialBucketPreview, supplierFinancialBucketRead } from './_xeroSupplierFinancialBucketWorkflow.js';
 import { xeroIntegrityReport } from './_xeroIntegrityReport.js';
 
@@ -93,6 +95,11 @@ export const XERO_HANDLER_MODULE_ACCESS = Object.freeze(Object.fromEntries([
   'xeroFinancialDocumentCorrectionVerify',
   'xeroFinancialDocumentPreservationPreview',
   'xeroFinancialDocumentPreservationRun',
+  'xeroExistingDraftAuthorisationApprovedScope',
+  'xeroExistingDraftAuthorisationPreview',
+  'xeroExistingDraftAuthorisationRead',
+  'xeroExistingDraftAuthorisationApply',
+  'xeroExistingDraftAuthorisationRecover',
   'xeroSupplierFinancialBucketPreview',
   'xeroSupplierFinancialBucketRead',
   'xeroSupplierFinancialBucketApply',
@@ -171,6 +178,11 @@ export function createXeroHandlers({ requireActiveUser, resolveRecoveredSystemEr
     xeroFinancialDocumentCorrectionVerify: wrap(xeroFinancialDocumentCorrectionVerify),
     xeroFinancialDocumentPreservationPreview: wrap(xeroFinancialDocumentPreservationPreview),
     xeroFinancialDocumentPreservationRun: wrap(xeroFinancialDocumentPreservationRun),
+    xeroExistingDraftAuthorisationApprovedScope: wrap(existingDraftAuthorisationApprovedScope),
+    xeroExistingDraftAuthorisationPreview: wrap(existingDraftAuthorisationPreview),
+    xeroExistingDraftAuthorisationRead: wrap(existingDraftAuthorisationRead),
+    xeroExistingDraftAuthorisationApply: wrap(existingDraftAuthorisationApply),
+    xeroExistingDraftAuthorisationRecover: wrap(existingDraftAuthorisationRecover),
     xeroSupplierFinancialBucketPreview: wrap(supplierFinancialBucketPreview),
     xeroSupplierFinancialBucketRead: wrap(supplierFinancialBucketRead),
     xeroSupplierFinancialBucketApply: wrap(supplierFinancialBucketApply),

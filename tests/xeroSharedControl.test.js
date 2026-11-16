@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fixtureSharedControl, fixtureXeroConnection } from './helpers/xeroSharedControl.js';
 import { xeroAccountingFetch, getFreshXeroConnection, writeStoredXeroConnection } from '../api/_xeroContactSync.js';
-import { createXeroSharedControl, runWithXeroBudget, forecastXeroBudget } from '../api/_xeroSharedControl.js';
+import { createXeroSharedControl, runWithXeroBudget, runWithExistingDraftXeroBudget, forecastXeroBudget } from '../api/_xeroSharedControl.js';
 const json = (data,status=200,headers={}) => Response.json(data,{status,headers});
 const connection = { tenantId:'00000000-0000-4000-8000-000000000001', accessToken:'fixture',tokenVersion:1 };
 const immediate = async (_tenant,fn) => fn();
@@ -96,6 +96,66 @@ test('durable campaign write request identity reaches admission before the provi
     onResponse: data => { receipt = data; },
   });
   assert.equal(receipt.requestId, requestId);
+});
+
+test('draft-status scoped admission binds exact provider bytes and leaves ordinary admission unchanged', async () => {
+  const budgetId = '11111111-1111-4111-8111-111111111111';
+  const requestId = '22222222-2222-4222-8222-222222222222';
+  const target = '33333333-3333-4333-8333-333333333333';
+  const path = `/Invoices/${target}?unitdp=4`;
+  const body = { Invoices: [{ InvoiceID: target, Status: 'AUTHORISED' }] };
+  const events = [];
+  const control = createXeroSharedControl({ async rpc(name, args) {
+    events.push({ name, args });
+    return { data: { requestId: args.p_id } };
+  } });
+  const bound = fixtureXeroConnection(connection, control);
+  const options = { requestGate: immediate, fetchImpl: async (url, request) => {
+    events.push({ name: 'fetch', url, body: request.body });
+    return json({});
+  } };
+  await xeroAccountingFetch(bound, '/Invoices', options);
+  assert.equal(events[0].name, 'xero_shared_admit');
+  assert.equal(Object.hasOwn(events[0].args, 'p_payload_json'), false);
+  assert.equal(Object.hasOwn(events[0].args, 'p_resource_path'), false);
+  events.length = 0;
+  const scope = { budgetId, requestId };
+  const write = (pathName, overrides) => runWithExistingDraftXeroBudget(bound, scope,
+    () => xeroAccountingFetch(bound, pathName, { ...options, method: 'POST', body, ...overrides }));
+  for (const [pathName, overrides] of [
+    ['/Invoices', {}], [path, { body: { Invoices: [{ ...body.Invoices[0], Total: 100 }] } }],
+    [path, { body: undefined, rawBody: JSON.stringify(body) }], [path, { headers: { 'content-type': 'text/plain' } }],
+    [path, { budgetId: target }], [path, { requestId: target }], [path, { budgetPhase: 'verification' }],
+  ]) await assert.rejects(write(pathName, overrides), error => /^XERO_DRAFT_QUOTA_(REQUEST|SCOPE)_INVALID$/.test(error.code));
+  assert.deepEqual(events, []);
+  await write(path);
+  assert.deepEqual(events.map(row => row.name), ['xero_shared_admit_scoped_v1', 'fetch', 'xero_shared_observe']);
+  assert.equal(events[0].args.p_resource_path, path);
+  assert.deepEqual(events[0].args.p_payload_json, JSON.parse(events[1].body));
+  assert.equal(events[0].args.p_id, requestId);
+  events.length = 0;
+  await runWithExistingDraftXeroBudget(bound, { budgetId, budgetPhase: 'verification' },
+    () => xeroAccountingFetch(bound, path, options));
+  assert.equal(events[0].args.p_payload_json, null);
+  assert.equal(events[0].args.p_phase, 'verification');
+
+  const unavailable = async () => {
+    events.push({ name: 'fetch' });
+    return json({}, 503);
+  };
+  events.length = 0;
+  await assert.rejects(runWithExistingDraftXeroBudget(bound, { budgetId, budgetPhase: 'verification' },
+    () => xeroAccountingFetch(bound, path, { ...options, fetchImpl: unavailable })),
+  { code: 'XERO_CONTACT_SYNC_XERO_REQUEST_FAILED' });
+  assert.deepEqual(events.map(row => row.name), ['xero_shared_admit_scoped_v1', 'fetch', 'xero_shared_observe']);
+  assert.equal(events[2].args.p_outcome_unknown, false);
+
+  events.length = 0;
+  await assert.rejects(write(path, { fetchImpl: unavailable }), {
+    code: 'XERO_WRITE_OUTCOME_UNKNOWN', details: { requestId, budgetId, outcomeUnknown: true, safeToRetry: false },
+  });
+  assert.deepEqual(events.map(row => row.name), ['xero_shared_admit_scoped_v1', 'fetch', 'xero_shared_observe']);
+  assert.equal(events[2].args.p_outcome_unknown, true);
 });
 
 test('probe is one exact Organisations read; observation failure stops retries and preserves unknown receipt',async()=>{

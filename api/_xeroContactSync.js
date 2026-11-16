@@ -8,7 +8,7 @@ import { sfQuery } from './_salesforce.js';
 import { recordSupabaseRequest } from './_requestTelemetry.js';
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
 import { xeroRateLimitError, xeroRequestGate, xeroRetryAfterMs } from './_xeroRateLimit.js';
-import { bindXeroSharedControl, createXeroSharedControl, xeroSharedContext, xeroControlError } from './_xeroSharedControl.js';
+import { bindXeroSharedControl, createXeroSharedControl, existingDraftAdmissionFor, xeroSharedContext, xeroControlError } from './_xeroSharedControl.js';
 
 const SALESFORCE_PRODUCTION_ORG_ID = fcosSalesforceEnvironment('production').orgId;
 const MAX_JSON_BODY_BYTES = 256 * 1024;
@@ -838,6 +838,7 @@ export async function xeroAccountingFetch(connection, pathName, options = {}) {
   requireDeploymentMutationAllowed(true, env);
   const context = xeroSharedContext(connection, options);
   const control = context.sharedControl;
+  const existingDraft = existingDraftAdmissionFor(context);
   const requestMethod = String(method || 'GET').toUpperCase();
   // Do not let optional headers or path traversal change the scoped provider identity.
   if (!/^\/[A-Za-z]+(?:[/?][^#]*)?$/.test(pathName) || pathName.includes('..') || Object.keys(extraHeaders).some(key => /^(authorization|xero-tenant-id|host)$/i.test(key))) throw xeroControlError('XERO_REQUEST_SCOPE_INVALID');
@@ -845,9 +846,30 @@ export async function xeroAccountingFetch(connection, pathName, options = {}) {
   if (context.probeId && pathName !== '/Organisations') throw xeroControlError('XERO_PROBE_AUTHORITY_INVALID');
   if (rawBody !== undefined && body !== undefined) throw xeroControlError('XERO_REQUEST_BODY_INVALID');
   const requestBody = rawBody !== undefined ? rawBody : body ? JSON.stringify(body) : undefined;
+  let draftPayload = null;
+  if (existingDraft) {
+    if (typeof control.admitExistingDraft !== 'function' || rawBody !== undefined
+      || Object.keys(extraHeaders).some(key => key.toLowerCase() === 'content-type')
+      || (requestMethod === 'GET' ? requestBody !== undefined : requestMethod !== 'POST')) {
+      throw xeroControlError('XERO_DRAFT_QUOTA_REQUEST_INVALID');
+    }
+    if (requestMethod === 'POST') {
+      const target = /^\/Invoices\/([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})\?unitdp=4$/.exec(pathName)?.[1];
+      if (!target || !existingDraft.requestId || existingDraft.budgetPhase !== 'operation' || !requestBody) {
+        throw xeroControlError('XERO_DRAFT_QUOTA_REQUEST_INVALID');
+      }
+      draftPayload = JSON.parse(requestBody);
+      const invoice = draftPayload?.Invoices?.[0];
+      if (!invoice || Object.keys(draftPayload).length !== 1 || !Array.isArray(draftPayload.Invoices)
+        || draftPayload.Invoices.length !== 1 || Object.keys(invoice).length !== 2
+        || invoice.InvoiceID !== target || invoice.Status !== 'AUTHORISED') {
+        throw xeroControlError('XERO_DRAFT_QUOTA_REQUEST_INVALID');
+      }
+    }
+  }
   const contentType = rawBody !== undefined ? Object.entries(extraHeaders).find(([key]) => key.toLowerCase() === 'content-type')?.[1] || 'application/octet-stream' : 'application/json';
   const headers = { ...extraHeaders, Authorization: `Bearer ${connection.accessToken}`, 'xero-tenant-id': connection.tenantId, Accept: 'application/json', 'Content-Type': contentType, ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}) };
-  const retryRateLimit = !context.probeId && (retryOnRateLimit ?? requestMethod === 'GET');
+  const retryRateLimit = !existingDraft && !context.probeId && (retryOnRateLimit ?? requestMethod === 'GET');
   const intervalMs = callsPerMinute > 0 ? Math.ceil(60_000 / Math.min(45, callsPerMinute)) : 0;
   let rateWaitMs = 0;
   const requestedRetryLimit = options.transientRetryLimit;
@@ -855,7 +877,7 @@ export async function xeroAccountingFetch(connection, pathName, options = {}) {
     throw xeroControlError('XERO_REQUEST_RETRY_INVALID');
   }
   // A bounded read may spend fewer retries than the transport normally allows.
-  const transientRetryLimit = requestMethod === 'GET' && !context.probeId
+  const transientRetryLimit = requestMethod === 'GET' && !existingDraft && !context.probeId
     ? Math.min(xeroTransientRetryLimit(env), requestedRetryLimit ?? 2)
     : 0;
   let transientRetries = 0;
@@ -877,7 +899,12 @@ export async function xeroAccountingFetch(connection, pathName, options = {}) {
         let capacityWait = 0;
         for (;;) {
           try {
-            receipt = await control.admit({ tenantId: connection.tenantId, tokenVersion: connection.tokenVersion, ...(context.requestId ? { requestId: context.requestId } : {}), method: requestMethod, resourceKey, budgetId, budgetPhase: context.budgetPhase || 'operation', probeId: context.probeId || null });
+            const admission = { tenantId: connection.tenantId, tokenVersion: connection.tokenVersion,
+              ...(context.requestId ? { requestId: context.requestId } : {}), method: requestMethod, resourceKey,
+              budgetId, budgetPhase: context.budgetPhase || 'operation', probeId: context.probeId || null };
+            receipt = existingDraft
+              ? await control.admitExistingDraft({ ...admission, resourcePath: pathName, payloadJson: draftPayload })
+              : await control.admit(admission);
             break;
           } catch (error) {
             if (!['XERO_INFLIGHT_LIMIT', 'XERO_MINUTE_LIMIT'].includes(error.code)

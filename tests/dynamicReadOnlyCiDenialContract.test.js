@@ -48,6 +48,20 @@ test('literal CI mode retains the denial contract on a Production-runtime stagin
   }
 });
 
+test('existing-draft status routes stop before dispatch in read-only staging', async () => {
+  for (const suffix of ['Preview', 'Apply', 'Recover']) {
+    const name = `xeroExistingDraftAuthorisation${suffix}`;
+    for (const flag of [undefined, 'true']) {
+      const { res, headers } = await invoke({ flag, name });
+      assert.equal(res.statusCode, 403, name);
+      assert.equal(res.body.code, flag === 'true' ? 'FCOS_CI_READ_ONLY' : 'FCOS_DEPLOYMENT_READ_ONLY', name);
+      assert.equal(headers.get('x-fcos-handler-mutation'), '1', name);
+    }
+    const { res } = await invoke({ host: canonicalHost, name });
+    assert.equal(res.statusCode, 401, name);
+  }
+});
+
 test('Preview retains the same literal-CI denial compatibility without permitting dispatch', async () => {
   for (const flag of [undefined, 'true']) {
     const { res } = await invoke({ flag, deployment: 'preview' });
