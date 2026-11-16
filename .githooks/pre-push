@@ -39,6 +39,24 @@ fi
 GIT_NO_REPLACE_OBJECTS=1
 export GIT_NO_REPLACE_OBJECTS
 
+verify_frozen_protected_checkout() {
+  verifier_directory="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)" || return 1
+  candidate_directory="$(CDPATH= cd -- "$repo_root" && pwd -P)" || return 1
+  [ "$verifier_directory" != "$candidate_directory" ] || return 1
+  protected_main="$(env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$github_config_dir" gh api repos/hocheunglai-oss/fcos/branches/main --jq 'select(.protected == true and .name == "main") | .commit.sha' 2>/dev/null)" || return 1
+  git_local_environment="$(git rev-parse --local-env-vars)" || return 1
+  (
+    unset $git_local_environment NODE_OPTIONS NODE_PATH GH_TOKEN GITHUB_TOKEN
+    export GIT_NO_REPLACE_OBJECTS=1
+    cd "$verifier_directory" &&
+      [ "$(git rev-parse --show-toplevel)" = "$verifier_directory" ] &&
+      [ "$(git rev-parse --path-format=absolute --git-common-dir)" = "$git_common_dir" ] &&
+      [ -n "$protected_main" ] && [ "$(git rev-parse HEAD)" = "$protected_main" ] &&
+      ! git symbolic-ref --quiet HEAD >/dev/null &&
+      verifier_changes="$(git status --porcelain --untracked-files=normal)" && [ -z "$verifier_changes" ]
+  )
+}
+
 # Create-only review refs supply immutable source to the protected release.
 # The controller still requires DEVEE deployment and a strict mirror before QAT.
 review_prefix=refs/heads/codex/fcos-salesforce-review/
@@ -66,24 +84,7 @@ if printf '%s\n' "$updates" | awk -v prefix="$review_prefix" 'index($3, prefix) 
     /*) ;;
     *) echo "FCOS push blocked: Salesforce review source requires its exact verified release manifest." >&2; exit 1 ;;
   esac
-  verifier_directory="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)" || exit 1
-  candidate_directory="$(CDPATH= cd -- "$repo_root" && pwd -P)" || exit 1
-  if [ "$verifier_directory" = "$candidate_directory" ]; then
-    echo "FCOS push blocked: Salesforce review verification must run from a separate frozen protected-main checkout." >&2
-    exit 1
-  fi
-  protected_main="$(env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$github_config_dir" gh api repos/hocheunglai-oss/fcos/branches/main --jq 'select(.protected == true and .name == "main") | .commit.sha' 2>/dev/null)" || exit 1
-  git_local_environment="$(git rev-parse --local-env-vars)" || exit 1
-  if ! (
-    unset $git_local_environment NODE_OPTIONS NODE_PATH GH_TOKEN GITHUB_TOKEN
-    export GIT_NO_REPLACE_OBJECTS=1
-    cd "$verifier_directory" &&
-      [ "$(git rev-parse --show-toplevel)" = "$verifier_directory" ] &&
-      [ "$(git rev-parse --path-format=absolute --git-common-dir)" = "$git_common_dir" ] &&
-      [ -n "$protected_main" ] && [ "$(git rev-parse HEAD)" = "$protected_main" ] &&
-      ! git symbolic-ref --quiet HEAD >/dev/null &&
-      verifier_changes="$(git status --porcelain --untracked-files=normal)" && [ -z "$verifier_changes" ]
-  ); then
+  if ! verify_frozen_protected_checkout; then
     echo "FCOS push blocked: Salesforce review verification must run from a separate frozen protected-main checkout." >&2
     exit 1
   fi
@@ -94,6 +95,49 @@ if printf '%s\n' "$updates" | awk -v prefix="$review_prefix" 'index($3, prefix) 
       node "$verifier_directory/scripts/verify-salesforce-review-source.mjs" "$repo_root" "$review_sha" "$review_manifest"
   ); then
     echo "FCOS push blocked: Salesforce review source requires its exact verified release manifest." >&2
+    exit 1
+  fi
+  exit 0
+fi
+
+# The completed Payment successor may establish its exact reviewed metadata history
+# on one ordinary create-only ref. All other ordinary refs retain the complete-tree guard.
+anchor_ref=refs/heads/codex/trading-fx-payment-verified-baseline
+anchor_sha=6299e728d8b1c9f948f2f0cfdc3c11267dc21ac2
+if printf '%s\n' "$updates" | awk -v ref="$anchor_ref" '$3 == ref { found=1 } END { exit !found }'; then
+  if ! printf '%s\n' "$updates" | awk -v ref="$anchor_ref" -v sha="$anchor_sha" '
+    NF { rows++ }
+    NF == 4 && $2 == sha && $3 == ref && length($4) == 40 && $4 ~ /^0+$/ { valid=1 }
+    END { exit (rows != 1 || !valid) }'; then
+    echo "FCOS push blocked: the Trading FX anchor accepts one creation of the exact corrected commit." >&2
+    exit 1
+  fi
+  if [ -s "$git_common_dir/info/grafts" ] || [ -s "$git_common_dir/shallow" ] \
+    || [ -n "${GIT_GRAFT_FILE:-}" ] || [ -n "${GIT_SHALLOW_FILE:-}" ]; then
+    echo "FCOS push blocked: Trading FX source anchoring requires complete, unmodified Git history." >&2
+    exit 1
+  fi
+  anchor_repository="$(env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$github_config_dir" gh api repos/hocheunglai-oss/fcos --jq '.full_name + ":" + (.id|tostring)' 2>/dev/null)" || exit 1
+  if [ "$anchor_repository" != "hocheunglai-oss/fcos:1278654816" ]; then
+    echo "FCOS push blocked: Trading FX source anchoring requires the pinned FCOS repository." >&2
+    exit 1
+  fi
+  anchor_manifest="${FCOS_TRADING_FX_PAYMENT_ANCHOR_MANIFEST:-}"
+  case "$anchor_manifest" in
+    /*) ;;
+    *) echo "FCOS push blocked: Trading FX source anchoring requires the exact completed release manifest." >&2; exit 1 ;;
+  esac
+  if ! verify_frozen_protected_checkout; then
+    echo "FCOS push blocked: the Trading FX anchor requires a separate frozen protected-main checkout." >&2
+    exit 1
+  fi
+  if ! (
+    unset $git_local_environment NODE_OPTIONS NODE_PATH GH_TOKEN GITHUB_TOKEN
+    export GIT_NO_REPLACE_OBJECTS=1
+    cd "$verifier_directory" &&
+      node "$verifier_directory/scripts/verify-trading-fx-payment-source-anchor.mjs" "$repo_root" "$anchor_sha" "$anchor_manifest"
+  ); then
+    echo "FCOS push blocked: Trading FX requires the exact completed release and current byte-verified mirror." >&2
     exit 1
   fi
   exit 0
