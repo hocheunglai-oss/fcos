@@ -12,8 +12,9 @@ import { assertReviewedMirror } from './lib/salesforce-reviewed-release.mjs';
 import { assertAuthorization, digest, isSha, requireCondition, targets, validateManifest } from './lib/rapid-release/contract.mjs';
 import { assertBuildReceipt, assertSmokeProof } from './lib/rapid-release/engine.mjs';
 import { DeploymentJournal, pendingOperations } from './lib/rapid-release/journal.mjs';
-import { readLocalMirrorDeployments, verifyLocalMirrorReceipt } from './lib/rapid-release/local-mirror-handoff.mjs';
+import { LOCAL_MIRROR_ENVIRONMENT, readLocalMirrorDeployments, verifyLocalMirrorReceipt } from './lib/rapid-release/local-mirror-handoff.mjs';
 import { assertFrozenWorkflow, nativeWorkflowPath } from './lib/rapid-release/providers.mjs';
+import { requiresDeveeDesktopCheckpoint, verifyDeveeDesktopReceipt } from './lib/rapid-release/salesforce-devee-desktop-checkpoint.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const policy = FCOS_CONNECTION_POLICY.providers.find(provider => provider.id === 'salesforce');
@@ -28,6 +29,69 @@ const allow = (value, code) => requireCondition(value, 'REVIEWED_SOURCE_ANCHOR_'
 const owner = actor => actor?.id === ownerId && actor.login === targets().account;
 const data = row => row.payload.data;
 const sequence = row => row.payload.sequence;
+const trusted = row => row.creator?.id === botId && row.creator.login === 'github-actions[bot]';
+
+export function verifyCompletedDesktopApproval({ records, run, manifest, staged, promote, completion = promote }) {
+  const approvals = records.filter(row => ['approval.accepted', 'approval.reconfirmed'].includes(row.payload.event));
+  allow(run.run_attempt === 1 && approvals[0]?.payload.event === 'approval.accepted'
+    && approvals.slice(1).every(row => row.payload.event === 'approval.reconfirmed'), 'DESKTOP_APPROVAL_HISTORY_INVALID');
+  const approvedRuns = new Map();
+  for (const row of approvals) {
+    const approval = data(row);
+    allow(trusted(row) && approval.nativeReviewVerified === true && Number.isSafeInteger(approval.runId)
+      && approval.runId > 0 && !approvedRuns.has(approval.runId) && sequence(row) < sequence(completion)
+      && Date.parse(row.created_at) <= Date.parse(completion.created_at)
+      && (sequence(row) > sequence(promote) || Date.parse(row.created_at) <= Date.parse(promote.created_at))
+      && Date.parse(approval.approvedAt) <= Date.parse(row.created_at), 'DESKTOP_APPROVAL_HISTORY_INVALID');
+    assertAuthorization(approval, manifest, staged, Date.parse(row.created_at));
+    approvedRuns.set(approval.runId, row);
+  }
+  const current = approvedRuns.get(run.id);
+  const effective = approvals.filter(row => sequence(row) < sequence(promote)).at(-1);
+  allow(current && current === approvals.at(-1) && effective, 'DESKTOP_APPROVAL_RUN_MISMATCH');
+  assertAuthorization(data(effective), manifest, staged, Date.parse(promote.created_at));
+  assertAuthorization(data(current), manifest, staged, Date.parse(completion.created_at));
+  return approvedRuns;
+}
+
+export function verifyPublishedDesktopMirror({ approvedRuns, records, requests, manifest, reviewed, requestRow,
+  publication, deployment, validation, run, staged }) {
+  const mirrorRequest = requestRow.payload;
+  const approval = approvedRuns.get(mirrorRequest.runId);
+  allow(approval && mirrorRequest.runAttempt === 1, 'DESKTOP_MIRROR_RUN_UNAPPROVED');
+  const checkpoints = records.filter(row => row.payload.event === 'salesforce.checkpoint'
+    && data(row).stage === 'devee' && data(row).operation === 'native-desktop-smoke'
+    && data(row).outcome === 'evidence' && data(row).fingerprint === reviewed.fingerprint
+    && data(row).desktop?.runId === mirrorRequest.runId);
+  allow(checkpoints.length === 1, 'DESKTOP_CHECKPOINT_REQUIRED');
+  const [checkpoint] = checkpoints, desktop = data(checkpoint).desktop;
+  allow(trusted(checkpoint) && desktop.runAttempt === 1 && sequence(approval) < sequence(checkpoint)
+    && sequence(deployment) < sequence(checkpoint) && sequence(checkpoint) < sequence(publication)
+    && Date.parse(checkpoint.created_at) <= Date.parse(requestRow.created_at), 'DESKTOP_CHECKPOINT_ORDER_INVALID');
+  const nativeRequest = requests.filter(row => row.id === desktop.requestId);
+  const nativeReceipt = requests.filter(row => row.id === desktop.proofId);
+  allow(nativeRequest.length === 1 && nativeReceipt.length === 1, 'DESKTOP_NATIVE_PROOF_REQUIRED');
+  const [requestDeployment] = nativeRequest, [receiptDeployment] = nativeReceipt;
+  const request = requestDeployment.payload;
+  allow(request.manifestHash === digest(manifest) && request.releaseId === manifest.releaseId
+    && request.candidateSha === manifest.candidate.sha && request.controllerSha === manifest.controllerSha
+    && request.repositoryId === repositoryId && request.workflowPath === workflow
+    && request.runId === mirrorRequest.runId && request.runAttempt === mirrorRequest.runAttempt
+    && (request.runId !== run.id || request.dispatcherSha === run.head_sha)
+    && request.fingerprint === reviewed.fingerprint && request.orgId === fcosSalesforceEnvironment('devee').orgId
+    && request.deploymentJobId === data(deployment).job.id && request.validationJobId === data(validation).job.id
+    && request.sourceTreeHash === reviewed.binding.sourceTreeHash && request.sourceTreeHash === desktop.sourceTreeHash
+    && request.inventoryHash === reviewed.nativeInventories.devee.final.inventoryHash
+    && request.inventoryHash === desktop.inventoryHash && request.installedInventoryHash === desktop.installedInventoryHash
+    && request.caseSetDigest === manifest.prerequisites.plan.deveeDesktopCaseSetDigest
+    && request.caseSetDigest === desktop.caseSetDigest
+    && Date.parse(approval.created_at) <= Date.parse(requestDeployment.created_at)
+    && Date.parse(receiptDeployment.created_at) <= Date.parse(checkpoint.created_at), 'DESKTOP_NATIVE_PROOF_MISMATCH');
+  assertAuthorization(data(approval), manifest, staged, Date.parse(requestRow.created_at));
+  const proof = verifyDeveeDesktopReceipt({ request, requestDeployment, receiptDeployment,
+    environment: LOCAL_MIRROR_ENVIRONMENT, now: Date.parse(receiptDeployment.created_at) });
+  allow(proof.requestDigest === desktop.requestDigest && proof.proofDigest === desktop.proofDigest, 'DESKTOP_NATIVE_PROOF_MISMATCH');
+}
 
 export function assertStandardReviewedSourceManifest(manifest, candidate) {
   const hash = validateManifest(manifest);
@@ -52,17 +116,25 @@ export function verifyCompletedReviewedJournal({ records, requests, manifest, re
   allow(stage.outcome === 'applied' && staged.sha === manifest.candidate.sha
     && staged.artifactDigest === data(event('build.passed')).artifactDigest, 'STAGED_ARTIFACT_MISMATCH');
   assertSmokeProof(data(event('smoke.passed')), manifest, staged);
-  const approval = data(event('approval.accepted'));
   const promote = event('promote.intent');
-  allow(approval.runId === run.id, 'APPROVAL_RUN_MISMATCH');
-  assertAuthorization(approval, manifest, staged, Date.parse(promote.created_at));
+  const completion = event('release.complete');
+  const desktop = requiresDeveeDesktopCheckpoint(manifest);
+  const desktopCaseSet = reviewed.review?.nativeDeveeDesktop?.caseSetDigest;
+  allow(desktopCaseSet === manifest.prerequisites.plan.deveeDesktopCaseSetDigest
+    && (desktop || desktopCaseSet === undefined), 'DESKTOP_REVIEW_SCOPE_MISMATCH');
+  const approvedRuns = desktop ? verifyCompletedDesktopApproval({ records, run, manifest, staged, promote, completion }) : null;
+  if (!desktop) {
+    const approval = data(event('approval.accepted'));
+    allow(approval.runId === run.id, 'APPROVAL_RUN_MISMATCH');
+    assertAuthorization(approval, manifest, staged, Date.parse(promote.created_at));
+  }
   const prerequisites = event('prerequisites.passed');
   const checked = data(prerequisites).salesforce;
   allow(data(prerequisites).passed === true && checked?.order === promotionOrder && checked.mirrorVerified === true
     && checked.sourceTreeHash === reviewed.binding.sourceTreeHash, 'SALESFORCE_ORDER_MISMATCH');
   assertSmokeProof(data(event('prerequisites.smoke_passed')), manifest, staged);
   allow(data(event('prerequisites.smoke_passed')).prerequisiteDigest === digest(data(prerequisites)), 'PREREQUISITE_SMOKE_MISMATCH');
-  const promotion = event('promote.result'), observed = event('live.passed'), completion = event('release.complete');
+  const promotion = event('promote.result'), observed = event('live.passed');
   allow(data(promotion).outcome === 'applied' && data(promotion).result.id === staged.id
     && data(promotion).result.buildId === staged.buildId && data(observed).passed === true
     && data(observed).deploymentId === staged.id && data(observed).buildId === staged.buildId
@@ -93,8 +165,9 @@ export function verifyCompletedReviewedJournal({ records, requests, manifest, re
   allow(initial.length === 1 && sequence(deployment) < sequence(initial[0])
     && sequence(initial[0]) < sequence(publications[0]), 'MIRROR_INTENT_MISMATCH');
   const byRequest = new Map(requests.filter(row => row.creator?.id === botId && row.payload?.kind === 'fcos_local_mirror_request'
-    && row.payload.runId === run.id && Number.isSafeInteger(row.payload.runAttempt) && row.payload.runAttempt > 0
-    && row.payload.runAttempt <= run.run_attempt
+    && (desktop ? approvedRuns.has(row.payload.runId) && row.payload.runAttempt === 1
+      : row.payload.runId === run.id && Number.isSafeInteger(row.payload.runAttempt) && row.payload.runAttempt > 0
+        && row.payload.runAttempt <= run.run_attempt)
     && row.payload.manifestHash === digest(manifest)).map(row => [row.id, row]));
   const pairs = requests.filter(row => row.creator?.id === ownerId && row.payload?.kind === 'fcos_local_mirror_receipt'
     && byRequest.has(row.payload.requestId)).map(receipt => [byRequest.get(receipt.payload.requestId), receipt]);
@@ -112,6 +185,8 @@ export function verifyCompletedReviewedJournal({ records, requests, manifest, re
       && Date.parse(receipt.created_at) <= Date.parse(checkpoint.created_at));
     allow(matches.length === 1, 'MIRROR_RECEIPT_REQUIRED');
     const [[request, receipt]] = matches;
+    if (desktop) verifyPublishedDesktopMirror({ approvedRuns, records, requests, manifest, reviewed,
+      requestRow: request, publication: checkpoint, deployment, validation, run, staged });
     const proof = verifyLocalMirrorReceipt({ request: request.payload, requestDeployment: request, receiptDeployment: receipt,
       reviewed, workflowActorId: botId, publisherId: ownerId, now: Date.parse(receipt.created_at) });
     allow(proof.commit === mirror.commit && proof.pullRequest.number === mirror.pullRequest, 'MIRROR_RECEIPT_CHANGED');

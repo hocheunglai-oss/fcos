@@ -61,6 +61,13 @@ const ownedCodes = Object.freeze({
   SALESFORCE_HOSTED_CREDENTIAL_REQUIRED_DEVEE: 'credential_entry_required',
   SALESFORCE_HOSTED_CREDENTIAL_REQUIRED_QAT: 'credential_entry_required',
   SALESFORCE_HOSTED_CREDENTIAL_REQUIRED_PRODUCTION: 'credential_entry_required',
+  DEVEE_DESKTOP_REVIEW_SCOPE_INVALID: 'source_mismatch', DEVEE_DESKTOP_HOSTED_SCOPE_INVALID: 'source_mismatch',
+  DEVEE_DESKTOP_WORKFLOW_INVALID: 'authorization_required', DEVEE_DESKTOP_POSTIMAGE_REQUIRED: 'stale_evidence',
+  DEVEE_DESKTOP_APPROVAL_JOURNAL_CONFLICT: 'stale_evidence',
+  DEVEE_DESKTOP_POSTIMAGE_CHANGED: 'source_mismatch', DEVEE_DESKTOP_EVIDENCE_WINDOW_ENDED: 'stale_evidence',
+  DEVEE_DESKTOP_NATIVE_REQUEST_INVALID: 'stale_evidence', DEVEE_DESKTOP_NATIVE_RECEIPT_INVALID: 'stale_evidence',
+  DEVEE_DESKTOP_NATIVE_RECEIPT_DUPLICATE: 'stale_evidence',
+  DEVEE_DESKTOP_EVIDENCE_INVALID: 'test_failure', DEVEE_DESKTOP_CHECKPOINT_ACK_UNCERTAIN: 'write_uncertain',
   NORMAL_ROLE_COVERAGE_MISSING: 'credential_entry_required', PHASE_PERFORMANCE_BUDGET_EXCEEDED: 'slow_phase',
 });
 const steps = new Set(['controls', 'lint', 'typecheck', 'product_tests', 'affected_tests', 'build', 'performance',

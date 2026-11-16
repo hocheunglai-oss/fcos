@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { digest } from '../scripts/lib/rapid-release/contract.mjs';
+import { createManifest, digest, targets } from '../scripts/lib/rapid-release/contract.mjs';
 import { REVIEWED_SALESFORCE_MODE } from '../scripts/lib/salesforce-reviewed-release.mjs';
-import { awaitLocalMirrorReceipt, createLocalMirrorReceipt, createLocalMirrorRequest, LOCAL_MIRROR_ENVIRONMENT, readLocalMirrorStage, recordLocalMirrorDeployment, usesLocalCollaboratorMirror, verifyLocalMirrorReceipt }
+import { awaitLocalMirrorReceipt, createLocalMirrorReceipt, createLocalMirrorRequest, LOCAL_MIRROR_ENVIRONMENT, readLocalMirrorApproval, readLocalMirrorStage, recordLocalMirrorDeployment, usesLocalCollaboratorMirror, verifyLocalMirrorReceipt }
   from '../scripts/lib/rapid-release/local-mirror-handoff.mjs';
+import { editorDesktopCaseSetDigest } from '../scripts/lib/rapid-release/salesforce-devee-desktop-checkpoint.mjs';
 
 const now = Date.parse('2026-11-12T16:30:00.000Z');
 const iso = milliseconds => new Date(milliseconds).toISOString();
@@ -42,6 +43,39 @@ test('the local worker accepts owner-created staging only for the exact protecte
   }
   assert.throws(() => readLocalMirrorStage({ ...record, creator: { id: 100 } }, input), /STAGE_RECEIPT_REQUIRED/);
   assert.throws(() => readLocalMirrorStage(undefined, input), /STAGE_RECEIPT_REQUIRED/);
+});
+
+test('an opted-in mirror request resolves only the exact active DEVEE desktop approval', () => {
+  const workflowActorId = 41898282, creator = { id: workflowActorId, login: 'github-actions[bot]' };
+  const optionsFor = desktop => {
+    const release = createManifest({ candidate: { ...manifest.candidate, sourceDigest: fingerprint, lockDigest: fingerprint },
+      controllerSha: manifest.controllerSha, previous: { sha: '2'.repeat(40), deploymentId: 'dpl_previous', configurationDigest: fingerprint, schemaDigest: fingerprint },
+      paths: ['force-app/main/default/classes/FcosTradeCurrencyService.cls'], releaseId: 'mirror-desktop-fixture',
+      publicEnvironment: { VITE_SUPABASE_URL: `https://${targets().supabaseProject}.supabase.co`, VITE_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_' + 'p'.repeat(24) },
+      prerequisites: { adapter: 'salesforce-reviewed-manifest', adapterDigest: fingerprint,
+        plan: { mirrorPublication: 'local-collaborator', ...(desktop ? { deveeDesktopCaseSetDigest: editorDesktopCaseSetDigest } : {}) } } });
+    const staged = { id: 'dpl_staged' };
+    const approval = { manifestHash: digest(release), candidateSha: release.candidate.sha, buildId: release.build.buildId,
+      deploymentId: staged.id, previousDeploymentId: release.previous.deploymentId, environment: 'fcos-production-release',
+      reviewer: targets().account, nativeReviewVerified: true, runId: 101, approvedAt: iso(now - 8000) };
+    const previous = { creator, created_at: iso(now - 7000), payload: { event: 'approval.accepted', sequence: 1, data: approval } };
+    const fresh = { creator, created_at: iso(now - 4000), payload: { event: 'approval.reconfirmed', sequence: 4, data: {
+      ...approval, runId: 102, approvedAt: iso(now - 6000),
+    } } };
+    const request = { runId: 102, runAttempt: 1 };
+    const jobs = { jobs: [{ name: 'go-live', status: 'in_progress', run_id: 102, run_attempt: 1, started_at: iso(now - 5000) }] };
+    return { input: { chain: [previous, fresh], manifest: release, staged, request, requestDeployment: { created_at: iso(now - 2000) },
+      jobs, workflowActorId, now }, previous, fresh };
+  };
+  const { input, previous, fresh } = optionsFor(true);
+  assert.deepEqual(readLocalMirrorApproval(input), fresh.payload.data);
+  assert.throws(() => readLocalMirrorApproval({ ...input, chain: [previous] }), /CURRENT_APPROVAL_RECEIPT_REQUIRED/);
+  assert.throws(() => readLocalMirrorApproval({ ...input, chain: [previous, fresh, fresh] }), /CURRENT_APPROVAL_RECEIPT_REQUIRED/);
+  assert.throws(() => readLocalMirrorApproval({ ...input, jobs: { jobs: [{ ...input.jobs.jobs[0], run_id: 101 }] } }), /CURRENT_APPROVAL_RECEIPT_REQUIRED/);
+  assert.throws(() => readLocalMirrorApproval({ ...input, request: { ...input.request, runAttempt: 2 } }), /CURRENT_APPROVAL_RECEIPT_REQUIRED/);
+  const ordinary = optionsFor(false);
+  assert.throws(() => readLocalMirrorApproval(ordinary.input), /LOCAL_MIRROR_RELEASE_JOURNAL_REQUIRED/);
+  assert.deepEqual(readLocalMirrorApproval({ ...ordinary.input, request: { runId: 101, runAttempt: 1 } }), ordinary.previous.payload.data);
 });
 
 test('mirror request binds the approved run attempt, DEVEE job pair and exact source', () => {

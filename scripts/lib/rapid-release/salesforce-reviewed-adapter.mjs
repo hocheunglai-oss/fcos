@@ -10,8 +10,10 @@ import { openSalesforcePromotionJournal } from '../salesforce-promotion-journal.
 import { assertReviewedMirror, assertReviewedJobReport, matchesSalesforceCheckpoint, reviewedJobExpectations, runReviewedSalesforceRelease, safeProjectFile, verifyReviewedOrgInventory } from '../salesforce-reviewed-release.mjs';
 import { assertHostedSalesforceRunner, authenticateHostedSalesforce } from './salesforce-hosted-auth.mjs';
 import { digest, git, isDigest, requireCondition, targets } from './contract.mjs';
-import { awaitLocalMirrorReceipt, createLocalMirrorRequest, usesLocalCollaboratorMirror } from './local-mirror-handoff.mjs';
-import { githubClient } from './providers.mjs';
+import { awaitLocalMirrorReceipt, createLocalMirrorRequest, LOCAL_MIRROR_ENVIRONMENT, readLocalMirrorDeployments,
+  recordLocalMirrorDeployment, usesLocalCollaboratorMirror } from './local-mirror-handoff.mjs';
+import { githubClient, verifyExecution } from './providers.mjs';
+import { awaitDeveeDesktopReceipt, createDeveeDesktopRequest, recordVerifiedDeveeDesktopCheckpoint } from './salesforce-devee-desktop-checkpoint.mjs';
 import { applyTradingFxSalesSupportCorrection, applyTradingFxSalesSupportSandboxCorrection, verifyTradingFxSalesSupportReadGrants } from './trading-fx-sales-support-transport.mjs';
 import { verifySalesSupportRepairSource } from './trading-fx-sales-support-source.mjs';
 import { promoteSalesSupportCorrection } from './trading-fx-sales-support-promotion.mjs';
@@ -258,6 +260,10 @@ export function prepareReviewedSalesforcePrerequisites({
   assertHostedSalesforceRunner(env);
   const localMirror = plan.mirrorPublication === 'local-collaborator';
   requireCondition(plan.mirrorPublication === undefined || (localMirror && usesLocalCollaboratorMirror(manifest)), 'SALESFORCE_MIRROR_MODE_INVALID');
+  const desktopCaseSet = reviewed.review.nativeDeveeDesktop?.caseSetDigest;
+  requireCondition(plan.deveeDesktopCaseSetDigest === desktopCaseSet && (desktopCaseSet === undefined
+    || (!withDatabase && !schemaBootstrap && localMirror && manifest.prerequisites.adapter === 'salesforce-reviewed-manifest')),
+  'DEVEE_DESKTOP_HOSTED_SCOPE_INVALID');
   const adoption = plan.deveeBootstrapAdoption;
   requireCondition(adoption === undefined || (!withDatabase && schemaBootstrap && reviewed.nativeInventories?.devee?.bootstrap
     && adoption && Object.keys(adoption).length === 2 && Number.isSafeInteger(adoption.receiptId) && adoption.receiptId > 0
@@ -622,8 +628,10 @@ async function applyPreparedSalesforce({ manifest, manifestHash, approval, sales
       }
       const hasPreparation = saved.some(item => item.stage === 'production' && item.operation === 'preparation'
         && (item.preparation?.validationJobId || item.preparation?.status === 'awaiting-authorized-bootstrap'));
+      const verifyDeveeDesktop = reviewed.review.nativeDeveeDesktop === undefined ? undefined
+        : proof => verifyHostedDeveeDesktop({ manifest, approval, reviewed, salesforce, env, ...proof });
       const result = await runReviewedSalesforceRelease({ plan: reviewed, mode: hasPreparation ? 'apply' : 'approved-continuation',
-        policy, journal, provider,
+        policy, journal, provider, verifyDeveeDesktop,
         ownership, externalJournal: salesforce.journal, authorization, retainedDeveeInventory, retainedTradingFxMirror, repairProductionSalesSupport,
         salesSupportViewAllFieldsCorrection: manifest.prerequisites.plan.salesSupportRepair?.viewAllFieldsCorrection === true,
         assertUnchanged: () => assertReviewedInputsUnchanged(reviewed, { cwd, policy }) });
@@ -670,4 +678,17 @@ async function applyPreparedSalesforce({ manifest, manifestHash, approval, sales
     rmSync(credentials, { recursive: true, force: true });
     if (finished) rmSync(directory, { recursive: true, force: true });
   }
+}
+
+async function verifyHostedDeveeDesktop({ manifest, approval, reviewed, salesforce, env, deployment, inventory, readInstalledInventory }) {
+  const candidateSha = manifest.candidate.sha;
+  const github = githubClient({ token: env.GITHUB_TOKEN, candidateSha, actions: true });
+  const execution = await verifyExecution({ github, manifest, env, phase: 'promote' });
+  requireCondition(Number(env.GITHUB_RUN_ATTEMPT) === execution.run.run_attempt, 'DEVEE_DESKTOP_WORKFLOW_INVALID');
+  const request = createDeveeDesktopRequest({ manifest, approval, reviewed, deployment, inventory,
+    execution, workflowProof: execution.workflowProof });
+  const recordRequest = payload => recordLocalMirrorDeployment({ github, candidateSha, actorId: execution.user.id, payload });
+  const receipt = await awaitDeveeDesktopReceipt({ request, recordRequest,
+    readRecords: () => readLocalMirrorDeployments(github, candidateSha), environment: LOCAL_MIRROR_ENVIRONMENT });
+  return recordVerifiedDeveeDesktopCheckpoint({ request, receipt, readInstalledInventory, journal: salesforce.journal });
 }

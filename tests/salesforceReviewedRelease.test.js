@@ -289,6 +289,51 @@ test('all-org inventory preflight rejects stale, wrong-org, mismatched or hash-o
   } finally { f.cleanup(); }
 });
 
+test('the optional native desktop gate preserves DEVEE and stops before the first mirror intent', async () => {
+  const f = fixture({ inventoryBaseline: true });
+  let continuation;
+  try {
+    const plan = { ...f.plan, review: { ...f.plan.review, nativeDeveeDesktop: { caseSetDigest: 'a'.repeat(64) } } };
+    const options = { plan, authorization: f.authorization };
+    await assert.rejects(f.run('prepare', options), /requires the protected hosted runner/);
+    assert.equal(f.calls.length, 0);
+    await assert.rejects(f.run('approved-continuation', { ...options, async verifyDeveeDesktop({ inventory }) {
+      assert.equal(inventory.inventoryHash, reviewedCheckpointInventory(plan, { deployment: { status: 'Succeeded' } }, 'devee').inventoryHash);
+      throw Error('native desktop receipt is missing');
+    } }), /native desktop receipt is missing/);
+    const firstDevee = f.journal.state.stages.devee.deployment.jobId;
+    assert.deepEqual(f.calls.filter(([operation]) => ['validate', 'deploy'].includes(operation)).map(call => call.slice(0, 2)),
+      [['validate', 'devee'], ['deploy', 'devee']]);
+    assert.ok(f.checkpoints.every(({ stage }) => stage !== 'shared_mirror'));
+    assert.ok(f.calls.every(([operation]) => operation !== 'mirror'));
+    const original = f.journal.state.stages.devee;
+    const durable = ['validation', 'deployment'].map(operation => {
+      const record = original[operation];
+      return { fingerprint: plan.fingerprint, stage: 'devee', operation, outcome: 'resolved', evidenceDigest: digest(record),
+        job: { id: record.jobId, validationId: record.validationJobId, submittedAt: record.submittedAt } };
+    });
+    f.externalJournal.readCheckpoints = async () => durable;
+    f.provider.reconcile = async (environment, id, { operation }) => ({ fingerprint: plan.fingerprint, orgId: environment.orgId,
+      jobId: id, operation, sourceTreeHash: plan.binding.sourceTreeHash, manifestSha256: plan.binding.manifestSha256,
+      evidenceSha256: 'd'.repeat(64), verifiedAt: fixedNow.toISOString() });
+    continuation = openSalesforcePromotionJournal({ directory: path.join(f.directory, 'new-runner'), binding: plan.binding, now });
+    await f.run('approved-continuation', { ...options, journal: continuation, async verifyDeveeDesktop({ deployment, inventory, readInstalledInventory }) {
+      assert.equal(deployment.jobId, firstDevee);
+      assert.equal((await readInstalledInventory()).inventoryHash, inventory.inventoryHash);
+      f.calls.push(['desktop', 'passed']);
+      return { proofDigest: 'b'.repeat(64) };
+    } });
+    assert.equal(continuation.state.stages.devee.deployment.jobId, firstDevee);
+    assert.equal(f.calls.filter(([operation, target]) => operation === 'deploy' && target === 'devee').length, 1);
+    assert.ok(f.calls.findIndex(([operation]) => operation === 'desktop') < f.calls.findIndex(([operation]) => operation === 'mirror'));
+    assert.ok(f.calls.findIndex(([operation]) => operation === 'mirror')
+      < f.calls.findIndex(([operation, target]) => operation === 'deploy' && target === 'qat'));
+  } finally {
+    continuation?.close();
+    f.cleanup();
+  }
+});
+
 test('inventory-baseline resume verifies final upstream trees and untouched Production without resubmission', async () => {
   const f = fixture({ inventoryBaseline: true });
   try {

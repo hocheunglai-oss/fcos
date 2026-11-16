@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync, lstatSync } from 'node:fs';
 import path from 'node:path';
 import { digest as digestCheckpoint } from './rapid-release/contract.mjs';
+import { assertEditorDesktopReview } from './rapid-release/salesforce-devee-desktop-checkpoint.mjs';
 import { matchesTradingFxProductionProjection } from './rapid-release/trading-fx-production-inventory.mjs';
 import { salesforcePromotionHash as hash, assertSuccessfulSalesforceReport } from './salesforce-promotion-journal.mjs';
 
@@ -416,6 +417,7 @@ export function createReviewedSalesforcePlan({ review, manifestBytes, bootstrapB
   const nativeInventories = usesNativeProjection
     ? reviewedProjectedInventories(review, policy, baselineInventory, orgBaselineInventories, finalInventory, components)
     : reviewedNativeInventories(review, policy, baselineInventory, finalInventory, components, coveredFiles);
+  assertEditorDesktopReview(review, manifest, nativeInventories);
   const baselineJobs = baselineMode === COMPLETE_DEPLOYMENT_BASELINE_MODE ? {} : null;
   for (const environment of baselineJobs ? policy.environments : []) {
     const record = baselineWorkflow.environments?.[environment.key];
@@ -604,15 +606,22 @@ export function assertReviewedMirror(result, plan, policy, deploymentJobId) {
  * An uncertain submission is reconciled by an owner-supplied job ID, never blind resubmission.
  */
 export async function runReviewedSalesforceRelease({ plan, mode, policy, journal, provider, ownership, externalJournal,
-  authorization = null, now = () => new Date(), assertUnchanged, retainedDeveeInventory, retainedTradingFxMirror, repairProductionSalesSupport, salesSupportViewAllFieldsCorrection, replaceValidation = [], reconcile = {} }) {
+  authorization = null, now = () => new Date(), assertUnchanged, retainedDeveeInventory, retainedTradingFxMirror, repairProductionSalesSupport, salesSupportViewAllFieldsCorrection, replaceValidation = [], reconcile = {},
+  verifyDeveeDesktop }) {
   const approvedContinuation = mode === 'approved-continuation';
   if (!['prepare', 'apply', 'approved-continuation'].includes(mode)) throw new Error('Choose prepare, apply or approved-continuation.');
+  const nativeDesktopRequired = plan.review.nativeDeveeDesktop !== undefined;
+  if (nativeDesktopRequired && (mode === 'prepare' || typeof verifyDeveeDesktop !== 'function' || retainedTradingFxMirror)) {
+    throw new Error('The reviewed DEVEE desktop checkpoint requires the protected hosted runner.');
+  }
   if (retainedTradingFxMirror && typeof repairProductionSalesSupport !== 'function') {
     throw new Error('A retained mirror requires the Trading FX correction promotion.');
   }
   if (approvedContinuation) assertProductionAuthorization(authorization, plan, now());
   if (journal.state.fingerprint !== plan.fingerprint || !same(journal.state.binding, plan.binding)) throw new Error('Reviewed workflow fingerprint changed; prepare a new release from DEVEE.');
   if (typeof ownership?.assert !== 'function' || typeof externalJournal?.checkpoint !== 'function') throw new Error('Salesforce writes require external release ownership and a durable checkpoint adapter; a local lock is not global serialization.');
+  let verifiedDeveeInventory;
+  let deveeDesktopVerified = false;
   const timestamp = () => now().toISOString();
   const checkpoint = (stage, operation, record) => externalJournal.checkpoint({ fingerprint: plan.fingerprint, stage, operation, record });
   const persist = async (stage, operation, record) => {
@@ -857,6 +866,14 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
     await unchanged();
     const deployment = get('devee', 'deployment');
     if (deployment?.status !== 'Succeeded') throw new Error('Verified DEVEE deployment is required before the complete derived source mirror.');
+    if (nativeDesktopRequired && !deveeDesktopVerified) {
+      const environment = policy.environments[0];
+      const expected = reviewedCheckpointInventory(plan, { deployment }, 'devee');
+      const readInstalledInventory = () => verifyReviewedOrgInventory({ provider, environment, plan, expected, now });
+      const proof = await verifyDeveeDesktop({ deployment, inventory: verifiedDeveeInventory ?? await readInstalledInventory(), readInstalledInventory });
+      if (!HASH.test(proof?.proofDigest || '')) throw new Error('The reviewed DEVEE desktop proof is required before publishing the mirror.');
+      deveeDesktopVerified = true;
+    }
     if (retainedTradingFxMirror) {
       // This result is the immutable historical publication. The corrected
       // tree must be independently published and checked by the recovery hook.
@@ -925,8 +942,9 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
         if (!stage.validation) throw new Error('Deployment lacks its saved successful validation.');
         const validation = await runValidation(environment);
         await job(environment, 'deployment', () => provider.deploy(environment, validation.jobId, plan), { validationJobId: validation.jobId });
-        await verifyBeforeDeployment(environment,
+        const final = await verifyBeforeDeployment(environment,
           reviewedCheckpointInventory(plan, { deployment: { status: 'Succeeded' } }, environment.key));
+        if (nativeDesktopRequired && environment.key === 'devee') verifiedDeveeInventory = final;
         await permissions(environment, plan.binding.permissionSets);
         continue;
       }
@@ -959,8 +977,9 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
       // Validation may run for hours; refresh unchanged metadata before consuming its job.
       await verifyBeforeDeployment(environment, predeploymentInventory);
       await job(environment, 'deployment', () => provider.deploy(environment, validation.jobId, plan), { validationJobId: validation.jobId });
-      await verifyBeforeDeployment(environment,
+      const final = await verifyBeforeDeployment(environment,
         reviewedCheckpointInventory(plan, { deployment: { status: 'Succeeded' } }, environment.key));
+      if (nativeDesktopRequired && environment.key === 'devee') verifiedDeveeInventory = final;
       await permissions(environment, plan.binding.permissionSets);
     }
     await mirror();
