@@ -100,6 +100,43 @@ if printf '%s\n' "$updates" | awk -v prefix="$review_prefix" 'index($3, prefix) 
   exit 0
 fi
 
+# A completed reviewed release can establish its exact live metadata history.
+verified_prefix=refs/heads/codex/fcos-salesforce-verified/
+if printf '%s\n' "$updates" | awk -v prefix="$verified_prefix" 'index($3, prefix) == 1 { found=1 } END { exit !found }'; then
+  verified_sha="$(printf '%s\n' "$updates" | awk -v prefix="$verified_prefix" '
+    NF { rows++ }
+    NF == 4 && length($2) == 40 && $2 ~ /^[0-9a-f]+$/ && $2 !~ /^0+$/ \
+      && $3 == prefix $2 && length($4) == 40 && $4 ~ /^0+$/ { sha=$2 }
+    END { if (rows != 1 || !sha) exit 1; print sha }')" || {
+    echo "FCOS push blocked: a verified Salesforce source ref accepts one creation of its exact reviewed commit." >&2
+    exit 1
+  }
+  if [ -s "$git_common_dir/info/grafts" ] || [ -s "$git_common_dir/shallow" ] \
+    || [ -n "${GIT_GRAFT_FILE:-}" ] || [ -n "${GIT_SHALLOW_FILE:-}" ]; then
+    echo "FCOS push blocked: verified Salesforce source requires complete, unmodified Git history." >&2
+    exit 1
+  fi
+  verified_manifest="${FCOS_SALESFORCE_VERIFIED_RELEASE_MANIFEST:-}"
+  case "$verified_manifest" in
+    /*) ;;
+    *) echo "FCOS push blocked: verified Salesforce source requires its exact completed release manifest." >&2; exit 1 ;;
+  esac
+  if ! verify_frozen_protected_checkout; then
+    echo "FCOS push blocked: verified Salesforce source requires a separate frozen protected-main checkout." >&2
+    exit 1
+  fi
+  if ! (
+    unset $git_local_environment NODE_OPTIONS NODE_PATH GH_TOKEN GITHUB_TOKEN
+    export GIT_NO_REPLACE_OBJECTS=1
+    cd "$verifier_directory" && node "$verifier_directory/scripts/verify-completed-reviewed-salesforce-source.mjs" \
+      "$repo_root" "$verified_sha" "$verified_manifest" "${FCOS_SALESFORCE_VERIFIED_RELEASE_RUN_ID:-}"
+  ); then
+    echo "FCOS push blocked: verified Salesforce source requires the completed release, fresh DEVEE proof and current byte-verified mirror." >&2
+    exit 1
+  fi
+  exit 0
+fi
+
 # The completed Payment successor may establish its exact reviewed metadata history
 # on one ordinary create-only ref. All other ordinary refs retain the complete-tree guard.
 anchor_ref=refs/heads/codex/trading-fx-payment-verified-baseline
