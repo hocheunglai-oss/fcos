@@ -18,7 +18,7 @@ const steps = ['devee', 'shared_mirror', 'qat', 'production'];
 const environment = { id: 23178773471, name: 'fcos-production-release', can_admins_bypass: false,
   protection_rules: [{ type: 'required_reviewers', reviewers: [{ reviewer: owner }] }] };
 
-function fixture() {
+function fixture(recovery = false) {
   const expected = { sourceCommit: sha('f'), sourceTreeHash: hash('2'), application: sha('a'), releaseId: 'payment-anchor-fixture',
     runId: 42, deploymentId: 'dpl_promoted', artifactDigest: hash('4'), controllerSha: sha('c'), dispatcherSha: sha('d'),
     correctionFingerprint: hash('5'), closureId: 51 };
@@ -35,20 +35,21 @@ function fixture() {
           correctionFingerprint: expected.correctionFingerprint } } } });
   expected.manifestHash = digest(manifest);
   expected.buildId = manifest.build.buildId;
-  const runs = { id: expected.runId, run_attempt: 1, actor: owner, triggering_actor: owner, head_sha: expected.dispatcherSha, head_branch: 'main',
+  const runs = { id: expected.runId, run_attempt: recovery ? 2 : 1, actor: owner, triggering_actor: owner, head_sha: expected.dispatcherSha, head_branch: 'main',
     repository: { id: 1278654816, full_name: targets().repository }, path: '.github/workflows/fcos-rapid-release.yml',
     event: 'workflow_dispatch', status: 'completed', conclusion: 'success', created_at: iso(-9000),
     display_title: `FCOS rapid resume ${expected.manifestHash} ${expected.application}` };
-  const goLive = { name: 'go-live', run_id: expected.runId, run_attempt: 1, status: 'completed', conclusion: 'success',
-    started_at: iso(-2000), completed_at: iso(30_000) };
+  const goLive = { name: 'go-live', run_id: expected.runId, run_attempt: runs.run_attempt, status: 'completed', conclusion: 'success',
+    started_at: iso(recovery ? 420_000 : -2000), completed_at: iso(recovery ? 450_000 : 30_000) };
   const approval = { manifestHash: expected.manifestHash, candidateSha: expected.application, buildId: expected.buildId,
     deploymentId: expected.deploymentId, previousDeploymentId: manifest.previous.deploymentId, environment: environment.name, reviewer: owner.login,
     nativeReviewVerified: true, runId: expected.runId, approvedAt: runs.created_at };
   const records = [];
+  let timeShift = 0, pendingMirror;
   const add = (event, data) => {
     const payload = { event, data, sequence: records.length, recordHash: digest({ event, data, sequence: records.length }) };
     const row = { id: records.length + 1, creator: bot, environment: 'fcos-release-journal-v1', task: 'fcos-release-journal',
-      ref: expected.application, sha: expected.application, created_at: iso(records.length * 1000), payload };
+      ref: expected.application, sha: expected.application, created_at: iso(timeShift + records.length * 1000), payload };
     records.push(row);
     return row;
   };
@@ -74,11 +75,12 @@ function fixture() {
     const row = { stage, operation: stage === 'shared_mirror' ? 'publication' : 'sales-support-correction', outcome: 'resolved',
       fingerprint: expected.correctionFingerprint, evidenceDigest: digest(stage) };
     if (stage === 'shared_mirror') {
-      add('salesforce.checkpoint', pending);
+      pendingMirror = add('salesforce.checkpoint', pending);
+      if (recovery) timeShift = 420_000;
       row.mirror = { pullRequest: 9, commit };
     } else {
       row.job = { id: '0Af' + String(index + 1).padStart(15, '0'), validationId: null,
-        submittedAt: iso(records.length * 1000 - 100), packageSha256: digest({ profileDigest, manifestDigest }) };
+        submittedAt: iso(timeShift + records.length * 1000 - 100), packageSha256: digest({ profileDigest, manifestDigest }) };
     }
     return add('salesforce.checkpoint', row);
   });
@@ -111,31 +113,80 @@ function fixture() {
     sourceDeploymentJobId: devee.payload.data.job.id, repository: 'ivanyk20/fcbhk', account: owner.login, branch, commit,
     pullRequest: { number: 9, state: 'OPEN', isDraft: true, baseRefName: 'main', headRefName: branch, headRefOid: commit } };
   const mirrorRecords = [];
-  for (const [mode, lower] of [['publish', devee], ['check', qat], ['check', production]]) {
-    const offset = Date.parse(lower.created_at) - base + 100;
+  const mirrorJob = { orgId: reviewed.binding.orgIds.devee, status: 'Succeeded', fingerprint: reviewed.fingerprint,
+    jobId: devee.payload.data.job.id, validationJobId: null };
+  if (recovery) {
+    const offset = Date.parse(pendingMirror.created_at) - base + 100, id = 201;
+    const original = createLocalMirrorRequest({ manifest, approval, reviewed, mode: 'publish', runAttempt: 1, now: base + offset,
+      expiresAt: iso(offset + 299_000), intentHash: pending.evidenceDigest, deployment: mirrorJob });
+    mirrorRecords.push({ environment: LOCAL_MIRROR_ENVIRONMENT, sha: expected.application, id, creator: bot, created_at: iso(offset), payload: original });
+    expected.recovery = { deveeJobId: mirrorJob.jobId, mirrorIntentId: pendingMirror.id, expiredPublishRequestId: id };
+  }
+  const initialMode = recovery ? 'recover' : 'publish';
+  for (const [mode, lower] of [[initialMode, pendingMirror], ['check', qat], ['check', production]]) {
+    const offset = Math.max(Date.parse(lower.created_at), Date.parse(goLive.started_at)) - base + 100;
     const requestId = mirrorRecords.length + 201;
-    const request = createLocalMirrorRequest({ manifest, approval, reviewed, mode, runAttempt: 1, now: base + offset,
-      expiresAt: iso(offset + 300000), intentHash: mode === 'publish' ? pending.evidenceDigest : publication.payload.data.evidenceDigest,
-      deployment: { orgId: reviewed.binding.orgIds.devee, status: 'Succeeded', fingerprint: reviewed.fingerprint,
-        jobId: devee.payload.data.job.id, validationJobId: null } });
+    const request = createLocalMirrorRequest({ manifest, approval, reviewed, mode, runAttempt: runs.run_attempt, now: base + offset,
+      expiresAt: iso(offset + 300000), intentHash: mode === initialMode ? pending.evidenceDigest : publication.payload.data.evidenceDigest,
+      deployment: mirrorJob });
     const common = { environment: LOCAL_MIRROR_ENVIRONMENT, sha: expected.application };
     mirrorRecords.push({ ...common, id: requestId, creator: bot, created_at: iso(offset), payload: request },
       { ...common, id: requestId + 1, creator: owner, created_at: iso(offset + 100),
         payload: createLocalMirrorReceipt({ request, requestId, reviewed, report: mirrorReport }) });
   }
-  const input = { records, mirrorRecords, manifest, historical, expected, run: runs, goLive };
-  return { input, runInput: { run: runs, jobs: { jobs: [goLive] }, reviews: [
+  const stagingJob = { ...goLive, name: 'stage-and-smoke', run_attempt: 1, started_at: iso(-4000), completed_at: iso(3100) };
+  const firstGoLive = { ...goLive, run_attempt: 1, conclusion: 'failure', started_at: iso(3200), completed_at: iso(320_000) };
+  const runInput = { run: runs, jobs: { jobs: [goLive] }, reviews: [
     { state: 'approved', user: owner, environments: [{ id: environment.id, name: environment.name }] },
-  ], environment, expected }, corrected, prerequisites };
+  ], environment, expected, ...(recovery ? { firstRun: { ...runs, run_attempt: 1, conclusion: 'failure' },
+    firstJobs: { jobs: [stagingJob, firstGoLive] } } : {}) };
+  const execution = verifyTradingFxSourceAnchorRun(runInput);
+  return { input: { records, mirrorRecords, manifest, historical, expected, execution }, runInput, corrected, prerequisites };
 }
 
 test('only the exact successful approved protected run and attempt qualify', () => {
   const { runInput } = fixture();
-  assert.equal(verifyTradingFxSourceAnchorRun(runInput).run_id, runInput.expected.runId);
+  assert.equal(verifyTradingFxSourceAnchorRun(runInput).completionJob.run_id, runInput.expected.runId);
   for (const change of [{ conclusion: 'failure' }, { run_attempt: 2 }, { head_sha: sha('e') }, { actor: bot }]) {
     assert.throws(() => verifyTradingFxSourceAnchorRun({ ...runInput, run: { ...runInput.run, ...change } }), /NATIVE_RUN_MISMATCH/);
   }
   assert.throws(() => verifyTradingFxSourceAnchorRun({ ...runInput, reviews: [] }), /NATIVE_RUN_MISMATCH/);
+});
+
+test('attempt two admits the exact approved failure and original DEVEE job with fresh recover/check receipts', () => {
+  const { input, runInput } = fixture(true);
+  const execution = verifyTradingFxSourceAnchorRun(runInput);
+  assert.equal(execution.approvalJob.run_attempt, 1);
+  assert.equal(execution.completionJob.run_attempt, 2);
+  const proof = verifyTradingFxSourceAnchorJournal(input);
+  assert.equal(proof.job.id, input.expected.recovery.deveeJobId);
+  assert.deepEqual(proof.mirrorReceipts, [203, 205, 207]);
+  assert.throws(() => verifyTradingFxSourceAnchorRun({ ...runInput, firstRun: undefined }), /ORIGINAL_RUN_MISMATCH/);
+  assert.throws(() => verifyTradingFxSourceAnchorRun({ ...runInput, firstRun: { ...runInput.firstRun, conclusion: 'success' } }), /ORIGINAL_RUN_MISMATCH/);
+  const wrongApproval = fixture(true).input;
+  wrongApproval.records.find(row => row.payload.event === 'approval.accepted').created_at = iso(422_000);
+  assert.throws(() => verifyTradingFxSourceAnchorJournal(wrongApproval), /RELEASE_EVIDENCE_MISMATCH/);
+  const wrongTerminal = fixture(true).input;
+  wrongTerminal.records.find(row => row.payload.event === 'release.complete').created_at = iso(20_000);
+  assert.throws(() => verifyTradingFxSourceAnchorJournal(wrongTerminal), /RELEASE_EVIDENCE_MISMATCH/);
+});
+
+test('attempt two rejects original effects, a replaced checkpoint, and mixed or fresh publication requests', () => {
+  const changes = [
+    [input => { input.mirrorRecords.shift(); }, /ORIGINAL_MIRROR_ATTEMPT_MISMATCH/],
+    [input => { input.mirrorRecords[0].payload.expiresAt = iso(430_000); }, /ORIGINAL_MIRROR_ATTEMPT_MISMATCH/],
+    [input => { input.expected.recovery.mirrorIntentId++; }, /ORIGINAL_MIRROR_ATTEMPT_MISMATCH/],
+    [input => { input.expected.recovery.deveeJobId = '0Af000000000000099'; }, /ORIGINAL_MIRROR_ATTEMPT_MISMATCH/],
+    [input => { input.mirrorRecords.push({ ...input.mirrorRecords[2], payload: { ...input.mirrorRecords[2].payload, requestId: 201 } }); },
+      /ORIGINAL_MIRROR_ATTEMPT_MISMATCH/],
+    [input => { input.mirrorRecords[1].payload.mode = 'publish'; }, /MIRROR_RECEIPT_MISMATCH/],
+    [input => { input.mirrorRecords[3].payload.runAttempt = 1; }, /MIRROR_RECEIPT_MISMATCH/],
+    [input => { input.mirrorRecords[1].payload.intentHash = hash('a'); }, /MIRROR_REQUEST_MISMATCH/],
+  ];
+  for (const [change, expected] of changes) {
+    const { input } = fixture(true); change(input);
+    assert.throws(() => verifyTradingFxSourceAnchorJournal(input), expected);
+  }
 });
 
 test('anchor consumes ordered correction checkpoints and authentic publication and check receipts', () => {
