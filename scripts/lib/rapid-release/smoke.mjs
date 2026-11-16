@@ -8,7 +8,8 @@ import { READ_ONLY_CI_HANDLERS, isReadOnlyMarketAction, CI_DENIAL_PROBES } from 
 import { canonicalFcosE2eCandidateUrl } from '../../verify-e2e-candidate.mjs';
 import { candidateAuthenticationState, writePrivateE2eState, removePrivateE2eState } from '../../e2e-private-state.mjs';
 import { candidateProtectionState } from '../../e2e-protection-state.mjs';
-import { digest, requiresCompanyFxHistorySmoke, requiresSupplierBucketSmoke, requiresGroupedPetroleumSmoke, requiresTradingFxSmoke } from './contract.mjs';
+import { digest, requiresCompanyFxHistorySmoke, requiresSupplierBucketSmoke, requiresGroupedPetroleumSmoke,
+  requiresTradingFxSmoke, requiresExistingDraftSmoke } from './contract.mjs';
 import { hasTradingFxSigningLocator } from './trading-fx-signing-config.mjs';
 import { MODULE_READERS as moduleReaders, MODULE_SURFACES, NORMAL_NAVIGATION_READS, moduleReadBody, moduleReaderPayloadVerified as modulePayloadVerified } from './normal-role-readers.mjs';
 
@@ -263,7 +264,14 @@ async function denialProbes(route, origin) {
   return receipts;
 }
 
-async function verifyModuleDesktop({ page, origin, module, groupedPetroleumRequired, tradingFxRequired }) {
+async function verifyExistingDraftHeldDesktop(page) {
+  const panel = page.getByRole('region', { name: 'Existing draft status authorisation', exact: true });
+  await panel.getByRole('status').filter({ hasText: /^Draft authorisation is disabled on this deployment\.$/u })
+    .waitFor({ state: 'visible', timeout: 15000 });
+  requireFact(await panel.getByRole('button').count() === 0, 'SMOKE_EXISTING_DRAFT_DESKTOP_ACTION_VISIBLE');
+}
+
+async function verifyModuleDesktop({ page, origin, module, groupedPetroleumRequired, tradingFxRequired, existingDraftRequired }) {
   const spec = MODULE_SURFACES[module];
   requireFact(spec, 'MODULE_DESKTOP_COVERAGE_MISSING');
   await page.goto(`${origin}${spec.route}`, { waitUntil: 'domcontentloaded', timeout: 45000 });
@@ -293,6 +301,10 @@ async function verifyModuleDesktop({ page, origin, module, groupedPetroleumRequi
         await panel.waitFor({ state: 'visible', timeout: 15000 });
         requireFact(await panel.getByRole('button').count() === 0, 'SMOKE_TRADING_FX_DESKTOP_ACTION_VISIBLE');
       }
+      if (existingDraftRequired) {
+        if (!tradingFxRequired) await page.getByRole('tab', { name: 'Accounting', exact: true }).click();
+        await verifyExistingDraftHeldDesktop(page);
+      }
       await page.getByRole('tab', { name: 'Receipts', exact: true }).click();
       await page.locator('[aria-label="Receipt audit"] tbody tr').first().waitFor({ state: 'visible', timeout: 30000 });
     }
@@ -312,6 +324,7 @@ async function verifyModuleDesktop({ page, origin, module, groupedPetroleumRequi
     }
   } catch (error) {
     if (module === 'xero_portal' && tradingFxRequired && error?.code === 'SMOKE_TRADING_FX_DESKTOP_ACTION_VISIBLE') throw error;
+    if (error?.code === 'SMOKE_EXISTING_DRAFT_DESKTOP_ACTION_VISIBLE') throw error;
     throw fail('SMOKE_MODULE_DESKTOP_CONTENT_MISSING');
   }
   const body = await page.locator('body').innerText();
@@ -319,6 +332,7 @@ async function verifyModuleDesktop({ page, origin, module, groupedPetroleumRequi
   return { module, route: spec.route, rendered: true, dataSource: moduleReaders[module].path, businessSurface: true,
     ...(module === 'xero_portal' && groupedPetroleumRequired ? { groupedPetroleumControl: true } : {}),
     ...(module === 'xero_portal' && tradingFxRequired ? { tradingFxPanel: true } : {}),
+    ...(module === 'xero_portal' && existingDraftRequired ? { existingDraftHeld: true } : {}),
     ...(spec.readControl ? { readControl: spec.readControl } : {}) };
 }
 
@@ -412,22 +426,27 @@ export const TRADING_FX_STAGED_DENIAL_HANDLERS = Object.freeze([
   'xeroCreditAllocationPreview', 'xeroCreditAllocationApply', 'xeroCreditAllocationReconcile', 'xeroCreditAllocationRecoveryQueue',
 ]);
 
-async function verifyTradingFxRoutes(route, origin, normal) {
-  const results = await Promise.allSettled(TRADING_FX_STAGED_DENIAL_HANDLERS.map(async handler => {
+const EXISTING_DRAFT_STAGED_DENIAL_HANDLERS = Object.freeze([
+  'xeroExistingDraftAuthorisationPreview', 'xeroExistingDraftAuthorisationApply', 'xeroExistingDraftAuthorisationRecover',
+]);
+
+async function verifyWriteDenials(route, origin, normal, handlers, failureCode) {
+  const results = await Promise.allSettled(handlers.map(async handler => {
     const url = `${origin}/api/functions/${handler}`;
     let response;
     try {
       response = await route.fetch({ url, method: 'POST', postData: '{}', maxRedirects: 0, maxRetries: 0, timeout: 10000 });
       const { code } = await response.json();
       requireFact(response.url() === url && response.status() === 403
-        && (code === 'FCOS_DEPLOYMENT_READ_ONLY' || !normal && code === 'FCOS_CI_READ_ONLY'), 'SMOKE_TRADING_FX_ROUTE_NOT_DENIED');
+        && (code === 'FCOS_DEPLOYMENT_READ_ONLY' || !normal && code === 'FCOS_CI_READ_ONLY'), failureCode);
     } finally { await response?.dispose(); }
   }));
-  requireFact(results.every(result => result.status === 'fulfilled'), 'SMOKE_TRADING_FX_ROUTE_NOT_DENIED');
+  requireFact(results.every(result => result.status === 'fulfilled'), failureCode);
   return true;
 }
 
-async function browserRun({ origin, manifest, credentials, normal, modules, env, browserFactory, diagnostic, historyRequired, supplierBucketRequired, groupedPetroleumRequired, tradingFxRequired, signingRateRequired }) {
+async function browserRun({ origin, manifest, credentials, normal, modules, env, browserFactory, diagnostic,
+  historyRequired, supplierBucketRequired, groupedPetroleumRequired, tradingFxRequired, signingRateRequired, existingDraftRequired }) {
   async function checkModule(module, surface, check) {
     const start = performance.now();
     let receipt, code;
@@ -440,7 +459,8 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
     return receipt;
   }
   let phase = 'SETUP';
-  let browser, context, privateEnv, readNormalModules, companyFxHistory, supplierBucketVerified, groupedPetroleumVerified, tradingFxVerified, signingRateDigest, cleanupFailed = false;
+  let browser, context, privateEnv, readNormalModules, companyFxHistory, supplierBucketVerified, groupedPetroleumVerified;
+  let tradingFxVerified, signingRateDigest, existingDraftDenialsVerified, cleanupFailed = false;
   let denialReceipts = [], extraReads = [], desktopChecks = [], authProbed = false, probeError, rejectProbe, resolveProbe;
   const probeFailure = new Promise((_, reject) => { rejectProbe = reject; });
   probeFailure.catch(() => {});
@@ -470,7 +490,10 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
         requireFact(!normal || authorization.workspacePreferences?.initialized !== false, 'NORMAL_ROLE_PREFERENCES_REQUIRE_INITIALIZATION');
         if (supplierBucketRequired) supplierBucketVerified = await verifySupplierBucketRoutes(route, origin, normal);
         if (groupedPetroleumRequired) groupedPetroleumVerified = await verifyGroupedPetroleumRoutes(route, origin, normal);
-        if (tradingFxRequired) tradingFxVerified = await verifyTradingFxRoutes(route, origin, normal);
+        if (tradingFxRequired) tradingFxVerified = await verifyWriteDenials(route, origin, normal,
+          TRADING_FX_STAGED_DENIAL_HANDLERS, 'SMOKE_TRADING_FX_ROUTE_NOT_DENIED');
+        if (existingDraftRequired) existingDraftDenialsVerified = await verifyWriteDenials(route, origin, normal,
+          EXISTING_DRAFT_STAGED_DENIAL_HANDLERS, 'SMOKE_EXISTING_DRAFT_ROUTE_NOT_DENIED');
         if (!normal) denialReceipts = await denialProbes(route, origin);
         else {
           // No bearer extraction: all reads inherit this app-owned request in
@@ -567,7 +590,7 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
     if (normal && diagnostic?.desktop !== false) for (const module of modules.filter(value => !baselineModules.includes(value)
       && (!diagnostic?.desktopModules || diagnostic.desktopModules.includes(value)))) {
       phase = `DESKTOP_${module.toUpperCase()}`;
-      const receipt = await checkModule(module, 'desktop', () => verifyModuleDesktop({ page, origin, module, groupedPetroleumRequired, tradingFxRequired }));
+      const receipt = await checkModule(module, 'desktop', () => verifyModuleDesktop({ page, origin, module, groupedPetroleumRequired, tradingFxRequired, existingDraftRequired }));
       if (receipt) desktopChecks.push(receipt);
     }
     if (!normal) {
@@ -582,7 +605,8 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
     return { role: credentials.role, requiredModules: unique(modules), modules: unique(reads.map(read => read.module)), reads, desktopChecks, denialReceipts,
       ...gate.summary(), candidateSha: manifest.candidate.sha, ...(companyFxHistory ? { companyFxHistory } : {}),
       ...(supplierBucketVerified ? { supplierBucketVerified } : {}), ...(groupedPetroleumVerified ? { groupedPetroleumVerified } : {}),
-      ...(tradingFxVerified ? { tradingFxVerified } : {}), ...(signingRateDigest ? { signingRateDigest } : {}) };
+      ...(tradingFxVerified ? { tradingFxVerified } : {}), ...(signingRateDigest ? { signingRateDigest } : {}),
+      ...(existingDraftDenialsVerified ? { existingDraftDenialsVerified } : {}) };
   } catch (error) {
     const cause = probeError || error;
     const failure = fail(/^(?:SMOKE_|NORMAL_ROLE_)[A-Z0-9_]+$/.test(cause?.code || '') ? cause.code : `SMOKE_BROWSER_${phase}_FAILED`);
@@ -667,6 +691,8 @@ async function stagedSmoke({ manifest, staged, env = process.env, fetchImpl = fe
   const supplierBucketRequired = requiresSupplierBucketSmoke(manifest);
   const groupedPetroleumRequired = requiresGroupedPetroleumSmoke(manifest);
   const tradingFxRequired = requiresTradingFxSmoke(manifest);
+  const existingDraftRequired = requiresExistingDraftSmoke(manifest);
+  requireFact(!existingDraftRequired || normal && normalModules.includes('xero_portal'), 'SMOKE_EXISTING_DRAFT_NORMAL_ROLE_REQUIRED');
   requireFact(!(historyRequired || signingRateRequired) || normal?.role === 'general_manager', 'SMOKE_COMPANY_FX_HISTORY_GM_REQUIRED');
   requireFact(!supplierBucketRequired || normal && normalModules.includes('xero_portal'), 'SMOKE_SUPPLIER_BUCKET_NORMAL_ROLE_REQUIRED');
   requireFact(!groupedPetroleumRequired || normal && normalModules.includes('xero_portal'), 'SMOKE_GROUPED_PETROLEUM_NORMAL_ROLE_REQUIRED');
@@ -676,9 +702,9 @@ async function stagedSmoke({ manifest, staged, env = process.env, fetchImpl = fe
   await verifyIdentity(origin, manifest, fetchImpl, env.FCOS_E2E_VERCEL_BYPASS);
   const launch = browserFactory || (async options => (await import('@playwright/test')).chromium.launch(options));
   const restricted = await browserRun({ origin, manifest, credentials: ci, normal: false, modules: baselineModules, env, browserFactory: launch,
-    supplierBucketRequired, groupedPetroleumRequired, tradingFxRequired });
+    supplierBucketRequired, groupedPetroleumRequired, tradingFxRequired, existingDraftRequired });
   const ordinary = normal ? await browserRun({ origin, manifest, credentials: normal, normal: true, modules: normalModules, env, browserFactory: launch,
-    diagnostic, historyRequired, supplierBucketRequired, groupedPetroleumRequired, tradingFxRequired, signingRateRequired }) : null;
+    diagnostic, historyRequired, supplierBucketRequired, groupedPetroleumRequired, tradingFxRequired, signingRateRequired, existingDraftRequired }) : null;
   return { passed: true, deploymentId: staged.id, buildId: staged.buildId, login: true, restrictedAccess: true, businessWrites: 0,
     modules: unique([...restricted.modules, ...(ordinary?.modules || [])]), restrictedEvidence: restricted,
     ...(ordinary ? { normalRole: true, normalRoleEvidence: ordinary } : {}),
@@ -690,6 +716,11 @@ async function stagedSmoke({ manifest, staged, env = process.env, fetchImpl = fe
     ...(tradingFxRequired ? { tradingFx: { restrictedVerified: restricted.tradingFxVerified === true,
       normalVerified: ordinary?.tradingFxVerified === true,
       desktopVerified: ordinary?.desktopChecks.some(check => check.tradingFxPanel === true) === true } } : {}),
+    ...(existingDraftRequired ? { existingDraft: {
+      restrictedVerified: restricted.existingDraftDenialsVerified === true,
+      normalVerified: ordinary?.existingDraftDenialsVerified === true,
+      desktopHeldVerified: ordinary?.desktopChecks.some(check => check.existingDraftHeld === true) === true,
+    } } : {}),
     ...(ordinary?.companyFxHistory ? { companyFxHistory: ordinary.companyFxHistory } : {}),
     ...(ordinary?.signingRateDigest ? { signingRateDigest: ordinary.signingRateDigest } : {}) };
 }

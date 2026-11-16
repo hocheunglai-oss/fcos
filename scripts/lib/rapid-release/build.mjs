@@ -4,6 +4,7 @@ import { join, resolve, relative, isAbsolute } from 'node:path';
 import { canonical, changedPaths, digest, git, publicBuildEnvironment, PUBLIC_BUILD_KEYS, requireCondition, sourceSnapshot, targets, validateManifest } from './contract.mjs';
 
 import { readCandidateModuleInventory } from './modules.mjs';
+import { fcunoContractDirectory } from './fcuno-contract-input.mjs';
 
 const MODULE_TESTS = Object.freeze({ dashboard: /^(?:dashboard|missingNomB)/i, markets: /^(?:market|hedgeMarket)/i,
   buyer_invoices: /^buyerInvoice/i, xero_portal: /^xero/i, email_router: /^email/i, settings: /^(?:settings|auth|capability|user|permission)/i });
@@ -48,7 +49,7 @@ export function assertBuildArtifact(directory, receipt, manifest) {
   const version = JSON.parse(readFileSync(join(root, 'static/app-version.json'), 'utf8'));
   requireCondition(version.buildId === manifest.build.buildId && version.commit === manifest.candidate.sha
     && version.sourceDigest === manifest.candidate.sourceDigest, 'BUILT_IDENTITY_MISMATCH');
-  return { inventory: artifactInventory(root), version };
+  return { inventory, version };
 }
 export function credentialFreeBuildEnvironment(manifest, env = process.env) {
   return { PATH: env.PATH, HOME: env.FCOS_RAPID_BUILD_HOME, TMPDIR: env.TMPDIR || '/tmp', CI: '1', NO_COLOR: '1',
@@ -71,9 +72,13 @@ export function qualityAndBuild({ manifest, candidateDirectory, controllerDirect
   mkdirSync(buildEnv.HOME, { recursive: true, mode: 0o700 });
   const checks = [], started = Date.now();
   const testEnv = Object.fromEntries(Object.entries(buildEnv).filter(([key]) => !PUBLIC_BUILD_KEYS.includes(key)));
-  const command = (label, executable, args, directory = candidateDirectory) => {
+  const contractEnv = manifest.selection.broad ? {
+    ...buildEnv,
+    FCOS_FCUNO_CONTRACT_DIRECTORY: fcunoContractDirectory({ controllerDirectory, candidateDirectory }),
+  } : undefined;
+  const command = (label, executable, args, commandEnv = testEnv) => {
     const begin = Date.now();
-    try { run(executable, args, { cwd: directory, env: ['build', 'fcuno_contract'].includes(label) ? buildEnv : testEnv,
+    try { run(executable, args, { cwd: candidateDirectory, env: commandEnv,
       stdio: 'pipe', timeout: 900000, maxBuffer: 8 * 1024 * 1024 }); }
     catch { throw Object.assign(new Error(`QUALITY_${label.toUpperCase()}_FAILED`), { code: `QUALITY_${label.toUpperCase()}_FAILED` }); }
     checks.push({ label, elapsedMs: Date.now() - begin, passed: true });
@@ -88,12 +93,12 @@ export function qualityAndBuild({ manifest, candidateDirectory, controllerDirect
   command('migration_integrity', 'npm', ['run', 'verify:migrations']);
   command('compatibility', 'npm', ['run', 'verify:compatibility']);
   command('graph_only', 'npm', ['run', 'verify:graph-only']);
-  if (manifest.selection.broad) command('fcuno_contract', 'npm', ['run', 'verify:fcuno-contract']);
+  if (contractEnv) command('fcuno_contract', 'npm', ['run', 'verify:fcuno-contract'], contractEnv);
   const vercel = join(candidateDirectory, '.vercel'); mkdirSync(vercel, { recursive: true });
   writeFileSync(join(vercel, 'project.json'), JSON.stringify({ projectId: targets().projectId, orgId: targets().teamId,
     projectName: 'fcos', settings: { framework: 'vite', installCommand: 'npm ci', buildCommand: 'npm run build', nodeVersion: '24.x', rootDirectory: null } }));
   writeFileSync(join(vercel, '.env.production.local'), Object.entries(manifest.build.publicEnvironment).map(([key, value]) => `${key}=${JSON.stringify(value)}`).join('\n'));
-  command('build', 'vercel', ['build', '--prod', '--yes', '--standalone']);
+  command('build', 'vercel', ['build', '--prod', '--yes', '--standalone'], buildEnv);
   command('performance', 'npm', ['run', 'verify:performance']);
   requireCondition(sourceSnapshot(candidateDirectory).sourceDigest === before.sourceDigest
     && git(controllerDirectory, ['rev-parse', 'HEAD']) === manifest.controllerSha
@@ -102,7 +107,7 @@ export function qualityAndBuild({ manifest, candidateDirectory, controllerDirect
     controllerSha: manifest.controllerSha, sourceDigest: manifest.candidate.sourceDigest, lockDigest: manifest.candidate.lockDigest,
     artifactDigest: artifactDigest(join(vercel, 'output')), qualityPassed: true, performancePassed: true,
     node: process.version, checks, elapsedMs: Date.now() - started,
-    providerCalls: null, providerWrites: 0, knownPublicGitHubReads: manifest.selection.broad ? 4 : 0,
+    providerCalls: null, providerWrites: 0, knownPublicGitHubReads: 0,
     dependencyToolNetworkCalls: 'not_metered' };
   assertBuildArtifact(candidateDirectory, receipt, manifest); return receipt;
 }
