@@ -85,10 +85,15 @@
                                 <lightning-input-field field-name="Transportation_Type_Buy__c" value={currentOfferLineItem.Transportation_Type_Buy__c}
                                     onchange={handleTransportationBuyChange} variant="label-stacked">
                                 </lightning-input-field>
-                                <c-fcb-offer-broker-pricing-input field-label="Unit (Buy At)"
-                                    field-name="Supplier_Unit_Price__c" decimal-places=3 step=0.001 min=0.000
-                                    initial-value={supplierUnitPrice} onchange={calculateFormulas}>
-                                </c-fcb-offer-broker-pricing-input>
+                                <template if:true={showBuyUsdPrice}>
+                                    <c-fcb-offer-broker-pricing-input field-label="Unit (Buy At)"
+                                        field-name="Supplier_Unit_Price__c" decimal-places=3 step=0.001 min=0.000
+                                        initial-value={supplierUnitPrice} onchange={calculateFormulas}>
+                                    </c-fcb-offer-broker-pricing-input>
+                                </template>
+                                <c-fcos-trade-currency-editor record-id={currentOfferLineItem.Id} direction="Buy"
+                                    oncurrencyreview={handleCurrencyReview} oncurrencychange={handleCurrencyChange}>
+                                </c-fcos-trade-currency-editor>
                                 <c-fcb-offer-broker-pricing-input field-label="Supplier's Broker Commission"
                                     field-name="Supplier_Broker_Commission__c" decimal-places=3 step=0.001 min=0.000
                                     initial-value={currentOfferLineItem.Supplier_Broker_Commission__c}
@@ -132,10 +137,15 @@
                                 <lightning-input-field class="slds-m-top_x-small" field-name="Transportation_Type_Sell__c" value={currentOfferLineItem.Transportation_Type_Sell__c}
                                     onchange={handleTransportationSellChange} variant="label-stacked">
                                 </lightning-input-field>
-                                <c-fcb-offer-broker-pricing-input field-label="Unit (Sell At)" field-name="UnitPrice"
-                                    decimal-places=3 step=0.001 min=0.000 required initial-value={unitPrice}
-                                    onchange={calculateFormulas}>
-                                </c-fcb-offer-broker-pricing-input>
+                                <template if:true={showSellUsdPrice}>
+                                    <c-fcb-offer-broker-pricing-input field-label="Unit (Sell At)" field-name="UnitPrice"
+                                        decimal-places=3 step=0.001 min=0.000 required initial-value={unitPrice}
+                                        onchange={calculateFormulas}>
+                                    </c-fcb-offer-broker-pricing-input>
+                                </template>
+                                <c-fcos-trade-currency-editor record-id={currentOfferLineItem.Id} direction="Sell"
+                                    oncurrencyreview={handleCurrencyReview} oncurrencychange={handleCurrencyChange}>
+                                </c-fcos-trade-currency-editor>
                                 <c-fcb-offer-broker-pricing-input field-label={buyerBrokerCommissionLabel}
                                     field-name="Buyer_Broker_Commission__c" decimal-places=3 step=0.001 min=0.000
                                     initial-value={currentOfferLineItem.Buyer_Broker_Commission__c}

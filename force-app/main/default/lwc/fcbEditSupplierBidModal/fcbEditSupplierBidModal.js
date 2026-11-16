@@ -93,6 +93,8 @@ export default class FcbEditSupplierBidModal extends LightningElement {
       .map(bid => ({
         ...bid, 
         disableComm: !Boolean(bid.Suppliers_Broker__c),
+        showUsdPrice: bid.Buy_Currency__c !== 'HKD' && bid.Buy_USD_Unit_Price_Precise__c == null
+          && bid.Buy_FX_Confirmed_At__c == null,
         isDisabledPartialCIA: !bid.Partial_CIA__c,
         transportationExtraCost: {
           id: '',
@@ -230,6 +232,7 @@ export default class FcbEditSupplierBidModal extends LightningElement {
             obj[field] = fields[field];
           }
         }
+        this.stripManagedFxFields(obj, productSupplierBid.showUsdPrice);
         supplierBidToSave.push(obj);
       })
       console.log(supplierBidToSave);
@@ -352,6 +355,33 @@ export default class FcbEditSupplierBidModal extends LightningElement {
   handlePriceChange(event) {
     let changedSupplierBid = this.productSupplierBids.find(bid => bid.Id === event.detail.supplierBidId);
     changedSupplierBid[event.detail.name] = event.detail.value;
+  }
+
+  handleCurrencyReview(event) {
+    this.applyCurrencyReview(event.detail, false);
+  }
+
+  handleCurrencyChange(event) {
+    this.applyCurrencyReview(event.detail, true);
+  }
+
+  applyCurrencyReview({ recordId, direction, review } = {}, saved) {
+    if (!recordId || direction !== 'Buy' || typeof review?.managedPrice !== 'boolean') return;
+    const bid = this.productSupplierBids?.find(item => item.Id === recordId);
+    if (!bid) return;
+    const priceChanged = saved && review.enabled === true && review.usdUnitPrice != null;
+    if (!priceChanged && bid.showUsdPrice === !review.managedPrice) return;
+    const updated = { ...bid, showUsdPrice: !review.managedPrice };
+    if (priceChanged) updated.Supplier_Unit_Price__c = review.usdUnitPrice;
+    this.productSupplierBids = this.productSupplierBids.map(item => item.Id === recordId ? updated : item);
+    this.template.querySelector('c-fcb-supplier-bid-extra-costs')?.refreshData([updated]);
+  }
+
+  stripManagedFxFields(fields, showUsdPrice) {
+    for (const field of Object.keys(fields)) {
+      if (/^(Buy|Sell)_(Currency__c|HKD_(Unit_Price|Minimum|Lumpsum)__c|USD_Unit_Price_Precise__c|FX_(Rate|Revision|Effective_At|Confirmed_At|Side)__c)$/u.test(field)) delete fields[field];
+    }
+    if (!showUsdPrice) delete fields.Supplier_Unit_Price__c;
   }
 
   handleCompanyChange(event) {

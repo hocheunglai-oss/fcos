@@ -99,7 +99,12 @@ export default class FcosTradeCurrencyEditor extends LightningElement {
         return this._recordId;
     }
     set recordId(value) {
-        if (this._recordId !== value) this.lastReviewKey = undefined;
+        if (this._recordId !== value) {
+            this.requestVersion += 1;
+            this.lastReviewKey = undefined;
+            this.applyReview(undefined);
+            this.cancelAmendment();
+        }
         this._recordId = value;
         this.refreshReview();
     }
@@ -109,7 +114,12 @@ export default class FcosTradeCurrencyEditor extends LightningElement {
         return this._direction;
     }
     set direction(value) {
-        if (this._direction !== value) this.lastReviewKey = undefined;
+        if (this._direction !== value) {
+            this.requestVersion += 1;
+            this.lastReviewKey = undefined;
+            this.applyReview(undefined);
+            this.cancelAmendment();
+        }
         this._direction = value;
         this.refreshReview();
     }
@@ -244,25 +254,29 @@ export default class FcosTradeCurrencyEditor extends LightningElement {
             input?.reportValidity();
             return;
         }
+        const { recordId, direction } = this;
+        if (!recordId || !direction || this.controlsDisabled) return;
         this.isSaving = true;
         this.error = undefined;
         try {
             const reviewResult = await saveDraft({
-                recordId: this.recordId,
-                direction: this.direction,
+                recordId,
+                direction,
                 currencyCode: this.currency,
                 nativeUnitPrice: this.nativeUnitPrice,
                 reviewedFingerprint: this.review?.fingerprint,
                 reviewedRateId: this.review?.rateId,
                 confirmSide,
             });
+            if (this.recordId !== recordId || this.direction !== direction) return;
             this.applyReview(reviewResult);
             this.dispatchEvent(new CustomEvent('currencychange', {
-                detail: { recordId: this.recordId, direction: this.direction, review: reviewResult },
+                detail: { recordId, direction, review: reviewResult },
                 bubbles: true,
                 composed: true,
             }));
         } catch (error) {
+            if (this.recordId !== recordId || this.direction !== direction) return;
             this.error = errorMessage(error);
             await this.refreshReview({ keepError: true });
         } finally {
@@ -286,18 +300,21 @@ export default class FcosTradeCurrencyEditor extends LightningElement {
     }
 
     async handleStartAmendment() {
+        const { recordId, direction, review } = this;
+        if (!recordId || !direction || !review || this.controlsDisabled) return;
         this.error = undefined;
         this.isSaving = true;
         try {
             const rate = await previewAmendmentRate();
-            this.amendmentOriginalReview = { ...this.review };
+            if (this.recordId !== recordId || this.direction !== direction) return;
+            this.amendmentOriginalReview = { ...review };
             this.amendmentRate = rate;
-            this.amendmentCurrency = this.review.currencyCode;
-            this.amendmentNativeUnitPrice = String(this.review.nativeUnitPrice ?? '');
+            this.amendmentCurrency = review.currencyCode;
+            this.amendmentNativeUnitPrice = String(review.nativeUnitPrice ?? '');
             this.amendmentReason = '';
             this.isAmending = true;
         } catch (error) {
-            this.error = errorMessage(error);
+            if (this.recordId === recordId && this.direction === direction) this.error = errorMessage(error);
         } finally {
             this.isSaving = false;
         }
@@ -337,26 +354,30 @@ export default class FcosTradeCurrencyEditor extends LightningElement {
             this.error = 'Enter a specific amendment reason of at least five characters.';
             return;
         }
+        const { recordId, direction } = this;
+        if (!recordId || !direction || this.controlsDisabled) return;
         this.isSaving = true;
         this.error = undefined;
         try {
             const reviewResult = await amendCurrency({
-                recordId: this.recordId,
-                direction: this.direction,
+                recordId,
+                direction,
                 currencyCode: this.amendmentCurrency,
                 nativeUnitPrice: this.amendmentNativeUnitPrice,
                 reviewedFingerprint: this.amendmentOriginalReview?.fingerprint,
                 reviewedRateId: this.amendmentRate?.rateId,
                 reason: this.amendmentReason.trim(),
             });
+            if (this.recordId !== recordId || this.direction !== direction) return;
             this.applyReview(reviewResult);
             this.cancelAmendment();
             this.dispatchEvent(new CustomEvent('currencychange', {
-                detail: { recordId: this.recordId, direction: this.direction, review: reviewResult },
+                detail: { recordId, direction, review: reviewResult },
                 bubbles: true,
                 composed: true,
             }));
         } catch (error) {
+            if (this.recordId !== recordId || this.direction !== direction) return;
             this.error = errorMessage(error);
             await this.refreshReview({ keepError: true });
         } finally {

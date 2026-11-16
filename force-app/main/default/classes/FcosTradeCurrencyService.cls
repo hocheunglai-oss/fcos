@@ -19,6 +19,7 @@ public with sharing class FcosTradeCurrencyService {
     }
     public class Review {
         @AuraEnabled public Boolean enabled;
+        @AuraEnabled public Boolean managedPrice;
         @AuraEnabled public String currencyCode;
         @AuraEnabled public String direction;
         @AuraEnabled public String fingerprint;
@@ -102,6 +103,8 @@ public with sharing class FcosTradeCurrencyService {
         result.currencyCode = leg == null ? (String)ctx.row.get(p+'Currency__c') : leg.Currency__c;
         if (String.isBlank(result.currencyCode)) result.currencyCode = 'USD';
         result.confirmedAt = leg == null ? null : leg.Confirmed_At__c;
+        result.managedPrice = result.confirmedAt != null || ctx.row.get(p+'Currency__c') == 'HKD'
+            || ctx.row.get(p+'USD_Unit_Price_Precise__c') != null;
         result.hongKong = hongKong(ctx.portName,ctx.portCountry) && !ctx.formulaPrice;
         result.rate = result.confirmedAt != null ? leg.FX_Rate__c : currentRate == null ? null : currentRate.usdHkdRate;
         result.rateId = result.confirmedAt != null ? leg.FX_Revision__c : currentRate == null ? null : currentRate.rateId;
