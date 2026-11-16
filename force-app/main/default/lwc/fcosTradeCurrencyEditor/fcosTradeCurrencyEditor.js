@@ -12,9 +12,20 @@ const CURRENCY_OPTIONS = [
 ];
 
 const AMENDMENT_PRICE_SCALE = 8;
-const BIGINT_ZERO = BigInt(0);
-const BIGINT_TWO = BigInt(2);
-const BIGINT_TEN = BigInt(10);
+// Lightning Locker can hide the global BigInt constructor. Keep exact arithmetic using literals.
+const DECIMAL_DIGITS = [0n, 1n, 2n, 3n, 4n, 5n, 6n, 7n, 8n, 9n];
+
+function decimalInteger(digits) {
+    let integer = 0n;
+    for (const digit of digits) {
+        integer = integer * 10n + DECIMAL_DIGITS[digit];
+    }
+    return integer;
+}
+
+function powerOfTen(scale) {
+    return 10n ** decimalInteger(String(scale));
+}
 
 function decimalParts(value) {
     const raw = String(value ?? '').trim();
@@ -22,7 +33,7 @@ function decimalParts(value) {
     const [whole, fraction = ''] = raw.split('.');
     if (fraction.length > 16) return null;
     return {
-        integer: BigInt(`${whole}${fraction}`),
+        integer: decimalInteger(whole + fraction),
         scale: fraction.length,
     };
 }
@@ -35,7 +46,7 @@ function formatScaled(integer, scale) {
 }
 
 function roundDivision(numerator, denominator) {
-    return (numerator + denominator / BIGINT_TWO) / denominator;
+    return (numerator + denominator / 2n) / denominator;
 }
 
 function multiplyDecimal(left, right) {
@@ -45,9 +56,9 @@ function multiplyDecimal(left, right) {
     const scale = a.scale + b.scale;
     let integer = a.integer * b.integer;
     if (scale > AMENDMENT_PRICE_SCALE) {
-        integer = roundDivision(integer, BIGINT_TEN ** BigInt(scale - AMENDMENT_PRICE_SCALE));
+        integer = roundDivision(integer, powerOfTen(scale - AMENDMENT_PRICE_SCALE));
     } else if (scale < AMENDMENT_PRICE_SCALE) {
-        integer *= BIGINT_TEN ** BigInt(AMENDMENT_PRICE_SCALE - scale);
+        integer *= powerOfTen(AMENDMENT_PRICE_SCALE - scale);
     }
     return formatScaled(integer, AMENDMENT_PRICE_SCALE);
 }
@@ -55,9 +66,9 @@ function multiplyDecimal(left, right) {
 function divideDecimal(left, right) {
     const a = decimalParts(left);
     const b = decimalParts(right);
-    if (!a || !b || b.integer === BIGINT_ZERO) return '';
-    const numerator = a.integer * (BIGINT_TEN ** BigInt(b.scale + AMENDMENT_PRICE_SCALE));
-    const denominator = b.integer * (BIGINT_TEN ** BigInt(a.scale));
+    if (!a || !b || b.integer === 0n) return '';
+    const numerator = a.integer * powerOfTen(b.scale + AMENDMENT_PRICE_SCALE);
+    const denominator = b.integer * powerOfTen(a.scale);
     return formatScaled(roundDivision(numerator, denominator), AMENDMENT_PRICE_SCALE);
 }
 
