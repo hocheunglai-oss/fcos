@@ -4,6 +4,8 @@ import { xeroRateLimitSnapshot } from './_xeroRateLimit.js';
 
 const bindings = new WeakMap();
 const scopes = new AsyncLocalStorage();
+const existingDraftAdmission = Symbol('existing draft admission');
+const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const messages = {
   XERO_CONNECTION_RENEWAL_UNAVAILABLE: 'The saved Xero connection could not be renewed. Check the configured OAuth client; this does not prove the grant was revoked.',
   XERO_CONNECTION_REVOKED: 'Xero rejected the saved refresh grant. Reconnect the authorised organisation.',
@@ -40,7 +42,22 @@ export function xeroSharedContext(connection, options = {}) {
 }
 export function runWithXeroBudget(connection, options, operation) {
   const context = xeroSharedContext(connection, options);
+  if (context[existingDraftAdmission]) throw xeroControlError('XERO_DRAFT_QUOTA_SCOPE_INVALID');
   return scopes.run({ ...context, tenantId: connection.tenantId }, operation);
+}
+export function runWithExistingDraftXeroBudget(connection, options, operation) {
+  const { budgetId, budgetPhase = 'operation', requestId } = options;
+  if (!uuid.test(budgetId || '') || !['operation', 'verification'].includes(budgetPhase)
+    || (requestId !== undefined && !uuid.test(requestId))) throw xeroControlError('XERO_DRAFT_QUOTA_SCOPE_INVALID');
+  const context = xeroSharedContext(connection, { ...options, budgetPhase, requestId });
+  const admission = Object.freeze({ budgetId, budgetPhase, requestId });
+  return scopes.run({ ...context, tenantId: connection.tenantId, [existingDraftAdmission]: admission }, operation);
+}
+export function existingDraftAdmissionFor(context) {
+  const scope = context[existingDraftAdmission];
+  if (scope && (scope.budgetId !== context.budgetId || scope.budgetPhase !== context.budgetPhase
+    || scope.requestId !== context.requestId || context.probeId)) throw xeroControlError('XERO_DRAFT_QUOTA_SCOPE_INVALID');
+  return scope;
 }
 export function forecastXeroBudget({ operationCalls, verificationCalls = 0 } = {}) {
   if (![operationCalls, verificationCalls].every(n => Number.isSafeInteger(n) && n >= 0) || operationCalls + verificationCalls < 1 || operationCalls + verificationCalls > 10_000) throw xeroControlError('XERO_BUDGET_INVALID');
@@ -67,6 +84,11 @@ export function createXeroSharedControl(client) {
     authorizeProbe: ({ tenantId, probeId = randomUUID(), actorId, notBefore, reason }) => rpc('xero_shared_authorize_probe', { p_tenant_id: tenantId, p_id: probeId, p_actor_id: actorId, p_not_before: notBefore, p_reason: reason }),
     admit: ({ tenantId, tokenVersion, requestId = randomUUID(), method, resourceKey, budgetId = null, budgetPhase = 'operation', probeId = null }) => rpc('xero_shared_admit', {
       p_tenant_id: tenantId, p_id: requestId, p_token_version: tokenVersion, p_method: method, p_resource_key: resourceKey, p_budget_id: budgetId, p_phase: budgetPhase, p_probe_id: probeId,
+    }),
+    admitExistingDraft: ({ tenantId, tokenVersion, requestId = randomUUID(), method, resourceKey, resourcePath,
+      payloadJson = null, budgetId, budgetPhase }) => rpc('xero_shared_admit_scoped_v1', {
+      p_tenant_id: tenantId, p_id: requestId, p_token_version: tokenVersion, p_method: method, p_resource_key: resourceKey,
+      p_budget_id: budgetId, p_phase: budgetPhase, p_probe_id: null, p_resource_path: resourcePath, p_payload_json: payloadJson,
     }),
     observe: ({ tenantId, requestId, status = null, headers = null, outcomeUnknown = false }) => rpc('xero_shared_observe', {
       p_tenant_id: tenantId, p_request_id: requestId, p_status: status, p_snapshot: headers ? xeroRateLimitSnapshot(headers) : {}, p_outcome_unknown: outcomeUnknown,
