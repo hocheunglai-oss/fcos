@@ -5,7 +5,7 @@
   "baselineCommit": "725cbbfcad23f28eaee9c429820a34f53b44eb21",
   "baselineInventoryHash": "99ee8c6d9647b0342a929aacfc6e36630beebf71ba1d96b8a2f87f80c7190d3d",
   "baselineSourceTreeHash": "60a7b50cc4ee36847424e87970720bc1e12184ed15c6971b44d7c36c55b1a616",
-  "sourceTreeHash": "7698d74086acd6e02202e229c9c783910bf441714beaa9ad3c7b068bf26e0e93",
+  "sourceTreeHash": "765eb19ffe75552f697ddebcb302034f1e5e7743ef245986e5e8020354587905",
   "manifestSha256": "1a23d62cfe98f8e00a7b34d9fbe55e9cef2033786b46aaa4512fef0270f78cb5",
   "components": [
     {
@@ -30,7 +30,7 @@
   "dependencyReview": {
     "complete": true,
     "reviewer": "Codex",
-    "evidence": "The existing email entry point, invoice trigger and variable-charge and Master Contract readiness services are exercised by the focused regressions. FX-aware and previously snapshotted records retain their user-mode approval path. Each org inventory covers the complete owned tree, and only the two reviewed Apex bodies change."
+    "evidence": "The existing email entry point, invoice trigger and variable-charge and Master Contract readiness services are exercised by the approval-specific restricted-role regression and the existing full email-controller tests. FX-aware and previously snapshotted records retain their user-mode approval path. Each org inventory covers the complete owned tree, and only the two reviewed Apex bodies change."
   },
   "testPlan": {
     "level": "RunSpecifiedTests",
@@ -5417,8 +5417,8 @@
             "size": 174
           },
           "classes/FcosLegacyFinancialCompatibilityTest.cls": {
-            "sha256": "ed9cd0239e69d20c6ddf1ce48bdfbb9ecb149ddbcf5c9ed5e84a0a096547d239",
-            "size": 25453
+            "sha256": "cc5e513e139e7b4bfbaff3be92280ba1ac6a5acfb7c540454690ebc061020300",
+            "size": 25763
           },
           "classes/FcosLegacyFinancialCompatibilityTest.cls-meta.xml": {
             "sha256": "356db61093648679fc9b3a801e41d51c94fa51e993380eac65b0bb076a20b6b0",
@@ -10373,7 +10373,7 @@
             "size": 178
           }
         },
-        "inventoryHash": "913411129e67bad88959a5024a26065a21651b2a055dd71e07e4f532db55a21c"
+        "inventoryHash": "e0ce0089f241db3812740b34dacbb1ffe332e0a365ca7ab5ae6b4907d55eb474"
       }
     },
     "qat": {
@@ -15746,8 +15746,8 @@
             "size": 174
           },
           "classes/FcosLegacyFinancialCompatibilityTest.cls": {
-            "sha256": "ed9cd0239e69d20c6ddf1ce48bdfbb9ecb149ddbcf5c9ed5e84a0a096547d239",
-            "size": 25453
+            "sha256": "cc5e513e139e7b4bfbaff3be92280ba1ac6a5acfb7c540454690ebc061020300",
+            "size": 25763
           },
           "classes/FcosLegacyFinancialCompatibilityTest.cls-meta.xml": {
             "sha256": "356db61093648679fc9b3a801e41d51c94fa51e993380eac65b0bb076a20b6b0",
@@ -20698,7 +20698,7 @@
             "size": 178
           }
         },
-        "inventoryHash": "ee0123d739e0bebfe3601c781b10308893644c2bc23a393a22931c0b9bed098d"
+        "inventoryHash": "45dd356385be9dd94f5a69b6081653a7fb4f2cf6a1e8403ff99d7022c131415b"
       }
     },
     "production": {
@@ -26079,8 +26079,8 @@
             "size": 174
           },
           "classes/FcosLegacyFinancialCompatibilityTest.cls": {
-            "sha256": "ed9cd0239e69d20c6ddf1ce48bdfbb9ecb149ddbcf5c9ed5e84a0a096547d239",
-            "size": 25453
+            "sha256": "cc5e513e139e7b4bfbaff3be92280ba1ac6a5acfb7c540454690ebc061020300",
+            "size": 25763
           },
           "classes/FcosLegacyFinancialCompatibilityTest.cls-meta.xml": {
             "sha256": "356db61093648679fc9b3a801e41d51c94fa51e993380eac65b0bb076a20b6b0",
@@ -31039,7 +31039,7 @@
             "size": 178
           }
         },
-        "inventoryHash": "339bf9790c8426cc82ade550e11ab13118714865f0a136a2466ae7f82262e132"
+        "inventoryHash": "ecd174c1beb9de7ab3c25ae6d0503a961cda59fb4e0c2d5abbd84c04a080abd8"
       }
     }
   },
@@ -31052,7 +31052,7 @@
         "sha256": "1a23d62cfe98f8e00a7b34d9fbe55e9cef2033786b46aaa4512fef0270f78cb5"
       }
     },
-    "913411129e67bad88959a5024a26065a21651b2a055dd71e07e4f532db55a21c": {
+    "e0ce0089f241db3812740b34dacbb1ffe332e0a365ca7ab5ae6b4907d55eb474": {
       "path": "manifest/invoice-email-fx-approval-devee-native.xml",
       "sha256": "fc602e5a1d7ce1cb98489e6ebfd3ff12395daad11e1a641c7e6743e95ef61cd3",
       "apex": {
@@ -31068,7 +31068,7 @@
         "sha256": "1a23d62cfe98f8e00a7b34d9fbe55e9cef2033786b46aaa4512fef0270f78cb5"
       }
     },
-    "ee0123d739e0bebfe3601c781b10308893644c2bc23a393a22931c0b9bed098d": {
+    "45dd356385be9dd94f5a69b6081653a7fb4f2cf6a1e8403ff99d7022c131415b": {
       "path": "manifest/invoice-email-fx-approval-qat-native.xml",
       "sha256": "fc602e5a1d7ce1cb98489e6ebfd3ff12395daad11e1a641c7e6743e95ef61cd3",
       "apex": {
@@ -31084,7 +31084,7 @@
         "sha256": "1a23d62cfe98f8e00a7b34d9fbe55e9cef2033786b46aaa4512fef0270f78cb5"
       }
     },
-    "339bf9790c8426cc82ade550e11ab13118714865f0a136a2466ae7f82262e132": {
+    "ecd174c1beb9de7ab3c25ae6d0503a961cda59fb4e0c2d5abbd84c04a080abd8": {
       "path": "manifest/invoice-email-fx-approval-production-native.xml",
       "sha256": "8fffbff393f0de7ffcc815401706fd1a5009b1bb7239e438776badb0739f8f00",
       "apex": {

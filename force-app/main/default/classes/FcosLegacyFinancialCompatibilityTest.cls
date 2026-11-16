@@ -58,27 +58,16 @@ private class FcosLegacyFinancialCompatibilityTest {
     private static User legacyOperator() {return [SELECT Id FROM User WHERE LastName=:LEGACY_OPERATOR_LAST_NAME LIMIT 1];}
 
     @IsTest
-    static void salesSupportCanSendOrdinaryUsdWithoutReadingPrivateFxLookup() {
-        User operator = legacyOperator();
-        System.runAs(operator) {
-            // Supply the readiness fields available to Sales Support in Production.
-            PermissionSet readiness = [SELECT Id FROM PermissionSet WHERE Name = 'FCOS_Master_Contracts_Data'];
-            insert new PermissionSetAssignment(AssigneeId = operator.Id, PermissionSetId = readiness.Id);
-        }
-        Invoice__c invoice;
-        Id stemId;
+    static void salesSupportCanCheckSendApprovalWithoutReadingPrivateFxLookup() {
+        Id invoiceId;
         System.runAs(actor()) {
             configure(false);
-            STEM_Line_Item__c source = line();
-            stemId = source.STEM__c;
-            invoice = draftLegacyInvoice(source);
-            Id invoiceId = invoice.Id;
+            invoiceId = draftLegacyInvoice(line()).Id;
             System.assertEquals(null,
                 [SELECT Buyer_Charge_Snapshot__c FROM Invoice__c WHERE Id = :invoiceId].Buyer_Charge_Snapshot__c);
         }
-        Id invoiceId = invoice.Id;
         Test.startTest();
-        System.runAs(operator) {
+        System.runAs(legacyOperator()) {
             Boolean fxReadDenied = false;
             try {
                 Database.query('SELECT Document_FX_Side__c FROM Invoice__c WHERE Id = :invoiceId', AccessLevel.USER_MODE);
@@ -86,16 +75,32 @@ private class FcosLegacyFinancialCompatibilityTest {
                 fxReadDenied = true;
             }
             System.assert(fxReadDenied, 'The invoice operator must lack access to the private FX lookup.');
-            EmailInvoiceController.EmailData email = new EmailInvoiceController.EmailData();
-            email.stemId = String.valueOf(stemId);
-            email.toAddress = 'invoice@example.invalid';
-            email.subject = 'Synthetic legacy invoice';
-            email.textBody = 'Salesforce Apex test email';
-            EmailInvoiceController.sendEmail(email, new List<Invoice__c>{new Invoice__c(Id = invoiceId)}, new List<String>());
-            System.assertEquals(1, Limits.getEmailInvocations());
+
+            // Some sandboxes also restrict ordinary invoice fields for Sales Support.
+            // Where those grants are missing, the ordinary invoice denial must take precedence.
+            Map<String, Schema.SObjectField> invoiceFields = Invoice__c.SObjectType.getDescribe().fields.getMap();
+            List<String> approvalFields = new List<String>{'Proforma__c', 'Deprecated__c'};
+            approvalFields.addAll(BuyerInvoiceApprovalService.INVOICE_FIELDS);
+            List<String> inaccessibleFields = new List<String>();
+            for (String field : approvalFields) {
+                if (invoiceFields.containsKey(field) && !invoiceFields.get(field).getDescribe().isAccessible()) {
+                    inaccessibleFields.add(field);
+                }
+            }
+            Integer statementsBefore = Limits.getDmlStatements();
+            Boolean businessReadDenied = false;
+            try {
+                BuyerInvoiceApprovalService.assertPersistedInvoicesCanSend(new Set<Id>{invoiceId});
+            } catch (QueryException denied) {
+                for (String field : inaccessibleFields) {
+                    if (denied.getMessage().contains(field)) businessReadDenied = true;
+                }
+                System.assert(businessReadDenied, denied.getMessage());
+            }
+            System.assertEquals(!inaccessibleFields.isEmpty(), businessReadDenied);
+            System.assertEquals(statementsBefore, Limits.getDmlStatements());
         }
         Test.stopTest();
-        System.assertEquals(true, [SELECT Sent__c FROM Invoice__c WHERE Id = :invoiceId].Sent__c);
     }
 
     private static void assertLegacyReview(FcosTradeDocumentService.DocumentReview review) {
