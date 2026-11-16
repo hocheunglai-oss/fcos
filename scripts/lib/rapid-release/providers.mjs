@@ -6,6 +6,7 @@ import { nativeCompatibilityReader, assertNativeHandoverState } from './compatib
 import { DeploymentJournal } from './journal.mjs';
 import { assertAuthorization, digest, isSha, requireCondition, targets } from './contract.mjs';
 import { hasTradingFxSigningLocator, verifyTradingFxReleaseSigningConfig } from './trading-fx-signing-config.mjs';
+import { requiresDeveeDesktopCheckpoint } from './salesforce-devee-desktop-checkpoint.mjs';
 
 export const nativeWorkflowPath = run => String(run?.path || '').split('@')[0];
 export async function assertFrozenWorkflow({ github, controllerSha, dispatcherSha, path = '.github/workflows/fcos-rapid-release.yml' }) {
@@ -97,6 +98,8 @@ export async function verifyExecution({ github, manifest, env = process.env, pha
 }
 export async function nativeApproval({ github, manifest, staged, env = process.env }) {
   const { run } = await verifyExecution({ github, manifest, env, phase: 'promote' });
+  const deveeDesktop = requiresDeveeDesktopCheckpoint(manifest);
+  if (deveeDesktop) requireCondition(env.GITHUB_RUN_ATTEMPT === '1' && run.run_attempt === 1, 'FRESH_NATIVE_APPROVAL_REQUIRED');
   const environment = await github.read(`/repos/${targets().repository}/environments/fcos-production-release`);
   const rule = environment.protection_rules?.find(item => item.type === 'required_reviewers');
   requireCondition(rule?.reviewers?.some(item => item.reviewer?.login === targets().account) && environment.can_admins_bypass === false, 'PRODUCTION_REVIEW_PROTECTION_REQUIRED');
@@ -106,7 +109,7 @@ export async function nativeApproval({ github, manifest, staged, env = process.e
   requireCondition(matches.length >= 1, 'NATIVE_PRODUCTION_REVIEW_REQUIRED');
   const jobs = await github.read(`/repos/${targets().repository}/actions/runs/${env.GITHUB_RUN_ID}/jobs?per_page=100`);
   const job = jobs.jobs?.find(item => item.name === 'go-live' && item.status === 'in_progress');
-  requireCondition(job?.started_at, 'APPROVED_EXECUTION_JOB_REQUIRED');
+  requireCondition(job?.started_at && (!deveeDesktop || job.run_id === run.id && job.run_attempt === 1), 'APPROVED_EXECUTION_JOB_REQUIRED');
   const identity = await github.identity();
   const journal = new DeploymentJournal({ github, actorIds: [identity.user.id, run.actor.id], releaseId: manifest.releaseId, manifestHash: digest(manifest) });
   const saved = (await journal.read()).find(record => record.payload.event === 'approval.accepted')?.payload.data;
@@ -271,7 +274,8 @@ export function vercelProvider({ manifest, github, env = process.env, execute = 
     },
     async verifyApproval(receipt, context) {
       const actual = await nativeApproval({ github, manifest, staged: context.staged, env });
-      requireCondition(actual.runId === receipt.runId && actual.manifestHash === receipt.manifestHash, 'APPROVAL_CHANGED');
+      requireCondition(actual.runId === receipt.runId && actual.manifestHash === receipt.manifestHash
+        && (!requiresDeveeDesktopCheckpoint(manifest) || digest(actual) === digest(receipt)), 'APPROVAL_CHANGED');
     },
     async promote({ staged }) {
       assertAdmitted('promote'); requireCondition(staged.sha === manifest.candidate.sha && staged.buildId === manifest.build.buildId, 'PROMOTION_SOURCE_MISMATCH');

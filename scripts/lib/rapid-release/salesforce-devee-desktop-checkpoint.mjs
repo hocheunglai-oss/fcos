@@ -30,6 +30,31 @@ const editorComponents = [
   'LightningComponentBundle:fcbSupplierBidExtraCosts', 'LightningComponentBundle:fcosTradeCurrencyEditor',
 ];
 
+export function requiresDeveeDesktopCheckpoint(manifest) {
+  const prerequisites = manifest.prerequisites;
+  return manifest.selection?.salesforce === true && manifest.selection.database === false
+    && prerequisites?.adapter === 'salesforce-reviewed-manifest'
+    && prerequisites.plan?.mirrorPublication === 'local-collaborator'
+    && prerequisites.plan.deveeDesktopCaseSetDigest === editorDesktopCaseSetDigest;
+}
+
+export function requireDeveeDesktopApprovalRecord({ chain, request, requestDeployment, jobs }) {
+  const goLive = jobs?.jobs?.filter(job => job.name === 'go-live') ?? [];
+  const trusted = row => row.creator?.id === actionsActorId && row.creator.login === 'github-actions[bot]';
+  const original = chain.filter(row => row.payload.event === 'approval.accepted');
+  const accepted = chain.filter(row => ['approval.accepted', 'approval.reconfirmed'].includes(row.payload.event)
+    && row.payload.data.runId === request.runId);
+  requireCondition(request.runAttempt === 1 && goLive.length === 1 && goLive[0].status === 'in_progress'
+    && goLive[0].run_id === request.runId && goLive[0].run_attempt === request.runAttempt
+    && original.length === 1 && trusted(original[0]) && accepted.length === 1 && trusted(accepted[0]),
+  'DEVEE_DESKTOP_OPERATOR_CURRENT_APPROVAL_RECEIPT_REQUIRED');
+  const saved = accepted[0], recordedAt = Date.parse(saved.created_at);
+  requireCondition(original[0].payload.sequence <= saved.payload.sequence
+    && Date.parse(saved.payload.data.approvedAt) <= recordedAt && Date.parse(goLive[0].started_at) <= recordedAt
+    && recordedAt <= Date.parse(requestDeployment.created_at), 'DEVEE_DESKTOP_OPERATOR_CURRENT_APPROVAL_RECEIPT_REQUIRED');
+  return saved;
+}
+
 export function assertEditorDesktopReview(review, manifestComponents, nativeInventories) {
   const selection = review.nativeDeveeDesktop;
   if (selection === undefined) return;

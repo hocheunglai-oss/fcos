@@ -10,7 +10,8 @@ import { assertPublicPayload, DeploymentJournal } from './lib/rapid-release/jour
 import { LOCAL_MIRROR_ENVIRONMENT, readLocalMirrorDeployments, readLocalMirrorStage, recordLocalMirrorDeployment } from './lib/rapid-release/local-mirror-handoff.mjs';
 import { assertFrozenWorkflow, assertPermanentHandover, nativeWorkflowPath } from './lib/rapid-release/providers.mjs';
 import { assertEditorDesktopReview, createDeveeDesktopReceipt, DEVEE_DESKTOP_RECEIPT_KIND, DEVEE_DESKTOP_WORKFLOW,
-  editorDesktopCaseSetDigest, verifyDeveeDesktopReceipt, verifyDeveeDesktopRequest } from './lib/rapid-release/salesforce-devee-desktop-checkpoint.mjs';
+  editorDesktopCaseSetDigest, requireDeveeDesktopApprovalRecord, verifyDeveeDesktopReceipt, verifyDeveeDesktopRequest }
+  from './lib/rapid-release/salesforce-devee-desktop-checkpoint.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const base = '/repos/' + targets().repository;
@@ -74,10 +75,7 @@ async function requireActiveApproval({ github, runPath, run, request, requestDep
     github.read(runPath + '/attempts/' + request.runAttempt + '/jobs?per_page=100'),
     github.read(base + '/actions/variables/FCOS_RAPID_RELEASE_ENABLED'), github.read(base + '/actions/variables/FCOS_RAPID_RELEASE_HANDOVER_ID'),
   ]);
-  const goLive = jobs.jobs?.filter(job => job.name === 'go-live') ?? [];
-  requireCondition(run.status === 'in_progress' && goLive.length === 1 && goLive[0].status === 'in_progress'
-    && goLive[0].run_id === request.runId && goLive[0].run_attempt === request.runAttempt
-    && Date.parse(goLive[0].started_at) <= Date.parse(requestDeployment.created_at)
+  requireCondition(run.status === 'in_progress'
     && environment.name === 'fcos-production-release' && positive(environment.id) && environment.can_admins_bypass === false
     && environment.protection_rules?.some(rule => rule.type === 'required_reviewers'
       && rule.reviewers?.some(row => row.reviewer?.id === ownerId && row.reviewer.login === targets().account))
@@ -93,13 +91,7 @@ async function requireActiveApproval({ github, runPath, run, request, requestDep
     'DEVEE_DESKTOP_OPERATOR_HANDOVER_MISMATCH');
   const stage = chain.find(row => row.payload.event === 'stage.result');
   const staged = readLocalMirrorStage(stage, { manifest, handover: permanent, workflowActorId: botId });
-  const accepted = chain.filter(row => row.creator?.id === botId && row.creator.login === 'github-actions[bot]'
-    && row.payload.event === 'approval.accepted' && row.payload.data.runId === request.runId);
-  requireCondition(accepted.length === 1, 'DEVEE_DESKTOP_OPERATOR_CURRENT_APPROVAL_RECEIPT_REQUIRED');
-  const saved = accepted[0];
-  const recordedAt = Date.parse(saved.created_at);
-  requireCondition(Date.parse(saved.payload.data.approvedAt) <= recordedAt && Date.parse(goLive[0].started_at) <= recordedAt
-    && recordedAt <= Date.parse(requestDeployment.created_at), 'DEVEE_DESKTOP_OPERATOR_CURRENT_APPROVAL_RECEIPT_REQUIRED');
+  const saved = requireDeveeDesktopApprovalRecord({ chain, request, requestDeployment, jobs });
   assertAuthorization(saved.payload.data, manifest, staged, now());
 }
 

@@ -1,9 +1,10 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import { FCOS_CONNECTION_POLICY } from '../../../config/fcosConnections.js';
 import { assertReviewedMirror } from '../salesforce-reviewed-release.mjs';
-import { digest, isDigest, requireCondition, targets } from './contract.mjs';
+import { assertAuthorization, digest, isDigest, requireCondition, targets } from './contract.mjs';
 import { assertPublicPayload } from './journal.mjs';
-import { DEVEE_DESKTOP_RECEIPT_KIND, DEVEE_DESKTOP_REQUEST_KIND } from './salesforce-devee-desktop-checkpoint.mjs';
+import { DEVEE_DESKTOP_RECEIPT_KIND, DEVEE_DESKTOP_REQUEST_KIND, requireDeveeDesktopApprovalRecord, requiresDeveeDesktopCheckpoint }
+  from './salesforce-devee-desktop-checkpoint.mjs';
 
 export const LOCAL_MIRROR_ENVIRONMENT = 'fcos-release-mirror-handoff-v1';
 export const LOCAL_MIRROR_WINDOW_MS = 5 * 60_000;
@@ -36,6 +37,15 @@ export function readLocalMirrorStage(record, { manifest, handover, workflowActor
     && result.manifestHash === record.payload.manifestHash && isDigest(result.artifactDigest)
     && typeof result.id === 'string' && result.id.startsWith('dpl_'), 'LOCAL_MIRROR_STAGE_RECEIPT_REQUIRED');
   return result;
+}
+
+export function readLocalMirrorApproval({ chain, manifest, staged, request, requestDeployment, jobs, workflowActorId, now = Date.now() }) {
+  const record = requiresDeveeDesktopCheckpoint(manifest)
+    ? requireDeveeDesktopApprovalRecord({ chain, request, requestDeployment, jobs })
+    : chain.find(row => row.creator?.id === workflowActorId && row.payload.event === 'approval.accepted');
+  const approval = assertAuthorization(record?.payload.data, manifest, staged, now);
+  requireCondition(approval.runId === request.runId, 'LOCAL_MIRROR_RELEASE_JOURNAL_REQUIRED');
+  return approval;
 }
 
 export function createLocalMirrorRequest({ manifest, approval, reviewed, deployment, runAttempt, intentHash, expiresAt, mode = 'publish', sequence = 1, now = Date.now() }) {

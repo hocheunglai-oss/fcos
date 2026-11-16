@@ -15,10 +15,12 @@ import { readTradingFxSalesSupportNoEffectClosure } from './lib/rapid-release/tr
 import { readTradingFxFieldBoundNoEffectClosure } from './lib/rapid-release/trading-fx-field-bound-no-effect-checkpoint.mjs';
 import { assertTradingFxFieldBoundCorrectionSuccessor, assertTradingFxProductionBootstrapSuccessor, assertTradingFxViewAllFieldsCorrectionSuccessor } from './lib/rapid-release/trading-fx-production-bootstrap-successor.mjs';
 import { runReviewedMirror } from './sync-salesforce-reviewed-repository.mjs';
-import { assertAuthorization, digest, git, requireCondition, sourceSnapshot, targets, validateManifest } from './lib/rapid-release/contract.mjs';
+import { digest, git, requireCondition, sourceSnapshot, targets, validateManifest } from './lib/rapid-release/contract.mjs';
 import { DeploymentJournal } from './lib/rapid-release/journal.mjs';
 import { assertFrozenWorkflow, assertPermanentHandover, nativeWorkflowPath } from './lib/rapid-release/providers.mjs';
-import { createLocalMirrorReceipt, readLocalMirrorStage, recordLocalMirrorDeployment, usesLocalCollaboratorMirror, verifyLocalMirrorRequest } from './lib/rapid-release/local-mirror-handoff.mjs';
+import { createLocalMirrorReceipt, readLocalMirrorApproval, readLocalMirrorStage, recordLocalMirrorDeployment,
+  usesLocalCollaboratorMirror, verifyLocalMirrorRequest } from './lib/rapid-release/local-mirror-handoff.mjs';
+import { requiresDeveeDesktopCheckpoint } from './lib/rapid-release/salesforce-devee-desktop-checkpoint.mjs';
 
 const policy = FCOS_CONNECTION_POLICY.providers.find(provider => provider.id === 'salesforce');
 const { publication } = policy;
@@ -118,8 +120,9 @@ async function main() {
   const event = name => chain.find(record => record.creator?.id === bot.id && record.payload.event === name)?.payload.data;
   const stageRecord = chain.find(record => record.payload.event === 'stage.result');
   const staged = readLocalMirrorStage(stageRecord, { manifest, handover, workflowActorId: bot.id });
-  const approval = assertAuthorization(event('approval.accepted'), manifest, staged);
-  requireCondition(approval.runId === request.runId && event('prerequisites.intent'), 'LOCAL_MIRROR_RELEASE_JOURNAL_REQUIRED');
+  const jobs = requiresDeveeDesktopCheckpoint(manifest) ? await github.read(`${runPath}/attempts/${request.runAttempt}/jobs?per_page=100`) : undefined;
+  readLocalMirrorApproval({ chain, manifest, staged, request, requestDeployment: nativeRequest, jobs, workflowActorId: bot.id });
+  requireCondition(event('prerequisites.intent'), 'LOCAL_MIRROR_RELEASE_JOURNAL_REQUIRED');
   await journal.assertNoUnresolvedOtherRelease();
 
   const checkpoints = chain.filter(record => record.creator?.id === bot.id && record.payload.event === 'salesforce.checkpoint'

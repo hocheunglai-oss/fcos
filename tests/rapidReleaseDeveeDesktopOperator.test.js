@@ -71,7 +71,7 @@ function fixture(t, { lost = false, noAcknowledgement = false, priorRunId, curre
   const prerequisite = { planDigest: digest(manifest.prerequisites), candidateSha: request.candidateSha };
   add('stage.result', { outcome: 'applied', result: stage });
   add('approval.accepted', approval);
-  if (currentApproval) add('approval.accepted', { ...approval, runId, ...currentApproval });
+  if (currentApproval) add('approval.reconfirmed', { ...approval, runId, ...currentApproval });
   add('prerequisites.intent', { operationId: manifest.releaseId + '-prerequisites', requestHash: digest(prerequisite), request: prerequisite });
   add('salesforce.checkpoint', { fingerprint: reviewed.fingerprint, stage: 'devee', operation: 'validation', outcome: 'resolved',
     job: { id: request.validationJobId, validationId: null } });

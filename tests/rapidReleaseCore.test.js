@@ -4,6 +4,7 @@ import { createManifest, digest, selectChecks, targets, publicBuildEnvironment }
 import { MemoryJournal, validateChain, assertPublicPayload, DeploymentJournal } from '../scripts/lib/rapid-release/journal.mjs';
 import { assertPreBootstrapProof, stageRelease, promoteRelease } from '../scripts/lib/rapid-release/engine.mjs';
 import { selectedProductTests } from '../scripts/lib/rapid-release/build.mjs';
+import { editorDesktopCaseSetDigest } from '../scripts/lib/rapid-release/salesforce-devee-desktop-checkpoint.mjs';
 
 const sha = 'a'.repeat(40), h = 'b'.repeat(64);
 function fixture() {
@@ -72,6 +73,83 @@ test('missing module/normal-role coverage is a failure, not a passing smoke', as
 test('exact native approval promotes same tested deployment once', async () => {
   const f = fixture(); await stageRelease(f); assert.equal((await promoteRelease(f)).state, 'complete');
   assert.equal((await promoteRelease(f)).reused, true); assert.equal(f.calls.filter(c => c === 'promote').length, 1);
+});
+async function deveeDesktopResumeFixture() {
+  const f = fixture();
+  f.manifest = createManifest({ candidate: f.manifest.candidate, controllerSha: f.manifest.controllerSha,
+    previous: f.manifest.previous, paths: ['force-app/main/default/classes/FcosTradeCurrencyService.cls'],
+    publicEnvironment: f.manifest.build.publicEnvironment, releaseId: f.manifest.releaseId,
+    prerequisites: { adapter: 'salesforce-reviewed-manifest', adapterDigest: h,
+      plan: { mirrorPublication: 'local-collaborator', deveeDesktopCaseSetDigest: editorDesktopCaseSetDigest } } });
+  f.approval.manifestHash = digest(f.manifest);
+  const records = [], writes = [];
+  const github = { candidateSha: sha, async pages() { return records; }, async write(_path, body) {
+    writes.push(body.payload);
+    records.push({ id: records.length + 1, creator: { id: 41898282, login: 'github-actions[bot]' }, payload: body.payload });
+  } };
+  f.journal = new DeploymentJournal({ github, manifestHash: digest(f.manifest), releaseId: f.manifest.releaseId, actorIds: [41898282] });
+  const smoke = f.smoke;
+  f.smoke = async () => ({ ...await smoke(), modules: f.manifest.selection.modules, normalRole: true });
+  f.prerequisites = async () => { f.calls.push('desktop'); throw Error('desktop evidence pending'); };
+  await stageRelease(f);
+  await assert.rejects(promoteRelease(f), /desktop evidence pending/);
+  const first = structuredClone(f.approval);
+  f.approval = { ...f.approval, runId: 124, approvedAt: new Date(Date.now() - 60_000).toISOString() };
+  return { f, records, writes, github, first };
+}
+test('a verified DEVEE desktop resume persists the exact approval once and retains the first receipt', async () => {
+  const { f, writes, first } = await deveeDesktopResumeFixture();
+  const native = structuredClone(f.approval);
+  f.provider.verifyApproval = async receipt => { assert.deepEqual(receipt, native); };
+  const append = f.journal.append.bind(f.journal);
+  f.journal.append = async (event, data, options) => {
+    if (event === 'approval.reconfirmed') assert.equal(options.expectedPreviousHash, writes.at(-1).recordHash);
+    return append(event, data, options);
+  };
+  await assert.rejects(promoteRelease(f), /desktop evidence pending/);
+  await assert.rejects(promoteRelease(f), /desktop evidence pending/);
+  assert.deepEqual(writes.filter(row => row.event === 'approval.accepted').map(row => row.data), [first]);
+  assert.deepEqual(writes.filter(row => row.event === 'approval.reconfirmed').map(row => row.data), [native]);
+  assert.equal(writes.filter(row => row.event === 'prerequisites.intent').length, 1);
+  assert.equal(f.calls.includes('promote'), false);
+});
+test('rejected native review and conflicting saved approval stop DEVEE desktop before prerequisites', async () => {
+  const { f, writes } = await deveeDesktopResumeFixture();
+  f.provider.verifyApproval = async () => { throw Error('native review refused'); };
+  await assert.rejects(promoteRelease(f), /native review refused/);
+  assert.equal(writes.some(row => row.event === 'approval.reconfirmed'), false);
+  assert.equal(f.calls.filter(call => call === 'desktop').length, 1);
+  f.provider.verifyApproval = async () => {};
+  const changed = { ...f.approval, approvedAt: new Date(Date.now() - 120_000).toISOString() };
+  await f.journal.append('approval.reconfirmed', changed);
+  await assert.rejects(promoteRelease(f), /DEVEE_DESKTOP_APPROVAL_JOURNAL_CONFLICT/);
+  assert.equal(writes.filter(row => row.event === 'approval.reconfirmed').length, 1);
+  assert.equal(f.calls.filter(call => call === 'desktop').length, 1);
+});
+test('DEVEE desktop approval reads back the exact lost acknowledgement and never retries an unknown append', async () => {
+  const acknowledged = await deveeDesktopResumeFixture();
+  const nativeWrite = acknowledged.github.write;
+  acknowledged.github.write = async (path, body) => {
+    await nativeWrite(path, body);
+    if (body.payload.event === 'approval.reconfirmed') throw Error('lost journal acknowledgement');
+  };
+  await assert.rejects(promoteRelease(acknowledged.f), /desktop evidence pending/);
+  assert.equal(acknowledged.writes.filter(row => row.event === 'approval.reconfirmed').length, 1);
+  const unknown = await deveeDesktopResumeFixture();
+  let attempts = 0;
+  unknown.github.write = async () => { attempts++; throw Error('approval append outcome unknown'); };
+  await assert.rejects(promoteRelease(unknown.f), /approval append outcome unknown/);
+  assert.equal(attempts, 1);
+  assert.equal(unknown.f.calls.filter(call => call === 'desktop').length, 1);
+  const moved = await deveeDesktopResumeFixture();
+  const append = moved.f.journal.append.bind(moved.f.journal);
+  moved.f.journal.append = async (event, data, options) => {
+    if (event === 'approval.reconfirmed') await append('release.waiting', { phase: 'prerequisites' });
+    return append(event, data, options);
+  };
+  await assert.rejects(promoteRelease(moved.f), /JOURNAL_ADVANCED/);
+  assert.equal(moved.writes.filter(row => row.event === 'approval.reconfirmed').length, 0);
+  assert.equal(moved.f.calls.filter(call => call === 'desktop').length, 1);
 });
 test('changed candidate/deployment cannot reuse authorization', async () => {
   const f = fixture(); await stageRelease(f); f.approval.deploymentId = 'dpl_other';
