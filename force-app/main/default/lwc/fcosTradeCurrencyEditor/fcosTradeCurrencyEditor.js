@@ -86,6 +86,7 @@ export default class FcosTradeCurrencyEditor extends LightningElement {
     isLoading = false;
     isSaving = false;
     requestVersion = 0;
+    scopeVersion = 0;
     lastReviewKey;
     amendmentRate;
     amendmentOriginalReview;
@@ -100,6 +101,7 @@ export default class FcosTradeCurrencyEditor extends LightningElement {
     }
     set recordId(value) {
         if (this._recordId !== value) {
+            this.scopeVersion += 1;
             this.requestVersion += 1;
             this.lastReviewKey = undefined;
             this.applyReview(undefined);
@@ -115,6 +117,7 @@ export default class FcosTradeCurrencyEditor extends LightningElement {
     }
     set direction(value) {
         if (this._direction !== value) {
+            this.scopeVersion += 1;
             this.requestVersion += 1;
             this.lastReviewKey = undefined;
             this.applyReview(undefined);
@@ -254,7 +257,7 @@ export default class FcosTradeCurrencyEditor extends LightningElement {
             input?.reportValidity();
             return;
         }
-        const { recordId, direction } = this;
+        const { recordId, direction, scopeVersion } = this;
         if (!recordId || !direction || this.controlsDisabled) return;
         this.isSaving = true;
         this.error = undefined;
@@ -268,7 +271,7 @@ export default class FcosTradeCurrencyEditor extends LightningElement {
                 reviewedRateId: this.review?.rateId,
                 confirmSide,
             });
-            if (this.recordId !== recordId || this.direction !== direction) return;
+            if (this.scopeVersion !== scopeVersion) return;
             this.applyReview(reviewResult);
             this.dispatchEvent(new CustomEvent('currencychange', {
                 detail: { recordId, direction, review: reviewResult },
@@ -276,7 +279,7 @@ export default class FcosTradeCurrencyEditor extends LightningElement {
                 composed: true,
             }));
         } catch (error) {
-            if (this.recordId !== recordId || this.direction !== direction) return;
+            if (this.scopeVersion !== scopeVersion) return;
             this.error = errorMessage(error);
             await this.refreshReview({ keepError: true });
         } finally {
@@ -300,13 +303,13 @@ export default class FcosTradeCurrencyEditor extends LightningElement {
     }
 
     async handleStartAmendment() {
-        const { recordId, direction, review } = this;
+        const { recordId, direction, review, scopeVersion } = this;
         if (!recordId || !direction || !review || this.controlsDisabled) return;
         this.error = undefined;
         this.isSaving = true;
         try {
             const rate = await previewAmendmentRate();
-            if (this.recordId !== recordId || this.direction !== direction) return;
+            if (this.scopeVersion !== scopeVersion) return;
             this.amendmentOriginalReview = { ...review };
             this.amendmentRate = rate;
             this.amendmentCurrency = review.currencyCode;
@@ -314,7 +317,7 @@ export default class FcosTradeCurrencyEditor extends LightningElement {
             this.amendmentReason = '';
             this.isAmending = true;
         } catch (error) {
-            if (this.recordId === recordId && this.direction === direction) this.error = errorMessage(error);
+            if (this.scopeVersion === scopeVersion) this.error = errorMessage(error);
         } finally {
             this.isSaving = false;
         }
@@ -354,7 +357,7 @@ export default class FcosTradeCurrencyEditor extends LightningElement {
             this.error = 'Enter a specific amendment reason of at least five characters.';
             return;
         }
-        const { recordId, direction } = this;
+        const { recordId, direction, scopeVersion } = this;
         if (!recordId || !direction || this.controlsDisabled) return;
         this.isSaving = true;
         this.error = undefined;
@@ -368,7 +371,7 @@ export default class FcosTradeCurrencyEditor extends LightningElement {
                 reviewedRateId: this.amendmentRate?.rateId,
                 reason: this.amendmentReason.trim(),
             });
-            if (this.recordId !== recordId || this.direction !== direction) return;
+            if (this.scopeVersion !== scopeVersion) return;
             this.applyReview(reviewResult);
             this.cancelAmendment();
             this.dispatchEvent(new CustomEvent('currencychange', {
@@ -377,7 +380,7 @@ export default class FcosTradeCurrencyEditor extends LightningElement {
                 composed: true,
             }));
         } catch (error) {
-            if (this.recordId !== recordId || this.direction !== direction) return;
+            if (this.scopeVersion !== scopeVersion) return;
             this.error = errorMessage(error);
             await this.refreshReview({ keepError: true });
         } finally {
