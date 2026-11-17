@@ -2,6 +2,11 @@
 public with sharing class FcosTradeCurrencyService {
     public class TradeFxException extends Exception {}
     @TestVisible private static Boolean managedWrite = false;
+    private static Set<Id> fixtureWriteRows;
+    private static Context fixtureWriteContext;
+    private static Set<Id> fixtureTeardownRows;
+    private static String fixtureTeardownDirection;
+    private static Id fixtureTeardownSide;
     private static final Set<String> TYPES = new Set<String>{'Supplier_Bid__c','Supplier_Bid_Extra_Cost__c','QuoteLineItem','STEM_Line_Item__c','STEM_Extra_Cost__c'};
     public class Context {
         public SObject row;
@@ -98,8 +103,13 @@ public with sharing class FcosTradeCurrencyService {
     public static Review review(Id recordId, String direction, FcosCompanyFxRateService.Snapshot currentRate) {
         Context ctx = context(recordId, direction);
         Trade_Currency_Side__c leg = side(ctx, false);
+        return reviewContext(ctx, leg, currentRate, sideRows(ctx), FcosCompanyFxRateService.enabled());
+    }
+    private static Review reviewContext(Context ctx, Trade_Currency_Side__c leg, FcosCompanyFxRateService.Snapshot currentRate,
+        List<SObject> rows, Boolean enabled) {
+        String direction = ctx.direction;
         String p = prefix(direction);
-        Review result = new Review(); result.enabled = FcosCompanyFxRateService.enabled(); result.direction = direction;
+        Review result = new Review(); result.enabled = enabled; result.direction = direction;
         result.currencyCode = leg == null ? (String)ctx.row.get(p+'Currency__c') : leg.Currency__c;
         if (String.isBlank(result.currencyCode)) result.currencyCode = 'USD';
         result.confirmedAt = leg == null ? null : leg.Confirmed_At__c;
@@ -111,12 +121,14 @@ public with sharing class FcosTradeCurrencyService {
         result.usdUnitPrice = usdUnitPrice(ctx.row,direction,ctx.priceField);
         result.nativeUnitPrice = result.currencyCode == 'HKD' ? amount(ctx.row,p+'HKD_Unit_Price__c') : result.usdUnitPrice;
         if (result.currencyCode == 'HKD' && result.rate != null && result.rate > 0) result.usdUnitPrice=result.nativeUnitPrice/result.rate;
-        result.fingerprint = fingerprint(ctx, leg, result.rateId);
+        result.fingerprint = fingerprint(ctx, leg, result.rateId, rows);
         result.needsConfirmation = result.confirmedAt == null || leg.Review_Fingerprint__c != result.fingerprint;
         return result;
     }
     private static String fingerprint(Context ctx, Trade_Currency_Side__c leg, String rateId) {
-        List<SObject> rows = sideRows(ctx);
+        return fingerprint(ctx, leg, rateId, sideRows(ctx));
+    }
+    private static String fingerprint(Context ctx, Trade_Currency_Side__c leg, String rateId, List<SObject> rows) {
         List<String> values = new List<String>{ctx.key, leg != null && leg.Currency__c=='HKD' ? rateId : null, leg == null ? 'USD' : leg.Currency__c, leg == null ? '1' : String.valueOf(leg.Version__c)};
         for (SObject row : rows) {
             Map<String,Object> financial = row.getPopulatedFieldsAsMap().clone();
@@ -153,24 +165,88 @@ public with sharing class FcosTradeCurrencyService {
         return direction == 'Buy' ? 'Supplier_Unit_Price__c' : 'UnitPrice';
     }
     public static Review save(Id recordId, String direction, String currencyCode, Decimal nativeUnitPrice, String reviewedFingerprint, FcosCompanyFxRateService.Snapshot currentRate, Boolean confirmSide) {
-        return saveReviewed(recordId,direction,currencyCode,nativeUnitPrice,reviewedFingerprint,currentRate,confirmSide,null);
+        return saveReviewed(recordId,direction,currencyCode,nativeUnitPrice,reviewedFingerprint,currentRate,confirmSide,null,null);
     }
     public static Review amend(Id recordId,String direction,String currencyCode,Decimal nativeUnitPrice,String reviewedFingerprint,FcosCompanyFxRateService.Snapshot currentRate,String reason) {
         if (!FeatureManagement.checkPermission('Fcos_Trading_FX_Amend') || String.isBlank(reason) || reason.trim().length()<5) throw new TradeFxException('An authorized amendment and specific reason are required.');
-        return saveReviewed(recordId,direction,currencyCode,nativeUnitPrice,reviewedFingerprint,currentRate,false,reason.trim());
+        return saveReviewed(recordId,direction,currencyCode,nativeUnitPrice,reviewedFingerprint,currentRate,false,reason.trim(),null);
     }
-    private static Review saveReviewed(Id recordId, String direction, String currencyCode, Decimal nativeUnitPrice, String reviewedFingerprint, FcosCompanyFxRateService.Snapshot currentRate, Boolean confirmSide,String amendmentReason) {
-        if (!FcosCompanyFxRateService.enabled() || !FeatureManagement.checkPermission('Fcos_Trading_FX_Entry')) throw new TradeFxException('HKD trading entry is not enabled for this user.');
+
+    public static Review saveEditorFixture(String fixtureId, Id recordId, String direction, String currencyCode,
+        Decimal nativeUnitPrice, String reviewedFingerprint, String reviewedRateId, Boolean confirmSide) {
+        FcosCompanyFxRateService.requireDeveeEditorActor();
+        Context context = context(recordId, direction);
+        FcosCompanyFxRateService.EditorFixtureEnrollment enrollment = FcosCompanyFxRateService.lookupEditorFixture(fixtureId, context);
+        FcosCompanyFxRateService.Snapshot rate = FcosCompanyFxRateService.editorFixtureRate(enrollment, context, 'confirmation', reviewedRateId);
+        return saveReviewed(recordId, direction, currencyCode, nativeUnitPrice, reviewedFingerprint, rate, confirmSide, null, enrollment);
+    }
+
+    public static Review previewEditorFixture(String fixtureId, Id recordId, String direction) {
+        FcosCompanyFxRateService.requireDeveeEditorActor();
+        Context reviewed = context(recordId, direction);
+        FcosCompanyFxRateService.EditorFixtureEnrollment enrollment = FcosCompanyFxRateService.lookupEditorFixture(fixtureId, reviewed);
+        FcosCompanyFxRateService.Snapshot rate = FcosCompanyFxRateService.editorFixtureRate(enrollment, reviewed, 'preview', null);
+        Context current = context(recordId, direction);
+        if (!reviewed.key.equals(current.key)) throw new TradeFxException('The enrolled editor scope changed.');
+        return reviewEditorFixtureContext(enrollment, current, rate);
+    }
+
+    @TestVisible
+    private static Review reviewEditorFixtureContext(FcosCompanyFxRateService.EditorFixtureEnrollment enrollment,
+        Context ctx, FcosCompanyFxRateService.Snapshot rate) {
+        FcosCompanyFxRateService.assertEditorFixtureContext(enrollment, ctx);
+        List<SObject> rows = sideRows(ctx);
+        assertEditorFixtureWriteSet(enrollment, rows);
+        return reviewContext(ctx, side(ctx, false), rate, rows, true);
+    }
+
+    private static Set<Id> assertEditorFixtureWriteSet(FcosCompanyFxRateService.EditorFixtureEnrollment enrollment,
+        List<SObject> rows) {
+        Set<Id> actual = new Set<Id>();
+        for (SObject row : rows) actual.add(row.Id);
+        if (!actual.equals(enrollment.recordIds)) throw new TradeFxException('The enrolled editor write set changed.');
+        return actual;
+    }
+
+    private static void lockEditorFixtureRows(Context ctx, Set<Id> recordIds) {
+        if (ctx.scopeType == 'Offer') {
+            List<QuoteLineItem> locked = [SELECT Id FROM QuoteLineItem WHERE Id IN :recordIds FOR UPDATE];
+            if (locked.size() != recordIds.size()) throw new TradeFxException('The enrolled editor records are no longer available.');
+        } else {
+            Set<Id> extras = recordIds.clone();
+            extras.remove(ctx.scopeId);
+            if (!extras.isEmpty()) {
+                List<Supplier_Bid_Extra_Cost__c> locked = [SELECT Id FROM Supplier_Bid_Extra_Cost__c WHERE Id IN :extras FOR UPDATE];
+                if (locked.size() != extras.size()) throw new TradeFxException('The enrolled editor records are no longer available.');
+            }
+        }
+    }
+
+    @TestVisible
+    private static Review saveReviewed(Id recordId, String direction, String currencyCode, Decimal nativeUnitPrice,
+        String reviewedFingerprint, FcosCompanyFxRateService.Snapshot currentRate, Boolean confirmSide, String amendmentReason,
+        FcosCompanyFxRateService.EditorFixtureEnrollment enrollment) {
+        if ((enrollment == null && !FcosCompanyFxRateService.enabled()) || !FeatureManagement.checkPermission('Fcos_Trading_FX_Entry')) throw new TradeFxException('HKD trading entry is not enabled for this user.');
         if (currencyCode != 'USD' && currencyCode != 'HKD') throw new TradeFxException('Choose USD or HKD.');
         if (nativeUnitPrice == null || nativeUnitPrice < 0 || nativeUnitPrice!=nativeUnitPrice.setScale(8,RoundingMode.HALF_UP)) throw new TradeFxException('Enter a non-negative trading price with at most eight decimal places.');
         Context ctx = context(recordId, direction);
         if (currencyCode == 'HKD' && (!hongKong(ctx.portName,ctx.portCountry) || ctx.formulaPrice)) throw new TradeFxException('HKD is available only for fixed-price Hong Kong deliveries.');
         // Serialize all side edits under the same parent, including creation of a previously absent side.
         Id scopeId = ctx.scopeId;
-        Database.query('SELECT Id FROM '+scopeId.getSObjectType().getDescribe().getName()+' WHERE Id = :scopeId FOR UPDATE');
+        if (enrollment != null) FcosCompanyFxRateService.assertEditorFixtureContext(enrollment, ctx);
+        List<SObject> lockedScope = Database.query('SELECT Id FROM '+scopeId.getSObjectType().getDescribe().getName()+' WHERE Id = :scopeId FOR UPDATE');
+        if (enrollment != null) {
+            if (lockedScope.size() != 1) throw new TradeFxException('The enrolled editor parent is no longer available.');
+            String scopeKey = ctx.key;
+            lockEditorFixtureRows(ctx, enrollment.recordIds);
+            ctx = context(recordId, direction);
+            FcosCompanyFxRateService.assertEditorFixtureContext(enrollment, ctx);
+            if (!scopeKey.equals(ctx.key)) throw new TradeFxException('The enrolled editor scope changed.');
+        }
         Trade_Currency_Side__c leg = side(ctx, true);
         String reviewedRateId = leg != null && leg.Confirmed_At__c != null ? leg.FX_Revision__c : currentRate == null ? null : currentRate.rateId;
-        if (String.isBlank(reviewedFingerprint) || fingerprint(ctx,leg,reviewedRateId) != reviewedFingerprint) throw new TradeFxException('Prices, currency, or the company rate changed. Review the side again.');
+        List<SObject> rows = sideRows(ctx);
+        if (String.isBlank(reviewedFingerprint) || fingerprint(ctx,leg,reviewedRateId,rows) != reviewedFingerprint) throw new TradeFxException('Prices, currency, or the company rate changed. Review the side again.');
         if (leg != null && leg.Confirmed_At__c != null && currencyCode != leg.Currency__c && amendmentReason == null) throw new TradeFxException('Changing confirmed currency requires an explicit amendment.');
         if (leg == null) leg = new Trade_Currency_Side__c(External_Key__c=ctx.key,Scope_Id__c=String.valueOf(ctx.scopeId),Scope_Type__c=ctx.scopeType,Party__c=ctx.partyId,Port__c=ctx.portId,Direction__c=direction,Version__c=1);
         Trade_Currency_Side__c previousSide;
@@ -181,7 +257,23 @@ public with sharing class FcosTradeCurrencyService {
         }
         Decimal rate = leg.Confirmed_At__c != null ? leg.FX_Rate__c : currentRate == null ? null : currentRate.usdHkdRate;
         if (currencyCode == 'HKD' && (rate == null || rate <= 0)) throw new TradeFxException('The authoritative company rate is unavailable.');
-        List<SObject> rows = sideRows(ctx);
+        if (enrollment != null) {
+            Set<Id> actualRows = assertEditorFixtureWriteSet(enrollment, rows);
+            if (ctx.scopeType == 'Offer') {
+                String oppositeDirection = direction == 'Sell' ? 'Buy' : 'Sell';
+                String opposite = oppositeDirection + '_';
+                List<SObject> otherSides = Database.query('SELECT '+fields(oppositeDirection)+' FROM QuoteLineItem WHERE Id IN :actualRows');
+                for (SObject other : otherSides) {
+                    if (other.get(opposite+'Currency__c') != 'USD' || other.get(opposite+'FX_Side__c') != null
+                        || other.get(opposite+'HKD_Unit_Price__c') != null || other.get(opposite+'HKD_Minimum__c') != null
+                        || other.get(opposite+'HKD_Lumpsum__c') != null || other.get(opposite+'FX_Rate__c') != null
+                        || other.get(opposite+'FX_Revision__c') != null || other.get(opposite+'FX_Confirmed_At__c') != null) {
+                        throw new TradeFxException('The editor fixture requires an unchanged USD opposite side.');
+                    }
+                }
+            }
+            FcosCompanyFxRateService.assertEditorFixtureContext(enrollment, ctx);
+        }
         String p = prefix(direction);
         for (SObject row : rows) {
             if (isInvoiced(row,direction)) {
@@ -199,7 +291,12 @@ public with sharing class FcosTradeCurrencyService {
             leg.FX_Effective_At__c = currencyCode == 'HKD' ? currentRate.effectiveAt : null;
         }
         if (confirmSide && leg.Confirmed_At__c == null) leg.Confirmed_At__c = System.now();
+        Savepoint fixtureSavepoint = enrollment == null ? null : Database.setSavepoint();
         managedWrite = true;
+        if (enrollment != null) {
+            fixtureWriteRows = enrollment.recordIds.clone();
+            fixtureWriteContext = ctx;
+        }
         try {
             if(previousSide != null) { previousSide.External_Key__c=ctx.key+':v'+String.valueOf(previousSide.Version__c); FcosTradeEvidenceStore.updateSide(previousSide); }
             FcosTradeEvidenceStore.saveSide(leg);
@@ -237,7 +334,19 @@ public with sharing class FcosTradeCurrencyService {
                 leg.Review_Fingerprint__c = fingerprint(ctx,leg,leg.FX_Revision__c);
                 FcosTradeEvidenceStore.updateSide(leg);
             }
-        } finally { managedWrite = false; }
+            if (enrollment != null) {
+                Review scoped = review(recordId,direction,currentRate);
+                scoped.enabled = true;
+                return scoped;
+            }
+        } catch (Exception error) {
+            if (fixtureSavepoint != null) Database.rollback(fixtureSavepoint);
+            throw error;
+        } finally {
+            fixtureWriteRows = null;
+            fixtureWriteContext = null;
+            managedWrite = false;
+        }
         return review(recordId,direction,currentRate);
     }
     private static Boolean isInvoiced(SObject row,String direction) {
@@ -312,8 +421,97 @@ public with sharing class FcosTradeCurrencyService {
             || row.Buy_FX_Side__c != null;
     }
     public static Boolean isManagedWrite() { return managedWrite; }
-    public static void guardSideMutation(List<Trade_Currency_Side__c> rows) {
-        if (managedWrite) return;
-        for (Trade_Currency_Side__c row : rows) row.addError('Use the reviewed trading-currency action to amend or confirm this side.');
+    public static Boolean isManagedWriteFor(Id rowId, String direction) {
+        return managedWrite && (fixtureWriteRows == null || isEditorFixtureWrite(rowId, direction));
+    }
+    public static Boolean isEditorFixtureWrite(Id rowId, String direction) {
+        return managedWrite && fixtureWriteRows != null && fixtureWriteRows.contains(rowId)
+            && fixtureWriteContext.direction.equals(direction);
+    }
+    public static Boolean isManagedParentWrite(Id rowId, Boolean deleting, Boolean changedContext) {
+        return managedWrite && (fixtureWriteRows == null || (!deleting && !changedContext && fixtureWriteContext.scopeType == 'Offer'
+            && fixtureWriteContext.direction == 'Sell' && fixtureWriteContext.scopeId == rowId));
+    }
+
+    public static void teardownEditorFixture(String payload, String signature) {
+        // Verify the signed claim and the pinned DEVEE actor before reading the
+        // trading record. Fetch enrollment before taking any transaction locks.
+        FcosCompanyFxRateService.EditorFixtureTeardownClaim claim =
+            FcosCompanyFxRateService.readEditorFixtureTeardownClaim(payload, signature);
+        Context ctx = context(claim.recordId, claim.direction);
+        FcosCompanyFxRateService.EditorFixtureEnrollment enrollment =
+            FcosCompanyFxRateService.lookupEditorFixture(claim.fixtureId, ctx);
+        applyEditorFixtureTeardown(enrollment, claim);
+    }
+
+    @TestVisible
+    private static void applyEditorFixtureTeardown(
+        FcosCompanyFxRateService.EditorFixtureEnrollment enrollment, FcosCompanyFxRateService.EditorFixtureTeardownClaim claim
+    ) {
+        Id recordId = claim.recordId;
+        String direction = claim.direction;
+        Context ctx = context(recordId, direction);
+        FcosCompanyFxRateService.assertEditorFixtureContext(enrollment, ctx);
+        Id scopeId = ctx.scopeId;
+        String scopeKey = ctx.key;
+        List<SObject> parent = Database.query('SELECT Id FROM '+scopeId.getSObjectType().getDescribe().getName()+' WHERE Id = :scopeId FOR UPDATE');
+        if (parent.size() != 1) throw new TradeFxException('The enrolled editor parent is no longer available.');
+        lockEditorFixtureRows(ctx, enrollment.recordIds);
+        ctx = context(recordId, direction);
+        FcosCompanyFxRateService.assertEditorFixtureContext(enrollment, ctx);
+        if (!scopeKey.equals(ctx.key)) throw new TradeFxException('The enrolled editor scope changed.');
+        List<SObject> rows = sideRows(ctx);
+        Set<Id> exactRows = assertEditorFixtureWriteSet(enrollment, rows);
+        Trade_Currency_Side__c leg = side(ctx, true);
+        if (leg == null || leg.Currency__c != 'HKD' || leg.Version__c != 1) {
+            throw new TradeFxException('The fixture teardown currency evidence changed.');
+        }
+        FcosCompanyFxRateService.assertEditorFixtureTeardownClaim(claim, enrollment, ctx, leg.Id,
+            fingerprint(ctx, leg, leg.FX_Revision__c, rows));
+        String snapshot = prefix(direction);
+        for (SObject row : rows) {
+            if (row.get(snapshot+'FX_Side__c') != leg.Id || row.get(snapshot+'Currency__c') != 'HKD') {
+                throw new TradeFxException('The fixture teardown contains a different side.');
+            }
+        }
+        Savepoint original = Database.setSavepoint();
+        fixtureTeardownRows = exactRows;
+        fixtureTeardownDirection = direction;
+        fixtureTeardownSide = leg.Id;
+        try {
+            if (ctx.scopeType == 'Offer') {
+                delete rows;
+            } else {
+                List<SObject> extras = new List<SObject>();
+                for (SObject row : rows) if (row.Id != scopeId) extras.add(row);
+                if (!extras.isEmpty()) delete extras;
+                delete parent;
+            }
+            delete leg;
+        } catch (Exception error) {
+            Database.rollback(original);
+            throw error;
+        } finally {
+            fixtureTeardownRows = null;
+            fixtureTeardownDirection = null;
+            fixtureTeardownSide = null;
+        }
+    }
+
+    public static Boolean isEditorFixtureTeardownRow(Id rowId, String direction, Id sideId) {
+        return fixtureTeardownRows != null && fixtureTeardownRows.contains(rowId)
+            && fixtureTeardownDirection == direction && fixtureTeardownSide == sideId;
+    }
+
+    public static void guardSideMutation(List<Trade_Currency_Side__c> rows, Boolean deleting) {
+        if (managedWrite && fixtureWriteRows == null) return;
+        for (Trade_Currency_Side__c row : rows) {
+            if (deleting && fixtureTeardownSide != null && fixtureTeardownSide == row.Id) continue;
+            if (!deleting && managedWrite && fixtureWriteContext != null && fixtureWriteContext.key.equals(row.External_Key__c)
+                && String.valueOf(fixtureWriteContext.scopeId).equals(row.Scope_Id__c)
+                && fixtureWriteContext.scopeType.equals(row.Scope_Type__c) && fixtureWriteContext.direction.equals(row.Direction__c)
+                && fixtureWriteContext.partyId == row.Party__c && fixtureWriteContext.portId == row.Port__c) continue;
+            row.addError('Use the reviewed trading-currency action to amend or confirm this side.');
+        }
     }
 }

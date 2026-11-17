@@ -18,6 +18,8 @@ export default class FcbEditOfferLineItemModal extends LightningElement {
   @api recordId;
   @api enquiryLineItems;
   @api quote;
+  @api buyEditorFixtureId;
+  @api sellEditorFixtureId;
   
   @wire(CurrentPageReference) pageRef;
 

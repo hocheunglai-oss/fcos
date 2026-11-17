@@ -12,6 +12,7 @@ export default class FcbEditSupplierBidModal extends LightningElement {
   @api enquiryLineItems;
   @api quoteId;
   @api allSupplierBids;
+  @api editorFixtureId;
   @wire(CurrentPageReference) pageRef;
 
   @track isQuantityRangeDisabled = true;

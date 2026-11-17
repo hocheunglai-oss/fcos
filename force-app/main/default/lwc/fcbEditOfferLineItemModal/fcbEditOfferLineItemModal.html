@@ -91,7 +91,7 @@
                                         initial-value={supplierUnitPrice} onchange={calculateFormulas}>
                                     </c-fcb-offer-broker-pricing-input>
                                 </template>
-                                <c-fcos-trade-currency-editor record-id={currentOfferLineItem.Id} direction="Buy"
+                                <c-fcos-trade-currency-editor record-id={currentOfferLineItem.Id} direction="Buy" fixture-id={buyEditorFixtureId}
                                     oncurrencyreview={handleCurrencyReview} oncurrencychange={handleCurrencyChange}>
                                 </c-fcos-trade-currency-editor>
                                 <c-fcb-offer-broker-pricing-input field-label="Supplier's Broker Commission"
@@ -143,7 +143,7 @@
                                         onchange={calculateFormulas}>
                                     </c-fcb-offer-broker-pricing-input>
                                 </template>
-                                <c-fcos-trade-currency-editor record-id={currentOfferLineItem.Id} direction="Sell"
+                                <c-fcos-trade-currency-editor record-id={currentOfferLineItem.Id} direction="Sell" fixture-id={sellEditorFixtureId}
                                     oncurrencyreview={handleCurrencyReview} oncurrencychange={handleCurrencyChange}>
                                 </c-fcos-trade-currency-editor>
                                 <c-fcb-offer-broker-pricing-input field-label={buyerBrokerCommissionLabel}

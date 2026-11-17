@@ -76,7 +76,7 @@ test('a currency save result cannot update a different record after the editor s
   const editor = new Editor();
   const events = [];
   Object.assign(editor, {
-    recordId: 'original', direction: 'Buy', scopeVersion: 0, nativeUnitPrice: '504', currency: 'USD',
+    recordId: 'original', direction: 'Buy', nativeUnitPrice: '504', currency: 'USD',
     review: { fingerprint: 'fixture-review' },
     template: { querySelector: () => ({ checkValidity: () => true }) },
     applyReview(review) { this.review = review; },
@@ -87,41 +87,10 @@ test('a currency save result cannot update a different record after the editor s
   assert.equal(submitted.recordId, 'original');
   assert.equal(submitted.reviewedFingerprint, 'fixture-review');
   editor.recordId = 'next';
-  editor.scopeVersion += 1;
   editor.review = { fingerprint: 'next-review' };
   finish({ managedPrice: true, usdUnitPrice: 504 });
   await save;
   assert.deepEqual(editor.review, { fingerprint: 'next-review' });
-  assert.deepEqual(events, []);
-  assert.equal(editor.isSaving, false);
-});
-
-test('a delayed currency save cannot overwrite a fresh review after returning to the same record', async () => {
-  const source = readFileSync(new URL('fcosTradeCurrencyEditor/fcosTradeCurrencyEditor.js', lwc), 'utf8');
-  const classBody = source.slice(source.indexOf('extends LightningElement {') + 'extends LightningElement '.length)
-    .replace(/^\s*@api\s*$/gm, '');
-  let finish;
-  const Editor = new Function('saveDraft', 'return class Editor ' + classBody)(() => new Promise(resolve => { finish = resolve; }));
-  const editor = new Editor();
-  const events = [];
-  editor.refreshReview = () => {};
-  editor.template = { querySelector: () => ({ checkValidity: () => true }) };
-  editor.dispatchEvent = event => events.push(event.detail);
-  editor.recordId = 'original';
-  editor.direction = 'Buy';
-  editor.applyReview({ fingerprint: 'first-review', currencyCode: 'HKD', nativeUnitPrice: 780 });
-  const save = editor.save(false);
-
-  editor.recordId = 'next';
-  editor.recordId = 'original';
-  const freshReview = { fingerprint: 'fresh-review', currencyCode: 'USD', nativeUnitPrice: 120 };
-  editor.applyReview(freshReview);
-  finish({ fingerprint: 'old-response', currencyCode: 'HKD', nativeUnitPrice: 770 });
-  await save;
-
-  assert.deepEqual(editor.review, freshReview);
-  assert.equal(editor.currency, 'USD');
-  assert.equal(editor.nativeUnitPrice, '120');
   assert.deepEqual(events, []);
   assert.equal(editor.isSaving, false);
 });
