@@ -1,16 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Package xmlns="http://soap.sforce.com/2006/04/metadata">
-    <types>
-        <members>FcosTradeCurrencyService</members>
-        <name>ApexClass</name>
-    </types>
-    <types>
-        <members>fcbEditOfferLineItemModal</members>
-        <members>fcbEditSupplierBidModal</members>
-        <members>fcbPromotedOfferLineItemExtraCosts</members>
-        <members>fcbSupplierBidExtraCosts</members>
-        <members>fcosTradeCurrencyEditor</members>
-        <name>LightningComponentBundle</name>
-    </types>
-    <version>65.0</version>
+<types><members>FcosCompanyFxRateService</members><members>FcosCompanyFxRateServiceTest</members><members>FcosDeveeEditorFixtureRehearsalTest</members><members>FcosTradeCurrencyController</members><members>FcosTradeCurrencyGuard</members><members>FcosTradeCurrencyParentGuard</members><members>FcosTradeCurrencyService</members><name>ApexClass</name></types>
+<types><members>FcosTradeCurrencySideTrigger</members><name>ApexTrigger</name></types>
+<types><members>fcbEditOfferLineItemModal</members><members>fcbEditSupplierBidModal</members><members>fcbPromotedOfferLineItemExtraCosts</members><members>fcbSupplierBidExtraCosts</members><members>fcosTradeCurrencyEditor</members><name>LightningComponentBundle</name></types>
+<version>67.0</version>
 </Package>

@@ -2,19 +2,57 @@
   "schemaVersion": 1,
   "releaseMode": "reviewed-manifest-incremental-v1",
   "baselineMode": "read-only-owned-tree-inventory",
-  "sourceTreeHash": "5b9ab99ceb1ca8b7d1529bfd379a0e8afe5994243733dde8bcb9e1059e810329",
-  "manifestSha256": "8ae5bc3a2d711fd7c48d9f44bdc27152ee280543c0cbc3aea2a84ffb0649ee50",
+  "sourceTreeHash": "23e406cfd28c77076716d1c3cc48a0331845c699d3d4f14c70a892427bcdad5f",
+  "manifestSha256": "7f0e7b49dedc247e148b952872cb239337bef52de8c53ffd4ed63c761b018a4b",
   "baselineCommit": "30f3675994af711f029bdb3ba9bcebc25ba08f93",
   "baselineSourceTreeHash": "765eb19ffe75552f697ddebcb302034f1e5e7743ef245986e5e8020354587905",
   "baselineInventoryHash": "57df5cac4c15a8d80191a2bd721e09ee794f795cf11bde2a3efff638230562e4",
   "components": [
     {
-      "id": "LightningComponentBundle:fcbPromotedOfferLineItemExtraCosts",
+      "id": "ApexClass:FcosCompanyFxRateService",
       "files": [
-        "lwc/fcbPromotedOfferLineItemExtraCosts/fcbPromotedOfferLineItemExtraCosts.css",
-        "lwc/fcbPromotedOfferLineItemExtraCosts/fcbPromotedOfferLineItemExtraCosts.html",
-        "lwc/fcbPromotedOfferLineItemExtraCosts/fcbPromotedOfferLineItemExtraCosts.js",
-        "lwc/fcbPromotedOfferLineItemExtraCosts/fcbPromotedOfferLineItemExtraCosts.js-meta.xml"
+        "classes/FcosCompanyFxRateService.cls",
+        "classes/FcosCompanyFxRateService.cls-meta.xml"
+      ],
+      "dependsOn": []
+    },
+    {
+      "id": "ApexClass:FcosCompanyFxRateServiceTest",
+      "files": [
+        "classes/FcosCompanyFxRateServiceTest.cls",
+        "classes/FcosCompanyFxRateServiceTest.cls-meta.xml"
+      ],
+      "dependsOn": []
+    },
+    {
+      "id": "ApexClass:FcosDeveeEditorFixtureRehearsalTest",
+      "files": [
+        "classes/FcosDeveeEditorFixtureRehearsalTest.cls",
+        "classes/FcosDeveeEditorFixtureRehearsalTest.cls-meta.xml"
+      ],
+      "dependsOn": []
+    },
+    {
+      "id": "ApexClass:FcosTradeCurrencyController",
+      "files": [
+        "classes/FcosTradeCurrencyController.cls",
+        "classes/FcosTradeCurrencyController.cls-meta.xml"
+      ],
+      "dependsOn": []
+    },
+    {
+      "id": "ApexClass:FcosTradeCurrencyGuard",
+      "files": [
+        "classes/FcosTradeCurrencyGuard.cls",
+        "classes/FcosTradeCurrencyGuard.cls-meta.xml"
+      ],
+      "dependsOn": []
+    },
+    {
+      "id": "ApexClass:FcosTradeCurrencyParentGuard",
+      "files": [
+        "classes/FcosTradeCurrencyParentGuard.cls",
+        "classes/FcosTradeCurrencyParentGuard.cls-meta.xml"
       ],
       "dependsOn": []
     },
@@ -23,6 +61,14 @@
       "files": [
         "classes/FcosTradeCurrencyService.cls",
         "classes/FcosTradeCurrencyService.cls-meta.xml"
+      ],
+      "dependsOn": []
+    },
+    {
+      "id": "ApexTrigger:FcosTradeCurrencySideTrigger",
+      "files": [
+        "triggers/FcosTradeCurrencySideTrigger.trigger",
+        "triggers/FcosTradeCurrencySideTrigger.trigger-meta.xml"
       ],
       "dependsOn": []
     },
@@ -43,6 +89,16 @@
         "lwc/fcbEditSupplierBidModal/fcbEditSupplierBidModal.html",
         "lwc/fcbEditSupplierBidModal/fcbEditSupplierBidModal.js",
         "lwc/fcbEditSupplierBidModal/fcbEditSupplierBidModal.js-meta.xml"
+      ],
+      "dependsOn": []
+    },
+    {
+      "id": "LightningComponentBundle:fcbPromotedOfferLineItemExtraCosts",
+      "files": [
+        "lwc/fcbPromotedOfferLineItemExtraCosts/fcbPromotedOfferLineItemExtraCosts.css",
+        "lwc/fcbPromotedOfferLineItemExtraCosts/fcbPromotedOfferLineItemExtraCosts.html",
+        "lwc/fcbPromotedOfferLineItemExtraCosts/fcbPromotedOfferLineItemExtraCosts.js",
+        "lwc/fcbPromotedOfferLineItemExtraCosts/fcbPromotedOfferLineItemExtraCosts.js-meta.xml"
       ],
       "dependsOn": []
     },
@@ -74,13 +130,27 @@
   },
   "dependencyReview": {
     "complete": true,
-    "reviewer": "FCOS release backlog reconciliation",
-    "evidence": "trading-fx-post-guard-followup-dependency-inventory.json"
+    "reviewer": "FCOS Editors fixture source qualification",
+    "evidence": "DEVEE validation 0AfHF000007HZwd0AG verified the exact 13-component closure and all 600 local Apex tests. Scoped runtime and cleanup artifacts are independently qualified."
   },
   "nativeProjection": "schema-free-apex-lightning",
   "nativeInventories": {
     "devee": {
       "orgId": "00D1m0000008kioEAA",
+      "presentComponents": [
+        "ApexClass:FcosCompanyFxRateService",
+        "ApexClass:FcosCompanyFxRateServiceTest",
+        "ApexClass:FcosTradeCurrencyController",
+        "ApexClass:FcosTradeCurrencyGuard",
+        "ApexClass:FcosTradeCurrencyParentGuard",
+        "ApexClass:FcosTradeCurrencyService",
+        "ApexTrigger:FcosTradeCurrencySideTrigger",
+        "LightningComponentBundle:fcbEditOfferLineItemModal",
+        "LightningComponentBundle:fcbEditSupplierBidModal",
+        "LightningComponentBundle:fcbPromotedOfferLineItemExtraCosts",
+        "LightningComponentBundle:fcbSupplierBidExtraCosts",
+        "LightningComponentBundle:fcosTradeCurrencyEditor"
+      ],
       "baseline": {
         "files": {
           "aura/NewVesselOverride/NewVesselOverride.auradoc": {
@@ -4884,8 +4954,8 @@
             "size": 7876
           },
           "profiles/Sales Support.profile-meta.xml": {
-            "sha256": "27ec8e2ce7f36499f56d661d1c79ab2d597c294bdefa153c114c6f5a4aac77b2",
-            "size": 152137
+            "sha256": "b344df1b05f02c03c0fe4a482f1fe6a4c88e212f70953df9c640088a3c09ae4b",
+            "size": 151478
           },
           "quickActions/Invoice__c.Finalize_Native_Proforma.quickAction-meta.xml": {
             "sha256": "29f670276215065291ccf4b42955e4278cbf2ae75d200898654b5ef7e6b267c3",
@@ -5244,7 +5314,7 @@
             "size": 178
           }
         },
-        "inventoryHash": "4e90295c2039fbaf1c6f6176539caef8341ca28b1f7d776625d0147c3d6452ec"
+        "inventoryHash": "ee2bf99a8f2e84d94c9d2b62ba964373f10277ef7914b953f8cdc9e0389341d8"
       },
       "final": {
         "files": {
@@ -5436,22 +5506,6 @@
             "sha256": "356db61093648679fc9b3a801e41d51c94fa51e993380eac65b0bb076a20b6b0",
             "size": 174
           },
-          "classes/FcosCompanyFxRateService.cls": {
-            "sha256": "86ee9d931f08dbb38eb829a3cb742114b126540c4305de34cba50e72b136b669",
-            "size": 4978
-          },
-          "classes/FcosCompanyFxRateService.cls-meta.xml": {
-            "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
-            "size": 174
-          },
-          "classes/FcosCompanyFxRateServiceTest.cls": {
-            "sha256": "6ff86b8882da0349fcfa4e495d28bfbdb7fb100196369875460f42157409ed55",
-            "size": 7017
-          },
-          "classes/FcosCompanyFxRateServiceTest.cls-meta.xml": {
-            "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
-            "size": 174
-          },
           "classes/FcosLegacyFinancialCompatibilityTest.cls": {
             "sha256": "cc5e513e139e7b4bfbaff3be92280ba1ac6a5acfb7c540454690ebc061020300",
             "size": 25763
@@ -5564,14 +5618,6 @@
             "sha256": "356db61093648679fc9b3a801e41d51c94fa51e993380eac65b0bb076a20b6b0",
             "size": 174
           },
-          "classes/FcosTradeCurrencyController.cls": {
-            "sha256": "3c1bddc858422f260ac2fcde2508ed6a9b4f8f5beac32d14239b36e02330929d",
-            "size": 4182
-          },
-          "classes/FcosTradeCurrencyController.cls-meta.xml": {
-            "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
-            "size": 174
-          },
           "classes/FcosTradeCurrencyExtraCostController.cls": {
             "sha256": "6a82fc837576bc2ef003d1f999eb10d17531f21e228f5d0d57a76505a86045b2",
             "size": 3013
@@ -5593,14 +5639,6 @@
             "size": 6254
           },
           "classes/FcosTradeCurrencyExtraCostTest.cls-meta.xml": {
-            "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
-            "size": 174
-          },
-          "classes/FcosTradeCurrencyGuard.cls": {
-            "sha256": "19272e06e05ab99775c0bc8522244cc330e7233c34bc5370e107afb49d9f1c35",
-            "size": 26910
-          },
-          "classes/FcosTradeCurrencyGuard.cls-meta.xml": {
             "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
             "size": 174
           },
@@ -5626,14 +5664,6 @@
           },
           "classes/FcosTradeCurrencyInheritanceTest.cls-meta.xml": {
             "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
-            "size": 174
-          },
-          "classes/FcosTradeCurrencyParentGuard.cls": {
-            "sha256": "e6f340321c0c05217c4b6ac10550f6053428c9bf4db7e126c362a159bb36ec19",
-            "size": 1738
-          },
-          "classes/FcosTradeCurrencyParentGuard.cls-meta.xml": {
-            "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
             "size": 174
           },
           "classes/FcosTradeCurrencyServiceTest.cls": {
@@ -9961,8 +9991,8 @@
             "size": 7876
           },
           "profiles/Sales Support.profile-meta.xml": {
-            "sha256": "27ec8e2ce7f36499f56d661d1c79ab2d597c294bdefa153c114c6f5a4aac77b2",
-            "size": 152137
+            "sha256": "b344df1b05f02c03c0fe4a482f1fe6a4c88e212f70953df9c640088a3c09ae4b",
+            "size": 151478
           },
           "quickActions/Invoice__c.Finalize_Native_Proforma.quickAction-meta.xml": {
             "sha256": "29f670276215065291ccf4b42955e4278cbf2ae75d200898654b5ef7e6b267c3",
@@ -10022,14 +10052,6 @@
           },
           "triggers/FcosTradeCurrencyQuoteParent.trigger-meta.xml": {
             "sha256": "18a9f7cd9d86eb4e7a191f499acd3b8e2f9aadacf869085fe85472913c6d0748",
-            "size": 178
-          },
-          "triggers/FcosTradeCurrencySideTrigger.trigger": {
-            "sha256": "8e7ae4ea2fe9b460ab54a2842ef3ad316024e7d7e381697d474d0d9fd61f57e6",
-            "size": 206
-          },
-          "triggers/FcosTradeCurrencySideTrigger.trigger-meta.xml": {
-            "sha256": "3818dbe302a4fac9140d6748610634608f9cdce2e51193051a176011f5ea1599",
             "size": 178
           },
           "triggers/FcosTradeCurrencyStemParent.trigger": {
@@ -10321,12 +10343,26 @@
             "size": 178
           }
         },
-        "inventoryHash": "e1f8f9768417c88f2f3fc34cee5fd00bb835c37a212b014496afafe46939f436",
+        "inventoryHash": "59aa771c5edb374a50a401da92fb7afdea20f14c430af09d5ba62979ffa3117b",
         "projected": true
       }
     },
     "qat": {
       "orgId": "00D1s0000008lFEEAY",
+      "presentComponents": [
+        "ApexClass:FcosCompanyFxRateService",
+        "ApexClass:FcosCompanyFxRateServiceTest",
+        "ApexClass:FcosTradeCurrencyController",
+        "ApexClass:FcosTradeCurrencyGuard",
+        "ApexClass:FcosTradeCurrencyParentGuard",
+        "ApexClass:FcosTradeCurrencyService",
+        "ApexTrigger:FcosTradeCurrencySideTrigger",
+        "LightningComponentBundle:fcbEditOfferLineItemModal",
+        "LightningComponentBundle:fcbEditSupplierBidModal",
+        "LightningComponentBundle:fcbPromotedOfferLineItemExtraCosts",
+        "LightningComponentBundle:fcbSupplierBidExtraCosts",
+        "LightningComponentBundle:fcosTradeCurrencyEditor"
+      ],
       "baseline": {
         "files": {
           "aura/NewVesselOverride/NewVesselOverride.auradoc": {
@@ -15126,8 +15162,8 @@
             "size": 7876
           },
           "profiles/Sales Support.profile-meta.xml": {
-            "sha256": "bcf807b2bb801cf075a44137fcf1542aa26fbbc146ef3a185b79c153fc280e8e",
-            "size": 151774
+            "sha256": "273ab00a27b0f34d402bde0643efec47093f6d99e72e66748e1e723d4db75f11",
+            "size": 151115
           },
           "quickActions/Invoice__c.Finalize_Native_Proforma.quickAction-meta.xml": {
             "sha256": "29f670276215065291ccf4b42955e4278cbf2ae75d200898654b5ef7e6b267c3",
@@ -15486,7 +15522,7 @@
             "size": 178
           }
         },
-        "inventoryHash": "5b5bab8e4ba17461e2372c5bb31fbeb3a3ffca7d836961cb1d36896bf2bc9d3e"
+        "inventoryHash": "aa057d1b0ad8e98e0b6f542309b5dcea7d136e33a54dd923a2b997ca9945e528"
       },
       "final": {
         "files": {
@@ -15678,22 +15714,6 @@
             "sha256": "356db61093648679fc9b3a801e41d51c94fa51e993380eac65b0bb076a20b6b0",
             "size": 174
           },
-          "classes/FcosCompanyFxRateService.cls": {
-            "sha256": "86ee9d931f08dbb38eb829a3cb742114b126540c4305de34cba50e72b136b669",
-            "size": 4978
-          },
-          "classes/FcosCompanyFxRateService.cls-meta.xml": {
-            "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
-            "size": 174
-          },
-          "classes/FcosCompanyFxRateServiceTest.cls": {
-            "sha256": "6ff86b8882da0349fcfa4e495d28bfbdb7fb100196369875460f42157409ed55",
-            "size": 7017
-          },
-          "classes/FcosCompanyFxRateServiceTest.cls-meta.xml": {
-            "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
-            "size": 174
-          },
           "classes/FcosLegacyFinancialCompatibilityTest.cls": {
             "sha256": "cc5e513e139e7b4bfbaff3be92280ba1ac6a5acfb7c540454690ebc061020300",
             "size": 25763
@@ -15806,14 +15826,6 @@
             "sha256": "356db61093648679fc9b3a801e41d51c94fa51e993380eac65b0bb076a20b6b0",
             "size": 174
           },
-          "classes/FcosTradeCurrencyController.cls": {
-            "sha256": "3c1bddc858422f260ac2fcde2508ed6a9b4f8f5beac32d14239b36e02330929d",
-            "size": 4182
-          },
-          "classes/FcosTradeCurrencyController.cls-meta.xml": {
-            "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
-            "size": 174
-          },
           "classes/FcosTradeCurrencyExtraCostController.cls": {
             "sha256": "6a82fc837576bc2ef003d1f999eb10d17531f21e228f5d0d57a76505a86045b2",
             "size": 3013
@@ -15835,14 +15847,6 @@
             "size": 6254
           },
           "classes/FcosTradeCurrencyExtraCostTest.cls-meta.xml": {
-            "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
-            "size": 174
-          },
-          "classes/FcosTradeCurrencyGuard.cls": {
-            "sha256": "19272e06e05ab99775c0bc8522244cc330e7233c34bc5370e107afb49d9f1c35",
-            "size": 26910
-          },
-          "classes/FcosTradeCurrencyGuard.cls-meta.xml": {
             "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
             "size": 174
           },
@@ -15868,14 +15872,6 @@
           },
           "classes/FcosTradeCurrencyInheritanceTest.cls-meta.xml": {
             "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
-            "size": 174
-          },
-          "classes/FcosTradeCurrencyParentGuard.cls": {
-            "sha256": "e6f340321c0c05217c4b6ac10550f6053428c9bf4db7e126c362a159bb36ec19",
-            "size": 1738
-          },
-          "classes/FcosTradeCurrencyParentGuard.cls-meta.xml": {
-            "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
             "size": 174
           },
           "classes/FcosTradeCurrencyServiceTest.cls": {
@@ -20199,8 +20195,8 @@
             "size": 7876
           },
           "profiles/Sales Support.profile-meta.xml": {
-            "sha256": "bcf807b2bb801cf075a44137fcf1542aa26fbbc146ef3a185b79c153fc280e8e",
-            "size": 151774
+            "sha256": "273ab00a27b0f34d402bde0643efec47093f6d99e72e66748e1e723d4db75f11",
+            "size": 151115
           },
           "quickActions/Invoice__c.Finalize_Native_Proforma.quickAction-meta.xml": {
             "sha256": "29f670276215065291ccf4b42955e4278cbf2ae75d200898654b5ef7e6b267c3",
@@ -20260,14 +20256,6 @@
           },
           "triggers/FcosTradeCurrencyQuoteParent.trigger-meta.xml": {
             "sha256": "18a9f7cd9d86eb4e7a191f499acd3b8e2f9aadacf869085fe85472913c6d0748",
-            "size": 178
-          },
-          "triggers/FcosTradeCurrencySideTrigger.trigger": {
-            "sha256": "8e7ae4ea2fe9b460ab54a2842ef3ad316024e7d7e381697d474d0d9fd61f57e6",
-            "size": 206
-          },
-          "triggers/FcosTradeCurrencySideTrigger.trigger-meta.xml": {
-            "sha256": "3818dbe302a4fac9140d6748610634608f9cdce2e51193051a176011f5ea1599",
             "size": 178
           },
           "triggers/FcosTradeCurrencyStemParent.trigger": {
@@ -20559,12 +20547,26 @@
             "size": 178
           }
         },
-        "inventoryHash": "89b8eb83c9262425827f6908aacc6fb4d860e4da4ce5033ac769555f3c190cd7",
+        "inventoryHash": "53c52ba4790c732d552f2de30dbe3b8580624244a24996312d0b6c2b9aadbda8",
         "projected": true
       }
     },
     "production": {
       "orgId": "00D2x000000Ei4oEAC",
+      "presentComponents": [
+        "ApexClass:FcosCompanyFxRateService",
+        "ApexClass:FcosCompanyFxRateServiceTest",
+        "ApexClass:FcosTradeCurrencyController",
+        "ApexClass:FcosTradeCurrencyGuard",
+        "ApexClass:FcosTradeCurrencyParentGuard",
+        "ApexClass:FcosTradeCurrencyService",
+        "ApexTrigger:FcosTradeCurrencySideTrigger",
+        "LightningComponentBundle:fcbEditOfferLineItemModal",
+        "LightningComponentBundle:fcbEditSupplierBidModal",
+        "LightningComponentBundle:fcbPromotedOfferLineItemExtraCosts",
+        "LightningComponentBundle:fcbSupplierBidExtraCosts",
+        "LightningComponentBundle:fcosTradeCurrencyEditor"
+      ],
       "baseline": {
         "files": {
           "aura/NewVesselOverride/NewVesselOverride.auradoc": {
@@ -25372,8 +25374,8 @@
             "size": 7876
           },
           "profiles/Sales Support.profile-meta.xml": {
-            "sha256": "06ab2ac889dee93d249bc567ca957a02a1d4c8cca3c070dfc284036204943524",
-            "size": 152344
+            "sha256": "cbbb66f7a7a6337f0d8cad88f1e1eee22a375edc377d99543fc3f040ce3a52e7",
+            "size": 151685
           },
           "quickActions/Invoice__c.Finalize_Native_Proforma.quickAction-meta.xml": {
             "sha256": "29f670276215065291ccf4b42955e4278cbf2ae75d200898654b5ef7e6b267c3",
@@ -25732,7 +25734,7 @@
             "size": 178
           }
         },
-        "inventoryHash": "95b855807b2f2be4ca7bdcd7557f9264367934021da2f4ea965d0ef5a51c6e24"
+        "inventoryHash": "cd87fdfdafabf8f1e1be4867f81eccc2fdc1ef2434cc2deffab91a39b1f8a46c"
       },
       "final": {
         "files": {
@@ -25924,22 +25926,6 @@
             "sha256": "356db61093648679fc9b3a801e41d51c94fa51e993380eac65b0bb076a20b6b0",
             "size": 174
           },
-          "classes/FcosCompanyFxRateService.cls": {
-            "sha256": "86ee9d931f08dbb38eb829a3cb742114b126540c4305de34cba50e72b136b669",
-            "size": 4978
-          },
-          "classes/FcosCompanyFxRateService.cls-meta.xml": {
-            "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
-            "size": 174
-          },
-          "classes/FcosCompanyFxRateServiceTest.cls": {
-            "sha256": "6ff86b8882da0349fcfa4e495d28bfbdb7fb100196369875460f42157409ed55",
-            "size": 7017
-          },
-          "classes/FcosCompanyFxRateServiceTest.cls-meta.xml": {
-            "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
-            "size": 174
-          },
           "classes/FcosLegacyFinancialCompatibilityTest.cls": {
             "sha256": "cc5e513e139e7b4bfbaff3be92280ba1ac6a5acfb7c540454690ebc061020300",
             "size": 25763
@@ -26052,14 +26038,6 @@
             "sha256": "356db61093648679fc9b3a801e41d51c94fa51e993380eac65b0bb076a20b6b0",
             "size": 174
           },
-          "classes/FcosTradeCurrencyController.cls": {
-            "sha256": "3c1bddc858422f260ac2fcde2508ed6a9b4f8f5beac32d14239b36e02330929d",
-            "size": 4182
-          },
-          "classes/FcosTradeCurrencyController.cls-meta.xml": {
-            "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
-            "size": 174
-          },
           "classes/FcosTradeCurrencyExtraCostController.cls": {
             "sha256": "6a82fc837576bc2ef003d1f999eb10d17531f21e228f5d0d57a76505a86045b2",
             "size": 3013
@@ -26081,14 +26059,6 @@
             "size": 6254
           },
           "classes/FcosTradeCurrencyExtraCostTest.cls-meta.xml": {
-            "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
-            "size": 174
-          },
-          "classes/FcosTradeCurrencyGuard.cls": {
-            "sha256": "19272e06e05ab99775c0bc8522244cc330e7233c34bc5370e107afb49d9f1c35",
-            "size": 26910
-          },
-          "classes/FcosTradeCurrencyGuard.cls-meta.xml": {
             "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
             "size": 174
           },
@@ -26114,14 +26084,6 @@
           },
           "classes/FcosTradeCurrencyInheritanceTest.cls-meta.xml": {
             "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
-            "size": 174
-          },
-          "classes/FcosTradeCurrencyParentGuard.cls": {
-            "sha256": "e6f340321c0c05217c4b6ac10550f6053428c9bf4db7e126c362a159bb36ec19",
-            "size": 1738
-          },
-          "classes/FcosTradeCurrencyParentGuard.cls-meta.xml": {
-            "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
             "size": 174
           },
           "classes/FcosTradeCurrencyServiceTest.cls": {
@@ -30453,8 +30415,8 @@
             "size": 7876
           },
           "profiles/Sales Support.profile-meta.xml": {
-            "sha256": "06ab2ac889dee93d249bc567ca957a02a1d4c8cca3c070dfc284036204943524",
-            "size": 152344
+            "sha256": "cbbb66f7a7a6337f0d8cad88f1e1eee22a375edc377d99543fc3f040ce3a52e7",
+            "size": 151685
           },
           "quickActions/Invoice__c.Finalize_Native_Proforma.quickAction-meta.xml": {
             "sha256": "29f670276215065291ccf4b42955e4278cbf2ae75d200898654b5ef7e6b267c3",
@@ -30514,14 +30476,6 @@
           },
           "triggers/FcosTradeCurrencyQuoteParent.trigger-meta.xml": {
             "sha256": "18a9f7cd9d86eb4e7a191f499acd3b8e2f9aadacf869085fe85472913c6d0748",
-            "size": 178
-          },
-          "triggers/FcosTradeCurrencySideTrigger.trigger": {
-            "sha256": "8e7ae4ea2fe9b460ab54a2842ef3ad316024e7d7e381697d474d0d9fd61f57e6",
-            "size": 206
-          },
-          "triggers/FcosTradeCurrencySideTrigger.trigger-meta.xml": {
-            "sha256": "3818dbe302a4fac9140d6748610634608f9cdce2e51193051a176011f5ea1599",
             "size": 178
           },
           "triggers/FcosTradeCurrencyStemParent.trigger": {
@@ -30813,7 +30767,7 @@
             "size": 178
           }
         },
-        "inventoryHash": "201a409b661c72c566084a3ccdee698b3e42e348f6fb988170c27a6dd589df3e",
+        "inventoryHash": "cbcf0b78d6f1b2f0b907756a88b183c57c6af600f8f4b4ae393400fc5d681af6",
         "projected": true
       }
     }
@@ -31769,52 +31723,52 @@
     ]
   },
   "inventoryManifests": {
-    "e1f8f9768417c88f2f3fc34cee5fd00bb835c37a212b014496afafe46939f436": {
+    "ee2bf99a8f2e84d94c9d2b62ba964373f10277ef7914b953f8cdc9e0389341d8": {
       "path": "manifest/trading-fx-editors-combined-stable.xml",
-      "sha256": "fdf8f96b0de870754bcb8890f2fb5fe0d6f9443a47c7b528f340f64f3268b3f4",
+      "sha256": "14234a40aa8e21270f4061c471b8f0ee685cc73af1e899601b6a90db778b0571",
       "metadata": {
-        "path": "manifest/trading-fx-editors-combined.xml",
-        "sha256": "8ae5bc3a2d711fd7c48d9f44bdc27152ee280543c0cbc3aea2a84ffb0649ee50"
+        "path": "manifest/trading-fx-editors-fixture-baseline.xml",
+        "sha256": "6432e1c2e81ed6f09c8247a21d178020708ca5bcd714889760bcb1546937910e"
       }
     },
-    "5b5bab8e4ba17461e2372c5bb31fbeb3a3ffca7d836961cb1d36896bf2bc9d3e": {
+    "59aa771c5edb374a50a401da92fb7afdea20f14c430af09d5ba62979ffa3117b": {
       "path": "manifest/trading-fx-editors-combined-stable.xml",
-      "sha256": "fdf8f96b0de870754bcb8890f2fb5fe0d6f9443a47c7b528f340f64f3268b3f4",
+      "sha256": "14234a40aa8e21270f4061c471b8f0ee685cc73af1e899601b6a90db778b0571",
       "metadata": {
         "path": "manifest/trading-fx-editors-combined.xml",
-        "sha256": "8ae5bc3a2d711fd7c48d9f44bdc27152ee280543c0cbc3aea2a84ffb0649ee50"
+        "sha256": "7f0e7b49dedc247e148b952872cb239337bef52de8c53ffd4ed63c761b018a4b"
       }
     },
-    "89b8eb83c9262425827f6908aacc6fb4d860e4da4ce5033ac769555f3c190cd7": {
+    "aa057d1b0ad8e98e0b6f542309b5dcea7d136e33a54dd923a2b997ca9945e528": {
       "path": "manifest/trading-fx-editors-combined-stable.xml",
-      "sha256": "fdf8f96b0de870754bcb8890f2fb5fe0d6f9443a47c7b528f340f64f3268b3f4",
+      "sha256": "14234a40aa8e21270f4061c471b8f0ee685cc73af1e899601b6a90db778b0571",
       "metadata": {
-        "path": "manifest/trading-fx-editors-combined.xml",
-        "sha256": "8ae5bc3a2d711fd7c48d9f44bdc27152ee280543c0cbc3aea2a84ffb0649ee50"
+        "path": "manifest/trading-fx-editors-fixture-baseline.xml",
+        "sha256": "6432e1c2e81ed6f09c8247a21d178020708ca5bcd714889760bcb1546937910e"
       }
     },
-    "95b855807b2f2be4ca7bdcd7557f9264367934021da2f4ea965d0ef5a51c6e24": {
+    "53c52ba4790c732d552f2de30dbe3b8580624244a24996312d0b6c2b9aadbda8": {
       "path": "manifest/trading-fx-editors-combined-stable.xml",
-      "sha256": "fdf8f96b0de870754bcb8890f2fb5fe0d6f9443a47c7b528f340f64f3268b3f4",
+      "sha256": "14234a40aa8e21270f4061c471b8f0ee685cc73af1e899601b6a90db778b0571",
       "metadata": {
         "path": "manifest/trading-fx-editors-combined.xml",
-        "sha256": "8ae5bc3a2d711fd7c48d9f44bdc27152ee280543c0cbc3aea2a84ffb0649ee50"
+        "sha256": "7f0e7b49dedc247e148b952872cb239337bef52de8c53ffd4ed63c761b018a4b"
       }
     },
-    "201a409b661c72c566084a3ccdee698b3e42e348f6fb988170c27a6dd589df3e": {
+    "cd87fdfdafabf8f1e1be4867f81eccc2fdc1ef2434cc2deffab91a39b1f8a46c": {
       "path": "manifest/trading-fx-editors-combined-stable.xml",
-      "sha256": "fdf8f96b0de870754bcb8890f2fb5fe0d6f9443a47c7b528f340f64f3268b3f4",
+      "sha256": "14234a40aa8e21270f4061c471b8f0ee685cc73af1e899601b6a90db778b0571",
       "metadata": {
-        "path": "manifest/trading-fx-editors-combined.xml",
-        "sha256": "8ae5bc3a2d711fd7c48d9f44bdc27152ee280543c0cbc3aea2a84ffb0649ee50"
+        "path": "manifest/trading-fx-editors-fixture-baseline.xml",
+        "sha256": "6432e1c2e81ed6f09c8247a21d178020708ca5bcd714889760bcb1546937910e"
       }
     },
-    "4e90295c2039fbaf1c6f6176539caef8341ca28b1f7d776625d0147c3d6452ec": {
+    "cbcf0b78d6f1b2f0b907756a88b183c57c6af600f8f4b4ae393400fc5d681af6": {
       "path": "manifest/trading-fx-editors-combined-stable.xml",
-      "sha256": "fdf8f96b0de870754bcb8890f2fb5fe0d6f9443a47c7b528f340f64f3268b3f4",
+      "sha256": "14234a40aa8e21270f4061c471b8f0ee685cc73af1e899601b6a90db778b0571",
       "metadata": {
         "path": "manifest/trading-fx-editors-combined.xml",
-        "sha256": "8ae5bc3a2d711fd7c48d9f44bdc27152ee280543c0cbc3aea2a84ffb0649ee50"
+        "sha256": "7f0e7b49dedc247e148b952872cb239337bef52de8c53ffd4ed63c761b018a4b"
       }
     }
   },
