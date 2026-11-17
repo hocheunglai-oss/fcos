@@ -82,6 +82,7 @@ export default class FcosTradeCurrencyEditor extends LightningElement {
     _recordId;
     _direction;
     _fixtureId;
+    isLifecycleConnected = false;
     scopeVersion = 0;
     reviewScheduled = false;
     review;
@@ -149,16 +150,18 @@ export default class FcosTradeCurrencyEditor extends LightningElement {
         this.reviewScheduled = true;
         Promise.resolve().then(() => {
             this.reviewScheduled = false;
-            if (this.isConnected) return this.refreshReview();
+            if (this.isLifecycleConnected) return this.refreshReview();
             return undefined;
         });
     }
 
     connectedCallback() {
+        this.isLifecycleConnected = true;
         this.scheduleReview();
     }
 
     disconnectedCallback() {
+        this.isLifecycleConnected = false;
         this.scopeVersion += 1;
         this.requestVersion += 1;
         this.isLoading = false;

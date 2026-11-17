@@ -31,10 +31,10 @@ function mount(overrides = {}) {
     return overrides[name] ? overrides[name](input) : review;
   }]));
   class LightningElement {
-    isConnected = true;
     template = { querySelector: () => ({ checkValidity: () => true }) };
     dispatchEvent(event) { events.push(event); }
   }
+  if (!overrides.withoutDomConnectionGetter) LightningElement.prototype.isConnected = true;
   class CustomEvent {
     constructor(name, options) { Object.assign(this, { name, ...options }); }
   }
@@ -46,7 +46,7 @@ function mount(overrides = {}) {
 }
 
 test('ordinary mount coalesces input and connect events and uses only the normal Apex actions', async () => {
-  const { editor, calls } = mount();
+  const { editor, calls } = mount({ withoutDomConnectionGetter: true });
   editor.direction = 'Buy';
   editor.recordId = 'ordinary-record';
   editor.connectedCallback();
@@ -55,6 +55,16 @@ test('ordinary mount coalesces input and connect events and uses only the normal
   assert.deepEqual(calls.map(call => call.name), ['preview', 'saveDraft']);
   assert.deepEqual(calls[0].input, { direction: 'Buy', recordId: 'ordinary-record' });
   assert.equal(Object.hasOwn(calls[1].input, 'fixtureId'), false);
+});
+
+test('review scheduling uses lifecycle callbacks without a DOM connection getter and cancels on disconnect', async () => {
+  const { editor, calls } = mount({ withoutDomConnectionGetter: true });
+  editor.direction = 'Buy';
+  editor.recordId = 'disconnected-record';
+  editor.connectedCallback();
+  editor.disconnectedCallback();
+  await tick();
+  assert.deepEqual(calls, []);
 });
 
 test('an explicit fixture uses scoped initial preview, currency selection and save', async () => {
