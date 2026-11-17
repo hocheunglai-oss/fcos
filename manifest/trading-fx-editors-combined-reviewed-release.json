@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "releaseMode": "reviewed-manifest-incremental-v1",
   "baselineMode": "read-only-owned-tree-inventory",
-  "sourceTreeHash": "23e406cfd28c77076716d1c3cc48a0331845c699d3d4f14c70a892427bcdad5f",
+  "sourceTreeHash": "e71e29b60a175d5d6848e85c7fb72d05ab7299c8b53e4e1424a53dc88717ceeb",
   "manifestSha256": "7f0e7b49dedc247e148b952872cb239337bef52de8c53ffd4ed63c761b018a4b",
   "baselineCommit": "30f3675994af711f029bdb3ba9bcebc25ba08f93",
   "baselineSourceTreeHash": "765eb19ffe75552f697ddebcb302034f1e5e7743ef245986e5e8020354587905",
@@ -131,7 +131,7 @@
   "dependencyReview": {
     "complete": true,
     "reviewer": "FCOS Editors fixture source qualification",
-    "evidence": "DEVEE validation 0AfHF000007HZwd0AG verified the exact 13-component closure and all 600 local Apex tests. Scoped runtime and cleanup artifacts are independently qualified."
+    "evidence": "DEVEE validation 0AfHF000007HZwd0AG passed the 13-component closure and 600 Apex tests before the LWC-only lifecycle correction. Scheduler probe 0AfHF000007HZwh0AG validated the exact corrected bundle and DEVEE job 0AfHF000007HcWH0A0 rendered the signed currency review. No Apex or dependency definitions changed."
   },
   "nativeProjection": "schema-free-apex-lightning",
   "nativeInventories": {
