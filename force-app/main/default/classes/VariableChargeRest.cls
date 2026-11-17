@@ -143,8 +143,8 @@ global without sharing class VariableChargeRest {
             stage.Reviewed_Source_Fingerprint__c = costFingerprint;
         }
         if (sides.contains('buyer_charge')) {
-            buyerFingerprint = VariableChargeInvoiceReadinessService.buyerChargeFingerprint(stemId, supplierId);
-            if (String.isBlank(body.expectedBuyerFingerprint) || body.expectedBuyerFingerprint.toLowerCase() != buyerFingerprint) throw requestError('Buyer-charge data changed after review. Refresh and review the buyer-charge side again.');
+            buyerFingerprint = VariableChargeInvoiceReadinessService.matchingBuyerChargeFingerprint(stemId, supplierId, body.expectedBuyerFingerprint);
+            if (buyerFingerprint == null) throw requestError('The reviewed buyer-charge fingerprint differs from the current delivery, product and charge inputs. Refresh and review the Buyer Leg again.');
             stage.Buyer_Charge_Status__c = 'Verified';
             stage.Buyer_Charge_Confirmed_At__c = System.now();
             stage.Buyer_Charge_Confirmed_By_Email__c = body.verifierEmail.trim().toLowerCase();

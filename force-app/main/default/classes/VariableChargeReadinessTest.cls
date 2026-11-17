@@ -89,6 +89,36 @@ private class VariableChargeReadinessTest {
         update stage;
     }
 
+    @IsTest
+    static void buyerApprovalAcceptsLegacyApiLinksAndDetectsChangedInputs() {
+        Map<String, Id> ids = prepareRequiredSupplier(true);
+        Id stemId = ids.get('stem');
+        Id supplierId = ids.get('supplier');
+        verifyBuyerSide(ids);
+        String stable = VariableChargeInvoiceReadinessService.buyerChargeFingerprint(stemId, supplierId);
+        String legacy = VariableChargeInvoiceReadinessService.buyerChargeFingerprintForVersion(stemId, supplierId, '68.0');
+        System.assertNotEquals(stable, legacy, 'The generated API links must produce different historical fingerprints.');
+        update new STEM_Variable_Charge_Supplier__c(Id = ids.get('stage'), Buyer_Charge_Reviewed_Source_Fingerprint__c = legacy);
+
+        Test.startTest();
+        VariableChargeInvoiceReadinessService.Readiness incomplete = VariableChargeInvoiceReadinessService.evaluateBuyer(stemId);
+        System.assertEquals(false, incomplete.ready);
+        System.assert(incomplete.reason.contains('STEM-level Buyer Charges Confirmed flag is off'), incomplete.reason);
+        update new STEM__c(Id = stemId, Variable_Charges_Confirmed__c = true);
+        System.assertEquals(true, VariableChargeInvoiceReadinessService.evaluateBuyer(stemId).ready);
+
+        ContextManager.skipTriggers = true;
+        try {
+            update new STEM__c(Id = stemId, Delivery_Date__c = Date.today().addDays(-2));
+        } finally {
+            ContextManager.skipTriggers = false;
+        }
+        VariableChargeInvoiceReadinessService.Readiness mismatch = VariableChargeInvoiceReadinessService.evaluateBuyerSupplier(stemId, supplierId);
+        System.assertEquals(false, mismatch.ready);
+        System.assert(mismatch.reason.contains('differs from the fingerprint of the current delivery, product and charge inputs'), mismatch.reason);
+        Test.stopTest();
+    }
+
     private static Invoice__c insertInvoiceWithoutTriggers(Id stemId) {
         ContextManager.avoidInvoiceFiring = true;
         try {

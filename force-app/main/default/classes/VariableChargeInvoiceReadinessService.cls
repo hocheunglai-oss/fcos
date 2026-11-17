@@ -1,4 +1,6 @@
 public without sharing class VariableChargeInvoiceReadinessService {
+    private static final String BUYER_FINGERPRINT_API_VERSION = '67.0';
+    private static final String LEGACY_BUYER_FINGERPRINT_API_VERSION = '68.0';
     public static final String FCOS_URL_PREFIX = 'https://fcos.fcuno.com/payment-collections?tab=variable-charges&stemId=';
     public static final Date STEM_CREATED_FROM = Date.newInstance(2026, 1, 1);
     private static final Decimal ANCHORAGE_BUYER_RATE_USD = 0.002;
@@ -173,7 +175,9 @@ public without sharing class VariableChargeInvoiceReadinessService {
             if (buyerSideReadiness.ready != true) return buyerSideReadiness;
         }
         if (stem.Variable_Charges_Confirmed__c != true) {
-            return blocked('Approve buyer charges in FCOS before creating the final Buyer Invoice.', stemId, null, true);
+            return blocked('The supplier buyer-charge approvals match the current data. '
+                + 'The STEM-level Buyer Charges Confirmed flag is off. Amend and approve the Buyer Leg in FCOS before creating the final Buyer Invoice.',
+                stemId, null, true);
         }
         return withActionability(new Readiness(true, true, null, stemId, null), actionability);
     }
@@ -194,10 +198,16 @@ public without sharing class VariableChargeInvoiceReadinessService {
         if (context.stage == null || context.stage.Buyer_Charge_Status__c != 'Verified') {
             return blocked('Confirm ' + context.supplier.Name + ' buyer charges in FCOS before creating the final Buyer Invoice.', stemId, supplierId, true);
         }
-        String currentFingerprint = buyerChargeFingerprint(stemId, supplierId);
-        if (String.isBlank(context.stage.Buyer_Charge_Reviewed_Source_Fingerprint__c)
-            || context.stage.Buyer_Charge_Reviewed_Source_Fingerprint__c != currentFingerprint) {
-            return blocked(context.supplier.Name + ' buyer charges changed. Confirm them again in FCOS before creating the final Buyer Invoice.', stemId, supplierId, true);
+        String approvedFingerprint = context.stage.Buyer_Charge_Reviewed_Source_Fingerprint__c;
+        if (String.isBlank(approvedFingerprint)) {
+            return blocked('The saved buyer-charge approval for ' + context.supplier.Name
+                + ' is missing its fingerprint. Amend and approve the Buyer Leg in FCOS.', stemId, supplierId, true);
+        }
+        if (matchingBuyerChargeFingerprint(stemId, supplierId, approvedFingerprint) == null) {
+            return blocked('The saved buyer-charge fingerprint for ' + context.supplier.Name
+                + ' differs from the fingerprint of the current delivery, product and charge inputs. '
+                + 'This approval only stores the fingerprint. Review the current inputs in FCOS, then amend and approve the Buyer Leg.',
+                stemId, supplierId, true);
         }
         return withActionability(new Readiness(true, true, null, stemId, supplierId), actionability);
     }
@@ -555,6 +565,38 @@ public without sharing class VariableChargeInvoiceReadinessService {
     }
 
     public static String buyerChargeFingerprint(Id stemId, Id supplierId) {
+        return buyerChargeFingerprintForVersion(stemId, supplierId, BUYER_FINGERPRINT_API_VERSION);
+    }
+
+    public static String matchingBuyerChargeFingerprint(Id stemId, Id supplierId, String expectedFingerprint) {
+        if (String.isBlank(expectedFingerprint)) return null;
+        List<String> parts = buyerChargeFingerprintParts(stemId, supplierId);
+        String canonical = buyerChargeDigest(parts, BUYER_FINGERPRINT_API_VERSION);
+        if (expectedFingerprint == canonical) return canonical;
+        // Salesforce v68 changed its generated record links. Compare the same
+        // current inputs with the exact header serialization used by those approvals.
+        return expectedFingerprint == buyerChargeDigest(parts, LEGACY_BUYER_FINGERPRINT_API_VERSION) ? canonical : null;
+    }
+
+    @TestVisible private static String buyerChargeFingerprintForVersion(Id stemId, Id supplierId, String version) {
+        return buyerChargeDigest(buyerChargeFingerprintParts(stemId, supplierId), version);
+    }
+
+    private static String buyerChargeDigest(List<String> parts, String version) {
+        List<String> normalized = new List<String>();
+        for (String part : parts) {
+            if (part.startsWith('S|{"attributes":') || part.startsWith('A|{"attributes":')) {
+                // Only the platform-generated header link varies with the org API version.
+                part = part.replaceFirst(',"url":"/services/data/v[0-9]+\\.[0-9]+/sobjects/',
+                    ',"url":"/services/data/v' + version + '/sobjects/');
+            }
+            normalized.add(part);
+        }
+        Blob digest = Crypto.generateDigest('SHA-256', Blob.valueOf(String.join(normalized, '\n')));
+        return EncodingUtil.convertToHex(digest).toLowerCase();
+    }
+
+    private static List<String> buyerChargeFingerprintParts(Id stemId, Id supplierId) {
         List<String> parts = new List<String>();
         Map<String, Object> binds = new Map<String, Object>{'stemId' => stemId, 'supplierId' => supplierId};
         parts.add('S|' + JSON.serialize(fingerprintRows(STEM__c.SObjectType, new List<String>{
@@ -600,8 +642,7 @@ public without sharing class VariableChargeInvoiceReadinessService {
         for (SObject row : extraRows) parts.add('E|' + serializeProjection(row, baseExtraFields));
         addReviewedEvidenceFingerprintParts(parts, stemId, extraRows, false);
         appendFxFingerprintParts(parts,lineRows,extraRows,supplierId,'Sell');
-        Blob digest = Crypto.generateDigest('SHA-256', Blob.valueOf(String.join(parts, '\n')));
-        return EncodingUtil.convertToHex(digest).toLowerCase();
+        return parts;
     }
 
     private static List<String> tradeFxFields(String direction) {

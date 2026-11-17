@@ -152,7 +152,9 @@ private class VariableChargeRestTest {
         body.stemId = String.valueOf(ids.get('stem'));
         body.supplierId = String.valueOf(ids.get('supplier'));
         body.verifierEmail = 'supplier.trader@example.com';
-        body.expectedBuyerFingerprint = VariableChargeInvoiceReadinessService.buyerChargeFingerprint(ids.get('stem'), ids.get('supplier'));
+        String stable = VariableChargeInvoiceReadinessService.buyerChargeFingerprint(ids.get('stem'), ids.get('supplier'));
+        body.expectedBuyerFingerprint = VariableChargeInvoiceReadinessService.buyerChargeFingerprintForVersion(ids.get('stem'), ids.get('supplier'), '68.0');
+        System.assertNotEquals(stable, body.expectedBuyerFingerprint);
         body.expectedStageLastModifiedAt = iso(stage.LastModifiedDate);
         body.expectedStemLastModifiedAt = iso(stem.LastModifiedDate);
         request('POST', String.valueOf(ids.get('stem')) + '/supplier/' + String.valueOf(ids.get('supplier')) + '/buyer-charge/confirm', body);
@@ -163,6 +165,7 @@ private class VariableChargeRestTest {
         System.assertEquals('Verified', confirmed.buyerChargeStatus);
         System.assertEquals('Pending', confirmed.supplierStatus);
         System.assertEquals(true, confirmed.buyerConfirmed);
+        System.assertEquals(stable, confirmed.buyerFingerprint);
     }
 
     @IsTest
