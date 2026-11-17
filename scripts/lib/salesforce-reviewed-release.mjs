@@ -405,8 +405,10 @@ export function createReviewedSalesforcePlan({ review, manifestBytes, bootstrapB
   } else if (bootstrapBytes) throw new Error('Unreviewed bootstrap bytes supplied.');
   assertNativeSerializationAllowances(review, components);
   const nativeProjection = review.nativeProjection;
+  // The exact Editors desktop component contract is checked below after its native inventory loads.
+  const editorFixtureTrigger = review.nativeDeveeDesktop === undefined ? null : 'ApexTrigger:FcosTradeCurrencySideTrigger';
   if (nativeProjection !== undefined && (nativeProjection !== 'schema-free-apex-lightning' || bootstrap
-    || !review.nativeInventories || components.some(({ id }) => !/^(?:ApexClass|LightningComponentBundle):/u.test(id))
+    || !review.nativeInventories || components.some(({ id }) => id !== editorFixtureTrigger && !/^(?:ApexClass|LightningComponentBundle):/u.test(id))
     || !components.some(({ id }) => id.startsWith('LightningComponentBundle:')))) {
     failCoverage('Schema-free native projections require an explicit Lightning package with only reviewed Apex or Lightning components.');
   }

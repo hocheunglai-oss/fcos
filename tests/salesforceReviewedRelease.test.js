@@ -12,6 +12,7 @@ import { assertSalesforceProductionSettingCompatibility, assertReviewedInputsUnc
 import { reviewedDeveePublicationProof } from '../scripts/sync-salesforce-reviewed-repository.mjs';
 import { applyReviewedPrerequisites, verifyPreBootstrapStage } from '../scripts/lib/rapid-release/salesforce-reviewed-adapter.mjs';
 import { digest, targets } from '../scripts/lib/rapid-release/contract.mjs';
+import { editorDesktopCaseSetDigest } from '../scripts/lib/rapid-release/salesforce-devee-desktop-checkpoint.mjs';
 
 const policy = FCOS_CONNECTION_POLICY.providers.find(({ id }) => id === 'salesforce');
 const fixedNow = new Date('2026-11-06T10:00:00.000Z');
@@ -1798,22 +1799,28 @@ test('zero-test quick deploy requires native positive validation for the exact l
   } finally { f.cleanup(); }
 });
 
-test('mixed native readback allows one terminal newline difference in LWC JavaScript, templates, and stylesheets', () => {
+test('mixed native readback allows one terminal newline difference in Lightning and Apex trigger source', () => {
   const cwd = mkdtempSync(path.join(tmpdir(), 'fcos-native-lwc-fixture-'));
   const environment = policy.environments[0];
   const component = 'LightningComponentBundle:examplePanel';
+  const triggerComponent = 'ApexTrigger:FcosTradeCurrencySideTrigger';
+  const trigger = 'triggers/FcosTradeCurrencySideTrigger.trigger';
+  const triggerDescriptor = trigger + '-meta.xml';
   const js = 'lwc/examplePanel/examplePanel.js';
   const html = 'lwc/examplePanel/examplePanel.html';
   const css = 'lwc/examplePanel/examplePanel.css';
   const source = {
+    [trigger]: Buffer.from('trigger FcosTradeCurrencySideTrigger on Trade_Currency_Side__c (before delete) {}\n'),
+    [triggerDescriptor]: Buffer.from('<ApexTrigger><status>Active</status></ApexTrigger>\n'),
     [js]: Buffer.from('export default class ExamplePanel {}\n'),
     [html]: Buffer.from('<template><div>Example</div></template>\n'),
     [css]: Buffer.from('div { color: black; }\n'),
   };
   const stable = { 'profiles/Example.profile-meta.xml': Buffer.from('<Profile/>') };
-  const native = { ...source, [js]: source[js].subarray(0, -1), [html]: source[html].subarray(0, -1), [css]: source[css].subarray(0, -1) };
+  const native = { ...source, [trigger]: source[trigger].subarray(0, -1), [js]: source[js].subarray(0, -1),
+    [html]: source[html].subarray(0, -1), [css]: source[css].subarray(0, -1) };
   const manifest = packageXml(['Profile:Example']);
-  const supplemental = packageXml([component]);
+  const supplemental = packageXml([component, triggerComponent]);
   const projectionPaths = Object.keys(source).sort();
   const expectedInventory = inventoryFromFiles(stable).files;
   const expectedInventoryHash = projectedNativeInventoryHash(expectedInventory, projectionPaths);
@@ -1835,14 +1842,17 @@ test('mixed native readback allows one terminal newline difference in LWC JavaSc
       return { id: '09SHF000002gTFl2AM', status: 'Succeeded', done: true, success: true };
     } });
     const request = { plan: { finalInventory: inventoryFromFiles(source), review: {
-      components: [{ id: component, files: projectionPaths }],
+      components: [{ id: component, files: [js, html, css] }, { id: triggerComponent, files: [trigger, triggerDescriptor] }],
       inventoryManifests: { [expectedInventoryHash]: { path: 'inventory.xml', sha256: hash(manifest),
         metadata: { path: 'metadata.xml', sha256: hash(supplemental) } } },
     } }, expectedInventory, expectedInventoryHash, nativeExport: true, nativeBootstrap: true, projectedNativeInventory: true,
     projectionPaths };
     assert.deepEqual(provider.verifyInventory(environment, request).verifiedProjectionPaths, projectionPaths);
     for (const [name, invalid] of [[js, 'export default class OtherPanel {}'], [html, '<template><div>Other</div></template>'],
-      [html, source[html].toString() + '\n'], [css, 'div { color: red; }'], [css, source[css].toString() + '\n']]) {
+      [html, source[html].toString() + '\n'], [css, 'div { color: red; }'], [css, source[css].toString() + '\n'],
+      [trigger, source[trigger].toString().replace('before delete', 'before insert')],
+      [trigger, source[trigger].toString() + '\n'],
+      [triggerDescriptor, '<ApexTrigger><status>Inactive</status></ApexTrigger>']]) {
       const before = native[name];
       native[name] = Buffer.from(invalid);
       assert.throws(() => provider.verifyInventory(environment, request), /Native metadata projection differs/);
@@ -1961,6 +1971,58 @@ test('schema-free Lightning and Apex can verify a projected final inventory with
   const fakeBootstrap = structuredClone(review);
   fakeBootstrap.nativeInventories.devee.bootstrap = rawBaseline;
   assert.throws(() => create(fakeBootstrap), /matching post-write checkpoint modes/u);
+});
+
+test('only the exact extended Editors desktop review may project the currency side trigger', () => {
+  const triggerName = 'FcosTradeCurrencySideTrigger';
+  const rehearsalName = 'FcosDeveeEditorFixtureRehearsalTest';
+  const create = ({ desktop = true, trigger = triggerName, omitClass = false } = {}) => {
+    const classes = ['FcosCompanyFxRateService', 'FcosCompanyFxRateServiceTest', rehearsalName, 'FcosTradeCurrencyController',
+      'FcosTradeCurrencyGuard', 'FcosTradeCurrencyParentGuard', 'FcosTradeCurrencyService'];
+    const bundles = ['fcbEditOfferLineItemModal', 'fcbEditSupplierBidModal', 'fcbPromotedOfferLineItemExtraCosts',
+      'fcbSupplierBidExtraCosts', 'fcosTradeCurrencyEditor'];
+    const component = (type, name, files) => ({ id: type + ':' + name, files, dependsOn: [] });
+    const components = [
+      ...classes.filter(name => !omitClass || name !== rehearsalName)
+        .map(name => component('ApexClass', name, [`classes/${name}.cls`, `classes/${name}.cls-meta.xml`])),
+      component('ApexTrigger', trigger, [`triggers/${trigger}.trigger`, `triggers/${trigger}.trigger-meta.xml`]),
+      ...bundles.map(name => component('LightningComponentBundle', name, [`lwc/${name}/${name}.js`, `lwc/${name}/${name}.js-meta.xml`])),
+    ];
+    const projectionPaths = components.flatMap(row => row.files).sort();
+    const stable = 'objects/Invoice__c/fields/Amount__c.field-meta.xml';
+    const before = Object.fromEntries([[stable, Buffer.from('<CustomField/>\n')],
+      ...projectionPaths.filter(name => !name.includes(rehearsalName)).map(name => [name, Buffer.from('reviewed baseline ' + name)])]);
+    const after = { ...before, [`triggers/${trigger}.trigger`]: Buffer.from('reviewed trigger source') };
+    for (const name of projectionPaths.filter(path => path.includes(rehearsalName))) after[name] = Buffer.from('new reviewed ' + name);
+    const baselineInventory = inventoryFromFiles(before);
+    const finalInventory = inventoryFromFiles(after);
+    const manifestBytes = packageXml(components.map(row => row.id));
+    const baseline = { files: baselineInventory.files, inventoryHash: baselineInventory.inventoryHash };
+    const pins = { [stable]: baseline.files[stable] };
+    const final = { projected: true, files: pins, inventoryHash: projectedNativeInventoryHash(pins, projectionPaths) };
+    const retrieval = { path: 'manifest/stable.xml', sha256: hash('stable'),
+      metadata: { path: 'manifest/extended.xml', sha256: hash(manifestBytes) } };
+    const review = { schemaVersion: 1, releaseMode: REVIEWED_SALESFORCE_MODE, baselineMode: INVENTORY_BASELINE_MODE,
+      sourceTreeHash: finalInventory.sourceTreeHash, manifestSha256: hash(manifestBytes), baselineCommit: 'a'.repeat(40),
+      baselineSourceTreeHash: baselineInventory.sourceTreeHash, baselineInventoryHash: baselineInventory.inventoryHash,
+      components, dependencyReview: { complete: true, reviewer: 'reviewer', evidence: 'isolated Editors fixture review' },
+      testPlan: { level: 'RunLocalTests', tests: [], minimumTests: 1 },
+      ...(desktop ? { nativeDeveeDesktop: { caseSetDigest: editorDesktopCaseSetDigest } } : {}),
+      nativeProjection: 'schema-free-apex-lightning',
+      nativeInventories: Object.fromEntries(policy.environments.map(({ key, orgId }) => [key, { orgId, baseline, final }])),
+      inventoryManifests: { [baseline.inventoryHash]: { ...retrieval, metadata: { path: 'manifest/present.xml',
+        sha256: hash(packageXml(components.map(row => row.id).filter(id => id !== 'ApexClass:' + rehearsalName))) } },
+      [final.inventoryHash]: retrieval },
+    };
+    return createReviewedSalesforcePlan({ review, baselineInventory, finalInventory, manifestBytes, policy });
+  };
+  const plan = create();
+  assert.ok(plan.nativeInventories.devee.final.projectionPaths.includes(`triggers/${triggerName}.trigger`));
+  assert.ok(plan.nativeInventories.devee.final.projectionPaths.includes(`triggers/${triggerName}.trigger-meta.xml`));
+  assert.deepEqual(plan.nativeInventories.devee.baseline.absentComponents, ['ApexClass:' + rehearsalName]);
+  assert.throws(() => create({ desktop: false }), /explicit Lightning package/u);
+  assert.throws(() => create({ trigger: 'UnrelatedTrigger' }), /explicit Lightning package/u);
+  assert.throws(() => create({ omitClass: true }), /DEVEE_DESKTOP_REVIEW_SCOPE_INVALID/u);
 });
 
 test('approved continuation rechecks the mirror after schema-free Production validation and preserves the job on drift', async () => {

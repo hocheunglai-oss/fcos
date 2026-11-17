@@ -62,6 +62,37 @@ test('only the frozen scope of the combined Editors review can opt into the DEVE
     components, reviewed.nativeInventories), /REVIEW_SCOPE_INVALID/);
 });
 
+test('Editors with the isolated fixture must match its exact ordered manifest and native inventory contract', () => {
+  const { input: { reviewed } } = fixture();
+  const extended = [
+    'ApexClass:FcosCompanyFxRateService',
+    'ApexClass:FcosCompanyFxRateServiceTest',
+    'ApexClass:FcosDeveeEditorFixtureRehearsalTest',
+    'ApexClass:FcosTradeCurrencyController',
+    'ApexClass:FcosTradeCurrencyGuard',
+    'ApexClass:FcosTradeCurrencyParentGuard',
+    'ApexClass:FcosTradeCurrencyService',
+    'ApexTrigger:FcosTradeCurrencySideTrigger',
+    ...components.slice(1),
+  ];
+  assert.doesNotThrow(() => assertEditorDesktopReview(reviewed.review, extended, reviewed.nativeInventories));
+  const invalidScopes = [
+    extended.slice(1),
+    [...extended, 'PermissionSet:FCOS_DEVEE_Editor_Fixture_Callout'],
+    [...extended.slice(0, -1), extended[0]],
+    [...extended].reverse(),
+  ];
+  for (const invalid of invalidScopes) {
+    assert.throws(() => assertEditorDesktopReview(reviewed.review, invalid, reviewed.nativeInventories), /DEVEE_DESKTOP_REVIEW_SCOPE_INVALID/);
+  }
+  assert.throws(() => assertEditorDesktopReview(reviewed.review, extended, { devee: { final: { projectedNativeInventory: false } } }),
+    /DEVEE_DESKTOP_REVIEW_SCOPE_INVALID/);
+  assert.throws(() => assertEditorDesktopReview({ ...reviewed.review, bootstrap: {} }, extended, reviewed.nativeInventories),
+    /DEVEE_DESKTOP_REVIEW_SCOPE_INVALID/);
+  assert.throws(() => assertEditorDesktopReview({ ...reviewed.review, nativeProjection: undefined }, extended, reviewed.nativeInventories),
+    /DEVEE_DESKTOP_REVIEW_SCOPE_INVALID/);
+});
+
 test('request binds original DEVEE Quick Deploy, its native final tree and exact currently approved workflow', () => {
   const { input, request } = fixture();
   assert.equal(request.runId, input.approval.runId);

@@ -29,6 +29,16 @@ const editorComponents = [
   'LightningComponentBundle:fcbEditSupplierBidModal', 'LightningComponentBundle:fcbPromotedOfferLineItemExtraCosts',
   'LightningComponentBundle:fcbSupplierBidExtraCosts', 'LightningComponentBundle:fcosTradeCurrencyEditor',
 ];
+const editorFixtureComponents = [
+  ...editorComponents,
+  'ApexClass:FcosCompanyFxRateService',
+  'ApexClass:FcosCompanyFxRateServiceTest',
+  'ApexClass:FcosDeveeEditorFixtureRehearsalTest',
+  'ApexClass:FcosTradeCurrencyController',
+  'ApexClass:FcosTradeCurrencyGuard',
+  'ApexClass:FcosTradeCurrencyParentGuard',
+  'ApexTrigger:FcosTradeCurrencySideTrigger',
+].sort();
 
 export function requiresDeveeDesktopCheckpoint(manifest) {
   const prerequisites = manifest.prerequisites;
@@ -58,9 +68,11 @@ export function requireDeveeDesktopApprovalRecord({ chain, request, requestDeplo
 export function assertEditorDesktopReview(review, manifestComponents, nativeInventories) {
   const selection = review.nativeDeveeDesktop;
   if (selection === undefined) return;
+  const componentDigest = digest(manifestComponents);
   requireCondition(digest(selection) === digest({ caseSetDigest: editorDesktopCaseSetDigest })
     && review.nativeProjection === 'schema-free-apex-lightning' && !review.bootstrap
-    && digest(manifestComponents) === digest(editorComponents) && nativeInventories?.devee?.final?.projectedNativeInventory === true,
+    && (componentDigest === digest(editorComponents) || componentDigest === digest(editorFixtureComponents))
+    && nativeInventories?.devee?.final?.projectedNativeInventory === true,
   'DEVEE_DESKTOP_REVIEW_SCOPE_INVALID');
 }
 
