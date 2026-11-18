@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { changedPaths, createManifest, digest, sourceSnapshot, validateManifest } from '../scripts/lib/rapid-release/contract.mjs';
 import { baselineGitInventory, loadReviewedSalesforcePlan } from '../scripts/deploy-salesforce-reviewed-manifest.mjs';
 import { readReviewedInventory } from '../scripts/lib/salesforce-reviewed-release.mjs';
-import { verifySalesforceReviewSource } from '../scripts/verify-salesforce-review-source.mjs';
+import { verifyCompletedSalesforceReviewSource, verifySalesforceReviewSource } from '../scripts/verify-salesforce-review-source.mjs';
 
 test('candidate admission binds reviewed files and retrieval manifests to the tracked source', t => {
   const cwd = mkdtempSync(join(tmpdir(), 'fcos-review-source-test-'));
@@ -60,7 +60,7 @@ test('candidate admission binds reviewed files and retrieval manifests to the tr
   };
   write(reviewPath, JSON.stringify(review));
   commit('candidate');
-  const check = (path = reviewPath, locator = {}, ref) => {
+  const check = (path = reviewPath, locator = {}, ref, verify = verifySalesforceReviewSource) => {
     const reviewed = loadReviewedSalesforcePlan({ cwd, manifestPath, reviewPath: path });
     const candidate = sourceSnapshot(cwd);
     const paths = git('diff', '--name-only', baselineCommit, 'HEAD').split('\n');
@@ -75,7 +75,7 @@ test('candidate admission binds reviewed files and retrieval manifests to the tr
     } else {
       assert.equal(validateManifest(manifest), digest(manifest));
     }
-    return verifySalesforceReviewSource({ cwd, candidateSha: ref ?? candidate.sha, manifest, verifierDirectory: cwd });
+    return verify({ cwd, candidateSha: ref ?? candidate.sha, manifest, verifierDirectory: cwd });
   };
   assert.equal(check().candidateSha, git('rev-parse', 'HEAD'));
   assert.throws(() => check(reviewPath, { xeroQualificationDeploymentId: 1 }), { code: 'TRADING_FX_XERO_QUALIFICATION_LOCATOR_REQUIRED' });
@@ -84,6 +84,15 @@ test('candidate admission binds reviewed files and retrieval manifests to the tr
   const ignoredReview = '.fcos-cli/review.json';
   write(ignoredReview, JSON.stringify(review));
   assert.throws(() => check(ignoredReview), { code: 'SALESFORCE_REVIEW_SOURCE_UNTRACKED_INPUT' });
+  write(adapterPath, 'export const test = false;\n');
+  commit('update protected adapter');
+  const locator = { xeroQualificationDeploymentId: 1, xeroQualificationDigest: 'a'.repeat(64) };
+  assert.throws(() => check(reviewPath, locator), { code: 'SALESFORCE_REVIEW_SOURCE_ADAPTER_MISMATCH' });
+  assert.equal(check(reviewPath, locator, undefined, verifyCompletedSalesforceReviewSource).candidateSha, git('rev-parse', 'HEAD'));
+  assert.throws(() => check(reviewPath, {}, undefined, verifyCompletedSalesforceReviewSource),
+    { code: 'TRADING_FX_XERO_QUALIFICATION_LOCATOR_REQUIRED' });
+  write(adapterPath, adapter);
+  commit('restore adapter for current-release source tests');
   const ignoredRetrieval = '.fcos-cli/inventory.xml';
   write(ignoredRetrieval, xml);
   review.inventoryManifests[baseline.inventoryHash].path = ignoredRetrieval;
