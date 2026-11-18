@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { nativeDocumentSourceFingerprint } from './_xeroNativeDocumentFingerprint.js';
 import { sfCompositeQueries, sfQuery } from './_salesforce.js';
 import { completeNativeRecords, loadNativeDocumentLineSources, readNativeDocuments, resolveNativeDocumentId } from './_xeroNativeDocumentSource.js';
+import { XERO_FINANCIAL_CUTOFF } from './_xeroFinancialSync.js';
 
 const ID = /^[a-zA-Z0-9]{15}(?:[a-zA-Z0-9]{3})?$/;
 
@@ -15,6 +16,62 @@ function sameId(left, right) {
 
 function sourceError(message, status = 409) {
   return Object.assign(new Error(message), { code: 'XERO_CREDIT_ALLOCATION_SOURCE_INVALID', status });
+}
+
+/** Enumerate issued credit candidates, including those held for missing lineage. */
+export async function readCreditAllocationSourceCohort({ cutoff, through } = {}, { composite = sfCompositeQueries } = {}) {
+  const upper = Date.parse(through);
+  if (cutoff !== XERO_FINANCIAL_CUTOFF || !Number.isFinite(upper)
+      || new Date(upper).toISOString() !== through || upper < Date.parse(cutoff)) {
+    throw sourceError('An exact credit cohort cutoff and creation watermark are required.', 400);
+  }
+  const sources = [
+    { object: 'Invoice__c', original: 'Original_Invoice__c', amount: 'Amount__c', file: 'File__c', buyer: true },
+    { object: 'Supplier_Invoice__c', original: 'Original_Supplier_Invoice__c', amount: 'Invoice_Amount__c', file: 'Invoice_File__c', buyer: false },
+  ];
+  const limit = 100000;
+  const results = await composite(sources.map(({ object, original, amount, file, buyer }) => ({
+    soql: `SELECT Id, Name, CreatedDate, LastModifiedDate, Invoice_Date__c, ${original}, ${amount}, ${file},
+        Proforma__c${buyer ? ', Deprecated__c' : ''}
+      FROM ${object}
+      WHERE CreatedDate <= ${through} AND Proforma__c = false AND ${file} != null
+        ${buyer ? 'AND Deprecated__c = false' : ''}
+        AND (${original} != null OR ${amount} < 0${buyer ? " OR Name LIKE '%-CN-%'" : ''})
+        AND (Invoice_Date__c >= ${cutoff} OR (Invoice_Date__c = null AND CreatedDate >= ${cutoff}T00:00:00Z))
+      ORDER BY Id`,
+    clean: true,
+    limit,
+  })));
+  if (!Array.isArray(results) || results.length !== sources.length) {
+    throw sourceError('Salesforce returned incomplete credit cohort evidence.', 502);
+  }
+  const seen = new Set();
+  const rows = sources.flatMap(({ object, original, amount, file, buyer }, index) =>
+    completeNativeRecords(results[index], limit).map(row => {
+      const date = row?.Invoice_Date__c;
+      const created = Date.parse(row?.CreatedDate);
+      const modified = Date.parse(row?.LastModifiedDate);
+      const creditByAmountOrName = Number(row?.[amount]) < 0 || (buyer && /-CN-/i.test(row?.Name || ''));
+      if (!validId(row?.Id) || seen.has(row.Id.slice(0, 15)) || !row[file]
+          || row.Proforma__c !== false || (buyer && row.Deprecated__c !== false)
+          || !Number.isFinite(created) || !Number.isFinite(modified) || created > upper || modified < created
+          || (date == null ? created < Date.parse(cutoff)
+            : typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)
+              || !Number.isFinite(Date.parse(date)) || new Date(date).toISOString().slice(0, 10) !== date || date < cutoff)
+          || (row[original] == null && !creditByAmountOrName)) {
+        throw sourceError('Salesforce returned duplicate or out-of-scope credit cohort evidence.', 502);
+      }
+      seen.add(row.Id.slice(0, 15));
+      const originalId = validId(row[original]) && !sameId(row.Id, row[original]) ? row[original] : null;
+      return {
+        sourceObject: object,
+        creditId: row.Id,
+        originalId,
+        modifiedAt: new Date(modified).toISOString(),
+        sourceHold: !date ? 'missing_invoice_date' : !originalId ? 'missing_original_invoice' : null,
+      };
+    }));
+  return { cutoff, through, rows };
 }
 
 export function resolveCreditAllocationSourceId(sourceObject, creditNumber, query = sfQuery) {

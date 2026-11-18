@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { loadCreditAllocationSalesforceSource, resolveCreditAllocationSourceId, verifyCreditAllocationSourceMappings } from '../api/_xeroCreditAllocationSource.js';
+import { loadCreditAllocationSalesforceSource, readCreditAllocationSourceCohort, resolveCreditAllocationSourceId,
+  verifyCreditAllocationSourceMappings } from '../api/_xeroCreditAllocationSource.js';
+import { XERO_FINANCIAL_CUTOFF } from '../api/_xeroFinancialSync.js';
 import { nativeDocumentSourceFingerprint } from "../api/_xeroNativeDocumentFingerprint.js";
 import { loadCreditAllocationDocumentContext } from "../api/_xeroCreditAllocationContext.js";
 
@@ -9,6 +11,44 @@ const id = suffix => `a0000000000000${suffix}AAA`;
 const [creditId, originalId, stemId, partyId, creditLineId, originalLineId, sourceId, otherId] =
   Array.from({ length: 8 }, (_, index) => id(index + 1));
 const result = records => ({ records, totalSize: records.length });
+
+test('reads both issued credit cohorts in one composite and retains held rows', async () => {
+  const window = { cutoff: XERO_FINANCIAL_CUTOFF, through: '2026-09-03T00:00:00.000Z' };
+  const common = { CreatedDate: '2026-09-01T10:00:00Z', LastModifiedDate: '2026-09-02T10:00:00Z', Proforma__c: false };
+  const buyer = { ...common, Id: creditId, Name: 'INV-CN-123', Invoice_Date__c: '2026-09-01',
+    Original_Invoice__c: originalId, File__c: 'issued', Deprecated__c: false };
+  const held = { ...buyer, Id: otherId, Original_Invoice__c: null };
+  const supplier = { ...common, Id: creditLineId, Original_Supplier_Invoice__c: originalLineId,
+    Invoice_File__c: 'issued', Invoice_Date__c: null };
+  let calls = 0;
+  const scope = await readCreditAllocationSourceCohort(window, { composite: async requests => {
+    calls++;
+    assert.equal(requests.length, 2);
+    assert.match(requests[0].soql, /FROM Invoice__c/);
+    assert.match(requests[1].soql, /FROM Supplier_Invoice__c/);
+    assert.ok(requests.every(({ soql }) => soql.includes(`CreatedDate <= ${window.through}`)
+      && soql.includes(`Invoice_Date__c >= ${window.cutoff}`)));
+    return [result([buyer, held]), result([supplier])];
+  } });
+  assert.equal(calls, 1);
+  assert.equal(scope.through, window.through);
+  assert.deepEqual(scope.rows.map(({ sourceObject, creditId, originalId, sourceHold }) =>
+    [sourceObject, creditId, originalId, sourceHold]), [
+    ['Invoice__c', creditId, originalId, null],
+    ['Invoice__c', otherId, null, 'missing_original_invoice'],
+    ['Supplier_Invoice__c', creditLineId, originalLineId, 'missing_invoice_date'],
+  ]);
+  const read = (records, overrides = {}) => readCreditAllocationSourceCohort(window, {
+    composite: async () => [{ ...result(records), ...overrides }, result([])],
+  });
+  await assert.rejects(read([buyer], { totalSize: 2 }), /incomplete credit/);
+  await assert.rejects(read([buyer, { ...buyer, Id: creditId.slice(0, 15) }]), /duplicate or out-of-scope/);
+  await assert.rejects(read([{ ...buyer, CreatedDate: '2026-09-04T00:00:00Z' }]), /out-of-scope/);
+  await assert.rejects(read([{ ...buyer, Invoice_Date__c: '2026-02-29' }]), /out-of-scope/);
+  await assert.rejects(readCreditAllocationSourceCohort({ ...window, cutoff: '2025-01-01' }, {
+    composite: () => assert.fail('reject the scope before reading Salesforce'),
+  }), /exact credit cohort/);
+});
 
 function fixture(supplier = false) {
   const sourceObject = supplier ? 'Supplier_Invoice__c' : 'Invoice__c';
