@@ -14,6 +14,7 @@ import { runPrerequisites, verifyBeforeBootstrap, qualifiedAdapter } from './lib
 import { readCandidateModuleInventory } from './lib/rapid-release/modules.mjs';
 import { nativeCompatibilityReader, verifyNativeHandoverDatabase, withPinnedReadOnlyDatabase } from './lib/rapid-release/compatibility.mjs';
 import { hasTradingFxSigningLocator, verifyTradingFxReleaseSigningConfig } from './lib/rapid-release/trading-fx-signing-config.mjs';
+import { readEditorPreflightAttestation } from './lib/rapid-release/salesforce-editor-preflight-transport.mjs';
 
 const read = path => JSON.parse(readFileSync(resolve(path), 'utf8'));
 const write = (path, value) => { mkdirSync(resolve(path, '..'), { recursive: true }); writeFileSync(resolve(path), `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 }); };
@@ -139,12 +140,14 @@ async function rapidReleaseCommand(argv, env, runtime) {
       requireCondition(confirmed.currentDeploymentId === manifest.previous.deploymentId
         && confirmed.sha === manifest.previous.sha && confirmed.configurationDigest === manifest.previous.configurationDigest
         && confirmed.schemaDigest === manifest.previous.schemaDigest, 'STAGING_BASELINE_CHANGED');
+      await readEditorPreflightAttestation({ manifest, github });
     };
     result = await stageRelease({ manifest, journal, provider, build, smoke, verifyStageBaseline, withStageOwnership,
       beforeBootstrap: values => verifyBeforeBootstrap({ ...values, controllerDirectory: controller, env, provider }) });
   } else {
     requireCondition(staged, 'STAGED_DEPLOYMENT_REQUIRED');
     const approval = await nativeApproval({ github, manifest, staged, env });
+    const editorPreflight = await readEditorPreflightAttestation({ manifest, github, approvalAt: approval.approvedAt });
     result = await promoteRelease({ manifest, journal, provider, approval, smoke,
       observe: async values => {
         if (hasTradingFxSigningLocator(manifest.prerequisites?.plan)) {
@@ -159,7 +162,7 @@ async function rapidReleaseCommand(argv, env, runtime) {
         repair: manifest.prerequisites?.plan?.salesSupportRepair,
         finalPackageApplied: Boolean(manifest.prerequisites?.plan?.paymentRepair),
         paymentAdjustmentCorrection: Boolean(manifest.prerequisites?.plan?.paymentRepair) }),
-      prerequisites: values => runPrerequisites({ ...values, staged, journal, provider, controllerDirectory: controller, env }) });
+      prerequisites: values => runPrerequisites({ ...values, staged, journal, provider, controllerDirectory: controller, env, editorPreflight }) });
   }
   if (opts.output) write(opts.output, result);
   return result;
