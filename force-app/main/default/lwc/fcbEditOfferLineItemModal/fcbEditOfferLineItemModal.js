@@ -18,6 +18,8 @@ export default class FcbEditOfferLineItemModal extends LightningElement {
   @api recordId;
   @api enquiryLineItems;
   @api quote;
+  @api buyEditorFixtureId;
+  @api sellEditorFixtureId;
   
   @wire(CurrentPageReference) pageRef;
 
@@ -29,6 +31,8 @@ export default class FcbEditOfferLineItemModal extends LightningElement {
   @track _currentOfferLineItem;
   _unitPrice = 0.000;
   _supplierUnitPrice = 0.000;
+  buyPriceManaged = false;
+  sellPriceManaged = false;
   _today = this._convertDate(new Date());
   paymentTermOptions;
   wiredPaymentTermOptions;
@@ -131,6 +135,10 @@ export default class FcbEditOfferLineItemModal extends LightningElement {
   @api
   set currentOfferLineItem(value) {
     this._currentOfferLineItem = { ...value };
+    this.buyPriceManaged = value?.Buy_Currency__c === 'HKD' || value?.Buy_USD_Unit_Price_Precise__c != null
+      || value?.Buy_FX_Confirmed_At__c != null;
+    this.sellPriceManaged = value?.Sell_Currency__c === 'HKD' || value?.Sell_USD_Unit_Price_Precise__c != null
+      || value?.Sell_FX_Confirmed_At__c != null;
     this._unitPrice = Number(this._currentOfferLineItem.UnitPrice);
     this.modalTitle = !this.modalTitle ? this._generateModalHeader(this._currentOfferLineItem) : this.modalTitle;
     this._supplierUnitPrice = Number(this._currentOfferLineItem.Supplier_Unit_Price__c);
@@ -169,6 +177,42 @@ export default class FcbEditOfferLineItemModal extends LightningElement {
   _reassignObject() {
     this._currentOfferLineItem['transportationChanged'] = false;
     this._currentOfferLineItem = { ...this._currentOfferLineItem };
+  }
+
+  get showBuyUsdPrice() {
+    return !this.buyPriceManaged;
+  }
+
+  get showSellUsdPrice() {
+    return !this.sellPriceManaged;
+  }
+
+  handleCurrencyReview(event) {
+    this.applyCurrencyReview(event.detail, false);
+  }
+
+  handleCurrencyChange(event) {
+    this.applyCurrencyReview(event.detail, true);
+  }
+
+  applyCurrencyReview({ recordId, direction, review } = {}, saved) {
+    if (!recordId || recordId !== this._currentOfferLineItem?.Id
+        || (direction !== 'Buy' && direction !== 'Sell') || typeof review?.managedPrice !== 'boolean') return;
+    if (direction === 'Buy') this.buyPriceManaged = review.managedPrice;
+    else this.sellPriceManaged = review.managedPrice;
+    if (!saved || review.enabled !== true || review.usdUnitPrice == null) return;
+    const field = direction === 'Buy' ? 'Supplier_Unit_Price__c' : 'UnitPrice';
+    if (direction === 'Buy') this._supplierUnitPrice = Number(review.usdUnitPrice);
+    else this._unitPrice = Number(review.usdUnitPrice);
+    this._currentOfferLineItem = { ...this._currentOfferLineItem, [field]: review.usdUnitPrice };
+  }
+
+  stripManagedFxFields(fields) {
+    for (const field of Object.keys(fields)) {
+      if (/^(Buy|Sell)_(Currency__c|HKD_(Unit_Price|Minimum|Lumpsum)__c|USD_Unit_Price_Precise__c|FX_(Rate|Revision|Effective_At|Confirmed_At|Side)__c)$/u.test(field)) delete fields[field];
+    }
+    if (this.buyPriceManaged) delete fields.Supplier_Unit_Price__c;
+    if (this.sellPriceManaged) delete fields.UnitPrice;
   }
 
   _convertDate(date) {
@@ -446,6 +490,7 @@ export default class FcbEditOfferLineItemModal extends LightningElement {
         fields.Validity_Time__c = this._currentOfferLineItem.Validity_Time__c
         fields.Buyer_Payment_Term__c = 
         fields = { ...fields, ...this._currentOfferLineItem };
+        this.stripManagedFxFields(fields);
         this.template.querySelector('lightning-record-edit-form').submit(fields); 
       } else{
         this.actionExecuting = false;
