@@ -2,7 +2,8 @@ import { FCOS_CONNECTION_POLICY, fcosSalesforceEnvironment } from '../../../conf
 import { digest, isDigest, targets } from './contract.mjs';
 import { assertPublicPayload } from './journal.mjs';
 import { editorDesktopCaseSetDigest, requiresDeveeDesktopCheckpoint } from './salesforce-devee-desktop-checkpoint.mjs';
-import { EDITOR_PREFLIGHT_MAX_AGE_MS, verifyEditorPreflightEvidence } from './salesforce-editor-preflight-proof.mjs';
+import { EDITOR_PREFLIGHT_MAX_AGE_MS, editorNativeComponentFiles,
+  verifyEditorPreflightEvidence } from './salesforce-editor-preflight-proof.mjs';
 
 export const EDITOR_PREFLIGHT_ATTESTATION_ENVIRONMENT = 'fcos-editor-native-attestation-v1';
 export const EDITOR_PREFLIGHT_ATTESTATION_TASK = 'verify:editors-native-preflight';
@@ -12,12 +13,14 @@ const devee = fcosSalesforceEnvironment('devee');
 const positive = value => Number.isSafeInteger(value) && value > 0;
 const jobId = value => /^0Af[A-Za-z0-9]{12}(?:[A-Za-z0-9]{3})?$/u.test(value ?? '');
 const timestamp = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
-const fields = [
+const baseFields = [
   'kind', 'schemaVersion', 'repository', 'candidateSha', 'sourceDigest', 'controllerSha', 'baselineSha',
   'sourceTreeHash', 'salesforceFingerprint', 'caseSetDigest', 'evidenceDigest',
   'qualificationValidationJobId', 'qualificationDeploymentJobId', 'installedInventoryHash',
   'cleanupEvidenceDigest', 'completedAt', 'expiresAt',
 ].sort();
+const fields = schemaVersion => [...baseFields, ...(schemaVersion === 2
+  ? ['nativeExportProjectionDigest', 'nativeComponentFilesDigest', 'observedNativeInventoryHash'] : [])].sort();
 
 function check(condition, code) {
   if (!condition) throw Object.assign(new Error(code), { code });
@@ -27,9 +30,9 @@ export function hasEditorPreflightLocator(plan) {
   return Object.hasOwn(plan ?? {}, 'editorPreflightReceiptId') || Object.hasOwn(plan ?? {}, 'editorPreflightReceiptDigest');
 }
 
-function binding(manifest) {
+function binding(manifest, schemaVersion = 1) {
   return {
-    kind, schemaVersion: 1, repository: targets().repository, candidateSha: manifest.candidate.sha,
+    kind, schemaVersion, repository: targets().repository, candidateSha: manifest.candidate.sha,
     sourceDigest: manifest.candidate.sourceDigest, controllerSha: manifest.controllerSha, baselineSha: manifest.previous.sha,
     sourceTreeHash: manifest.prerequisites.plan.salesforceSourceTreeHash,
     salesforceFingerprint: manifest.prerequisites.plan.salesforceFingerprint, caseSetDigest: editorDesktopCaseSetDigest,
@@ -41,16 +44,19 @@ function binding(manifest) {
 export function createEditorPreflightAttestation({ manifest, proofInput, now = Date.now() }) {
   check(requiresDeveeDesktopCheckpoint(manifest), 'EDITOR_PREFLIGHT_LOCATOR_INVALID');
   const proof = verifyEditorPreflightEvidence({ ...proofInput, qualifiedAt: new Date(now).toISOString(), now });
-  const expected = binding(manifest);
+  const expected = binding(manifest, proofInput.proof?.schemaVersion);
   check(proof.candidateSha === expected.candidateSha && proof.controllerSha === expected.controllerSha
     && proof.baselineSha === expected.baselineSha && proof.sourceTreeHash === expected.sourceTreeHash
     && proof.caseSetDigest === expected.caseSetDigest && isDigest(expected.sourceDigest)
     && isDigest(expected.salesforceFingerprint) && proofInput.expected.source.dependencyLockDigest === manifest.candidate.lockDigest,
   'EDITOR_PREFLIGHT_RELEASE_BINDING_INVALID');
   const { qualificationValidationJobId, qualificationDeploymentJobId, installedInventoryHash,
-    cleanupEvidenceDigest, completedAt, expiresAt } = proof;
+    cleanupEvidenceDigest, completedAt, expiresAt, nativeExportProjectionDigest, nativeComponentFilesDigest,
+    observedNativeInventoryHash } = proof;
   const payload = { ...expected, evidenceDigest: proof.receiptDigest, qualificationValidationJobId,
-    qualificationDeploymentJobId, installedInventoryHash, cleanupEvidenceDigest, completedAt, expiresAt };
+    qualificationDeploymentJobId, installedInventoryHash, cleanupEvidenceDigest, completedAt, expiresAt,
+    ...(proofInput.proof?.schemaVersion === 2
+      ? { nativeExportProjectionDigest, nativeComponentFilesDigest, observedNativeInventoryHash } : {}) };
   assertPublicPayload(payload);
   return payload;
 }
@@ -70,7 +76,8 @@ export function verifyEditorPreflightAttestation({ manifest, record, approvalAt,
   check(requiresDeveeDesktopCheckpoint(manifest) && positive(id) && isDigest(proofDigest), 'EDITOR_PREFLIGHT_LOCATOR_INVALID');
   const repositoryPath = '/repos/' + targets().repository;
   const proof = record?.payload;
-  const expected = binding(manifest);
+  const schemaVersion = proof?.schemaVersion;
+  const expected = binding(manifest, schemaVersion);
   const created = Date.parse(record?.created_at);
   const completed = Date.parse(proof?.completedAt);
   const expires = Date.parse(proof?.expiresAt);
@@ -81,9 +88,11 @@ export function verifyEditorPreflightAttestation({ manifest, record, approvalAt,
     && record.environment === EDITOR_PREFLIGHT_ATTESTATION_ENVIRONMENT && record.original_environment === record.environment
     && record.task === EDITOR_PREFLIGHT_ATTESTATION_TASK
     && record.production_environment === false && record.transient_environment === false
-    && proof && digest(Object.keys(proof).sort()) === digest(fields) && digest(proof) === proofDigest
+    && proof && [1, 2].includes(schemaVersion) && digest(Object.keys(proof).sort()) === digest(fields(schemaVersion)) && digest(proof) === proofDigest
     && Object.entries(expected).every(([key, value]) => proof[key] === value)
-    && [proof.evidenceDigest, proof.installedInventoryHash, proof.cleanupEvidenceDigest].every(isDigest)
+    && [proof.evidenceDigest, proof.installedInventoryHash, proof.cleanupEvidenceDigest,
+      ...(schemaVersion === 2
+        ? [proof.nativeExportProjectionDigest, proof.nativeComponentFilesDigest, proof.observedNativeInventoryHash] : [])].every(isDigest)
     && jobId(proof.qualificationValidationJobId) && jobId(proof.qualificationDeploymentJobId)
     && proof.qualificationValidationJobId !== proof.qualificationDeploymentJobId
     && timestamp(proof.completedAt) && timestamp(proof.expiresAt)
@@ -109,8 +118,15 @@ export async function verifyEditorPreflightPostimage({ manifest, proof, reviewed
   check(installed?.orgId === devee.orgId && installed.identity?.isSandbox === true && installed.identity.username === devee.username
     && installed.verificationMethod === 'metadata-api-reviewed-native-byte-inventory'
     && installed.inventoryHash === reviewed.nativeInventories?.devee?.final?.inventoryHash
-    && installed.observedNativeInventoryHash === proof.installedInventoryHash && isDigest(installed.evidenceSha256)
+    && installed.observedNativeInventoryHash === (proof.schemaVersion === 2
+      ? proof.observedNativeInventoryHash : proof.installedInventoryHash) && isDigest(installed.evidenceSha256)
     && timestamp(installed.verifiedAt) && Math.abs(Date.parse(installed.verifiedAt) - now) <= 300_000,
   'EDITOR_PREFLIGHT_DEVEE_POSTIMAGE_CHANGED');
+  if (proof.schemaVersion === 2) {
+    check(isDigest(proof.nativeExportProjectionDigest) && isDigest(proof.nativeComponentFilesDigest)
+      && isDigest(proof.observedNativeInventoryHash)
+      && proof.nativeComponentFilesDigest === digest(editorNativeComponentFiles(installed.observedInventory)),
+    'EDITOR_PREFLIGHT_DEVEE_POSTIMAGE_CHANGED');
+  }
   return { proofId: proof.proofId, proofDigest: proof.proofDigest, finalInventoryReceiptDigest: installed.evidenceSha256 };
 }

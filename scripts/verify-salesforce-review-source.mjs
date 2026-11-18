@@ -1,4 +1,5 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { join, resolve } from 'node:path';
@@ -13,7 +14,7 @@ function assertNoIgnoredMetadata(directory) {
     'SALESFORCE_REVIEW_SOURCE_UNTRACKED_INPUT');
 }
 
-function verifyReviewedApplication({ cwd, manifest, verifierDirectory }) {
+function verifyReviewedApplication({ cwd, manifest, verifierDirectory, completed = false }) {
   const { candidate: { sha: candidateSha }, controllerSha } = manifest;
   const candidate = sourceSnapshot(cwd);
   requireCondition(candidate.sha === candidateSha && candidate.sourceDigest === manifest.candidate.sourceDigest
@@ -28,9 +29,15 @@ function verifyReviewedApplication({ cwd, manifest, verifierDirectory }) {
   const adapter = registry.adapters.find(entry => entry.id === manifest.prerequisites.adapter);
   requireCondition(adapter?.status === 'qualified' && adapter.salesforce === true && adapter.database === manifest.selection.database
     && adapter.sourceDigest === adapterDigest && /^scripts\/[A-Za-z0-9_./-]+\.mjs$/u.test(adapter.path)
-    && !adapter.path.split('/').includes('..')
-    && git(verifierDirectory, ['rev-parse', controllerSha + ':' + adapter.path]) === git(verifierDirectory, ['rev-parse', 'HEAD:' + adapter.path])
-    && digest(readFileSync(resolve(verifierDirectory, adapter.path))) === adapterDigest,
+    && !adapter.path.split('/').includes('..'), 'SALESFORCE_REVIEW_SOURCE_ADAPTER_MISMATCH');
+  // A completed-run verifier authenticates the original protected workflow
+  // before entering here. Hash the historical adapter bytes without executing them.
+  const adapterObject = controllerSha + ':' + adapter.path;
+  const bytes = completed
+    ? execFileSync('git', ['cat-file', 'blob', adapterObject], { cwd: verifierDirectory, stdio: ['ignore', 'pipe', 'pipe'] })
+    : readFileSync(resolve(verifierDirectory, adapter.path));
+  requireCondition(digest(bytes) === adapterDigest
+    && (completed || git(verifierDirectory, ['rev-parse', adapterObject]) === git(verifierDirectory, ['rev-parse', 'HEAD:' + adapter.path])),
   'SALESFORCE_REVIEW_SOURCE_ADAPTER_MISMATCH');
   const tracked = new Set(candidate.files.map(file => file.path));
   const checkTracked = paths => requireCondition(paths.every(path => tracked.has(path)), 'SALESFORCE_REVIEW_SOURCE_UNTRACKED_INPUT');
@@ -85,17 +92,26 @@ function verifyReviewedCorrection({ cwd, candidateSha, manifest, verifierDirecto
   }
 }
 
-export function verifySalesforceReviewSource({ cwd, candidateSha, manifest, verifierDirectory }) {
+function verifySource({ cwd, candidateSha, manifest, verifierDirectory }, completed) {
   // GitHub needs the exact source commit before it can record the Demo receipt.
-  validateManifest(manifest, { sourcePublicationOnly: true });
+  validateManifest(manifest, { sourcePublicationOnly: !completed });
   requireCondition(isSha(candidateSha) && manifest.selection.salesforce === true && manifest.prerequisites?.plan,
     'SALESFORCE_REVIEW_SOURCE_PLAN_REQUIRED');
   const controllerSha = manifest.controllerSha;
   requireCondition(!git(verifierDirectory, ['status', '--porcelain', '--untracked-files=no'])
     && git(verifierDirectory, ['merge-base', controllerSha, 'HEAD']) === controllerSha,
   'SALESFORCE_REVIEW_SOURCE_CONTROLLER_MISMATCH');
-  const input = { cwd, candidateSha, manifest, verifierDirectory };
+  const input = { cwd, candidateSha, manifest, verifierDirectory, completed };
   return candidateSha === manifest.candidate.sha ? verifyReviewedApplication(input) : verifyReviewedCorrection(input);
+}
+
+export function verifySalesforceReviewSource(input) {
+  return verifySource(input, false);
+}
+
+export function verifyCompletedSalesforceReviewSource(input) {
+  requireCondition(input.candidateSha === input.manifest.candidate.sha, 'SALESFORCE_REVIEW_SOURCE_MISMATCH');
+  return verifySource(input, true);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
