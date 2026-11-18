@@ -117,7 +117,9 @@ function transportFixture() {
         salesforceSourceTreeHash: expected.source.sourceTreeHash, salesforceFingerprint: hash('salesforce plan') },
     },
   };
-  const payload = createEditorPreflightAttestation({ manifest, proofInput });
+  const { receipt, ...privateEvidence } = proofInput;
+  const payload = createEditorPreflightAttestation({ manifest, proofInput: { ...privateEvidence, proof: receipt.payload },
+    now: clock + 26_000 });
   const record = {
     id: 4500, ref: manifest.candidate.sha, sha: manifest.candidate.sha, created_at: at(27),
     creator: { ...owner, type: 'User' }, repository_url: 'https://api.github.com/repos/' + targets().repository,

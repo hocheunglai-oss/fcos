@@ -2,7 +2,7 @@ import { FCOS_CONNECTION_POLICY, fcosSalesforceEnvironment } from '../../../conf
 import { digest, isDigest, targets } from './contract.mjs';
 import { assertPublicPayload } from './journal.mjs';
 import { editorDesktopCaseSetDigest, requiresDeveeDesktopCheckpoint } from './salesforce-devee-desktop-checkpoint.mjs';
-import { EDITOR_PREFLIGHT_MAX_AGE_MS, verifySalesforceEditorPreflightProof } from './salesforce-editor-preflight-proof.mjs';
+import { EDITOR_PREFLIGHT_MAX_AGE_MS, verifyEditorPreflightEvidence } from './salesforce-editor-preflight-proof.mjs';
 
 export const EDITOR_PREFLIGHT_ATTESTATION_ENVIRONMENT = 'fcos-editor-native-attestation-v1';
 export const EDITOR_PREFLIGHT_ATTESTATION_TASK = 'verify:editors-native-preflight';
@@ -38,9 +38,9 @@ function binding(manifest) {
 
 // The operator verifies privately retained case and provider evidence before
 // publishing this compact attestation. Only digests and operational IDs leave that store.
-export function createEditorPreflightAttestation({ manifest, proofInput }) {
+export function createEditorPreflightAttestation({ manifest, proofInput, now = Date.now() }) {
   check(requiresDeveeDesktopCheckpoint(manifest), 'EDITOR_PREFLIGHT_LOCATOR_INVALID');
-  const proof = verifySalesforceEditorPreflightProof(proofInput);
+  const proof = verifyEditorPreflightEvidence({ ...proofInput, qualifiedAt: new Date(now).toISOString(), now });
   const expected = binding(manifest);
   check(proof.candidateSha === expected.candidateSha && proof.controllerSha === expected.controllerSha
     && proof.baselineSha === expected.baselineSha && proof.sourceTreeHash === expected.sourceTreeHash

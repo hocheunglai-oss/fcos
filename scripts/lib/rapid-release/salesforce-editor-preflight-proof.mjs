@@ -210,21 +210,32 @@ function historicalSource(record, observation, expectedSource, evidence, qualifi
  * reports, inventory and observation artifact. Original timestamps remain unchanged;
  * deterministic historical cases do not inherit the current receipt's expiry limit.
  */
-export function verifySalesforceEditorPreflightProof({ receipt, expected, nativeEvidence, caseEvidence,
-  historicalAttestations = [], historicalNativeEvidence = {}, now = Date.now(), approvalAt } = {}) {
+export function verifySalesforceEditorPreflightProof({ receipt, expected, now = Date.now(), approvalAt, ...evidence } = {}) {
+  check(plain(expected) && plain(expected.source), 'SCHEMA_INVALID');
+  nativeOwner(receipt, EDITOR_PREFLIGHT_ENVIRONMENT, expected.source.candidateSha);
+  check(receipt.id === expected.receiptId && digest(receipt.payload) === expected.receiptDigest, 'PINNED_RECEIPT_MISMATCH');
+  if (approvalAt !== undefined) check(stamp(approvalAt) && receipt.created_at < approvalAt && Date.parse(approvalAt) <= now,
+    'QUALIFICATION_NOT_BEFORE_APPROVAL');
+  return { receiptId: receipt.id, ...verifyEditorPreflightEvidence({
+    ...evidence, proof: receipt.payload, expected, qualifiedAt: receipt.created_at, now,
+  }) };
+}
+
+/** Verify the retained private evidence before publishing its compact owner attestation. */
+export function verifyEditorPreflightEvidence({ proof, expected, nativeEvidence, caseEvidence,
+  historicalAttestations = [], historicalNativeEvidence = {}, qualifiedAt, now = Date.now() }) {
   check(Number.isFinite(now), 'TIME_INVALID');
-  keys(expected, ['receiptId', 'receiptDigest', 'controllerSha', 'baselineSha', 'source', 'packageDigest',
+  check(plain(expected), 'SCHEMA_INVALID');
+  const { receiptId: _receiptId, receiptDigest: _receiptDigest, ...bindings } = expected;
+  keys(bindings, ['controllerSha', 'baselineSha', 'source', 'packageDigest',
     'inventoryHash', 'minimumTests', 'actors', 'restoration', 'cleanupScope']);
+  check(stamp(qualifiedAt) && Date.parse(qualifiedAt) <= now, 'TIME_INVALID');
   source(expected.source);
   actors(expected.actors);
   keys(expected.restoration, ['sourceTreeHash', 'inventoryHash']);
   keys(expected.cleanupScope, ['records', 'managedSides', 'metadata', 'assignments', 'listeners']);
-  check(positive(expected.receiptId) && isDigest(expected.receiptDigest) && isSha(expected.controllerSha)
-    && isSha(expected.baselineSha) && positive(expected.minimumTests) && [expected.packageDigest, expected.inventoryHash,
+  check(isSha(expected.controllerSha) && isSha(expected.baselineSha) && positive(expected.minimumTests) && [expected.packageDigest, expected.inventoryHash,
       expected.restoration.sourceTreeHash, expected.restoration.inventoryHash].every(isDigest), 'EXPECTED_BINDING_INVALID');
-  nativeOwner(receipt, EDITOR_PREFLIGHT_ENVIRONMENT, expected.source.candidateSha);
-  check(receipt.id === expected.receiptId && digest(receipt.payload) === expected.receiptDigest, 'PINNED_RECEIPT_MISMATCH');
-  const proof = receipt.payload;
   keys(proof, ['schemaVersion', 'kind', 'repository', 'controllerSha', 'baselineSha', 'source', 'org',
     'startedAt', 'completedAt', 'expiresAt', 'caseSetDigest', 'native', 'actors', 'cases', 'effects', 'cleanup']);
   keys(proof.org, ['orgId', 'username', 'isSandbox']);
@@ -235,11 +246,9 @@ export function verifySalesforceEditorPreflightProof({ receipt, expected, native
     && same(proof.org, { orgId: devee.orgId, username: devee.username, isSandbox: true }), 'SOURCE_OR_IDENTITY_MISMATCH');
   check([proof.startedAt, proof.completedAt, proof.expiresAt].every(stamp) && proof.startedAt <= proof.completedAt
     && Date.parse(proof.completedAt) - Date.parse(proof.startedAt) <= EDITOR_PREFLIGHT_MAX_AGE_MS
-    && proof.completedAt <= receipt.created_at && Date.parse(receipt.created_at) <= now
+    && proof.completedAt <= qualifiedAt
     && Date.parse(proof.expiresAt) > now && Date.parse(proof.expiresAt) - Date.parse(proof.completedAt) <= EDITOR_PREFLIGHT_MAX_AGE_MS
     && now - Date.parse(proof.completedAt) <= EDITOR_PREFLIGHT_MAX_AGE_MS, 'MISSING_OR_EXPIRED_EVIDENCE');
-  if (approvalAt !== undefined) check(stamp(approvalAt) && receipt.created_at < approvalAt && Date.parse(approvalAt) <= now,
-    'QUALIFICATION_NOT_BEFORE_APPROVAL');
   actors(proof.actors);
   check(same(proof.actors, expected.actors), 'ACTORS_INVALID');
   effects(proof.effects, true);
@@ -294,7 +303,7 @@ export function verifySalesforceEditorPreflightProof({ receipt, expected, native
       const matches = historicalAttestations.filter(record => record.id === observation.sourceAttestationId);
       check(matches.length === 1, 'HISTORICAL_SOURCE_ATTESTATION_REQUIRED');
       historicalSource(matches[0], observation, proof.source,
-        historicalNativeEvidence[observation.sourceAttestationId], receipt.created_at);
+        historicalNativeEvidence[observation.sourceAttestationId], qualifiedAt);
     }
     if (observation.completedAt > lastObservation) lastObservation = observation.completedAt;
   }
@@ -304,7 +313,7 @@ export function verifySalesforceEditorPreflightProof({ receipt, expected, native
     && proof.cleanup.completedAt === nativeEvidence.cleanup.completedAt && proof.cleanup.completedAt >= lastObservation
     && proof.cleanup.restoredInventoryHash === expected.restoration.inventoryHash, 'CLEANUP_EVIDENCE_MISMATCH');
   verifyCleanup(nativeEvidence.cleanup, expected, proof.completedAt, lastObservation);
-  return { receiptId: receipt.id, receiptDigest: digest(proof), candidateSha: proof.source.candidateSha,
+  return { receiptDigest: digest(proof), candidateSha: proof.source.candidateSha,
     controllerSha: proof.controllerSha, baselineSha: proof.baselineSha, sourceTreeHash: proof.source.sourceTreeHash,
     caseSetDigest: proof.caseSetDigest, qualificationValidationJobId: native.validationJobId,
     qualificationDeploymentJobId: native.deploymentJobId, installedInventoryHash: native.inventoryHash,
