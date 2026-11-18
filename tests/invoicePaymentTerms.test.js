@@ -334,3 +334,33 @@ test('the form exposes validation and makes only protected payment-term fields r
   assert.equal((html.match(/read-only=\{input.isPaymentTermLocked\}/gu) || []).length, 2);
   assert.match(html, /disabled=\{input.isPaymentTermLocked\}/u);
 });
+
+test('a PDF save failure clears the spinner and identifies the already created invoice', async () => {
+  let saves = 0;
+  const { component, calls } = await loadForm({
+    generateInvoicePDF: async () => {
+      saves++;
+      throw { body: { message: 'PDF attachment failed.' } };
+    },
+  });
+  await component.openModal('stem-id', products, false, true, savedForm());
+  await component.handleGeneratePDF();
+  assert.equal(component.actionExecuted, true);
+  assert.equal(component.isModalOpen, true);
+  assert.match(component.invoiceFormError, /NEW INVOICE.*PDF attachment failed/u);
+  await component.handleGeneratePDF();
+  assert.equal(calls.invoices.length, 1);
+  assert.equal(saves, 1);
+  assert.deepEqual(calls.savedForms, []);
+});
+
+test('a last-form save failure reports that the invoice PDF was already saved', async () => {
+  const { component, calls } = await loadForm({
+    upsertLastInvoiceForm: async () => { throw new Error('Form save rejected.'); },
+  });
+  await component.openModal('stem-id', products, false, true, savedForm());
+  await component.handleGeneratePDF();
+  assert.equal(component.actionExecuted, true);
+  assert.match(component.invoiceFormError, /NEW INVOICE and its PDF were saved.*Form save rejected/u);
+  assert.equal(calls.pdfs.length, 1);
+});

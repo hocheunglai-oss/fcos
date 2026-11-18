@@ -509,4 +509,140 @@ private class VariableChargeReadinessTest {
         insert new Invoice__c(Name = '00001T-CN-VC', STEM__c = ids.get('stem'), Proforma__c = false);
         Test.stopTest();
     }
+
+    private static Map<String, Id> prepareUnrelatedCharge() {
+        Map<String, Id> ids = prepareRequiredSupplier(true);
+        Account ordinary = TestDataFactory.createTestAccount('Unrelated fixed supplier', 'SUPPLIER', true);
+        STEM_Extra_Cost__c extra = TestDataFactory.createTestStemExtraCost(
+            ids.get('stem'), null, null, null, null, 75, 50, null, 'STEM Charge', false);
+        extra.Supplier__c = ordinary.Id;
+        extra.Fixed__c = true;
+        ContextManager.skipTriggers = true;
+        try { insert extra; } finally { ContextManager.skipTriggers = false; }
+        ids.put('extra', extra.Id);
+        ids.put('ordinary', ordinary.Id);
+        verifyBuyerSide(ids);
+        update new STEM__c(Id = ids.get('stem'), Variable_Charges_Confirmed__c = true);
+        return ids;
+    }
+
+    private static void assertOriginalBuyerApproval(Map<String, Id> ids, STEM_Variable_Charge_Supplier__c before) {
+        STEM_Variable_Charge_Supplier__c after = [
+            SELECT Buyer_Charge_Status__c, Buyer_Charge_Confirmed_At__c, Buyer_Charge_Confirmed_By_Email__c,
+                Buyer_Charge_Reviewed_Source_Fingerprint__c, Buyer_Charge_Revision__c
+            FROM STEM_Variable_Charge_Supplier__c WHERE Id = :ids.get('stage')
+        ];
+        System.assertEquals(JSON.serialize(before), JSON.serialize(after), 'An unrelated charge must preserve the original buyer approval.');
+        System.assertEquals(true, [SELECT Variable_Charges_Confirmed__c FROM STEM__c WHERE Id = :ids.get('stem')].Variable_Charges_Confirmed__c);
+        System.assertEquals(true, VariableChargeInvoiceReadinessService.evaluateBuyer(ids.get('stem')).ready);
+    }
+
+    private static STEM_Variable_Charge_Supplier__c originalBuyerApproval(Map<String, Id> ids) {
+        return [SELECT Buyer_Charge_Status__c, Buyer_Charge_Confirmed_At__c, Buyer_Charge_Confirmed_By_Email__c,
+            Buyer_Charge_Reviewed_Source_Fingerprint__c, Buyer_Charge_Revision__c
+            FROM STEM_Variable_Charge_Supplier__c WHERE Id = :ids.get('stage')];
+    }
+
+    @IsTest static void unrelatedExtraCostInsertPreservesBuyerConfirmation() {
+        Map<String, Id> ids = prepareUnrelatedCharge();
+        STEM_Variable_Charge_Supplier__c before = originalBuyerApproval(ids);
+        STEM_Extra_Cost__c extra = TestDataFactory.createTestStemExtraCost(
+            ids.get('stem'), null, null, null, null, 125, 100, null, 'STEM Charge', false);
+        extra.Supplier__c = ids.get('ordinary');
+        extra.Fixed__c = true;
+        Test.startTest();
+        insert extra;
+        assertOriginalBuyerApproval(ids, before);
+        Test.stopTest();
+    }
+
+    @IsTest static void unrelatedExtraCostUpdatePreservesBuyerConfirmation() {
+        Map<String, Id> ids = prepareUnrelatedCharge();
+        STEM_Variable_Charge_Supplier__c before = originalBuyerApproval(ids);
+        Test.startTest();
+        update new STEM_Extra_Cost__c(Id = ids.get('extra'), Lumpsum_Price__c = 95);
+        assertOriginalBuyerApproval(ids, before);
+        Test.stopTest();
+    }
+
+    @IsTest static void unrelatedExtraCostDeletePreservesBuyerConfirmation() {
+        Map<String, Id> ids = prepareUnrelatedCharge();
+        STEM_Variable_Charge_Supplier__c before = originalBuyerApproval(ids);
+        Test.startTest();
+        delete new STEM_Extra_Cost__c(Id = ids.get('extra'));
+        assertOriginalBuyerApproval(ids, before);
+        Test.stopTest();
+    }
+
+    @IsTest static void unrelatedExtraCostCannotRestoreExplicitlyClearedConfirmation() {
+        Map<String, Id> ids = prepareUnrelatedCharge();
+        update new STEM__c(Id = ids.get('stem'), Variable_Charges_Confirmed__c = false);
+        Test.startTest();
+        update new STEM_Extra_Cost__c(Id = ids.get('extra'), Lumpsum_Price__c = 95);
+        System.assertEquals(false, [SELECT Variable_Charges_Confirmed__c FROM STEM__c WHERE Id = :ids.get('stem')].Variable_Charges_Confirmed__c);
+        System.assertEquals(false, VariableChargeInvoiceReadinessService.evaluateBuyer(ids.get('stem')).ready);
+        Test.stopTest();
+    }
+
+    private static STEM_Line_Item__c unrelatedProduct(Map<String, Id> ids) {
+        STEM_Line_Item__c source = [SELECT Product__c FROM STEM_Line_Item__c WHERE STEM__c = :ids.get('stem') LIMIT 1];
+        return TestDataFactory.createTestStemLineItem('Unrelated product', String.valueOf(ids.get('stem')),
+            String.valueOf(ids.get('ordinary')), String.valueOf(source.Product__c), 10, 100, 90, 10, '30', false);
+    }
+
+    @IsTest static void unrelatedProductPricePreservesBuyerConfirmation() {
+        Map<String, Id> ids = prepareUnrelatedCharge();
+        STEM_Line_Item__c line = unrelatedProduct(ids);
+        ContextManager.skipTriggers = true;
+        try { insert line; } finally { ContextManager.skipTriggers = false; }
+        verifyBuyerSide(ids);
+        STEM_Variable_Charge_Supplier__c before = originalBuyerApproval(ids);
+        Test.startTest();
+        update new STEM_Line_Item__c(Id = line.Id, Unit_Sell_At__c = 110);
+        assertOriginalBuyerApproval(ids, before);
+        Test.stopTest();
+    }
+
+    @IsTest static void unrelatedProductInsertRevokesBuyerConfirmation() {
+        Map<String, Id> ids = prepareUnrelatedCharge();
+        STEM_Line_Item__c line = unrelatedProduct(ids);
+        Test.startTest();
+        insert line;
+        System.assertEquals(false, [SELECT Variable_Charges_Confirmed__c FROM STEM__c WHERE Id = :ids.get('stem')].Variable_Charges_Confirmed__c);
+        System.assertEquals('Invalidated', [SELECT Buyer_Charge_Status__c FROM STEM_Variable_Charge_Supplier__c WHERE Id = :ids.get('stage')].Buyer_Charge_Status__c);
+        Test.stopTest();
+    }
+
+    @IsTest static void unrelatedProductDeleteRevokesBuyerConfirmation() {
+        Map<String, Id> ids = prepareUnrelatedCharge();
+        STEM_Line_Item__c line = unrelatedProduct(ids);
+        ContextManager.skipTriggers = true;
+        try { insert line; } finally { ContextManager.skipTriggers = false; }
+        verifyBuyerSide(ids);
+        Test.startTest();
+        delete line;
+        System.assertEquals(false, [SELECT Variable_Charges_Confirmed__c FROM STEM__c WHERE Id = :ids.get('stem')].Variable_Charges_Confirmed__c);
+        System.assertEquals('Invalidated', [SELECT Buyer_Charge_Status__c FROM STEM_Variable_Charge_Supplier__c WHERE Id = :ids.get('stage')].Buyer_Charge_Status__c);
+        Test.stopTest();
+    }
+
+    @IsTest static void requiredExtraCostWithoutStageStillRevokesBuyerConfirmation() {
+        Map<String, Id> ids = prepareUnrelatedCharge();
+        ContextManager.skipTriggers = true;
+        try { update new Account(Id = ids.get('ordinary'), Is_Variable__c = true); }
+        finally { ContextManager.skipTriggers = false; }
+        Test.startTest();
+        update new STEM_Extra_Cost__c(Id = ids.get('extra'), Lumpsum_Price__c = 95);
+        System.assertEquals(false, [SELECT Variable_Charges_Confirmed__c FROM STEM__c WHERE Id = :ids.get('stem')].Variable_Charges_Confirmed__c);
+        Test.stopTest();
+    }
+
+    @IsTest static void deletingLastRequiredManualExtraStillRevokesBuyerConfirmation() {
+        Map<String, Id> ids = prepareUnrelatedCharge();
+        insert new STEM_Variable_Charge_Supplier__c(STEM__c = ids.get('stem'), Supplier__c = ids.get('ordinary'), Manual_Review_Required__c = true);
+        Test.startTest();
+        delete new STEM_Extra_Cost__c(Id = ids.get('extra'));
+        System.assertEquals(false, [SELECT Variable_Charges_Confirmed__c FROM STEM__c WHERE Id = :ids.get('stem')].Variable_Charges_Confirmed__c);
+        Test.stopTest();
+    }
 }

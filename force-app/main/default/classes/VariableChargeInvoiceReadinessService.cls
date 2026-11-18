@@ -768,11 +768,10 @@ public without sharing class VariableChargeInvoiceReadinessService {
         Set<String> costPairs = new Set<String>();
         Set<String> buyerPairs = new Set<String>();
         Set<String> sharedPairs = new Set<String>();
-        Map<Id, Integer> activeCountDelta = new Map<Id, Integer>();
+        Set<Id> productMembershipStems = new Set<Id>();
         if (newRecords != null) for (STEM_Line_Item__c row : newRecords) {
             STEM_Line_Item__c oldRow = oldMap == null ? null : oldMap.get(row.Id);
-            addActiveCountDelta(activeCountDelta, row.STEM__c, row.Cancelled__c != true ? 1 : 0);
-            if (oldRow != null) addActiveCountDelta(activeCountDelta, oldRow.STEM__c, oldRow.Cancelled__c != true ? -1 : 0);
+            addProductMembershipChanges(productMembershipStems, row, oldRow);
             if (oldRow == null || changed(row, oldRow, new List<String>{'STEM__c','Original_Supplier__c','Cancelled__c','Product__c','Quantity__c','Quantity_Delivered_Per_BDN__c','Quantity_Max__c','Unit_of_Measure__c','CurrencyIsoCode'}))
                 addChangedPairs(sharedPairs, row, oldRow, 'Original_Supplier__c');
             if (oldRow != null && (changed(row, oldRow, new List<String>{'Payment_Term__c','Unit_Buy_At__c','Total_Cost__c','Commission_Cost__c'}) || tradeFxChanged(row,oldRow,'Buy')))
@@ -782,14 +781,11 @@ public without sharing class VariableChargeInvoiceReadinessService {
         }
         if (newRecords == null && oldMap != null) for (STEM_Line_Item__c row : oldMap.values()) {
             addPair(sharedPairs, row.STEM__c, row.Original_Supplier__c);
-            addActiveCountDelta(activeCountDelta, row.STEM__c, row.Cancelled__c != true ? -1 : 0);
+            addProductMembershipChanges(productMembershipStems, null, row);
         }
         costPairs.removeAll(sharedPairs);
         buyerPairs.removeAll(sharedPairs);
-        invalidatePairSides(sharedPairs, true, true);
-        invalidatePairSides(costPairs, true, false);
-        invalidatePairSides(buyerPairs, false, true);
-        invalidateProductPresenceTransitions(activeCountDelta);
+        invalidateChargeRowChanges(sharedPairs, costPairs, buyerPairs, productMembershipStems);
     }
 
     public static void invalidateManagedBundlePairs(Set<String> pairs) {
@@ -812,9 +808,7 @@ public without sharing class VariableChargeInvoiceReadinessService {
         if (newRecords == null && oldMap != null) for (STEM_Extra_Cost__c row : oldMap.values()) addPair(sharedPairs, row.STEM__c, row.Supplier__c);
         costPairs.removeAll(sharedPairs);
         buyerPairs.removeAll(sharedPairs);
-        invalidatePairSides(sharedPairs, true, true);
-        invalidatePairSides(costPairs, true, false);
-        invalidatePairSides(buyerPairs, false, true);
+        invalidateChargeRowChanges(sharedPairs, costPairs, buyerPairs, new Set<Id>());
     }
 
     public static void invalidateForVesselChanges(Map<Id, Vessel__c> newMap, Map<Id, Vessel__c> oldMap) {
@@ -1045,9 +1039,13 @@ public without sharing class VariableChargeInvoiceReadinessService {
         if (beforeRow != null) addPair(pairs, (Id)beforeRow.get('STEM__c'), (Id)beforeRow.get(supplierField));
     }
 
-    private static void addActiveCountDelta(Map<Id, Integer> deltas, Id stemId, Integer delta) {
-        if (stemId == null || delta == null || delta == 0) return;
-        deltas.put(stemId, (deltas.containsKey(stemId) ? deltas.get(stemId) : 0) + delta);
+    private static void addProductMembershipChanges(Set<Id> stemIds, STEM_Line_Item__c afterRow, STEM_Line_Item__c beforeRow) {
+        Boolean afterActive = afterRow != null && afterRow.Cancelled__c != true;
+        Boolean beforeActive = beforeRow != null && beforeRow.Cancelled__c != true;
+        if (afterActive && (!beforeActive || afterRow.STEM__c != beforeRow.STEM__c)
+            && afterRow.STEM__c != null) stemIds.add(afterRow.STEM__c);
+        if (beforeActive && (!afterActive || beforeRow.STEM__c != afterRow.STEM__c)
+            && beforeRow.STEM__c != null) stemIds.add(beforeRow.STEM__c);
     }
 
     private static Set<Id> productBearingStemIds(Set<Id> stemIds) {
@@ -1060,21 +1058,75 @@ public without sharing class VariableChargeInvoiceReadinessService {
         return result;
     }
 
-    private static void invalidateProductPresenceTransitions(Map<Id, Integer> activeCountDelta) {
-        if (activeCountDelta == null || activeCountDelta.isEmpty()) return;
-        Set<Id> stemIds = activeCountDelta.keySet();
-        Map<Id, Integer> currentCounts = new Map<Id, Integer>();
-        for (SObject aggregate : Database.queryWithBinds(
-            'SELECT STEM__c stemId, COUNT(Id) itemCount FROM STEM_Line_Item__c WHERE STEM__c IN :stemIds AND Cancelled__c = false GROUP BY STEM__c',
-            new Map<String,Object>{'stemIds'=>stemIds},AccessLevel.SYSTEM_MODE))
-            currentCounts.put((Id)aggregate.get('stemId'), (Integer)aggregate.get('itemCount'));
-        Set<Id> transitioned = new Set<Id>();
-        for (Id stemId : stemIds) {
-            Integer currentCount = currentCounts.containsKey(stemId) ? currentCounts.get(stemId) : 0;
-            Integer previousCount = currentCount - activeCountDelta.get(stemId);
-            if ((currentCount > 0) != (previousCount > 0)) transitioned.add(stemId);
+    private static void invalidateChargeRowChanges(Set<String> sharedPairs, Set<String> costPairs,
+        Set<String> buyerPairs, Set<Id> productMembershipStems) {
+        if (invalidationInProgress) return;
+        Set<String> pairs = new Set<String>();
+        pairs.addAll(sharedPairs);
+        pairs.addAll(costPairs);
+        pairs.addAll(buyerPairs);
+        Set<Id> stemIds = new Set<Id>();
+        stemIds.addAll(productMembershipStems);
+        Set<Id> supplierIds = new Set<Id>();
+        for (String pair : pairs) {
+            stemIds.add((Id)pair.substringBefore(':'));
+            supplierIds.add((Id)pair.substringAfter(':'));
         }
-        invalidateStagesForStems(transitioned, true, true, true);
+        if (stemIds.isEmpty()) return;
+        // One bulk read retains old/new pair scope even after the last row is
+        // cancelled, deleted or reassigned; current exact membership is insufficient.
+        Map<Id, Account> accounts = new Map<Id, Account>([
+            SELECT Id, Is_Agent__c, Is_Variable__c, Inactive_Suspended__c
+            FROM Account WHERE Id IN :supplierIds WITH SYSTEM_MODE
+        ]);
+        List<STEM__c> stems = [
+            SELECT Id, Variable_Charges_Confirmed__c,
+                (SELECT Id, STEM__c, Supplier__c, Manual_Review_Required__c,
+                    Supplier_Status__c, Verified_At__c, Verified_By_Email__c,
+                    Reviewed_Source_Fingerprint__c, Buyer_Charge_Status__c,
+                    Buyer_Charge_Reviewed_Source_Fingerprint__c, Buyer_Charge_Confirmed_At__c,
+                    Buyer_Charge_Confirmed_By_Email__c
+                 FROM Variable_Charge_Suppliers__r
+                 WHERE External_Key__c IN :pairs OR STEM__c IN :productMembershipStems)
+            FROM STEM__c WHERE Id IN :stemIds WITH SYSTEM_MODE
+        ];
+        Set<String> manualPairs = new Set<String>();
+        List<STEM_Variable_Charge_Supplier__c> stageUpdates = new List<STEM_Variable_Charge_Supplier__c>();
+        for (STEM__c stem : stems) for (STEM_Variable_Charge_Supplier__c stage : stem.Variable_Charge_Suppliers__r) {
+            String key = pairKey(stage.STEM__c, stage.Supplier__c);
+            if (stage.Manual_Review_Required__c == true) manualPairs.add(key);
+            Boolean shared = productMembershipStems.contains(stem.Id) || sharedPairs.contains(key);
+            Boolean invalidateCost = shared || costPairs.contains(key);
+            Boolean invalidateBuyer = shared || buyerPairs.contains(key);
+            if (!invalidateCost && !invalidateBuyer) continue;
+            invalidateStage(stage, invalidateCost, invalidateBuyer);
+            stageUpdates.add(stage);
+        }
+        // Every supplier fingerprint includes all active product IDs. Membership
+        // changes revoke both sides across the STEM, including net-zero replacements
+        // and the first/last-product actionability transitions.
+        Set<Id> buyerAffectedStems = new Set<Id>();
+        buyerAffectedStems.addAll(productMembershipStems);
+        Set<String> buyerAffectedPairs = new Set<String>();
+        buyerAffectedPairs.addAll(sharedPairs);
+        buyerAffectedPairs.addAll(buyerPairs);
+        for (String pair : buyerAffectedPairs) {
+            Account supplier = accounts.get((Id)pair.substringAfter(':'));
+            if (supplier != null && supplier.Inactive_Suspended__c != true
+                && (isVariableChargeAccount(supplier) || manualPairs.contains(pair))) {
+                buyerAffectedStems.add((Id)pair.substringBefore(':'));
+            }
+        }
+        List<STEM__c> stemUpdates = new List<STEM__c>();
+        for (STEM__c stem : stems) if (buyerAffectedStems.contains(stem.Id) && stem.Variable_Charges_Confirmed__c == true)
+            stemUpdates.add(new STEM__c(Id = stem.Id, Variable_Charges_Confirmed__c = false));
+        invalidationInProgress = true;
+        try {
+            if (!stageUpdates.isEmpty()) Database.update(stageUpdates, true, AccessLevel.SYSTEM_MODE);
+            if (!stemUpdates.isEmpty()) Database.update(stemUpdates, true, AccessLevel.SYSTEM_MODE);
+        } finally {
+            invalidationInProgress = false;
+        }
     }
 
     // These private trigger-derived operations only revoke stale approvals. Keep their
