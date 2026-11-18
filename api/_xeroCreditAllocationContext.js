@@ -5,8 +5,9 @@ import { loadFinancialSafetyContext } from './_xeroDocumentSafety.js';
 import { exactXeroRows, loadXeroPrepaymentContextForStem, scopedRows } from './_xeroPrepaymentContext.js';
 import { reviewCreditAllocation } from './_xeroCreditAllocations.js';
 import { xeroPaymentDate } from './_xeroPaymentAssociation.js';
+import { xeroPrepaymentEvidenceFingerprint } from './_xeroPrepaymentCurrency.js';
 import {
-  loadCreditAllocationSalesforceSource, verifyCreditAllocationSourceMappings,
+  loadCreditAllocationSalesforceSource, readCreditAllocationSourceCohort, verifyCreditAllocationSourceMappings,
 } from './_xeroCreditAllocationSource.js';
 import {
   assertXeroFinancialDailyReserve, loadSalesforcePayments, xeroFinancialAccountingFetch, xeroFinancialRateSnapshot,
@@ -17,6 +18,101 @@ const isUuid = value => typeof value === 'string' && UUID.test(value);
 
 function fail(message, status = 409) {
   throw Object.assign(new Error(message), { status, code: 'XERO_CREDIT_ALLOCATION_CONTEXT_INCOMPLETE' });
+}
+
+const sourceKey = (object, id) => `${object}:${id?.slice(0, 15)}`;
+const allocationStates = new Set(['processing', 'applied', 'unknown', 'exception', 'cancelled_before_send']);
+
+// This snapshot exposes historical journal outcomes. Current Xero settlement needs its own observation.
+export async function loadCreditAllocationQueueSnapshot(window, {
+  client, tenantId, env = process.env, composite, readRows = scopedRows,
+} = {}) {
+  if (!client || !isUuid(tenantId) || (env.XERO_TENANT_ID && env.XERO_TENANT_ID !== tenantId)) {
+    fail('The exact credit allocation tenant is required.', 400);
+  }
+  // Document mappings belong to the pinned primary connection; the journal also has a tenant column.
+  const readConnection = () => client.from('xero_contact_sync_connections').select('tenant_id,token_version')
+    .eq('id', 'primary').maybeSingle();
+  const assertTenant = result => {
+    if (result?.error || result?.data?.tenant_id !== tenantId || !Number.isSafeInteger(result.data.token_version)) {
+      fail('The saved credit allocation tenant could not be verified.');
+    }
+    return result.data.token_version;
+  };
+  const tokenVersion = assertTenant(await readConnection());
+  const cohort = await readCreditAllocationSourceCohort(window, { composite });
+  const ids = cohort.rows.flatMap(({ creditId, originalId }) => originalId ? [creditId, originalId] : [creditId]);
+  const mappings = await readRows(client, {
+    table: 'xero_financial_document_mappings', field: 'salesforce_id', ids, source: true,
+  });
+  const bySource = new Map();
+  for (const mapping of mappings) {
+    const key = sourceKey(mapping.salesforce_object, mapping.salesforce_id);
+    if (bySource.has(key)) fail('Credit allocation evidence has ambiguous document mappings.');
+    bySource.set(key, mapping);
+  }
+  const cases = cohort.rows.map(row => ({
+    ...row,
+    creditMapping: bySource.get(sourceKey(row.sourceObject, row.creditId)),
+    originalMapping: row.originalId && bySource.get(sourceKey(row.sourceObject, row.originalId)),
+  }));
+  const byCreditMapping = new Map(cases.filter(row => row.creditMapping).map(row => [row.creditMapping.id, row]));
+  const operations = await readRows(client, {
+    table: 'xero_financial_credit_allocations', field: 'credit_mapping_id',
+    ids: [...byCreditMapping.keys()], key: 'operation_id', tenantId,
+  });
+  const activeByMapping = new Map();
+  for (const operation of operations) {
+    const row = byCreditMapping.get(operation.credit_mapping_id);
+    const request = operation.request_evidence;
+    const outcome = operation.response_evidence;
+    const evidencePairMatches = request?.evidence?.credit?.Id === request?.creditId
+      && request?.evidence?.original?.Id === request?.originalId
+      && sourceKey(row?.sourceObject, request?.creditId) === sourceKey(row?.sourceObject, row?.creditId)
+      && sourceKey(row?.sourceObject, request?.originalId) === sourceKey(row?.sourceObject, row?.originalId);
+    if (!row?.originalMapping || !request || !evidencePairMatches || operation.tenant_id !== tenantId
+        || request.action !== 'credit_allocate' || !/^[0-9a-f]{64}$/.test(request.reviewFingerprint ?? '')
+        || operation.request_hash !== xeroPrepaymentEvidenceFingerprint(request)
+        || operation.invoice_mapping_id !== row.originalMapping.id
+        || request.creditMappingId !== row.creditMapping.id || request.invoiceMappingId !== row.originalMapping.id
+        || request.xeroCreditId !== row.creditMapping.xero_document_id
+        || request.xeroInvoiceId !== row.originalMapping.xero_document_id
+        || !allocationStates.has(operation.status) || !isUuid(operation.operation_id)
+        || !Number.isFinite(Date.parse(operation.updated_at))
+        || (['applied', 'unknown', 'exception'].includes(operation.status) && !Number.isFinite(Date.parse(operation.send_started_at)))
+        || (operation.status !== 'applied' && operation.xero_allocation_id != null)
+        || (operation.status === 'cancelled_before_send' && operation.send_started_at != null)) {
+      fail('The saved operation does not match the exact credit and original invoice.');
+    }
+    if (operation.status === 'cancelled_before_send') continue;
+    if (activeByMapping.has(operation.credit_mapping_id)) fail('Multiple active operations match one credit.');
+    if (operation.status === 'applied' && (!isUuid(operation.xero_allocation_id)
+        || outcome?.identities?.xeroAllocationId !== operation.xero_allocation_id
+        || outcome?.allocation?.AllocationID !== operation.xero_allocation_id
+        || outcome?.allocation?.Invoice?.InvoiceID !== request.xeroInvoiceId
+        || outcome?.credit?.CreditNoteID !== request.xeroCreditId || outcome?.invoice?.InvoiceID !== request.xeroInvoiceId)) {
+      fail('The saved credit allocation has no matching provider readback.');
+    }
+    activeByMapping.set(operation.credit_mapping_id, operation);
+  }
+  if (assertTenant(await readConnection()) !== tokenVersion) {
+    fail('The saved credit allocation connection changed during the snapshot.');
+  }
+  return {
+    cutoff: cohort.cutoff,
+    through: cohort.through,
+    tenantId,
+    rows: cases.map(({ creditMapping, originalMapping, ...row }) => {
+      const operation = activeByMapping.get(creditMapping?.id);
+      return {
+        ...row,
+        mappingHold: !creditMapping || !originalMapping ? 'missing_document_mapping' : null,
+        journalStatus: operation?.status ?? null,
+        observedAllocationId: operation?.status === 'applied' ? operation.xero_allocation_id : null,
+        journalUpdatedAt: operation?.updated_at ?? null,
+      };
+    }),
+  };
 }
 
 function verifyMappedLines(row, mapping, snapshots, source) {

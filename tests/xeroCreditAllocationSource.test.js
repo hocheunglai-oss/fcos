@@ -4,13 +4,86 @@ import { loadCreditAllocationSalesforceSource, readCreditAllocationSourceCohort,
   verifyCreditAllocationSourceMappings } from '../api/_xeroCreditAllocationSource.js';
 import { XERO_FINANCIAL_CUTOFF } from '../api/_xeroFinancialSync.js';
 import { nativeDocumentSourceFingerprint } from "../api/_xeroNativeDocumentFingerprint.js";
-import { loadCreditAllocationDocumentContext } from "../api/_xeroCreditAllocationContext.js";
+import { loadCreditAllocationDocumentContext, loadCreditAllocationQueueSnapshot } from "../api/_xeroCreditAllocationContext.js";
+import { xeroPrepaymentEvidenceFingerprint } from '../api/_xeroPrepaymentCurrency.js';
 
 
 const id = suffix => `a0000000000000${suffix}AAA`;
 const [creditId, originalId, stemId, partyId, creditLineId, originalLineId, sourceId, otherId] =
   Array.from({ length: 8 }, (_, index) => id(index + 1));
 const result = records => ({ records, totalSize: records.length });
+
+test('joins credit journal across reviewers, pins the tenant, and requires provider readback for applied status', async () => {
+  const uuid = digit => `00000000-0000-4000-8000-00000000000${digit}`;
+  const [tenantId, creditMappingId, invoiceMappingId, xeroCreditId, xeroInvoiceId, allocationId, operationId, cancelledId] =
+    Array.from({ length: 8 }, (_, index) => uuid(index + 1));
+  const window = { cutoff: XERO_FINANCIAL_CUTOFF, through: '2026-09-03T00:00:00.000Z' };
+  const created = '2026-09-01T10:00:00Z';
+  const request = {
+    creditId, originalId, creditMappingId, invoiceMappingId, xeroCreditId, xeroInvoiceId, action: 'credit_allocate',
+    reviewFingerprint: 'a'.repeat(64), evidence: { credit: { Id: creditId }, original: { Id: originalId } },
+  };
+  const credit = { Id: creditId, Original_Invoice__c: originalId, File__c: 'issued', Deprecated__c: false,
+    Proforma__c: false, CreatedDate: created, LastModifiedDate: created, Invoice_Date__c: '2026-09-01' };
+  const applied = {
+    operation_id: operationId, tenant_id: tenantId, request_evidence: request,
+    request_hash: xeroPrepaymentEvidenceFingerprint(request), credit_mapping_id: creditMappingId, invoice_mapping_id: invoiceMappingId,
+    status: 'applied', updated_at: created, send_started_at: created, xero_allocation_id: allocationId,
+    response_evidence: { identities: { xeroAllocationId: allocationId },
+      allocation: { AllocationID: allocationId, Invoice: { InvoiceID: xeroInvoiceId } },
+      credit: { CreditNoteID: xeroCreditId }, invoice: { InvoiceID: xeroInvoiceId } },
+  };
+  const cancelled = { ...applied, operation_id: cancelledId, status: 'cancelled_before_send',
+    send_started_at: null, xero_allocation_id: null, response_evidence: { code: 'cancelled' } };
+  const ready = (operations, { storedTenant = tenantId, finalVersion = 1, configuredTenant = tenantId } = {}) => {
+    const calls = [];
+    const client = { from(table) {
+      assert.equal(table, 'xero_contact_sync_connections');
+      const version = calls.length === 0 ? 1 : finalVersion;
+      calls.push('tenant');
+      return { select(fields) {
+        assert.equal(fields, 'tenant_id,token_version');
+        return { eq: (field, value) => {
+          assert.deepEqual([field, value], ['id', 'primary']);
+          return { maybeSingle: async () => ({ data: { tenant_id: storedTenant, token_version: version } }) };
+        } };
+      } };
+    } };
+    const promise = loadCreditAllocationQueueSnapshot(window, {
+      client, tenantId, env: { XERO_TENANT_ID: configuredTenant },
+      composite: async () => {
+        calls.push('source');
+        return [result([credit]), result([])];
+      },
+      readRows: async (actualClient, scope) => {
+        assert.equal(actualClient, client);
+        calls.push(scope.table);
+        if (scope.table === 'xero_financial_document_mappings') {
+          assert.deepEqual(scope.ids, [creditId, originalId]);
+          return [[creditMappingId, creditId, xeroCreditId], [invoiceMappingId, originalId, xeroInvoiceId]]
+            .map(([id, salesforce_id, xero_document_id]) => ({ id, salesforce_id, xero_document_id, salesforce_object: 'Invoice__c' }));
+        }
+        assert.deepEqual(scope, { table: 'xero_financial_credit_allocations', field: 'credit_mapping_id',
+          ids: [creditMappingId], key: 'operation_id', tenantId });
+        return operations;
+      },
+    });
+    return { promise, calls };
+  };
+  const valid = ready([cancelled, applied]);
+  const snapshot = await valid.promise;
+  assert.equal(snapshot.tenantId, tenantId);
+  assert.deepEqual(snapshot.rows, [{ sourceObject: 'Invoice__c', creditId, originalId, sourceHold: null, mappingHold: null,
+    modifiedAt: '2026-09-01T10:00:00.000Z', journalStatus: 'applied', observedAllocationId: allocationId, journalUpdatedAt: created }]);
+  assert.deepEqual(valid.calls, ['tenant', 'source', 'xero_financial_document_mappings', 'xero_financial_credit_allocations', 'tenant']);
+  assert.equal((await ready([cancelled]).promise).rows[0].journalStatus, null);
+  assert.equal((await ready([{ ...applied, status: 'unknown', xero_allocation_id: null }]).promise).rows[0].observedAllocationId, null);
+  await assert.rejects(ready([{ ...applied, response_evidence: null }]).promise, /no matching provider readback/);
+  await assert.rejects(ready([{ ...applied, request_hash: 'b'.repeat(64) }]).promise, /exact credit and original/);
+  await assert.rejects(ready([applied, { ...applied, operation_id: cancelledId }]).promise, /Multiple active/);
+  await assert.rejects(ready([applied], { storedTenant: uuid(9) }).promise, /tenant could not be verified/);
+  await assert.rejects(ready([applied], { finalVersion: 2 }).promise, /changed during the snapshot/);
+});
 
 test('reads both issued credit cohorts in one composite and retains held rows', async () => {
   const window = { cutoff: XERO_FINANCIAL_CUTOFF, through: '2026-09-03T00:00:00.000Z' };
