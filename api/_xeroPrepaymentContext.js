@@ -5,6 +5,8 @@ import { XERO_PREPAYMENT_POLICY_TABLE, loadPrepaymentPostingSettings } from './_
 import { sfQuery } from './_salesforce.js';
 import { loadTradeCashLedger, validateTradeCashLedger } from './_tradeCashLedger.js';
 import { loadFinancialSafetyContext } from './_xeroDocumentSafety.js';
+import { prepaymentSourceFingerprint, reconcilePrepaymentLedger } from './_xeroPrepaymentReconciliation.js';
+import { boundedSettlementReads } from './_xeroSettlementReads.js';
 import {
   assertXeroFinancialDailyReserve, buildFinancialClassifications, loadSalesforceDocumentLinkSnapshot,
   loadSalesforcePayments, loadStoredDocumentLinkControls, loadXeroFinancialSnapshot, normalizeXeroInvoice,
@@ -426,6 +428,79 @@ export async function loadPrepaymentQueuePaymentBridges(snapshot, { query = sfQu
     inCohort: expected.has(canonicalId(allocation.Id)),
     reversal,
   }));
+}
+
+/** Verify applied prepayment work against the current cash ledger and exact Xero records. */
+export async function loadPrepaymentSettlementSnapshot(window, {
+  client, tenantId, env = process.env, maxXeroReads, readConnection, accountingFetch, now,
+  loadQueue = loadPrepaymentQueueSnapshot, loadLedger = loadXeroPrepaymentContextForStem, ...options
+} = {}) {
+  const transport = boundedSettlementReads({ client, tenantId, env, maxXeroReads,
+    readConnection, accountingFetch, now, fail: contextError });
+  const snapshot = await loadQueue(window, { ...options, client, tenantId });
+  if (snapshot.tenantId !== tenantId || snapshot.cutoff !== window?.cutoff || snapshot.through !== window?.through) {
+    contextError('The managed prepayment settlement cohort changed.');
+  }
+  const { context, cohort, paymentBridges } = snapshot;
+  const events = new Map(context.events.map(row => [canonicalId(row.Id), row]));
+  const allocations = new Map(context.allocations.map(row => [canonicalId(row.Id), row]));
+  const actions = { Payment: 'create', Refund: 'refund', Applied: 'allocate', Reversal: 'reverse' };
+  const unresolved = new Set(['processing', 'unknown', 'exception']);
+  const operations = new Map();
+  const unresolvedStems = new Set();
+  for (const operation of context.operations) {
+    const source = (operation.source_kind === 'cash_event' ? events : allocations).get(canonicalId(operation.source_id));
+    const event = events.get(canonicalId(source?.Cash_Event__c || source?.Original_Cash_Event__c || source?.Id));
+    if (!['cash_event', 'cash_allocation'].includes(operation.source_kind) || !source || !event
+        || operation.tenant_id !== tenantId || canonicalId(event.Id) !== canonicalId(operation.cash_event_id)
+        || actions[source.Kind__c] !== operation.action || !uuid(operation.operation_id)) {
+      contextError('A managed prepayment operation does not match its exact source and cash event.');
+    }
+    if (operation.status === 'cancelled_before_send') continue;
+    const key = canonicalId(source.Id);
+    if (operations.has(key) || (operation.status !== 'applied' && !unresolved.has(operation.status))) {
+      contextError('Managed prepayment history is ambiguous.');
+    }
+    operations.set(key, operation);
+    if (unresolved.has(operation.status)) unresolvedStems.add(canonicalId(event.STEM__c));
+  }
+  const verifiedStems = new Map();
+  const rows = [];
+  for (const [sourceIds, index, sourceObject] of [
+    [cohort.events, events, 'Trade_Cash_Event__c'], [cohort.allocations, allocations, 'Trade_Cash_Allocation__c'],
+  ]) {
+    for (const sourceId of sourceIds) {
+      const key = canonicalId(sourceId);
+      const source = index.get(key);
+      const event = events.get(canonicalId(source?.Cash_Event__c || source?.Original_Cash_Event__c || source?.Id));
+      const stemKey = canonicalId(event?.STEM__c);
+      if (!source || !event || !stemKey) contextError('Managed prepayment source history is incomplete.');
+      const selected = { sourceId, sourceObject, cashEventId: event.Id };
+      const operation = operations.get(key);
+      if (unresolved.has(operation?.status)) {
+        rows.push({ ...selected, status: 'unresolved', reason: operation.status });
+      } else if (unresolvedStems.has(stemKey)) {
+        rows.push({ ...selected, status: 'held', reason: 'related_cash_unresolved' });
+      } else if (!operation) {
+        rows.push({ ...selected, status: source.Currency__c === 'HKD' ? 'held' : 'waiting',
+          reason: source.Currency__c === 'HKD' ? 'hkd_unsupported' : 'not_posted' });
+      } else {
+        if (!verifiedStems.has(stemKey)) {
+          const connection = await transport.getConnection();
+          const ledger = await loadLedger(event.STEM__c, { ...options, client, connection, env, accountingFetch: transport.read });
+          if (ledger.tenantId !== tenantId) contextError('The current prepayment ledger belongs to a different tenant.');
+          const { appliedOperations } = reconcilePrepaymentLedger(ledger);
+          verifiedStems.set(stemKey, new Map(appliedOperations.map(row => [row.operation_id, row])));
+        }
+        const confirmed = verifiedStems.get(stemKey).get(operation.operation_id);
+        if (confirmed?.request_hash !== operation.request_hash || confirmed?.source_hash !== prepaymentSourceFingerprint(source)) {
+          contextError('A managed prepayment operation changed during settlement verification.');
+        }
+        rows.push({ ...selected, status: 'reconciled', verified: true });
+      }
+    }
+  }
+  return { cutoff: snapshot.cutoff, through: snapshot.through, tenantId, complete: true, rows, paymentBridges, xeroReads: transport.count() };
 }
 
 export async function loadPrepaymentContactChoices(stemId, sourceId, {

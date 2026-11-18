@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import { createClient } from '@supabase/supabase-js';
 import { loadPrepaymentQueueCohort, loadPrepaymentQueueContext, loadPrepaymentSalesforceContext, loadXeroPrepaymentContextForStem,
   loadPrepaymentQueueSnapshot, loadPrepaymentQueuePaymentBridges, loadXeroPrepaymentReviewContext,
-  resolvePrepaymentStemKey } from '../api/_xeroPrepaymentContext.js';
+  loadPrepaymentSettlementSnapshot, resolvePrepaymentStemKey } from '../api/_xeroPrepaymentContext.js';
 import { XERO_FINANCIAL_CUTOFF } from '../api/_xeroFinancialSync.js';
+import { xeroPrepaymentEvidenceFingerprint } from '../api/_xeroPrepaymentCurrency.js';
+import { prepaymentSourceFingerprint } from '../api/_xeroPrepaymentReconciliation.js';
 import { allocation, fixture, id } from './fixtures/xeroPrepayment.js';
 
 const stem = 'a01000000000001AAA';
@@ -250,6 +252,46 @@ test('finds post-cutoff allocations on older deposits and separates work members
   const truncated = async () => ({ done: false, totalSize: 0, records: [] });
   await assert.rejects(loadPrepaymentQueueSnapshot(scope, { client: options.client, tenantId: id(9), query: truncated }),
     /discovery is incomplete/);
+});
+
+test('settlement verifies both managed operations in one exact STEM readback', async () => {
+  const raw = fixture();
+  allocation(raw);
+  const aliases = new Map([['cash', cashId], ['invoice', invoiceId], ['allocation', allocationId], ['payment-a', paymentId], ['stem', stem]]);
+  const ledger = JSON.parse(JSON.stringify(raw), (_key, value) => aliases.get(value) ?? value);
+  for (const [index, operation] of ledger.operations.entries()) {
+    operation.source_kind = index ? 'cash_allocation' : 'cash_event';
+    operation.source_hash = prepaymentSourceFingerprint(index ? ledger.allocations[0] : ledger.events[0]);
+    operation.request_evidence.sourceFingerprint = operation.source_hash;
+    operation.request_hash = xeroPrepaymentEvidenceFingerprint(operation.request_evidence);
+  }
+  const window = { cutoff: XERO_FINANCIAL_CUTOFF, through: '2026-09-12T00:00:00.000Z' };
+  const snapshot = { ...window, tenantId: ledger.tenantId, context: ledger,
+    cohort: { events: [cashId], allocations: [allocationId] }, paymentBridges: [] };
+  let ledgerReads = 0;
+  const options = {
+    client: {}, tenantId: ledger.tenantId, env: {}, maxXeroReads: 0, now: () => Date.parse(window.through),
+    loadQueue: async () => snapshot,
+    readConnection: async () => ({ tenantId: ledger.tenantId, accessToken: 'fixture', expiresAt: '2026-09-12T00:30:00.000Z' }),
+    loadLedger: async id => {
+      assert.equal(id, stem);
+      ledgerReads++;
+      return ledger;
+    },
+  };
+  const result = await loadPrepaymentSettlementSnapshot(window, options);
+  assert.deepEqual(result.rows.map(({ status }) => status), ['reconciled', 'reconciled']);
+  assert.equal(ledgerReads, 1);
+  assert.equal(result.xeroReads, 0);
+  await assert.rejects(loadPrepaymentSettlementSnapshot(window, { ...options, loadLedger: async () => ({
+    ...ledger, xeroPrepayments: [{ ...ledger.xeroPrepayments[0], Allocations: [] }],
+  }) }), /unknown or missing application/);
+  const unsettled = { ...ledger, operations: [{ ...ledger.operations[1], status: 'unknown' }] };
+  const pending = await loadPrepaymentSettlementSnapshot(window, { ...options,
+    loadQueue: async () => ({ ...snapshot, context: unsettled }),
+    readConnection: () => assert.fail('unresolved proofs do not read Xero'),
+  });
+  assert.deepEqual(pending.rows.map(({ status }) => status), ['held', 'unresolved']);
 });
 
 test('blocks incomplete, wrong-tenant and conflicting journal evidence before Xero calls', async () => {
