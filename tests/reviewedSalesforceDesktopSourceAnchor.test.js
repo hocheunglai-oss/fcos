@@ -6,6 +6,8 @@ import { createLocalMirrorRequest, LOCAL_MIRROR_ENVIRONMENT } from '../scripts/l
 import { createDeveeDesktopReceipt, createDeveeDesktopRequest, DEVEE_DESKTOP_WORKFLOW,
   editorDesktopCases, editorDesktopCaseSetDigest } from '../scripts/lib/rapid-release/salesforce-devee-desktop-checkpoint.mjs';
 import { verifyCompletedDesktopApproval, verifyPublishedDesktopMirror } from '../scripts/verify-completed-reviewed-salesforce-source.mjs';
+import { EDITOR_PREFLIGHT_ATTESTATION_ENVIRONMENT, EDITOR_PREFLIGHT_ATTESTATION_TASK }
+  from '../scripts/lib/rapid-release/salesforce-editor-preflight-transport.mjs';
 
 const base = Date.parse('2026-11-16T06:00:00.000Z');
 const at = offset => new Date(base + offset).toISOString();
@@ -223,4 +225,33 @@ test('a historical mirror publication still requires its own approved run and ex
     change(input);
     assert.throws(() => verifyPublishedDesktopMirror(input), /REVIEWED_SOURCE_ANCHOR_DESKTOP_|DEVEE_DESKTOP_NATIVE_/u, label);
   }
+});
+
+test('a completed release retains the preapproval attestation and run-bound native readback after the receipt expires', () => {
+  const input = publishedMirrorFixture();
+  const { manifest, reviewed, desktopCheckpoint, approvedRuns } = input;
+  const plan = manifest.prerequisites.plan;
+  const payload = {
+    kind: 'fcos_editor_native_preflight_attestation', schemaVersion: 1, repository: targets().repository,
+    candidateSha: manifest.candidate.sha, sourceDigest: manifest.candidate.sourceDigest, controllerSha: manifest.controllerSha,
+    baselineSha: manifest.previous.sha, sourceTreeHash: reviewed.binding.sourceTreeHash,
+    salesforceFingerprint: reviewed.fingerprint, caseSetDigest: editorDesktopCaseSetDigest, evidenceDigest: hash('6'),
+    qualificationValidationJobId: '0Af000000000000003', qualificationDeploymentJobId: '0Af000000000000004',
+    installedInventoryHash: hash('4'), cleanupEvidenceDigest: hash('7'), completedAt: at(-80_000), expiresAt: at(-10_000),
+  };
+  const attestation = {
+    id: 45, ref: manifest.candidate.sha, sha: manifest.candidate.sha, created_at: at(-79_000),
+    creator: { ...owner, type: 'User' }, repository_url: 'https://api.github.com/repos/' + targets().repository,
+    environment: EDITOR_PREFLIGHT_ATTESTATION_ENVIRONMENT, original_environment: EDITOR_PREFLIGHT_ATTESTATION_ENVIRONMENT,
+    task: EDITOR_PREFLIGHT_ATTESTATION_TASK, production_environment: false, transient_environment: false, payload,
+  };
+  Object.assign(plan, { editorPreflightReceiptId: attestation.id, editorPreflightReceiptDigest: digest(payload),
+    salesforceSourceTreeHash: reviewed.binding.sourceTreeHash, salesforceFingerprint: reviewed.fingerprint });
+  approvedRuns.get(originalId).payload.data.manifestHash = digest(manifest);
+  Object.assign(desktopCheckpoint.payload.data, { operation: 'native-desktop-preflight',
+    desktop: { runId: originalId, proofId: attestation.id, proofDigest: digest(payload), finalInventoryReceiptDigest: hash('5') } });
+  const values = { ...input, editorAttestation: attestation };
+  assert.doesNotThrow(() => verifyPublishedDesktopMirror(values));
+  desktopCheckpoint.payload.data.desktop.runId = resumedId;
+  assert.throws(() => verifyPublishedDesktopMirror(values), /DESKTOP_CHECKPOINT_REQUIRED/);
 });

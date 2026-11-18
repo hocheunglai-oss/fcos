@@ -9,12 +9,13 @@ import { executeSharedMirror } from './sync-salesforce-shared-repository.mjs';
 import { reviewedDeveePublicationProof } from './sync-salesforce-reviewed-repository.mjs';
 import { verifySalesforceReviewSource } from './verify-salesforce-review-source.mjs';
 import { assertReviewedMirror } from './lib/salesforce-reviewed-release.mjs';
-import { assertAuthorization, digest, isSha, requireCondition, targets, validateManifest } from './lib/rapid-release/contract.mjs';
+import { assertAuthorization, digest, isDigest, isSha, requireCondition, targets, validateManifest } from './lib/rapid-release/contract.mjs';
 import { assertBuildReceipt, assertSmokeProof } from './lib/rapid-release/engine.mjs';
 import { DeploymentJournal, pendingOperations } from './lib/rapid-release/journal.mjs';
 import { LOCAL_MIRROR_ENVIRONMENT, readLocalMirrorDeployments, verifyLocalMirrorReceipt } from './lib/rapid-release/local-mirror-handoff.mjs';
 import { assertFrozenWorkflow, nativeWorkflowPath } from './lib/rapid-release/providers.mjs';
 import { requiresDeveeDesktopCheckpoint, verifyDeveeDesktopReceipt } from './lib/rapid-release/salesforce-devee-desktop-checkpoint.mjs';
+import { hasEditorPreflightLocator, verifyEditorPreflightAttestation } from './lib/rapid-release/salesforce-editor-preflight-transport.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const policy = FCOS_CONNECTION_POLICY.providers.find(provider => provider.id === 'salesforce');
@@ -55,10 +56,27 @@ export function verifyCompletedDesktopApproval({ records, run, manifest, staged,
 }
 
 export function verifyPublishedDesktopMirror({ approvedRuns, records, requests, manifest, reviewed, requestRow,
-  publication, deployment, validation, run, staged }) {
+  publication, deployment, validation, run, staged, editorAttestation }) {
   const mirrorRequest = requestRow.payload;
   const approval = approvedRuns.get(mirrorRequest.runId);
   allow(approval && mirrorRequest.runAttempt === 1, 'DESKTOP_MIRROR_RUN_UNAPPROVED');
+  if (hasEditorPreflightLocator(manifest.prerequisites.plan)) {
+    const matching = records.filter(row => trusted(row) && row.payload.event === 'salesforce.checkpoint'
+      && data(row).stage === 'devee' && data(row).operation === 'native-desktop-preflight'
+      && data(row).outcome === 'evidence' && data(row).fingerprint === reviewed.fingerprint
+      && data(row).desktop?.runId === mirrorRequest.runId
+      && sequence(row) > sequence(approval) && sequence(row) > sequence(deployment)
+      && sequence(row) < sequence(publication) && Date.parse(row.created_at) <= Date.parse(requestRow.created_at));
+    allow(matching.length > 0, 'DESKTOP_CHECKPOINT_REQUIRED');
+    const checkpoint = matching.at(-1);
+    const proof = verifyEditorPreflightAttestation({ manifest, record: editorAttestation,
+      approvalAt: data(approval).approvedAt, now: Date.parse(checkpoint.created_at) });
+    const evidence = data(checkpoint).desktop;
+    allow(evidence.proofId === proof.proofId && evidence.proofDigest === proof.proofDigest
+      && isDigest(evidence.finalInventoryReceiptDigest), 'DESKTOP_NATIVE_PROOF_MISMATCH');
+    assertAuthorization(data(approval), manifest, staged, Date.parse(requestRow.created_at));
+    return;
+  }
   const checkpoints = records.filter(row => row.payload.event === 'salesforce.checkpoint'
     && data(row).stage === 'devee' && data(row).operation === 'native-desktop-smoke'
     && data(row).outcome === 'evidence' && data(row).fingerprint === reviewed.fingerprint
@@ -102,7 +120,7 @@ export function assertStandardReviewedSourceManifest(manifest, candidate) {
   return hash;
 }
 
-export function verifyCompletedReviewedJournal({ records, requests, manifest, reviewed, run }) {
+export function verifyCompletedReviewedJournal({ records, requests, manifest, reviewed, run, editorAttestation }) {
   const event = name => {
     const found = records.filter(row => row.payload.event === name);
     allow(found.length === 1, 'REQUIRED_EVENT_MISMATCH');
@@ -186,7 +204,7 @@ export function verifyCompletedReviewedJournal({ records, requests, manifest, re
     allow(matches.length === 1, 'MIRROR_RECEIPT_REQUIRED');
     const [[request, receipt]] = matches;
     if (desktop) verifyPublishedDesktopMirror({ approvedRuns, records, requests, manifest, reviewed,
-      requestRow: request, publication: checkpoint, deployment, validation, run, staged });
+      requestRow: request, publication: checkpoint, deployment, validation, run, staged, editorAttestation });
     const proof = verifyLocalMirrorReceipt({ request: request.payload, requestDeployment: request, receiptDeployment: receipt,
       reviewed, workflowActorId: botId, publisherId: ownerId, now: Date.parse(receipt.created_at) });
     allow(proof.commit === mirror.commit && proof.pullRequest.number === mirror.pullRequest, 'MIRROR_RECEIPT_CHANGED');
@@ -244,10 +262,11 @@ async function main() {
     && reviews.filter(row => row.state === 'approved' && owner(row.user)
       && row.environments?.some(item => item.id === environmentId && item.name === environmentName)).length === 1, 'NATIVE_APPROVAL_MISMATCH');
   const journal = new DeploymentJournal({ github, actorIds: [botId], releaseId: manifest.releaseId, manifestHash: hash });
-  const [records, requests] = await Promise.all([journal.read(), readLocalMirrorDeployments(github, candidate),
+  const [records, requests, editorAttestation] = await Promise.all([journal.read(), readLocalMirrorDeployments(github, candidate),
+    hasEditorPreflightLocator(plan) ? github.read(repoPath + '/deployments/' + plan.editorPreflightReceiptId) : undefined,
     assertFrozenWorkflow({ github, controllerSha: manifest.controllerSha, dispatcherSha: run.head_sha }),
     assertCurrentVersion(manifest)]);
-  const { deploymentId, validationId, mirror } = verifyCompletedReviewedJournal({ records, requests, manifest, reviewed, run });
+  const { deploymentId, validationId, mirror } = verifyCompletedReviewedJournal({ records, requests, manifest, reviewed, run, editorAttestation });
   const devee = fcosSalesforceEnvironment('devee');
   const provider = cliSalesforceProvider({ cwd, policy, commandEnvironment: process.env });
   const job = jobId => ({ jobId, status: 'Succeeded', fingerprint: reviewed.fingerprint, orgId: devee.orgId });
