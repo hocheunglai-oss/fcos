@@ -51,5 +51,5 @@ test('the invoice form normalizes new, reused, and pre-generation vessel text', 
   assert.match(source, /import \{ buildInvoiceVesselText, normalizeInvoiceVesselText \} from '\.\/invoiceVesselText';/u);
   assert.match(source, /this\.vesselText = normalizeInvoiceVesselText\(this\.lastInvoiceForm\.Vessel_Text__c\?\.toUpperCase\(\)\);/u);
   assert.match(source, /this\.vesselText = buildInvoiceVesselText\(this\.stem\.Vessel__r\?\.Name\?\.toUpperCase\(\), imo\);/u);
-  assert.match(source, /if \(this\.isGenerateDisabled\) return;\s+this\.vesselText = normalizeInvoiceVesselText\(this\.vesselText\);/u);
+  assert.match(source, /async handleGeneratePDF\(\) \{\s+if \(this\.isGenerateDisabled\) return;[\s\S]*?try \{\s+this\.vesselText = normalizeInvoiceVesselText\(this\.vesselText\);/u);
 });

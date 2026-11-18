@@ -573,11 +573,13 @@ export default class FcbInvoiceForm extends LightningElement {
         })
     }
 
-    handleGeneratePDF(event) {
+    async handleGeneratePDF() {
+        if (this.isGenerateDisabled) return;
+        const operationSequence = this.invoiceFormLoadSequence;
+        let invoice;
+        let pdfSaved = false;
         try {
-            if (this.isGenerateDisabled) return;
             this.vesselText = normalizeInvoiceVesselText(this.vesselText);
-            const operationSequence = this.invoiceFormLoadSequence;
             const reviewedFxFingerprint = this.isManagedDocument ? this.tradeDocument.fingerprint : null;
             const createProforma = this.proforma;
             const includeDeliveryNotes = this.stem.Mailing_Requirement__c?.includes('-7');
@@ -778,7 +780,7 @@ export default class FcbInvoiceForm extends LightningElement {
             const selectedProducts = this.selectedProductInputs.map(product => product.id)
                 .filter(id => typeof id === 'string' && id.length > 7);
             const create = reviewedFxFingerprint ? createReviewedInvoice : createInvoice;
-            create({
+            invoice = await create({
                 stemId: this.stemId,
                 extraIds: selectedProducts,
                 createProforma,
@@ -793,74 +795,49 @@ export default class FcbInvoiceForm extends LightningElement {
                     : null,
                 invoiceDueDate: this._convertDate(new Date(this.stem.Invoice_Due_Date__c)),
                 ...(reviewedFxFingerprint ? { reviewedFxFingerprint } : {}),
-            }).then((result) => {
-                if (includeDeliveryNotes) {
-                    getBDNBase64Strings({ entityIds: deliveryNoteEntityIds }).then(async (bdn64Strings) => {
-                        try {
-                            const { PDFDocument } = window['pdfLib'] || window['PDFLib'];
-                            const mergedPdf = await PDFDocument.create();
-
-                            bdn64Strings.unshift(base64String)
-
-                            for (let pdfFile of bdn64Strings) {
-                                const pdfBytes = Uint8Array.from(atob(pdfFile), c => c.charCodeAt(0));
-                                const pdfDoc = await PDFDocument.load(pdfBytes);
-                                const copiedPages = await mergedPdf.copyPages(pdfDoc, pdfDoc.getPageIndices());
-                                copiedPages.forEach(page => mergedPdf.addPage(page));
-                            }
-
-                            const mergedPdfBytes = await mergedPdf.save();
-
-                            function arrayBufferToBase64(buffer) {
-                                let binary = '';
-                                const bytes = new Uint8Array(buffer);
-                                const chunkSize = 8192;
-
-                                for (let i = 0; i < bytes.length; i += chunkSize) {
-                                    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
-                                }
-                                return btoa(binary);
-                            }
-                            const combinedBase64String = arrayBufferToBase64(mergedPdfBytes);
-                            generateInvoicePDF({
-                                invoiceId: result.Id,
-                                invoiceVersionName: result.Name,
-                                extraIds: selectedProducts,
-                                body: combinedBase64String,
-                                createProforma,
-                                reviewedFxFingerprint
-                            }).then(() => {
-                                upsertLastInvoiceForm({ lastInvoiceForm: fields }).then(() => {
-                                    if (operationSequence === this.invoiceFormLoadSequence) this.closeModal();
-                                    fireEvent(this.pageRef, "refreshInvoices", true);
-                                });
-                            });
-                        } catch (error) {
-                            console.error('Error merging PDF files:', error);
-                        }
-                    })
-                } else {
-                    generateInvoicePDF({
-                        invoiceId: result.Id,
-                        invoiceVersionName: result.Name,
-                        extraIds: selectedProducts,
-                        body: base64String,
-                        createProforma,
-                        reviewedFxFingerprint
-                    }).then(() => {
-                        upsertLastInvoiceForm({ lastInvoiceForm: fields }).then(() => {
-                            if (operationSequence === this.invoiceFormLoadSequence) this.closeModal();
-                            fireEvent(this.pageRef, "refreshInvoices", true);
-                        });
-                    });
+            });
+            let pdfBody = base64String;
+            if (includeDeliveryNotes) {
+                const deliveryNotes = await getBDNBase64Strings({ entityIds: deliveryNoteEntityIds });
+                const { PDFDocument } = window.pdfLib || window.PDFLib;
+                const mergedPdf = await PDFDocument.create();
+                for (const pdfFile of [base64String, ...deliveryNotes]) {
+                    const bytes = Uint8Array.from(atob(pdfFile), character => character.charCodeAt(0));
+                    const document = await PDFDocument.load(bytes);
+                    const pages = await mergedPdf.copyPages(document, document.getPageIndices());
+                    pages.forEach(page => mergedPdf.addPage(page));
                 }
-            }, error => {
-                if (operationSequence !== this.invoiceFormLoadSequence) return;
-                this.formLoadError = error?.body?.message || error?.message || 'The invoice could not be created. Reopen it to review the source.';
-                this.actionExecuted = true;
-            })
+                const mergedBytes = await mergedPdf.save();
+                let binary = '';
+                for (let i = 0; i < mergedBytes.length; i += 8192) {
+                    binary += String.fromCharCode(...mergedBytes.subarray(i, i + 8192));
+                }
+                pdfBody = btoa(binary);
+            }
+            await generateInvoicePDF({
+                invoiceId: invoice.Id,
+                invoiceVersionName: invoice.Name,
+                extraIds: selectedProducts,
+                body: pdfBody,
+                createProforma,
+                reviewedFxFingerprint
+            });
+            pdfSaved = true;
+            await upsertLastInvoiceForm({ lastInvoiceForm: fields });
+            if (operationSequence === this.invoiceFormLoadSequence) this.closeModal();
+            fireEvent(this.pageRef, "refreshInvoices", true);
         } catch (error) {
-            console.error(error);
+            if (operationSequence !== this.invoiceFormLoadSequence) return;
+            const detail = error?.body?.message || error?.message || 'Salesforce did not return an error message.';
+            if (pdfSaved) {
+                this.formLoadError = `Invoice ${invoice.Name} and its PDF were saved, but the last invoice form could not be saved. ${detail} Open the Invoices tab to view the invoice.`;
+            } else if (invoice) {
+                this.formLoadError = `Invoice record ${invoice.Name} was created, but PDF generation could not be confirmed. ${detail} Check that invoice in the Invoices tab before trying again.`;
+            } else {
+                this.formLoadError = detail;
+            }
+        } finally {
+            if (operationSequence === this.invoiceFormLoadSequence) this.actionExecuted = true;
         }
     }
 
