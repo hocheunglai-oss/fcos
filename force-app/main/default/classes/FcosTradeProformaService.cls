@@ -103,6 +103,54 @@ public with sharing class FcosTradeProformaService {
     }
 
     @AuraEnabled(cacheable=true)
+    public static Map<String,Object> invoiceLauncherActions(Id recordId) {
+        List<String> actions = new List<String>();
+        Map<String,Object> result = new Map<String,Object>{'recordId' => recordId, 'actions' => actions};
+        if (recordId == null || !FcosCompanyFxRateService.enabled()
+            || !FeatureManagement.checkPermission('Fcos_Trading_FX_Entry')) return result;
+        Boolean buyer = recordId.getSObjectType() == Invoice__c.SObjectType;
+        if (!buyer && recordId.getSObjectType() != Supplier_Invoice__c.SObjectType) return result;
+        String objectName = recordId.getSObjectType().getDescribe().getName();
+
+        List<SObject> readable;
+        try {
+            readable = Database.query('SELECT Id,Proforma__c FROM ' + objectName
+                + ' WHERE Id = :recordId WITH USER_MODE');
+        } catch (QueryException denied) {
+            return result;
+        }
+        if (readable.isEmpty()) return result;
+        result.put('objectApiName', objectName);
+        if (readable[0].get('Proforma__c') == true) {
+            if (!FcosTradeCashService.enabled()) return result;
+            try {
+                loadFinalizableProforma(recordId);
+                actions.add('Finalize_Native_Proforma');
+            } catch (AuraHandledException unavailable) {
+                // Business eligibility is evaluated again by the native action.
+            }
+            return result;
+        }
+
+        // No date or amount. This checks existing settlement evidence without a rate callout.
+        try {
+            Decimal remaining = FcosTradePaymentService.previewAllocation(recordId, null, null).remainingNative;
+            if (remaining != null && remaining != 0) {
+                actions.add('Record_HKD_Payment');
+            }
+        } catch (AuraHandledException unavailable) {
+            // The other action can still be available.
+        }
+        try {
+            FcosTradeCreditService.preview(recordId);
+            actions.add('Record_HKD_Credit');
+        } catch (AuraHandledException unavailable) {
+            // The original document may be ineligible or already credited.
+        }
+        return result;
+    }
+
+    @AuraEnabled(cacheable=true)
     public static Context describeContext(Id recordId) {
         requireAccess();
         if(recordId==null) throw new AuraHandledException('Open this action from a STEM or proforma.');
@@ -213,7 +261,7 @@ public with sharing class FcosTradeProformaService {
         return insertDocument(review,operationId,requestFingerprint,true,null);
     }
 
-    private static Review finalReview(Id proformaId,String reference,Date invoiceDate,Date deliveryDate,Date dueDate) {
+    private static SObject loadFinalizableProforma(Id proformaId) {
         Boolean buyer=proformaId.getSObjectType()==Invoice__c.SObjectType;
         if(!buyer && proformaId.getSObjectType()!=Supplier_Invoice__c.SObjectType) throw new AuraHandledException('Select a native proforma.');
         String objectName=proformaId.getSObjectType().getDescribe().getName();String amount=buyer?'Amount__c':'Invoice_Amount__c';
@@ -228,6 +276,11 @@ public with sharing class FcosTradeProformaService {
         if(String.isBlank((String)row.get(fileField))) throw new AuraHandledException('Generate and retain the immutable proforma before finalizing it.');
         List<SObject> priorFinal=Database.query('SELECT Id FROM '+objectName+' WHERE Final_Of_Proforma__c=:proformaId LIMIT 1');
         if(!priorFinal.isEmpty()) throw new AuraHandledException('This proforma already has its one final document.');
+        return row;
+    }
+    private static Review finalReview(Id proformaId,String reference,Date invoiceDate,Date deliveryDate,Date dueDate) {
+        SObject row = loadFinalizableProforma(proformaId);
+        Boolean buyer = row.getSObjectType() == Invoice__c.SObjectType;
         List<Trade_Document_Line__c> evidence=FcosTradeDocumentLineService.readForAuthorizedDocument(proformaId);List<Id> lineIds=new List<Id>();
         for(Trade_Document_Line__c line:evidence) {if(String.isBlank(line.Source_Record_Id__c))throw new AuraHandledException('The proforma source-line evidence is incomplete.');lineIds.add(Id.valueOf(line.Source_Record_Id__c));}
         String direction=buyer?'Sell':'Buy';Id supplierId=buyer?null:(Id)row.get('Supplier__c');Decimal deposit=(Decimal)row.get(row.get('Document_Currency__c')=='HKD'?'Deposit_Requested_HKD__c':'Deposit_Requested_USD__c');

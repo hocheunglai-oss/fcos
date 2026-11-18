@@ -1,0 +1,8 @@
+<template>
+    <lightning-button-group lwc:if={hasActions} aria-label="Trading FX invoice actions">
+        <template for:each={actions} for:item="action">
+            <lightning-button key={action.name} label={action.label} data-action={action.name} onclick={handleAction}>
+            </lightning-button>
+        </template>
+    </lightning-button-group>
+</template>

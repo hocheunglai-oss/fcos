@@ -43,6 +43,28 @@ private class FcosTradeProformaServiceTest {
         FcosTradeCurrencyController.saveDraft(lineId,direction,'HKD',Decimal.valueOf('780.00000000'),review.fingerprint,review.rateId,true);
     }
     private static Invoice__c buyerProforma(){return [SELECT Id FROM Invoice__c WHERE Document_Operation_Id__c=:BUYER_PROFORMA_OP LIMIT 1];}
+    private static void assertLauncherActions(Id invoiceId, List<String> expected) {
+        Integer writes = Limits.getDmlStatements(), callouts = Limits.getCallouts();
+        Map<String,Object> result = FcosTradeProformaService.invoiceLauncherActions(invoiceId);
+        System.assertEquals(invoiceId, result.get('recordId'));
+        System.assertEquals(expected, result.get('actions'));
+        System.assertEquals(writes, Limits.getDmlStatements(), 'Launcher must not write records.');
+        System.assertEquals(callouts, Limits.getCallouts(), 'Launcher must not retrieve an FX rate.');
+    }
+    @IsTest static void invoiceLauncherHonorsCashAndFxConfiguration() {
+        System.runAs(actor()) {
+            configure();
+            Id proformaId = buyerProforma().Id;
+            assertLauncherActions(proformaId, new List<String>{'Finalize_Native_Proforma'});
+            assertLauncherActions(line().Id, new List<String>());
+            Fcos_Trading_FX_Setting__c setting = Fcos_Trading_FX_Setting__c.getOrgDefaults();
+            setting.Cash_Enabled__c = false;
+            update setting;
+            assertLauncherActions(proformaId, new List<String>());
+            FcosCompanyFxRateService.settingsOverride.Enabled__c = false;
+            assertLauncherActions(proformaId, new List<String>());
+        }
+    }
     private class SeedBuyerProforma implements Queueable,Database.AllowsCallouts {
         private final Id lineId;
         SeedBuyerProforma(Id lineId){this.lineId=lineId;}
@@ -76,10 +98,14 @@ private class FcosTradeProformaServiceTest {
             try{FcosTradeProformaService.recordFinal(proformaId,'INV-BUYER-CHANGED',Date.newInstance(2026,9,13),Date.newInstance(2026,9,10),Date.newInstance(2026,9,23),finalReview.fingerprint,BUYER_FINAL_OP);System.assert(false,'Changed final arguments cannot reuse an earlier operation UUID.');}catch(AuraHandledException expected){System.assertNotEquals(null,expected.getMessage());}
             Invoice__c finalDocument=[SELECT Proforma__c,Final_Of_Proforma__c,Document_FX_Rate__c,Deposit_Requested_HKD__c FROM Invoice__c WHERE Id=:finalId];
             System.assertEquals(false,finalDocument.Proforma__c);System.assertEquals(proformaId,finalDocument.Final_Of_Proforma__c);System.assertEquals(RATE,finalDocument.Document_FX_Rate__c);System.assertEquals(Decimal.valueOf('7800'),finalDocument.Deposit_Requested_HKD__c);
+            assertLauncherActions(proformaId, new List<String>());
+            assertLauncherActions(finalId, new List<String>());
             source=line();System.assertEquals(finalId,source.Buyer_Invoice__c);System.assertEquals(true,source.Issued__c);
             Trade_Document_Line__c finalLine=[SELECT Original_Line__c FROM Trade_Document_Line__c WHERE Buyer_Invoice__c=:finalId LIMIT 1];System.assertNotEquals(null,finalLine.Original_Line__c,'Final evidence must trace to the immutable proforma line.');
             try{FcosTradeProformaService.recordFinal(proformaId,'INV-BUYER-1',Date.newInstance(2026,9,13),Date.newInstance(2026,9,10),Date.newInstance(2026,9,23),finalReview.fingerprint,'44444444-4444-4444-8444-444444444444');System.assert(false,'A proforma permits one economic final.');}catch(AuraHandledException expected){System.assertNotEquals(null,expected.getMessage());}
             try{update new Invoice__c(Id=proformaId,Deposit_Requested_HKD__c=Decimal.valueOf('1'));System.assert(false,'Reviewed deposit terms must be immutable.');}catch(DmlException expected){System.assert(expected.getMessage().contains('immutable')||expected.getMessage().contains('workflow'));}
+            System.assertNotEquals(null,FcosTradeProformaService.generateDocument(finalId));
+            assertLauncherActions(finalId, new List<String>{'Record_HKD_Payment','Record_HKD_Credit'});
         }
     }
     @IsTest static void subCentDepositCannotBeSilentlyRounded(){System.runAs(actor()){configure();STEM_Line_Item__c source=line();Test.startTest();System.enqueueJob(new RejectSubCent(source.Id));Test.stopTest();}}
@@ -91,7 +117,9 @@ private class FcosTradeProformaServiceTest {
             Id proformaId=FcosTradeProformaService.recordProforma(source.STEM__c,'Buy',source.Original_Supplier__c,ids,'PF-SUPPLIER-1',Date.newInstance(2026,9,10),Date.newInstance(2026,9,10),Date.newInstance(2026,9,20),Decimal.valueOf('3900'),Date.newInstance(2026,9,12),review.fingerprint,SUPPLIER_PROFORMA_OP);
             Supplier_Invoice__c proforma=[SELECT Proforma__c,Deposit_Requested_HKD__c,Deposit_Requested_USD__c,Document_FX_Side__c FROM Supplier_Invoice__c WHERE Id=:proformaId];
             System.assertEquals(true,proforma.Proforma__c);System.assertEquals(Decimal.valueOf('3900'),proforma.Deposit_Requested_HKD__c);System.assertEquals(Decimal.valueOf('500'),proforma.Deposit_Requested_USD__c);System.assertNotEquals(null,proforma.Document_FX_Side__c);
+            assertLauncherActions(proformaId, new List<String>());
             source=line();System.assertEquals(null,source.Supplier_Invoice__c);System.assertNotEquals(true,source.Supplier_Issued__c);System.assertNotEquals(null,FcosTradeProformaService.generateDocument(proformaId));
+            assertLauncherActions(proformaId, new List<String>{'Finalize_Native_Proforma'});
         }
     }
     @IsTest static void buyerProformaRemainsNonpostingAndFinalIsIdempotent(){System.runAs(actor()){Invoice__c proforma=buyerProforma();Test.startTest();System.enqueueJob(new FinalizeBuyerProforma(proforma.Id));Test.stopTest();}}
