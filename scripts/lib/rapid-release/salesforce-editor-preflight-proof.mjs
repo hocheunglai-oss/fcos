@@ -70,6 +70,51 @@ function effects(value, positiveSynthetic = false) {
     && Number.isSafeInteger(value.syntheticFixtureWrites) && value.syntheticFixtureWrites >= (positiveSynthetic ? 1 : 0),
   'PROHIBITED_EFFECT_OR_MISSING_SYNTHETIC_WRITES');
 }
+function verifyCaseObservations(id, value, caseEffects) {
+  const failure = 'CASE_OBSERVATION_INVALID';
+  check(plain(value) && isDigest(value.nativeEventDigest), failure);
+  const exact = (actual, expected) => check(same(actual, expected), failure);
+  switch (id) {
+  case 'transport-source-both-orders': {
+    keys(value, ['nativeEventDigest', 'forward', 'reverse'], failure);
+    for (const [order, observation] of [['buy-sell', value.forward], ['sell-buy', value.reverse]]) {
+      exact(observation, { order, buySourceAndProductMatch: true, sellSourceAndProductMatch: true });
+    }
+    break;
+  }
+  case 'wrong-product-rejected':
+    keys(value, ['nativeEventDigest', 'buySourceAndProductMatch', 'productDiffersFromBothSources', 'sellSourceAbsent'], failure);
+    check(value.buySourceAndProductMatch === true && value.productDiffersFromBothSources === true && value.sellSourceAbsent === true, failure);
+    break;
+  case 'ordinary-usd-preview':
+    keys(value, ['nativeEventDigest', 'quote', 'supplier'], failure);
+    for (const control of [value.quote, value.supplier]) {
+      keys(control, ['currency', 'unitPriceMinor', 'subtotalMinor', 'editableUnitPriceMinor', 'saveSubmitted'], failure);
+      check(control.currency === 'USD' && positive(control.unitPriceMinor) && positive(control.subtotalMinor)
+        && control.editableUnitPriceMinor === control.unitPriceMinor && control.saveSubmitted === false, failure);
+    }
+    break;
+  case 'managed-hkd-rate-and-review':
+    keys(value, ['nativeEventDigest', 'currency', 'renderedRate', 'signedRate', 'rateLocked', 'reviewHeld'], failure);
+    check(value.currency === 'HKD' && typeof value.signedRate === 'number' && Number.isFinite(value.signedRate)
+      && value.signedRate > 0 && value.renderedRate === value.signedRate && value.rateLocked === true && value.reviewHeld === true, failure);
+    break;
+  case 'scoped-save-and-stale-response':
+    keys(value, ['nativeEventDigest', 'savedOnlySelectedFixture', 'confirmationReadbackMatched',
+      'olderResponseArrivedAfterSwitch', 'stalePriceAbsent'], failure);
+    check(caseEffects.syntheticFixtureWrites > 0 && value.savedOnlySelectedFixture === true && value.confirmationReadbackMatched === true
+      && value.olderResponseArrivedAfterSwitch === true && value.stalePriceAbsent === true, failure);
+    return;
+  case 'normal-and-restricted-access':
+    keys(value, ['nativeEventDigest', 'normal', 'restricted'], failure);
+    exact(value.normal, { cardMounted: true, signedEligible: true });
+    exact(value.restricted, { nativeDenied: true, visibleDenial: true, writeControlsRendered: false });
+    break;
+  default:
+    check(false, failure);
+  }
+  check(caseEffects.syntheticFixtureWrites === 0, failure);
+}
 function nativeReport(response, id, checkOnly, minimumTests) {
   const report = response?.result;
   check(response?.status === 0 && plain(report) && report.id === id && jobId(id) && report.status === 'Succeeded'
@@ -232,9 +277,10 @@ export function verifySalesforceEditorPreflightProof({ receipt, expected, native
     keys(artifact, ['caseId', 'outcome', 'runId', 'startedAt', 'completedAt', 'sourceDigest', 'actorRoles', 'effects', 'observations']);
     check(digest(artifact) === observation.evidenceDigest && artifact.caseId === observation.id && artifact.outcome === 'passed'
       && artifact.runId === observation.runId && artifact.startedAt === observation.startedAt && artifact.completedAt === observation.completedAt
-      && artifact.sourceDigest === digest(observation.source) && plain(artifact.observations) && Object.keys(artifact.observations).length > 0,
+      && artifact.sourceDigest === digest(observation.source),
     'CASE_EVIDENCE_MISMATCH');
     effects(artifact.effects);
+    verifyCaseObservations(observation.id, artifact.observations, artifact.effects);
     syntheticWrites += artifact.effects.syntheticFixtureWrites;
     check(Array.isArray(artifact.actorRoles) && artifact.actorRoles.length > 0
       && new Set(artifact.actorRoles).size === artifact.actorRoles.length

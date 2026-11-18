@@ -17,6 +17,23 @@ const { publication } = FCOS_CONNECTION_POLICY.providers.find(provider => provid
 const owner = { id: publication.requiredAccountId, login: publication.requiredAccount };
 const validationId = '0Af000000000000001', deploymentId = '0Af000000000000002';
 const effects = syntheticFixtureWrites => ({ businessWrites: 0, financialRequests: 0, customerSends: 0, syntheticFixtureWrites });
+const transport = order => ({ order, buySourceAndProductMatch: true, sellSourceAndProductMatch: true });
+const ordinary = unitPriceMinor => ({
+  currency: 'USD', unitPriceMinor, subtotalMinor: unitPriceMinor * 2, editableUnitPriceMinor: unitPriceMinor, saveSubmitted: false,
+});
+const observationsByCase = {
+  'transport-source-both-orders': { forward: transport('buy-sell'), reverse: transport('sell-buy') },
+  'wrong-product-rejected': { buySourceAndProductMatch: true, productDiffersFromBothSources: true, sellSourceAbsent: true },
+  'ordinary-usd-preview': { quote: ordinary(12_000), supplier: ordinary(8_000) },
+  'managed-hkd-rate-and-review': { currency: 'HKD', renderedRate: 7.84, signedRate: 7.84, rateLocked: true, reviewHeld: true },
+  'scoped-save-and-stale-response': {
+    savedOnlySelectedFixture: true, confirmationReadbackMatched: true, olderResponseArrivedAfterSwitch: true, stalePriceAbsent: true,
+  },
+  'normal-and-restricted-access': {
+    normal: { cardMounted: true, signedEligible: true },
+    restricted: { nativeDenied: true, visibleDenial: true, writeControlsRendered: false },
+  },
+};
 
 function nativeReport(checkOnly) {
   return { status: 0, result: {
@@ -56,7 +73,8 @@ function fixture() {
   const cases = editorDesktopCases.map((id, index) => {
     const evidence = { caseId: id, outcome: 'passed', runId: 44000000001, startedAt: at(6 + index), completedAt: at(6.5 + index),
       sourceDigest: digest(source), actorRoles: id === 'normal-and-restricted-access' ? ['normal', 'restricted'] : ['normal'],
-      effects: effects(id === 'scoped-save-and-stale-response' ? 2 : 0), observations: { nativeEventDigest: hash(id + ' native event') } };
+      effects: effects(id === 'scoped-save-and-stale-response' ? 2 : 0),
+      observations: { ...structuredClone(observationsByCase[id]), nativeEventDigest: hash(id + ' native event') } };
     const evidenceDigest = digest(evidence);
     caseEvidence[evidenceDigest] = evidence;
     return { id, outcome: 'passed', runId: evidence.runId, startedAt: evidence.startedAt, completedAt: evidence.completedAt,
@@ -90,6 +108,25 @@ function updateCaseArtifact(input, index, change) {
   observation.evidenceDigest = digest(artifact);
   input.caseEvidence[observation.evidenceDigest] = artifact;
 }
+test('rejects digest-bound case artifacts that lack the actual passing observations', () => {
+  const regressions = [
+    observation => { observation.reverse.order = 'buy-sell'; },
+    observation => { observation.sellSourceAbsent = false; },
+    observation => { observation.supplier.saveSubmitted = true; },
+    observation => { observation.renderedRate = 7.85; },
+    observation => { observation.stalePriceAbsent = false; },
+    observation => { observation.restricted.writeControlsRendered = true; },
+  ];
+  for (const [index, mutate] of regressions.entries()) {
+    const input = fixture();
+    updateCaseArtifact(input, index, artifact => mutate(artifact.observations));
+    assert.throws(() => verifySalesforceEditorPreflightProof(seal(input)), /EDITOR_PREFLIGHT_CASE_OBSERVATION_INVALID/,
+      editorDesktopCases[index]);
+  }
+  const digestOnly = fixture();
+  updateCaseArtifact(digestOnly, 0, artifact => { artifact.observations = { nativeEventDigest: hash('uninterpreted evidence') }; });
+  assert.throws(() => verifySalesforceEditorPreflightProof(seal(digestOnly)), /EDITOR_PREFLIGHT_CASE_OBSERVATION_INVALID/);
+});
 function historicalFixture() {
   const input = fixture(), observation = input.receipt.payload.cases[0];
   observation.source.candidateSha = sha('d');
