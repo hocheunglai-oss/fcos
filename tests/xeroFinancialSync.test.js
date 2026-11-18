@@ -12,7 +12,7 @@ import {
   isProtectedXeroDocument,
   xeroFinancialRateSnapshot,
 } from '../api/_xeroFinancialSync.js';
-import { summarizeXeroFinancialReconciliation } from '../src/lib/xeroFinancialReconciliation.js';
+import { summarizeCombinedXeroFinancialReconciliation, summarizeXeroFinancialReconciliation } from '../src/lib/xeroFinancialReconciliation.js';
 import { enrichOrdinaryRemittanceFamilies } from '../api/_xeroOrdinaryRemittanceCash.js';
 import { resolveRemittanceBankEvidence } from '../api/_xeroPaymentBankEvidence.js';
 import { buildBuyerPaymentDocumentEvidence } from '../api/_xeroBuyerPaymentEvidence.js';
@@ -232,6 +232,42 @@ test('combined reconciliation reaches 100 percent only after documents and payme
   });
   assert.equal(complete.status, 'reconciled');
   assert.equal(complete.completion, 100);
+});
+
+test('a combined percentage requires matching verified lanes and counts a managed payment once', () => {
+  const scope = { tenantId: '00000000-0000-4000-8000-000000000001',
+    cutoff: '2026-01-01', through: '2026-11-18T09:00:00.000Z', complete: true };
+  const [invoiceId, creditId, paymentId, allocationId, cashEventId] = [1, 2, 3, 4, 5].map(paymentSfId);
+  const documentPayments = { ...scope,
+    documents: [{ salesforceId: invoiceId, action: 'link', status: 'eligible', differences: [] }],
+    payments: [{ salesforcePaymentId: paymentId + 'AAA', action: 'prepayment_allocation', status: 'managed' }],
+  };
+  const credits = { ...scope, rows: [{ creditId, status: 'held' }] };
+  const prepayments = { ...scope,
+    rows: [{ sourceId: allocationId, sourceObject: 'Trade_Cash_Allocation__c', cashEventId, status: 'unresolved' }],
+    paymentBridges: [{ paymentId, allocationId, cashEventId, reversal: false, inCohort: true }],
+  };
+  const fullScope = { documentPayments, credits, prepayments };
+  const combined = summarizeCombinedXeroFinancialReconciliation(fullScope);
+  assert.deepEqual([combined.completion, combined.transactionTotal, combined.exceptions, combined.duplicatePaymentCount], [33, 3, 2, 1]);
+  assert.equal(combined.status, 'attention_required');
+  assert.equal(summarizeCombinedXeroFinancialReconciliation({ ...fullScope,
+    credits: { ...credits, rows: [{ creditId, status: 'reconciled', verified: true }] },
+    prepayments: { ...prepayments, rows: [{ ...prepayments.rows[0], status: 'reconciled', verified: true }] },
+  }).completion, 100);
+  for (const change of [
+    { credits: undefined },
+    { credits: { ...credits, through: '2026-11-18T08:00:00.000Z' } },
+    { credits: { ...credits, tenantId: '00000000-0000-4000-8000-000000000002' } },
+    { credits: { ...credits, rows: [{ creditId, status: 'reconciled' }] } },
+    { prepayments: { ...prepayments, paymentBridges: [] } },
+    { prepayments: { ...prepayments, paymentBridges: [{ ...prepayments.paymentBridges[0], cashEventId: invoiceId }] } },
+    { prepayments: { ...prepayments, paymentBridges: [...prepayments.paymentBridges, { ...prepayments.paymentBridges[0], paymentId: paymentId + 'AAA' }] } },
+    { documentPayments: { ...documentPayments, payments: [{ ...documentPayments.payments[0], xeroPaymentId: 'competing-target' }] } },
+  ]) {
+    assert.deepEqual(summarizeCombinedXeroFinancialReconciliation({ ...fullScope, ...change }),
+      { status: 'incomplete_check', checked: false, completion: null });
+  }
 });
 
 test('identity conflicts block an otherwise matching transaction', () => {
