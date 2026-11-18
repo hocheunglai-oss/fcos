@@ -119,7 +119,8 @@ function verifiedSalesforceCandidate({ manifest, root, env }) {
   return directory;
 }
 
-export async function runPrerequisites({ manifest, approval, staged, journal, provider, controllerDirectory, env = process.env, load = url => import(url) }) {
+export async function runPrerequisites({ manifest, approval, staged, journal, provider, controllerDirectory,
+  env = process.env, editorPreflight, load = url => import(url) }) {
   assertAuthorization(approval, manifest, staged);
   const needed = manifest.selection.salesforce || manifest.selection.database;
   if (!needed) return { passed: true, manifestHash: digest(manifest), backwardCompatible: true, providerCalls: 0 };
@@ -133,7 +134,7 @@ export async function runPrerequisites({ manifest, approval, staged, journal, pr
     ? protectedDatabaseContext({ manifest, approval, staged, journal, provider })
     : undefined;
   const result = await adapter.applyReviewedPrerequisites({ manifest, approval, journal, controllerDirectory: root, env,
-    provider: signingConfigurationReader(provider), salesforce, salesforceCandidateDirectory,
+    provider: signingConfigurationReader(provider), salesforce, salesforceCandidateDirectory, editorPreflight,
     correctionDirectory: verifiedCorrectionCandidate({ manifest, root, env }), databaseWriter,
     plan: descriptor.plan, authorization: { manifestHash: digest(manifest), nativeReview: approval } });
   requireCondition(result?.passed === true && result.manifestHash === digest(manifest)

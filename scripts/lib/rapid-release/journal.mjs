@@ -65,7 +65,7 @@ export class DeploymentJournal {
   async checkpoint({ fingerprint, stage, operation, record }) {
     requireCondition(/^[a-f0-9]{64}$/.test(fingerprint || '')
       && ['devee', 'shared_mirror', 'qat', 'production'].includes(stage)
-      && /^(?:validation|deployment|bootstrap|sales-support-correction|publication|inventory-checkpoint|native-desktop-smoke|preparation|restoration-checkpoint|permission:[A-Za-z][A-Za-z0-9_]*)$/.test(operation || '')
+      && /^(?:validation|deployment|bootstrap|sales-support-correction|publication|inventory-checkpoint|native-desktop-smoke|native-desktop-preflight|preparation|restoration-checkpoint|permission:[A-Za-z][A-Za-z0-9_]*)$/.test(operation || '')
       && (operation !== 'sales-support-correction' || stage !== 'shared_mirror')
       && record && typeof record === 'object' && !Array.isArray(record), 'SALESFORCE_CHECKPOINT_INVALID');
     const providerOperation = /^(?:validation|deployment|bootstrap|sales-support-correction|publication|permission:)/.test(operation);
@@ -93,6 +93,14 @@ export class DeploymentJournal {
           .every(hash => /^[a-f0-9]{64}$/u.test(hash || '')), 'DEVEE_DESKTOP_CHECKPOINT_INVALID');
       data.desktop = { runId, runAttempt, requestId, requestDigest, proofId, proofDigest, sourceTreeHash, inventoryHash,
         installedInventoryHash, finalInventoryReceiptDigest, caseSetDigest };
+    }
+    if (operation === 'native-desktop-preflight') {
+      const { runId, proofId, proofDigest, finalInventoryReceiptDigest } = record;
+      requireCondition(stage === 'devee' && status === 'observed' && Number.isSafeInteger(proofId) && proofId > 0
+        && Number.isSafeInteger(runId) && runId > 0
+        && [proofDigest, finalInventoryReceiptDigest].every(hash => /^[a-f0-9]{64}$/u.test(hash || '')),
+      'EDITOR_PREFLIGHT_CHECKPOINT_INVALID');
+      data.desktop = { runId, proofId, proofDigest, finalInventoryReceiptDigest };
     }
     if (['validation', 'deployment', 'bootstrap', 'sales-support-correction'].includes(operation) && Object.hasOwn(record, 'jobId')) {
       const validJob = value => typeof value === 'string' && /^0Af[A-Za-z0-9]{12}(?:[A-Za-z0-9]{3})?$/u.test(value);

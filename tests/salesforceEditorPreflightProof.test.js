@@ -7,6 +7,9 @@ import { EDITOR_PREFLIGHT_COMPONENTS, EDITOR_PREFLIGHT_COMPONENT_FILES, EDITOR_P
   EDITOR_PREFLIGHT_MAX_AGE_MS, EDITOR_PREFLIGHT_PROOF_KIND, EDITOR_PREFLIGHT_SOURCE_ENVIRONMENT,
   EDITOR_PREFLIGHT_SOURCE_KIND, verifySalesforceEditorPreflightProof }
   from '../scripts/lib/rapid-release/salesforce-editor-preflight-proof.mjs';
+import { createEditorPreflightAttestation, EDITOR_PREFLIGHT_ATTESTATION_ENVIRONMENT, EDITOR_PREFLIGHT_ATTESTATION_TASK,
+  readEditorPreflightAttestation, verifyEditorPreflightPostimage }
+  from '../scripts/lib/rapid-release/salesforce-editor-preflight-transport.mjs';
 
 const clock = Date.parse('2026-11-18T08:00:00.000Z');
 const at = seconds => new Date(clock + seconds * 1000).toISOString();
@@ -100,6 +103,65 @@ function seal(input) {
   input.expected.receiptDigest = digest(input.receipt.payload);
   return input;
 }
+function transportFixture() {
+  const proofInput = fixture();
+  const { expected } = proofInput;
+  const manifest = {
+    selection: { salesforce: true, database: false },
+    candidate: { sha: expected.source.candidateSha, sourceDigest: hash('candidate source'), lockDigest: expected.source.dependencyLockDigest },
+    controllerSha: expected.controllerSha,
+    previous: { sha: expected.baselineSha },
+    prerequisites: {
+      adapter: 'salesforce-reviewed-manifest',
+      plan: { mirrorPublication: 'local-collaborator', deveeDesktopCaseSetDigest: editorDesktopCaseSetDigest,
+        salesforceSourceTreeHash: expected.source.sourceTreeHash, salesforceFingerprint: hash('salesforce plan') },
+    },
+  };
+  const payload = createEditorPreflightAttestation({ manifest, proofInput });
+  const record = {
+    id: 4500, ref: manifest.candidate.sha, sha: manifest.candidate.sha, created_at: at(27),
+    creator: { ...owner, type: 'User' }, repository_url: 'https://api.github.com/repos/' + targets().repository,
+    environment: EDITOR_PREFLIGHT_ATTESTATION_ENVIRONMENT, original_environment: EDITOR_PREFLIGHT_ATTESTATION_ENVIRONMENT,
+    task: EDITOR_PREFLIGHT_ATTESTATION_TASK, production_environment: false, transient_environment: false, payload,
+  };
+  Object.assign(manifest.prerequisites.plan, { editorPreflightReceiptId: record.id, editorPreflightReceiptDigest: digest(payload) });
+  const reads = [];
+  const github = { read: async path => { reads.push(path); return record; } };
+  return { manifest, proofInput, record, github, reads, now: clock + 30_000 };
+}
+test('staging accepts only the owner-created compact preflight and promotion checks its original chronology', async () => {
+  const input = transportFixture();
+  const proof = await readEditorPreflightAttestation(input);
+  assert.equal(proof.proofId, input.record.id);
+  assert.deepEqual(input.reads, ['/repos/' + targets().repository + '/deployments/4500']);
+  await assert.rejects(readEditorPreflightAttestation({ ...input, approvalAt: at(26) }), /QUALIFICATION_NOT_BEFORE_APPROVAL/);
+  await assert.rejects(readEditorPreflightAttestation({ ...input, now: clock + 3_600_000 }), /ATTESTATION_INVALID/);
+  input.record.creator.type = 'Bot';
+  await assert.rejects(readEditorPreflightAttestation(input), /ATTESTATION_INVALID/);
+  delete input.manifest.prerequisites.plan.editorPreflightReceiptId;
+  delete input.manifest.prerequisites.plan.editorPreflightReceiptDigest;
+  await assert.rejects(readEditorPreflightAttestation(input), /LOCATOR_INVALID/);
+  input.manifest.selection.salesforce = false;
+  assert.equal(await readEditorPreflightAttestation(input), null);
+});
+test('the preapproval receipt is checked against a fresh DEVEE promotion postimage before mirror publication', async () => {
+  const input = transportFixture();
+  const proof = await readEditorPreflightAttestation({ ...input, approvalAt: at(28) });
+  const reviewedInventoryHash = hash('reviewed inventory');
+  const reviewed = { fingerprint: proof.salesforceFingerprint, binding: { sourceTreeHash: proof.sourceTreeHash },
+    nativeInventories: { devee: { final: { inventoryHash: reviewedInventoryHash } } } };
+  const deployment = { status: 'Succeeded', orgId: devee.orgId, fingerprint: proof.salesforceFingerprint,
+    jobId: '0Af000000000000003', validationJobId: '0Af000000000000004' };
+  const inventory = { orgId: devee.orgId, identity: { username: devee.username, isSandbox: true },
+    verificationMethod: 'metadata-api-reviewed-native-byte-inventory', inventoryHash: reviewedInventoryHash,
+    observedNativeInventoryHash: proof.installedInventoryHash, evidenceSha256: hash('real fresh inventory receipt'), verifiedAt: at(30) };
+  const args = { ...input, proof, reviewed, deployment, readInstalledInventory: async () => inventory };
+  assert.equal((await verifyEditorPreflightPostimage(args)).finalInventoryReceiptDigest, inventory.evidenceSha256);
+  inventory.observedNativeInventoryHash = hash('provider drift');
+  await assert.rejects(verifyEditorPreflightPostimage(args), /DEVEE_POSTIMAGE_CHANGED/);
+  deployment.jobId = proof.qualificationDeploymentJobId;
+  await assert.rejects(verifyEditorPreflightPostimage(args), /PROMOTION_BINDING_INVALID/);
+});
 function updateCaseArtifact(input, index, change) {
   const observation = input.receipt.payload.cases[index], old = observation.evidenceDigest;
   const artifact = input.caseEvidence[old];

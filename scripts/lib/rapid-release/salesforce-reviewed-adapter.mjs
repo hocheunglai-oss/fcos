@@ -14,6 +14,7 @@ import { awaitLocalMirrorReceipt, createLocalMirrorRequest, LOCAL_MIRROR_ENVIRON
   recordLocalMirrorDeployment, usesLocalCollaboratorMirror } from './local-mirror-handoff.mjs';
 import { githubClient, verifyExecution } from './providers.mjs';
 import { awaitDeveeDesktopReceipt, createDeveeDesktopRequest, recordVerifiedDeveeDesktopCheckpoint } from './salesforce-devee-desktop-checkpoint.mjs';
+import { hasEditorPreflightLocator, verifyEditorPreflightPostimage } from './salesforce-editor-preflight-transport.mjs';
 import { applyTradingFxSalesSupportCorrection, applyTradingFxSalesSupportSandboxCorrection, verifyTradingFxSalesSupportReadGrants } from './trading-fx-sales-support-transport.mjs';
 import { verifySalesSupportRepairSource } from './trading-fx-sales-support-source.mjs';
 import { promoteSalesSupportCorrection } from './trading-fx-sales-support-promotion.mjs';
@@ -236,7 +237,7 @@ export async function applyReviewedPrerequisites(input) {
 }
 
 export function prepareReviewedSalesforcePrerequisites({
-  manifest, approval, plan, salesforce, salesforceCandidateDirectory: cwd, correctionDirectory, env = process.env,
+  manifest, approval, plan, salesforce, salesforceCandidateDirectory: cwd, correctionDirectory, editorPreflight, env = process.env,
 }, { withDatabase = false, tradingFxRecovery, tradingFxQatRecovery, tradingFxPostQatRecovery, tradingFxProductionBootstrapRecovery } = {}) {
   const manifestHash = digest(manifest);
   const databaseSelected = withDatabase ? manifest.selection.database === true : !manifest.selection.database;
@@ -264,6 +265,9 @@ export function prepareReviewedSalesforcePrerequisites({
   requireCondition(plan.deveeDesktopCaseSetDigest === desktopCaseSet && (desktopCaseSet === undefined
     || (!withDatabase && !schemaBootstrap && localMirror && manifest.prerequisites.adapter === 'salesforce-reviewed-manifest')),
   'DEVEE_DESKTOP_HOSTED_SCOPE_INVALID');
+  requireCondition(hasEditorPreflightLocator(plan) === Boolean(editorPreflight)
+    && (!editorPreflight || desktopCaseSet !== undefined && editorPreflight.proofId === plan.editorPreflightReceiptId
+      && editorPreflight.proofDigest === plan.editorPreflightReceiptDigest), 'EDITOR_PREFLIGHT_ATTESTATION_REQUIRED');
   const adoption = plan.deveeBootstrapAdoption;
   requireCondition(adoption === undefined || (!withDatabase && schemaBootstrap && reviewed.nativeInventories?.devee?.bootstrap
     && adoption && Object.keys(adoption).length === 2 && Number.isSafeInteger(adoption.receiptId) && adoption.receiptId > 0
@@ -293,7 +297,8 @@ export function prepareReviewedSalesforcePrerequisites({
       && tradingFxProductionBootstrapRecovery.receipt?.id === plan.tradingFxProductionBootstrapRecoveryReceiptId,
   'SALESFORCE_TRADING_FX_PRODUCTION_BOOTSTRAP_ADOPTION_INVALID');
   return () => applyPreparedSalesforce({ manifest, manifestHash, approval, salesforce, cwd, correctionDirectory, env, reviewed, schemaBootstrap,
-    localMirror, adoption, promotionReceiptId, tradingFxRecovery, tradingFxQatRecovery, tradingFxPostQatRecovery, tradingFxProductionBootstrapRecovery });
+    localMirror, adoption, promotionReceiptId, tradingFxRecovery, tradingFxQatRecovery, tradingFxPostQatRecovery,
+    tradingFxProductionBootstrapRecovery, editorPreflight });
 }
 
 export async function hostedLocalMirrorTransport({ manifest, approval, env, reviewed, salesforce }) {
@@ -482,7 +487,8 @@ export async function recoverTradingFxProductionReadbacks({ recovery, reviewed, 
 }
 
 async function applyPreparedSalesforce({ manifest, manifestHash, approval, salesforce, cwd, correctionDirectory, env, reviewed, schemaBootstrap, localMirror,
-  adoption, promotionReceiptId, tradingFxRecovery, tradingFxQatRecovery, tradingFxPostQatRecovery, tradingFxProductionBootstrapRecovery }) {
+  adoption, promotionReceiptId, tradingFxRecovery, tradingFxQatRecovery, tradingFxPostQatRecovery, tradingFxProductionBootstrapRecovery,
+  editorPreflight }) {
   const saved = await salesforce.journal.readCheckpoints();
   const localTransport = localMirror ? await hostedLocalMirrorTransport({ manifest, approval, env, reviewed, salesforce }) : null;
   const directory = mkdtempSync(join(tmpdir(), 'fcos-salesforce-hosted-'));
@@ -629,7 +635,14 @@ async function applyPreparedSalesforce({ manifest, manifestHash, approval, sales
       const hasPreparation = saved.some(item => item.stage === 'production' && item.operation === 'preparation'
         && (item.preparation?.validationJobId || item.preparation?.status === 'awaiting-authorized-bootstrap'));
       const verifyDeveeDesktop = reviewed.review.nativeDeveeDesktop === undefined ? undefined
-        : proof => verifyHostedDeveeDesktop({ manifest, approval, reviewed, salesforce, env, ...proof });
+        : async proof => {
+          if (!editorPreflight) return verifyHostedDeveeDesktop({ manifest, approval, reviewed, salesforce, env, ...proof });
+          const observed = await verifyEditorPreflightPostimage({ manifest, proof: editorPreflight, reviewed, ...proof });
+          const checkpoint = await salesforce.journal.checkpoint({ fingerprint: reviewed.fingerprint, stage: 'devee',
+            operation: 'native-desktop-preflight', record: { status: 'observed', runId: approval.runId, ...observed } });
+          requireCondition(checkpoint?.payload?.data?.desktop?.proofId === observed.proofId, 'EDITOR_PREFLIGHT_CHECKPOINT_ACK_UNCERTAIN');
+          return observed;
+        };
       const result = await runReviewedSalesforceRelease({ plan: reviewed, mode: hasPreparation ? 'apply' : 'approved-continuation',
         policy, journal, provider, verifyDeveeDesktop,
         ownership, externalJournal: salesforce.journal, authorization, retainedDeveeInventory, retainedTradingFxMirror, repairProductionSalesSupport,
