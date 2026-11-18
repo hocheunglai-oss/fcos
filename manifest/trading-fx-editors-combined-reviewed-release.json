@@ -131,7 +131,7 @@
   "dependencyReview": {
     "complete": true,
     "reviewer": "FCOS Editors fixture source qualification",
-    "evidence": "Retains the exact 4cc51cf5 Editors runtime and fixture components. Current native DEVEE/QAT/Production inventories match the verified Puccini source c17ba6bd after fixture cleanup and QAT restoration. The Puccini source changes four unrelated readiness/REST classes. Prior desktop observations remain diagnostic until admitted by the qualified controller. A fresh native validation must qualify this resulting complete package."
+    "evidence": "Retains the exact 4cc51cf5 Editors runtime and fixture components. Current native DEVEE/QAT/Production inventories match the verified Puccini source c17ba6bd after fixture cleanup and QAT restoration. The Puccini source changes four unrelated readiness/REST classes. Prior desktop observations remain diagnostic until admitted by the qualified controller. A fresh native validation must qualify this resulting complete package. Paired native retrievals in DEVEE, QAT and Production verified that the Editors retrieval manifest changes only the disabled Sales Support Apex access entries returned in the profile export. This review pins the exact per-org Editors retrieval bytes."
   },
   "nativeProjection": "schema-free-apex-lightning",
   "nativeInventories": {
@@ -4954,8 +4954,8 @@
             "size": 7876
           },
           "profiles/Sales Support.profile-meta.xml": {
-            "sha256": "a5b580f9e6ca8ef171ba4edf87c2246a29b6564e79ca9cc13e30a04fd8e1fa8c",
-            "size": 151739
+            "sha256": "b344df1b05f02c03c0fe4a482f1fe6a4c88e212f70953df9c640088a3c09ae4b",
+            "size": 151478
           },
           "quickActions/Invoice__c.Finalize_Native_Proforma.quickAction-meta.xml": {
             "sha256": "29f670276215065291ccf4b42955e4278cbf2ae75d200898654b5ef7e6b267c3",
@@ -5314,7 +5314,7 @@
             "size": 178
           }
         },
-        "inventoryHash": "cb2526c8f228a7cfe984b12b09ee11efdd70ffd23c85e52841a158ac8e7a3236"
+        "inventoryHash": "cf5443e47b5b606a2d6e67c21734c7230f272a436e18ac0de29cfd8a089fa89a"
       },
       "final": {
         "files": {
@@ -9991,8 +9991,8 @@
             "size": 7876
           },
           "profiles/Sales Support.profile-meta.xml": {
-            "sha256": "a5b580f9e6ca8ef171ba4edf87c2246a29b6564e79ca9cc13e30a04fd8e1fa8c",
-            "size": 151739
+            "sha256": "b344df1b05f02c03c0fe4a482f1fe6a4c88e212f70953df9c640088a3c09ae4b",
+            "size": 151478
           },
           "quickActions/Invoice__c.Finalize_Native_Proforma.quickAction-meta.xml": {
             "sha256": "29f670276215065291ccf4b42955e4278cbf2ae75d200898654b5ef7e6b267c3",
@@ -10343,7 +10343,7 @@
             "size": 178
           }
         },
-        "inventoryHash": "6baf036fb30a6ae2ccb6b43ff6e7784f797c69bba1b170a66aa9731ecf9d04bb",
+        "inventoryHash": "840f6cb51f8d7302439169c24c5bcc7e9713cefb9c3c59ac11d35fc5116bde85",
         "projected": true
       }
     },
@@ -15162,8 +15162,8 @@
             "size": 7876
           },
           "profiles/Sales Support.profile-meta.xml": {
-            "sha256": "df3fdacf73383f22a46e4975c6d79e93407983cb8c4ed9d3b6e044c6589af3f4",
-            "size": 151376
+            "sha256": "273ab00a27b0f34d402bde0643efec47093f6d99e72e66748e1e723d4db75f11",
+            "size": 151115
           },
           "quickActions/Invoice__c.Finalize_Native_Proforma.quickAction-meta.xml": {
             "sha256": "29f670276215065291ccf4b42955e4278cbf2ae75d200898654b5ef7e6b267c3",
@@ -15522,7 +15522,7 @@
             "size": 178
           }
         },
-        "inventoryHash": "7dc562a3bdb79f3174403df0852e669d6601df3f2806adc08a81753d39aa631f"
+        "inventoryHash": "054a73da5a6afc9c92d7d96ff04ef2d2b55a5de4baef92fdaadf65b18e6e2f28"
       },
       "final": {
         "files": {
@@ -20195,8 +20195,8 @@
             "size": 7876
           },
           "profiles/Sales Support.profile-meta.xml": {
-            "sha256": "df3fdacf73383f22a46e4975c6d79e93407983cb8c4ed9d3b6e044c6589af3f4",
-            "size": 151376
+            "sha256": "273ab00a27b0f34d402bde0643efec47093f6d99e72e66748e1e723d4db75f11",
+            "size": 151115
           },
           "quickActions/Invoice__c.Finalize_Native_Proforma.quickAction-meta.xml": {
             "sha256": "29f670276215065291ccf4b42955e4278cbf2ae75d200898654b5ef7e6b267c3",
@@ -20547,7 +20547,7 @@
             "size": 178
           }
         },
-        "inventoryHash": "bb9f5b9c33d54ce7ffc41b4687189e420fc305162c5204333fb07f59b6af8f24",
+        "inventoryHash": "371b5a08465b38e3d7bf8a783ae7eff578cce7a1157e1671f7bbfc8727b2a57a",
         "projected": true
       }
     },
@@ -25374,8 +25374,8 @@
             "size": 7876
           },
           "profiles/Sales Support.profile-meta.xml": {
-            "sha256": "32630bfff480466ca3837853ffae2fb7191a5b82f2f0edd052a0eaa3aad26909",
-            "size": 151946
+            "sha256": "cbbb66f7a7a6337f0d8cad88f1e1eee22a375edc377d99543fc3f040ce3a52e7",
+            "size": 151685
           },
           "quickActions/Invoice__c.Finalize_Native_Proforma.quickAction-meta.xml": {
             "sha256": "29f670276215065291ccf4b42955e4278cbf2ae75d200898654b5ef7e6b267c3",
@@ -25734,7 +25734,7 @@
             "size": 178
           }
         },
-        "inventoryHash": "767d30091d51a5a27997fc1b7d700d8d77d0c829c0be9b2720adde9eac0db786"
+        "inventoryHash": "0b5ddb14f9c58690540d041d6569eaca3a671b18b9d75731300eee9c292e2057"
       },
       "final": {
         "files": {
@@ -30415,8 +30415,8 @@
             "size": 7876
           },
           "profiles/Sales Support.profile-meta.xml": {
-            "sha256": "32630bfff480466ca3837853ffae2fb7191a5b82f2f0edd052a0eaa3aad26909",
-            "size": 151946
+            "sha256": "cbbb66f7a7a6337f0d8cad88f1e1eee22a375edc377d99543fc3f040ce3a52e7",
+            "size": 151685
           },
           "quickActions/Invoice__c.Finalize_Native_Proforma.quickAction-meta.xml": {
             "sha256": "29f670276215065291ccf4b42955e4278cbf2ae75d200898654b5ef7e6b267c3",
@@ -30767,7 +30767,7 @@
             "size": 178
           }
         },
-        "inventoryHash": "5745fdd65aa5b7f623a5e7950f30caa03d4ff15f5b73fd21ab5fc2235c0419f1",
+        "inventoryHash": "598f780b0ae7e10567ad3caf814def097a6fc1a5e99a4a6db2aae9fe8eabdd33",
         "projected": true
       }
     }
@@ -31723,7 +31723,7 @@
     ]
   },
   "inventoryManifests": {
-    "cb2526c8f228a7cfe984b12b09ee11efdd70ffd23c85e52841a158ac8e7a3236": {
+    "cf5443e47b5b606a2d6e67c21734c7230f272a436e18ac0de29cfd8a089fa89a": {
       "path": "manifest/trading-fx-editors-combined-stable.xml",
       "sha256": "14234a40aa8e21270f4061c471b8f0ee685cc73af1e899601b6a90db778b0571",
       "metadata": {
@@ -31731,7 +31731,7 @@
         "sha256": "6432e1c2e81ed6f09c8247a21d178020708ca5bcd714889760bcb1546937910e"
       }
     },
-    "6baf036fb30a6ae2ccb6b43ff6e7784f797c69bba1b170a66aa9731ecf9d04bb": {
+    "840f6cb51f8d7302439169c24c5bcc7e9713cefb9c3c59ac11d35fc5116bde85": {
       "path": "manifest/trading-fx-editors-combined-stable.xml",
       "sha256": "14234a40aa8e21270f4061c471b8f0ee685cc73af1e899601b6a90db778b0571",
       "metadata": {
@@ -31739,7 +31739,7 @@
         "sha256": "7f0e7b49dedc247e148b952872cb239337bef52de8c53ffd4ed63c761b018a4b"
       }
     },
-    "7dc562a3bdb79f3174403df0852e669d6601df3f2806adc08a81753d39aa631f": {
+    "054a73da5a6afc9c92d7d96ff04ef2d2b55a5de4baef92fdaadf65b18e6e2f28": {
       "path": "manifest/trading-fx-editors-combined-stable.xml",
       "sha256": "14234a40aa8e21270f4061c471b8f0ee685cc73af1e899601b6a90db778b0571",
       "metadata": {
@@ -31747,7 +31747,7 @@
         "sha256": "6432e1c2e81ed6f09c8247a21d178020708ca5bcd714889760bcb1546937910e"
       }
     },
-    "bb9f5b9c33d54ce7ffc41b4687189e420fc305162c5204333fb07f59b6af8f24": {
+    "371b5a08465b38e3d7bf8a783ae7eff578cce7a1157e1671f7bbfc8727b2a57a": {
       "path": "manifest/trading-fx-editors-combined-stable.xml",
       "sha256": "14234a40aa8e21270f4061c471b8f0ee685cc73af1e899601b6a90db778b0571",
       "metadata": {
@@ -31755,7 +31755,7 @@
         "sha256": "7f0e7b49dedc247e148b952872cb239337bef52de8c53ffd4ed63c761b018a4b"
       }
     },
-    "767d30091d51a5a27997fc1b7d700d8d77d0c829c0be9b2720adde9eac0db786": {
+    "0b5ddb14f9c58690540d041d6569eaca3a671b18b9d75731300eee9c292e2057": {
       "path": "manifest/trading-fx-editors-combined-stable.xml",
       "sha256": "14234a40aa8e21270f4061c471b8f0ee685cc73af1e899601b6a90db778b0571",
       "metadata": {
@@ -31763,7 +31763,7 @@
         "sha256": "6432e1c2e81ed6f09c8247a21d178020708ca5bcd714889760bcb1546937910e"
       }
     },
-    "5745fdd65aa5b7f623a5e7950f30caa03d4ff15f5b73fd21ab5fc2235c0419f1": {
+    "598f780b0ae7e10567ad3caf814def097a6fc1a5e99a4a6db2aae9fe8eabdd33": {
       "path": "manifest/trading-fx-editors-combined-stable.xml",
       "sha256": "14234a40aa8e21270f4061c471b8f0ee685cc73af1e899601b6a90db778b0571",
       "metadata": {
