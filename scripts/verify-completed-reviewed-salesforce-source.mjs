@@ -7,7 +7,7 @@ import { cliSalesforceProvider, loadReviewedSalesforcePlan } from './deploy-sale
 import { githubConfigDirectory } from './fcos-connections.mjs';
 import { executeSharedMirror } from './sync-salesforce-shared-repository.mjs';
 import { reviewedDeveePublicationProof } from './sync-salesforce-reviewed-repository.mjs';
-import { verifySalesforceReviewSource } from './verify-salesforce-review-source.mjs';
+import { verifyCompletedSalesforceReviewSource } from './verify-salesforce-review-source.mjs';
 import { assertReviewedMirror } from './lib/salesforce-reviewed-release.mjs';
 import { assertAuthorization, digest, isDigest, isSha, requireCondition, targets, validateManifest } from './lib/rapid-release/contract.mjs';
 import { assertBuildReceipt, assertSmokeProof } from './lib/rapid-release/engine.mjs';
@@ -238,10 +238,7 @@ async function main() {
   allow(directory && manifestFile && Number.isSafeInteger(runId) && runId > 0 && !noMore.length, 'USAGE_CANDIDATE_SHA_MANIFEST_RUN');
   const cwd = resolve(directory), manifest = JSON.parse(readFileSync(manifestFile, 'utf8'));
   const hash = assertStandardReviewedSourceManifest(manifest, candidate);
-  const verifySource = () => verifySalesforceReviewSource({ cwd, candidateSha: candidate, manifest, verifierDirectory: root });
-  verifySource();
   const plan = manifest.prerequisites.plan;
-  const reviewed = loadReviewedSalesforcePlan({ cwd, manifestPath: plan.salesforceManifestPath, reviewPath: plan.salesforceReviewPath });
   const github = readGitHub(candidate), repoPath = '/repos/' + targets().repository;
   const viewer = github.read('/user'), repo = github.read(repoPath);
   allow(owner(viewer) && repo.id === repositoryId && owner(repo.owner) && repo.full_name === targets().repository
@@ -261,11 +258,14 @@ async function main() {
       && rule.reviewers?.some(row => owner(row.reviewer)))
     && reviews.filter(row => row.state === 'approved' && owner(row.user)
       && row.environments?.some(item => item.id === environmentId && item.name === environmentName)).length === 1, 'NATIVE_APPROVAL_MISMATCH');
+  await Promise.all([assertFrozenWorkflow({ github, controllerSha: manifest.controllerSha, dispatcherSha: run.head_sha }),
+    assertCurrentVersion(manifest)]);
+  const verifySource = () => verifyCompletedSalesforceReviewSource({ cwd, candidateSha: candidate, manifest, verifierDirectory: root });
+  verifySource();
+  const reviewed = loadReviewedSalesforcePlan({ cwd, manifestPath: plan.salesforceManifestPath, reviewPath: plan.salesforceReviewPath });
   const journal = new DeploymentJournal({ github, actorIds: [botId], releaseId: manifest.releaseId, manifestHash: hash });
   const [records, requests, editorAttestation] = await Promise.all([journal.read(), readLocalMirrorDeployments(github, candidate),
-    hasEditorPreflightLocator(plan) ? github.read(repoPath + '/deployments/' + plan.editorPreflightReceiptId) : undefined,
-    assertFrozenWorkflow({ github, controllerSha: manifest.controllerSha, dispatcherSha: run.head_sha }),
-    assertCurrentVersion(manifest)]);
+    hasEditorPreflightLocator(plan) ? github.read(repoPath + '/deployments/' + plan.editorPreflightReceiptId) : undefined]);
   const { deploymentId, validationId, mirror } = verifyCompletedReviewedJournal({ records, requests, manifest, reviewed, run, editorAttestation });
   const devee = fcosSalesforceEnvironment('devee');
   const provider = cliSalesforceProvider({ cwd, policy, commandEnvironment: process.env });
