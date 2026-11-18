@@ -1,4 +1,5 @@
 import { xeroCreditAllocationApply, xeroCreditAllocationPreview, xeroCreditAllocationReconcile, xeroCreditAllocationRecoveryQueue } from './_xeroCreditAllocationActions.js';
+import { xeroFinanceCompletion } from './_xeroFinanceCompletion.js';
 import { xeroNativeDocumentApply, xeroNativeDocumentReconcile, xeroNativeDocumentRecoveryQueue } from './_xeroNativeDocumentActions.js';
 import { xeroPrepaymentApply, xeroPrepaymentContacts, xeroPrepaymentPreview, xeroPrepaymentQueue, xeroPrepaymentReconcile } from './_xeroPrepayments.js';
 import { xeroPrepaymentPolicyGet, xeroPrepaymentPolicySave } from './_xeroPrepaymentPolicy.js';
@@ -86,6 +87,7 @@ export const XERO_HANDLER_MODULE_ACCESS = Object.freeze(Object.fromEntries([
   'xeroFinancialMappingsSave',
   'xeroFinancialSyncPreview',
   'xeroFinancialSyncLatest',
+  'xeroFinanceCompletion',
   'xeroFinancialSyncApply',
   'xeroFinancialSyncRun',
   'xeroFinancialPaymentApply',
@@ -169,6 +171,7 @@ export function createXeroHandlers({ requireActiveUser, resolveRecoveredSystemEr
     xeroFinancialMappingsSave: wrap(xeroFinancialMappingsSave),
     xeroFinancialSyncPreview: wrap(xeroFinancialSyncPreview, { recoveredHandler: 'xeroFinancialSyncPreview' }),
     xeroFinancialSyncLatest: wrap(xeroFinancialSyncLatest),
+    xeroFinanceCompletion: wrap(xeroFinanceCompletion),
     xeroFinancialSyncApply: wrap(xeroFinancialSyncApply),
     xeroFinancialSyncRun: wrap(xeroFinancialSyncRun),
     xeroFinancialPaymentApply: wrap(xeroFinancialPaymentApply),

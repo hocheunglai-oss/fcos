@@ -122,9 +122,8 @@ export async function loadCreditAllocationSettlementSnapshot(window, {
   client, tenantId, env = process.env, maxXeroReads,
   loadQueue = loadCreditAllocationQueueSnapshot, loadReview = loadCreditAllocationReview,
   readConnection, accountingFetch,
-  now = Date.now, ...options
+  now = Date.now, transport = boundedSettlementReads({ client, tenantId, env, maxXeroReads, fail, readConnection, accountingFetch, now }), ...options
 } = {}) {
-  const transport = boundedSettlementReads({ client, tenantId, env, maxXeroReads, fail, readConnection, accountingFetch, now });
   const snapshot = await loadQueue(window, { client, tenantId, env, ...options });
   if (snapshot.tenantId !== tenantId || snapshot.cutoff !== window?.cutoff || snapshot.through !== window?.through) {
     fail('The credit settlement cohort changed.');

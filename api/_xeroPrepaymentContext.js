@@ -433,10 +433,9 @@ export async function loadPrepaymentQueuePaymentBridges(snapshot, { query = sfQu
 /** Verify applied prepayment work against the current cash ledger and exact Xero records. */
 export async function loadPrepaymentSettlementSnapshot(window, {
   client, tenantId, env = process.env, maxXeroReads, readConnection, accountingFetch, now,
+  transport = boundedSettlementReads({ client, tenantId, env, maxXeroReads, readConnection, accountingFetch, now, fail: contextError }),
   loadQueue = loadPrepaymentQueueSnapshot, loadLedger = loadXeroPrepaymentContextForStem, ...options
 } = {}) {
-  const transport = boundedSettlementReads({ client, tenantId, env, maxXeroReads,
-    readConnection, accountingFetch, now, fail: contextError });
   const snapshot = await loadQueue(window, { ...options, client, tenantId });
   if (snapshot.tenantId !== tenantId || snapshot.cutoff !== window?.cutoff || snapshot.through !== window?.through) {
     contextError('The managed prepayment settlement cohort changed.');

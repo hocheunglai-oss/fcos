@@ -80,6 +80,7 @@ export default function XeroFinancialSync({ portalStatus }) {
   const [mappingPage, setMappingPage] = useState(0);
   const [busy, setBusy] = useState(verificationOnly ? '' : 'mappings');
   const [error, setError] = useState('');
+  const [combinedCheck, setCombinedCheck] = useState(null);
   const [dailyAllowance, setDailyAllowance] = useState(null);
   const captureDailyAllowance = useCallback((value) => {
     const receivedAt = new Date().toISOString();
@@ -241,6 +242,27 @@ export default function XeroFinancialSync({ portalStatus }) {
       setError(nextError.message || 'The check could not be completed. Your last check is retained.');
       return false;
     } finally { requestBusy.current = false; setBusy(''); }
+  }
+
+  async function checkCombinedCompletion() {
+    if (busy || requestBusy.current || preview?.run?.status !== 'ready_for_review') return;
+    const { id: runId, revision } = preview.run;
+    requestBusy.current = true;
+    setBusy('combined');
+    setCombinedCheck(null);
+    try {
+      const { data } = await appClient.functions.invoke('xeroFinanceCompletion', { runId }, FORCE_OPTIONS);
+      if (data?.runId !== runId || data?.summary?.checked !== true) {
+        setCombinedCheck({ runId, revision, error: data?.error || 'Complete combined evidence is unavailable.' });
+        return;
+      }
+      setCombinedCheck({ ...data, revision });
+    } catch (nextError) {
+      setCombinedCheck({ runId, revision, error: nextError.message || 'Complete combined evidence is unavailable.' });
+    } finally {
+      requestBusy.current = false;
+      setBusy('');
+    }
   }
 
   async function executeRun() {
@@ -427,6 +449,15 @@ export default function XeroFinancialSync({ portalStatus }) {
           {reconciliation.summaries > 0 && <div>{flow.summary}: {reconciliation.summaries} · {flow.summaryDescription}</div>}
           {reconciliation.documents.acceptedLegacy > 0 && <div>{flow.acceptedLegacy}: {reconciliation.documents.acceptedLegacy}</div>}
         </div>
+        {!verificationOnly && <div className="mt-3 flex flex-wrap items-center gap-3">
+          <Button type="button" variant="outline" onClick={checkCombinedCompletion}
+            disabled={Boolean(busy) || preview?.run?.status !== 'ready_for_review' || !portalStatus?.xero?.connected}>
+            {busy === 'combined' ? 'Checking combined Finance completion' : 'Check combined Finance completion'}
+          </Button>
+          {combinedCheck && combinedCheck.runId === preview?.run?.id && combinedCheck.revision === preview?.run?.revision &&
+            <div role="status" className={DETAIL_CLASS}>{combinedCheck.error ||
+              `${combinedCheck.summary.completion}% across documents, payments, credit allocations, and managed prepayments · Checked ${new Date(combinedCheck.checkedAt).toLocaleString()}`}</div>}
+        </div>}
         {!scopeFlags.settingsRead || !scopeFlags.paymentsRead ? <div className="finance-reconnect-notice">{financialCopy.reconnect}</div> : null}
       </section>
 

@@ -25,9 +25,12 @@ export function boundedSettlementReads({ client, tenantId, env, maxXeroReads, fa
   const read = async (current, path, request) => {
     assertCurrent();
     const record = /^\/(CreditNotes|Invoices|Payments|Prepayments|BankTransactions)\/([a-f0-9-]+)(?:\?unitdp=4)?$/i.exec(path);
+    const changeProbe = /^\/(Invoices|CreditNotes|Payments|Contacts)\?page=1&pageSize=1$/.test(path)
+      && Number.isFinite(Date.parse(request.headers?.['If-Modified-Since']));
     if (current !== connection || request.method !== 'GET' || request.body != null || request.rawBody != null
-        || (path !== '/Organisations' && !uuid(record?.[2]))) fail('Settlement verification accepts read-only accounting requests.');
-    if (reads.has(path)) return reads.get(path);
+        || (path !== '/Organisations' && !uuid(record?.[2]) && !changeProbe)) fail('Settlement verification accepts read-only accounting requests.');
+    const key = changeProbe ? `${path}:${request.headers['If-Modified-Since']}` : path;
+    if (reads.has(key)) return reads.get(key);
     assertXeroFinancialDailyReserve(rate, env);
     if (reads.size >= maxXeroReads) fail('The settlement accounting read budget was exhausted.');
     const response = accountingFetch(connection, path, { ...request, retryOnRateLimit: false, transientRetryLimit: 0, onResponse: (value) => {
@@ -35,7 +38,7 @@ export function boundedSettlementReads({ client, tenantId, env, maxXeroReads, fa
       request.onResponse?.(value);
       assertXeroFinancialDailyReserve(rate, env);
     } });
-    reads.set(path, response);
+    reads.set(key, response);
     return response;
   };
   return { getConnection, read, count: () => reads.size };

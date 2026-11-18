@@ -133,6 +133,7 @@ const HANDLER_BEHAVIOR = Object.freeze({
   xeroFinancialMappingsSave: mutationPolicy({"cache":"none","externalAction":false,"capability":"xero_portal_manage"}),
   xeroFinancialSyncPreview: mutationPolicy({"cache":"none","externalAction":true,"capability":"xero_portal_manage"}),
   xeroFinancialSyncLatest: readPolicy({"cache":"none","externalAction":false,"capability":"xero_portal_manage"}),
+  xeroFinanceCompletion: readPolicy({ cache: 'none', externalAction: true, capability: 'xero_portal_manage' }),
   xeroFinancialSyncApply: mutationPolicy({"cache":"none","externalAction":false,"capability":"xero_portal_manage"}),
   xeroFinancialSyncRun: mutationPolicy({"cache":"none","externalAction":true,"capability":"xero_portal_manage"}),
   xeroFinancialPaymentApply: mutationPolicy({"cache":"none","externalAction":true,"capability":"xero_portal_manage"}),
