@@ -41,7 +41,7 @@
   "dependencyReview": {
     "complete": true,
     "reviewer": "Codex",
-    "evidence": "Row-level approval invalidation clears the aggregate only for affected required supplier pairs. Unrelated nonrequired extra and stable product edits preserve existing approval evidence. Active product membership changes revoke all affected STEM stages, including net-zero replacements. Explicit revocations, Account requirement changes, last required row removals and the STEM confirmation gate remain enforced. The invoice form now reports failures during PDF or saved-form persistence and releases the spinner. No automatic reapproval or financial record changes are introduced."
+    "evidence": "Row-level approval invalidation clears the aggregate only for affected required supplier pairs. Unrelated nonrequired extra and stable product edits preserve existing approval evidence. Active product membership changes revoke all affected STEM stages, including net-zero replacements. Explicit revocations, Account requirement changes, last required row removals and the STEM confirmation gate remain enforced. The invoice form now reports failures during PDF or saved-form persistence and releases the spinner. No automatic reapproval or financial record changes are introduced. Reviewed split inventory includes two disabled Sales Support class-access entries serialized because VariableChargeRest and VariableChargeRestTest are retrieved with stable components. Verified in every pinned org. No profile is part of the deployment package."
   },
   "testPlan": {
     "level": "RunSpecifiedTests",
@@ -5811,8 +5811,8 @@
             "size": 7876
           },
           "profiles/Sales Support.profile-meta.xml": {
-            "sha256": "a5b580f9e6ca8ef171ba4edf87c2246a29b6564e79ca9cc13e30a04fd8e1fa8c",
-            "size": 151739
+            "sha256": "b3504561a17c1b02e99076d67c206a0c71fdafa957c9cbeee7a7dd89cbcf86c3",
+            "size": 151991
           },
           "quickActions/Invoice__c.Finalize_Native_Proforma.quickAction-meta.xml": {
             "sha256": "29f670276215065291ccf4b42955e4278cbf2ae75d200898654b5ef7e6b267c3",
@@ -6171,7 +6171,7 @@
             "size": 178
           }
         },
-        "inventoryHash": "cb2526c8f228a7cfe984b12b09ee11efdd70ffd23c85e52841a158ac8e7a3236"
+        "inventoryHash": "629f52b52c23efa83e4486d861e57aa36ea8a60c3b401abf4b211ee703f01ec0"
       },
       "final": {
         "files": {
@@ -10940,8 +10940,8 @@
             "size": 7876
           },
           "profiles/Sales Support.profile-meta.xml": {
-            "sha256": "a5b580f9e6ca8ef171ba4edf87c2246a29b6564e79ca9cc13e30a04fd8e1fa8c",
-            "size": 151739
+            "sha256": "b3504561a17c1b02e99076d67c206a0c71fdafa957c9cbeee7a7dd89cbcf86c3",
+            "size": 151991
           },
           "quickActions/Invoice__c.Finalize_Native_Proforma.quickAction-meta.xml": {
             "sha256": "29f670276215065291ccf4b42955e4278cbf2ae75d200898654b5ef7e6b267c3",
@@ -11300,7 +11300,7 @@
             "size": 178
           }
         },
-        "inventoryHash": "52e001e7d249fbad3c6f0848ebe3c5987abb271b05601c21b222f778bcb9da3e",
+        "inventoryHash": "88ffe908af1201b67cb25b5c04e950844ecc2ed893dea0ef4a3b4ee4e9560c32",
         "projected": true
       }
     },
@@ -16105,8 +16105,8 @@
             "size": 7876
           },
           "profiles/Sales Support.profile-meta.xml": {
-            "sha256": "df3fdacf73383f22a46e4975c6d79e93407983cb8c4ed9d3b6e044c6589af3f4",
-            "size": 151376
+            "sha256": "70edb9cad5f2572129f17ed9b22d6e28fb7f95c13138b96383de0739662fcf57",
+            "size": 151628
           },
           "quickActions/Invoice__c.Finalize_Native_Proforma.quickAction-meta.xml": {
             "sha256": "29f670276215065291ccf4b42955e4278cbf2ae75d200898654b5ef7e6b267c3",
@@ -16465,7 +16465,7 @@
             "size": 178
           }
         },
-        "inventoryHash": "7dc562a3bdb79f3174403df0852e669d6601df3f2806adc08a81753d39aa631f"
+        "inventoryHash": "562c53c6a2e2ee070d938b7fdf86afbbec29b241b6cafc942e2d20c6fb405708"
       },
       "final": {
         "files": {
@@ -21230,8 +21230,8 @@
             "size": 7876
           },
           "profiles/Sales Support.profile-meta.xml": {
-            "sha256": "df3fdacf73383f22a46e4975c6d79e93407983cb8c4ed9d3b6e044c6589af3f4",
-            "size": 151376
+            "sha256": "70edb9cad5f2572129f17ed9b22d6e28fb7f95c13138b96383de0739662fcf57",
+            "size": 151628
           },
           "quickActions/Invoice__c.Finalize_Native_Proforma.quickAction-meta.xml": {
             "sha256": "29f670276215065291ccf4b42955e4278cbf2ae75d200898654b5ef7e6b267c3",
@@ -21590,7 +21590,7 @@
             "size": 178
           }
         },
-        "inventoryHash": "e5f433a312e0d3b98c38612d1410b180ffc960353a3b9df6e2c62e69741d69b6",
+        "inventoryHash": "707c52dc24e13c7e2af5b12a3625e160c92cc2a93a03c9acd2dd6916d5acd044",
         "projected": true
       }
     },
@@ -26403,8 +26403,8 @@
             "size": 7876
           },
           "profiles/Sales Support.profile-meta.xml": {
-            "sha256": "32630bfff480466ca3837853ffae2fb7191a5b82f2f0edd052a0eaa3aad26909",
-            "size": 151946
+            "sha256": "ae20bc231b3247002121a73314f614a540e308accf14023092881ab0ae64f5d7",
+            "size": 152198
           },
           "quickActions/Invoice__c.Finalize_Native_Proforma.quickAction-meta.xml": {
             "sha256": "29f670276215065291ccf4b42955e4278cbf2ae75d200898654b5ef7e6b267c3",
@@ -26763,7 +26763,7 @@
             "size": 178
           }
         },
-        "inventoryHash": "767d30091d51a5a27997fc1b7d700d8d77d0c829c0be9b2720adde9eac0db786"
+        "inventoryHash": "9122beae80f4725fe8a6c284f148bca4085e9bc8c89993921321cfbadca8f9b8"
       },
       "final": {
         "files": {
@@ -31536,8 +31536,8 @@
             "size": 7876
           },
           "profiles/Sales Support.profile-meta.xml": {
-            "sha256": "32630bfff480466ca3837853ffae2fb7191a5b82f2f0edd052a0eaa3aad26909",
-            "size": 151946
+            "sha256": "ae20bc231b3247002121a73314f614a540e308accf14023092881ab0ae64f5d7",
+            "size": 152198
           },
           "quickActions/Invoice__c.Finalize_Native_Proforma.quickAction-meta.xml": {
             "sha256": "29f670276215065291ccf4b42955e4278cbf2ae75d200898654b5ef7e6b267c3",
@@ -31896,13 +31896,13 @@
             "size": 178
           }
         },
-        "inventoryHash": "fbd8a20e37721bcf4d3a8151233455ce41cf274ac170e50455b9bde8b8415fb7",
+        "inventoryHash": "c6beca707305964369a33a1edd316054d481f32a2a582241186838ae37ed822b",
         "projected": true
       }
     }
   },
   "inventoryManifests": {
-    "cb2526c8f228a7cfe984b12b09ee11efdd70ffd23c85e52841a158ac8e7a3236": {
+    "629f52b52c23efa83e4486d861e57aa36ea8a60c3b401abf4b211ee703f01ec0": {
       "path": "manifest/buyer-confirmation-consistency-devee-native.xml",
       "sha256": "a073741bac9ba90d8961b8deea6b2ef630c2bcfc73c0c3ec462fcc33ff8eef57",
       "metadata": {
@@ -31910,7 +31910,7 @@
         "sha256": "bb14649c632bb53d6dc98f89e8eb7a88bc9d06125ec0cb3e00aa97215c678565"
       }
     },
-    "52e001e7d249fbad3c6f0848ebe3c5987abb271b05601c21b222f778bcb9da3e": {
+    "88ffe908af1201b67cb25b5c04e950844ecc2ed893dea0ef4a3b4ee4e9560c32": {
       "path": "manifest/buyer-confirmation-consistency-devee-native.xml",
       "sha256": "a073741bac9ba90d8961b8deea6b2ef630c2bcfc73c0c3ec462fcc33ff8eef57",
       "metadata": {
@@ -31918,7 +31918,7 @@
         "sha256": "bb14649c632bb53d6dc98f89e8eb7a88bc9d06125ec0cb3e00aa97215c678565"
       }
     },
-    "7dc562a3bdb79f3174403df0852e669d6601df3f2806adc08a81753d39aa631f": {
+    "562c53c6a2e2ee070d938b7fdf86afbbec29b241b6cafc942e2d20c6fb405708": {
       "path": "manifest/buyer-confirmation-consistency-qat-native.xml",
       "sha256": "a073741bac9ba90d8961b8deea6b2ef630c2bcfc73c0c3ec462fcc33ff8eef57",
       "metadata": {
@@ -31926,7 +31926,7 @@
         "sha256": "bb14649c632bb53d6dc98f89e8eb7a88bc9d06125ec0cb3e00aa97215c678565"
       }
     },
-    "e5f433a312e0d3b98c38612d1410b180ffc960353a3b9df6e2c62e69741d69b6": {
+    "707c52dc24e13c7e2af5b12a3625e160c92cc2a93a03c9acd2dd6916d5acd044": {
       "path": "manifest/buyer-confirmation-consistency-qat-native.xml",
       "sha256": "a073741bac9ba90d8961b8deea6b2ef630c2bcfc73c0c3ec462fcc33ff8eef57",
       "metadata": {
@@ -31934,7 +31934,7 @@
         "sha256": "bb14649c632bb53d6dc98f89e8eb7a88bc9d06125ec0cb3e00aa97215c678565"
       }
     },
-    "767d30091d51a5a27997fc1b7d700d8d77d0c829c0be9b2720adde9eac0db786": {
+    "9122beae80f4725fe8a6c284f148bca4085e9bc8c89993921321cfbadca8f9b8": {
       "path": "manifest/buyer-confirmation-consistency-production-native.xml",
       "sha256": "327fa03a8bfa479a34ff1ff144cf1803b083c34b695fa9c74031c3bf352a094c",
       "metadata": {
@@ -31942,7 +31942,7 @@
         "sha256": "bb14649c632bb53d6dc98f89e8eb7a88bc9d06125ec0cb3e00aa97215c678565"
       }
     },
-    "fbd8a20e37721bcf4d3a8151233455ce41cf274ac170e50455b9bde8b8415fb7": {
+    "c6beca707305964369a33a1edd316054d481f32a2a582241186838ae37ed822b": {
       "path": "manifest/buyer-confirmation-consistency-production-native.xml",
       "sha256": "327fa03a8bfa479a34ff1ff144cf1803b083c34b695fa9c74031c3bf352a094c",
       "metadata": {
