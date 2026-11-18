@@ -6,6 +6,7 @@ import { exactXeroRows, loadXeroPrepaymentContextForStem, scopedRows } from './_
 import { reviewCreditAllocation } from './_xeroCreditAllocations.js';
 import { xeroPaymentDate } from './_xeroPaymentAssociation.js';
 import { xeroPrepaymentEvidenceFingerprint } from './_xeroPrepaymentCurrency.js';
+import { readStoredXeroConnection, splitScopes } from './_xeroContactSync.js';
 import {
   loadCreditAllocationSalesforceSource, readCreditAllocationSourceCohort, verifyCreditAllocationSourceMappings,
 } from './_xeroCreditAllocationSource.js';
@@ -113,6 +114,90 @@ export async function loadCreditAllocationQueueSnapshot(window, {
       };
     }),
   };
+}
+
+/** Verify each actionable credit against current Xero and Salesforce without refreshing a credential. */
+export async function loadCreditAllocationSettlementSnapshot(window, {
+  client, tenantId, env = process.env, maxXeroReads,
+  loadQueue = loadCreditAllocationQueueSnapshot, loadReview = loadCreditAllocationReview,
+  readConnection = readStoredXeroConnection, accountingFetch = xeroFinancialAccountingFetch,
+  now = Date.now, ...options
+} = {}) {
+  if (!Number.isSafeInteger(maxXeroReads) || maxXeroReads < 0 || !client || !isUuid(tenantId)
+      || (env.XERO_TENANT_ID && env.XERO_TENANT_ID !== tenantId)) {
+    fail('Credit settlement requires an exact tenant and a bounded accounting read budget.', 400);
+  }
+  const snapshot = await loadQueue(window, { client, tenantId, env, ...options });
+  if (snapshot.tenantId !== tenantId || snapshot.cutoff !== window?.cutoff || snapshot.through !== window?.through) {
+    fail('The credit settlement cohort changed.');
+  }
+  let connection;
+  let rate = {};
+  const reads = new Map();
+  const assertCurrent = () => {
+    if (!connection?.accessToken || connection.tenantId !== tenantId || !(Date.parse(connection.expiresAt) > now() + 90_000)) {
+      fail('An unexpired saved Xero connection is required for credit settlement verification.');
+    }
+  };
+  const read = async (current, path, request) => {
+    assertCurrent();
+    const record = /^\/(CreditNotes|Invoices|Payments|Prepayments|BankTransactions)\/([a-f0-9-]+)(?:\?unitdp=4)?$/i.exec(path);
+    if (current !== connection || request.method !== 'GET' || request.body != null || request.rawBody != null
+        || (path !== '/Organisations' && !isUuid(record?.[2]))) fail('Credit settlement accepts read-only accounting requests.');
+    if (reads.has(path)) return reads.get(path);
+    assertXeroFinancialDailyReserve(rate, env);
+    if (reads.size >= maxXeroReads) fail('The credit settlement accounting read budget was exhausted.');
+    const response = accountingFetch(connection, path, { ...request, retryOnRateLimit: false, transientRetryLimit: 0, onResponse: (value) => {
+      rate = xeroFinancialRateSnapshot(value?.headers, rate);
+      request.onResponse?.(value);
+      assertXeroFinancialDailyReserve(rate, env);
+    } });
+    reads.set(path, response);
+    return response;
+  };
+  const rows = [];
+  for (const row of snapshot.rows) {
+    const { sourceObject, creditId, originalId, sourceHold, mappingHold, journalStatus, observedAllocationId } = row;
+    const selected = { sourceObject, creditId, originalId };
+    if (sourceHold || mappingHold) {
+      rows.push({ ...selected, status: 'held', reason: sourceHold || mappingHold });
+      continue;
+    }
+    if (['processing', 'unknown', 'exception'].includes(journalStatus)) {
+      rows.push({ ...selected, status: 'unresolved', reason: journalStatus });
+      continue;
+    }
+    if (!connection) {
+      connection = await readConnection(client);
+      assertCurrent();
+      const scopes = new Set(splitScopes(connection.scope || ''));
+      const canRead = resource => scopes.has(`accounting.${resource}`) || scopes.has(`accounting.${resource}.read`);
+      if (!canRead('settings') || (!canRead('transactions') && (!canRead('invoices') || !canRead('payments')))) {
+        fail('The saved Xero connection lacks credit settlement read scopes.');
+      }
+    }
+    const review = await loadReview(sourceObject, creditId, { ...options, client, connection, env, accountingFetch: read });
+    if (review?.status === 'blocked' && sourceKey(sourceObject, review.key) === sourceKey(sourceObject, creditId)) {
+      rows.push({ ...selected, status: 'held', reason: 'settlement_review_blocked' });
+      continue;
+    }
+    if (!['eligible', 'reconciled'].includes(review?.status)
+        || sourceKey(sourceObject, review.creditId) !== sourceKey(sourceObject, creditId)
+        || sourceKey(sourceObject, review.originalId) !== sourceKey(sourceObject, originalId)
+        || !/^[0-9a-f]{64}$/.test(review.reviewFingerprint ?? '')) {
+      fail('Current credit settlement review does not match the exact source.');
+    }
+    if (journalStatus === 'applied') {
+      const allocations = review.evidence?.xeroCredit?.Allocations;
+      if (review.status !== 'reconciled' || !Array.isArray(allocations) || !allocations.some(allocation =>
+        allocation.AllocationID === observedAllocationId && allocation.Invoice?.InvoiceID === review.xeroInvoiceId)) {
+        rows.push({ ...selected, status: 'held', reason: 'journal_allocation_changed' });
+        continue;
+      }
+    }
+    rows.push({ ...selected, status: review.status, verified: true, reviewFingerprint: review.reviewFingerprint });
+  }
+  return { cutoff: snapshot.cutoff, through: snapshot.through, tenantId, complete: true, rows, xeroReads: reads.size };
 }
 
 function verifyMappedLines(row, mapping, snapshots, source) {

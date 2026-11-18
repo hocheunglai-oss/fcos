@@ -4,7 +4,8 @@ import { loadCreditAllocationSalesforceSource, readCreditAllocationSourceCohort,
   verifyCreditAllocationSourceMappings } from '../api/_xeroCreditAllocationSource.js';
 import { XERO_FINANCIAL_CUTOFF } from '../api/_xeroFinancialSync.js';
 import { nativeDocumentSourceFingerprint } from "../api/_xeroNativeDocumentFingerprint.js";
-import { loadCreditAllocationDocumentContext, loadCreditAllocationQueueSnapshot } from "../api/_xeroCreditAllocationContext.js";
+import { loadCreditAllocationDocumentContext, loadCreditAllocationQueueSnapshot,
+  loadCreditAllocationSettlementSnapshot } from '../api/_xeroCreditAllocationContext.js';
 import { xeroPrepaymentEvidenceFingerprint } from '../api/_xeroPrepaymentCurrency.js';
 
 
@@ -12,6 +13,58 @@ const id = suffix => `a0000000000000${suffix}AAA`;
 const [creditId, originalId, stemId, partyId, creditLineId, originalLineId, sourceId, otherId] =
   Array.from({ length: 8 }, (_, index) => id(index + 1));
 const result = records => ({ records, totalSize: records.length });
+
+test('checks current credit settlement with saved read scopes, shared GETs and a hard request cap', async () => {
+  const uuid = digit => `00000000-0000-4000-8000-00000000000${digit}`;
+  const tenantId = uuid(1);
+  const xeroInvoiceId = uuid(2);
+  const allocationId = uuid(3);
+  const window = { cutoff: XERO_FINANCIAL_CUTOFF, through: '2026-09-03T00:00:00.000Z' };
+  const makeRow = (id, extra = {}) => ({ sourceObject: 'Invoice__c', creditId: id, originalId, ...extra });
+  const cohort = [
+    makeRow(creditId, { journalStatus: 'applied', observedAllocationId: allocationId }), makeRow(otherId),
+    makeRow(creditLineId, { sourceHold: 'missing_original_invoice' }),
+    makeRow(originalLineId, { journalStatus: 'unknown' }),
+  ];
+  const requested = [];
+  const options = {
+    client: {}, tenantId, env: { XERO_TENANT_ID: tenantId }, maxXeroReads: 1, now: () => Date.parse(window.through),
+    loadQueue: async () => ({ ...window, tenantId, rows: cohort }),
+    readConnection: async () => ({
+      tenantId, scope: 'accounting.settings.read accounting.transactions.read', accessToken: 'fixture',
+      expiresAt: '2026-09-03T00:30:00.000Z',
+    }),
+    loadReview: async (_object, selectedId, { connection, accountingFetch }) => {
+      const allocations = await accountingFetch(connection, `/Invoices/${xeroInvoiceId}?unitdp=4`, { method: 'GET' });
+      return { creditId: selectedId, originalId, xeroInvoiceId, status: selectedId === creditId ? 'reconciled' : 'eligible',
+        reviewFingerprint: 'b'.repeat(64), evidence: { xeroCredit: { Allocations: allocations } } };
+    },
+    accountingFetch: async (connection, path, request) => {
+      assert.equal(connection.tenantId, tenantId);
+      assert.equal(request.method, 'GET');
+      assert.equal(request.transientRetryLimit, 0);
+      assert.equal(request.retryOnRateLimit, false);
+      requested.push(path);
+      return [{ AllocationID: allocationId, Invoice: { InvoiceID: xeroInvoiceId } }];
+    },
+  };
+  const snapshot = await loadCreditAllocationSettlementSnapshot(window, options);
+  assert.equal(snapshot.complete, true);
+  assert.equal(snapshot.xeroReads, 1);
+  assert.equal(requested.length, 1);
+  assert.deepEqual(snapshot.rows.map(row => row.status), ['reconciled', 'eligible', 'held', 'unresolved']);
+  assert.equal(snapshot.rows[0].verified, true);
+  const drift = await loadCreditAllocationSettlementSnapshot(window, { ...options, accountingFetch: async () => [] });
+  assert.equal(drift.rows[0].reason, 'journal_allocation_changed');
+  await assert.rejects(loadCreditAllocationSettlementSnapshot(window, { ...options, maxXeroReads: 0 }), /read budget was exhausted/);
+  await assert.rejects(loadCreditAllocationSettlementSnapshot(window, { ...options, now: () => Date.parse('2026-09-03T00:29:00.000Z') }),
+    /unexpired saved Xero connection/);
+  await assert.rejects(loadCreditAllocationSettlementSnapshot(window, { ...options,
+    loadReview: async (_object, _id, { connection, accountingFetch }) =>
+      accountingFetch(connection, `/Invoices/${xeroInvoiceId}`, { method: 'POST' }),
+  }), /read-only accounting requests/);
+  assert.equal(requested.length, 1);
+});
 
 test('joins credit journal across reviewers, pins the tenant, and requires provider readback for applied status', async () => {
   const uuid = digit => `00000000-0000-4000-8000-00000000000${digit}`;
