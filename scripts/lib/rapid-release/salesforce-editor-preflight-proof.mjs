@@ -1,5 +1,6 @@
 import { FCOS_CONNECTION_POLICY, fcosSalesforceEnvironment } from '../../../config/fcosConnections.js';
 import { canonical, digest, isDigest, isSha, targets } from './contract.mjs';
+import { salesforcePromotionHash } from '../salesforce-promotion-journal.mjs';
 import { editorDesktopCases, editorDesktopCaseSetDigest } from './salesforce-devee-desktop-checkpoint.mjs';
 
 export const EDITOR_PREFLIGHT_PROOF_KIND = 'fcos_salesforce_editor_preflight_qualification_v1';
@@ -30,6 +31,9 @@ const positive = value => Number.isSafeInteger(value) && value > 0;
 const jobId = value => typeof value === 'string' && /^0Af[A-Za-z0-9]{12}(?:[A-Za-z0-9]{3})?$/u.test(value);
 const stamp = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
 const same = (left, right) => canonical(left) === canonical(right);
+const pin = bytes => ({ sha256: digest(bytes), size: bytes.length });
+const sourceBody = /\.(?:cls|trigger|js|html|css|js-meta\.xml)$/u;
+const apexMetadata = /^(?:classes\/[A-Za-z][A-Za-z0-9_]*\.cls-meta\.xml|triggers\/[A-Za-z][A-Za-z0-9_]*\.trigger-meta\.xml)$/u;
 function check(condition, suffix) {
   if (!condition) throw Object.assign(new Error(`EDITOR_PREFLIGHT_${suffix}`), { code: `EDITOR_PREFLIGHT_${suffix}` });
 }
@@ -45,6 +49,73 @@ function inventory(value, exactPaths) {
     check(isDigest(entry.sha256) && Number.isSafeInteger(entry.size) && entry.size >= 0, 'FILE_INVENTORY_INVALID');
   }
   if (exactPaths) check(same(Object.keys(value).sort(), exactPaths), 'COMPONENT_SCOPE_INVALID');
+}
+function exactComponentPins(value) {
+  inventory(value, EDITOR_PREFLIGHT_COMPONENT_FILES);
+  return Object.fromEntries(Object.keys(value).sort().map(path => [path, { sha256: value[path].sha256, size: value[path].size }]));
+}
+
+function providerIndentedApexMetadata(bytes, path) {
+  if (!apexMetadata.test(path)) return null;
+  const source = bytes.toString('utf8');
+  const compact = /^(<\?xml version="1\.0" encoding="UTF-8"\?>\n<(ApexClass|ApexTrigger) xmlns="http:\/\/soap\.sforce\.com\/2006\/04\/metadata">)(<apiVersion>[^<]+<\/apiVersion>)(<status>Active<\/status>)(<\/(?:ApexClass|ApexTrigger)>)\n$/u.exec(source);
+  if (!compact || compact[2] !== compact[5].slice(2, -1)) return null;
+  return Buffer.from(`${compact[1]}\n    ${compact[3]}\n    ${compact[4]}\n${compact[5]}\n`, 'utf8');
+}
+
+/**
+ * The Metadata API has three observed representations for the exact Editors
+ * files. This intentionally does not parse or normalize arbitrary source: a
+ * different byte must either be the one omitted final LF or the precise Apex
+ * metadata indentation emitted for the source's own compact XML.
+ */
+export function createEditorNativeExportProjection({ sourceFiles, nativeFiles }) {
+  check(plain(sourceFiles) && plain(nativeFiles), 'NATIVE_EXPORT_PROJECTION_INVALID');
+  const sources = {};
+  const native = exactComponentPins(nativeFiles);
+  const modes = {};
+  for (const path of EDITOR_PREFLIGHT_COMPONENT_FILES) {
+    const bytes = sourceFiles[path];
+    check(Buffer.isBuffer(bytes), 'NATIVE_EXPORT_PROJECTION_INVALID');
+    const sourcePin = pin(bytes), observed = native[path];
+    sources[path] = sourcePin;
+    const candidates = [{ mode: 'exact', bytes }];
+    if (sourceBody.test(path) && bytes.at(-1) === 10) candidates.push({ mode: 'terminal-lf-omitted', bytes: bytes.subarray(0, -1) });
+    const indented = providerIndentedApexMetadata(bytes, path);
+    if (indented) candidates.push({ mode: 'apex-metadata-provider-indent', bytes: indented });
+    const matches = candidates.filter(candidate => same(pin(candidate.bytes), observed));
+    check(matches.length === 1, 'NATIVE_EXPORT_PROJECTION_INVALID');
+    modes[path] = matches[0].mode;
+  }
+  return { schemaVersion: 1, kind: 'fcos_editor_native_export_projection_v1', sourceFiles: sources, nativeFiles: native, modes };
+}
+
+export function verifyEditorReviewedNativeProjection({ reviewed, projection, inventoryHash, observedNativeInventoryHash }) {
+  const files = exactComponentPins(projection.nativeFiles);
+  check(reviewed?.projectedNativeInventory === true
+    && same(reviewed.projectionPaths, EDITOR_PREFLIGHT_COMPONENT_FILES)
+    && reviewed.inventoryHash === inventoryHash
+    && !Object.keys(files).some(path => Object.hasOwn(reviewed.files, path)),
+  'NATIVE_EXPORT_PROJECTION_INVALID');
+  const complete = Object.fromEntries(Object.entries({ ...reviewed.files, ...files })
+    .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0));
+  check(salesforcePromotionHash(complete) === observedNativeInventoryHash, 'NATIVE_EXPORT_PROJECTION_INVALID');
+}
+
+export function editorNativeComponentFiles(observedFiles) {
+  check(plain(observedFiles), 'NATIVE_EXPORT_PROJECTION_INVALID');
+  return exactComponentPins(Object.fromEntries(EDITOR_PREFLIGHT_COMPONENT_FILES.map(path => [path, observedFiles[path]])));
+}
+
+function nativeExportProjection(value, sourceFiles) {
+  keys(value, ['schemaVersion', 'kind', 'sourceFiles', 'nativeFiles', 'modes'], 'NATIVE_EXPORT_PROJECTION_INVALID');
+  check(value.schemaVersion === 1 && value.kind === 'fcos_editor_native_export_projection_v1', 'NATIVE_EXPORT_PROJECTION_INVALID');
+  check(same(exactComponentPins(value.sourceFiles), sourceFiles), 'NATIVE_EXPORT_PROJECTION_INVALID');
+  exactComponentPins(value.nativeFiles);
+  keys(value.modes, EDITOR_PREFLIGHT_COMPONENT_FILES, 'NATIVE_EXPORT_PROJECTION_INVALID');
+  check(Object.values(value.modes).every(mode => ['exact', 'terminal-lf-omitted', 'apex-metadata-provider-indent'].includes(mode)),
+    'NATIVE_EXPORT_PROJECTION_INVALID');
+  return value;
 }
 function source(value) {
   keys(value, ['candidateSha', 'sourceTreeHash', 'dependencyLockDigest', 'componentFiles', 'dependencyFiles',
@@ -201,6 +272,16 @@ function historicalSource(record, observation, expectedSource, evidence, qualifi
   'HISTORICAL_NATIVE_CHRONOLOGY_OR_SOURCE_INVALID');
 }
 
+function installedInventory(value, version) {
+  const fields = ['orgId', 'username', 'isSandbox', 'sourceTreeHash', 'componentFiles', 'dependencyFiles', 'inventoryHash', 'observedAt'];
+  if (version === 2) fields.push('nativeExportProjection', 'observedNativeInventoryHash');
+  keys(value, fields);
+  inventory(value.componentFiles, EDITOR_PREFLIGHT_COMPONENT_FILES);
+  inventory(value.dependencyFiles);
+  if (version === 2) nativeExportProjection(value.nativeExportProjection, value.componentFiles);
+  return value;
+}
+
 /**
  * Pure verifier. The caller fetches native envelopes/reports through pinned providers and
  * computes `expected` from the clean current source and reviewed dependency/cleanup scope.
@@ -240,7 +321,7 @@ export function verifyEditorPreflightEvidence({ proof, expected, nativeEvidence,
     'startedAt', 'completedAt', 'expiresAt', 'caseSetDigest', 'native', 'actors', 'cases', 'effects', 'cleanup']);
   keys(proof.org, ['orgId', 'username', 'isSandbox']);
   source(proof.source);
-  check(proof.schemaVersion === 1 && proof.kind === EDITOR_PREFLIGHT_PROOF_KIND && proof.repository === targets().repository
+  check([1, 2].includes(proof.schemaVersion) && proof.kind === EDITOR_PREFLIGHT_PROOF_KIND && proof.repository === targets().repository
     && proof.controllerSha === expected.controllerSha && proof.baselineSha === expected.baselineSha
     && same(proof.source, expected.source) && proof.caseSetDigest === editorDesktopCaseSetDigest
     && same(proof.org, { orgId: devee.orgId, username: devee.username, isSandbox: true }), 'SOURCE_OR_IDENTITY_MISMATCH');
@@ -252,8 +333,12 @@ export function verifyEditorPreflightEvidence({ proof, expected, nativeEvidence,
   actors(proof.actors);
   check(same(proof.actors, expected.actors), 'ACTORS_INVALID');
   effects(proof.effects, true);
-  keys(proof.native, ['validationJobId', 'deploymentJobId', 'packageDigest', 'validationEvidenceDigest',
-    'deploymentEvidenceDigest', 'inventoryEvidenceDigest', 'inventoryHash']);
+  keys(proof.native, proof.schemaVersion === 2
+    ? ['validationJobId', 'deploymentJobId', 'packageDigest', 'validationEvidenceDigest', 'deploymentEvidenceDigest',
+      'inventoryEvidenceDigest', 'inventoryHash', 'nativeExportProjectionDigest', 'nativeComponentFilesDigest',
+      'observedNativeInventoryHash']
+    : ['validationJobId', 'deploymentJobId', 'packageDigest', 'validationEvidenceDigest',
+      'deploymentEvidenceDigest', 'inventoryEvidenceDigest', 'inventoryHash']);
   keys(nativeEvidence, ['validation', 'deployment', 'inventory', 'cleanup']);
   const native = proof.native;
   check(native.packageDigest === expected.packageDigest && native.inventoryHash === expected.inventoryHash
@@ -264,15 +349,19 @@ export function verifyEditorPreflightEvidence({ proof, expected, nativeEvidence,
   const deployed = nativeReport(nativeEvidence.deployment, native.deploymentJobId, false, 0);
   check(native.validationJobId !== native.deploymentJobId && proof.startedAt <= validated.createdDate
     && validated.completedDate <= deployed.createdDate, 'NATIVE_JOB_ORDER_INVALID');
-  const installed = nativeEvidence.inventory;
-  keys(installed, ['orgId', 'username', 'isSandbox', 'sourceTreeHash', 'componentFiles', 'dependencyFiles', 'inventoryHash', 'observedAt']);
-  inventory(installed.componentFiles, EDITOR_PREFLIGHT_COMPONENT_FILES);
-  inventory(installed.dependencyFiles);
+  const installed = installedInventory(nativeEvidence.inventory, proof.schemaVersion);
   check(installed.orgId === devee.orgId && installed.username === devee.username && installed.isSandbox === true
     && installed.sourceTreeHash === proof.source.sourceTreeHash && installed.inventoryHash === native.inventoryHash
     && same(installed.componentFiles, proof.source.componentFiles) && same(installed.dependencyFiles, proof.source.dependencyFiles)
     && stamp(installed.observedAt) && deployed.completedDate <= installed.observedAt && installed.observedAt <= proof.completedAt,
   'INSTALLED_SOURCE_NOT_EQUIVALENT');
+  if (proof.schemaVersion === 2) {
+    check(native.nativeExportProjectionDigest === digest(installed.nativeExportProjection)
+      && native.nativeComponentFilesDigest === digest(installed.nativeExportProjection.nativeFiles)
+      && native.observedNativeInventoryHash === installed.observedNativeInventoryHash
+      && isDigest(native.observedNativeInventoryHash),
+    'NATIVE_EXPORT_PROJECTION_INVALID');
+  }
   check(Array.isArray(proof.cases) && proof.cases.length === editorDesktopCases.length && plain(caseEvidence)
     && Array.isArray(historicalAttestations) && plain(historicalNativeEvidence), 'CASES_INVALID');
   let syntheticWrites = 0, lastObservation = installed.observedAt;
@@ -317,5 +406,8 @@ export function verifyEditorPreflightEvidence({ proof, expected, nativeEvidence,
     controllerSha: proof.controllerSha, baselineSha: proof.baselineSha, sourceTreeHash: proof.source.sourceTreeHash,
     caseSetDigest: proof.caseSetDigest, qualificationValidationJobId: native.validationJobId,
     qualificationDeploymentJobId: native.deploymentJobId, installedInventoryHash: native.inventoryHash,
-    cleanupEvidenceDigest: proof.cleanup.evidenceDigest, completedAt: proof.completedAt, expiresAt: proof.expiresAt };
+    cleanupEvidenceDigest: proof.cleanup.evidenceDigest, completedAt: proof.completedAt, expiresAt: proof.expiresAt,
+    ...(proof.schemaVersion === 2 ? { nativeExportProjectionDigest: proof.native.nativeExportProjectionDigest,
+      nativeComponentFilesDigest: proof.native.nativeComponentFilesDigest,
+      observedNativeInventoryHash: proof.native.observedNativeInventoryHash } : {}) };
 }

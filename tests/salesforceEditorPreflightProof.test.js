@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { FCOS_CONNECTION_POLICY, fcosSalesforceEnvironment } from '../config/fcosConnections.js';
+import { salesforcePromotionHash } from '../scripts/lib/salesforce-promotion-journal.mjs';
 import { digest, targets } from '../scripts/lib/rapid-release/contract.mjs';
 import { editorDesktopCases, editorDesktopCaseSetDigest } from '../scripts/lib/rapid-release/salesforce-devee-desktop-checkpoint.mjs';
 import { EDITOR_PREFLIGHT_COMPONENTS, EDITOR_PREFLIGHT_COMPONENT_FILES, EDITOR_PREFLIGHT_ENVIRONMENT,
   EDITOR_PREFLIGHT_MAX_AGE_MS, EDITOR_PREFLIGHT_PROOF_KIND, EDITOR_PREFLIGHT_SOURCE_ENVIRONMENT,
-  EDITOR_PREFLIGHT_SOURCE_KIND, verifySalesforceEditorPreflightProof }
+  EDITOR_PREFLIGHT_SOURCE_KIND, createEditorNativeExportProjection, verifyEditorReviewedNativeProjection, verifySalesforceEditorPreflightProof }
   from '../scripts/lib/rapid-release/salesforce-editor-preflight-proof.mjs';
 import { createEditorPreflightAttestation, EDITOR_PREFLIGHT_ATTESTATION_ENVIRONMENT, EDITOR_PREFLIGHT_ATTESTATION_TASK,
   readEditorPreflightAttestation, verifyEditorPreflightPostimage }
@@ -103,8 +104,7 @@ function seal(input) {
   input.expected.receiptDigest = digest(input.receipt.payload);
   return input;
 }
-function transportFixture() {
-  const proofInput = fixture();
+function transportFixture(proofInput = fixture()) {
   const { expected } = proofInput;
   const manifest = {
     selection: { salesforce: true, database: false },
@@ -131,6 +131,112 @@ function transportFixture() {
   const github = { read: async path => { reads.push(path); return record; } };
   return { manifest, proofInput, record, github, reads, now: clock + 30_000 };
 }
+
+function projectionBytes() {
+  const sourceFiles = {}, nativeFiles = {}, modes = { exact: 0, omitted: 0, indented: 0 };
+  const bodies = EDITOR_PREFLIGHT_COMPONENT_FILES.filter(path => /\.(?:cls|trigger|js|html|css|js-meta\.xml)$/u.test(path));
+  const compactMetadata = EDITOR_PREFLIGHT_COMPONENT_FILES.filter(path => /^(?:classes\/.*\.cls-meta\.xml|triggers\/.*\.trigger-meta\.xml)$/u.test(path));
+  assert.ok(bodies.length >= 20); assert.ok(compactMetadata.length >= 7);
+  for (const path of EDITOR_PREFLIGHT_COMPONENT_FILES) {
+    let source;
+    if (compactMetadata.includes(path)) {
+      const kind = path.startsWith('classes/') ? 'ApexClass' : 'ApexTrigger';
+      source = Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>\n<${kind} xmlns="http://soap.sforce.com/2006/04/metadata"><apiVersion>63.0</apiVersion><status>Active</status></${kind}>\n`);
+    } else source = Buffer.from(`exact ${path}\n`);
+    sourceFiles[path] = source;
+  }
+  for (const path of EDITOR_PREFLIGHT_COMPONENT_FILES) {
+    const source = sourceFiles[path];
+    if (bodies.includes(path) && modes.omitted < 20) {
+      nativeFiles[path] = { sha256: digest(source.subarray(0, -1)), size: source.length - 1 }; modes.omitted++;
+    } else if (compactMetadata.includes(path) && modes.indented < 7) {
+      const kind = path.startsWith('classes/') ? 'ApexClass' : 'ApexTrigger';
+      const native = Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>\n<${kind} xmlns="http://soap.sforce.com/2006/04/metadata">\n    <apiVersion>63.0</apiVersion>\n    <status>Active</status>\n</${kind}>\n`);
+      nativeFiles[path] = { sha256: digest(native), size: native.length }; modes.indented++;
+    } else { nativeFiles[path] = { sha256: digest(source), size: source.length }; modes.exact++; }
+  }
+  assert.deepEqual(modes, { exact: 9, omitted: 20, indented: 7 });
+  return { sourceFiles, nativeFiles };
+}
+
+function projectionProof() {
+  const input = fixture();
+  const projection = createEditorNativeExportProjection(projectionBytes());
+  input.expected.source.componentFiles = structuredClone(projection.sourceFiles);
+  input.receipt.payload.source.componentFiles = structuredClone(projection.sourceFiles);
+  input.nativeEvidence.inventory.componentFiles = structuredClone(projection.sourceFiles);
+  input.nativeEvidence.inventory.nativeExportProjection = projection;
+  input.nativeEvidence.inventory.observedNativeInventoryHash = hash('raw native export inventory');
+  input.receipt.payload.schemaVersion = 2;
+  for (const observation of input.receipt.payload.cases) {
+    const artifact = input.caseEvidence[observation.evidenceDigest];
+    delete input.caseEvidence[observation.evidenceDigest];
+    observation.source.componentFiles = structuredClone(projection.sourceFiles);
+    artifact.sourceDigest = digest(observation.source);
+    observation.evidenceDigest = digest(artifact);
+    input.caseEvidence[observation.evidenceDigest] = artifact;
+  }
+  input.receipt.payload.native.inventoryEvidenceDigest = digest(input.nativeEvidence.inventory);
+  input.receipt.payload.native.nativeExportProjectionDigest = digest(projection);
+  input.receipt.payload.native.nativeComponentFilesDigest = digest(projection.nativeFiles);
+  input.receipt.payload.native.observedNativeInventoryHash = input.nativeEvidence.inventory.observedNativeInventoryHash;
+  return seal(input);
+}
+
+test('native export provenance permits only the current 20 LF and seven Apex XML representations', () => {
+  const fixture = projectionBytes();
+  const projection = createEditorNativeExportProjection(fixture);
+  assert.equal(Object.values(projection.modes).filter(mode => mode === 'terminal-lf-omitted').length, 20);
+  assert.equal(Object.values(projection.modes).filter(mode => mode === 'apex-metadata-provider-indent').length, 7);
+  assert.equal(Object.values(projection.modes).filter(mode => mode === 'exact').length, 9);
+  const mutated = structuredClone(fixture.nativeFiles);
+  const path = EDITOR_PREFLIGHT_COMPONENT_FILES[0];
+  mutated[path] = { sha256: hash('one byte differs'), size: 1 };
+  assert.throws(() => createEditorNativeExportProjection({ sourceFiles: fixture.sourceFiles, nativeFiles: mutated }),
+    /EDITOR_PREFLIGHT_NATIVE_EXPORT_PROJECTION_INVALID/);
+});
+
+test('publication recomputes the full observed native hash from the reviewed projection and unchanged inventory', () => {
+  const projection = createEditorNativeExportProjection(projectionBytes());
+  const reviewed = { projectedNativeInventory: true, projectionPaths: EDITOR_PREFLIGHT_COMPONENT_FILES,
+    inventoryHash: hash('reviewed projected inventory'), files: {
+      'classes/Another.cls': { sha256: hash('unchanged dependency'), size: 20 },
+    } };
+  const complete = Object.fromEntries(Object.entries({ ...reviewed.files, ...projection.nativeFiles }).sort(([a], [b]) =>
+    a < b ? -1 : a > b ? 1 : 0));
+  const observedNativeInventoryHash = salesforcePromotionHash(complete);
+  const input = { reviewed, projection, inventoryHash: reviewed.inventoryHash, observedNativeInventoryHash };
+  verifyEditorReviewedNativeProjection(input);
+  assert.throws(() => verifyEditorReviewedNativeProjection({ ...input, inventoryHash: hash('different review') }),
+    /EDITOR_PREFLIGHT_NATIVE_EXPORT_PROJECTION_INVALID/);
+  const changed = { ...reviewed, files: { 'classes/Another.cls': { sha256: hash('changed dependency'), size: 18 } } };
+  assert.throws(() => verifyEditorReviewedNativeProjection({ ...input, reviewed: changed }),
+    /EDITOR_PREFLIGHT_NATIVE_EXPORT_PROJECTION_INVALID/);
+});
+
+test('v2 attestation pins raw native component exports and rechecks them at postimage', async () => {
+  const input = transportFixture(projectionProof());
+  const proof = await readEditorPreflightAttestation({ ...input, approvalAt: at(28) });
+  assert.equal(proof.schemaVersion, 2);
+  assert.equal(proof.nativeComponentFilesDigest, input.proofInput.receipt.payload.native.nativeComponentFilesDigest);
+  const reviewedInventoryHash = hash('reviewed inventory');
+  const reviewed = { fingerprint: proof.salesforceFingerprint, binding: { sourceTreeHash: proof.sourceTreeHash },
+    nativeInventories: { devee: { final: { inventoryHash: reviewedInventoryHash } } } };
+  const deployment = { status: 'Succeeded', orgId: devee.orgId, fingerprint: proof.salesforceFingerprint,
+    jobId: '0Af000000000000003', validationJobId: '0Af000000000000004' };
+  const inventory = { orgId: devee.orgId, identity: { username: devee.username, isSandbox: true },
+    verificationMethod: 'metadata-api-reviewed-native-byte-inventory', inventoryHash: reviewedInventoryHash,
+    observedNativeInventoryHash: proof.observedNativeInventoryHash,
+    observedInventory: structuredClone(input.proofInput.nativeEvidence.inventory.nativeExportProjection.nativeFiles),
+    evidenceSha256: hash('v2 native postimage'), verifiedAt: at(30) };
+  const args = { ...input, proof, reviewed, deployment, readInstalledInventory: async () => inventory };
+  await verifyEditorPreflightPostimage(args);
+  inventory.observedNativeInventoryHash = hash('changed native envelope');
+  await assert.rejects(verifyEditorPreflightPostimage(args), /DEVEE_POSTIMAGE_CHANGED/);
+  inventory.observedNativeInventoryHash = proof.observedNativeInventoryHash;
+  inventory.observedInventory[EDITOR_PREFLIGHT_COMPONENT_FILES[0]].sha256 = hash('changed export');
+  await assert.rejects(verifyEditorPreflightPostimage(args), /DEVEE_POSTIMAGE_CHANGED/);
+});
 test('staging accepts only the owner-created compact preflight and promotion checks its original chronology', async () => {
   const input = transportFixture();
   const proof = await readEditorPreflightAttestation(input);
