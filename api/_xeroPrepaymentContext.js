@@ -318,11 +318,20 @@ export async function resolvePrepaymentStemKey(stemKey, query = sfQuery) {
   return row.Id;
 }
 
-/** Queue discovery reads only the selected Salesforce STEM and its durable journal. */
-export async function loadPrepaymentQueueContext(stemId, { client, tenantId, query = sfQuery } = {}) {
-  if (!canonicalId(stemId) || !uuid(tenantId) || !client) contextError('The exact prepayment queue scope is required.');
-  const cash = await loadTradeCashLedger([stemId], query, { direction: null, includeReviewIdentity: true });
+/** Read the cash graph and journal for an explicitly supplied Salesforce STEM cohort. */
+export async function loadPrepaymentQueueCohort(stemIds, { client, tenantId, query = sfQuery } = {}) {
+  if (!Array.isArray(stemIds) || !uuid(tenantId) || !client) contextError('The exact prepayment queue scope is required.');
+  const canonicalStems = stemIds.map(canonicalId);
+  if (canonicalStems.includes(null) || new Set(canonicalStems).size !== stemIds.length) {
+    contextError('The exact prepayment queue scope is required.');
+  }
+  const cash = await loadTradeCashLedger(stemIds, query, { direction: null, includeReviewIdentity: true });
   return { ...cash, operations: await loadPrepaymentOperations(client, tenantId, cash.events) };
+}
+
+/** The interactive queue remains scoped to the single selected Salesforce STEM. */
+export function loadPrepaymentQueueContext(stemId, options) {
+  return loadPrepaymentQueueCohort([stemId], options);
 }
 
 export async function loadPrepaymentContactChoices(stemId, sourceId, {

@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createClient } from '@supabase/supabase-js';
-import { loadPrepaymentSalesforceContext, loadXeroPrepaymentContextForStem, loadXeroPrepaymentReviewContext, resolvePrepaymentStemKey } from '../api/_xeroPrepaymentContext.js';
+import { loadPrepaymentQueueCohort, loadPrepaymentQueueContext, loadPrepaymentSalesforceContext, loadXeroPrepaymentContextForStem,
+  loadXeroPrepaymentReviewContext, resolvePrepaymentStemKey } from '../api/_xeroPrepaymentContext.js';
 import { allocation, fixture, id } from './fixtures/xeroPrepayment.js';
 
 const stem = 'a01000000000001AAA';
@@ -134,6 +135,48 @@ test('scopes journal and mapping queries before reading three exact Xero records
   assert.equal(filters[0].get('tenant_id'), `eq.${id(9)}`);
   assert.equal(filters[3].get('tenant_id'), `eq.${id(9)}`);
   assert.match(filters[3].get('invoice_mapping_id'), new RegExp(id(8)));
+});
+
+test('reads an exact two-STEM prepayment cohort with half the per-STEM calls, retaining unresolved operations', async () => {
+  const otherStem = 'a01000000000002AAA';
+  const otherCash = 'a02000000000002AAA';
+  const tenantId = id(9);
+  const { rows } = scopedFixture();
+  const allEvents = [...rows.Trade_Cash_Event__c, { ...rows.Trade_Cash_Event__c[0], Id: otherCash, STEM__c: otherStem }];
+  const operations = [{ operation_id: id(21), tenant_id: tenantId, cash_event_id: otherCash, status: 'unknown' }];
+  const calls = { salesforce: 0, journal: 0 };
+  const query = async (soql) => {
+    calls.salesforce += 1;
+    const selected = allEvents.filter((event) => soql.includes(`'${event.STEM__c}'`));
+    const records = soql.includes('FROM Trade_Cash_Event__c') ? selected
+      : rows.Trade_Cash_Allocation__c.filter((allocation) => selected.some((event) => event.Id === allocation.Cash_Event__c));
+    return { done: true, records, totalSize: records.length };
+  };
+  const client = createClient('https://fixture.invalid', 'fixture-key', {
+    auth: { persistSession: false, autoRefreshToken: false },
+    global: { fetch: async (input, options) => {
+      calls.journal += 1;
+      const url = new URL(input);
+      assert.equal(url.pathname.split('/').at(-1), 'xero_financial_prepayment_operations');
+      assert.equal(url.searchParams.get('tenant_id'), `eq.${tenantId}`);
+      assert.equal(options.method, 'GET');
+      const scope = url.searchParams.get('or');
+      const selected = operations.filter((operation) => scope.includes(operation.cash_event_id.slice(0, 15)));
+      return Response.json(selected, { headers: { 'content-range': selected.length ? '0-0/1' : '*/0' } });
+    } },
+  });
+  const options = { client, tenantId, query };
+  const separate = [await loadPrepaymentQueueContext(stem, options), await loadPrepaymentQueueContext(otherStem, options)];
+  assert.deepEqual(calls, { salesforce: 4, journal: 2 });
+  calls.salesforce = calls.journal = 0;
+  const cohort = await loadPrepaymentQueueCohort([stem, otherStem], options);
+  for (const key of ['events', 'allocations', 'operations']) {
+    assert.deepEqual(cohort[key], separate.flatMap((context) => context[key]));
+  }
+  assert.deepEqual(calls, { salesforce: 2, journal: 1 });
+  assert.equal(cohort.operations[0].status, 'unknown');
+  await assert.rejects(loadPrepaymentQueueCohort([stem, stem.slice(0, 15)], options), /exact prepayment queue scope/);
+  assert.deepEqual(calls, { salesforce: 2, journal: 1 });
 });
 
 test('blocks incomplete, wrong-tenant and conflicting journal evidence before Xero calls', async () => {
