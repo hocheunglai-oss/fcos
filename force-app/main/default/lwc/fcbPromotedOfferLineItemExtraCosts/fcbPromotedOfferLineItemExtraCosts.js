@@ -49,6 +49,9 @@ export default class FcbPromotedOfferLineItemExtraCosts extends LightningElement
         if (transportationType) {
             if (transportationExtraCost) {
                 let product = this._getTransportationProductByTransportationType(transportationType);
+                if (product.Id !== transportationExtraCost.product2Id) {
+                    transportationExtraCost.supplierBidExtraCostId = null;
+                }
                 if (product.Name !== transportationExtraCost.productName) {
                     transportationExtraCost.unitCost = null;
                     transportationExtraCost.unitPrice.value = null;
@@ -75,14 +78,18 @@ export default class FcbPromotedOfferLineItemExtraCosts extends LightningElement
         return transportationExtraCost;
     }
 
-    _addTransportationExtraCost(record, transportationExtraCost, transportationType, nundinationType) {
+    _addTransportationExtraCost(record, transportationExtraCost, transportationType, nundinationType, fromSupplierBid = false) {
         console.log(record);
         console.log(transportationExtraCost);
         
         let product = this._getTransportationProductByTransportationType(transportationType);
+        const supplierBidExtraCostId = fromSupplierBid && record?.Id && product && record.Product__c === product.Id
+            ? record.Id : null;
         if (!transportationExtraCost) {
             let result = {
                 type: nundinationType,
+                supplierBidExtraCostId,
+                sourceProductId: supplierBidExtraCostId ? record.Product__c : null,
                 product2Id: product ? product.Id : null,
                 productName: product ? product.Name : null,
                 isTransportationTypeIncluded: transportationType.includes('Included'),
@@ -364,6 +371,8 @@ export default class FcbPromotedOfferLineItemExtraCosts extends LightningElement
             transportationExtraCost = result;
         } else {
             transportationExtraCost.type = nundinationType
+            transportationExtraCost.supplierBidExtraCostId = supplierBidExtraCostId;
+            transportationExtraCost.sourceProductId = supplierBidExtraCostId ? record.Product__c : null;
             transportationExtraCost.unitOfMeasure = record ? this._quoteLineItem.Unit_of_Measure__c : '1.';
             transportationExtraCost.isTransportationTypeIncluded = transportationType.includes('Included');
             transportationExtraCost.product2Id = product.Id;
@@ -464,24 +473,30 @@ export default class FcbPromotedOfferLineItemExtraCosts extends LightningElement
                 console.log(this.quoteLineItem.Supplier_Bid_Extra_Costs__r);
                 
                 if (this.quoteLineItem.Supplier_Bid_Extra_Costs__r) {
-                    let transportationProductBuy = this._getTransportationProductByTransportationType(this.quoteLineItem.Transportation_Type_Buy__c);
-                    let transportationProductSell = this._getTransportationProductByTransportationType(this.quoteLineItem.Transportation_Type_Sell__c);   
-                    if (this.quoteLineItem.Supplier_Bid_Extra_Costs__r){
-                        this.quoteLineItem.Supplier_Bid_Extra_Costs__r.forEach(extraCharge => {
-                            if ((extraCharge.Product__c === transportationProductBuy.Id || extraCharge.Product__c === transportationProductSell.Id) && (this.quoteLineItem.Transportation_Type_Buy__c || this.quoteLineItem.Transportation_Type_Sell__c)) {
-                                this.transportationExtraCostBuy = this._addTransportationExtraCost(extraCharge, this.transportationExtraCostBuy, this.quoteLineItem.Transportation_Type_Buy__c, 'Buy');
-                                this.transportationExtraCostSell = this._addTransportationExtraCost(extraCharge, this.transportationExtraCostSell, this.quoteLineItem.Transportation_Type_Sell__c, 'Sell');
-                            } else if(!extraCharge.STEM_Extra_Charge__c){
-                                this.addExtraCostLine(extraCharge , false);
-                            }
-                        });
-                        if(this.transportationExtraCostSell.fixedCost === this.transportationExtraCostBuy.fixedCost && this.transportationExtraCostSell.isTransportationTypeIncluded === this.transportationExtraCostBuy.isTransportationTypeIncluded){
-                            this.resetFieldsForTransportationExtraCostSell();
+                    const buyType = this.quoteLineItem.Transportation_Type_Buy__c;
+                    const sellType = this.quoteLineItem.Transportation_Type_Sell__c;
+                    const buyProduct = buyType && this._getTransportationProductByTransportationType(buyType);
+                    const sellProduct = sellType && this._getTransportationProductByTransportationType(sellType);
+                    this.quoteLineItem.Supplier_Bid_Extra_Costs__r.forEach(extraCharge => {
+                        const matchesBuy = buyProduct && extraCharge.Product__c === buyProduct.Id;
+                        const matchesSell = sellProduct && extraCharge.Product__c === sellProduct.Id;
+                        if (matchesBuy) {
+                            this.transportationExtraCostBuy = this._addTransportationExtraCost(extraCharge, this.transportationExtraCostBuy, buyType, 'Buy', true);
                         }
-                        
-                        this.transportationExtraCostBuy.recalculate();
-                        this.transportationExtraCostSell.recalculate();
+                        if (matchesSell) {
+                            this.transportationExtraCostSell = this._addTransportationExtraCost(extraCharge, this.transportationExtraCostSell, sellType, 'Sell', true);
+                        }
+                        if (!matchesBuy && !matchesSell && !extraCharge.STEM_Extra_Charge__c) {
+                            this.addExtraCostLine(extraCharge, false);
+                        }
+                    });
+                    if (this.transportationExtraCostSell && this.transportationExtraCostBuy
+                        && this.transportationExtraCostSell.fixedCost === this.transportationExtraCostBuy.fixedCost
+                        && this.transportationExtraCostSell.isTransportationTypeIncluded === this.transportationExtraCostBuy.isTransportationTypeIncluded) {
+                        this.resetFieldsForTransportationExtraCostSell();
                     }
+                    this.transportationExtraCostBuy?.recalculate();
+                    this.transportationExtraCostSell?.recalculate();
                     this.calculateTotal();
                 } else{
                     console.log('check');
@@ -818,6 +833,7 @@ export default class FcbPromotedOfferLineItemExtraCosts extends LightningElement
     addExtraCostLine(record, isExtraCharge) {
         let row = {
             id: record?.Id,
+            sourceProductId: record?.Product__c,
             uniqueIndex: this.makeId(5),
             product2Id: record ? record.Product__c : this.extraCostProducts[0].value,
             product2Name: record ? record.Product__r.Name : '',
@@ -1172,8 +1188,10 @@ export default class FcbPromotedOfferLineItemExtraCosts extends LightningElement
                         fields['Buyer_Payment_Term__c'] = buyerPaymentTerm;
                         fields['Supplier_Payment_Term__c'] = supplierPaymentTerm;
                         fields['STEM_Extra_Charge__c'] = value.stemCharge;
-                        if (value.stemCharge) {
+                        if (value.id && (value.stemCharge || (value.sourceProductId && value.sourceProductId === value.product2Id))) {
                             fields['Supplier_Bid_Extra_Cost__c'] = value.id;
+                        }
+                        if (value.stemCharge) {
                             fields = this._assignDateTimeFields(this.enquiryLineItem, fields);
                         }
                         fields['sobjectType'] = QUOTE_LINE_ITEM.objectApiName;
@@ -1209,6 +1227,10 @@ export default class FcbPromotedOfferLineItemExtraCosts extends LightningElement
                     fields['Buyer_Payment_Term__c'] = buyerPaymentTerm;
                     fields['Supplier_Payment_Term__c'] = supplierPaymentTerm;
                     fields['Nundination_Type__c'] = transportationExtraCost.type;
+                    if (transportationExtraCost.supplierBidExtraCostId
+                        && transportationExtraCost.sourceProductId === transportationExtraCost.product2Id) {
+                        fields['Supplier_Bid_Extra_Cost__c'] = transportationExtraCost.supplierBidExtraCostId;
+                    }
                     fields['sobjectType'] = QUOTE_LINE_ITEM.objectApiName;
                     extraCostsToInsert.push(fields);
                 }
