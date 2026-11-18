@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createClient } from '@supabase/supabase-js';
 import { loadPrepaymentQueueCohort, loadPrepaymentQueueContext, loadPrepaymentSalesforceContext, loadXeroPrepaymentContextForStem,
-  loadPrepaymentQueueSnapshot, loadXeroPrepaymentReviewContext, resolvePrepaymentStemKey } from '../api/_xeroPrepaymentContext.js';
+  loadPrepaymentQueueSnapshot, loadPrepaymentQueuePaymentBridges, loadXeroPrepaymentReviewContext,
+  resolvePrepaymentStemKey } from '../api/_xeroPrepaymentContext.js';
 import { XERO_FINANCIAL_CUTOFF } from '../api/_xeroFinancialSync.js';
 import { allocation, fixture, id } from './fixtures/xeroPrepayment.js';
 
@@ -65,6 +66,25 @@ test('rejects missing schema and invalid input before requesting payment or invo
   assert.equal(calls.length, 0);
   await assert.rejects(loadPrepaymentSalesforceContext(stem, { query, safetyContext: {} }), /bridge fields are unavailable/);
   assert.equal(calls.length, 2);
+});
+
+test('verifies a normal payment and its managed allocation represent the same cash application', async () => {
+  const { rows, calls, query } = scopedFixture();
+  const context = { allocations: rows.Trade_Cash_Allocation__c, events: rows.Trade_Cash_Event__c };
+  const read = (allocations) => loadPrepaymentQueuePaymentBridges({ context, cohort: { allocations } }, { query });
+  const bridge = { paymentId: paymentId.slice(0, 15), cashEventId: cashId.slice(0, 15), allocationId: allocationId.slice(0, 15),
+    inCohort: true, reversal: false };
+  assert.deepEqual(await read([allocationId]), [bridge]);
+  assert.equal(calls.length, 2);
+  assert.match(calls.find(soql => soql.includes('FROM Payment__c')), /WHERE Id IN \('a04000000000001AAA'\)/);
+  assert.deepEqual(await read([]), [{ ...bridge, inCohort: false }]);
+  await assert.rejects(read([allocationId, allocationId.slice(0, 15)]), /invalid or duplicate/);
+  await assert.rejects(read([invoiceId]), /missing from the cash graph/);
+  assert.equal(calls.length, 4);
+  rows.Payment__c[0].Cash_Event__c = invoiceId;
+  await assert.rejects(read([allocationId]), /Payment cash event does not match/);
+  rows.Payment__c = [];
+  await assert.rejects(read([allocationId]), /Payment__c evidence is incomplete/);
 });
 
 function mappedContextFixture() {
@@ -183,7 +203,8 @@ test('reads an exact two-STEM prepayment cohort with half the per-STEM calls, re
 test('finds post-cutoff allocations on older deposits and separates work membership from supporting history', async () => {
   const { options, databaseReads, xeroReads } = mappedContextFixture();
   const { rows } = scopedFixture();
-  const event = { ...rows.Trade_Cash_Event__c[0], Payment_Date__c: '2025-12-30', CreatedDate: '2025-12-30T06:00:00.000Z' };
+  const event = { ...rows.Trade_Cash_Event__c[0], Payment_Date__c: '2025-12-30', CreatedDate: '2025-12-30T06:00:00.000Z',
+    FX_Effective_At__c: '2025-12-30T00:00:00.000Z' };
   const allocation = { ...rows.Trade_Cash_Allocation__c[0], Allocation_Date__c: '2026-01-02',
     CreatedDate: '2026-01-02T03:00:00.000Z', Cash_Event__r: { STEM__c: stem } };
   const scope = { cutoff: XERO_FINANCIAL_CUTOFF, through: '2026-01-03T00:00:00.000Z' };
@@ -195,14 +216,22 @@ test('finds post-cutoff allocations on older deposits and separates work members
       assert.match(soql, /CreatedDate <= 2026-01-03T00:00:00.000Z/);
       assert.match(soql, />= 2026-01-01/);
     }
-    const records = soql.includes('FROM Trade_Cash_Allocation__c') ? [allocation] : discovery ? [] : [event];
+    const object = soql.match(/\bFROM (\w+)/)[1];
+    const records = {
+      Trade_Cash_Allocation__c: [allocation],
+      Trade_Cash_Event__c: discovery ? [] : [event],
+      Invoice__c: rows.Invoice__c,
+      Payment__c: rows.Payment__c.map(row => ({ ...row, Date__c: event.Payment_Date__c, Payment_FX_Effective_At__c: event.FX_Effective_At__c })),
+    }[object];
     return { done: true, totalSize: records.length, records };
   };
   const snapshot = await loadPrepaymentQueueSnapshot(scope, { client: options.client, tenantId: id(9), query });
   assert.deepEqual(snapshot.cohort, { events: [], allocations: [allocationId] });
   assert.deepEqual(snapshot.context.events.map((row) => row.Id), [cashId]);
   assert.equal(snapshot.context.operations.length, 1);
-  assert.equal(calls.length, 4);
+  assert.deepEqual(snapshot.paymentBridges, [{ paymentId: paymentId.slice(0, 15), cashEventId: cashId.slice(0, 15),
+    allocationId: allocationId.slice(0, 15), inCohort: true, reversal: false }]);
+  assert.equal(calls.length, 6);
   assert.equal(databaseReads.length, 1);
   assert.equal(xeroReads.length, 0);
   const changedReadback = async (soql) => {

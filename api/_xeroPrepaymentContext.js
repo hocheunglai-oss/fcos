@@ -17,12 +17,21 @@ const DOCUMENTS = [
   ['Invoice__c', 'Buyer_Invoice__c', 'Original_Invoice__c,STEM__r.Account__c'],
   ['Supplier_Invoice__c', 'Supplier_Invoice__c', 'Original_Supplier_Invoice__c,Supplier__c'],
 ];
+const BRIDGE_FIELDS = [
+  'Id', 'STEM__c', 'Account__c', 'RecordType.DeveloperName', 'Cash_Event__c', 'Buyer_Invoice__c', 'Supplier_Invoice__c',
+  'Bank__c', 'Bank_Currency__c', 'Bank_FX_Evidence__c', 'Bank_Native_Amount__c', 'Payment_Currency__c',
+  'Payment_HKD_Amount__c', 'Payment_FX_Rate__c', 'Payment_FX_Revision__c', 'Payment_FX_Effective_At__c', 'Date__c',
+  'Amount__c', 'Invoice_Carrying_USD__c', 'Settlement_FX_USD__c', 'Payment_Operation_Id__c', 'Payment_Request_Fingerprint__c',
+].join(',');
 
 function fail(message, status = 502) {
   throw Object.assign(new Error(message), { code: 'XERO_PREPAYMENT_SALESFORCE_INCOMPLETE', status });
 }
 
 async function exactRecords(query, objectName, fields, ids) {
+  if (ids.some((id) => !canonicalId(id)) || new Set(ids.map(canonicalId)).size !== ids.length) {
+    fail(`Invalid or duplicate prepayment ${objectName} identity.`);
+  }
   const records = [];
   for (let offset = 0; offset < ids.length; offset += 100) {
     const batch = ids.slice(offset, offset + 100);
@@ -41,6 +50,14 @@ async function exactRecords(query, objectName, fields, ids) {
   return records;
 }
 
+async function readAllocationInvoices(query, allocations) {
+  const documents = await Promise.all(DOCUMENTS.map(([objectName, field, partyFields]) => {
+    const ids = [...new Set(allocations.map((row) => row[field]).filter(Boolean))];
+    return exactRecords(query, objectName, `Id,Name,STEM__c,Document_Currency__c,Proforma__c,${partyFields}`, ids);
+  }));
+  return documents.flat();
+}
+
 /** Read the Salesforce side of the prepayment graph without provider writes or a tenant-wide scan. */
 export async function loadPrepaymentSalesforceContext(stemId, {
   query = sfQuery, queryAll, safetyContext = null,
@@ -54,11 +71,7 @@ export async function loadPrepaymentSalesforceContext(stemId, {
     fail('Required prepayment bridge fields are unavailable in Salesforce.');
   }
   const [invoices, payments] = await Promise.all([
-    Promise.all(DOCUMENTS.map(([objectName, field, partyFields]) => {
-      const ids = [...new Set(cash.allocations.map((row) => row[field]).filter(Boolean))];
-      if (ids.some((id) => !canonicalId(id))) fail('Invalid prepayment invoice identity.');
-      return exactRecords(query, objectName, `Id,Name,STEM__c,Document_Currency__c,Proforma__c,${partyFields}`, ids);
-    })).then((rows) => rows.flat()),
+    readAllocationInvoices(query, cash.allocations),
     loadSalesforcePayments(null, paymentSafety, query, { queryAll, stemId }),
   ]);
   validateTradeCashLedger({ ...cash, payments, invoices });
@@ -382,7 +395,37 @@ export async function loadPrepaymentQueueSnapshot({ cutoff, through } = {}, { cl
     }
     cohort[kind] = observed;
   }
-  return { tenantId, cutoff, through, cohort, context };
+  const paymentBridges = await loadPrepaymentQueuePaymentBridges({ context, cohort }, { query });
+  return { tenantId, cutoff, through, cohort, context, paymentBridges };
+}
+
+/** Verify which normal Payment__c records represent a managed application or reversal. */
+export async function loadPrepaymentQueuePaymentBridges(snapshot, { query = sfQuery } = {}) {
+  const { context, cohort } = snapshot || {};
+  if (!Array.isArray(context?.allocations) || !Array.isArray(context?.events) || !Array.isArray(cohort?.allocations)) {
+    contextError('The managed prepayment source snapshot is required.');
+  }
+  const expected = new Set(cohort.allocations.map(canonicalId));
+  if (expected.has(null) || expected.size !== cohort.allocations.length) {
+    contextError('The prepayment allocation cohort contains an invalid or duplicate identity.');
+  }
+  const observed = new Set(context.allocations.map((row) => canonicalId(row.Id)));
+  if (observed.has(null) || observed.size !== context.allocations.length || [...expected].some((id) => !observed.has(id))) {
+    contextError('The expected prepayment allocation is missing from the cash graph.');
+  }
+  const paymentIds = context.allocations.map((row) => row.Payment__c);
+  const [invoices, payments] = await Promise.all([
+    readAllocationInvoices(query, context.allocations),
+    exactRecords(query, 'Payment__c', BRIDGE_FIELDS, paymentIds),
+  ]);
+  const { paymentEvidence } = validateTradeCashLedger({ ...context, payments, invoices });
+  return [...paymentEvidence].map(([paymentId, { event, allocation, reversal }]) => ({
+    paymentId: canonicalId(paymentId),
+    cashEventId: canonicalId(event.Id),
+    allocationId: canonicalId(allocation.Id),
+    inCohort: expected.has(canonicalId(allocation.Id)),
+    reversal,
+  }));
 }
 
 export async function loadPrepaymentContactChoices(stemId, sourceId, {
