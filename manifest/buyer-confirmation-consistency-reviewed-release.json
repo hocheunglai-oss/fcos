@@ -5,7 +5,7 @@
   "baselineCommit": "c17ba6bd556d3c3c6a833d1b92d541b034ed1976",
   "baselineInventoryHash": "9c372ff224ddf347459857b5d776ace7326f13997dec28b7492fdb80a7d94b9c",
   "baselineSourceTreeHash": "745f09cf9237cdf115d57c2db29b939de882b176585bb51ecc8428af3ce88697",
-  "sourceTreeHash": "533b2dad02ea42f1a845bd7ae28761fac2f12fdf366669b38ef578c9a829507a",
+  "sourceTreeHash": "aa437cd079af74e6233176827012973a3103020e12b2e8a46331c86a6537be40",
   "manifestSha256": "bb14649c632bb53d6dc98f89e8eb7a88bc9d06125ec0cb3e00aa97215c678565",
   "components": [
     {
@@ -41,7 +41,7 @@
   "dependencyReview": {
     "complete": true,
     "reviewer": "Codex",
-    "evidence": "Row-level approval invalidation clears the aggregate only for affected required supplier pairs. Unrelated nonrequired extra and stable product edits preserve existing approval evidence. Active product membership changes revoke all affected STEM stages, including net-zero replacements. Explicit revocations, Account requirement changes, last required row removals and the STEM confirmation gate remain enforced. The invoice form now reports failures during PDF or saved-form persistence and releases the spinner. No automatic reapproval or financial record changes are introduced. Reviewed split inventory includes two disabled Sales Support class-access entries serialized because VariableChargeRest and VariableChargeRestTest are retrieved with stable components. Verified in every pinned org. No profile is part of the deployment package."
+    "evidence": "Row-level approval invalidation clears the aggregate only for affected required supplier pairs. Unrelated nonrequired extra and stable product edits preserve existing approval evidence. Active product membership changes revoke all affected STEM stages, including net-zero replacements. Explicit revocations, Account requirement changes, last required row removals and the STEM confirmation gate remain enforced. The invoice form now reports failures during PDF or saved-form persistence and releases the spinner. No automatic reapproval or financial record changes are introduced. Reviewed split inventory includes two disabled Sales Support class-access entries serialized because VariableChargeRest and VariableChargeRestTest are retrieved with stable components. Verified in every pinned org. No profile is part of the deployment package. Canonicalizes the explicit STEM and supplier Account fields across callers and recognizes known historical 67/68 headers containing implicitly serialized RecordTypeId. A fresh read-only PUCCINI replay reproduced both hashes from the same commercial inputs. Tests preserve rejection of actual delivery changes."
   },
   "testPlan": {
     "level": "RunSpecifiedTests",
@@ -51,7 +51,7 @@
       "BuyerInvoiceApprovalServiceTest",
       "FcosTradeCurrencyServiceTest"
     ],
-    "minimumTests": 61
+    "minimumTests": 62
   },
   "permissionSets": [],
   "nativeProjection": "schema-free-apex-lightning",

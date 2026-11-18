@@ -570,16 +570,32 @@ public without sharing class VariableChargeInvoiceReadinessService {
 
     public static String matchingBuyerChargeFingerprint(Id stemId, Id supplierId, String expectedFingerprint) {
         if (String.isBlank(expectedFingerprint)) return null;
-        List<String> parts = buyerChargeFingerprintParts(stemId, supplierId);
+        Map<Integer, String> legacyHeaders = new Map<Integer, String>();
+        List<String> parts = buyerChargeFingerprintParts(stemId, supplierId, legacyHeaders);
         String canonical = buyerChargeDigest(parts, BUYER_FINGERPRINT_API_VERSION);
-        if (expectedFingerprint == canonical) return canonical;
-        // Salesforce v68 changed its generated record links. Compare the same
-        // current inputs with the exact header serialization used by those approvals.
-        return expectedFingerprint == buyerChargeDigest(parts, LEGACY_BUYER_FINGERPRINT_API_VERSION) ? canonical : null;
+        if (expectedFingerprint == canonical
+            || expectedFingerprint == buyerChargeDigest(parts, LEGACY_BUYER_FINGERPRINT_API_VERSION)) return canonical;
+
+        // Some older callers injected RecordTypeId into the serialized header.
+        // Replay those exact headers using current values without changing approved inputs.
+        applyLegacyBuyerHeaders(parts, legacyHeaders);
+        return expectedFingerprint == buyerChargeDigest(parts, BUYER_FINGERPRINT_API_VERSION)
+            || expectedFingerprint == buyerChargeDigest(parts, LEGACY_BUYER_FINGERPRINT_API_VERSION) ? canonical : null;
     }
 
     @TestVisible private static String buyerChargeFingerprintForVersion(Id stemId, Id supplierId, String version) {
-        return buyerChargeDigest(buyerChargeFingerprintParts(stemId, supplierId), version);
+        return buyerChargeDigest(buyerChargeFingerprintParts(stemId, supplierId, null), version);
+    }
+
+    @TestVisible private static String buyerChargeFingerprintWithLegacyRecordType(Id stemId, Id supplierId, String version) {
+        Map<Integer, String> headers = new Map<Integer, String>();
+        List<String> parts = buyerChargeFingerprintParts(stemId, supplierId, headers);
+        applyLegacyBuyerHeaders(parts, headers);
+        return buyerChargeDigest(parts, version);
+    }
+
+    private static void applyLegacyBuyerHeaders(List<String> parts, Map<Integer, String> headers) {
+        for (Integer index : headers.keySet()) parts[index] = headers.get(index);
     }
 
     private static String buyerChargeDigest(List<String> parts, String version) {
@@ -596,14 +612,24 @@ public without sharing class VariableChargeInvoiceReadinessService {
         return EncodingUtil.convertToHex(digest).toLowerCase();
     }
 
-    private static List<String> buyerChargeFingerprintParts(Id stemId, Id supplierId) {
+    private static void addBuyerFingerprintHeader(List<String> parts, Map<Integer, String> legacyHeaders,
+        String prefix, Schema.SObjectType objectType, List<String> fields, String whereClause, Map<String, Object> binds) {
+        List<String> selected = fields.clone();
+        if (legacyHeaders != null) selected.add('RecordTypeId');
+        for (SObject row : fingerprintRows(objectType, selected, whereClause, binds)) {
+            if (legacyHeaders != null) legacyHeaders.put(parts.size(), prefix + serializeProjection(row, selected));
+            parts.add(prefix + serializeProjection(row, fields));
+        }
+    }
+
+    private static List<String> buyerChargeFingerprintParts(Id stemId, Id supplierId, Map<Integer, String> legacyHeaders) {
         List<String> parts = new List<String>();
         Map<String, Object> binds = new Map<String, Object>{'stemId' => stemId, 'supplierId' => supplierId};
-        parts.add('S|' + JSON.serialize(fingerprintRows(STEM__c.SObjectType, new List<String>{
+        addBuyerFingerprintHeader(parts, legacyHeaders, 'S|', STEM__c.SObjectType, new List<String>{
             'Id','CreatedDate','Delivery_Date__c','ETA_Start_Date__c','ETA_End_Date__c',
             'ETB_Start_Date__c','ETB_End_Date__c','ETCD_Start_Date__c','ETCD_End_Date__c',
             'ETD_Start_Date__c','ETD_End_Date__c','CurrencyIsoCode'
-        }, 'WHERE Id = :stemId LIMIT 1', binds)[0]));
+        }, 'WHERE Id = :stemId LIMIT 1', binds);
         List<String> lineFields = new List<String>{
             'Id','Original_Supplier__c','Cancelled__c','Product__c','Quantity__c',
             'Quantity_Delivered_Per_BDN__c','Quantity_Max__c','Unit_of_Measure__c',
@@ -612,10 +638,8 @@ public without sharing class VariableChargeInvoiceReadinessService {
         List<SObject> lineRows = fingerprintRows(STEM_Line_Item__c.SObjectType, lineFields,
             'WHERE STEM__c = :stemId AND Cancelled__c = false ORDER BY Id', binds);
         for (SObject row : lineRows) parts.add('P|' + String.valueOf(row.get('Id')));
-        for (SObject row : fingerprintRows(Account.SObjectType,
-            new List<String>{'Id','Is_Agent__c','Is_Variable__c'}, 'WHERE Id = :supplierId', binds)) {
-            parts.add('A|' + JSON.serialize(row));
-        }
+        addBuyerFingerprintHeader(parts, legacyHeaders, 'A|', Account.SObjectType,
+            new List<String>{'Id','Is_Agent__c','Is_Variable__c'}, 'WHERE Id = :supplierId', binds);
         for (SObject row : lineRows) if (row.get('Original_Supplier__c') == supplierId)
             parts.add('L|' + serializeProjection(row, lineFields));
         List<String> baseExtraFields = new List<String>{

@@ -119,6 +119,27 @@ private class VariableChargeReadinessTest {
         Test.stopTest();
     }
 
+    @IsTest
+    static void buyerApprovalAcceptsRecordTypeMetadataFromLegacyCallers() {
+        Map<String, Id> ids = prepareRequiredSupplier(true);
+        Id stemId = ids.get('stem');
+        Id supplierId = ids.get('supplier');
+        String canonical = VariableChargeInvoiceReadinessService.buyerChargeFingerprint(stemId, supplierId);
+
+        Test.startTest();
+        for (String version : new List<String>{'67.0', '68.0'}) {
+            String legacy = VariableChargeInvoiceReadinessService.buyerChargeFingerprintWithLegacyRecordType(stemId, supplierId, version);
+            System.assertNotEquals(canonical, legacy, 'The fixture must exercise a distinct historical header.');
+            System.assertEquals(canonical, VariableChargeInvoiceReadinessService.matchingBuyerChargeFingerprint(stemId, supplierId, legacy));
+        }
+        String oldFingerprint = VariableChargeInvoiceReadinessService.buyerChargeFingerprintWithLegacyRecordType(stemId, supplierId, '68.0');
+        ContextManager.skipTriggers = true;
+        try { update new STEM__c(Id = stemId, Delivery_Date__c = Date.today().addDays(-2)); }
+        finally { ContextManager.skipTriggers = false; }
+        System.assertEquals(null, VariableChargeInvoiceReadinessService.matchingBuyerChargeFingerprint(stemId, supplierId, oldFingerprint));
+        Test.stopTest();
+    }
+
     private static Invoice__c insertInvoiceWithoutTriggers(Id stemId) {
         ContextManager.avoidInvoiceFiring = true;
         try {
