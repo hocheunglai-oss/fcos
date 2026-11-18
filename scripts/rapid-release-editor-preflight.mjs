@@ -7,7 +7,8 @@ import { cliSalesforceProvider, loadReviewedSalesforcePlan } from './deploy-sale
 import { githubConfigDirectory } from './fcos-connections.mjs';
 import { digest, git, requireCondition, targets, validateManifest } from './lib/rapid-release/contract.mjs';
 import { verifyReviewedOrgInventory } from './lib/salesforce-reviewed-release.mjs';
-import { EDITOR_PREFLIGHT_SOURCE_ENVIRONMENT } from './lib/rapid-release/salesforce-editor-preflight-proof.mjs';
+import { EDITOR_PREFLIGHT_COMPONENT_FILES, EDITOR_PREFLIGHT_SOURCE_ENVIRONMENT, createEditorNativeExportProjection,
+  verifyEditorReviewedNativeProjection } from './lib/rapid-release/salesforce-editor-preflight-proof.mjs';
 import { createEditorPreflightAttestation, EDITOR_PREFLIGHT_ATTESTATION_ENVIRONMENT, EDITOR_PREFLIGHT_ATTESTATION_TASK,
   hasEditorPreflightLocator, verifyEditorPreflightAttestation } from './lib/rapid-release/salesforce-editor-preflight-transport.mjs';
 import { verifySalesforceReviewSource } from './verify-salesforce-review-source.mjs';
@@ -76,6 +77,26 @@ async function verifyPinnedInputs({ root, candidate, manifest, evidence, github 
   const baseline = reviewed.nativeInventories?.devee?.baseline;
   requireCondition(baseline && evidence.expected.restoration.sourceTreeHash === reviewed.binding.baselineSourceTreeHash
     && evidence.expected.restoration.inventoryHash === baseline.inventoryHash, 'EDITOR_PREFLIGHT_RESTORATION_BASELINE_MISMATCH');
+  if (evidence.proof.schemaVersion === 1) {
+    await verifyReviewedOrgInventory({ provider, environment: devee, plan: reviewed, expected: baseline });
+    return;
+  }
+  requireCondition(evidence.proof.schemaVersion === 2 && native.nativeExportProjection,
+    'EDITOR_PREFLIGHT_NATIVE_EXPORT_PROJECTION_REQUIRED');
+  const sourceFiles = Object.fromEntries(EDITOR_PREFLIGHT_COMPONENT_FILES.map(path => [path,
+    readFileSync(join(candidate, 'force-app/main/default', path))]));
+  const projected = createEditorNativeExportProjection({ sourceFiles,
+    nativeFiles: native.nativeExportProjection.nativeFiles });
+  requireCondition(digest(projected) === evidence.proof.native.nativeExportProjectionDigest
+    && digest(projected.nativeFiles) === evidence.proof.native.nativeComponentFilesDigest
+    && digest(projected) === digest(native.nativeExportProjection)
+    && digest(projected.sourceFiles) === digest(native.componentFiles),
+  'EDITOR_PREFLIGHT_NATIVE_EXPORT_PROJECTION_CHANGED');
+  verifyEditorReviewedNativeProjection({ reviewed: reviewed.nativeInventories?.devee?.final, projection: projected,
+    inventoryHash: native.inventoryHash, observedNativeInventoryHash: native.observedNativeInventoryHash });
+  // The desktop fixture has been torn down by publication time. The final native
+  // component bytes are bound to its original job/report evidence above; only the
+  // restored baseline may be read freshly here.
   await verifyReviewedOrgInventory({ provider, environment: devee, plan: reviewed, expected: baseline });
 }
 
