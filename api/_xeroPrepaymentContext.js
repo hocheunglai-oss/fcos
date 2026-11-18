@@ -334,6 +334,57 @@ export function loadPrepaymentQueueContext(stemId, options) {
   return loadPrepaymentQueueCohort([stemId], options);
 }
 
+/** Discover cash work within the shared financial cutoff, retaining older dependencies for classification. */
+export async function loadPrepaymentQueueSnapshot({ cutoff, through } = {}, { client, tenantId, query = sfQuery } = {}) {
+  function validDate(date) {
+    if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/u.test(date)) return false;
+    const time = Date.parse(date);
+    return Number.isFinite(time) && new Date(time).toISOString().slice(0, 10) === date;
+  }
+  const throughMs = Date.parse(through);
+  if (!client || !uuid(tenantId) || cutoff !== XERO_FINANCIAL_CUTOFF || !validDate(cutoff)
+    || !Number.isFinite(throughMs) || new Date(throughMs).toISOString() !== through || throughMs < Date.parse(cutoff)) {
+    contextError('The prepayment snapshot requires the exact financial cutoff and source watermark.');
+  }
+  function inWindow(row, dateField) {
+    const created = Date.parse(row.CreatedDate);
+    const date = row[dateField];
+    if (!Number.isFinite(created) || (date != null && !validDate(date))) contextError('Prepayment source dates are incomplete.');
+    return created <= throughMs && (date == null ? created >= Date.parse(cutoff) : date >= cutoff);
+  }
+  const sources = [
+    { object: 'Trade_Cash_Event__c', dateField: 'Payment_Date__c', stemField: 'STEM__c', kind: 'events' },
+    { object: 'Trade_Cash_Allocation__c', dateField: 'Allocation_Date__c', stemField: 'Cash_Event__r.STEM__c', kind: 'allocations' },
+  ];
+  const discoveries = await Promise.all(sources.map(async ({ object, dateField, stemField }) => {
+    const result = await query(`
+      SELECT Id, CreatedDate, ${dateField}, ${stemField} FROM ${object}
+      WHERE CreatedDate <= ${through}
+        AND (${dateField} >= ${cutoff} OR (${dateField} = null AND CreatedDate >= ${cutoff}T00:00:00Z))
+      ORDER BY Id`, { clean: true, limit: 100000 });
+    if (result?.error || !Array.isArray(result?.records) || result.totalSize !== result.records.length
+      || result.done === false || result.nextRecordsUrl || result.records.some((row) => !canonicalId(row.Id) || !inWindow(row, dateField))
+      || new Set(result.records.map((row) => canonicalId(row.Id))).size !== result.records.length) {
+      contextError('Prepayment cohort discovery is incomplete.');
+    }
+    return result.records;
+  }));
+  const stems = [...discoveries[0].map((row) => row.STEM__c), ...discoveries[1].map((row) => row.Cash_Event__r?.STEM__c)];
+  if (stems.some((stem) => !canonicalId(stem))) contextError('Prepayment cohort is missing its exact STEM scope.');
+  const stemIds = [...new Map(stems.map((stem) => [canonicalId(stem), stem])).values()];
+  const context = await loadPrepaymentQueueCohort(stemIds, { client, tenantId, query });
+  const cohort = {};
+  for (const [index, { kind, dateField }] of sources.entries()) {
+    const expected = new Set(discoveries[index].map((row) => canonicalId(row.Id)));
+    const observed = context[kind].filter((row) => inWindow(row, dateField)).map((row) => row.Id);
+    if (observed.length !== expected.size || !observed.every((id) => expected.delete(canonicalId(id)))) {
+      contextError('Prepayment cohort changed between discovery and ledger readback.');
+    }
+    cohort[kind] = observed;
+  }
+  return { tenantId, cutoff, through, cohort, context };
+}
+
 export async function loadPrepaymentContactChoices(stemId, sourceId, {
   connection, query = sfQuery, env = process.env, fetchImpl, accountingFetch = xeroFinancialAccountingFetch,
 } = {}) {

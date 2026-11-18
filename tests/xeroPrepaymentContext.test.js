@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createClient } from '@supabase/supabase-js';
 import { loadPrepaymentQueueCohort, loadPrepaymentQueueContext, loadPrepaymentSalesforceContext, loadXeroPrepaymentContextForStem,
-  loadXeroPrepaymentReviewContext, resolvePrepaymentStemKey } from '../api/_xeroPrepaymentContext.js';
+  loadPrepaymentQueueSnapshot, loadXeroPrepaymentReviewContext, resolvePrepaymentStemKey } from '../api/_xeroPrepaymentContext.js';
+import { XERO_FINANCIAL_CUTOFF } from '../api/_xeroFinancialSync.js';
 import { allocation, fixture, id } from './fixtures/xeroPrepayment.js';
 
 const stem = 'a01000000000001AAA';
@@ -177,6 +178,49 @@ test('reads an exact two-STEM prepayment cohort with half the per-STEM calls, re
   assert.equal(cohort.operations[0].status, 'unknown');
   await assert.rejects(loadPrepaymentQueueCohort([stem, stem.slice(0, 15)], options), /exact prepayment queue scope/);
   assert.deepEqual(calls, { salesforce: 2, journal: 1 });
+});
+
+test('finds post-cutoff allocations on older deposits and separates work membership from supporting history', async () => {
+  const { options, databaseReads, xeroReads } = mappedContextFixture();
+  const { rows } = scopedFixture();
+  const event = { ...rows.Trade_Cash_Event__c[0], Payment_Date__c: '2025-12-30', CreatedDate: '2025-12-30T06:00:00.000Z' };
+  const allocation = { ...rows.Trade_Cash_Allocation__c[0], Allocation_Date__c: '2026-01-02',
+    CreatedDate: '2026-01-02T03:00:00.000Z', Cash_Event__r: { STEM__c: stem } };
+  const scope = { cutoff: XERO_FINANCIAL_CUTOFF, through: '2026-01-03T00:00:00.000Z' };
+  const calls = [];
+  const query = async (soql) => {
+    calls.push(soql);
+    const discovery = soql.includes('WHERE CreatedDate <=');
+    if (discovery) {
+      assert.match(soql, /CreatedDate <= 2026-01-03T00:00:00.000Z/);
+      assert.match(soql, />= 2026-01-01/);
+    }
+    const records = soql.includes('FROM Trade_Cash_Allocation__c') ? [allocation] : discovery ? [] : [event];
+    return { done: true, totalSize: records.length, records };
+  };
+  const snapshot = await loadPrepaymentQueueSnapshot(scope, { client: options.client, tenantId: id(9), query });
+  assert.deepEqual(snapshot.cohort, { events: [], allocations: [allocationId] });
+  assert.deepEqual(snapshot.context.events.map((row) => row.Id), [cashId]);
+  assert.equal(snapshot.context.operations.length, 1);
+  assert.equal(calls.length, 4);
+  assert.equal(databaseReads.length, 1);
+  assert.equal(xeroReads.length, 0);
+  const changedReadback = async (soql) => {
+    const result = await query(soql);
+    if (!soql.includes('WHERE CreatedDate <=') && soql.includes('FROM Trade_Cash_Allocation__c')) {
+      return { ...result, records: [{ ...allocation, Allocation_Date__c: '2025-12-30' }] };
+    }
+    return result;
+  };
+  await assert.rejects(loadPrepaymentQueueSnapshot(scope, { client: options.client, tenantId: id(9), query: changedReadback }),
+    /cohort changed/);
+  calls.length = 0;
+  await assert.rejects(loadPrepaymentQueueSnapshot({ ...scope, cutoff: '2025-01-01' },
+    { client: options.client, tenantId: id(9), query }), /exact financial cutoff/);
+  assert.equal(calls.length, 0);
+  const truncated = async () => ({ done: false, totalSize: 0, records: [] });
+  await assert.rejects(loadPrepaymentQueueSnapshot(scope, { client: options.client, tenantId: id(9), query: truncated }),
+    /discovery is incomplete/);
 });
 
 test('blocks incomplete, wrong-tenant and conflicting journal evidence before Xero calls', async () => {
