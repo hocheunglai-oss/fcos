@@ -1,3 +1,4 @@
+import { invoiceAppPlacementDescriptors } from './salesforce-invoice-app-placement.mjs';
 import { readFileSync, readdirSync, lstatSync } from 'node:fs';
 import path from 'node:path';
 import { digest as digestCheckpoint } from './rapid-release/contract.mjs';
@@ -303,6 +304,7 @@ function componentFiles(id, inventory) {
   const [type, member, extra] = id.split(':');
   if (extra || !member) failCoverage('Invalid reviewed component identifier.');
   const direct = {
+    FlexiPage: [`flexipages/${member}.flexipage-meta.xml`],
     ApexClass: [`classes/${member}.cls`, `classes/${member}.cls-meta.xml`],
     ApexTrigger: [`triggers/${member}.trigger`, `triggers/${member}.trigger-meta.xml`],
     ApexPage: [`pages/${member}.page`, `pages/${member}.page-meta.xml`],
@@ -349,6 +351,7 @@ export function createReviewedSalesforcePlan({ review, manifestBytes, bootstrapB
     || baselineWorkflow.sourceScope !== 'force-app/main/default' || baselineWorkflow.sourceTreeHash !== baselineInventory.sourceTreeHash)) failCoverage('Unknown or unverified complete-tree baseline.');
   if (baselineMode === INVENTORY_BASELINE_MODE && (baselineWorkflow || review.baselineWorkflowPath)) failCoverage('Read-only inventory baselines cannot claim complete-tree deployment proof.');
   const manifest = parseReviewedPackage(manifestBytes.toString('utf8'));
+  const invoiceAppPlacement = invoiceAppPlacementDescriptors(review, manifest);
   const components = review.components;
   if (!Array.isArray(components) || !same(sorted(components.map(({ id }) => id)), manifest) || components.length !== manifest.length) failCoverage('Manifest component/dependency coverage is incomplete.');
   const coveredFiles = new Set();
@@ -368,7 +371,7 @@ export function createReviewedSalesforcePlan({ review, manifestBytes, bootstrapB
   if (catalogControls !== undefined && (baselineMode !== INVENTORY_BASELINE_MODE || !catalogControls || Array.isArray(catalogControls)
     || typeof catalogControls !== 'object' || Object.entries(catalogControls).some(([key, controls]) =>
       !ENVIRONMENTS.includes(key) || !Array.isArray(controls) || new Set(controls).size !== controls.length || controls.some(id =>
-        !/^(?:(?:ApexPage|CustomPermission):[A-Za-z][A-Za-z0-9_]*|QuickAction:[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)?)$/u.test(id)
+        !/^(?:(?:ApexPage|CustomPermission|FlexiPage):[A-Za-z][A-Za-z0-9_]*|QuickAction:[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)?)$/u.test(id)
         || manifest.includes(id))))) failCoverage('Inventory catalog controls must be exact independent metadata members for pinned orgs.');
   if (orgBaselines !== undefined || orgBaselineInventories !== undefined) {
     if (baselineMode !== INVENTORY_BASELINE_MODE || !orgBaselines || !orgBaselineInventories
@@ -408,7 +411,8 @@ export function createReviewedSalesforcePlan({ review, manifestBytes, bootstrapB
   // The exact Editors desktop component contract is checked below after its native inventory loads.
   const editorFixtureTrigger = review.nativeDeveeDesktop === undefined ? null : 'ApexTrigger:FcosTradeCurrencySideTrigger';
   if (nativeProjection !== undefined && (nativeProjection !== 'schema-free-apex-lightning' || bootstrap
-    || !review.nativeInventories || components.some(({ id }) => id !== editorFixtureTrigger && !/^(?:ApexClass|LightningComponentBundle):/u.test(id))
+    || !review.nativeInventories || components.some(({ id }) => id !== editorFixtureTrigger
+      && !(invoiceAppPlacement && id.startsWith('FlexiPage:')) && !/^(?:ApexClass|LightningComponentBundle):/u.test(id))
     || !components.some(({ id }) => id.startsWith('LightningComponentBundle:')))) {
     failCoverage('Schema-free native projections require an explicit Lightning package with only reviewed Apex or Lightning components.');
   }
@@ -444,15 +448,16 @@ export function createReviewedSalesforcePlan({ review, manifestBytes, bootstrapB
     ...(orgBaselines ? { orgBaselines } : {}),
   };
   return { fingerprint: hash(binding), binding, review, manifest, changedFiles: changed, finalInventory,
-    baselineInventory, orgBaselineInventories, nativeInventories, baselineWorkflow };
+    baselineInventory, orgBaselineInventories, nativeInventories, baselineWorkflow, invoiceAppPlacement };
 }
 
 export function reviewedJobExpectations(plan, environment, operation) {
   const bootstrap = operation === 'bootstrap';
+  const app = environment.key === 'devee' ? undefined : plan.invoiceAppPlacement?.[environment.key]?.app;
   return {
     validation: operation === 'validation', bootstrap,
     testPlan: bootstrap ? { level: environment.isSandbox ? 'NoTestRun' : 'RunRelevantTests', tests: [], minimumTests: 1 } : plan.binding.testPlan,
-    expectedComponents: bootstrap ? plan.review.bootstrap.components : plan.manifest,
+    expectedComponents: bootstrap ? plan.review.bootstrap.components : app ? [...plan.manifest, `CustomApplication:${app}`] : plan.manifest,
   };
 }
 
@@ -777,14 +782,24 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
     }
   }
   let profileRecovery = repairProductionSalesSupport ? 'before-correction' : undefined;
-  const verifyBeforeDeployment = (environment, expected) => {
+  const verifyBeforeDeployment = async (environment, expected) => {
     // Only the qualified recovery adapter supplies an old DEVEE inventory.
     // After a deployment, the corrected candidate always supplies the proof.
     if (environment.key === 'devee' && retainedDeveeInventory && !get('devee', 'deployment')) {
       return verifyReviewedOrgInventory({ ...retainedDeveeInventory, environment, now });
     }
-    return verifyReviewedOrgInventory({ provider, environment, plan, expected, now,
+    const inventory = await verifyReviewedOrgInventory({ provider, environment, plan, expected, now,
       profileRecovery: environment.key === 'production' ? profileRecovery : undefined });
+    if (plan.invoiceAppPlacement) {
+      const phase = get(environment.key, 'deployment')?.status === 'Succeeded' ? 'after' : 'before';
+      if (typeof provider.verifyInvoiceAppPlacement !== 'function') throw new Error('Native invoice application readback is required.');
+      const app = await provider.verifyInvoiceAppPlacement(environment, plan, phase);
+      if (app.orgId !== environment.orgId || app.phase !== phase || !HASH.test(app.evidenceSha256)) {
+        throw new Error('Native invoice application receipt does not bind the reviewed org and checkpoint.');
+      }
+      return { ...inventory, evidenceSha256: hash({ inventory: inventory.evidenceSha256, app }) };
+    }
+    return inventory;
   };
   const preparation = get('production', 'preparation');
   if ((mode === 'apply' || approvedContinuation && preparation) && (preparation?.fingerprint !== plan.fingerprint || !['ready', 'awaiting-authorized-bootstrap'].includes(preparation?.status))) {
@@ -967,7 +982,7 @@ export async function runReviewedSalesforceRelease({ plan, mode, policy, journal
         predeploymentInventory = reviewedCheckpointInventory(plan, journal.state.stages[environment.key], environment.key);
         await verifyBeforeDeployment(environment, predeploymentInventory);
         await permissions(environment, plan.review.bootstrap.permissionSets || []);
-      } else await verifyReviewedOrgInventory({ provider, environment, plan, expected: baseline, now });
+      } else await verifyBeforeDeployment(environment, baseline);
       const validation = await runValidation(environment);
       if (production && (mode === 'prepare' || approvedContinuation && !get('production', 'preparation'))) {
         await persist('production', 'preparation', { status: 'ready', fingerprint: plan.fingerprint, validationJobId: validation.jobId });
