@@ -2,11 +2,11 @@
   "schemaVersion": 1,
   "releaseMode": "reviewed-manifest-incremental-v1",
   "baselineMode": "read-only-owned-tree-inventory",
-  "sourceTreeHash": "81a6877ba002648cb226fc46319da884be33c40cfac3ddb5e6e48fd9ab494bff",
+  "sourceTreeHash": "be04f130ad6163f1890cd2e186f7c82ae3ae7c6d0589e51c9dd8a21a31cfa942",
   "manifestSha256": "7f0e7b49dedc247e148b952872cb239337bef52de8c53ffd4ed63c761b018a4b",
-  "baselineCommit": "d368a70832cf3d9160e07568db80fb18e0ad4eae",
-  "baselineSourceTreeHash": "aa437cd079af74e6233176827012973a3103020e12b2e8a46331c86a6537be40",
-  "baselineInventoryHash": "d0cd2622d5fb1e1f9b60f41df1b6b621f0cb0e8e32343ec3e9181b759f7fc6e1",
+  "baselineCommit": "f68e3b7701709813611a754b439c0e14e9c33df7",
+  "baselineSourceTreeHash": "5898113c061213e6b665d80ae1ebf61ffa8db4c49dfe0a021859c5d9fef2c850",
+  "baselineInventoryHash": "a8aeacd672e4f54a010c5c75566f0613a582e20c2752750635e309cecb7998a0",
   "components": [
     {
       "id": "ApexClass:FcosCompanyFxRateService",
@@ -131,7 +131,7 @@
   "dependencyReview": {
     "complete": true,
     "reviewer": "FCOS Editors fixture source qualification",
-    "evidence": "The reviewed 13-component Editors package retains its source bytes. Buyer Confirmation component readbacks provide the successor baseline. The Sales Support profile retains the established Editors retrieval scope."
+    "evidence": "The 13 Editors components and their source bytes are unchanged. Pinned native readbacks confirm the 12 Puccini and DIAS WELL differences in each org. All other baseline inventory entries retain their previous raw evidence."
   },
   "nativeProjection": "schema-free-apex-lightning",
   "nativeInventories": {
@@ -222,16 +222,16 @@
             "size": 174
           },
           "classes/BuyerInvoiceApprovalService.cls": {
-            "sha256": "19cddb792d18446493ea592971a93ca1f1cb970cfe3dba5fc72550618df23e44",
-            "size": 14283
+            "sha256": "eabb2b5d239df89d98df0738a36b72f7044d3b3a1fa4bd26aca74cc053b4aae5",
+            "size": 14483
           },
           "classes/BuyerInvoiceApprovalService.cls-meta.xml": {
             "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
             "size": 174
           },
           "classes/BuyerInvoiceApprovalServiceTest.cls": {
-            "sha256": "db808b830fa4a5e9056acb0d813b7889edc2f0f3acf149ff7d22fcdba7bd1c81",
-            "size": 14351
+            "sha256": "782f2d9a48fa2380c45eabfa0b2e5771852884c3ca3cbad37e63751cd3fabcd0",
+            "size": 16298
           },
           "classes/BuyerInvoiceApprovalServiceTest.cls-meta.xml": {
             "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
@@ -358,8 +358,8 @@
             "size": 174
           },
           "classes/FcosLegacyFinancialCompatibilityTest.cls": {
-            "sha256": "cc5e513e139e7b4bfbaff3be92280ba1ac6a5acfb7c540454690ebc061020300",
-            "size": 25763
+            "sha256": "03a335b85b2dceccc1e21c058275239c65d4d9017488ca944ef889a0ec9c3802",
+            "size": 29369
           },
           "classes/FcosLegacyFinancialCompatibilityTest.cls-meta.xml": {
             "sha256": "356db61093648679fc9b3a801e41d51c94fa51e993380eac65b0bb076a20b6b0",
@@ -726,16 +726,16 @@
             "size": 174
           },
           "classes/InvoiceController.cls": {
-            "sha256": "9e92cb34f9548a9a384669163b708361643874781827ba2d6abaa2c72cbec002",
-            "size": 25911
+            "sha256": "8cebdc7df575cf506e6deff54eee35d93737fc2a1e5cee510ec544eadd630102",
+            "size": 28637
           },
           "classes/InvoiceController.cls-meta.xml": {
             "sha256": "93c98277e0edc72d11074aef3a175769c93fa2ea22e2753be76ac5746c951512",
             "size": 174
           },
           "classes/InvoiceControllerTest.cls": {
-            "sha256": "87974c8020f6c2d92ce51aa6ceb75043e18616b80b4ceb1f19f384ff7075cf7e",
-            "size": 5010
+            "sha256": "20fe277848791fa11a01afe7969ccaff8c0e02c69650f7abf5c95207efd2ea7a",
+            "size": 7562
           },
           "classes/InvoiceControllerTest.cls-meta.xml": {
             "sha256": "93c98277e0edc72d11074aef3a175769c93fa2ea22e2753be76ac5746c951512",
@@ -1142,16 +1142,16 @@
             "size": 174
           },
           "classes/StemTriggerHandler.cls": {
-            "sha256": "453389c79ac989e0ac92e0e3b5fe86188d5561465b60a68f21ed057f987b12ca",
-            "size": 34757
+            "sha256": "a3f2caff5caa91640f1d8654c2d6723e10ab228c9b34de796033759ab698d565",
+            "size": 34966
           },
           "classes/StemTriggerHandler.cls-meta.xml": {
             "sha256": "a1499a395f5cb2b7d6f5bf91daccbe6b14f400fa35d2fb86675f3a3651cd1d65",
             "size": 174
           },
           "classes/StemTriggerHandlerTest.cls": {
-            "sha256": "35d4bca76968a094f781b1eb6e3485c0c03ae0c09ce114a40c27993565042be9",
-            "size": 6497
+            "sha256": "87c5b08cb71acb1af16214f87f54bcd4b641fc8713372dd446e669b5cdfaf16c",
+            "size": 8033
           },
           "classes/StemTriggerHandlerTest.cls-meta.xml": {
             "sha256": "a1499a395f5cb2b7d6f5bf91daccbe6b14f400fa35d2fb86675f3a3651cd1d65",
@@ -1198,16 +1198,16 @@
             "size": 174
           },
           "classes/VariableChargeInvoiceReadinessService.cls": {
-            "sha256": "df689913469ce0c813f4553d0bd9444351de754501876aab043fc599fac91191",
-            "size": 75332
+            "sha256": "7961004151d57188dc53467f11609462370cfd86f24c4d6f36dda829a6f1dfb0",
+            "size": 76564
           },
           "classes/VariableChargeInvoiceReadinessService.cls-meta.xml": {
             "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
             "size": 174
           },
           "classes/VariableChargeReadinessTest.cls": {
-            "sha256": "ec5ad682de108fbd57618ef6889b6541825255cf4d393e260b5515cb66f27e84",
-            "size": 35931
+            "sha256": "b6e96150d94602c8520985a4b877bfaf1c99ba39102015358f3017ecdc01a020",
+            "size": 37359
           },
           "classes/VariableChargeReadinessTest.cls-meta.xml": {
             "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
@@ -1470,8 +1470,8 @@
             "size": 11174
           },
           "lwc/fcbInvoiceForm/fcbInvoiceForm.js": {
-            "sha256": "90b88d667bd259cc95d39347385474446cbf1eed82edefd61bc8d04126e1ce2d",
-            "size": 48150
+            "sha256": "ddb1648f684db242da350dae7326ff56e79871af3a658a521e6b365e6d2c87f0",
+            "size": 49350
           },
           "lwc/fcbInvoiceForm/fcbInvoiceForm.js-meta.xml": {
             "sha256": "5b0642735826002bc0c0309154622d3b16108678798c8d432ff61570bc04ee75",
@@ -1566,12 +1566,12 @@
             "size": 745
           },
           "lwc/fcbStemProcessing/fcbStemProcessing.html": {
-            "sha256": "d94164a01f0140703526778e8daf09d919724e18056e4b7c3d27572a7a4766a5",
-            "size": 30285
+            "sha256": "ef682503b346a7ef9d39e9b65546d3379f988163745b72612b8bf66e21490519",
+            "size": 30447
           },
           "lwc/fcbStemProcessing/fcbStemProcessing.js": {
-            "sha256": "4d7594da5fad7bffe6fedcfbb179aea8716f3f5bfcd517ca3c589e115e480526",
-            "size": 44045
+            "sha256": "8c65b6a84fcf58ebab64e057958c8f8b14825b4da61379b74ca1cdf5555c6caa",
+            "size": 44796
           },
           "lwc/fcbStemProcessing/fcbStemProcessing.js-meta.xml": {
             "sha256": "70e6f162268d57442bf6ae24982f53bd9181d842c8841aab4295013c2c3bfd67",
@@ -5314,7 +5314,7 @@
             "size": 178
           }
         },
-        "inventoryHash": "b820be17e46ceed25a6dfa1de5f51f4ac13e94ca4eb5f1f8b690af131b747a3c"
+        "inventoryHash": "3f8038ce074908754beef5a91b94231bff6f6a7f8178645b9ec3a197d2030c42"
       },
       "final": {
         "files": {
@@ -5387,16 +5387,16 @@
             "size": 174
           },
           "classes/BuyerInvoiceApprovalService.cls": {
-            "sha256": "19cddb792d18446493ea592971a93ca1f1cb970cfe3dba5fc72550618df23e44",
-            "size": 14283
+            "sha256": "eabb2b5d239df89d98df0738a36b72f7044d3b3a1fa4bd26aca74cc053b4aae5",
+            "size": 14483
           },
           "classes/BuyerInvoiceApprovalService.cls-meta.xml": {
             "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
             "size": 174
           },
           "classes/BuyerInvoiceApprovalServiceTest.cls": {
-            "sha256": "db808b830fa4a5e9056acb0d813b7889edc2f0f3acf149ff7d22fcdba7bd1c81",
-            "size": 14351
+            "sha256": "782f2d9a48fa2380c45eabfa0b2e5771852884c3ca3cbad37e63751cd3fabcd0",
+            "size": 16298
           },
           "classes/BuyerInvoiceApprovalServiceTest.cls-meta.xml": {
             "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
@@ -5507,8 +5507,8 @@
             "size": 174
           },
           "classes/FcosLegacyFinancialCompatibilityTest.cls": {
-            "sha256": "cc5e513e139e7b4bfbaff3be92280ba1ac6a5acfb7c540454690ebc061020300",
-            "size": 25763
+            "sha256": "03a335b85b2dceccc1e21c058275239c65d4d9017488ca944ef889a0ec9c3802",
+            "size": 29369
           },
           "classes/FcosLegacyFinancialCompatibilityTest.cls-meta.xml": {
             "sha256": "356db61093648679fc9b3a801e41d51c94fa51e993380eac65b0bb076a20b6b0",
@@ -5843,16 +5843,16 @@
             "size": 174
           },
           "classes/InvoiceController.cls": {
-            "sha256": "9e92cb34f9548a9a384669163b708361643874781827ba2d6abaa2c72cbec002",
-            "size": 25911
+            "sha256": "8cebdc7df575cf506e6deff54eee35d93737fc2a1e5cee510ec544eadd630102",
+            "size": 28637
           },
           "classes/InvoiceController.cls-meta.xml": {
             "sha256": "93c98277e0edc72d11074aef3a175769c93fa2ea22e2753be76ac5746c951512",
             "size": 174
           },
           "classes/InvoiceControllerTest.cls": {
-            "sha256": "87974c8020f6c2d92ce51aa6ceb75043e18616b80b4ceb1f19f384ff7075cf7e",
-            "size": 5010
+            "sha256": "20fe277848791fa11a01afe7969ccaff8c0e02c69650f7abf5c95207efd2ea7a",
+            "size": 7562
           },
           "classes/InvoiceControllerTest.cls-meta.xml": {
             "sha256": "93c98277e0edc72d11074aef3a175769c93fa2ea22e2753be76ac5746c951512",
@@ -6259,16 +6259,16 @@
             "size": 174
           },
           "classes/StemTriggerHandler.cls": {
-            "sha256": "453389c79ac989e0ac92e0e3b5fe86188d5561465b60a68f21ed057f987b12ca",
-            "size": 34757
+            "sha256": "a3f2caff5caa91640f1d8654c2d6723e10ab228c9b34de796033759ab698d565",
+            "size": 34966
           },
           "classes/StemTriggerHandler.cls-meta.xml": {
             "sha256": "a1499a395f5cb2b7d6f5bf91daccbe6b14f400fa35d2fb86675f3a3651cd1d65",
             "size": 174
           },
           "classes/StemTriggerHandlerTest.cls": {
-            "sha256": "35d4bca76968a094f781b1eb6e3485c0c03ae0c09ce114a40c27993565042be9",
-            "size": 6497
+            "sha256": "87c5b08cb71acb1af16214f87f54bcd4b641fc8713372dd446e669b5cdfaf16c",
+            "size": 8033
           },
           "classes/StemTriggerHandlerTest.cls-meta.xml": {
             "sha256": "a1499a395f5cb2b7d6f5bf91daccbe6b14f400fa35d2fb86675f3a3651cd1d65",
@@ -6315,16 +6315,16 @@
             "size": 174
           },
           "classes/VariableChargeInvoiceReadinessService.cls": {
-            "sha256": "df689913469ce0c813f4553d0bd9444351de754501876aab043fc599fac91191",
-            "size": 75332
+            "sha256": "7961004151d57188dc53467f11609462370cfd86f24c4d6f36dda829a6f1dfb0",
+            "size": 76564
           },
           "classes/VariableChargeInvoiceReadinessService.cls-meta.xml": {
             "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
             "size": 174
           },
           "classes/VariableChargeReadinessTest.cls": {
-            "sha256": "ec5ad682de108fbd57618ef6889b6541825255cf4d393e260b5515cb66f27e84",
-            "size": 35931
+            "sha256": "b6e96150d94602c8520985a4b877bfaf1c99ba39102015358f3017ecdc01a020",
+            "size": 37359
           },
           "classes/VariableChargeReadinessTest.cls-meta.xml": {
             "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
@@ -6555,8 +6555,8 @@
             "size": 11174
           },
           "lwc/fcbInvoiceForm/fcbInvoiceForm.js": {
-            "sha256": "90b88d667bd259cc95d39347385474446cbf1eed82edefd61bc8d04126e1ce2d",
-            "size": 48150
+            "sha256": "ddb1648f684db242da350dae7326ff56e79871af3a658a521e6b365e6d2c87f0",
+            "size": 49350
           },
           "lwc/fcbInvoiceForm/fcbInvoiceForm.js-meta.xml": {
             "sha256": "5b0642735826002bc0c0309154622d3b16108678798c8d432ff61570bc04ee75",
@@ -6635,12 +6635,12 @@
             "size": 745
           },
           "lwc/fcbStemProcessing/fcbStemProcessing.html": {
-            "sha256": "d94164a01f0140703526778e8daf09d919724e18056e4b7c3d27572a7a4766a5",
-            "size": 30285
+            "sha256": "ef682503b346a7ef9d39e9b65546d3379f988163745b72612b8bf66e21490519",
+            "size": 30447
           },
           "lwc/fcbStemProcessing/fcbStemProcessing.js": {
-            "sha256": "4d7594da5fad7bffe6fedcfbb179aea8716f3f5bfcd517ca3c589e115e480526",
-            "size": 44045
+            "sha256": "8c65b6a84fcf58ebab64e057958c8f8b14825b4da61379b74ca1cdf5555c6caa",
+            "size": 44796
           },
           "lwc/fcbStemProcessing/fcbStemProcessing.js-meta.xml": {
             "sha256": "70e6f162268d57442bf6ae24982f53bd9181d842c8841aab4295013c2c3bfd67",
@@ -10343,7 +10343,7 @@
             "size": 178
           }
         },
-        "inventoryHash": "17cd21d20ab0cdef81d516ea1f8f6092f89bf07f0ece5cc416430c28ed923a63",
+        "inventoryHash": "f0c11916c73ea19f8c3a5f232a1d5365e003b3bd19e7077d9aeffad2d01a81e8",
         "projected": true
       }
     },
@@ -10434,16 +10434,16 @@
             "size": 174
           },
           "classes/BuyerInvoiceApprovalService.cls": {
-            "sha256": "19cddb792d18446493ea592971a93ca1f1cb970cfe3dba5fc72550618df23e44",
-            "size": 14283
+            "sha256": "eabb2b5d239df89d98df0738a36b72f7044d3b3a1fa4bd26aca74cc053b4aae5",
+            "size": 14483
           },
           "classes/BuyerInvoiceApprovalService.cls-meta.xml": {
             "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
             "size": 174
           },
           "classes/BuyerInvoiceApprovalServiceTest.cls": {
-            "sha256": "db808b830fa4a5e9056acb0d813b7889edc2f0f3acf149ff7d22fcdba7bd1c81",
-            "size": 14351
+            "sha256": "782f2d9a48fa2380c45eabfa0b2e5771852884c3ca3cbad37e63751cd3fabcd0",
+            "size": 16298
           },
           "classes/BuyerInvoiceApprovalServiceTest.cls-meta.xml": {
             "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
@@ -10570,8 +10570,8 @@
             "size": 174
           },
           "classes/FcosLegacyFinancialCompatibilityTest.cls": {
-            "sha256": "cc5e513e139e7b4bfbaff3be92280ba1ac6a5acfb7c540454690ebc061020300",
-            "size": 25763
+            "sha256": "03a335b85b2dceccc1e21c058275239c65d4d9017488ca944ef889a0ec9c3802",
+            "size": 29369
           },
           "classes/FcosLegacyFinancialCompatibilityTest.cls-meta.xml": {
             "sha256": "356db61093648679fc9b3a801e41d51c94fa51e993380eac65b0bb076a20b6b0",
@@ -10938,16 +10938,16 @@
             "size": 174
           },
           "classes/InvoiceController.cls": {
-            "sha256": "9e92cb34f9548a9a384669163b708361643874781827ba2d6abaa2c72cbec002",
-            "size": 25911
+            "sha256": "8cebdc7df575cf506e6deff54eee35d93737fc2a1e5cee510ec544eadd630102",
+            "size": 28637
           },
           "classes/InvoiceController.cls-meta.xml": {
             "sha256": "93c98277e0edc72d11074aef3a175769c93fa2ea22e2753be76ac5746c951512",
             "size": 174
           },
           "classes/InvoiceControllerTest.cls": {
-            "sha256": "87974c8020f6c2d92ce51aa6ceb75043e18616b80b4ceb1f19f384ff7075cf7e",
-            "size": 5010
+            "sha256": "20fe277848791fa11a01afe7969ccaff8c0e02c69650f7abf5c95207efd2ea7a",
+            "size": 7562
           },
           "classes/InvoiceControllerTest.cls-meta.xml": {
             "sha256": "93c98277e0edc72d11074aef3a175769c93fa2ea22e2753be76ac5746c951512",
@@ -11354,16 +11354,16 @@
             "size": 174
           },
           "classes/StemTriggerHandler.cls": {
-            "sha256": "453389c79ac989e0ac92e0e3b5fe86188d5561465b60a68f21ed057f987b12ca",
-            "size": 34757
+            "sha256": "a3f2caff5caa91640f1d8654c2d6723e10ab228c9b34de796033759ab698d565",
+            "size": 34966
           },
           "classes/StemTriggerHandler.cls-meta.xml": {
             "sha256": "a1499a395f5cb2b7d6f5bf91daccbe6b14f400fa35d2fb86675f3a3651cd1d65",
             "size": 174
           },
           "classes/StemTriggerHandlerTest.cls": {
-            "sha256": "35d4bca76968a094f781b1eb6e3485c0c03ae0c09ce114a40c27993565042be9",
-            "size": 6497
+            "sha256": "87c5b08cb71acb1af16214f87f54bcd4b641fc8713372dd446e669b5cdfaf16c",
+            "size": 8033
           },
           "classes/StemTriggerHandlerTest.cls-meta.xml": {
             "sha256": "a1499a395f5cb2b7d6f5bf91daccbe6b14f400fa35d2fb86675f3a3651cd1d65",
@@ -11410,16 +11410,16 @@
             "size": 174
           },
           "classes/VariableChargeInvoiceReadinessService.cls": {
-            "sha256": "df689913469ce0c813f4553d0bd9444351de754501876aab043fc599fac91191",
-            "size": 75332
+            "sha256": "7961004151d57188dc53467f11609462370cfd86f24c4d6f36dda829a6f1dfb0",
+            "size": 76564
           },
           "classes/VariableChargeInvoiceReadinessService.cls-meta.xml": {
             "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
             "size": 174
           },
           "classes/VariableChargeReadinessTest.cls": {
-            "sha256": "ec5ad682de108fbd57618ef6889b6541825255cf4d393e260b5515cb66f27e84",
-            "size": 35931
+            "sha256": "b6e96150d94602c8520985a4b877bfaf1c99ba39102015358f3017ecdc01a020",
+            "size": 37359
           },
           "classes/VariableChargeReadinessTest.cls-meta.xml": {
             "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
@@ -11682,8 +11682,8 @@
             "size": 11174
           },
           "lwc/fcbInvoiceForm/fcbInvoiceForm.js": {
-            "sha256": "90b88d667bd259cc95d39347385474446cbf1eed82edefd61bc8d04126e1ce2d",
-            "size": 48150
+            "sha256": "ddb1648f684db242da350dae7326ff56e79871af3a658a521e6b365e6d2c87f0",
+            "size": 49350
           },
           "lwc/fcbInvoiceForm/fcbInvoiceForm.js-meta.xml": {
             "sha256": "5b0642735826002bc0c0309154622d3b16108678798c8d432ff61570bc04ee75",
@@ -11778,12 +11778,12 @@
             "size": 745
           },
           "lwc/fcbStemProcessing/fcbStemProcessing.html": {
-            "sha256": "d94164a01f0140703526778e8daf09d919724e18056e4b7c3d27572a7a4766a5",
-            "size": 30285
+            "sha256": "ef682503b346a7ef9d39e9b65546d3379f988163745b72612b8bf66e21490519",
+            "size": 30447
           },
           "lwc/fcbStemProcessing/fcbStemProcessing.js": {
-            "sha256": "4d7594da5fad7bffe6fedcfbb179aea8716f3f5bfcd517ca3c589e115e480526",
-            "size": 44045
+            "sha256": "8c65b6a84fcf58ebab64e057958c8f8b14825b4da61379b74ca1cdf5555c6caa",
+            "size": 44796
           },
           "lwc/fcbStemProcessing/fcbStemProcessing.js-meta.xml": {
             "sha256": "70e6f162268d57442bf6ae24982f53bd9181d842c8841aab4295013c2c3bfd67",
@@ -15522,7 +15522,7 @@
             "size": 178
           }
         },
-        "inventoryHash": "3e9239ccea34e522b7c5e5b3c6950906842ae17cc759da20ec2d34a1cab33406"
+        "inventoryHash": "c45e7f539ee0657169171d28ba5c6867f049aa4e5e1736be3404e5b838f8fdb0"
       },
       "final": {
         "files": {
@@ -15595,16 +15595,16 @@
             "size": 174
           },
           "classes/BuyerInvoiceApprovalService.cls": {
-            "sha256": "19cddb792d18446493ea592971a93ca1f1cb970cfe3dba5fc72550618df23e44",
-            "size": 14283
+            "sha256": "eabb2b5d239df89d98df0738a36b72f7044d3b3a1fa4bd26aca74cc053b4aae5",
+            "size": 14483
           },
           "classes/BuyerInvoiceApprovalService.cls-meta.xml": {
             "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
             "size": 174
           },
           "classes/BuyerInvoiceApprovalServiceTest.cls": {
-            "sha256": "db808b830fa4a5e9056acb0d813b7889edc2f0f3acf149ff7d22fcdba7bd1c81",
-            "size": 14351
+            "sha256": "782f2d9a48fa2380c45eabfa0b2e5771852884c3ca3cbad37e63751cd3fabcd0",
+            "size": 16298
           },
           "classes/BuyerInvoiceApprovalServiceTest.cls-meta.xml": {
             "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
@@ -15715,8 +15715,8 @@
             "size": 174
           },
           "classes/FcosLegacyFinancialCompatibilityTest.cls": {
-            "sha256": "cc5e513e139e7b4bfbaff3be92280ba1ac6a5acfb7c540454690ebc061020300",
-            "size": 25763
+            "sha256": "03a335b85b2dceccc1e21c058275239c65d4d9017488ca944ef889a0ec9c3802",
+            "size": 29369
           },
           "classes/FcosLegacyFinancialCompatibilityTest.cls-meta.xml": {
             "sha256": "356db61093648679fc9b3a801e41d51c94fa51e993380eac65b0bb076a20b6b0",
@@ -16051,16 +16051,16 @@
             "size": 174
           },
           "classes/InvoiceController.cls": {
-            "sha256": "9e92cb34f9548a9a384669163b708361643874781827ba2d6abaa2c72cbec002",
-            "size": 25911
+            "sha256": "8cebdc7df575cf506e6deff54eee35d93737fc2a1e5cee510ec544eadd630102",
+            "size": 28637
           },
           "classes/InvoiceController.cls-meta.xml": {
             "sha256": "93c98277e0edc72d11074aef3a175769c93fa2ea22e2753be76ac5746c951512",
             "size": 174
           },
           "classes/InvoiceControllerTest.cls": {
-            "sha256": "87974c8020f6c2d92ce51aa6ceb75043e18616b80b4ceb1f19f384ff7075cf7e",
-            "size": 5010
+            "sha256": "20fe277848791fa11a01afe7969ccaff8c0e02c69650f7abf5c95207efd2ea7a",
+            "size": 7562
           },
           "classes/InvoiceControllerTest.cls-meta.xml": {
             "sha256": "93c98277e0edc72d11074aef3a175769c93fa2ea22e2753be76ac5746c951512",
@@ -16467,16 +16467,16 @@
             "size": 174
           },
           "classes/StemTriggerHandler.cls": {
-            "sha256": "453389c79ac989e0ac92e0e3b5fe86188d5561465b60a68f21ed057f987b12ca",
-            "size": 34757
+            "sha256": "a3f2caff5caa91640f1d8654c2d6723e10ab228c9b34de796033759ab698d565",
+            "size": 34966
           },
           "classes/StemTriggerHandler.cls-meta.xml": {
             "sha256": "a1499a395f5cb2b7d6f5bf91daccbe6b14f400fa35d2fb86675f3a3651cd1d65",
             "size": 174
           },
           "classes/StemTriggerHandlerTest.cls": {
-            "sha256": "35d4bca76968a094f781b1eb6e3485c0c03ae0c09ce114a40c27993565042be9",
-            "size": 6497
+            "sha256": "87c5b08cb71acb1af16214f87f54bcd4b641fc8713372dd446e669b5cdfaf16c",
+            "size": 8033
           },
           "classes/StemTriggerHandlerTest.cls-meta.xml": {
             "sha256": "a1499a395f5cb2b7d6f5bf91daccbe6b14f400fa35d2fb86675f3a3651cd1d65",
@@ -16523,16 +16523,16 @@
             "size": 174
           },
           "classes/VariableChargeInvoiceReadinessService.cls": {
-            "sha256": "df689913469ce0c813f4553d0bd9444351de754501876aab043fc599fac91191",
-            "size": 75332
+            "sha256": "7961004151d57188dc53467f11609462370cfd86f24c4d6f36dda829a6f1dfb0",
+            "size": 76564
           },
           "classes/VariableChargeInvoiceReadinessService.cls-meta.xml": {
             "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
             "size": 174
           },
           "classes/VariableChargeReadinessTest.cls": {
-            "sha256": "ec5ad682de108fbd57618ef6889b6541825255cf4d393e260b5515cb66f27e84",
-            "size": 35931
+            "sha256": "b6e96150d94602c8520985a4b877bfaf1c99ba39102015358f3017ecdc01a020",
+            "size": 37359
           },
           "classes/VariableChargeReadinessTest.cls-meta.xml": {
             "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
@@ -16763,8 +16763,8 @@
             "size": 11174
           },
           "lwc/fcbInvoiceForm/fcbInvoiceForm.js": {
-            "sha256": "90b88d667bd259cc95d39347385474446cbf1eed82edefd61bc8d04126e1ce2d",
-            "size": 48150
+            "sha256": "ddb1648f684db242da350dae7326ff56e79871af3a658a521e6b365e6d2c87f0",
+            "size": 49350
           },
           "lwc/fcbInvoiceForm/fcbInvoiceForm.js-meta.xml": {
             "sha256": "5b0642735826002bc0c0309154622d3b16108678798c8d432ff61570bc04ee75",
@@ -16843,12 +16843,12 @@
             "size": 745
           },
           "lwc/fcbStemProcessing/fcbStemProcessing.html": {
-            "sha256": "d94164a01f0140703526778e8daf09d919724e18056e4b7c3d27572a7a4766a5",
-            "size": 30285
+            "sha256": "ef682503b346a7ef9d39e9b65546d3379f988163745b72612b8bf66e21490519",
+            "size": 30447
           },
           "lwc/fcbStemProcessing/fcbStemProcessing.js": {
-            "sha256": "4d7594da5fad7bffe6fedcfbb179aea8716f3f5bfcd517ca3c589e115e480526",
-            "size": 44045
+            "sha256": "8c65b6a84fcf58ebab64e057958c8f8b14825b4da61379b74ca1cdf5555c6caa",
+            "size": 44796
           },
           "lwc/fcbStemProcessing/fcbStemProcessing.js-meta.xml": {
             "sha256": "70e6f162268d57442bf6ae24982f53bd9181d842c8841aab4295013c2c3bfd67",
@@ -20547,7 +20547,7 @@
             "size": 178
           }
         },
-        "inventoryHash": "705ceb13af5a2665be5a8583019b297a3706975aa2541a604b59f91d8f2636cf",
+        "inventoryHash": "48049c98f61c20bd87028ecaf795ad7e81382a2cf1dd181f78d4d3abd181bd57",
         "projected": true
       }
     },
@@ -20638,16 +20638,16 @@
             "size": 174
           },
           "classes/BuyerInvoiceApprovalService.cls": {
-            "sha256": "19cddb792d18446493ea592971a93ca1f1cb970cfe3dba5fc72550618df23e44",
-            "size": 14283
+            "sha256": "eabb2b5d239df89d98df0738a36b72f7044d3b3a1fa4bd26aca74cc053b4aae5",
+            "size": 14483
           },
           "classes/BuyerInvoiceApprovalService.cls-meta.xml": {
             "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
             "size": 174
           },
           "classes/BuyerInvoiceApprovalServiceTest.cls": {
-            "sha256": "db808b830fa4a5e9056acb0d813b7889edc2f0f3acf149ff7d22fcdba7bd1c81",
-            "size": 14351
+            "sha256": "782f2d9a48fa2380c45eabfa0b2e5771852884c3ca3cbad37e63751cd3fabcd0",
+            "size": 16298
           },
           "classes/BuyerInvoiceApprovalServiceTest.cls-meta.xml": {
             "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
@@ -20774,8 +20774,8 @@
             "size": 174
           },
           "classes/FcosLegacyFinancialCompatibilityTest.cls": {
-            "sha256": "cc5e513e139e7b4bfbaff3be92280ba1ac6a5acfb7c540454690ebc061020300",
-            "size": 25763
+            "sha256": "03a335b85b2dceccc1e21c058275239c65d4d9017488ca944ef889a0ec9c3802",
+            "size": 29369
           },
           "classes/FcosLegacyFinancialCompatibilityTest.cls-meta.xml": {
             "sha256": "356db61093648679fc9b3a801e41d51c94fa51e993380eac65b0bb076a20b6b0",
@@ -21142,16 +21142,16 @@
             "size": 174
           },
           "classes/InvoiceController.cls": {
-            "sha256": "9e92cb34f9548a9a384669163b708361643874781827ba2d6abaa2c72cbec002",
-            "size": 25911
+            "sha256": "8cebdc7df575cf506e6deff54eee35d93737fc2a1e5cee510ec544eadd630102",
+            "size": 28637
           },
           "classes/InvoiceController.cls-meta.xml": {
             "sha256": "93c98277e0edc72d11074aef3a175769c93fa2ea22e2753be76ac5746c951512",
             "size": 174
           },
           "classes/InvoiceControllerTest.cls": {
-            "sha256": "87974c8020f6c2d92ce51aa6ceb75043e18616b80b4ceb1f19f384ff7075cf7e",
-            "size": 5010
+            "sha256": "20fe277848791fa11a01afe7969ccaff8c0e02c69650f7abf5c95207efd2ea7a",
+            "size": 7562
           },
           "classes/InvoiceControllerTest.cls-meta.xml": {
             "sha256": "93c98277e0edc72d11074aef3a175769c93fa2ea22e2753be76ac5746c951512",
@@ -21558,16 +21558,16 @@
             "size": 174
           },
           "classes/StemTriggerHandler.cls": {
-            "sha256": "453389c79ac989e0ac92e0e3b5fe86188d5561465b60a68f21ed057f987b12ca",
-            "size": 34757
+            "sha256": "a3f2caff5caa91640f1d8654c2d6723e10ab228c9b34de796033759ab698d565",
+            "size": 34966
           },
           "classes/StemTriggerHandler.cls-meta.xml": {
             "sha256": "a1499a395f5cb2b7d6f5bf91daccbe6b14f400fa35d2fb86675f3a3651cd1d65",
             "size": 174
           },
           "classes/StemTriggerHandlerTest.cls": {
-            "sha256": "35d4bca76968a094f781b1eb6e3485c0c03ae0c09ce114a40c27993565042be9",
-            "size": 6497
+            "sha256": "87c5b08cb71acb1af16214f87f54bcd4b641fc8713372dd446e669b5cdfaf16c",
+            "size": 8033
           },
           "classes/StemTriggerHandlerTest.cls-meta.xml": {
             "sha256": "a1499a395f5cb2b7d6f5bf91daccbe6b14f400fa35d2fb86675f3a3651cd1d65",
@@ -21614,16 +21614,16 @@
             "size": 174
           },
           "classes/VariableChargeInvoiceReadinessService.cls": {
-            "sha256": "df689913469ce0c813f4553d0bd9444351de754501876aab043fc599fac91191",
-            "size": 75332
+            "sha256": "7961004151d57188dc53467f11609462370cfd86f24c4d6f36dda829a6f1dfb0",
+            "size": 76564
           },
           "classes/VariableChargeInvoiceReadinessService.cls-meta.xml": {
             "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
             "size": 174
           },
           "classes/VariableChargeReadinessTest.cls": {
-            "sha256": "ec5ad682de108fbd57618ef6889b6541825255cf4d393e260b5515cb66f27e84",
-            "size": 35931
+            "sha256": "b6e96150d94602c8520985a4b877bfaf1c99ba39102015358f3017ecdc01a020",
+            "size": 37359
           },
           "classes/VariableChargeReadinessTest.cls-meta.xml": {
             "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
@@ -21886,8 +21886,8 @@
             "size": 11174
           },
           "lwc/fcbInvoiceForm/fcbInvoiceForm.js": {
-            "sha256": "90b88d667bd259cc95d39347385474446cbf1eed82edefd61bc8d04126e1ce2d",
-            "size": 48150
+            "sha256": "ddb1648f684db242da350dae7326ff56e79871af3a658a521e6b365e6d2c87f0",
+            "size": 49350
           },
           "lwc/fcbInvoiceForm/fcbInvoiceForm.js-meta.xml": {
             "sha256": "5b0642735826002bc0c0309154622d3b16108678798c8d432ff61570bc04ee75",
@@ -21982,12 +21982,12 @@
             "size": 745
           },
           "lwc/fcbStemProcessing/fcbStemProcessing.html": {
-            "sha256": "d94164a01f0140703526778e8daf09d919724e18056e4b7c3d27572a7a4766a5",
-            "size": 30285
+            "sha256": "ef682503b346a7ef9d39e9b65546d3379f988163745b72612b8bf66e21490519",
+            "size": 30447
           },
           "lwc/fcbStemProcessing/fcbStemProcessing.js": {
-            "sha256": "4d7594da5fad7bffe6fedcfbb179aea8716f3f5bfcd517ca3c589e115e480526",
-            "size": 44045
+            "sha256": "8c65b6a84fcf58ebab64e057958c8f8b14825b4da61379b74ca1cdf5555c6caa",
+            "size": 44796
           },
           "lwc/fcbStemProcessing/fcbStemProcessing.js-meta.xml": {
             "sha256": "70e6f162268d57442bf6ae24982f53bd9181d842c8841aab4295013c2c3bfd67",
@@ -25734,7 +25734,7 @@
             "size": 178
           }
         },
-        "inventoryHash": "b1f4becae9b5408f0d51eef8d170feaf409550bba8cae706bd1854f494f382bd"
+        "inventoryHash": "f0461d027a767be826066affa74c3e7a794fc36f4d6896c831bef58df735885b"
       },
       "final": {
         "files": {
@@ -25807,16 +25807,16 @@
             "size": 174
           },
           "classes/BuyerInvoiceApprovalService.cls": {
-            "sha256": "19cddb792d18446493ea592971a93ca1f1cb970cfe3dba5fc72550618df23e44",
-            "size": 14283
+            "sha256": "eabb2b5d239df89d98df0738a36b72f7044d3b3a1fa4bd26aca74cc053b4aae5",
+            "size": 14483
           },
           "classes/BuyerInvoiceApprovalService.cls-meta.xml": {
             "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
             "size": 174
           },
           "classes/BuyerInvoiceApprovalServiceTest.cls": {
-            "sha256": "db808b830fa4a5e9056acb0d813b7889edc2f0f3acf149ff7d22fcdba7bd1c81",
-            "size": 14351
+            "sha256": "782f2d9a48fa2380c45eabfa0b2e5771852884c3ca3cbad37e63751cd3fabcd0",
+            "size": 16298
           },
           "classes/BuyerInvoiceApprovalServiceTest.cls-meta.xml": {
             "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
@@ -25927,8 +25927,8 @@
             "size": 174
           },
           "classes/FcosLegacyFinancialCompatibilityTest.cls": {
-            "sha256": "cc5e513e139e7b4bfbaff3be92280ba1ac6a5acfb7c540454690ebc061020300",
-            "size": 25763
+            "sha256": "03a335b85b2dceccc1e21c058275239c65d4d9017488ca944ef889a0ec9c3802",
+            "size": 29369
           },
           "classes/FcosLegacyFinancialCompatibilityTest.cls-meta.xml": {
             "sha256": "356db61093648679fc9b3a801e41d51c94fa51e993380eac65b0bb076a20b6b0",
@@ -26263,16 +26263,16 @@
             "size": 174
           },
           "classes/InvoiceController.cls": {
-            "sha256": "9e92cb34f9548a9a384669163b708361643874781827ba2d6abaa2c72cbec002",
-            "size": 25911
+            "sha256": "8cebdc7df575cf506e6deff54eee35d93737fc2a1e5cee510ec544eadd630102",
+            "size": 28637
           },
           "classes/InvoiceController.cls-meta.xml": {
             "sha256": "93c98277e0edc72d11074aef3a175769c93fa2ea22e2753be76ac5746c951512",
             "size": 174
           },
           "classes/InvoiceControllerTest.cls": {
-            "sha256": "87974c8020f6c2d92ce51aa6ceb75043e18616b80b4ceb1f19f384ff7075cf7e",
-            "size": 5010
+            "sha256": "20fe277848791fa11a01afe7969ccaff8c0e02c69650f7abf5c95207efd2ea7a",
+            "size": 7562
           },
           "classes/InvoiceControllerTest.cls-meta.xml": {
             "sha256": "93c98277e0edc72d11074aef3a175769c93fa2ea22e2753be76ac5746c951512",
@@ -26679,16 +26679,16 @@
             "size": 174
           },
           "classes/StemTriggerHandler.cls": {
-            "sha256": "453389c79ac989e0ac92e0e3b5fe86188d5561465b60a68f21ed057f987b12ca",
-            "size": 34757
+            "sha256": "a3f2caff5caa91640f1d8654c2d6723e10ab228c9b34de796033759ab698d565",
+            "size": 34966
           },
           "classes/StemTriggerHandler.cls-meta.xml": {
             "sha256": "a1499a395f5cb2b7d6f5bf91daccbe6b14f400fa35d2fb86675f3a3651cd1d65",
             "size": 174
           },
           "classes/StemTriggerHandlerTest.cls": {
-            "sha256": "35d4bca76968a094f781b1eb6e3485c0c03ae0c09ce114a40c27993565042be9",
-            "size": 6497
+            "sha256": "87c5b08cb71acb1af16214f87f54bcd4b641fc8713372dd446e669b5cdfaf16c",
+            "size": 8033
           },
           "classes/StemTriggerHandlerTest.cls-meta.xml": {
             "sha256": "a1499a395f5cb2b7d6f5bf91daccbe6b14f400fa35d2fb86675f3a3651cd1d65",
@@ -26735,16 +26735,16 @@
             "size": 174
           },
           "classes/VariableChargeInvoiceReadinessService.cls": {
-            "sha256": "df689913469ce0c813f4553d0bd9444351de754501876aab043fc599fac91191",
-            "size": 75332
+            "sha256": "7961004151d57188dc53467f11609462370cfd86f24c4d6f36dda829a6f1dfb0",
+            "size": 76564
           },
           "classes/VariableChargeInvoiceReadinessService.cls-meta.xml": {
             "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
             "size": 174
           },
           "classes/VariableChargeReadinessTest.cls": {
-            "sha256": "ec5ad682de108fbd57618ef6889b6541825255cf4d393e260b5515cb66f27e84",
-            "size": 35931
+            "sha256": "b6e96150d94602c8520985a4b877bfaf1c99ba39102015358f3017ecdc01a020",
+            "size": 37359
           },
           "classes/VariableChargeReadinessTest.cls-meta.xml": {
             "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
@@ -26975,8 +26975,8 @@
             "size": 11174
           },
           "lwc/fcbInvoiceForm/fcbInvoiceForm.js": {
-            "sha256": "90b88d667bd259cc95d39347385474446cbf1eed82edefd61bc8d04126e1ce2d",
-            "size": 48150
+            "sha256": "ddb1648f684db242da350dae7326ff56e79871af3a658a521e6b365e6d2c87f0",
+            "size": 49350
           },
           "lwc/fcbInvoiceForm/fcbInvoiceForm.js-meta.xml": {
             "sha256": "5b0642735826002bc0c0309154622d3b16108678798c8d432ff61570bc04ee75",
@@ -27055,12 +27055,12 @@
             "size": 745
           },
           "lwc/fcbStemProcessing/fcbStemProcessing.html": {
-            "sha256": "d94164a01f0140703526778e8daf09d919724e18056e4b7c3d27572a7a4766a5",
-            "size": 30285
+            "sha256": "ef682503b346a7ef9d39e9b65546d3379f988163745b72612b8bf66e21490519",
+            "size": 30447
           },
           "lwc/fcbStemProcessing/fcbStemProcessing.js": {
-            "sha256": "4d7594da5fad7bffe6fedcfbb179aea8716f3f5bfcd517ca3c589e115e480526",
-            "size": 44045
+            "sha256": "8c65b6a84fcf58ebab64e057958c8f8b14825b4da61379b74ca1cdf5555c6caa",
+            "size": 44796
           },
           "lwc/fcbStemProcessing/fcbStemProcessing.js-meta.xml": {
             "sha256": "70e6f162268d57442bf6ae24982f53bd9181d842c8841aab4295013c2c3bfd67",
@@ -30767,7 +30767,7 @@
             "size": 178
           }
         },
-        "inventoryHash": "a43a7845e969cc1f2eba9f9c4262b60a301ac60d5732320d112056c7e5849b56",
+        "inventoryHash": "e12e6dbe9b1203c2fe5f216283636a5c0a03185b7b5f3adef208d9d3ac51392c",
         "projected": true
       }
     }
@@ -31723,7 +31723,7 @@
     ]
   },
   "inventoryManifests": {
-    "b820be17e46ceed25a6dfa1de5f51f4ac13e94ca4eb5f1f8b690af131b747a3c": {
+    "3f8038ce074908754beef5a91b94231bff6f6a7f8178645b9ec3a197d2030c42": {
       "path": "manifest/trading-fx-editors-combined-stable.xml",
       "sha256": "14234a40aa8e21270f4061c471b8f0ee685cc73af1e899601b6a90db778b0571",
       "metadata": {
@@ -31731,7 +31731,7 @@
         "sha256": "6432e1c2e81ed6f09c8247a21d178020708ca5bcd714889760bcb1546937910e"
       }
     },
-    "17cd21d20ab0cdef81d516ea1f8f6092f89bf07f0ece5cc416430c28ed923a63": {
+    "f0c11916c73ea19f8c3a5f232a1d5365e003b3bd19e7077d9aeffad2d01a81e8": {
       "path": "manifest/trading-fx-editors-combined-stable.xml",
       "sha256": "14234a40aa8e21270f4061c471b8f0ee685cc73af1e899601b6a90db778b0571",
       "metadata": {
@@ -31739,7 +31739,7 @@
         "sha256": "7f0e7b49dedc247e148b952872cb239337bef52de8c53ffd4ed63c761b018a4b"
       }
     },
-    "3e9239ccea34e522b7c5e5b3c6950906842ae17cc759da20ec2d34a1cab33406": {
+    "c45e7f539ee0657169171d28ba5c6867f049aa4e5e1736be3404e5b838f8fdb0": {
       "path": "manifest/trading-fx-editors-combined-stable.xml",
       "sha256": "14234a40aa8e21270f4061c471b8f0ee685cc73af1e899601b6a90db778b0571",
       "metadata": {
@@ -31747,7 +31747,7 @@
         "sha256": "6432e1c2e81ed6f09c8247a21d178020708ca5bcd714889760bcb1546937910e"
       }
     },
-    "705ceb13af5a2665be5a8583019b297a3706975aa2541a604b59f91d8f2636cf": {
+    "48049c98f61c20bd87028ecaf795ad7e81382a2cf1dd181f78d4d3abd181bd57": {
       "path": "manifest/trading-fx-editors-combined-stable.xml",
       "sha256": "14234a40aa8e21270f4061c471b8f0ee685cc73af1e899601b6a90db778b0571",
       "metadata": {
@@ -31755,7 +31755,7 @@
         "sha256": "7f0e7b49dedc247e148b952872cb239337bef52de8c53ffd4ed63c761b018a4b"
       }
     },
-    "b1f4becae9b5408f0d51eef8d170feaf409550bba8cae706bd1854f494f382bd": {
+    "f0461d027a767be826066affa74c3e7a794fc36f4d6896c831bef58df735885b": {
       "path": "manifest/trading-fx-editors-combined-stable.xml",
       "sha256": "14234a40aa8e21270f4061c471b8f0ee685cc73af1e899601b6a90db778b0571",
       "metadata": {
@@ -31763,7 +31763,7 @@
         "sha256": "6432e1c2e81ed6f09c8247a21d178020708ca5bcd714889760bcb1546937910e"
       }
     },
-    "a43a7845e969cc1f2eba9f9c4262b60a301ac60d5732320d112056c7e5849b56": {
+    "e12e6dbe9b1203c2fe5f216283636a5c0a03185b7b5f3adef208d9d3ac51392c": {
       "path": "manifest/trading-fx-editors-combined-stable.xml",
       "sha256": "14234a40aa8e21270f4061c471b8f0ee685cc73af1e899601b6a90db778b0571",
       "metadata": {
