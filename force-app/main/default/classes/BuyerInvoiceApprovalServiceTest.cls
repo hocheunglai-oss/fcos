@@ -83,6 +83,38 @@ private class BuyerInvoiceApprovalServiceTest {
         };
     }
 
+    @IsTest
+    static void atomicInvoiceCapturesApprovalAndLinksProductAndCharge() {
+        Map<String, Id> ids = prepareRequiredBuyerApproval(true);
+        Id stemId = ids.get('stem');
+        STEM_Extra_Cost__c charge = TestDataFactory.createTestStemExtraCost(
+            stemId, null, null, null, null, 950, 650, null, 'STEM Charge', false
+        );
+        charge.Fixed__c = true;
+        // A separate supplier keeps the verified supplier's approved inputs unchanged.
+        insert charge;
+        List<String> selected = new List<String>{String.valueOf(ids.get('line')), String.valueOf(charge.Id)};
+        Date invoiceDate = Date.today();
+        Test.startTest();
+        Invoice__c invoice = InvoiceController.saveFinalBuyerInvoicePdf(
+            stemId, selected, invoiceDate, invoiceDate.addDays(-1), invoiceDate.addDays(30),
+            EncodingUtil.base64Encode(Blob.valueOf('%PDF-1.4 test'))
+        );
+        System.assert(Limits.getQueries() < 90, 'Leave query headroom for the approved invoice path. Queries used: ' + Limits.getQueries());
+        Test.stopTest();
+
+        Invoice__c saved = [SELECT File__c, Amount__c, Buyer_Charge_Snapshot__c FROM Invoice__c WHERE Id = :invoice.Id];
+        System.assertNotEquals(null, saved.File__c);
+        System.assertNotEquals(null, saved.Buyer_Charge_Snapshot__c);
+        STEM_Line_Item__c product = [SELECT Buyer_Invoice__c, Issued__c, Total_Price__c FROM STEM_Line_Item__c WHERE Id = :ids.get('line')];
+        STEM_Extra_Cost__c extra = [SELECT Buyer_Invoice__c, Issued__c, Line_Total__c FROM STEM_Extra_Cost__c WHERE Id = :charge.Id];
+        System.assertEquals(true, product.Issued__c);
+        System.assertEquals(true, extra.Issued__c);
+        System.assertEquals(invoice.Id, product.Buyer_Invoice__c);
+        System.assertEquals(invoice.Id, extra.Buyer_Invoice__c);
+        System.assertEquals(product.Total_Price__c + extra.Line_Total__c, saved.Amount__c);
+    }
+
     private static IssuedInvoice issueApprovedInvoice() {
         Map<String, Id> ids = prepareRequiredBuyerApproval(true);
         STEM_Line_Item__c line = [

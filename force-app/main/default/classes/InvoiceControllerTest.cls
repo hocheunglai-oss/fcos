@@ -5,6 +5,48 @@ public class InvoiceControllerTest {
 		TestDataFactory.prepareDataForNominationConfirmationFlow();
 	}
     
+    @IsTest
+    static void finalBuyerInvoiceRollsBackPdfFailureAndGuardsRetry() {
+        STEM_Line_Item__c line = [SELECT Id, STEM__c FROM STEM_Line_Item__c WHERE Cancelled__c = false LIMIT 1];
+        List<String> selected = new List<String>{String.valueOf(line.Id)};
+        Date invoiceDate = Date.today();
+        Date deliveryDate = invoiceDate.addDays(-1);
+        Date dueDate = invoiceDate.addDays(30);
+        Test.startTest();
+        try {
+            InvoiceController.saveFinalBuyerInvoicePdf(line.STEM__c, selected, invoiceDate, deliveryDate, dueDate, '!');
+            System.assert(false, 'Invalid PDF data must fail.');
+        } catch (AuraHandledException expected) {
+            System.assert(expected.getMessage().contains('Salesforce could not save the invoice PDF'));
+        }
+        System.assertEquals(0, [SELECT COUNT() FROM Invoice__c WHERE STEM__c = :line.STEM__c]);
+        System.assertEquals(null, [SELECT Buyer_Invoice__c FROM STEM_Line_Item__c WHERE Id = :line.Id].Buyer_Invoice__c);
+        Test.stopTest();
+    }
+
+    @IsTest
+    static void finalBuyerInvoiceAttachesPdfAndRejectsAnAlreadyIssuedLine() {
+        STEM_Line_Item__c line = [SELECT Id, STEM__c FROM STEM_Line_Item__c WHERE Cancelled__c = false LIMIT 1];
+        List<String> selected = new List<String>{String.valueOf(line.Id)};
+        Date invoiceDate = Date.today();
+        Date deliveryDate = invoiceDate.addDays(-1);
+        Date dueDate = invoiceDate.addDays(30);
+        String pdf = EncodingUtil.base64Encode(Blob.valueOf('%PDF-1.4 test'));
+        Test.startTest();
+        Invoice__c invoice = InvoiceController.saveFinalBuyerInvoicePdf(line.STEM__c, selected, invoiceDate, deliveryDate, dueDate, pdf);
+        try {
+            InvoiceController.saveFinalBuyerInvoicePdf(line.STEM__c, selected, invoiceDate, deliveryDate, dueDate, pdf);
+            System.assert(false, 'Retry on a completed invoice must not create another invoice.');
+        } catch (AuraHandledException expected) {
+            System.assert(expected.getMessage().contains(invoice.Name));
+        }
+        Test.stopTest();
+        System.assertEquals(1, [SELECT COUNT() FROM Invoice__c WHERE STEM__c = :line.STEM__c]);
+        System.assertEquals(1, [SELECT COUNT() FROM ContentDocumentLink WHERE LinkedEntityId = :invoice.Id]);
+        System.assertNotEquals(null, [SELECT File__c FROM Invoice__c WHERE Id = :invoice.Id].File__c);
+        System.assertEquals(invoice.Id, [SELECT Buyer_Invoice__c FROM STEM_Line_Item__c WHERE Id = :line.Id].Buyer_Invoice__c);
+    }
+
     @isTest
     static void getStemInfoTest(){
         Test.startTest();
