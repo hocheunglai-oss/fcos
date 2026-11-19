@@ -7,6 +7,7 @@ import StemDetailModal from '@/components/dashboard/StemDetailModal';
 import StemActivity from '@/components/common/StemActivity';
 import RelatedStemSearch from '@/components/common/RelatedStemSearch';
 import { AuthenticatedDocumentDownloadButton } from '@/components/common/AuthenticatedDocumentPreview';
+import WorkNotifications from '@/components/WorkNotifications';
 import { MemoryRouter } from 'react-router-dom';
 import { useRecordDraft } from '@/hooks/useRecordDraft';
 import { setClientSessionOwner } from '@/lib/clientSessionState';
@@ -20,6 +21,12 @@ import '@/index.css';
 // Local fixtures never access a provider or save business records.
 setClientSessionOwner('fixture-user-a');
 window.recoveryFixture = { calls: [] };
+const notificationScenario = new URLSearchParams(location.search).has('notifications');
+if (notificationScenario) {
+  const pending = [];
+  window.recoveryFixture.notifications = pending;
+  window.recoveryFixture.resolveNotification = (index, data) => pending[index].resolve({ data });
+}
 const nativePrices = new URLSearchParams(location.search).has('native-prices');
 const pricedLines = [
   { Id: 'native-line', _Product_Name: 'Native price fixture', Price_Per_Unit__c: 1000, Cost_Per_Unit__c: 600,
@@ -31,6 +38,9 @@ const pricedLines = [
 ];
 appClient.functions.invoke = async (name, body) => {
   window.recoveryFixture.calls.push({ name, body });
+  if (notificationScenario && ['workNotificationsList', 'systemErrorVerify'].includes(name)) {
+    return new Promise((resolve) => window.recoveryFixture.notifications.push({ name, body, resolve }));
+  }
   if (name === 'specialTermMigrationPreviewAll') return { data: { projections: Object.fromEntries(['termsText', 'confirmationRemark', 'nominationRemark'].map((key) => [key, { style: 'Numbered', segments: [{ clauseText: 'Existing China clause.', suggestedShortName: 'China clause', suggestedCategory: 'General' }] }])) } };
   if (name === 'workspaceSearch') return { data: { results: [{ id: 'invoice', stemId: 'a0H000000000001AAA', kind: 'Buyer invoice', label: 'TEST-INV-2026' }], unavailableSources: [] } };
   if (name === 'salesforceStemDetail') return { data: { record: { Id: body.stemId, Name: 'TEST STEM WORKSPACE', _Vessel_Name: 'TEST VESSEL', _Port_Name: 'Hong Kong', Delivery_Date__c: '2026-09-16' }, lineItems: nativePrices ? pricedLines : [], extraCosts: [] } };
@@ -84,4 +94,4 @@ function Fixture() {
     <ContractEditor open={editor} onOpenChange={setEditor} detail={null} options={{ accounts: [], contacts: [], ports: [], products: [], users: [], owners: [], vessels: [] }} onOptionsQuery={async () => ({})} onSave={() => setError('Synthetic failure; no contract saved.')} />
   </main>;
 }
-createRoot(document.getElementById('root')).render(<MemoryRouter><Fixture /></MemoryRouter>);
+createRoot(document.getElementById('root')).render(<MemoryRouter>{notificationScenario ? <WorkNotifications /> : <Fixture />}</MemoryRouter>);

@@ -1,4 +1,54 @@
 import { expect, test } from '@playwright/test';
+
+test('incident verification refreshes only the current notification view', async ({ page, baseURL }, testInfo) => {
+  test.skip(process.env.FCOS_E2E_WORKFLOW_FIXTURE !== '1' || testInfo.project.name !== 'desktop-chrome',
+    'Local desktop fixture; all incident and notification operations are synthetic.');
+  await page.route('**/*', (route) => new URL(route.request().url()).origin === baseURL ? route.continue() : route.abort());
+  await page.goto('/e2e/fixtures/app-workflow-recovery.html?notifications=1');
+
+  const nextRequest = async (name, after = -1) => {
+    const find = () => page.evaluate(({ handler, previous }) => window.recoveryFixture.notifications
+      .findLastIndex((request, index) => index > previous && request.name === handler), { handler: name, previous: after });
+    await expect.poll(find).toBeGreaterThan(after);
+    return find();
+  };
+  const respond = (index, data) => page.evaluate(({ index, data }) => window.recoveryFixture.resolveNotification(index, data), { index, data });
+  const list = (title, extra = {}) => ({
+    notifications: [{ id: title, title, source: 'markets', createdAt: '2026-11-18T00:00:00Z', ...extra }],
+    unreadCount: 1,
+  });
+
+  const initial = await nextRequest('workNotificationsList');
+  await respond(initial, list('Initial fixture'));
+  await page.getByRole('button', { name: '1 unread work notifications' }).click();
+  const opened = await nextRequest('workNotificationsList', initial);
+  await respond(opened, list('Initial fixture'));
+  const source = page.getByRole('combobox', { name: 'Filter notification source' });
+  await source.click();
+  await page.getByRole('option', { name: 'System errors', exact: true }).click();
+  const incident = await nextRequest('workNotificationsList', opened);
+  await respond(incident, list('Fixture incident', { source: 'system_error', incidentSignature: 'fixture-incident', verificationAvailable: true }));
+  await page.getByTitle('Verify this exact incident is fixed').click();
+  const verification = await nextRequest('systemErrorVerify', incident);
+  await page.getByRole('button', { name: 'Handled', exact: true }).click();
+  await source.click();
+  await page.getByRole('option', { name: 'Markets', exact: true }).click();
+  const handled = await nextRequest('workNotificationsList', verification);
+  await respond(handled, list('Handled fixture'));
+  await respond(verification, { message: 'Verified fixture incident.' });
+  const refresh = await nextRequest('workNotificationsList', handled);
+  expect(await page.evaluate((index) => window.recoveryFixture.notifications[index].body, refresh))
+    .toEqual({ limit: 40, state: 'handled', source: 'markets' });
+
+  await page.getByRole('button', { name: 'Active', exact: true }).click();
+  const active = await nextRequest('workNotificationsList', refresh);
+  await respond(active, list('Current Markets fixture'));
+  await respond(refresh, list('Stale handled fixture'));
+  await expect(page.getByText('Current Markets fixture', { exact: true })).toBeVisible();
+  await expect(page.getByText('Stale handled fixture', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('status').filter({ hasText: 'Verified fixture incident.' })).toBeVisible();
+});
+
 test.describe('application draft recovery', () => {
   test.skip(process.env.FCOS_E2E_WORKFLOW_FIXTURE !== '1', 'Local fixture; every external action is stubbed.');
   test.beforeEach(async ({ page }) => { await page.goto('/e2e/fixtures/app-workflow-recovery.html'); });

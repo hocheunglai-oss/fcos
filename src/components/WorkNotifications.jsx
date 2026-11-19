@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, Bell, BellRing, Check, CheckCheck, Clock3, Loader2, RotateCcw, ShieldCheck, TriangleAlert } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { appClient } from "@/api/appClient";
@@ -66,6 +66,13 @@ export default function WorkNotifications() {
   const [unavailableSources, setUnavailableSources] = useState([]);
   const [stateFilter, setStateFilter] = useState("active");
   const [sourceFilter, setSourceFilter] = useState("all");
+  const currentFilters = useRef(null);
+  const latestListRequest = useRef(null);
+
+  useLayoutEffect(() => {
+    currentFilters.current = { state: stateFilter, source: sourceFilter };
+    return () => { currentFilters.current = null; };
+  }, [stateFilter, sourceFilter]);
 
   const applyResponse = useCallback((data) => {
     setNotifications(Array.isArray(data?.notifications) ? data.notifications : []);
@@ -75,6 +82,11 @@ export default function WorkNotifications() {
 
   const loadNotifications = useCallback(
     async ({ quiet = false } = {}) => {
+      const filters = currentFilters.current;
+      if (!filters) return;
+      const request = {};
+      latestListRequest.current = request;
+      const isCurrent = () => filters === currentFilters.current && request === latestListRequest.current;
       if (!quiet) setLoading(true);
 
       try {
@@ -82,22 +94,22 @@ export default function WorkNotifications() {
           "workNotificationsList",
           {
             limit: NOTIFICATION_LIMIT,
-            state: stateFilter,
-            source: sourceFilter,
+            ...filters,
           },
           { force: true },
         );
 
+        if (!isCurrent() || response.data?.cancelled) return;
         if (response.data?.error) {
           setUnavailableSources(["Notifications"]);
         } else {
           applyResponse(response.data);
         }
       } finally {
-        if (!quiet) setLoading(false);
+        if (isCurrent()) setLoading(false);
       }
     },
-    [applyResponse, sourceFilter, stateFilter],
+    [applyResponse],
   );
 
   useEffect(() => {
@@ -115,7 +127,7 @@ export default function WorkNotifications() {
       window.clearInterval(interval);
       window.removeEventListener("fcos:work-notifications-changed", handleChanged);
     };
-  }, [loadNotifications]);
+  }, [loadNotifications, sourceFilter, stateFilter]);
 
   const markRead = useCallback(
     async (notificationIds) => {
@@ -171,6 +183,7 @@ export default function WorkNotifications() {
       const response = await appClient.functions.invoke("systemErrorVerify", {
         incidentSignature: notification.incidentSignature,
       }, { force: true });
+      if (response.data?.cancelled) return;
       setVerificationMessage(response.data?.error || response.data?.message || "Recovery verified for this incident.");
       if (!response.data?.error) await loadNotifications({ quiet: true });
     } catch {
