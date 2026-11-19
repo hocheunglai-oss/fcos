@@ -12,6 +12,7 @@ import getDBSInfo from "@salesforce/apex/InvoiceController.getDBSInfo";
 import getUBSInfo from "@salesforce/apex/InvoiceController.getUBSInfo";
 import createInvoice from "@salesforce/apex/InvoiceController.createInvoice";
 import createReviewedInvoice from "@salesforce/apex/InvoiceController.createReviewedInvoice";
+import saveFinalBuyerInvoicePdf from "@salesforce/apex/InvoiceController.saveFinalBuyerInvoicePdf";
 import generateInvoicePDF from "@salesforce/apex/InvoiceController.generateInvoicePDF";
 import upsertLastInvoiceForm from "@salesforce/apex/InvoiceController.upsertLastInvoiceForm";
 import getBDNBase64Strings from "@salesforce/apex/InvoiceController.getBDNBase64Strings";
@@ -60,6 +61,7 @@ export default class FcbInvoiceForm extends LightningElement {
     paymentTerm;
     partialCiaPaymentTermInputId;
     formLoadError;
+    generationError;
     pdfLibraryError;
     pdfLibraryLoadPromise;
     invoiceFormLoadSequence = 0;
@@ -92,6 +94,7 @@ export default class FcbInvoiceForm extends LightningElement {
             this.proforma = proforma;
             this.isCreditNote = false;
             this.formLoadError = null;
+            this.generationError = null;
             this.tradeDocument = undefined;
             this.tradeDocumentError = undefined;
             this.stem = null;
@@ -181,7 +184,7 @@ export default class FcbInvoiceForm extends LightningElement {
     }
 
     get isGenerateDisabled() {
-        return !this.actionExecuted || this.isFinalInvoiceBlocked || Boolean(this.invoiceFormError) || Boolean(this.pdfLibraryLoadPromise && !this.isPDFLibLoaded);
+        return !this.actionExecuted || this.isFinalInvoiceBlocked || Boolean(this.invoicePrerequisiteError) || Boolean(this.pdfLibraryLoadPromise && !this.isPDFLibLoaded);
     }
 
     get hasPartialCiaPaymentTerm() {
@@ -189,6 +192,10 @@ export default class FcbInvoiceForm extends LightningElement {
     }
 
     get invoiceFormError() {
+        return this.generationError || this.invoicePrerequisiteError;
+    }
+
+    get invoicePrerequisiteError() {
         return this.formLoadError || this.tradeDocumentError || this.pdfLibraryError || this.partialCiaPaymentTermValidationError;
     }
 
@@ -578,6 +585,8 @@ export default class FcbInvoiceForm extends LightningElement {
         const operationSequence = this.invoiceFormLoadSequence;
         let invoice;
         let pdfSaved = false;
+        const useAtomicFinalSave = !this.isManagedDocument && !this.proforma && !this.isCreditNote;
+        this.generationError = null;
         try {
             this.vesselText = normalizeInvoiceVesselText(this.vesselText);
             const reviewedFxFingerprint = this.isManagedDocument ? this.tradeDocument.fingerprint : null;
@@ -779,12 +788,9 @@ export default class FcbInvoiceForm extends LightningElement {
             let fields = this.mapLastInvoiceFormFields();
             const selectedProducts = this.selectedProductInputs.map(product => product.id)
                 .filter(id => typeof id === 'string' && id.length > 7);
-            const create = reviewedFxFingerprint ? createReviewedInvoice : createInvoice;
-            invoice = await create({
+            const invoiceRequest = {
                 stemId: this.stemId,
                 extraIds: selectedProducts,
-                createProforma,
-                isCreditNote: this.isCreditNote,
                 invoiceDate: this.stem.Mailing_Requirement__c?.includes('-3')
                     ? this._convertDate(new Date(this.stem.Delivery_Date__c))
                     : this._convertDate(new Date()),
@@ -794,8 +800,7 @@ export default class FcbInvoiceForm extends LightningElement {
                     ? this._convertDate(new Date(this.stem.Delivery_Date__c))
                     : null,
                 invoiceDueDate: this._convertDate(new Date(this.stem.Invoice_Due_Date__c)),
-                ...(reviewedFxFingerprint ? { reviewedFxFingerprint } : {}),
-            });
+            };
             let pdfBody = base64String;
             if (includeDeliveryNotes) {
                 const deliveryNotes = await getBDNBase64Strings({ entityIds: deliveryNoteEntityIds });
@@ -814,25 +819,44 @@ export default class FcbInvoiceForm extends LightningElement {
                 }
                 pdfBody = btoa(binary);
             }
-            await generateInvoicePDF({
-                invoiceId: invoice.Id,
-                invoiceVersionName: invoice.Name,
-                extraIds: selectedProducts,
-                body: pdfBody,
-                createProforma,
-                reviewedFxFingerprint
-            });
+            if (useAtomicFinalSave) {
+                invoice = await saveFinalBuyerInvoicePdf({ ...invoiceRequest, body: pdfBody });
+            } else {
+                const create = reviewedFxFingerprint ? createReviewedInvoice : createInvoice;
+                invoice = await create({
+                    ...invoiceRequest,
+                    createProforma,
+                    isCreditNote: this.isCreditNote,
+                    ...(reviewedFxFingerprint ? { reviewedFxFingerprint } : {}),
+                });
+                await generateInvoicePDF({
+                    invoiceId: invoice.Id,
+                    invoiceVersionName: invoice.Name,
+                    extraIds: selectedProducts,
+                    body: pdfBody,
+                    createProforma,
+                    reviewedFxFingerprint,
+                });
+            }
             pdfSaved = true;
             await upsertLastInvoiceForm({ lastInvoiceForm: fields });
             if (operationSequence === this.invoiceFormLoadSequence) this.closeModal();
             fireEvent(this.pageRef, "refreshInvoices", true);
         } catch (error) {
             if (operationSequence !== this.invoiceFormLoadSequence) return;
-            const detail = error?.body?.message || error?.message || 'Salesforce did not return an error message.';
+            const body = error?.body;
+            const errors = Array.isArray(body) ? body : [
+                ...(body?.output?.errors ?? body?.pageErrors ?? []),
+                ...Object.values(body?.output?.fieldErrors ?? body?.fieldErrors ?? {}).flat(),
+            ];
+            const detail = errors.map(issue => issue?.message).filter(Boolean).join(' ')
+                || body?.message || error?.message || error?.statusText || 'Salesforce did not return an error message.';
             if (pdfSaved) {
                 this.formLoadError = `Invoice ${invoice.Name} and its PDF were saved, but the last invoice form could not be saved. ${detail} Open the Invoices tab to view the invoice.`;
             } else if (invoice) {
                 this.formLoadError = `Invoice record ${invoice.Name} was created, but PDF generation could not be confirmed. ${detail} Check that invoice in the Invoices tab before trying again.`;
+            } else if (useAtomicFinalSave) {
+                this.generationError = detail;
             } else {
                 this.formLoadError = detail;
             }

@@ -64,6 +64,54 @@ public class InvoiceController {
     }
 
     @AuraEnabled
+    public static Invoice__c saveFinalBuyerInvoicePdf(
+        Id stemId, List<String> extraIds, Date invoiceDate, Date deliveryDate, Date invoiceDueDate, String body
+    ) {
+        if (extraIds == null || extraIds.isEmpty() || String.isBlank(body)) {
+            throw invoiceSaveError('Select the invoice lines and provide the PDF before saving.');
+        }
+        STEM__c lockedStem = [SELECT Id FROM STEM__c WHERE Id = :stemId FOR UPDATE];
+        List<Id> selected = new List<Id>();
+        for (String lineId : extraIds) selected.add(Id.valueOf(lineId));
+        List<STEM_Line_Item__c> issuedProducts = [
+            SELECT Buyer_Invoice__r.Name FROM STEM_Line_Item__c
+            WHERE Id IN :selected AND STEM__c = :lockedStem.Id
+            AND Buyer_Invoice__r.File__c != null AND Buyer_Invoice__r.Proforma__c = false
+            AND Buyer_Invoice__r.Deprecated__c = false LIMIT 1
+        ];
+        List<STEM_Extra_Cost__c> issuedCharges = [
+            SELECT Buyer_Invoice__r.Name FROM STEM_Extra_Cost__c
+            WHERE Id IN :selected AND STEM__c = :lockedStem.Id
+            AND Buyer_Invoice__r.File__c != null AND Buyer_Invoice__r.Proforma__c = false
+            AND Buyer_Invoice__r.Deprecated__c = false LIMIT 1
+        ];
+        if (!issuedProducts.isEmpty() || !issuedCharges.isEmpty()) {
+            String existing = issuedProducts.isEmpty()
+                ? issuedCharges[0].Buyer_Invoice__r.Name : issuedProducts[0].Buyer_Invoice__r.Name;
+            throw invoiceSaveError('A selected line is already on invoice ' + existing + '. Open it in the Invoices tab.');
+        }
+
+        // The locked STEM serializes issuance. An exception rolls back the invoice, file and line updates together.
+        Savepoint beforeInvoice = Database.setSavepoint();
+        try {
+            Invoice__c invoice = createInvoice(String.valueOf(stemId), extraIds, false, false,
+                invoiceDate, deliveryDate, invoiceDueDate);
+            attachInvoicePdf(invoice.Id, invoice.Name, extraIds, body, false, null, true);
+            return invoice;
+        } catch (Exception error) {
+            Database.rollback(beforeInvoice);
+            if (error instanceof AuraHandledException) throw error;
+            throw invoiceSaveError('Salesforce could not save the invoice PDF. ' + error.getMessage());
+        }
+    }
+
+    private static AuraHandledException invoiceSaveError(String message) {
+        AuraHandledException error = new AuraHandledException(message);
+        error.setMessage(message);
+        return error;
+    }
+
+    @AuraEnabled
     public static Invoice__c createReviewedInvoice(String stemId, List<String> extraIds, Boolean createProforma, Boolean isCreditNote, Date invoiceDate, Date deliveryDate, Date invoiceDueDate, String reviewedFxFingerprint){
         if(String.isBlank(reviewedFxFingerprint)) throw new AuraHandledException('Review the exact native invoice lines before creating the invoice.');
         return createInvoiceFromSelection(stemId,extraIds,createProforma,isCreditNote,invoiceDate,deliveryDate,invoiceDueDate,reviewedFxFingerprint);
@@ -121,11 +169,9 @@ public class InvoiceController {
         Integer invoiceVersionNumber;
         String invoiceVersionName = '';
         List<List<Invoice__c>> invoicesList = new List<List<Invoice__c>>();
-        List<String> invoicesIds = new List<String>();
         if(!currentInvoices.isEmpty()){
             List<Invoice__c> buffInvoices = new List<Invoice__c>();
             for(Integer i = 0; i < currentInvoices.size(); i++){
-                invoicesIds.add(currentInvoices.get(i).Id);
                 if(i == 0){
                    buffInvoices.add(currentInvoices.get(i));
                    continue;
@@ -150,9 +196,6 @@ public class InvoiceController {
                 break;
             }
         }
-
-        List<ContentVersion> versions = [SELECT Id, Title, FileType, VersionData, isLatest, ContentDocumentId, FileExtension, FirstPublishLocationId
-                                         FROM ContentVersion where isLatest = true AND FirstPublishLocationId In: invoicesIds];
 
         //Creating Invoice object
         if(Test.isRunningTest()){
@@ -275,6 +318,11 @@ public class InvoiceController {
     }
     @AuraEnabled
     public static void generateInvoicePDF(String invoiceId, String invoiceVersionName, List<String> extraIds, String body, Boolean createProforma, String reviewedFxFingerprint){
+        attachInvoicePdf(invoiceId, invoiceVersionName, extraIds, body, createProforma, reviewedFxFingerprint, false);
+    }
+
+    private static void attachInvoicePdf(String invoiceId, String invoiceVersionName, List<String> extraIds,
+        String body, Boolean createProforma, String reviewedFxFingerprint, Boolean justCreatedUnderLock) {
         Invoice__c sourceInvoice=[SELECT Id,STEM__c,Document_Currency__c,Document_FX_Fingerprint__c,Document_FX_Side__c,Document_FX_Confirmed_At__c,Reissue_Of_Invoice__c,Original_Invoice__c,Final_Of_Proforma__c,Proforma__c,File__c FROM Invoice__c WHERE Id=:invoiceId];
         Boolean managedDocument=FcosTradeDocumentService.isManagedDocument(sourceInvoice);
         Blob documentBody;
@@ -309,24 +357,29 @@ public class InvoiceController {
         ];
         if(productLines.size()+chargeLines.size()!=fxLineIds.size())
             throw new AuraHandledException('Every invoice line must belong to this STEM.');
-        MasterContractInvoiceReadinessService.assertPersistedInvoicesAllowed(new Set<Id>{Id.valueOf(invoiceId)});
-        VariableChargeInvoiceReadinessService.assertPersistedInvoicesAllowed(new Set<Id>{Id.valueOf(invoiceId)});
+        if (!justCreatedUnderLock) {
+            MasterContractInvoiceReadinessService.assertPersistedInvoicesAllowed(new Set<Id>{Id.valueOf(invoiceId)});
+            VariableChargeInvoiceReadinessService.assertPersistedInvoicesAllowed(new Set<Id>{Id.valueOf(invoiceId)});
+        }
+        // The atomic path already checked both gates while inserting this invoice under the STEM lock.
+        // Both paths still recheck readiness in InvoiceTrigger when assigning the file.
+
         ContentVersion contentVersion = new ContentVersion();
         contentVersion.PathOnClient = '/' + invoiceVersionName + '.pdf';
         contentVersion.Title = invoiceVersionName + '.pdf';
         contentVersion.VersionData = documentBody;
         contentVersion.FirstPublishLocationId = invoiceId;
         insert contentVersion;
-        ContentDocumentLink cdl = [SELECT Id, LinkedEntityId, ContentDocumentId FROM ContentDocumentLink where LinkedEntityId =: invoiceId];
+        Id documentId = [SELECT ContentDocumentId FROM ContentVersion WHERE Id = :contentVersion.Id].ContentDocumentId;
         List<ContentDocumentLink> extraLinks = new List<ContentDocumentLink>();
         system.debug(extraIds);
         for(String extraId: extraIds){
-            extraLinks.add(new ContentDocumentLink(LinkedEntityId = extraId, ContentDocumentId = cdl.ContentDocumentId));
+            extraLinks.add(new ContentDocumentLink(LinkedEntityId = extraId, ContentDocumentId = documentId));
         }
         insert extraLinks;
         //Setting File refference for Invoice record
         Decimal totalAmount = linkInvoiceLines(productLines, chargeLines, invoiceId, createProforma);
-        Invoice__c invoice = new Invoice__c(Id = invoiceId, File__c = Url.getOrgDomainURL().toExternalForm() + '/' + cdl.ContentDocumentId, Amount__c = totalAmount);
+        Invoice__c invoice = new Invoice__c(Id = invoiceId, File__c = Url.getOrgDomainURL().toExternalForm() + '/' + documentId, Amount__c = totalAmount);
         if (managedDocument) {
             invoice.Amount__c=fxReview.usdTotal;
             FcosTradeDocumentService.applySnapshot(invoice,fxReview);

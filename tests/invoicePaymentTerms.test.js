@@ -62,6 +62,11 @@ async function loadForm(overrides = {}) {
     getDBSInfo: async () => bank, getUBSInfo: async () => bank,
     getVariableChargeInvoiceReadiness: async () => ({ ready: true, requiresVariableChargeReview: false }),
     loadScript: async () => {}, jsPDF: 'jsPDF', jspdfAutotable: 'autotable', pdfLib: 'pdfLib',
+    saveFinalBuyerInvoicePdf: async (request) => {
+      calls.invoices.push({ ...request, createProforma: false });
+      calls.pdfs.push({ invoiceId: 'new-invoice', body: request.body });
+      return { Id: 'new-invoice', Name: 'NEW INVOICE' };
+    },
     createInvoice: async (request) => { calls.invoices.push(request); return { Id: 'new-invoice', Name: 'NEW INVOICE' }; },
     createReviewedInvoice: async (request) => { calls.invoices.push(request); return { Id: 'new-invoice', Name: 'NEW INVOICE' }; },
     generateInvoicePDF: async (request) => { calls.pdfs.push(request); },
@@ -335,23 +340,25 @@ test('the form exposes validation and makes only protected payment-term fields r
   assert.match(html, /disabled=\{input.isPaymentTermLocked\}/u);
 });
 
-test('a PDF save failure clears the spinner and identifies the already created invoice', async () => {
-  let saves = 0;
+test('a final PDF save failure surfaces an Apex array error and retries the atomic save', async () => {
+  let attempts = 0;
   const { component, calls } = await loadForm({
-    generateInvoicePDF: async () => {
-      saves++;
-      throw { body: { message: 'PDF attachment failed.' } };
+    saveFinalBuyerInvoicePdf: async () => {
+      if (++attempts === 1) throw { body: [{ message: 'PDF attachment failed.' }] };
+      return { Id: 'new-invoice', Name: 'NEW INVOICE' };
     },
   });
   await component.openModal('stem-id', products, false, true, savedForm());
   await component.handleGeneratePDF();
   assert.equal(component.actionExecuted, true);
   assert.equal(component.isModalOpen, true);
-  assert.match(component.invoiceFormError, /NEW INVOICE.*PDF attachment failed/u);
-  await component.handleGeneratePDF();
-  assert.equal(calls.invoices.length, 1);
-  assert.equal(saves, 1);
+  assert.match(component.invoiceFormError, /PDF attachment failed/u);
   assert.deepEqual(calls.savedForms, []);
+  assert.deepEqual(calls.invoices, []);
+  await component.handleGeneratePDF();
+  assert.equal(attempts, 2);
+  assert.equal(component.isModalOpen, false);
+  assert.equal(calls.savedForms.length, 1);
 });
 
 test('a last-form save failure reports that the invoice PDF was already saved', async () => {
