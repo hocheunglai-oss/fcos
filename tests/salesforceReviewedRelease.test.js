@@ -1799,10 +1799,15 @@ test('zero-test quick deploy requires native positive validation for the exact l
   } finally { f.cleanup(); }
 });
 
-test('mixed native readback allows one terminal newline difference in Lightning and Apex trigger source', () => {
+test('mixed native readback allows only observed Salesforce source and invoice page serialization', () => {
   const cwd = mkdtempSync(path.join(tmpdir(), 'fcos-native-lwc-fixture-'));
   const environment = policy.environments[0];
   const component = 'LightningComponentBundle:examplePanel';
+  const pageComponent = 'FlexiPage:FCOS_DEVEE_Invoice_Launcher_Buyer';
+  const page = 'flexipages/FCOS_DEVEE_Invoice_Launcher_Buyer.flexipage-meta.xml';
+  const pageBody = '<FlexiPage><componentName>c:fcosTradeInvoiceActions</componentName><sobjectType>Invoice__c</sobjectType></FlexiPage>';
+  const sourcePage = "<?xml version='1.0' encoding='UTF-8'?>\n" + pageBody;
+  const nativePage = '<?xml version="1.0" encoding="UTF-8"?>\n' + pageBody.replace('c:fcosTradeInvoiceActions', 'fcosTradeInvoiceActions') + '\n';
   const triggerComponent = 'ApexTrigger:FcosTradeCurrencySideTrigger';
   const trigger = 'triggers/FcosTradeCurrencySideTrigger.trigger';
   const triggerDescriptor = trigger + '-meta.xml';
@@ -1810,6 +1815,7 @@ test('mixed native readback allows one terminal newline difference in Lightning 
   const html = 'lwc/examplePanel/examplePanel.html';
   const css = 'lwc/examplePanel/examplePanel.css';
   const source = {
+    [page]: Buffer.from(sourcePage),
     [trigger]: Buffer.from('trigger FcosTradeCurrencySideTrigger on Trade_Currency_Side__c (before delete) {}\n'),
     [triggerDescriptor]: Buffer.from('<ApexTrigger><status>Active</status></ApexTrigger>\n'),
     [js]: Buffer.from('export default class ExamplePanel {}\n'),
@@ -1817,10 +1823,10 @@ test('mixed native readback allows one terminal newline difference in Lightning 
     [css]: Buffer.from('div { color: black; }\n'),
   };
   const stable = { 'profiles/Example.profile-meta.xml': Buffer.from('<Profile/>') };
-  const native = { ...source, [trigger]: source[trigger].subarray(0, -1), [js]: source[js].subarray(0, -1),
+  const native = { ...source, [page]: Buffer.from(nativePage), [trigger]: source[trigger].subarray(0, -1), [js]: source[js].subarray(0, -1),
     [html]: source[html].subarray(0, -1), [css]: source[css].subarray(0, -1) };
   const manifest = packageXml(['Profile:Example']);
-  const supplemental = packageXml([component, triggerComponent]);
+  const supplemental = packageXml([component, triggerComponent, pageComponent]);
   const projectionPaths = Object.keys(source).sort();
   const expectedInventory = inventoryFromFiles(stable).files;
   const expectedInventoryHash = projectedNativeInventoryHash(expectedInventory, projectionPaths);
@@ -1841,14 +1847,15 @@ test('mixed native readback allows one terminal newline difference in Lightning 
       write(path.join(project, directory), directory === 'metadata' ? native : stable);
       return { id: '09SHF000002gTFl2AM', status: 'Succeeded', done: true, success: true };
     } });
-    const request = { plan: { finalInventory: inventoryFromFiles(source), review: {
-      components: [{ id: component, files: [js, html, css] }, { id: triggerComponent, files: [trigger, triggerDescriptor] }],
+    const request = { plan: { invoiceAppPlacement: { devee: { app: 'FCB' } }, finalInventory: inventoryFromFiles(source), review: {
+      components: [{ id: component, files: [js, html, css] }, { id: triggerComponent, files: [trigger, triggerDescriptor] }, { id: pageComponent, files: [page] }],
       inventoryManifests: { [expectedInventoryHash]: { path: 'inventory.xml', sha256: hash(manifest),
         metadata: { path: 'metadata.xml', sha256: hash(supplemental) } } },
     } }, expectedInventory, expectedInventoryHash, nativeExport: true, nativeBootstrap: true, projectedNativeInventory: true,
     projectionPaths };
     assert.deepEqual(provider.verifyInventory(environment, request).verifiedProjectionPaths, projectionPaths);
-    for (const [name, invalid] of [[js, 'export default class OtherPanel {}'], [html, '<template><div>Other</div></template>'],
+    for (const [name, invalid] of [[page, nativePage.replace('Invoice__c', 'Supplier_Invoice__c')],
+      [page, nativePage.replace('UTF-8', 'UTF-16')], [page, nativePage.replace('fcosTradeInvoiceActions', 'unrelatedComponent')], [js, 'export default class OtherPanel {}'], [html, '<template><div>Other</div></template>'],
       [html, source[html].toString() + '\n'], [css, 'div { color: red; }'], [css, source[css].toString() + '\n'],
       [trigger, source[trigger].toString().replace('before delete', 'before insert')],
       [trigger, source[trigger].toString() + '\n'],

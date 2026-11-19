@@ -270,9 +270,11 @@ function verifyNativeMetadataProjection({ root, sourceRoot, plan, projectionPath
     }
     if (local === observed) continue;
     if (plan.invoiceAppPlacement && /^flexipages\/FCOS_DEVEE_Invoice_Launcher_(?:Buyer|Supplier)\.flexipage-meta\.xml$/u.test(name)) {
-      const normalizeLauncher = xml => normalizedMetadataDefinition(xml.replace(
-        /<componentName>c:fcosTradeInvoiceActions<\/componentName>/gu,
-        '<componentName>fcosTradeInvoiceActions</componentName>'));
+      // Salesforce exports the same UTF-8 declaration using double quotes.
+      const normalizeLauncher = xml => normalizedMetadataDefinition(xml
+        .replace(/^<\?xml version='1\.0' encoding='UTF-8'\?>/u, '<?xml version="1.0" encoding="UTF-8"?>')
+        .replace(/<componentName>c:fcosTradeInvoiceActions<\/componentName>/gu,
+          '<componentName>fcosTradeInvoiceActions</componentName>'));
       if (JSON.stringify(normalizeLauncher(local)) === JSON.stringify(normalizeLauncher(observed))) continue;
     }
     if (/^layouts\/[^/]+\.layout-meta\.xml$/u.test(name)
