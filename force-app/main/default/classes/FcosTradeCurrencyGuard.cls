@@ -27,8 +27,10 @@ public with sharing class FcosTradeCurrencyGuard {
         }
         Boolean fxEnabled = FcosCompanyFxRateService.enabled();
         Boolean chargePriceWriter=fxEnabled && FeatureManagement.checkPermission('Fcos_Trading_FX_Charge_Price');
-        if(!FcosTradeCurrencyService.isManagedWrite()) for(SObject row:rows) for(String direction:directions)
-            guardPreciseUsdCharge(row,oldRows==null?null:oldRows.get(row.Id),direction,chargePriceWriter);
+        for(SObject row:rows) for(String direction:directions) {
+            if(!FcosTradeCurrencyService.isManagedWriteFor(row.Id,direction))
+                guardPreciseUsdCharge(row,oldRows==null?null:oldRows.get(row.Id),direction,chargePriceWriter);
+        }
         manageInitialAgentHkdMarkers(rows, oldRows, fxEnabled);
         if (!fxEnabled && !hasAnyHkdRows(rows, oldRows, directions)
             && !hasUsdSideOrReissueEvidence(rows, oldRows, directions)) return;
@@ -82,8 +84,11 @@ public with sharing class FcosTradeCurrencyGuard {
         for (SObject row : rows) for (String direction : directions) {
             String lineage=direction=='Sell'?'Reissue_Of_Buyer_Invoice__c':'Reissue_Of_Supplier_Invoice__c';
             String invoice=direction=='Sell'?'Buyer_Invoice__c':'Supplier_Invoice__c';
-            Boolean issuedUsd=row.get(direction+'_FX_Side__c')!=null && hasField(row,invoice) && row.get(invoice)!=null;
-            if (row.get(direction+'_Currency__c') == 'HKD' || issuedUsd || (hasField(row,lineage) && row.get(lineage)!=null)) {
+            Id sideId = (Id)row.get(direction+'_FX_Side__c');
+            Boolean issuedUsd=sideId!=null && hasField(row,invoice) && row.get(invoice)!=null;
+            Boolean retainedHkd=row.get(direction+'_Currency__c') == 'HKD'
+                && !FcosTradeCurrencyService.isEditorFixtureTeardownRow(row.Id, direction, sideId);
+            if (retainedHkd || issuedUsd || (hasField(row,lineage) && row.get(lineage)!=null)) {
                 row.addError('Retain native trading and reissue source evidence. Use the reviewed cancellation or credit workflow.');
                 break;
             }
@@ -106,9 +111,9 @@ public with sharing class FcosTradeCurrencyGuard {
             if (!inserting) {
                 Boolean wasPending = previous != null && previous.Buy_Agent_Currency_Pending__c == true;
                 Boolean isPending = extra.Buy_Agent_Currency_Pending__c == true;
-                if (isPending != wasPending && !FcosTradeCurrencyService.isManagedWrite()) {
+                if (isPending != wasPending && !FcosTradeCurrencyService.isManagedWriteFor(extra.Id,'Buy')) {
                     extra.addError('The agent-currency proposal marker is system managed.');
-                } else if (wasPending && FcosTradeCurrencyService.isManagedWrite()
+                } else if (wasPending && FcosTradeCurrencyService.isManagedWriteFor(extra.Id,'Buy')
                     && hasInitialBuyEvidence(extra)) {
                     // A Sell-side reviewed write must not consume a Buy proposal.
                     extra.Buy_Agent_Currency_Pending__c = false;
@@ -190,7 +195,7 @@ public with sharing class FcosTradeCurrencyGuard {
         if (String.isBlank(currencyCode)) { currencyCode='USD'; row.put(p+'Currency__c', currencyCode); }
         String oldCurrency = oldRow == null ? null : (String)oldRow.get(p+'Currency__c');
         Boolean isHkd = currencyCode == 'HKD', wasHkd = oldCurrency == 'HKD';
-        Boolean trusted = admitted.contains(index+':'+direction) || FcosTradeCurrencyService.isManagedWrite();
+        Boolean trusted = admitted.contains(index+':'+direction) || FcosTradeCurrencyService.isManagedWriteFor(row.Id,direction);
         Trade_Currency_Side__c side = sides.get((Id)row.get(p+'FX_Side__c'));
         if (!isHkd && !wasHkd) {
             if (hasHkdEvidence(row, direction)) row.addError('USD records cannot carry HKD currency snapshots.');
@@ -202,7 +207,9 @@ public with sharing class FcosTradeCurrencyGuard {
             validateReissueLineageImmutability(row, oldRow, direction);
             return;
         }
-        if (!fxEnabled) { row.addError('HKD trading entry is not enabled.'); return; }
+        if (!fxEnabled && !FcosTradeCurrencyService.isEditorFixtureWrite(row.Id,direction)) {
+            row.addError('HKD trading entry is not enabled.'); return;
+        }
         if (!isHkd) {
             if (!trusted || !matchesUsdSide(row, direction, sides.get((Id)row.get(p+'FX_Side__c')))) row.addError('Use the reviewed trading-currency action to change an HKD trading side.');
             else FcosTradeCurrencyService.setUsdPrincipal(row);
