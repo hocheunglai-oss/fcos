@@ -64,20 +64,21 @@ public without sharing class BuyerInvoiceApprovalService {
         return result;
     }
 
-    public static String snapshot(Invoice__c invoice) {
+    private static String snapshot(Invoice__c invoice) {
         Id stemId = invoice.STEM__c, invoiceId = invoice.Id;
         STEM__c stem = Database.query('SELECT ' + String.join(queryFields(STEM_FIELDS, STEM__c.SObjectType), ',')
-            + ' FROM STEM__c WHERE Id = :stemId LIMIT 1');
+            + ' FROM STEM__c WHERE Id = :stemId LIMIT 1', AccessLevel.USER_MODE);
+        // Compare private evidence for the admitted invoice, independent of the operator’s FX field grants.
         List<SObject> lines = Database.query('SELECT ' + String.join(queryFieldsWithFx(LINE_FIELDS, FX_LINE_FIELDS, STEM_Line_Item__c.SObjectType), ',')
             + ' FROM STEM_Line_Item__c WHERE STEM__c = :stemId AND Buyer_Invoice__c = :invoiceId'
-            + ' AND Cancelled__c = false ORDER BY Id');
+            + ' AND Cancelled__c = false ORDER BY Id', AccessLevel.SYSTEM_MODE);
         List<SObject> extras = Database.query('SELECT ' + String.join(queryFieldsWithFx(EXTRA_FIELDS, FX_EXTRA_FIELDS, STEM_Extra_Cost__c.SObjectType), ',')
             + ' FROM STEM_Extra_Cost__c WHERE STEM__c = :stemId AND Buyer_Invoice__c = :invoiceId'
-            + ' AND Cancelled__c = false ORDER BY Id');
+            + ' AND Cancelled__c = false ORDER BY Id', AccessLevel.SYSTEM_MODE);
         Id documentId;
         try { documentId = Id.valueOf(invoice.File__c.substringAfterLast('/')); }
         catch (Exception error) { throw blocked('The invoice PDF could not be verified. Generate the invoice PDF again.'); }
-        List<ContentDocument> documents = [SELECT Id, LatestPublishedVersionId FROM ContentDocument WHERE Id = :documentId];
+        List<ContentDocument> documents = [SELECT Id, LatestPublishedVersionId FROM ContentDocument WHERE Id = :documentId WITH USER_MODE];
         if (documents.isEmpty()) throw blocked('The invoice PDF could not be verified. Generate the invoice PDF again.');
         Map<String, Object> result = new Map<String, Object>{
             'version' => 1, 'invoice' => project(invoice, INVOICE_FIELDS),

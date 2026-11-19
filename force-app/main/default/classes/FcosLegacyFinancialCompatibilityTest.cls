@@ -310,6 +310,75 @@ private class FcosLegacyFinancialCompatibilityTest {
     }
 
     @IsTest
+    static void salesSupportCanVerifyIssuedSnapshotWithoutPrivateFxFieldAccess() {
+        STEM_Line_Item__c source = line();
+        Id stemId = source.STEM__c;
+        Id lineId = source.Id;
+        Account supplier = [SELECT Id FROM Account WHERE Id IN
+            (SELECT Original_Supplier__c FROM STEM_Line_Item__c WHERE Id = :lineId) LIMIT 1];
+        ContextManager.skipTriggers = true;
+        try {
+            update new STEM__c(Id = stemId, Delivery_Date__c = Date.today().addDays(-1));
+            update new Account(Id = supplier.Id, Is_Agent__c = true);
+        } finally {
+            ContextManager.skipTriggers = false;
+        }
+        insert new STEM_Variable_Charge_Supplier__c(
+            STEM__c = stemId,
+            Supplier__c = supplier.Id,
+            Supplier_Status__c = 'Verified',
+            Buyer_Charge_Status__c = 'Verified',
+            Verified_At__c = System.now(),
+            Verified_By_Email__c = 'supplier.trader@example.invalid',
+            Reviewed_Source_Fingerprint__c = VariableChargeInvoiceReadinessService.supplierFingerprint(stemId, supplier.Id),
+            Buyer_Charge_Confirmed_At__c = System.now(),
+            Buyer_Charge_Confirmed_By_Email__c = 'buyer.trader@example.invalid',
+            Buyer_Charge_Reviewed_Source_Fingerprint__c = VariableChargeInvoiceReadinessService.buyerChargeFingerprint(stemId, supplier.Id)
+        );
+        ContextManager.skipTriggers = true;
+        try {
+            update new STEM__c(Id = stemId, Variable_Charges_Confirmed__c = true);
+        } finally {
+            ContextManager.skipTriggers = false;
+        }
+        User operator = legacyOperator();
+        Id invoiceId;
+        User issuer = actor();
+        Test.startTest();
+        System.runAs(issuer) {
+            configure(false);
+            invoiceId = InvoiceController.saveFinalBuyerInvoicePdf(
+                stemId, new List<String>{String.valueOf(lineId)}, Date.today(),
+                Date.today().addDays(-1), Date.today().addDays(30), legacyPdf()
+            ).Id;
+            Id documentId = [SELECT ContentDocumentId FROM ContentDocumentLink WHERE LinkedEntityId = :invoiceId].ContentDocumentId;
+            insert new ContentDocumentLink(ContentDocumentId = documentId, LinkedEntityId = operator.Id, ShareType = 'V');
+        }
+        Test.stopTest();
+
+        List<String> fields = new List<String>(BuyerInvoiceApprovalService.INVOICE_FIELDS);
+        if (!Schema.SObjectType.Invoice__c.fields.getMap().containsKey('CurrencyIsoCode')) {
+            fields = new List<String>();
+            for (String field : BuyerInvoiceApprovalService.INVOICE_FIELDS) if (field != 'CurrencyIsoCode') fields.add(field);
+        }
+        fields.addAll(new List<String>{'Proforma__c', 'Deprecated__c', 'Buyer_Charge_Snapshot__c'});
+        Invoice__c saved = Database.query('SELECT ' + String.join(fields, ',') + ' FROM Invoice__c WHERE Id = :invoiceId');
+        System.assertNotEquals(null, saved.File__c);
+        System.assertNotEquals(null, saved.Buyer_Charge_Snapshot__c);
+
+        System.runAs(operator) {
+            Boolean fxReadDenied = false;
+            try {
+                Database.query('SELECT Sell_FX_Side__c FROM STEM_Line_Item__c WHERE Id = :lineId', AccessLevel.USER_MODE);
+            } catch (QueryException expected) {
+                fxReadDenied = expected.getMessage().contains('Sell_FX_Side__c');
+            }
+            System.assert(fxReadDenied, 'The Sales Support fixture must reproduce the private FX read denial.');
+            BuyerInvoiceApprovalService.assertCanSend(saved);
+        }
+    }
+
+    @IsTest
     static void disabledUnmanagedInvoiceGenerationKeepsAReserveQueryBudget() {
         System.runAs(actor()) {
             configure(false);STEM_Line_Item__c source=line();Integer generationQueries;
