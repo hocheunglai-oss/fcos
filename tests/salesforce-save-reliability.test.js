@@ -59,3 +59,53 @@ test('STEM Processing waits for both independent record and product wires before
   assert.match(productWire, /applyProductInfo\(\) \{\s+if \(!this\.stem \|\| !Array\.isArray\(this\.productInfo\)\) return;/s);
   assert.doesNotMatch(productWire, /this\.stem\.Payment_Term__c\.value/);
 });
+
+async function loadStemSaveHandlers(refreshApex) {
+  const source = await readBundleFile('fcbStemProcessing', 'fcbStemProcessing.js');
+  const methods = source.slice(source.indexOf('  isSavingStem = false;'), source.indexOf('  handleReset(event)'));
+  class Toast {
+    constructor(detail) { Object.assign(this, detail); }
+  }
+  const Handlers = new Function('ShowToastEvent', 'refreshApex', `return class { ${methods} }`)(Toast, refreshApex);
+  return new Handlers();
+}
+
+test('STEM save surfaces Salesforce field validation and permits a corrected submission', async () => {
+  const form = await loadStemSaveHandlers();
+  const events = [];
+  let submits = 0;
+  form.template = { querySelector: () => ({ submit: () => { submits++; } }) };
+  form.dispatchEvent = event => events.push(event);
+  const submit = { preventDefault() {}, detail: { fields: { Port__c: 'new-port' } } };
+
+  form.handleSubmit(submit);
+  form.handleSubmit(submit);
+  assert.equal(submits, 1);
+  form.handleError({ detail: { message: 'Review the errors', output: {
+    fieldErrors: { Port__c: [{ message: 'Choose an active port.' }] },
+  } } });
+  assert.equal(events[0].message, 'Choose an active port.');
+  assert.equal(events[0].title, 'STEM was not saved');
+  assert.equal(form.isSavingStem, false);
+  form.handleSubmit(submit);
+  assert.equal(submits, 2);
+});
+
+test('STEM save confirms the committed record even when a related grid cannot refresh', async () => {
+  const form = await loadStemSaveHandlers(async () => {});
+  const events = [];
+  form.dispatchEvent = event => events.push(event);
+  form.template = {
+    querySelector: selector => selector === 'c-fcb-stem-payment' ? { refreshGridData() { throw new Error('grid unavailable'); } } : null,
+    querySelectorAll: () => [],
+  };
+  form.isSavingStem = true;
+  form.showSaveButton = true;
+  form.handleInvoiceFormChange = () => {};
+  const refresh = form.handleSuccess();
+  assert.equal(events[0].title, 'STEM saved');
+  assert.equal(form.isSavingStem, false);
+  assert.equal(form.showSaveButton, false);
+  await refresh;
+  assert.match(events[1].title, /STEM saved, but/);
+});

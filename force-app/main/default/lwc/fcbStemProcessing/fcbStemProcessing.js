@@ -660,55 +660,74 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
     }
   }
 
+  isSavingStem = false;
+
   handleSubmit(event) {
+    event.preventDefault();
+    if (this.isSavingStem) return;
+
+    this.isSavingStem = true;
     try {
-      event.preventDefault();
-      const fields = event.detail.fields;
-      fields.Expected_Delivery_Date__c = this.expectedDeliveryDateValue;
-      fields.Payment_Term__c = this.paymentTermValue;
-      fields.Dispute_Status__c = this.disputeStatusValue;
-      fields.Hold_Payment__c = this.holdPaymentValue === 'Yes';
+      const fields = {
+        ...event.detail.fields,
+        Expected_Delivery_Date__c: this.expectedDeliveryDateValue,
+        Payment_Term__c: this.paymentTermValue,
+        Dispute_Status__c: this.disputeStatusValue,
+        Hold_Payment__c: this.holdPaymentValue === 'Yes',
+      };
       this.template.querySelector(".main-form").submit(fields);
-      console.log('save');
-      
     } catch (error) {
-      console.error(error)
+      this.handleError(error);
     }
-
   }
 
-  handleSuccess(event) {
-    try {
-      let evt = new ShowToastEvent({
-        title: "Record updated",
-        variant: "success",
-      });
-      if(this.template.querySelector("c-fcb-stem-payment")){
-        this.template.querySelector("c-fcb-stem-payment").refreshGridData();
-      }
-      if(this.template.querySelector("c-fcb-commission-invoice-form")){
-        this.template.querySelector("c-fcb-commission-invoice-form").refreshData()
-      }
-      refreshApex(this.wiredStemLineItems).then(() => {
-        let components = [
-          ...this.template.querySelectorAll("c-fcb-commision-invoices"),
-        ].map((component) => component.resetFields());
-      })
-      console.log(this.disputeStatusValue);
-      
-      this.dispatchEvent(evt);
-      this.showSaveButton = false;
-      refreshApex(this.wiredStemInfo).then(() => {
+  async handleSuccess() {
+    this.isSavingStem = false;
+    this.showSaveButton = false;
+    this.dispatchEvent(new ShowToastEvent({
+      title: "STEM saved",
+      variant: "success",
+    }));
+
+    const refreshes = [
+      () => this.template.querySelector("c-fcb-stem-payment")?.refreshGridData(),
+      () => this.template.querySelector("c-fcb-commission-invoice-form")?.refreshData(),
+      async () => {
+        await refreshApex(this.wiredStemLineItems);
+        for (const component of this.template.querySelectorAll("c-fcb-commision-invoices")) {
+          component.resetFields();
+        }
+      },
+      async () => {
+        await refreshApex(this.wiredStemInfo);
         this.handleInvoiceFormChange();
-      })
-    } catch (error) {
-      console.error(error)
+      },
+    ];
+    const results = await Promise.allSettled(refreshes.map(refresh => Promise.resolve().then(refresh)));
+    if (results.some(result => result.status === "rejected")) {
+      this.dispatchEvent(new ShowToastEvent({
+        title: "STEM saved, but some details did not refresh",
+        message: "Reload the STEM page to see the saved values.",
+        variant: "warning",
+      }));
     }
-
   }
 
-  handleError(event){
-    console.error('Save error:', JSON.stringify(event.detail));
+  handleError(error) {
+    this.isSavingStem = false;
+    const detail = error?.detail ?? error?.body ?? error;
+    const output = detail?.output;
+    const issues = [
+      ...(output?.errors ?? []),
+      ...Object.values(output?.fieldErrors ?? {}).flat(),
+    ];
+    const messages = [...new Set(issues.map(issue => issue.message).filter(Boolean))];
+    this.dispatchEvent(new ShowToastEvent({
+      title: "STEM was not saved",
+      message: messages.join(" ") || detail?.detail || detail?.message || "Review the STEM fields and try again.",
+      variant: "error",
+      mode: "sticky",
+    }));
   }
 
   handleReset(event) {

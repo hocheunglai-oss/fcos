@@ -9,6 +9,7 @@
                     <h3 slot="title">Invoicing Info (To Buyer)</h3>
                     <div class="slds-p-horizontal_small">
                         <lightning-record-edit-form record-id={recordId} class="main-form" object-api-name="STEM__c" onsuccess={handleSuccess} onsubmit={handleSubmit} onchange={handleChange} onerror={handleError}>
+                            <lightning-messages></lightning-messages>
                             <div class="slds-grid slds-wrap">
                                 <div class="slds-col slds-size_1-of-4"> 
                                     <lightning-input-field name="main-form-field" field-name="Vessel__c" variant="label-stacked">
@@ -140,7 +141,7 @@
                                 <div class="slds-grid slds-gutters slds-grid_align-center">
                                     <div class="slds-col">
                                         <lightning-button class="slds-m-top_small general-stem-info-buttons" variant="brand" type="submit" name="update"
-                                            label="Save">
+                                            label="Save" disabled={isSavingStem}>
                                         </lightning-button>
                                     </div>
                                     <div class="slds-col">
@@ -148,6 +149,7 @@
                                             class="slds-m-top_small"
                                             label="Cancel"
                                             onclick={handleReset}
+                                            disabled={isSavingStem}
                                         ></lightning-button>
                                     </div> 
                                 </div>
