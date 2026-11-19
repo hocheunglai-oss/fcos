@@ -47,3 +47,23 @@ test('both administrator fallbacks are guarded and hosted builds require authent
   assert.match(client, /if \(!isLocalAdminAllowed\) throw new Error\(authConfigurationError\);\s*return \{\s*id: 'local-admin'/);
   assert.match(client, /if \(!isSupabaseConfigured\) \{\s*if \(!isLocalAdminAllowed\) throw/);
 });
+
+test('browser Supabase configuration normalizes inputs before fallback and SDK creation', async () => {
+  const source = await readFile(new URL('../src/lib/supabaseClient.js', import.meta.url), 'utf8');
+  const loadClient = new Function('testEnv', 'createClient', 'resolveAuthRuntimePolicy',
+    `${source.replace(/^import .*;\n/gm, '').replaceAll('import.meta.env.', 'testEnv.').replaceAll('export const ', 'const ')}
+    return supabase;`);
+  const legacyKey = jwt({ role: 'anon', ref });
+  const publishableKey = 'sb_publishable_fixture';
+  const create = key => loadClient({
+    VITE_SUPABASE_URL: ` ${url} `,
+    VITE_SUPABASE_PUBLISHABLE_KEY: key,
+    VITE_SUPABASE_ANON_KEY: ` ${legacyKey} `,
+    DEV: false,
+  }, (clientUrl, publicKey) => ({ clientUrl, publicKey }), resolveAuthRuntimePolicy);
+
+  assert.deepEqual(create(` ${publishableKey} `), { clientUrl: url, publicKey: publishableKey });
+  assert.deepEqual(create(' \t '), { clientUrl: url, publicKey: legacyKey });
+  assert.deepEqual(create(undefined), { clientUrl: url, publicKey: legacyKey });
+  assert.equal(create(' sb_secret_fixture '), null);
+});
