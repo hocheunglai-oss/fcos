@@ -105,6 +105,8 @@ export default function WorkNotifications() {
         } else {
           applyResponse(response.data);
         }
+      } catch {
+        if (isCurrent()) setUnavailableSources(["Notifications"]);
       } finally {
         if (isCurrent()) setLoading(false);
       }
@@ -129,17 +131,35 @@ export default function WorkNotifications() {
     };
   }, [loadNotifications, sourceFilter, stateFilter]);
 
+  const applyMutationResponse = useCallback(async (data, filters) => {
+    if (!currentFilters.current || !data || data.error || data.cancelled) return;
+    if (filters !== currentFilters.current) {
+      await loadNotifications({ quiet: true });
+      return;
+    }
+    latestListRequest.current = null;
+    setLoading(false);
+    applyResponse(data);
+  }, [applyResponse, loadNotifications]);
+
   const markRead = useCallback(
     async (notificationIds) => {
+      const filters = currentFilters.current;
+      if (!filters) return;
       setUpdating(true);
       try {
-        const response = await appClient.functions.invoke("workNotificationsRead", notificationIds ? { notificationIds } : {}, { force: true });
-        if (!response.data?.error) applyResponse(response.data);
+        const response = await appClient.functions.invoke("workNotificationsRead", {
+          ...(notificationIds && { notificationIds }),
+          listState: filters.state,
+          source: filters.source,
+          limit: NOTIFICATION_LIMIT,
+        }, { force: true });
+        await applyMutationResponse(response.data, filters);
       } finally {
         setUpdating(false);
       }
     },
-    [applyResponse],
+    [applyMutationResponse],
   );
 
   const openNotification = async (notification) => {
@@ -152,6 +172,8 @@ export default function WorkNotifications() {
 
   const updateNotification = useCallback(
     async (notification, state) => {
+      const filters = currentFilters.current;
+      if (!filters) return;
       setUpdating(true);
       try {
         const snoozedUntil = state === "snoozed" ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() : undefined;
@@ -161,18 +183,18 @@ export default function WorkNotifications() {
             notificationIds: notification.notificationIds || [notification.id],
             state,
             snoozedUntil,
-            listState: stateFilter,
-            source: sourceFilter,
+            listState: filters.state,
+            source: filters.source,
             limit: NOTIFICATION_LIMIT,
           },
           { force: true },
         );
-        if (!response.data?.error) applyResponse(response.data);
+        await applyMutationResponse(response.data, filters);
       } finally {
         setUpdating(false);
       }
     },
-    [applyResponse, sourceFilter, stateFilter],
+    [applyMutationResponse],
   );
 
   const verifySystemIncident = useCallback(async (notification) => {

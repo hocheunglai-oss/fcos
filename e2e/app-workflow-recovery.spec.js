@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-test('incident verification refreshes only the current notification view', async ({ page, baseURL }, testInfo) => {
+async function openNotificationFixture(page, baseURL, testInfo) {
   test.skip(process.env.FCOS_E2E_WORKFLOW_FIXTURE !== '1' || testInfo.project.name !== 'desktop-chrome',
     'Local desktop fixture; all incident and notification operations are synthetic.');
   await page.route('**/*', (route) => new URL(route.request().url()).origin === baseURL ? route.continue() : route.abort());
@@ -24,6 +24,12 @@ test('incident verification refreshes only the current notification view', async
   const opened = await nextRequest('workNotificationsList', initial);
   await respond(opened, list('Initial fixture'));
   const source = page.getByRole('combobox', { name: 'Filter notification source' });
+  const requestBody = index => page.evaluate(i => window.recoveryFixture.notifications[i].body, index);
+  return { nextRequest, respond, list, source, requestBody, opened };
+}
+
+test('incident verification refreshes only the current notification view', async ({ page, baseURL }, testInfo) => {
+  const { nextRequest, respond, list, source, requestBody, opened } = await openNotificationFixture(page, baseURL, testInfo);
   await source.click();
   await page.getByRole('option', { name: 'System errors', exact: true }).click();
   const incident = await nextRequest('workNotificationsList', opened);
@@ -37,7 +43,7 @@ test('incident verification refreshes only the current notification view', async
   await respond(handled, list('Handled fixture'));
   await respond(verification, { message: 'Verified fixture incident.' });
   const refresh = await nextRequest('workNotificationsList', handled);
-  expect(await page.evaluate((index) => window.recoveryFixture.notifications[index].body, refresh))
+  expect(await requestBody(refresh))
     .toEqual({ limit: 40, state: 'handled', source: 'markets' });
 
   await page.getByRole('button', { name: 'Active', exact: true }).click();
@@ -47,6 +53,38 @@ test('incident verification refreshes only the current notification view', async
   await expect(page.getByText('Current Markets fixture', { exact: true })).toBeVisible();
   await expect(page.getByText('Stale handled fixture', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('status').filter({ hasText: 'Verified fixture incident.' })).toBeVisible();
+});
+
+test('marking notifications read preserves the selected view', async ({ page, baseURL }, testInfo) => {
+  const { nextRequest, respond, list, source, requestBody, opened } = await openNotificationFixture(page, baseURL, testInfo);
+  await page.getByRole('button', { name: 'Handled', exact: true }).click();
+  await source.click();
+  await page.getByRole('option', { name: 'Markets', exact: true }).click();
+  const markets = await nextRequest('workNotificationsList', opened);
+  await respond(markets, list('Handled Markets fixture', { handledAt: '2026-11-18T00:00:00Z' }));
+  await page.getByRole('button', { name: 'Mark all read' }).click();
+  const read = await nextRequest('workNotificationsRead', markets);
+  expect(await requestBody(read)).toEqual({ limit: 40, listState: 'handled', source: 'markets' });
+  await respond(read, list('Read handled Markets fixture', { handledAt: '2026-11-18T00:00:00Z', readAt: '2026-11-18T00:00:00Z' }));
+  await expect(page.getByText('Read handled Markets fixture', { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => window.recoveryFixture.notifications.length)).toBe(read + 1);
+});
+
+test('a delayed notification action refreshes the newly selected view', async ({ page, baseURL }, testInfo) => {
+  const { nextRequest, respond, list, source, requestBody, opened } = await openNotificationFixture(page, baseURL, testInfo);
+  await page.getByTitle('Mark handled').click();
+  const mutation = await nextRequest('workNotificationsState', opened);
+  await page.getByRole('button', { name: 'Handled', exact: true }).click();
+  await source.click();
+  await page.getByRole('option', { name: 'Markets', exact: true }).click();
+  const current = await nextRequest('workNotificationsList', mutation);
+  await respond(current, list('Current handled Markets fixture'));
+  await respond(mutation, list('Stale active fixture'));
+  const refresh = await nextRequest('workNotificationsList', current);
+  expect(await requestBody(refresh)).toEqual({ limit: 40, state: 'handled', source: 'markets' });
+  await respond(refresh, list('Updated handled Markets fixture'));
+  await expect(page.getByText('Updated handled Markets fixture', { exact: true })).toBeVisible();
+  await expect(page.getByText('Stale active fixture', { exact: true })).toHaveCount(0);
 });
 
 test.describe('application draft recovery', () => {
