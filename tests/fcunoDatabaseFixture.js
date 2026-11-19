@@ -82,7 +82,11 @@ export async function federationDatabase(t, { native = false } = {}) {
       await rm(directory, { recursive: true, force: true });
     });
     execFileSync(path.join(bindir, 'initdb'), ['-D', data, '--username=postgres', '--auth=trust', '--no-locale', '--encoding=UTF8'], { stdio: 'pipe' });
-    execFileSync(path.join(bindir, 'pg_ctl'), ['-D', data, '-l', path.join(directory, 'server.log'), '-o', `-k ${directory} -h '' -p ${port}`, '-w', 'start'], { stdio: 'pipe' });
+    // Start the disposable server in the same C locale selected by initdb.
+    // On macOS PostgreSQL can fail startup when the test runner clears the locale.
+    execFileSync(path.join(bindir, 'pg_ctl'), ['-D', data, '-l', path.join(directory, 'server.log'), '-o', `-k ${directory} -h '' -p ${port}`, '-w', 'start'], {
+      stdio: 'pipe', env: { ...process.env, LC_ALL: 'C' },
+    });
     started = true;
     db = new pg.Pool({ host: directory, port, user: 'postgres', database: 'postgres', max: 8 });
     query = (sql, values = []) => db.query(sql, values);
