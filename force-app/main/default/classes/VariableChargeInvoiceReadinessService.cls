@@ -573,14 +573,27 @@ public without sharing class VariableChargeInvoiceReadinessService {
         Map<Integer, String> legacyHeaders = new Map<Integer, String>();
         List<String> parts = buyerChargeFingerprintParts(stemId, supplierId, legacyHeaders);
         String canonical = buyerChargeDigest(parts, BUYER_FINGERPRINT_API_VERSION);
-        if (expectedFingerprint == canonical
-            || expectedFingerprint == buyerChargeDigest(parts, LEGACY_BUYER_FINGERPRINT_API_VERSION)) return canonical;
+        if (expectedFingerprint == canonical || matchesLegacyBuyerDigest(parts, expectedFingerprint)) return canonical;
 
         // Some older callers injected RecordTypeId into the serialized header.
         // Replay those exact headers using current values without changing approved inputs.
         applyLegacyBuyerHeaders(parts, legacyHeaders);
         return expectedFingerprint == buyerChargeDigest(parts, BUYER_FINGERPRINT_API_VERSION)
-            || expectedFingerprint == buyerChargeDigest(parts, LEGACY_BUYER_FINGERPRINT_API_VERSION) ? canonical : null;
+            || matchesLegacyBuyerDigest(parts, expectedFingerprint) ? canonical : null;
+    }
+
+    private static Boolean matchesLegacyBuyerDigest(List<String> parts, String expectedFingerprint) {
+        return expectedFingerprint == buyerChargeDigest(parts, LEGACY_BUYER_FINGERPRINT_API_VERSION)
+            || expectedFingerprint == buyerChargeDigest(parts, BUYER_FINGERPRINT_API_VERSION, true)
+            || expectedFingerprint == buyerChargeDigest(parts, LEGACY_BUYER_FINGERPRINT_API_VERSION, true);
+    }
+
+    @TestVisible private static String legacyBuyerCreatedDateFingerprint(Id stemId, Id supplierId,
+        String version, Boolean includeRecordType) {
+        Map<Integer, String> headers = includeRecordType ? new Map<Integer, String>() : null;
+        List<String> parts = buyerChargeFingerprintParts(stemId, supplierId, headers);
+        if (headers != null) applyLegacyBuyerHeaders(parts, headers);
+        return buyerChargeDigest(parts, version, true);
     }
 
     @TestVisible private static String buyerChargeFingerprintForVersion(Id stemId, Id supplierId, String version) {
@@ -599,12 +612,20 @@ public without sharing class VariableChargeInvoiceReadinessService {
     }
 
     private static String buyerChargeDigest(List<String> parts, String version) {
+        return buyerChargeDigest(parts, version, false);
+    }
+
+    private static String buyerChargeDigest(List<String> parts, String version, Boolean legacyCreatedDate) {
         List<String> normalized = new List<String>();
         for (String part : parts) {
             if (part.startsWith('S|{"attributes":') || part.startsWith('A|{"attributes":')) {
                 // Only the platform-generated header link varies with the org API version.
                 part = part.replaceFirst(',"url":"/services/data/v[0-9]+\\.[0-9]+/sobjects/',
                     ',"url":"/services/data/v' + version + '/sobjects/');
+            }
+            if (legacyCreatedDate && part.startsWith('S|')) {
+                // The original SObject serializer used +0000 for the same UTC instant.
+                part = part.replaceFirst('("CreatedDate":"[0-9T:.\\-]+)Z"', '$1+0000"');
             }
             normalized.add(part);
         }

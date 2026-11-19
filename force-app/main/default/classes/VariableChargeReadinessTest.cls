@@ -140,6 +140,31 @@ private class VariableChargeReadinessTest {
         Test.stopTest();
     }
 
+    @IsTest
+    static void buyerApprovalAcceptsLegacyUtcOffsetWithoutIgnoringDeliveryChanges() {
+        Map<String, Id> ids = prepareRequiredSupplier(true);
+        Id stemId = ids.get('stem');
+        Id supplierId = ids.get('supplier');
+        String canonical = VariableChargeInvoiceReadinessService.buyerChargeFingerprint(stemId, supplierId);
+        Set<String> approvedVariants = new Set<String>();
+        Test.startTest();
+        for (String version : new List<String>{'67.0', '68.0'}) {
+            for (Boolean withRecordType : new List<Boolean>{false, true}) {
+                String legacy = VariableChargeInvoiceReadinessService.legacyBuyerCreatedDateFingerprint(stemId, supplierId, version, withRecordType);
+                System.assertNotEquals(canonical, legacy);
+                approvedVariants.add(legacy);
+                System.assertEquals(canonical, VariableChargeInvoiceReadinessService.matchingBuyerChargeFingerprint(stemId, supplierId, legacy));
+            }
+        }
+        ContextManager.skipTriggers = true;
+        try { update new STEM__c(Id = stemId, Delivery_Date__c = Date.today().addDays(-2)); }
+        finally { ContextManager.skipTriggers = false; }
+        for (String approved : approvedVariants) {
+            System.assertEquals(null, VariableChargeInvoiceReadinessService.matchingBuyerChargeFingerprint(stemId, supplierId, approved));
+        }
+        Test.stopTest();
+    }
+
     private static Invoice__c insertInvoiceWithoutTriggers(Id stemId) {
         ContextManager.avoidInvoiceFiring = true;
         try {
