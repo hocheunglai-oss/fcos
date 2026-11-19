@@ -38,7 +38,7 @@ const pricedLines = [
 ];
 appClient.functions.invoke = async (name, body) => {
   window.recoveryFixture.calls.push({ name, body });
-  if (notificationScenario && ['workNotificationsList', 'systemErrorVerify'].includes(name)) {
+  if (notificationScenario && ['workNotificationsList', 'workNotificationsRead', 'workNotificationsState', 'systemErrorVerify'].includes(name)) {
     return new Promise((resolve) => window.recoveryFixture.notifications.push({ name, body, resolve }));
   }
   if (name === 'specialTermMigrationPreviewAll') return { data: { projections: Object.fromEntries(['termsText', 'confirmationRemark', 'nominationRemark'].map((key) => [key, { style: 'Numbered', segments: [{ clauseText: 'Existing China clause.', suggestedShortName: 'China clause', suggestedCategory: 'General' }] }])) } };
