@@ -5,7 +5,7 @@ import { createManifest, digest, targets } from '../scripts/lib/rapid-release/co
 import { createLocalMirrorRequest, LOCAL_MIRROR_ENVIRONMENT } from '../scripts/lib/rapid-release/local-mirror-handoff.mjs';
 import { createDeveeDesktopReceipt, createDeveeDesktopRequest, DEVEE_DESKTOP_WORKFLOW,
   editorDesktopCases, editorDesktopCaseSetDigest } from '../scripts/lib/rapid-release/salesforce-devee-desktop-checkpoint.mjs';
-import { verifyCompletedDesktopApproval, verifyPublishedDesktopMirror } from '../scripts/verify-completed-reviewed-salesforce-source.mjs';
+import { verifyCompletedDesktopApproval, verifyPublishedDesktopMirror, selectCompletedSalesforceJob } from '../scripts/verify-completed-reviewed-salesforce-source.mjs';
 import { EDITOR_PREFLIGHT_ATTESTATION_ENVIRONMENT, EDITOR_PREFLIGHT_ATTESTATION_TASK }
   from '../scripts/lib/rapid-release/salesforce-editor-preflight-transport.mjs';
 
@@ -254,4 +254,42 @@ test('a completed release retains the preapproval attestation and run-bound nati
   assert.doesNotThrow(() => verifyPublishedDesktopMirror(values));
   desktopCheckpoint.payload.data.desktop.runId = resumedId;
   assert.throws(() => verifyPublishedDesktopMirror(values), /DESKTOP_CHECKPOINT_REQUIRED/);
+});
+
+
+test('source anchor permits only identical adopted invoice jobs before the mirror intent', () => {
+  const row = (sequence, overrides = {}) => ({ payload: { sequence, data: {
+    stage: 'devee', operation: 'validation', fingerprint: hash('b'), evidenceDigest: hash('3'),
+    job: { id: '0AfHF000007IeZF0A0', validationId: null, packageSha256: hash('4'), submittedAt: at(0) },
+    ...overrides,
+  } } });
+  const prior = row(7), reattested = row(12, { evidenceDigest: hash('5') });
+  const mirror = { payload: { sequence: 14 } };
+  const manifest = { prerequisites: { plan: { deveePromotionAdoptionReceiptId: 123 } } };
+  const reviewed = { invoiceAppPlacement: { devee: {} }, review: {}, fingerprint: hash('b') };
+  const adoptedJobs = [{ operation: 'validation', record: { jobId: prior.payload.data.job.id,
+    validationJobId: null, packageSha256: hash('4'), submittedAt: at(0) } }];
+  const check = (completed = [prior, reattested], additions = {}) => selectCompletedSalesforceJob({
+    completed, manifest, reviewed, stageName: 'devee', operation: 'validation', firstMirrorIntent: mirror, adoptedJobs, ...additions,
+  });
+  assert.equal(check(), reattested);
+  const altered = structuredClone(reattested);
+  for (const [field, value] of [['id','0AfHF000007IeZG0A0'], ['packageSha256',hash('7')],
+    ['submittedAt',at(1)], ['validationId','0AfHF000007IeZF0A0']]) {
+    const changed = structuredClone(altered);
+    changed.payload.data.job[field] = value;
+    assert.throws(() => check([prior, changed]), /SALESFORCE_JOB_MISMATCH/);
+  }
+  assert.throws(() => check([prior, row(12, { fingerprint: hash('c') })]), /SALESFORCE_JOB_MISMATCH/);
+  assert.throws(() => check([prior, reattested, row(13)]), /SALESFORCE_JOB_MISMATCH/);
+  assert.throws(() => check([prior, row(15)]), /SALESFORCE_JOB_MISMATCH/);
+  assert.throws(() => check([prior, reattested], { adoptedJobs: undefined }), /SALESFORCE_JOB_MISMATCH/);
+  assert.throws(() => check([prior, reattested], { firstMirrorIntent: undefined }), /SALESFORCE_JOB_MISMATCH/);
+  assert.throws(() => check([prior, reattested], { reviewed: { review: {} } }), /SALESFORCE_JOB_MISMATCH/);
+  assert.throws(() => check([prior, reattested], { manifest: { prerequisites: { plan: {} } } }), /SALESFORCE_JOB_MISMATCH/);
+  assert.throws(() => check([prior, reattested], { reviewed: { invoiceAppPlacement: {}, review: { bootstrap: {} } } }), /SALESFORCE_JOB_MISMATCH/);
+  assert.throws(() => check([prior, reattested], { reviewed: { invoiceAppPlacement: {}, review: { nativeDeveeDesktop: {} } } }), /SALESFORCE_JOB_MISMATCH/);
+  const qat = [row(7, { stage: 'qat' }), row(12, { stage: 'qat' })];
+  assert.throws(() => check(qat, { stageName: 'qat' }), /SALESFORCE_JOB_MISMATCH/);
+  assert.equal(check([prior], { manifest: { prerequisites: { plan: {} } } }), prior);
 });
