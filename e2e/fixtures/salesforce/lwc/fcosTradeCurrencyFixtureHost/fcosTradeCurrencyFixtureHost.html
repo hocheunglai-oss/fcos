@@ -1,0 +1,18 @@
+<template>
+    <c-fcb-edit-offer-line-item-modal lwc:if={offerLine}
+        record-id={offerLine.QuoteId}
+        current-offer-line-item={offerLine}
+        quote={quote}
+        enquiry-line-items={enquiryLineItems}
+        buy-editor-fixture-id={buyFixtureId}
+        sell-editor-fixture-id={sellFixtureId}>
+    </c-fcb-edit-offer-line-item-modal>
+    <c-fcb-edit-supplier-bid-modal lwc:elseif={bid}
+        supplier-bid={bid}
+        all-supplier-bids={bids}
+        quote-id={bidQuoteId}
+        enquiry-line-items={enquiryLineItems}
+        editor-fixture-id={buyFixtureId}>
+    </c-fcb-edit-supplier-bid-modal>
+    <p lwc:elseif={invalidScope} role="alert">The editor check requires an accessible enrolled record and direction.</p>
+</template>
