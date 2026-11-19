@@ -347,4 +347,22 @@ test('completed DEVEE jobs carry forward only with linked native checkpoints and
   originals[1].payload.manifestHash = payload.manifestHash;
   observedHash = '9'.repeat(64);
   await assert.rejects(recoverReviewedDeveePromotion(input), /inventory receipt is absent, stale, or differs/);
+
+  delete reviewed.review.bootstrap;
+  reviewed.invoiceAppPlacement = { devee: { app: 'FCB' } };
+  receipt.payload.data.deveeCheckpoints = originals.slice(1).map(row => row.id);
+  observedHash = inventoryHash;
+  provider.prepareBootstrap = () => assert.fail('A schema-free recovery must not prepare a bootstrap');
+  const orgId = policy.environments[0].orgId;
+  provider.verifyInvoiceAppPlacement = async (_environment, _plan, phase) => ({
+    orgId, phase, evidenceSha256: '5'.repeat(64),
+  });
+  const schemaFree = await recoverReviewedDeveePromotion(input);
+  assert.deepEqual(schemaFree.map(item => item.record.jobId), jobIds.slice(1));
+  assert.deepEqual(schemaFree.map(item => item.operation), operations.slice(1));
+
+  provider.verifyInvoiceAppPlacement = async () => ({ orgId, phase: 'before', evidenceSha256: '5'.repeat(64) });
+  await assert.rejects(recoverReviewedDeveePromotion(input), /DEVEE_PROMOTION_APP_PLACEMENT_REQUIRED/);
+  delete reviewed.invoiceAppPlacement;
+  await assert.rejects(recoverReviewedDeveePromotion(input), /DEVEE_PROMOTION_RECEIPT_REQUIRED/);
 });

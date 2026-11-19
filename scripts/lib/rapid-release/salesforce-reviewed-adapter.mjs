@@ -110,22 +110,24 @@ export async function recoverReviewedDeveePromotion({ receiptId, manifest, revie
   const receipt = await github.read(endpoint + receiptId);
   const result = receipt?.payload?.data;
   const references = result?.deveeCheckpoints;
+  const includeBootstrap = Boolean(reviewed.review.bootstrap);
   requireCondition(receipt?.id === receiptId && receipt.creator?.id === policy.publication.requiredAccountId
     && receipt.creator.login === targets().account && receipt.environment === 'fcos-release-journal-v1'
     && receipt.sha === manifest.candidate.sha && receipt.payload?.kind === 'fcos_rapid_release_event'
     && receipt.payload.event === 'prerequisites.result' && isDigest(receipt.payload.manifestHash)
     && receipt.payload.manifestHash !== digest(manifest) && result?.outcome === 'devee_verified_mirror_not_published'
     && result.salesforceFingerprint === reviewed.fingerprint && isDigest(result.evidenceDigest)
-    && Array.isArray(references) && references.length === 3
-    && new Set(references).size === 3 && references.every(id => Number.isSafeInteger(id) && id > 0),
+    && (includeBootstrap || reviewed.invoiceAppPlacement)
+    && Array.isArray(references) && references.length === (includeBootstrap ? 3 : 2)
+    && new Set(references).size === references.length && references.every(id => Number.isSafeInteger(id) && id > 0),
   'SALESFORCE_DEVEE_PROMOTION_RECEIPT_REQUIRED');
   const originals = await Promise.all(references.map(id => github.read(endpoint + id)));
-  return verifySandboxPromotionJobs({ receipt, references, originals, reviewed, provider, now });
+  return verifySandboxPromotionJobs({ receipt, references, originals, reviewed, provider, now, includeBootstrap });
 }
 
 async function verifySandboxPromotionJobs({ receipt, references, originals, reviewed, provider, now,
-  environment = policy.environments[0] }) {
-  const operations = ['bootstrap', 'validation', 'deployment'];
+  environment = policy.environments[0], includeBootstrap = true }) {
+  const operations = includeBootstrap ? ['bootstrap', 'validation', 'deployment'] : ['validation', 'deployment'];
   const jobs = originals.map((original, index) => {
     const checkpoint = original?.payload?.data;
     const operation = operations[index];
@@ -142,10 +144,12 @@ async function verifySandboxPromotionJobs({ receipt, references, originals, revi
     'SALESFORCE_DEVEE_PROMOTION_CHECKPOINT_REQUIRED');
     return job;
   });
-  requireCondition(new Set(jobs.map(job => job.id)).size === jobs.length && jobs[2].validationId === jobs[1].id
+  const validation = jobs.at(-2);
+  requireCondition(new Set(jobs.map(job => job.id)).size === jobs.length && jobs.at(-1).validationId === validation.id
     && jobs.every((job, index) => index === 0 || Date.parse(job.submittedAt) >= Date.parse(jobs[index - 1].submittedAt)),
   'SALESFORCE_DEVEE_PROMOTION_JOB_ORDER_REQUIRED');
-  for (const [index, prepare] of [provider.prepareBootstrap, provider.prepareValidation].entries()) {
+  const conversions = includeBootstrap ? [provider.prepareBootstrap, provider.prepareValidation] : [provider.prepareValidation];
+  for (const [index, prepare] of conversions.entries()) {
     const prepared = await prepare(environment, reviewed);
     try {
       requireCondition(prepared.packageSha256 === jobs[index].packageSha256, 'SALESFORCE_DEVEE_PROMOTION_PACKAGE_CHANGED');
@@ -156,11 +160,14 @@ async function verifySandboxPromotionJobs({ receipt, references, originals, revi
   const reports = await Promise.all(jobs.map(job => provider.report(environment, job.id)));
   const inventory = await verifyReviewedOrgInventory({ provider, environment, plan: reviewed,
     expected: reviewed.nativeInventories[environment.key].final, now });
+  const placement = includeBootstrap ? undefined : await provider.verifyInvoiceAppPlacement?.(environment, reviewed, 'after');
+  requireCondition(includeBootstrap || (placement?.orgId === environment.orgId && placement.phase === 'after'
+    && isDigest(placement.evidenceSha256)), 'SALESFORCE_DEVEE_PROMOTION_APP_PLACEMENT_REQUIRED');
   return jobs.map((job, index) => {
     const operation = operations[index];
     const proof = assertReviewedJobReport(reports[index], { environment, jobId: job.id,
       ...reviewedJobExpectations(reviewed, environment, operation),
-      ...(operation === 'deployment' ? { quickValidation: { id: jobs[1].id, report: reports[1] } } : {}) });
+      ...(operation === 'deployment' ? { quickValidation: { id: validation.id, report: reports.at(-2) } } : {}) });
     const completed = Date.parse(proof.completedAt);
     const verifiedAt = now();
     requireCondition(completed >= Date.parse(job.submittedAt) - 30_000 && completed <= verifiedAt.getTime() + 30_000,
@@ -169,7 +176,8 @@ async function verifySandboxPromotionJobs({ receipt, references, originals, revi
       submittedAt: job.submittedAt, verifiedAt: verifiedAt.toISOString(), reconciledAt: verifiedAt.toISOString(),
       ...(job.packageSha256 ? { packageSha256: job.packageSha256 } : {}),
       recoveredEvidenceDigest: digest({ receiptId: receipt.id, originalCheckpoint: references[index],
-        providerReportSha256: proof.reportSha256, inventoryReceiptSha256: inventory.evidenceSha256 }) } };
+        providerReportSha256: proof.reportSha256, inventoryReceiptSha256: inventory.evidenceSha256,
+        ...(placement ? { appPlacementSha256: placement.evidenceSha256 } : {}) }) } };
   });
 }
 
@@ -273,7 +281,8 @@ export function prepareReviewedSalesforcePrerequisites({
     && adoption && Object.keys(adoption).length === 2 && Number.isSafeInteger(adoption.receiptId) && adoption.receiptId > 0
     && /^0Af[A-Za-z0-9]{15}$/u.test(adoption.jobId || '')), 'SALESFORCE_DEVEE_BOOTSTRAP_ADOPTION_INVALID');
   const promotionReceiptId = plan.deveePromotionAdoptionReceiptId;
-  requireCondition(promotionReceiptId === undefined || (adoption === undefined && !withDatabase && schemaBootstrap && localMirror
+  requireCondition(promotionReceiptId === undefined || (adoption === undefined && !withDatabase
+    && (schemaBootstrap || reviewed.invoiceAppPlacement) && localMirror
     && reviewed.nativeInventories?.devee?.final && Number.isSafeInteger(promotionReceiptId) && promotionReceiptId > 0),
   'SALESFORCE_DEVEE_PROMOTION_ADOPTION_INVALID');
   requireCondition(tradingFxRecovery === undefined ? plan.tradingFxRecoveryReceiptId === undefined
@@ -553,7 +562,7 @@ async function applyPreparedSalesforce({ manifest, manifestHash, approval, sales
           && isDigest(existing.evidenceDigest) && digest(existing.job ?? existing.permission ?? null)
             === digest(original.job ?? original.permission ?? null)), 'SALESFORCE_DEVEE_PROMOTION_CURRENT_CHECKPOINT_CHANGED');
       }
-      const adoptionOperations = ['bootstrap', 'validation', 'deployment', ...tradingFxCheckpoints
+      const adoptionOperations = [...(schemaBootstrap ? ['bootstrap'] : []), 'validation', 'deployment', ...tradingFxCheckpoints
         .filter(checkpoint => checkpoint.payload.data.permission).map(checkpoint => checkpoint.payload.data.operation)];
       if ((tradingFxRecovery || promotionReceiptId) && adoptionOperations.some(operation =>
         !saved.some(item => item.stage === 'devee' && item.operation === operation))) {
