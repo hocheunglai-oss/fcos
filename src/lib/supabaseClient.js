@@ -1,9 +1,9 @@
 import { createClient } from '@supabase/supabase-js';
 import { resolveAuthRuntimePolicy } from '../../shared/authRuntimePolicy.js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabasePublicKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
-  || import.meta.env.VITE_SUPABASE_ANON_KEY;
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL?.trim();
+const supabasePublicKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY?.trim()
+  || import.meta.env.VITE_SUPABASE_ANON_KEY?.trim();
 
 const runtimePolicy = resolveAuthRuntimePolicy({
   url: supabaseUrl,
