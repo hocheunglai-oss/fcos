@@ -360,9 +360,16 @@ test('native XLS exports more than the legacy worksheet row limit without droppi
   const blob = await createDashboardStemWorkbook({ rows });
   const book = read(await blob.arrayBuffer(), { type: 'array' });
   assert.deepEqual(book.SheetNames, ['STEMs 1', 'STEMs 2', 'Scope']);
-  const first = utils.sheet_to_json(book.Sheets['STEMs 1'], { header: 1 });
-  const second = utils.sheet_to_json(book.Sheets['STEMs 2'], { header: 1 });
-  assert.equal(first.length - 1, 60_000); assert.equal(second.length - 1, 5537);
-  assert.equal(first[1][0], 'STEM-0'); assert.equal(second.at(-1)[0], 'STEM-65536');
+  let nextStem = 0;
+  for (const [name, count] of [['STEMs 1', 60_000], ['STEMs 2', 5537]]) {
+    const sheet = book.Sheets[name];
+    const bounds = utils.decode_range(sheet['!ref']);
+    assert.equal(bounds.s.r, 0);
+    assert.equal(bounds.e.r, count);
+    for (let row = 2; row <= count + 1; row++) {
+      assert.equal(sheet[`A${row}`]?.v, `STEM-${nextStem++}`);
+    }
+  }
+  assert.equal(nextStem, 65_537);
   assert.equal(Object.fromEntries(utils.sheet_to_json(book.Sheets.Scope, { header: 1 }))['Exported STEM rows'], '65537');
 });
