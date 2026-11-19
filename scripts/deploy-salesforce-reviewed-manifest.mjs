@@ -3,6 +3,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync,
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { assertInvoiceAppPlacementReadback, readInvoiceAppPlacement } from './lib/salesforce-invoice-app-placement.mjs';
 import { parseDocument } from 'htmlparser2';
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import { openSalesforcePromotionJournal, salesforcePromotionHash } from './lib/salesforce-promotion-journal.mjs';
@@ -108,11 +109,17 @@ export function loadReviewedSalesforcePlan({ cwd = ROOT, manifestPath, reviewPat
     baselineWorkflow, baselineInventory, orgBaselineInventories, finalInventory: readReviewedInventory(sourceRoot), policy };
   const plan = createReviewedSalesforcePlan(inputs);
   assertLegacySalesforceDocumentAdmission(cwd, plan, policy.publication.sourceRoot);
+  for (const [key, descriptor] of Object.entries(plan.invoiceAppPlacement || {})) {
+    readInvoiceAppPlacement(descriptor, key, relative => safeProjectFile(cwd, relative));
+  }
   return { ...plan, manifestPath, reviewPath, manifestAbsolute, reviewAbsolute, baselineWorkflowAbsolute, bootstrapAbsolute,
     inputDigests: { review: salesforcePromotionHash(readFileSync(reviewAbsolute)), baseline: baselineWorkflowAbsolute ? salesforcePromotionHash(readFileSync(baselineWorkflowAbsolute)) : null } };
 }
 
 export function assertReviewedInputsUnchanged(plan, { cwd = ROOT, policy = POLICY } = {}) {
+  for (const [key, descriptor] of Object.entries(plan.invoiceAppPlacement || {})) {
+    readInvoiceAppPlacement(descriptor, key, relative => safeProjectFile(cwd, relative));
+  }
   if (readReviewedInventory(path.join(cwd, policy.publication.sourceRoot)).sourceTreeHash !== plan.binding.sourceTreeHash
     || salesforcePromotionHash(readFileSync(plan.manifestAbsolute)) !== plan.binding.manifestSha256
     || salesforcePromotionHash(readFileSync(plan.reviewAbsolute)) !== plan.inputDigests.review
@@ -262,6 +269,12 @@ function verifyNativeMetadataProjection({ root, sourceRoot, plan, projectionPath
       throw new Error(`Native CustomObject serialization differs from the exact reviewed source: ${name}`);
     }
     if (local === observed) continue;
+    if (plan.invoiceAppPlacement && /^flexipages\/FCOS_DEVEE_Invoice_Launcher_(?:Buyer|Supplier)\.flexipage-meta\.xml$/u.test(name)) {
+      const normalizeLauncher = xml => normalizedMetadataDefinition(xml.replace(
+        /<componentName>c:fcosTradeInvoiceActions<\/componentName>/gu,
+        '<componentName>fcosTradeInvoiceActions</componentName>'));
+      if (JSON.stringify(normalizeLauncher(local)) === JSON.stringify(normalizeLauncher(observed))) continue;
+    }
     if (/^layouts\/[^/]+\.layout-meta\.xml$/u.test(name)
       && equivalentNativeSerialization(local, observed, 'Layout', [['platformActionList', 'empty-record-action-list']])) continue;
     if (name.endsWith('.xml') && JSON.stringify(normalizedMetadataDefinition(local)) === JSON.stringify(normalizedMetadataDefinition(observed))) continue;
@@ -292,7 +305,7 @@ export function assertConvertedPackage(converted, roundTrip, members, files, sou
       expectedPackageFiles.add(`objects/${object}.object`);
       if (!members.has(`CustomObject:${object}`)) allowedShells.add(`objects/${object}/${object}.object-meta.xml`);
     } else {
-      const mdapiSuffix = ['customPermissions', 'layouts', 'permissionsets', 'quickActions'].includes(directory);
+      const mdapiSuffix = ['applications', 'customPermissions', 'flexipages', 'layouts', 'permissionsets', 'quickActions'].includes(directory);
       expectedPackageFiles.add(mdapiSuffix ? file.replace(/-meta\.xml$/u, '') : file);
     }
   }
@@ -367,20 +380,25 @@ function inspectNativeSupplementalFiles(root, reviewed, { allowObjectShells = fa
 
 export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = localCommand, adapter = {}, adapterPath, commandEnvironment } = {}) {
   const sf = (args, directory = cwd) => run('sf', args, directory, { env: commandEnvironment });
-  function preparePackage(plan, { operation, manifestPath, manifestSha256, components, command }) {
+  function preparePackage(plan, { operation, manifestPath, manifestSha256, components, command, invoiceApplication }) {
     const manifest = readFileSync(safeProjectFile(cwd, manifestPath));
     if (salesforcePromotionHash(manifest) !== manifestSha256) throw new Error(`Salesforce ${operation} manifest changed.`);
     const versions = [...manifest.toString('utf8').matchAll(/<version>\s*(\d+\.0)\s*<\/version>/gu)];
     if (versions.length !== 1) throw new Error(`Salesforce ${operation} requires one explicit metadata API version.`);
     const members = new Set(components);
     const files = new Set(plan.review.components.filter(({ id }) => members.has(id)).flatMap(({ files }) => files));
+    const appFile = invoiceApplication && `applications/${invoiceApplication.app}.app-meta.xml`;
+    const manifestForDeployment = invoiceApplication
+      ? manifest.toString('utf8').replace('</Package>', `<types><members>${invoiceApplication.app}</members><name>CustomApplication</name></types>\n</Package>`)
+      : manifest;
+    if (invoiceApplication) members.add(`CustomApplication:${invoiceApplication.app}`);
     const project = mkdtempSync(path.join(tmpdir(), `fcos-salesforce-${operation}-`));
     const cleanup = () => rmSync(project, { recursive: true, force: true });
     try {
       writeFileSync(path.join(project, 'sfdx-project.json'), JSON.stringify({
         packageDirectories: [{ path: 'force-app', default: true }], namespace: '', sourceApiVersion: versions[0][1],
       }));
-      writeFileSync(path.join(project, `${operation}.xml`), manifest, { mode: 0o600 });
+      writeFileSync(path.join(project, `${operation}.xml`), manifestForDeployment, { mode: 0o600 });
       // A source-format manifest can otherwise pull in unreviewed parent and child metadata.
       for (const name of files) {
         const relative = `${policy.publication.sourceRoot}/${name}`;
@@ -391,6 +409,12 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
         const destination = path.join(project, relative);
         mkdirSync(path.dirname(destination), { recursive: true });
         writeFileSync(destination, bytes, { mode: 0o600 });
+      }
+      if (invoiceApplication) {
+        const destination = path.join(project, policy.publication.sourceRoot, appFile);
+        mkdirSync(path.dirname(destination), { recursive: true });
+        writeFileSync(destination, invoiceApplication.bytes, { mode: 0o600 });
+        files.add(appFile);
       }
       const converted = path.join(project, 'converted');
       const roundTrip = path.join(project, 'round-trip');
@@ -430,13 +454,40 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
     prepareValidation(environment, plan) {
       const command = ['project', 'deploy', 'validate', '--target-org', environment.alias, '--test-level', plan.binding.testPlan.level];
       if (plan.binding.testPlan.level === 'RunSpecifiedTests') for (const name of plan.binding.testPlan.tests) command.push('--tests', name);
-      return preparePackage(plan, { operation: 'validation', manifestPath: plan.manifestPath,
+      const descriptor = environment.key === 'devee' ? undefined : plan.invoiceAppPlacement?.[environment.key];
+      const invoiceApplication = descriptor && { app: descriptor.app,
+        bytes: readInvoiceAppPlacement(descriptor, environment.key, relative => safeProjectFile(cwd, relative)).after };
+      return preparePackage(plan, { operation: 'validation', manifestPath: plan.manifestPath, invoiceApplication,
         manifestSha256: plan.binding.manifestSha256, components: plan.manifest, command });
     },
     validate(environment, plan) {
       const prepared = this.prepareValidation(environment, plan);
       try { return prepared.submit(); }
       finally { prepared.cleanup(); }
+    },
+    verifyInvoiceAppPlacement(environment, plan, phase) {
+      const descriptor = plan.invoiceAppPlacement?.[environment.key];
+      if (!descriptor || !['before', 'after'].includes(phase)) throw new Error('Invalid invoice application checkpoint.');
+      const expected = readInvoiceAppPlacement(descriptor, environment.key, relative => safeProjectFile(cwd, relative))[phase];
+      this.verifyIdentity(environment);
+      const project = mkdtempSync(path.join(tmpdir(), 'fcos-salesforce-invoice-placement-'));
+      try {
+        mkdirSync(path.join(project, 'force-app'));
+        copyFileSync(safeProjectFile(cwd, 'sfdx-project.json'), path.join(project, 'sfdx-project.json'));
+        const result = sf(['project', 'retrieve', 'start', '--target-org', environment.alias,
+          '--metadata', `CustomApplication:${descriptor.app}`, '--wait', '5', '--json'], project);
+        if (!/^09S[A-Za-z0-9]{15}$/u.test(result?.id || '') || result.status !== 'Succeeded'
+          || result.success !== true || result.done !== true || result.messages?.length) {
+          throw new Error('Invoice application readback did not complete without warnings.');
+        }
+        const actual = readFileSync(safeProjectFile(project,
+          `force-app/main/default/applications/${descriptor.app}.app-meta.xml`));
+        assertInvoiceAppPlacementReadback(expected, actual);
+        return { orgId: environment.orgId, phase,
+          evidenceSha256: salesforcePromotionHash({ jobId: result.id, contentSha256: salesforcePromotionHash(actual) }) };
+      } finally {
+        rmSync(project, { recursive: true, force: true });
+      }
     },
     deploy(environment, validationJobId) { return sf(['project', 'deploy', 'quick', '--target-org', environment.alias, '--job-id', validationJobId, '--async', '--json']); },
     prepareBootstrap(environment, plan) {
