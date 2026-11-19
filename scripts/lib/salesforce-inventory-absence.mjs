@@ -56,9 +56,9 @@ export function proveSalesforceInventoryAbsence({ expectedAbsentComponents, pres
     return rows;
   }
   for (const [type, names] of absent) {
-    if (type === 'QuickAction' || type === 'Layout') {
+    if (['QuickAction', 'Layout', 'FlexiPage'].includes(type)) {
       const pattern = type === 'QuickAction' ? /^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)?$/u
-        : /^[A-Za-z][A-Za-z0-9_]*-[A-Za-z0-9_.$-]+(?: +[A-Za-z0-9_.$-]+)*$/u;
+        : type === 'FlexiPage' ? NAME : /^[A-Za-z][A-Za-z0-9_]*-[A-Za-z0-9_.$-]+(?: +[A-Za-z0-9_.$-]+)*$/u;
       const valid = name => pattern.test(name);
       if (!names.every(valid)) throw new Error('Invalid Salesforce inventory catalog member.');
       const positive = control(type, valid);
