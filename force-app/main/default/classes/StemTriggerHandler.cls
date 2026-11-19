@@ -92,7 +92,13 @@ public class StemTriggerHandler {
 
                 List<STEM_Line_Item__c> lineItems = [SELECT Id, STEM__c, Vessel__c, Port__c, Product__c, Original_Supplier__c, Offer_Line_Item__r.Opportunity_Line_Item__c FROM STEM_Line_Item__c WHERE STEM__c IN :stemsToUpdateChildren.keySet()];
 
-                List<STEM_Extra_Cost__c> extraCosts = [SELECT Id, STEM__c, Vessel__c, Port__c, Product2Id__c, Supplier__c, Offer_Line_Item__r.Opportunity_Line_Item__c FROM STEM_Extra_Cost__c WHERE STEM__c IN :stemsToUpdateChildren.keySet()];
+                // Reapplying enquiry special terms also reads the supplier payment term.
+                List<STEM_Extra_Cost__c> extraCosts = [
+                    SELECT Id, STEM__c, Vessel__c, Port__c, Product2Id__c, Supplier__c, Payment_Term__c,
+                        Offer_Line_Item__r.Opportunity_Line_Item__c
+                    FROM STEM_Extra_Cost__c
+                    WHERE STEM__c IN :stemsToUpdateChildren.keySet()
+                ];
 
                 Set<Id> opportunityLineItemIds = new Set<Id>();
                 for(STEM_Line_Item__c sli : lineItems) {

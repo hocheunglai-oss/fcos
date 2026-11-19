@@ -57,6 +57,40 @@ private class StemTriggerHandlerTest {
         Test.stopTest();
     }
     
+    @IsTest
+    static void updatePortWithExtraCostRetainsSupplierPaymentTerm() {
+        STEM__c stem = [SELECT Id, Port__c, Vessel__c FROM STEM__c LIMIT 1];
+        STEM_Line_Item__c line = [
+            SELECT Id, Original_Supplier__c, Product__c
+            FROM STEM_Line_Item__c WHERE STEM__c = :stem.Id LIMIT 1
+        ];
+        Port__c napier = TestDataFactory.createTestPort('Napier', 'NEW ZEALAND', true);
+        STEM_Extra_Cost__c charge = TestDataFactory.createTestStemExtraCost(
+            stem.Id, null, null, null, null, 100, 75, null, 'STEM Charge', false
+        );
+        charge.Fixed__c = true;
+        charge.Port__c = stem.Port__c;
+        charge.Vessel__c = stem.Vessel__c;
+        charge.Supplier__c = line.Original_Supplier__c;
+        charge.Product2Id__c = line.Product__c;
+        charge.Payment_Term__c = '30';
+        insert charge;
+
+        Test.startTest();
+        update new STEM__c(Id = stem.Id, Port__c = napier.Id);
+        Test.stopTest();
+
+        STEM_Extra_Cost__c saved = [
+            SELECT Port__c, Payment_Term__c, Lumpsum_Price__c
+            FROM STEM_Extra_Cost__c WHERE Id = :charge.Id
+        ];
+        System.assertEquals(napier.Id, [SELECT Port__c FROM STEM__c WHERE Id = :stem.Id].Port__c);
+        System.assertEquals(napier.Id, [SELECT Port__c FROM STEM_Line_Item__c WHERE Id = :line.Id].Port__c);
+        System.assertEquals(napier.Id, saved.Port__c);
+        System.assertEquals('30', saved.Payment_Term__c);
+        System.assertEquals(100, saved.Lumpsum_Price__c);
+    }
+
     @isTest
     static void testSetPaymentDelay(){
         Test.startTest();
