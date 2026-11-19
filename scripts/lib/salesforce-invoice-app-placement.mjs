@@ -1,6 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { XMLValidator } from 'fast-xml-parser';
-import { parseDocument } from 'htmlparser2';
+import { parseDocument, QuoteType, Tokenizer } from 'htmlparser2';
 import { salesforcePromotionHash as hash } from './salesforce-promotion-journal.mjs';
 
 const apps = Object.freeze({ devee: 'FCB', qat: 'FCB', production: 'FCB_BT' });
@@ -21,11 +20,41 @@ const tags = node => node.children.filter(child => child.type === 'tag');
 const text = (node, name) => tags(node).find(child => child.name === name)?.children
   .map(child => child.data || '').join('');
 
+function assertCompleteXml(xml) {
+  const stack = [];
+  let opening, attributes;
+  const noop = () => {};
+  const invalid = () => fail('Unsupported or invalid XML.');
+  // The DOM parser recovers unmatched tags. Check token closure and attribute
+  // boundaries first so the reviewed app cannot rely on that recovery.
+  const tokenizer = new Tokenizer({ xmlMode: true, decodeEntities: true }, {
+    onopentagname(start, end) { opening = xml.slice(start, end); attributes = new Set(); },
+    onopentagend() { stack.push(opening); opening = undefined; },
+    onselfclosingtag() { opening = undefined; },
+    onclosetag(start, end) { if (stack.pop() !== xml.slice(start, end).trim()) invalid(); },
+    onattribname(start, end) {
+      const name = xml.slice(start, end);
+      if (attributes.has(name)) invalid();
+      attributes.add(name);
+    },
+    onattribend(quote) { if (![QuoteType.Single, QuoteType.Double].includes(quote)) invalid(); },
+    onend() { if (opening || stack.length) invalid(); },
+    ondeclaration: invalid, oncdata: invalid, oncomment: noop, onprocessinginstruction: noop,
+    onattribdata: noop, onattribentity: noop, ontext: noop, ontextentity: noop,
+  });
+  tokenizer.write(xml);
+  tokenizer.end();
+}
+
 function appDocument(xml) {
-  if (/<!DOCTYPE|<!ENTITY|xml:space/iu.test(xml) || XMLValidator.validate(xml) !== true) fail('Unsupported or invalid XML.');
+  if (/<!DOCTYPE|<!ENTITY|xml:space/iu.test(xml)) fail('Unsupported or invalid XML.');
+  assertCompleteXml(xml);
   const document = parseDocument(xml, { xmlMode: true, decodeEntities: true });
   const [root, ...others] = tags(document);
-  if (!root || others.length || root.name !== 'CustomApplication'
+  const unexpectedOuter = document.children.some(node => node !== root
+    && !(node.type === 'text' && !node.data.trim())
+    && !(node.type === 'directive' && node.name === '?xml' && document.children[0] === node));
+  if (!root || others.length || unexpectedOuter || root.name !== 'CustomApplication'
     || root.attribs.xmlns !== xmlNamespace || Object.keys(root.attribs).length !== 1) fail('Expected one CustomApplication.');
   return root;
 }
