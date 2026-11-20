@@ -179,6 +179,11 @@
         <c-fcb-supplier-bid-extra-costs supplier-bids={productSupplierBids}
             quote-id={quoteId} onchangeprice={handlePriceChange} onchangetransportationtype={handleTransportationChange}
             onchangequantity={handleQuantityChange} onchangecompany={handleCompanyChange}></c-fcb-supplier-bid-extra-costs>
+        <template for:each={productSupplierBids} for:item="productSupplierBid">
+          <c-fcos-trade-currency-editor key={productSupplierBid.Id} record-id={productSupplierBid.Id} direction="Buy" fixture-id={editorFixtureId}
+            oncurrencyreview={handleCurrencyReview} oncurrencychange={handleCurrencyChange}>
+          </c-fcos-trade-currency-editor>
+        </template>
         </div>
       <footer class="slds-modal__footer">
         <button class="slds-button slds-button_success" onclick={handleAddAction}>Save</button>
