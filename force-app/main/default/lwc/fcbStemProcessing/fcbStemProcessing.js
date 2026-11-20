@@ -1,3 +1,5 @@
+import getBuyerInvoiceTabReadiness from "@salesforce/apex/InvoiceController.getBuyerInvoiceTabReadiness";
+import sendBuyerChargeReminder from "@salesforce/apex/InvoiceController.sendBuyerChargeReminder";
 import { LightningElement, api, wire, track } from "lwc";
 import { ShowToastEvent } from "lightning/platformShowToastEvent";
 import { getRecord } from "lightning/uiRecordApi";
@@ -158,6 +160,57 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
   openEmail = false;
   productDisabled = true;
   proformaDisabled = true;
+  invoiceReadiness = null;
+  readinessSequence = 0;
+  reminderInFlight = false;
+  reminderRequestId = null;
+  reminderResult = '';
+  savingInvoiceDetails = false;
+
+  get finalReadinessBlocked() {
+    return !this.invoiceReadiness || this.invoiceReadiness.ready !== true || this.invoiceReadiness.pendingBuyerApproval === true;
+  }
+  get isCreditSelection() {
+    return this.selectedProducts.length > 0 && this.selectedProducts.every(product => product.total < 0);
+  }
+  get readinessApplies() { return this.invoiceButtonLabel !== PROFORMA_INVOICE_LABEL && !this.isCreditSelection; }
+  get invoiceActionDisabled() { return this.createInvoiceDisabled || this.savingInvoiceDetails || (this.readinessApplies && this.finalReadinessBlocked); }
+  get lastInvoiceActionDisabled() { return this.disabledLastInvoiceForm || this.savingInvoiceDetails || (this.readinessApplies && this.finalReadinessBlocked); }
+  get readinessMessage() { return this.invoiceReadiness?.reason || (this.invoiceReadiness?.pendingBuyerApproval ? 'Buyer approval is pending.' : 'Checking final Buyer Invoice readiness.'); }
+  get readinessUrl() { return this.invoiceReadiness?.fcosUrl; }
+  get showReadiness() { return this.readinessApplies && this.finalReadinessBlocked; }
+  get showReminder() { return this.showReadiness && this.invoiceReadiness?.pendingBuyerApproval === true; }
+
+  async refreshInvoiceReadiness() {
+    const sequence = ++this.readinessSequence;
+    this.invoiceReadiness = null;
+    try {
+      const result = await getBuyerInvoiceTabReadiness({ stemId: this.recordId });
+      if (sequence !== this.readinessSequence) return null;
+      this.invoiceReadiness = result;
+      return result;
+    } catch (error) {
+      const result = { ready: false, reason: 'Final Buyer Invoice readiness could not be checked. Refresh and try again.' };
+      if (sequence !== this.readinessSequence) return null;
+      this.invoiceReadiness = result;
+      return result;
+    }
+  }
+  handleInvoiceTabActive() { this.refreshInvoiceReadiness(); }
+  handleReadinessChanged() { this.refreshInvoiceReadiness(); }
+  async handleTraderReminder() {
+    if (this.reminderInFlight) return;
+    this.reminderInFlight = true;
+    if (!this.reminderRequestId) this.reminderRequestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    try {
+      this.reminderResult = await sendBuyerChargeReminder({ stemId: this.recordId, requestId: this.reminderRequestId });
+      this.reminderRequestId = null;
+      await this.refreshInvoiceReadiness();
+    } catch (error) {
+      this.reminderResult = getErrorMessage(error);
+    } finally { this.reminderInFlight = false; }
+  }
+
   createInvoiceDisabled = true;
   sendInvoiceDisabled = true;
   dueDateOverride = false;
@@ -576,6 +629,7 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
 
   handleRefreshStemItems(ref) {
     if (ref) {
+      this.refreshInvoiceReadiness();
       refreshApex(this.wiredStemLineItems).then(() => {
         refreshApex(this.wiredStemInfo);
         refreshApex(this.wiredProductInfo).then(() => {
@@ -648,7 +702,8 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
   }
 
   handleRefreshSupplierInvoices(ref) {
-    if (ref) {      
+    if (ref) {
+      this.refreshInvoiceReadiness();
       this.template.querySelector("c-fcb-supplier-invoices")?.refreshData();
       refreshApex(this.wiredStemInfo).then(() => {
         let components = [
@@ -689,6 +744,7 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
       variant: "success",
     }));
 
+    this.refreshInvoiceReadiness();
     const refreshes = [
       () => this.template.querySelector("c-fcb-stem-payment")?.refreshGridData(),
       () => this.template.querySelector("c-fcb-commission-invoice-form")?.refreshData(),
@@ -940,6 +996,7 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
 
       this.showSaveAllButton = false;
       await refreshApex(this.wiredStemLineItems);
+      await this.refreshInvoiceReadiness();
       this.dispatchEvent(
         new ShowToastEvent({
           title: "BDN details saved",
@@ -1007,41 +1064,47 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
    *
    * @param {*} event
    */
-  generateInvoice(event) {
+  async persistInvoiceDetails() {
+    const fields = {
+      Id: this.recordId,
+      Delivery_Date__c: this.productInfo.every(product => product.issued && product.objectName === 'STEM_Extra_Cost__c') ? null : this.deliveryDateValue,
+      Invoice_Due_Date__c: this.invoiceDueDateValue,
+      Due_Date_Override__c: !this.dueDateDisabled,
+      FCBS_Reference__c: this.fcbsReferenceVisible ? this.fcbsReference : null,
+    };
+    await updateRecord({ fields });
+    await updateAllStemExtraCosts({ stemExtraCosts: this.extraCosts });
+  }
+
+  async handleSaveInvoiceDetails() {
+    if (this.savingInvoiceDetails || !this.validateFields(false)) return;
+    this.savingInvoiceDetails = true;
     try {
-      let buttonName = event.target.dataset.name;
-      this.actionExecuted = false;
-      let fields = {};
-      let isValid = this.validateFields();
-      if (isValid) {
-        fields["Id"] = this.recordId;
-        fields["Delivery_Date__c"] = this.productInfo.every(product => product.issued && product.objectName === 'STEM_Extra_Cost__c') 
-          ? null
-          : this.deliveryDateValue;
-        fields["Invoice_Due_Date__c"] = this.invoiceDueDateValue;
-        fields["Due_Date_Override__c"] = !this.dueDateDisabled;
-        fields["FCBS_Reference__c"] = this.fcbsReferenceVisible ? this.fcbsReference : null;
-        let recordInput = {fields}
-        updateRecord(recordInput).then(() => {
-          updateAllStemExtraCosts({ stemExtraCosts: this.extraCosts });
-          let createProforma = this.template.querySelector('[data-name="createInvoiceButton"]').label === "Create Proforma Invoice" ? true : false;
-          let invoiceFormModal = this.template.querySelector(
-            "c-fcb-invoice-form"
-          );
-          if(buttonName === 'lastInvoiceForm'){
-            invoiceFormModal.openModal(this.recordId, this.selectedProducts, createProforma, this.isProductLineItemExisting, this.lastInvoiceForm);
-          } else{
-            this.selectedProducts = this.template.querySelector(".product-info").getSelectedRows();
-            invoiceFormModal.openModal(this.recordId, this.selectedProducts, createProforma, this.isProductLineItemExisting, null);
-          }
-          this.actionExecuted = true;
-        })
-      } else{
-        this.actionExecuted = true;
-      }
+      await this.persistInvoiceDetails();
+      this.dispatchEvent(new ShowToastEvent({ title: 'Invoice details saved', variant: 'success' }));
     } catch (error) {
-      console.error(error)
+      this.dispatchEvent(new ShowToastEvent({ title: 'Invoice details could not be saved', message: getErrorMessage(error), variant: 'error', mode: 'sticky' }));
+    } finally {
+      await this.refreshInvoiceReadiness();
+      this.savingInvoiceDetails = false;
     }
+  }
+
+  async generateInvoice(event) {
+    const buttonName = event.target.dataset.name;
+    if (this.savingInvoiceDetails || !this.validateFields()) return;
+    this.savingInvoiceDetails = true;
+    try {
+      await this.persistInvoiceDetails();
+      const readiness = await this.refreshInvoiceReadiness();
+      if (this.readinessApplies && (!readiness || readiness.ready !== true || readiness.pendingBuyerApproval === true)) return;
+      const products = buttonName === 'lastInvoiceForm' ? this.selectedProducts : this.template.querySelector('.product-info').getSelectedRows();
+      this.selectedProducts = products;
+      this.template.querySelector('c-fcb-invoice-form').openModal(this.recordId, products, this.invoiceButtonLabel === PROFORMA_INVOICE_LABEL, this.isProductLineItemExisting, buttonName === 'lastInvoiceForm' ? this.lastInvoiceForm : null, true);
+    } catch (error) {
+      this.dispatchEvent(new ShowToastEvent({ title: 'Invoice details could not be saved', message: getErrorMessage(error), variant: 'error', mode: 'sticky' }));
+      await this.refreshInvoiceReadiness();
+    } finally { this.savingInvoiceDetails = false; }
   }
 
   sendInvoice(event) {
@@ -1055,7 +1118,7 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
     }, 10);
   }
 
-  validateFields(fields) {
+  validateFields(checkProducts = true) {
     if (!this.deliveryDateValue && this.deliveryDateRequired) {
       this.dispatchEvent(
         new ShowToastEvent({
@@ -1086,7 +1149,7 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
       );
       return false;
     }
-    if(Array.isArray(this.selectedProducts)){
+    if(checkProducts && Array.isArray(this.selectedProducts)){
       if(this.selectedProducts.filter(product => product.issued).length > 0){
         this.dispatchEvent(
           new ShowToastEvent({
@@ -1098,7 +1161,7 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
         return false;
       }
     }
-    if(Array.isArray(this.selectedProducts)){
+    if(checkProducts && Array.isArray(this.selectedProducts)){
       let selectedSTEMLineItems = this.selectedProducts.filter(product => product.objectName === 'STEM_Line_Item__c');
       if(Array.isArray(selectedSTEMLineItems) && selectedSTEMLineItems.length > 0){
         let bdnDeliveryDate = selectedSTEMLineItems[0].bdnDeliveryDate;
@@ -1190,6 +1253,7 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
   }
 
   handleInvoiceTableRefresh() {
+    this.refreshInvoiceReadiness();
     this.isLoading = true;
     this.sendInvoiceDisabled = true;
     this.template.querySelector('.invoice-info').selectedRows = [];

@@ -44,6 +44,64 @@ private class VariableChargeReadinessTest {
     }
 
     @IsTest
+    static void invoiceTabCollectsOnlyOutstandingBuyerApprovalSuppliers() {
+        Map<String, Id> ids = prepareRequiredSupplier(true);
+        Id stemId = ids.get('stem');
+        Account other = TestDataFactory.createTestAccount('Second invoice reminder supplier', 'SUPPLIER', false);
+        other.Is_Variable__c = true;
+        insert other;
+        STEM_Extra_Cost__c extra = TestDataFactory.createTestStemExtraCost(
+            stemId, null, null, null, null, 25, 20, null, 'STEM Charge', false
+        );
+        extra.Supplier__c = other.Id;
+        extra.Fixed__c = true;
+        ContextManager.skipTriggers = true;
+        try {
+            insert extra;
+        } finally {
+            ContextManager.skipTriggers = false;
+        }
+
+        Test.startTest();
+        VariableChargeInvoiceReadinessService.Readiness tab =
+            VariableChargeInvoiceReadinessService.getBuyerInvoiceTabReadiness(String.valueOf(stemId));
+        System.assertEquals(false, tab.ready);
+        System.assertEquals(true, tab.pendingBuyerApproval);
+        System.assertEquals(new Set<Id>{ids.get('supplier'), other.Id}, new Set<Id>(tab.blockingBuyerSupplierIds));
+
+        verifyBuyerSide(ids);
+        tab = VariableChargeInvoiceReadinessService.getBuyerInvoiceTabReadiness(String.valueOf(stemId));
+        System.assertEquals(new List<Id>{other.Id}, tab.blockingBuyerSupplierIds);
+        Test.stopTest();
+    }
+
+    @IsTest
+    static void invoiceTabDoesNotOfferReminderForDeliveryOrAggregateFlag() {
+        Map<String, Id> ids = prepareRequiredSupplier(true);
+        Id stemId = ids.get('stem');
+        verifyBuyerSide(ids);
+
+        Test.startTest();
+        VariableChargeInvoiceReadinessService.Readiness aggregate =
+            VariableChargeInvoiceReadinessService.getBuyerInvoiceTabReadiness(String.valueOf(stemId));
+        System.assertEquals(false, aggregate.ready);
+        System.assertEquals(false, aggregate.pendingBuyerApproval);
+        System.assert(aggregate.reason.contains('STEM-level Buyer Charges Confirmed'));
+
+        ContextManager.skipTriggers = true;
+        try {
+            update new STEM__c(Id = stemId, Delivery_Date__c = null);
+        } finally {
+            ContextManager.skipTriggers = false;
+        }
+        VariableChargeInvoiceReadinessService.Readiness missingDelivery =
+            VariableChargeInvoiceReadinessService.getBuyerInvoiceTabReadiness(String.valueOf(stemId));
+        System.assertEquals(false, missingDelivery.pendingBuyerApproval);
+        System.assert(missingDelivery.reason.contains('Add the Salesforce Delivery Date'));
+        Test.stopTest();
+    }
+
+    @IsTest
     static void nonHongKongAgentDoesNotRequireHongKongCurrencyConfiguration() {
         Map<String, Id> ids = prepareRequiredSupplier(false);
         Port__c nonHongKong = TestDataFactory.createTestPort('GIBRALTAR', 'GIBRALTAR', true);

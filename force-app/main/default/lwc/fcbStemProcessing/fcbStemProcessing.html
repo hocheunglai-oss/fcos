@@ -334,7 +334,7 @@
             </div>
             <!-- COMISSION INVOICES -->
         </lightning-tab>
-        <lightning-tab label="Invoices" class={invoiceBackground}> 
+        <lightning-tab label="Invoices" class={invoiceBackground} onactive={handleInvoiceTabActive}>
             <!--PRODUCT INFO-->
             <div class="slds-m-bottom_small">
                 <lightning-card>
@@ -374,10 +374,20 @@
                             </div>
                         </template>
                     </div>
+                    <template if:true={showReadiness}>
+                        <div class="slds-notify slds-notify_alert slds-alert_warning slds-m-top_small" role="alert">
+                            <span>{readinessMessage}</span>
+                            <template if:true={readinessUrl}><a class="slds-m-left_small" href={readinessUrl} target="_blank" rel="noopener">Open FCOS task</a></template>
+                        </div>
+                        <template if:true={showReminder}><lightning-button label="Send Trader Reminder" onclick={handleTraderReminder} disabled={reminderInFlight}></lightning-button></template>
+                    </template>
+                    <template if:true={reminderResult}><p role="status">{reminderResult}</p></template>
+                    <lightning-button label="Save Invoice Details" onclick={handleSaveInvoiceDetails} disabled={savingInvoiceDetails}></lightning-button>
+                    <lightning-button label="Refresh Readiness" onclick={handleInvoiceTabActive}></lightning-button>
                     <div class="slds-m-top_x-small slds-m-bottom_x-small slds-grid slds-grid_align-space">
                         <div class="slds-col">
                             <lightning-button class="general-stem-info-buttons" data-name="createInvoiceButton" variant="brand"
-                                label={invoiceButtonLabel} title={invoiceButtonLabel} disabled={createInvoiceDisabled}
+                                label={invoiceButtonLabel} title={invoiceButtonLabel} disabled={invoiceActionDisabled}
                                 onclick={generateInvoice}>
                             </lightning-button>
                             <template if:true={createInvoiceDisabled}>
@@ -386,12 +396,12 @@
                         </div>
                         <div class="slds-col">
                             <lightning-button class="general-stem-info-buttons" data-name="lastInvoiceForm" variant="brand"
-                                label="Last Saved Invoice Form" title="Last Saved Invoice Form" disabled={disabledLastInvoiceForm}
+                                label="Last Saved Invoice Form" title="Last Saved Invoice Form" disabled={lastInvoiceActionDisabled}
                                 onclick={generateInvoice}>
                             </lightning-button>
                         </div>
                     </div>
-                    <c-fcb-invoice-form></c-fcb-invoice-form>
+                    <c-fcb-invoice-form onreadinesschanged={handleReadinessChanged}></c-fcb-invoice-form>
                     <lightning-datatable class="product-info" columns={productColumns} data={productInfo} key-field="Id" onrowselection={handleProductChange}> </lightning-datatable>    
                 </lightning-card>
             </div>

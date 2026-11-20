@@ -83,7 +83,7 @@ export default class FcbInvoiceForm extends LightningElement {
     }
 
     @api
-    async openModal(stemId, products, proforma, isProductLineItemExisting, lastInvoiceForm) {
+    async openModal(stemId, products, proforma, isProductLineItemExisting, lastInvoiceForm, managedReadiness = false) {
         const loadSequence = ++this.invoiceFormLoadSequence;
         let loadingPaymentTerm = false;
         try {
@@ -92,7 +92,8 @@ export default class FcbInvoiceForm extends LightningElement {
             this.isModalOpen = true;
             this.actionExecuted = false;
             this.proforma = proforma;
-            this.isCreditNote = false;
+            this.isCreditNote = products.length > 0 && products.every(product => product.total < 0);
+            this.managedReadiness = managedReadiness;
             this.formLoadError = null;
             this.generationError = null;
             this.tradeDocument = undefined;
@@ -113,7 +114,7 @@ export default class FcbInvoiceForm extends LightningElement {
             if (loadSequence !== this.invoiceFormLoadSequence) return;
             this.stem = loadedStem;
             this.invoiceNumber = this.stem.KeyStem__c;
-            this.isCreditNote = products.every(product => product.total < 0);
+            this.isCreditNote = products.length > 0 && products.every(product => product.total < 0);
             if (!lastInvoiceForm || this.hasPartialCiaPaymentTerm) {
                 if (this.hasPartialCiaPaymentTerm && !this.stem.Payment_Term__c) {
                     buildInvoicePaymentTerm(this.stem, null);
@@ -154,6 +155,10 @@ export default class FcbInvoiceForm extends LightningElement {
             .then((readiness) => {
                 if (loadSequence !== this.invoiceFormLoadSequence) return;
                 this.variableChargeReadiness = readiness;
+                if (this.managedReadiness && !this.proforma && !this.isCreditNote && readiness?.requiresVariableChargeReview && !readiness.ready) {
+                    this.dispatchEvent(new CustomEvent('readinesschanged'));
+                    this.closeModal();
+                }
             })
             .catch(() => {
                 if (loadSequence !== this.invoiceFormLoadSequence) return;
@@ -163,6 +168,10 @@ export default class FcbInvoiceForm extends LightningElement {
                     reason: 'Final Buyer Invoice readiness could not be checked. Refresh, then open the FCOS task if the problem continues.',
                     fcosUrl: `https://fcos.fcuno.com/payment-collections?tab=variable-charges&stemId=${stemId}`
                 };
+                if (this.managedReadiness && !this.proforma && !this.isCreditNote) {
+                    this.dispatchEvent(new CustomEvent('readinesschanged'));
+                    this.closeModal();
+                }
             });
     }
 
@@ -322,7 +331,7 @@ export default class FcbInvoiceForm extends LightningElement {
         this.brokerName = this.lastInvoiceForm.Broker_Name__c?.toUpperCase();
         this.address = this.lastInvoiceForm.Address__c?.toUpperCase();
         if (this.isExtraCostOnly) this.infoText = this.buildExtraCostInfoText();
-        this.isCreditNote = products.every(product => product.total < 0);
+        this.isCreditNote = products.length > 0 && products.every(product => product.total < 0);
         this.invoiceNumberLabel = this.isCreditNote ? 'CREDIT NOTE NO.' : 'INVOICE NO.';
         this.todayDateLabel = this.stem.Mailing_Requirement__c?.includes('-3') && this.isProductLineItemExisting ? 'Date ( =Delivery Date)' : 'Date'
         this.actionExecuted = true;
@@ -330,7 +339,7 @@ export default class FcbInvoiceForm extends LightningElement {
 
     prefillInputs(paymentTerm, products){
         let totalAmount = 0;
-        this.isCreditNote = products.every(product => product.total < 0);
+        this.isCreditNote = products.length > 0 && products.every(product => product.total < 0);
         this.todayDateLabel = this.stem.Mailing_Requirement__c?.includes('-3') && this.isProductLineItemExisting ? 'Date ( =Delivery Date)' : 'Date'
         products.forEach(product => {
             totalAmount += this.isCreditNote ? Math.abs(product.total) : product.total;
@@ -587,13 +596,22 @@ export default class FcbInvoiceForm extends LightningElement {
         let pdfSaved = false;
         const useAtomicFinalSave = !this.isManagedDocument && !this.proforma && !this.isCreditNote;
         this.generationError = null;
+        this.actionExecuted = false;
         try {
+            if (this.managedReadiness && !this.proforma && !this.isCreditNote) {
+                const readiness = await getVariableChargeInvoiceReadiness({ stemId: this.stemId }).catch(() => null);
+                if (operationSequence !== this.invoiceFormLoadSequence) return;
+                if (readiness?.ready !== true) {
+                    this.dispatchEvent(new CustomEvent('readinesschanged'));
+                    this.closeModal();
+                    return;
+                }
+            }
             this.vesselText = normalizeInvoiceVesselText(this.vesselText);
             const reviewedFxFingerprint = this.isManagedDocument ? this.tradeDocument.fingerprint : null;
             const createProforma = this.proforma;
             const includeDeliveryNotes = this.stem.Mailing_Requirement__c?.includes('-7');
             const deliveryNoteEntityIds = this.products.map(product => product.id);
-            this.actionExecuted = false;
             const { jsPDF } = window.jspdf;
             let doc = new jsPDF('p', 'pt', 'a4', true);
             doc.setFont('courier', 'bold');
@@ -857,6 +875,17 @@ export default class FcbInvoiceForm extends LightningElement {
                 this.formLoadError = `Invoice record ${invoice.Name} was created, but PDF generation could not be confirmed. ${detail} Check that invoice in the Invoices tab before trying again.`;
             } else if (useAtomicFinalSave) {
                 this.generationError = detail;
+                if (this.managedReadiness) {
+                    try {
+                        const readiness = await getVariableChargeInvoiceReadiness({ stemId: this.stemId });
+                        if (operationSequence === this.invoiceFormLoadSequence && readiness?.reason && !readiness.ready && detail.includes(readiness.reason)) {
+                            this.dispatchEvent(new CustomEvent('readinesschanged'));
+                            this.closeModal();
+                        }
+                    } catch (readinessError) {
+                        // Preserve the original generation error when the check itself fails.
+                    }
+                }
             } else {
                 this.formLoadError = detail;
             }
