@@ -1,4 +1,10 @@
 public class InvoiceController {
+    private static final String BUYER_CHARGE_REMINDER_SUBJECT = 'Buyer charge reminder sent ';
+    private static final String BUYER_CHARGE_REMINDER_RESULT = 'Buyer charge reminder sent.';
+    @TestVisible private static Messaging.SingleEmailMessage capturedBuyerChargeReminder;
+    @TestVisible private static Set<Id> buyerChargeReminderFixtureTraderIds;
+    @TestVisible private static Boolean failBuyerChargeReminderForTest = false;
+
     @AuraEnabled
     public static FcosTradeDocumentService.DocumentReview previewTradingDocument(Id stemId,List<Id> lineIds) {
         return FcosTradeDocumentService.previewForLegacyController(stemId,'Sell',null,lineIds);
@@ -7,6 +13,202 @@ public class InvoiceController {
     @AuraEnabled(cacheable=false)
     public static VariableChargeInvoiceReadinessService.Readiness getVariableChargeInvoiceReadiness(String stemId) {
         return VariableChargeInvoiceReadinessService.getBuyerReadiness(stemId);
+    }
+
+    @AuraEnabled(cacheable=false)
+    public static VariableChargeInvoiceReadinessService.Readiness getBuyerInvoiceTabReadiness(String stemId) {
+        Id sourceStemId = requireBuyerInvoiceStemRead(stemId);
+        return VariableChargeInvoiceReadinessService.getBuyerInvoiceTabReadiness(String.valueOf(sourceStemId));
+    }
+
+    @AuraEnabled
+    public static String sendBuyerChargeReminder(String stemId, String requestId) {
+        Id sourceStemId = requireBuyerInvoiceStemRead(stemId);
+        if (String.isBlank(requestId) || !Pattern.matches('[a-zA-Z0-9_-]{16,100}', requestId)) {
+            throw invoiceSaveError('The reminder request is invalid. Refresh the Invoice tab and try again.');
+        }
+        Id actorId = UserInfo.getUserId();
+        List<UserRecordAccess> access = [
+            SELECT RecordId, HasEditAccess FROM UserRecordAccess
+            WHERE UserId = :actorId AND RecordId = :sourceStemId
+        ];
+        if (access.isEmpty() || !access[0].HasEditAccess || !STEM__c.SObjectType.getDescribe().isUpdateable()) {
+            throw invoiceSaveError('You need edit access to this STEM to send a buyer charge reminder.');
+        }
+
+        STEM__c stem;
+        try {
+            // Approval and invoice writers also lock the STEM before rechecking eligibility.
+            stem = [SELECT Id, KeyStem__c, Name FROM STEM__c WHERE Id = :sourceStemId FOR UPDATE];
+        } catch (QueryException problem) {
+            throw invoiceSaveError('The STEM could not be locked. Try sending the reminder again.');
+        }
+
+        String requestDigest = EncodingUtil.convertToHex(Crypto.generateDigest('SHA-256',
+            Blob.valueOf(String.valueOf(stem.Id) + '|' + String.valueOf(actorId) + '|' + requestId)));
+        String taskSubject = BUYER_CHARGE_REMINDER_SUBJECT + requestDigest;
+        String taskHeader = 'FCOS buyer charge reminder v1\nRequest SHA-256: ' + requestDigest + '\n';
+        List<Task> previous = [
+            SELECT Id, Description, IsClosed FROM Task
+            WHERE WhatId = :stem.Id AND CreatedById = :actorId AND Subject = :taskSubject
+            LIMIT 2 ALL ROWS
+        ];
+        if (!previous.isEmpty()) {
+            if (previous.size() != 1 || !previous[0].IsClosed || previous[0].Description == null
+                || !previous[0].Description.startsWith(taskHeader)) {
+                throw invoiceSaveError('Salesforce could not verify the previous reminder result. Ask an administrator to check the activity on this STEM.');
+            }
+            return BUYER_CHARGE_REMINDER_RESULT;
+        }
+
+        VariableChargeInvoiceReadinessService.Readiness readiness =
+            VariableChargeInvoiceReadinessService.getBuyerInvoiceTabReadiness(String.valueOf(stem.Id));
+        if (readiness.pendingBuyerApproval != true || readiness.blockingBuyerSupplierIds == null
+            || readiness.blockingBuyerSupplierIds.isEmpty()) {
+            throw invoiceSaveError('A buyer charge approval reminder is no longer available. Refresh the Invoice tab.');
+        }
+
+        Map<Id, Account> suppliers = new Map<Id, Account>([
+            SELECT Id, Name FROM Account WHERE Id IN :readiness.blockingBuyerSupplierIds
+        ]);
+        List<String> supplierNames = new List<String>();
+        for (Id supplierId : readiness.blockingBuyerSupplierIds) {
+            if (!suppliers.containsKey(supplierId)) {
+                throw invoiceSaveError('Salesforce could not verify an exact blocked supplier. Refresh the Invoice tab.');
+            }
+            supplierNames.add(suppliers.get(supplierId).Name);
+        }
+        supplierNames.sort();
+        List<String> recipientIds = resolveBuyerChargeReminderTraders(stem.Id, suppliers);
+        String stemNumber = String.isBlank(stem.KeyStem__c) ? stem.Name : stem.KeyStem__c;
+        String supplierSummary = String.join(supplierNames, ', ');
+        Messaging.SingleEmailMessage email = new Messaging.SingleEmailMessage();
+        email.setToAddresses(recipientIds);
+        email.setSubject('Buyer charge approval pending for STEM ' + stemNumber);
+        email.setPlainTextBody('The final Buyer Invoice is blocked pending buyer charge approval for STEM '
+            + stemNumber + '.\n\nSuppliers awaiting approval: ' + supplierSummary
+            + '\n\nOpen the Variable Charges task in FCOS and review the Buyer Leg.\n' + readiness.fcosUrl);
+        email.setSaveAsActivity(false);
+
+        Savepoint beforeReminder = Database.setSavepoint();
+        try {
+            insert new Task(WhatId = stem.Id, OwnerId = actorId, Subject = taskSubject, Status = 'Completed',
+                Priority = 'Normal', ActivityDate = Date.today(), Description = taskHeader
+                    + 'Blocked suppliers: ' + supplierSummary + '\nSalesforce recipient IDs: ' + String.join(recipientIds, ', '));
+            if (Test.isRunningTest()) {
+                if (failBuyerChargeReminderForTest) throw new BuyerChargeReminderEmailException();
+                capturedBuyerChargeReminder = email;
+            } else {
+                Messaging.SendEmailResult[] results = Messaging.sendEmail(new Messaging.SingleEmailMessage[]{email});
+                if (results.size() != 1 || !results[0].isSuccess()) {
+                    throw invoiceSaveError('Salesforce could not send the reminder. Try again or contact your Salesforce administrator.');
+                }
+            }
+        } catch (Exception problem) {
+            Database.rollback(beforeReminder);
+            if (problem instanceof AuraHandledException) throw problem;
+            throw invoiceSaveError('Salesforce could not record and send the reminder. Try again or contact your Salesforce administrator.');
+        }
+        return BUYER_CHARGE_REMINDER_RESULT;
+    }
+
+    private class BuyerChargeReminderEmailException extends Exception {}
+
+    private static Id requireBuyerInvoiceStemRead(String stemId) {
+        Id sourceStemId;
+        try {
+            sourceStemId = Id.valueOf(stemId);
+            if (sourceStemId != null && sourceStemId.getSObjectType() == STEM__c.SObjectType) {
+                List<STEM__c> readable = [SELECT Id FROM STEM__c WHERE Id = :sourceStemId WITH USER_MODE];
+                if (!readable.isEmpty()) return sourceStemId;
+            }
+        } catch (Exception problem) {
+            // Malformed IDs and inaccessible records receive the same response.
+        }
+        throw invoiceSaveError('Open a STEM you have permission to access before checking the Buyer Invoice.');
+    }
+
+    private static List<String> resolveBuyerChargeReminderTraders(Id stemId, Map<Id, Account> suppliers) {
+        Set<Id> supplierIds = suppliers.keySet();
+        List<Nomination__c> confirmations = new List<Nomination__c>();
+        Map<Id, List<Nomination__c>> supplierNominations = new Map<Id, List<Nomination__c>>();
+        for (Id supplierId : supplierIds) supplierNominations.put(supplierId, new List<Nomination__c>());
+        Set<String> traderNames = new Set<String>();
+        for (Nomination__c nomination : [
+            SELECT Account__c, RecordTypeId, Buyer_Supplier_Trader__c
+            FROM Nomination__c WHERE STEM__c = :stemId AND Deprecated__c = false
+                AND (RecordTypeId = :FCBStatic.BUYER_NOMINATION_RT_ID
+                    OR (RecordTypeId = :FCBStatic.SUPPLIER_NOMINATION_RT_ID AND Account__c IN :supplierIds))
+        ]) {
+            if (nomination.RecordTypeId == FCBStatic.BUYER_NOMINATION_RT_ID) {
+                confirmations.add(nomination);
+            } else {
+                supplierNominations.get(nomination.Account__c).add(nomination);
+            }
+            String name = normalizeReminderTraderIdentity(nomination.Buyer_Supplier_Trader__c);
+            // The document email formula also returns a mailbox when the assignment is blank or shared.
+            if (name != null && name != 'others') traderNames.add(name);
+        }
+        if (confirmations.size() != 1) {
+            throw invoiceSaveError('The Buyer Trader requires one active Buyer Confirmation. Resolve the assignment before sending the reminder.');
+        }
+        Map<String, Set<Id>> usersByName = new Map<String, Set<Id>>();
+        Map<Id, String> emailByUser = new Map<Id, String>();
+        for (User trader : [
+            SELECT Id, Name, Email FROM User WHERE IsActive = true AND UserType = 'Standard'
+                AND Name IN :traderNames
+        ]) {
+            // Salesforce exposes User setup records to Apex tests even with SeeAllData disabled.
+            if (Test.isRunningTest() && buyerChargeReminderFixtureTraderIds != null
+                && !buyerChargeReminderFixtureTraderIds.contains(trader.Id)) continue;
+            String name = normalizeReminderTraderIdentity(trader.Name);
+            if (!usersByName.containsKey(name)) usersByName.put(name, new Set<Id>());
+            usersByName.get(name).add(trader.Id);
+            emailByUser.put(trader.Id, normalizeReminderTraderIdentity(trader.Email));
+        }
+
+        Set<Id> recipientUsers = new Set<Id>{resolveReminderRole(confirmations, 'Buyer Trader', usersByName)};
+        for (Id supplierId : supplierIds) {
+            recipientUsers.add(resolveReminderRole(supplierNominations.get(supplierId),
+                'Supplier Trader for ' + suppliers.get(supplierId).Name, usersByName));
+        }
+        Set<String> recipientEmails = new Set<String>();
+        List<String> recipientIds = new List<String>();
+        for (Id userId : recipientUsers) {
+            String email = emailByUser.get(userId);
+            if (String.isBlank(email)) {
+                throw invoiceSaveError('An assigned Salesforce user has no email address. Resolve the trader assignment before sending the reminder.');
+            }
+            if (!recipientEmails.add(email)) {
+                throw invoiceSaveError('Two assigned Salesforce users share an email address. Resolve the trader assignments before sending the reminder.');
+            }
+            recipientIds.add(String.valueOf(userId));
+        }
+        recipientIds.sort();
+        if (recipientIds.size() > 100) {
+            throw invoiceSaveError('The reminder exceeds the Salesforce recipient limit.');
+        }
+        return recipientIds;
+    }
+
+    private static Id resolveReminderRole(List<Nomination__c> nominations, String role, Map<String, Set<Id>> usersByName) {
+        Set<Id> resolved = new Set<Id>();
+        for (Nomination__c nomination : nominations) {
+            String name = normalizeReminderTraderIdentity(nomination.Buyer_Supplier_Trader__c);
+            Set<Id> matches = usersByName.get(name);
+            if (matches == null || matches.size() != 1) {
+                throw invoiceSaveError(role + ' must resolve to one active internal Salesforce user before sending the reminder.');
+            }
+            resolved.addAll(matches);
+        }
+        if (resolved.size() != 1) {
+            throw invoiceSaveError(role + ' is missing or conflicting on the active nomination. Resolve the assignment before sending the reminder.');
+        }
+        return new List<Id>(resolved)[0];
+    }
+
+    private static String normalizeReminderTraderIdentity(String value) {
+        return String.isBlank(value) ? null : value.trim().toLowerCase();
     }
 
     @AuraEnabled(cacheable=false)

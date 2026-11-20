@@ -19,9 +19,12 @@ public without sharing class VariableChargeInvoiceReadinessService {
         @AuraEnabled public String actionBasis { get; set; }
         @AuraEnabled public Date actionBasisDate { get; set; }
         @AuraEnabled public Date actionableOn { get; set; }
+        @AuraEnabled public Boolean pendingBuyerApproval { get; set; }
+        @AuraEnabled public List<Id> blockingBuyerSupplierIds { get; set; }
 
         public Readiness(Boolean ready, Boolean required, String reason, Id stemId, Id supplierId) {
             this.ready = ready;
+            this.pendingBuyerApproval = false;
             this.requiresVariableChargeReview = required;
             this.reason = reason;
             this.stemId = stemId;
@@ -55,10 +58,18 @@ public without sharing class VariableChargeInvoiceReadinessService {
 
     @AuraEnabled(cacheable=false)
     public static Readiness getBuyerReadiness(String stemId) {
+        return readBuyerReadiness(stemId, false);
+    }
+
+    public static Readiness getBuyerInvoiceTabReadiness(String stemId) {
+        return readBuyerReadiness(stemId, true);
+    }
+
+    private static Readiness readBuyerReadiness(String stemId, Boolean collectBlockers) {
         Id parsedStemId = safeId(stemId);
         if (parsedStemId == null) return blocked('Select a valid STEM before checking invoice readiness.', null, null, true);
         try {
-            return evaluateBuyer(parsedStemId);
+            return evaluateBuyer(parsedStemId, collectBlockers);
         } catch (Exception ex) {
             return blocked('Invoice readiness could not be checked. Refresh, then open the FCOS task if the problem continues.', parsedStemId, null, true);
         }
@@ -126,6 +137,10 @@ public without sharing class VariableChargeInvoiceReadinessService {
     }
 
     public static Readiness evaluateBuyer(Id stemId) {
+        return evaluateBuyer(stemId, false);
+    }
+
+    private static Readiness evaluateBuyer(Id stemId, Boolean collectBlockers) {
         List<STEM__c> stems = [
             SELECT Id, CreatedDate, Delivery_Date__c,
                 ETA_Start_Date__c, ETA_End_Date__c, ETB_Start_Date__c, ETB_End_Date__c,
@@ -170,9 +185,20 @@ public without sharing class VariableChargeInvoiceReadinessService {
         if (actionability.ready != true) {
             return blockedForActionability(actionability, stemId, null, true);
         }
+        Readiness firstBlocker;
+        List<Id> approvalBlockers = new List<Id>();
         for (Id supplierId : requiredIds) {
             Readiness buyerSideReadiness = evaluateBuyerSupplier(stemId, supplierId);
-            if (buyerSideReadiness.ready != true) return buyerSideReadiness;
+            if (buyerSideReadiness.ready == true) continue;
+            if (!collectBlockers) return buyerSideReadiness;
+            if (firstBlocker == null) firstBlocker = buyerSideReadiness;
+            if (buyerSideReadiness.pendingBuyerApproval == true) approvalBlockers.add(supplierId);
+        }
+        if (firstBlocker != null) {
+            approvalBlockers.sort();
+            firstBlocker.pendingBuyerApproval = !approvalBlockers.isEmpty();
+            firstBlocker.blockingBuyerSupplierIds = approvalBlockers;
+            return firstBlocker;
         }
         if (stem.Variable_Charges_Confirmed__c != true) {
             return blocked('The supplier buyer-charge approvals match the current data. '
@@ -196,18 +222,18 @@ public without sharing class VariableChargeInvoiceReadinessService {
         String anchorageProblem = hongKongAnchorageProblem(stemId, supplierId, false);
         if (String.isNotBlank(anchorageProblem)) return blocked(anchorageProblem, stemId, supplierId, true);
         if (context.stage == null || context.stage.Buyer_Charge_Status__c != 'Verified') {
-            return blocked('Confirm ' + context.supplier.Name + ' buyer charges in FCOS before creating the final Buyer Invoice.', stemId, supplierId, true);
+            return blockedBuyerApproval('Confirm ' + context.supplier.Name + ' buyer charges in FCOS before creating the final Buyer Invoice.', stemId, supplierId);
         }
         String approvedFingerprint = context.stage.Buyer_Charge_Reviewed_Source_Fingerprint__c;
         if (String.isBlank(approvedFingerprint)) {
-            return blocked('The saved buyer-charge approval for ' + context.supplier.Name
-                + ' is missing its fingerprint. Amend and approve the Buyer Leg in FCOS.', stemId, supplierId, true);
+            return blockedBuyerApproval('The saved buyer-charge approval for ' + context.supplier.Name
+                + ' is missing its fingerprint. Amend and approve the Buyer Leg in FCOS.', stemId, supplierId);
         }
         if (matchingBuyerChargeFingerprint(stemId, supplierId, approvedFingerprint) == null) {
-            return blocked('The saved buyer-charge fingerprint for ' + context.supplier.Name
+            return blockedBuyerApproval('The saved buyer-charge fingerprint for ' + context.supplier.Name
                 + ' differs from the fingerprint of the current delivery, product and charge inputs. '
                 + 'This approval only stores the fingerprint. Review the current inputs in FCOS, then amend and approve the Buyer Leg.',
-                stemId, supplierId, true);
+                stemId, supplierId);
         }
         return withActionability(new Readiness(true, true, null, stemId, supplierId), actionability);
     }
@@ -977,6 +1003,12 @@ public without sharing class VariableChargeInvoiceReadinessService {
         context.required = context.exactSupplier == true
             && (isVariableChargeAccount(context.supplier) || context.stage?.Manual_Review_Required__c == true);
         return context;
+    }
+
+    private static Readiness blockedBuyerApproval(String reason, Id stemId, Id supplierId) {
+        Readiness result = blocked(reason, stemId, supplierId, true);
+        result.pendingBuyerApproval = true;
+        return result;
     }
 
     private static Readiness blocked(String reason, Id stemId, Id supplierId, Boolean required) {

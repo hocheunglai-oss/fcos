@@ -67,7 +67,9 @@ async function loadStemSaveHandlers(refreshApex) {
     constructor(detail) { Object.assign(this, detail); }
   }
   const Handlers = new Function('ShowToastEvent', 'refreshApex', `return class { ${methods} }`)(Toast, refreshApex);
-  return new Handlers();
+  const instance = new Handlers();
+  instance.refreshInvoiceReadiness = async () => {};
+  return instance;
 }
 
 test('STEM save surfaces Salesforce field validation and permits a corrected submission', async () => {
