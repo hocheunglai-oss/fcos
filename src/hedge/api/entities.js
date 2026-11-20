@@ -27,7 +27,10 @@ async function requestEntities(payload, options = { cache: false }) {
   });
   const { data, meta } = response;
   if (data?.cancelled || meta?.cancelled) {
-    throw Object.assign(new Error(data?.error || 'The Hedge Desk request was cancelled.'), { name: 'AbortError' });
+    throw Object.assign(new Error(data?.error || 'The Hedge Desk request was cancelled.'), {
+      name: 'AbortError',
+      silentCancellation: !data?.error,
+    });
   }
   if (data?.error) throw new Error(data.error);
   if (data?.data == null) {

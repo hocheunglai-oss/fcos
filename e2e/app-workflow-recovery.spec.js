@@ -163,6 +163,20 @@ test('Hedge Desk keeps the newest book when superseded reads complete', async ({
     await new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)));
   });
   await expect(book).toHaveText('Latest book');
+
+  await refresh.click();
+  await expect.poll(count).toBe(6);
+  await page.evaluate(() => window.recoveryFixture.resolveHedgeSnapshot(5, { cancelled: true }));
+  await expect(refreshing).toHaveText('false');
+  await expect(book).toHaveText('Latest book');
+  await expect(page.getByRole('alert')).toHaveCount(0);
+
+  await refresh.click();
+  await expect.poll(count).toBe(7);
+  await page.evaluate(() => window.recoveryFixture.resolveHedgeSnapshot(6, {
+    cancelled: true, error: 'Your account changed. Refresh this view.',
+  }));
+  await expect(page.getByRole('alert')).toHaveText('Your account changed. Refresh this view.');
 });
 
 test.describe('application draft recovery', () => {

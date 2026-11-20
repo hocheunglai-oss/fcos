@@ -56,7 +56,7 @@ export function useDeskData() {
       });
       return applySnapshot(snapshot);
     } catch (nextError) {
-      if (isCurrent()) setError(nextError);
+      if (isCurrent() && !nextError?.silentCancellation) setError(nextError);
       throw nextError;
     } finally {
       if (isCurrent()) {
