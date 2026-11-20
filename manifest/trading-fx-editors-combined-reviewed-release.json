@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "releaseMode": "reviewed-manifest-incremental-v1",
   "baselineMode": "read-only-owned-tree-inventory",
-  "sourceTreeHash": "e7ef870c83e03f96568fff3cf6ac47900c5f9e6760655bb1812826ca21b349ee",
+  "sourceTreeHash": "9702b4d59a2ae42c4efcc9677d2176e770dd99eeb366b3de830144dd36260140",
   "manifestSha256": "7f0e7b49dedc247e148b952872cb239337bef52de8c53ffd4ed63c761b018a4b",
   "baselineCommit": "79bc7db6f4140db2550d390b725409cfde733af0",
   "baselineSourceTreeHash": "2ec27560a01c1f8c4521c7cddfd0a41c76cf032159314f2fd0f26fcff06d23ab",
@@ -131,7 +131,7 @@
   "dependencyReview": {
     "complete": true,
     "reviewer": "FCOS Editors fixture source qualification",
-    "evidence": "The invoice launcher baseline was verified live and its five installed components were retrieved from each pinned org. The thirteen Editors components retain their reviewed source bytes."
+    "evidence": "The invoice launcher baseline was verified live and its five installed components were retrieved from each pinned org. The thirteen Editors components retain their reviewed source bytes. The rehearsal test asserts the exact first teardown denial in each organization. The runtime guards, fixture signing, callout and DML assertions are unchanged."
   },
   "nativeProjection": "schema-free-apex-lightning",
   "nativeInventories": {

@@ -364,7 +364,10 @@ private class FcosDeveeEditorFixtureRehearsalTest {
                 FcosTradeCurrencyController.teardownFixture('invalid-payload', 'invalid-signature');
                 System.assert(false, 'The unverified teardown should be refused.');
             } catch (FcosCompanyFxRateService.FxException error) {
-                System.assert(error.getMessage().contains('could not be verified'));
+                String expectedError = (Id)UserInfo.getOrganizationId() == FcosCompanyFxRateService.DEVEE
+                    ? 'The editor fixture teardown claim could not be verified.'
+                    : 'The editor fixture is available only in DEVEE.';
+                System.assertEquals(expectedError, error.getMessage(), 'Teardown must stop at the applicable guard.');
             }
             System.assertEquals(initialDml, Limits.getDmlStatements());
             System.assertEquals(initialCallouts, Limits.getCallouts());
