@@ -306,7 +306,7 @@ export default function WorkNotifications() {
             <div className="divide-y divide-border">
               {visibleNotifications.map((notification) => (
                 <div key={notification.groupKey || notification.id} className={cn("flex items-start gap-1 px-2 py-1.5 transition-colors hover:bg-muted/60", !notification.readAt && "bg-blue-50/70 dark:bg-blue-950/35")}>
-                  <button type="button" className="flex min-w-0 flex-1 items-start gap-3 px-2 py-1.5 text-left" onClick={() => openNotification(notification)}>
+                  <button type="button" className="flex min-w-0 flex-1 items-start gap-3 px-2 py-1.5 text-left" disabled={updating && !notification.readAt} onClick={() => openNotification(notification)}>
                     <span className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", notification.readAt ? "bg-muted-foreground/40" : "bg-blue-600")} />
                     <span className="min-w-0 flex-1">
                       <span className="mb-1 flex flex-wrap items-center gap-2">

@@ -91,6 +91,21 @@ test('marking notifications read preserves the selected view', async ({ page, ba
   expect(await page.evaluate(() => window.recoveryFixture.notifications.length)).toBe(read + 1);
 });
 
+test('opening an unread notification awaits the pending mark-all action', async ({ page, baseURL }, testInfo) => {
+  const { nextRequest, respond, list, opened } = await openNotificationFixture(page, baseURL, testInfo);
+  const notification = page.getByRole('button', { name: /Initial fixture/u });
+  await expect(notification).toBeEnabled();
+  await page.getByRole('button', { name: 'Mark all read' }).click();
+  const read = await nextRequest('workNotificationsRead', opened);
+  await expect(notification).toBeDisabled();
+  await respond(read, list('Initial fixture', { readAt: '2026-11-18T00:00:00Z' }));
+  await expect(notification).toBeEnabled();
+  await notification.click();
+  const reads = await page.evaluate(() => window.recoveryFixture.notifications
+    .filter(request => request.name === 'workNotificationsRead').length);
+  expect(reads).toBe(1);
+});
+
 test('a delayed notification action refreshes the newly selected view', async ({ page, baseURL }, testInfo) => {
   const { nextRequest, respond, list, source, requestBody, opened } = await openNotificationFixture(page, baseURL, testInfo);
   await page.getByTitle('Mark handled').click();
