@@ -122,10 +122,20 @@ export default function WorkNotifications() {
         loadNotifications({ quiet: true });
       }
     }, REFRESH_INTERVAL_MS);
-    const handleChanged = () => loadNotifications({ quiet: true });
+    let refreshQueued = false;
+    let subscribed = true;
+    const handleChanged = () => {
+      if (refreshQueued) return;
+      refreshQueued = true;
+      queueMicrotask(() => {
+        refreshQueued = false;
+        if (subscribed) loadNotifications({ quiet: true });
+      });
+    };
     window.addEventListener("fcos:work-notifications-changed", handleChanged);
 
     return () => {
+      subscribed = false;
       window.clearInterval(interval);
       window.removeEventListener("fcos:work-notifications-changed", handleChanged);
     };

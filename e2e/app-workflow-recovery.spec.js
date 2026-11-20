@@ -55,6 +55,27 @@ test('incident verification refreshes only the current notification view', async
   await expect(page.getByRole('status').filter({ hasText: 'Verified fixture incident.' })).toBeVisible();
 });
 
+test('a burst of notification change events refreshes the current view once', async ({ page, baseURL }, testInfo) => {
+  const { nextRequest, respond, list, opened } = await openNotificationFixture(page, baseURL, testInfo);
+  const burst = () => page.evaluate(() => {
+    for (let event = 0; event < 10; event += 1) {
+      window.dispatchEvent(new Event('fcos:work-notifications-changed'));
+    }
+  });
+
+  await burst();
+  const refresh = await nextRequest('workNotificationsList', opened);
+  expect(await page.evaluate(() => window.recoveryFixture.notifications.length)).toBe(opened + 2);
+  await respond(refresh, list('First refreshed fixture'));
+  await expect(page.getByText('First refreshed fixture', { exact: true })).toBeVisible();
+
+  await burst();
+  const laterRefresh = await nextRequest('workNotificationsList', refresh);
+  expect(await page.evaluate(() => window.recoveryFixture.notifications.length)).toBe(refresh + 2);
+  await respond(laterRefresh, list('Later refreshed fixture'));
+  await expect(page.getByText('Later refreshed fixture', { exact: true })).toBeVisible();
+});
+
 test('marking notifications read preserves the selected view', async ({ page, baseURL }, testInfo) => {
   const { nextRequest, respond, list, source, requestBody, opened } = await openNotificationFixture(page, baseURL, testInfo);
   await page.getByRole('button', { name: 'Handled', exact: true }).click();
