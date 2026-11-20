@@ -10,11 +10,12 @@ requires a valid FCUNO session and entitlement.
 
 Use the ignored `.env.local` for local development and the pinned FCOS Vercel
 project for hosted configuration. The browser reads `VITE_SUPABASE_URL` and
-`VITE_SUPABASE_ANON_KEY`. The latter accepts a public publishable key or the
-legacy anonymous key. The protected build accepts `VITE_SUPABASE_PUBLISHABLE_KEY`
-as a fallback when `VITE_SUPABASE_ANON_KEY` is absent and validates the project
-and public key before building. Vite also checks any configured browser
-Supabase key and URL before serving or bundling the application.
+prefers `VITE_SUPABASE_PUBLISHABLE_KEY`. It falls back to
+`VITE_SUPABASE_ANON_KEY` when the preferred value is missing or empty after
+trimming whitespace. The fallback accepts a publishable key or a legacy
+anonymous key for the pinned project. The protected build validates the project
+and public keys. Vite also validates each configured browser key against the
+URL before serving or bundling the application.
 
 Keep `SUPABASE_SECRET_KEY` or the supported `SUPABASE_SERVICE_ROLE_KEY` server
 only. The server prefers `SUPABASE_URL` and withholds the credential when the
