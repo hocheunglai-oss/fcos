@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { loadDeskSnapshot } from "@/hedge/api/entities";
 import { navigationCacheOptions } from "@/lib/navigationCachePolicy";
 
@@ -22,8 +22,12 @@ export function useDeskData() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(null);
+  const latestRequest = useRef(null);
 
   const reload = useCallback(async ({ silent = false, force = silent } = {}) => {
+    const request = {};
+    latestRequest.current = request;
+    const isCurrent = () => latestRequest.current === request;
     if (silent) setRefreshing(true);
     else setLoading(true);
     setError(null);
@@ -33,12 +37,15 @@ export function useDeskData() {
           throw new Error('Hedge Desk returned an incomplete book snapshot.');
         }
         const nextData = { ...EMPTY_DATA, ...snapshot };
-        setData(nextData);
-        setLastUpdated(new Date());
+        if (isCurrent()) {
+          setData(nextData);
+          setLastUpdated(new Date());
+        }
         return nextData;
       };
       const snapshot = await loadDeskSnapshot({
         ...navigationCacheOptions("collaboration", (updated) => {
+          if (!isCurrent()) return;
           try {
             applySnapshot(updated);
           } catch (nextError) {
@@ -47,19 +54,21 @@ export function useDeskData() {
         }),
         force,
       });
-      const nextData = applySnapshot(snapshot);
-      return nextData;
+      return applySnapshot(snapshot);
     } catch (nextError) {
-      setError(nextError);
+      if (isCurrent()) setError(nextError);
       throw nextError;
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (isCurrent()) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, []);
 
   useEffect(() => {
     reload().catch(() => {});
+    return () => { latestRequest.current = null; };
   }, [reload]);
 
   useEffect(() => {

@@ -16,12 +16,20 @@ import WorkflowValidationSummary from '@/components/common/WorkflowValidationSum
 import WholeTermRevisionPanel from '@/components/special-terms/WholeTermRevisionPanel';
 import { ContractEditor } from '@/pages/MasterContracts';
 import { appClient } from '@/api/appClient';
+import { useDeskData } from '@/hedge/hooks/useDeskData';
 import '@/index.css';
 
 // Local fixtures never access a provider or save business records.
 setClientSessionOwner('fixture-user-a');
 window.recoveryFixture = { calls: [] };
 const notificationScenario = new URLSearchParams(location.search).has('notifications');
+const hedgeSnapshotScenario = new URLSearchParams(location.search).has('hedge-snapshots');
+const hedgeRequests = [];
+if (hedgeSnapshotScenario) {
+  window.recoveryFixture.hedgeRequestCount = () => hedgeRequests.length;
+  window.recoveryFixture.resolveHedgeSnapshot = (index, response) => hedgeRequests[index].resolve({ data: response });
+  window.recoveryFixture.updateHedgeSnapshot = (index, response) => hedgeRequests[index].onBackgroundUpdate({ data: response });
+}
 if (notificationScenario) {
   const pending = [];
   window.recoveryFixture.notifications = pending;
@@ -36,10 +44,13 @@ const pricedLines = [
   { Id: 'legacy-line', _Product_Name: 'Legacy price fixture', Price_Per_Unit__c: 777, Cost_Per_Unit__c: 333 },
   { Id: 'cancelled-line', _Product_Name: 'Cancelled price fixture', Price_Per_Unit__c: 999, Cancelled__c: true },
 ];
-appClient.functions.invoke = async (name, body) => {
+appClient.functions.invoke = async (name, body, options) => {
   window.recoveryFixture.calls.push({ name, body });
   if (notificationScenario && ['workNotificationsList', 'workNotificationsRead', 'workNotificationsState', 'systemErrorVerify'].includes(name)) {
     return new Promise((resolve) => window.recoveryFixture.notifications.push({ name, body, resolve }));
+  }
+  if (hedgeSnapshotScenario && name === 'hedgeDeskEntity' && body.action === 'snapshot') {
+    return new Promise((resolve) => hedgeRequests.push({ resolve, onBackgroundUpdate: options.onBackgroundUpdate }));
   }
   if (name === 'specialTermMigrationPreviewAll') return { data: { projections: Object.fromEntries(['termsText', 'confirmationRemark', 'nominationRemark'].map((key) => [key, { style: 'Numbered', segments: [{ clauseText: 'Existing China clause.', suggestedShortName: 'China clause', suggestedCategory: 'General' }] }])) } };
   if (name === 'workspaceSearch') return { data: { results: [{ id: 'invoice', stemId: 'a0H000000000001AAA', kind: 'Buyer invoice', label: 'TEST-INV-2026' }], unavailableSources: [] } };
@@ -94,4 +105,15 @@ function Fixture() {
     <ContractEditor open={editor} onOpenChange={setEditor} detail={null} options={{ accounts: [], contacts: [], ports: [], products: [], users: [], owners: [], vessels: [] }} onOptionsQuery={async () => ({})} onSave={() => setError('Synthetic failure; no contract saved.')} />
   </main>;
 }
-createRoot(document.getElementById('root')).render(<MemoryRouter>{notificationScenario ? <WorkNotifications /> : <Fixture />}</MemoryRouter>);
+function HedgeSnapshotFixture() {
+  const { physicals, reload, refreshing, error } = useDeskData();
+  return <section>
+    <button onClick={() => reload({ silent: true }).catch(() => {})}>Refresh fixture book</button>
+    <output aria-label="Fixture book">{physicals[0]?.id || 'empty'}</output>
+    <output aria-label="Fixture book refreshing">{String(refreshing)}</output>
+    {error && <p role="alert">{error.message}</p>}
+  </section>;
+}
+
+const scenario = hedgeSnapshotScenario ? <HedgeSnapshotFixture /> : notificationScenario ? <WorkNotifications /> : <Fixture />;
+createRoot(document.getElementById('root')).render(<MemoryRouter>{scenario}</MemoryRouter>);

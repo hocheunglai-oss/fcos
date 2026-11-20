@@ -108,6 +108,48 @@ test('a delayed notification action refreshes the newly selected view', async ({
   await expect(page.getByText('Stale active fixture', { exact: true })).toHaveCount(0);
 });
 
+test('Hedge Desk keeps the newest book when superseded reads complete', async ({ page, baseURL }, testInfo) => {
+  test.skip(process.env.FCOS_E2E_WORKFLOW_FIXTURE !== '1' || testInfo.project.name !== 'desktop-chrome',
+    'Local desktop fixture; all Hedge Desk reads are synthetic.');
+  await page.route('**/*', route => new URL(route.request().url()).origin === baseURL ? route.continue() : route.abort());
+  await page.goto('/e2e/fixtures/app-workflow-recovery.html?hedge-snapshots=1');
+  const count = () => page.evaluate(() => window.recoveryFixture.hedgeRequestCount());
+  const resolve = (index, id) => page.evaluate(async ({ index, id }) => {
+    window.recoveryFixture.resolveHedgeSnapshot(index, { data: { physicals: [{ id }], swaps: [] } });
+    await new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)));
+  }, { index, id });
+  const refresh = page.getByRole('button', { name: 'Refresh fixture book' });
+  const book = page.getByLabel('Fixture book', { exact: true });
+  const refreshing = page.getByLabel('Fixture book refreshing');
+
+  await expect.poll(count).toBe(1);
+  await resolve(0, 'Initial book');
+  await expect(book).toHaveText('Initial book');
+  await refresh.click();
+  await refresh.click();
+  await expect.poll(count).toBe(3);
+  await resolve(1, 'Superseded book');
+  await expect(book).toHaveText('Initial book');
+  await expect(refreshing).toHaveText('true');
+  await resolve(2, 'Current book');
+  await expect(book).toHaveText('Current book');
+  await expect(refreshing).toHaveText('false');
+
+  await refresh.click();
+  await refresh.click();
+  await expect.poll(count).toBe(5);
+  await resolve(4, 'Latest book');
+  await expect(book).toHaveText('Latest book');
+  await resolve(3, 'Late book');
+  await page.evaluate(async () => {
+    window.recoveryFixture.updateHedgeSnapshot(0, {
+      data: { physicals: [{ id: 'Late background book' }], swaps: [] },
+    });
+    await new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)));
+  });
+  await expect(book).toHaveText('Latest book');
+});
+
 test.describe('application draft recovery', () => {
   test.skip(process.env.FCOS_E2E_WORKFLOW_FIXTURE !== '1', 'Local fixture; every external action is stubbed.');
   test.beforeEach(async ({ page }) => { await page.goto('/e2e/fixtures/app-workflow-recovery.html'); });
