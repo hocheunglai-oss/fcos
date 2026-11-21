@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createManifest, digest, targets } from '../scripts/lib/rapid-release/contract.mjs';
 import { REVIEWED_SALESFORCE_MODE } from '../scripts/lib/salesforce-reviewed-release.mjs';
-import { awaitLocalMirrorReceipt, createLocalMirrorReceipt, createLocalMirrorRequest, LOCAL_MIRROR_ENVIRONMENT, readLocalMirrorApproval, readLocalMirrorStage, recordLocalMirrorDeployment, usesLocalCollaboratorMirror, verifyLocalMirrorReceipt }
+import { assertEditorMirrorCheckpointOrder, awaitLocalMirrorReceipt, createLocalMirrorReceipt, createLocalMirrorRequest, LOCAL_MIRROR_ENVIRONMENT, readLocalMirrorApproval, readLocalMirrorStage, recordLocalMirrorDeployment, usesLocalCollaboratorMirror, verifyLocalMirrorReceipt }
   from '../scripts/lib/rapid-release/local-mirror-handoff.mjs';
 import { editorDesktopCaseSetDigest } from '../scripts/lib/rapid-release/salesforce-devee-desktop-checkpoint.mjs';
 
@@ -173,4 +173,33 @@ test('hosted job waits for a bound receipt and stops at the original request dea
     now: () => current, pause: async ms => { current += ms; } }), /LOCAL_MIRROR_RECEIPT_WINDOW_ENDED/);
   assert.equal(writes, 1);
   assert.equal(current, Date.parse(request.expiresAt));
+});
+
+
+test('Editors continuation checks the original mirror with fresh DEVEE evidence and the same jobs', () => {
+  const plan = { editorPreflightReceiptId: 10, editorPreflightReceiptDigest: 'a'.repeat(64) };
+  const request = { mode: 'check', runId: 102, validationJobId: deployment.validationJobId, deploymentJobId: deployment.jobId };
+  const firstDeployment = { stage: 'devee', operation: 'deployment', outcome: 'resolved',
+    job: { id: request.deploymentJobId, validationId: request.validationJobId } };
+  const makeDesktop = runId => ({ stage: 'devee', operation: 'native-desktop-preflight', outcome: 'evidence',
+    desktop: { runId, proofId: plan.editorPreflightReceiptId, proofDigest: plan.editorPreflightReceiptDigest,
+      finalInventoryReceiptDigest: 'b'.repeat(64) } });
+  const firstDesktop = makeDesktop(101);
+  const mirror = { stage: 'shared_mirror', operation: 'publication', outcome: 'resolved' };
+  const currentDeployment = { ...firstDeployment };
+  const currentDesktop = makeDesktop(102);
+  const current = [firstDeployment, firstDesktop, mirror, currentDeployment, currentDesktop];
+  const verify = (checkpoints, overrides = {}) => assertEditorMirrorCheckpointOrder({
+    checkpoints, deployment: currentDeployment, mirror, request, plan, ...overrides,
+  });
+  verify(current);
+  verify([firstDeployment, firstDesktop, mirror], { deployment: firstDeployment, request: { ...request, runId: 101 } });
+  for (const mode of ['publish', 'recover']) {
+    assert.throws(() => verify(current, { request: { ...request, mode } }), /LOCAL_MIRROR_EDITOR_PREFLIGHT_REQUIRED/);
+  }
+  assert.throws(() => verify(current.slice(0, -1)), /LOCAL_MIRROR_EDITOR_PREFLIGHT_REQUIRED/);
+  assert.throws(() => verify([firstDeployment, mirror, currentDeployment, currentDesktop]), /LOCAL_MIRROR_EDITOR_PREFLIGHT_REQUIRED/);
+  assert.throws(() => verify([...current, { ...currentDesktop, outcome: 'pending' }]), /LOCAL_MIRROR_EDITOR_PREFLIGHT_REQUIRED/);
+  const mismatchedJob = { ...firstDeployment, job: { ...firstDeployment.job, validationId: '0Af000000000003' } };
+  assert.throws(() => verify([mismatchedJob, ...current.slice(1)]), /LOCAL_MIRROR_EDITOR_PREFLIGHT_REQUIRED/);
 });
