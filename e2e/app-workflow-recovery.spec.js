@@ -106,6 +106,31 @@ test('opening an unread notification awaits the pending mark-all action', async 
   expect(reads).toBe(1);
 });
 
+for (const { action, requestName } of [
+  { action: 'Mark all read', requestName: 'workNotificationsRead' },
+  { action: 'Mark handled', requestName: 'workNotificationsState' },
+]) {
+  test(`${action} preserves a newer notification list on the same filters`, async ({ page, baseURL }, testInfo) => {
+    const { nextRequest, respond, list, requestBody, opened } = await openNotificationFixture(page, baseURL, testInfo);
+    await page.getByRole('button', { name: action, exact: true }).click();
+    const mutation = await nextRequest(requestName, opened);
+    await page.evaluate(() => window.dispatchEvent(new Event('fcos:work-notifications-changed')));
+    const current = await nextRequest('workNotificationsList', mutation);
+    await respond(current, list('New notification fixture'));
+    await expect(page.getByText('New notification fixture', { exact: true })).toBeVisible();
+
+    await respond(mutation, list('Older action snapshot fixture'));
+    await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+    await expect(page.getByText('New notification fixture', { exact: true })).toBeVisible({ timeout: 1000 });
+    await expect(page.getByText('Older action snapshot fixture', { exact: true })).toHaveCount(0);
+
+    const refresh = await nextRequest('workNotificationsList', current);
+    expect(await requestBody(refresh)).toEqual(await requestBody(current));
+    await respond(refresh, list('Current notification fixture after acknowledgement'));
+    await expect(page.getByText('Current notification fixture after acknowledgement', { exact: true })).toBeVisible();
+  });
+}
+
 test('a delayed notification action refreshes the newly selected view', async ({ page, baseURL }, testInfo) => {
   const { nextRequest, respond, list, source, requestBody, opened } = await openNotificationFixture(page, baseURL, testInfo);
   await page.getByTitle('Mark handled').click();

@@ -141,9 +141,9 @@ export default function WorkNotifications() {
     };
   }, [loadNotifications, sourceFilter, stateFilter]);
 
-  const applyMutationResponse = useCallback(async (data, filters) => {
+  const applyMutationResponse = useCallback(async (data, filters, listRequestAtStart) => {
     if (!currentFilters.current || !data || data.error || data.cancelled) return;
-    if (filters !== currentFilters.current) {
+    if (filters !== currentFilters.current || listRequestAtStart !== latestListRequest.current) {
       await loadNotifications({ quiet: true });
       return;
     }
@@ -156,6 +156,7 @@ export default function WorkNotifications() {
     async (notificationIds) => {
       const filters = currentFilters.current;
       if (!filters) return;
+      const listRequestAtStart = latestListRequest.current;
       setUpdating(true);
       try {
         const response = await appClient.functions.invoke("workNotificationsRead", {
@@ -164,7 +165,7 @@ export default function WorkNotifications() {
           source: filters.source,
           limit: NOTIFICATION_LIMIT,
         }, { force: true });
-        await applyMutationResponse(response.data, filters);
+        await applyMutationResponse(response.data, filters, listRequestAtStart);
       } finally {
         setUpdating(false);
       }
@@ -184,6 +185,7 @@ export default function WorkNotifications() {
     async (notification, state) => {
       const filters = currentFilters.current;
       if (!filters) return;
+      const listRequestAtStart = latestListRequest.current;
       setUpdating(true);
       try {
         const snoozedUntil = state === "snoozed" ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() : undefined;
@@ -199,7 +201,7 @@ export default function WorkNotifications() {
           },
           { force: true },
         );
-        await applyMutationResponse(response.data, filters);
+        await applyMutationResponse(response.data, filters, listRequestAtStart);
       } finally {
         setUpdating(false);
       }
