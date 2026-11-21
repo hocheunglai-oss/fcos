@@ -261,7 +261,8 @@ test('hosted Salesforce checks mirror access and draft state before granting its
   assert.match(branchLookup, /throw error;/);
   assert.match(branchLookup, /result\?\.ref !== `refs\/heads\//);
   const adapter = await readFile(new URL('../scripts/lib/rapid-release/salesforce-reviewed-adapter.mjs', import.meta.url), 'utf8');
-  assert.match(adapter, /if \(!mirrorPreflightPassed\) \{\s*preflightSharedMirrorPublication\(\);\s*mirrorPreflightPassed = true;\s*\}\s*return salesforce\.ownership\.assert\(binding\)/);
+  assert.match(adapter, /if \(!mirrorPreflightPassed\) \{\s*preflightSharedMirrorPublication\(\);\s*mirrorPreflightPassed = true;\s*\}\s*const receipt = await salesforce\.ownership\.assert\(binding\)/);
+  assert.match(adapter, /const receipt = await salesforce\.ownership\.assert\(binding\)[\s\S]*?return receipt;/);
   assert.match(adapter, /runReviewedSalesforceRelease\(\{[\s\S]*?\n\s*ownership, externalJournal:/);
 });
 
