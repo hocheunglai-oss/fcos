@@ -22,6 +22,39 @@ public class InvoiceControllerTest {
         InvoiceController.buyerChargeReminderFixtureTraderIds = new Set<Id>{trader.Id};
         Id stemId = preparePendingBuyerChargeReminder('Otto Lai', 'Otto Lai', null);
         String requestId = 'fcos-accounts-cli-233';
+        Boolean hasCancellationReads;
+        System.runAs(accounts) {
+            hasCancellationReads = STEM_Extra_Cost__c.Cancelled__c.getDescribe().isAccessible()
+                && STEM_Line_Item__c.Cancelled__c.getDescribe().isAccessible();
+            if (!hasCancellationReads) {
+                VariableChargeInvoiceReadinessService.Readiness blocked =
+                    InvoiceController.getBuyerInvoiceTabReadiness(String.valueOf(stemId));
+                System.assertEquals(false, blocked.ready, blocked.reason);
+                System.assertEquals(false, blocked.pendingBuyerApproval, blocked.reason);
+                System.assertEquals(null, InvoiceController.capturedBuyerChargeReminder);
+            }
+        }
+        if (!hasCancellationReads) {
+            // Model the two existing Production reads for this synthetic user only.
+            // The QAT profile and all deployed permission sets remain unchanged.
+            System.runAs(new User(Id = UserInfo.getUserId())) {
+                PermissionSet reads = new PermissionSet(
+                    Name = 'InvoiceReminderTestCancellationReads',
+                    Label = 'Invoice Reminder Test Cancellation Reads');
+                insert reads;
+                List<ObjectPermissions> objects = new List<ObjectPermissions>();
+                List<FieldPermissions> fields = new List<FieldPermissions>();
+                for (String objectName : new List<String>{'STEM_Extra_Cost__c', 'STEM_Line_Item__c'}) {
+                    objects.add(new ObjectPermissions(ParentId = reads.Id,
+                        SobjectType = objectName, PermissionsRead = true));
+                    fields.add(new FieldPermissions(ParentId = reads.Id, SobjectType = objectName,
+                        Field = objectName + '.Cancelled__c', PermissionsRead = true, PermissionsEdit = false));
+                }
+                insert objects;
+                insert fields;
+                insert new PermissionSetAssignment(AssigneeId = accounts.Id, PermissionSetId = reads.Id);
+            }
+        }
         Test.startTest();
         System.runAs(accounts) {
             System.assertEquals(accounts.Id, UserInfo.getUserId());

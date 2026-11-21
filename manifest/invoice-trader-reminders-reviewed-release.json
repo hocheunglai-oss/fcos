@@ -5,7 +5,7 @@
   "baselineCommit": "44592ebaeb042bbb9a0b4945baf6093947c922c5",
   "baselineInventoryHash": "9f14f7f3bcd12cfaf516ca51f315a624262e8661cc93a97afe0b5c75f0678408",
   "baselineSourceTreeHash": "9702b4d59a2ae42c4efcc9677d2176e770dd99eeb366b3de830144dd36260140",
-  "sourceTreeHash": "c25c41991a4dac9348360640f9ba91f44f2de5ee3b8b0d4f7814890c8c287627",
+  "sourceTreeHash": "b6bd3a2da3caf47c8db4db326867d1d1a427512d9ce7caa0be19d99dd7c8a95c",
   "manifestSha256": "77b59e77d0c42a45d6dc5198848bbeba804ed87599946e8cbc9af17987992c89",
   "components": [
     {
@@ -77,7 +77,7 @@
   "dependencyReview": {
     "complete": true,
     "reviewer": "Codex",
-    "evidence": "Compared all pinned DEVEE, QAT and Production native metadata to the verified live Editors baseline and prior scoped retrievals. Only published Editors components and the disabled profile entry exposed by its newly retrieved test class differ. The six reminder components match the live baseline and do not overlap Editors. The Accounts-role Apex regression exercises exact captured reminder and idempotent replay with zero email invocations. No profile, permission or schema changes are in the reminder package."
+    "evidence": "Compared all pinned DEVEE, QAT and Production native metadata to the verified live Editors baseline and prior scoped retrievals. Only published Editors components and the disabled profile entry exposed by its newly retrieved test class differ. The six reminder components match the live baseline and do not overlap Editors. The Accounts-role Apex regression exercises exact captured reminder and idempotent replay with zero email invocations. No profile, permission or schema changes are in the reminder package. Revised only the Apex test to keep the unaugmented QAT role blocked and emulate the two established Production reads inside its test transaction. Exact DEVEE and QAT dry runs passed the restricted-role regression. DEVEE preflight uses the already installed and natively verified reminder source, while QAT and Production keep the previous verified baseline."
   },
   "testPlan": {
     "level": "RunSpecifiedTests",
@@ -1632,16 +1632,16 @@
             "size": 174
           },
           "classes/InvoiceController.cls": {
-            "sha256": "8cebdc7df575cf506e6deff54eee35d93737fc2a1e5cee510ec544eadd630102",
-            "size": 28637
+            "sha256": "b0609b3a750570272a8ca189d1deba1bebed1011453328dbe9b430496d4bbd0f",
+            "size": 40321
           },
           "classes/InvoiceController.cls-meta.xml": {
             "sha256": "93c98277e0edc72d11074aef3a175769c93fa2ea22e2753be76ac5746c951512",
             "size": 174
           },
           "classes/InvoiceControllerTest.cls": {
-            "sha256": "20fe277848791fa11a01afe7969ccaff8c0e02c69650f7abf5c95207efd2ea7a",
-            "size": 7562
+            "sha256": "aabf311f99b0ff37a1d9e190c67a9d9c25a29d8d0861965b0d920dd9b22596ce",
+            "size": 20684
           },
           "classes/InvoiceControllerTest.cls-meta.xml": {
             "sha256": "93c98277e0edc72d11074aef3a175769c93fa2ea22e2753be76ac5746c951512",
@@ -2104,16 +2104,16 @@
             "size": 174
           },
           "classes/VariableChargeInvoiceReadinessService.cls": {
-            "sha256": "7961004151d57188dc53467f11609462370cfd86f24c4d6f36dda829a6f1dfb0",
-            "size": 76564
+            "sha256": "9c708a8eb21a0fb13c073c894c81a004e645b72e1670c0ee95392cc35d7bbc55",
+            "size": 78005
           },
           "classes/VariableChargeInvoiceReadinessService.cls-meta.xml": {
             "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
             "size": 174
           },
           "classes/VariableChargeReadinessTest.cls": {
-            "sha256": "b6e96150d94602c8520985a4b877bfaf1c99ba39102015358f3017ecdc01a020",
-            "size": 37359
+            "sha256": "e595b17e042a8444dad7727cecde7132e9c17babb5c4c5978786e30518e0217e",
+            "size": 39990
           },
           "classes/VariableChargeReadinessTest.cls-meta.xml": {
             "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
@@ -2384,8 +2384,8 @@
             "size": 11174
           },
           "lwc/fcbInvoiceForm/fcbInvoiceForm.js": {
-            "sha256": "ddb1648f684db242da350dae7326ff56e79871af3a658a521e6b365e6d2c87f0",
-            "size": 49350
+            "sha256": "1fd1c5ff056f94e626fef1eb1d149f5e5374c8c645e22cd21b682dbdc5cfb4dc",
+            "size": 51241
           },
           "lwc/fcbInvoiceForm/fcbInvoiceForm.js-meta.xml": {
             "sha256": "5b0642735826002bc0c0309154622d3b16108678798c8d432ff61570bc04ee75",
@@ -2480,12 +2480,12 @@
             "size": 745
           },
           "lwc/fcbStemProcessing/fcbStemProcessing.html": {
-            "sha256": "ef682503b346a7ef9d39e9b65546d3379f988163745b72612b8bf66e21490519",
-            "size": 30447
+            "sha256": "0b5c94329da4087b0f214a73a212adeecde16d00b945f746c414267eebff19f7",
+            "size": 31561
           },
           "lwc/fcbStemProcessing/fcbStemProcessing.js": {
-            "sha256": "8c65b6a84fcf58ebab64e057958c8f8b14825b4da61379b74ca1cdf5555c6caa",
-            "size": 44796
+            "sha256": "c3bd5c1d82cc163992c5eb430ab40e1c76fe770e79ea66069922158946bb68e7",
+            "size": 48468
           },
           "lwc/fcbStemProcessing/fcbStemProcessing.js-meta.xml": {
             "sha256": "70e6f162268d57442bf6ae24982f53bd9181d842c8841aab4295013c2c3bfd67",
@@ -6244,7 +6244,7 @@
             "size": 178
           }
         },
-        "inventoryHash": "3ded03975ad5658fa0c8cd5649c7369cf205b3aec2ae4d698ebf726e8937d328"
+        "inventoryHash": "352547177d18c5c451fc26e3cf8149cfc15382b9165c39609ce3df9d359554fb"
       },
       "final": {
         "files": {
@@ -32074,6 +32074,34 @@
         "path": "manifest/invoice-trader-reminders.xml",
         "sha256": "77b59e77d0c42a45d6dc5198848bbeba804ed87599946e8cbc9af17987992c89"
       }
+    },
+    "352547177d18c5c451fc26e3cf8149cfc15382b9165c39609ce3df9d359554fb": {
+      "path": "manifest/invoice-trader-reminders-devee-stable.xml",
+      "sha256": "6f17e41fff8531fa9768715a561f07d55523ee61ab1753a9bd8a66f5d799327f",
+      "metadata": {
+        "path": "manifest/invoice-trader-reminders.xml",
+        "sha256": "77b59e77d0c42a45d6dc5198848bbeba804ed87599946e8cbc9af17987992c89"
+      }
+    }
+  },
+  "orgBaselines": {
+    "devee": {
+      "orgId": "00D1m0000008kioEAA",
+      "commit": "4c4d1b4548e090bc7eebb96b66549dc743dc01ad",
+      "sourceTreeHash": "c25c41991a4dac9348360640f9ba91f44f2de5ee3b8b0d4f7814890c8c287627",
+      "inventoryHash": "dfb4493c5ace9ed84924c4d5f46f5e3bec8b87ebe6e943c909448f43052e0db0"
+    },
+    "qat": {
+      "orgId": "00D1s0000008lFEEAY",
+      "commit": "44592ebaeb042bbb9a0b4945baf6093947c922c5",
+      "sourceTreeHash": "9702b4d59a2ae42c4efcc9677d2176e770dd99eeb366b3de830144dd36260140",
+      "inventoryHash": "9f14f7f3bcd12cfaf516ca51f315a624262e8661cc93a97afe0b5c75f0678408"
+    },
+    "production": {
+      "orgId": "00D2x000000Ei4oEAC",
+      "commit": "44592ebaeb042bbb9a0b4945baf6093947c922c5",
+      "sourceTreeHash": "9702b4d59a2ae42c4efcc9677d2176e770dd99eeb366b3de830144dd36260140",
+      "inventoryHash": "9f14f7f3bcd12cfaf516ca51f315a624262e8661cc93a97afe0b5c75f0678408"
     }
   }
 }
