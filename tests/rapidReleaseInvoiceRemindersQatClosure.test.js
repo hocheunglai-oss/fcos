@@ -3,7 +3,7 @@ import test from 'node:test';
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
 import { appendReminderClosure, assertClosureApproval, closureResult, original, productionEnvironment,
   reminderClosureJournal, schemaPins, verifyJournalBoundary } from '../scripts/lib/rapid-release/invoice-reminders-qat-closure.mjs';
-import { assertTerminalQatReport, readClosureSchema, readTerminalQatReport, verifyFreshEvidence }
+import { assertNoCompetingClosureWork, assertTerminalQatReport, readClosureSchema, readTerminalQatReport, verifyFreshEvidence }
   from '../scripts/rapid-release-invoice-reminders-qat-closure.mjs';
 
 const evidenceDigest = 'a'.repeat(64);
@@ -139,8 +139,8 @@ test('an unknown catalog fingerprint, reconstruction, or ACL selector refuses th
 
 const nativeFailure = {
   id: original.qatValidationId, status: 'Failed', done: true, checkOnly: true, numberComponentErrors: 0,
-  numberTestsTotal: 100, numberTestErrors: 1, completedDate: '2026-11-21T13:54:15.000Z',
-  details: { runTestResult: { failures: [{ name: 'InvoiceControllerTest',
+  numberTestsTotal: 101, numberTestsCompleted: 100, numberTestErrors: 1, completedDate: '2026-11-21T13:54:15.000Z',
+  details: { runTestResult: { numTestsRun: 101, numFailures: 1, failures: [{ name: 'InvoiceControllerTest',
     methodName: 'restrictedSalesSupportCanReadInvoiceBlockerAndCaptureOneReminder' }] } },
 };
 
@@ -149,7 +149,7 @@ test('only the exact native terminal check-only failure qualifies', () => {
   const proof = assertTerminalQatReport(nativeFailure, timing);
   assert.deepEqual([proof.jobId, proof.status, proof.checkOnly], [original.qatValidationId, 'Failed', true]);
   for (const changed of [{ checkOnly: false }, { done: false }, { status: 'InProgress' }, { status: 'Succeeded' },
-    { numberTestErrors: 2 }, { completedDate: '2026-11-21T13:59:00Z' }]) {
+    { numberTestErrors: 2 }, { numberTestsTotal: 100 }, { numberTestsCompleted: 101 }, { completedDate: '2026-11-21T13:59:00Z' }]) {
     assert.throws(() => assertTerminalQatReport({ ...nativeFailure, ...changed }, timing), /REMINDER_CLOSURE_QAT_TERMINAL_REPORT_MISMATCH/u);
   }
 });
@@ -211,4 +211,35 @@ test('an advanced journal head stops the closure without a second append', async
   } };
   await assert.rejects(appendReminderClosure({ read, journal, ...closureInputs }), /JOURNAL_ADVANCED/u);
   assert.deepEqual([reads, writes], [1, 1]);
+});
+
+
+test('closure can overlap only the exact credential-free quality workflow created by its own merge', async () => {
+  const run = { id: 50, head_sha: original.dispatcher };
+  const quality = { id: 51, path: '.github/workflows/quality.yml', event: 'push',
+    head_sha: run.head_sha, head_branch: 'main', repository: { id: original.repositoryId } };
+  const current = { id: run.id };
+  const page = (...workflow_runs) => ({ total_count: workflow_runs.length, workflow_runs });
+  let reads = 0;
+  const github = { read: async path => {
+    reads += 1;
+    assert.equal(path, '/repos/hocheunglai-oss/fcos/contents/.github/workflows/quality.yml?ref=' + run.head_sha);
+    return { type: 'file', sha: '9e9f584381cb4100e5a57a4f03e2cf94de482aa6' };
+  } };
+  await assertNoCompetingClosureWork({ github, run, active: [page(current)] });
+  assert.equal(reads, 0);
+  await assertNoCompetingClosureWork({ github, run, active: [page(current), page(quality)] });
+  assert.equal(reads, 1);
+  for (const change of [
+    { path: '.github/workflows/fcos-rapid-release.yml' }, { head_sha: original.candidate },
+    { event: 'pull_request' }, { repository: { id: 99 } },
+  ]) {
+    await assert.rejects(assertNoCompetingClosureWork({ github, run, active: [page(current, { ...quality, ...change })] }),
+      /REMINDER_CLOSURE_COMPETING_RUN/u);
+  }
+  await assert.rejects(assertNoCompetingClosureWork({ github, run, active: [page(current, quality, { ...quality, id: 52 })] }),
+    /REMINDER_CLOSURE_COMPETING_RUN/u);
+  const alteredWorkflow = { read: async () => ({ type: 'file', sha: original.candidate }) };
+  await assert.rejects(assertNoCompetingClosureWork({ github: alteredWorkflow, run, active: [page(current, quality)] }),
+    /REMINDER_CLOSURE_COMPETING_RUN/u);
 });

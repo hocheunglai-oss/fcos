@@ -21,6 +21,23 @@ const policy = FCOS_CONNECTION_POLICY.providers.find(({ id }) => id === 'salesfo
 const { publication } = policy;
 const orgs = ['devee', 'qat', 'production'];
 const same = (left, right) => digest(left) === digest(right);
+const readOnlyQualityPath = '.github/workflows/quality.yml';
+const readOnlyQualityBlob = '9e9f584381cb4100e5a57a4f03e2cf94de482aa6';
+
+export async function assertNoCompetingClosureWork({ github, run, active }) {
+  check(active.every(page => page.total_count === page.workflow_runs?.length && page.total_count < 100),
+    'REMINDER_CLOSURE_COMPETING_RUN');
+  const other = active.flatMap(page => page.workflow_runs).filter(current => current.id !== run.id);
+  if (!other.length) return;
+  // Only the credential-free push CI for this exact reviewed merge may run alongside closure.
+  check(new Set(other.map(current => current.id)).size === 1 && other.every(current =>
+    current.event === 'push' && current.head_sha === run.head_sha && current.head_branch === 'main'
+    && current.repository?.id === original.repositoryId && nativeWorkflowPath(current) === readOnlyQualityPath),
+  'REMINDER_CLOSURE_COMPETING_RUN');
+  const workflow = await github.read(`${repoPath}/contents/${readOnlyQualityPath}?ref=${run.head_sha}`);
+  check(workflow?.type === 'file' && workflow.sha === readOnlyQualityBlob, 'REMINDER_CLOSURE_COMPETING_RUN');
+}
+
 
 async function verifyExecution(env) {
   check(env.GITHUB_ACTIONS === 'true' && env.RUNNER_ENVIRONMENT === 'github-hosted' && env.GITHUB_REPOSITORY === targets().repository
@@ -52,8 +69,7 @@ async function verifyExecution(env) {
   assertClosureApproval(approvals);
   const active = await Promise.all(['queued', 'in_progress', 'waiting', 'requested', 'pending'].map(status =>
     github.read(`${repoPath}/actions/runs?status=${status}&per_page=100`)));
-  check(active.every(page => page.total_count === page.workflow_runs?.length && page.total_count < 100
-    && page.workflow_runs.every(current => current.id === run.id)), 'REMINDER_CLOSURE_COMPETING_RUN');
+  await assertNoCompetingClosureWork({ github, run, active });
   return { github, run, handoverRecord };
 }
 
@@ -107,7 +123,9 @@ export function assertTerminalQatReport(report, { submittedAt, completedBy }) {
   const failures = Array.isArray(rawFailures) ? rawFailures : rawFailures ? [rawFailures] : [];
   const completed = Date.parse(report.completedDate);
   check(report.id === original.qatValidationId && report.status === 'Failed' && report.done === true && report.checkOnly === true
-    && Number(report.numberComponentErrors) === 0 && Number(report.numberTestsTotal) === 100 && Number(report.numberTestErrors) === 1
+    && Number(report.numberComponentErrors) === 0 && Number(report.numberTestsTotal) === 101
+    && Number(report.numberTestsCompleted) === 100 && Number(report.numberTestErrors) === 1
+    && Number(report.details?.runTestResult?.numTestsRun) === 101 && Number(report.details?.runTestResult?.numFailures) === 1
     && failures.length === 1 && failures[0].name === 'InvoiceControllerTest'
     && failures[0].methodName === 'restrictedSalesSupportCanReadInvoiceBlockerAndCaptureOneReminder'
     && Date.parse(submittedAt) <= completed && completed <= Date.parse(completedBy), 'REMINDER_CLOSURE_QAT_TERMINAL_REPORT_MISMATCH');
