@@ -22,6 +22,7 @@
     <members>EnsureNominationsJob</members>
     <members>FcosCompanyFxRateService</members>
     <members>FcosCompanyFxRateServiceTest</members>
+    <members>FcosDeveeEditorFixtureRehearsalTest</members>
     <members>FcosLegacyFinancialCompatibilityTest</members>
     <members>FcosNativeConfirmationService</members>
     <members>FcosNativeConfirmationServiceTest</members>

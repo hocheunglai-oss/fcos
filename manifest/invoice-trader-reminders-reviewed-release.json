@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "releaseMode": "reviewed-manifest-incremental-v1",
   "baselineMode": "read-only-owned-tree-inventory",
-  "baselineCommit": "79bc7db6f4140db2550d390b725409cfde733af0",
-  "baselineInventoryHash": "2e332eda8f47fcf8817c08a6e21345f2650856215d69a5ecea7bbe9420cbaed3",
-  "baselineSourceTreeHash": "2ec27560a01c1f8c4521c7cddfd0a41c76cf032159314f2fd0f26fcff06d23ab",
-  "sourceTreeHash": "d723acba4ba8d00fa10d72ec9323238d07b3bbc337c9a8372ad8e4d3b460464a",
+  "baselineCommit": "4590ba170ea2ffac5ecd7d741b1913091b865560",
+  "baselineInventoryHash": "9f14f7f3bcd12cfaf516ca51f315a624262e8661cc93a97afe0b5c75f0678408",
+  "baselineSourceTreeHash": "9702b4d59a2ae42c4efcc9677d2176e770dd99eeb366b3de830144dd36260140",
+  "sourceTreeHash": "c25c41991a4dac9348360640f9ba91f44f2de5ee3b8b0d4f7814890c8c287627",
   "manifestSha256": "77b59e77d0c42a45d6dc5198848bbeba804ed87599946e8cbc9af17987992c89",
   "components": [
     {
@@ -77,7 +77,7 @@
   "dependencyReview": {
     "complete": true,
     "reviewer": "Codex",
-    "evidence": "The existing buyer invoice readiness service remains the final authorization gate. The InvoiceController exposes a record-authorized tab read and a STEM-serialized, idempotent reminder for the active trader assignments. The legacy tab consumes the tab readiness and keeps unrelated form and PDF errors in the modal. The latest invoice launcher source and every retained owned metadata file were compared with the native baseline. No Salesforce profile, permission, schema, or live data is part of this change."
+    "evidence": "Compared all pinned DEVEE, QAT and Production native metadata to the verified live Editors baseline and prior scoped retrievals. Only published Editors components and the disabled profile entry exposed by its newly retrieved test class differ. The six reminder components match the live baseline and do not overlap Editors. The Accounts-role Apex regression exercises exact captured reminder and idempotent replay with zero email invocations. No profile, permission or schema changes are in the reminder package."
   },
   "testPlan": {
     "level": "RunSpecifiedTests",
@@ -92,7 +92,7 @@
       "EmailInvoiceControllerTest",
       "FcosNativeEntryIntegrationTest"
     ],
-    "minimumTests": 98
+    "minimumTests": 99
   },
   "permissionSets": [],
   "nativeProjection": "schema-free-apex-lightning",
@@ -1255,6 +1255,14 @@
             "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
             "size": 174
           },
+          "classes/FcosDeveeEditorFixtureRehearsalTest.cls": {
+            "sha256": "682ad9c480576938f4f25b36f40e86945995b9f1fd8b1ce56fcf2203656e1a53",
+            "size": 27581
+          },
+          "classes/FcosDeveeEditorFixtureRehearsalTest.cls-meta.xml": {
+            "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
+            "size": 174
+          },
           "classes/FcosLegacyFinancialCompatibilityTest.cls": {
             "sha256": "03a335b85b2dceccc1e21c058275239c65d4d9017488ca944ef889a0ec9c3802",
             "size": 29369
@@ -5876,8 +5884,8 @@
             "size": 7876
           },
           "profiles/Sales Support.profile-meta.xml": {
-            "sha256": "3fc4720561bffef72601957edcdf94284a087cc8ad1b58dfe6844deafecf3a55",
-            "size": 151741
+            "sha256": "d4b6e8e8775b0315c5a38bdb33ec78d2ccfdce2d15ef27174830e2416fcd4f2b",
+            "size": 151882
           },
           "quickActions/Invoice__c.Finalize_Native_Proforma.quickAction-meta.xml": {
             "sha256": "29f670276215065291ccf4b42955e4278cbf2ae75d200898654b5ef7e6b267c3",
@@ -6236,7 +6244,7 @@
             "size": 178
           }
         },
-        "inventoryHash": "9ffbbb9ffa49eac54ca0487d463107addaf9ecf72d6d9ee8dc604601c53d6ac0"
+        "inventoryHash": "3ded03975ad5658fa0c8cd5649c7369cf205b3aec2ae4d698ebf726e8937d328"
       },
       "final": {
         "files": {
@@ -6444,6 +6452,14 @@
             "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
             "size": 174
           },
+          "classes/FcosDeveeEditorFixtureRehearsalTest.cls": {
+            "sha256": "682ad9c480576938f4f25b36f40e86945995b9f1fd8b1ce56fcf2203656e1a53",
+            "size": 27581
+          },
+          "classes/FcosDeveeEditorFixtureRehearsalTest.cls-meta.xml": {
+            "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
+            "size": 174
+          },
           "classes/FcosLegacyFinancialCompatibilityTest.cls": {
             "sha256": "03a335b85b2dceccc1e21c058275239c65d4d9017488ca944ef889a0ec9c3802",
             "size": 29369
@@ -10993,8 +11009,8 @@
             "size": 7876
           },
           "profiles/Sales Support.profile-meta.xml": {
-            "sha256": "3fc4720561bffef72601957edcdf94284a087cc8ad1b58dfe6844deafecf3a55",
-            "size": 151741
+            "sha256": "d4b6e8e8775b0315c5a38bdb33ec78d2ccfdce2d15ef27174830e2416fcd4f2b",
+            "size": 151882
           },
           "quickActions/Invoice__c.Finalize_Native_Proforma.quickAction-meta.xml": {
             "sha256": "29f670276215065291ccf4b42955e4278cbf2ae75d200898654b5ef7e6b267c3",
@@ -11353,7 +11369,7 @@
             "size": 178
           }
         },
-        "inventoryHash": "10b4f7b61863efb5b0717793eb5a4191a423719bd4b64ac83f279fc5592070f1",
+        "inventoryHash": "1932265857cb63e01b299385285117c30f1bfa546022c62d6938c6d5c5c8c9f3",
         "projected": true
       }
     },
@@ -11550,18 +11566,26 @@
             "size": 174
           },
           "classes/FcosCompanyFxRateService.cls": {
-            "sha256": "86ee9d931f08dbb38eb829a3cb742114b126540c4305de34cba50e72b136b669",
-            "size": 4978
+            "sha256": "e1662cbfeabef5933260fb54b699d78d51c495274d5d2d12ad34e8bff939a81b",
+            "size": 21395
           },
           "classes/FcosCompanyFxRateService.cls-meta.xml": {
             "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
             "size": 174
           },
           "classes/FcosCompanyFxRateServiceTest.cls": {
-            "sha256": "6ff86b8882da0349fcfa4e495d28bfbdb7fb100196369875460f42157409ed55",
-            "size": 7017
+            "sha256": "50c4001209a139dc6d2b4588eae8ad07056ad8fecd260214cecd50af4870553a",
+            "size": 21410
           },
           "classes/FcosCompanyFxRateServiceTest.cls-meta.xml": {
+            "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
+            "size": 174
+          },
+          "classes/FcosDeveeEditorFixtureRehearsalTest.cls": {
+            "sha256": "682ad9c480576938f4f25b36f40e86945995b9f1fd8b1ce56fcf2203656e1a53",
+            "size": 27581
+          },
+          "classes/FcosDeveeEditorFixtureRehearsalTest.cls-meta.xml": {
             "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
             "size": 174
           },
@@ -11678,8 +11702,8 @@
             "size": 174
           },
           "classes/FcosTradeCurrencyController.cls": {
-            "sha256": "3c1bddc858422f260ac2fcde2508ed6a9b4f8f5beac32d14239b36e02330929d",
-            "size": 4182
+            "sha256": "e12c1c1833224fcc2d72c440e09fae8bfd079a3632a55702c5f1799ec4b17202",
+            "size": 5488
           },
           "classes/FcosTradeCurrencyController.cls-meta.xml": {
             "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
@@ -11710,8 +11734,8 @@
             "size": 174
           },
           "classes/FcosTradeCurrencyGuard.cls": {
-            "sha256": "19272e06e05ab99775c0bc8522244cc330e7233c34bc5370e107afb49d9f1c35",
-            "size": 26910
+            "sha256": "efa9224d81d95598c54ebc4c51d3cb93c3f73ce9c07fb3e9896e58eb897553c3",
+            "size": 27278
           },
           "classes/FcosTradeCurrencyGuard.cls-meta.xml": {
             "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
@@ -11742,16 +11766,16 @@
             "size": 174
           },
           "classes/FcosTradeCurrencyParentGuard.cls": {
-            "sha256": "e6f340321c0c05217c4b6ac10550f6053428c9bf4db7e126c362a159bb36ec19",
-            "size": 1738
+            "sha256": "d02ec1368732d2bb691a606d6a87f59ac18ae339721ed85a7ba29db2f7e3cfb2",
+            "size": 1813
           },
           "classes/FcosTradeCurrencyParentGuard.cls-meta.xml": {
             "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
             "size": 174
           },
           "classes/FcosTradeCurrencyService.cls": {
-            "sha256": "e7d9013e1cd2c0238e8508bc197a04fd28cecfa118f8c6702fb3f0c361b26ad4",
-            "size": 26834
+            "sha256": "262ee9dcdc819249efbfd3c64ab5669880f115842c452c7cdabd3a4f41d46a67",
+            "size": 38538
           },
           "classes/FcosTradeCurrencyService.cls-meta.xml": {
             "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
@@ -12598,12 +12622,12 @@
             "size": 253
           },
           "lwc/fcbEditOfferLineItemModal/fcbEditOfferLineItemModal.html": {
-            "sha256": "71df045a0d1d75d2b8f04df01007a07512e5a92754ea461056a1143088aaf4c8",
-            "size": 14536
+            "sha256": "cc04cd31f10ddd3d03b55c57bca7e1245d0a526c8659255b3e704a3d0c5e7c47",
+            "size": 15451
           },
           "lwc/fcbEditOfferLineItemModal/fcbEditOfferLineItemModal.js": {
-            "sha256": "46eafd79908b366ea6050566ce3e83116bdca575095f32ca0631050cc1cd574d",
-            "size": 20599
+            "sha256": "258dcb634ff79d9f87aad77ba2f7d963337ee3662cf0a64fc3bf1a28a05b60d6",
+            "size": 22557
           },
           "lwc/fcbEditOfferLineItemModal/fcbEditOfferLineItemModal.js-meta.xml": {
             "sha256": "facac1b383dbf5f67c7fba58bdc8a771ba99166184fd5b9e3cf77eb26e992f4a",
@@ -12630,12 +12654,12 @@
             "size": 172
           },
           "lwc/fcbEditSupplierBidModal/fcbEditSupplierBidModal.html": {
-            "sha256": "c8b59198560ed043d822721c20df4c5bd22f187f0dd5c39e8238e285f1006b6a",
-            "size": 11156
+            "sha256": "e0dac2989415d2c0d11bd42ab6b7e86f1f9fa3044e4ceaf990bab95f1b069c3d",
+            "size": 11538
           },
           "lwc/fcbEditSupplierBidModal/fcbEditSupplierBidModal.js": {
-            "sha256": "697f3d68ea0a00868d8eed6f7628f4ac66e4fc4dd6a186efb7ce34d9c0873ef8",
-            "size": 18051
+            "sha256": "3b5083e902b9781f7798de16663b3392f4c57fed96703861efc629b77ac7f163",
+            "size": 19603
           },
           "lwc/fcbEditSupplierBidModal/fcbEditSupplierBidModal.js-meta.xml": {
             "sha256": "75c472b1559f1b2b64262aaf768b247ffc13613741e699fe87f0c828c5910205",
@@ -12738,8 +12762,8 @@
             "size": 22463
           },
           "lwc/fcbPromotedOfferLineItemExtraCosts/fcbPromotedOfferLineItemExtraCosts.js": {
-            "sha256": "a66218b962b995ac3a1a3b8362c6087830d2064a87108ec9ad474f33c43f43f9",
-            "size": 69345
+            "sha256": "873031dfd7b9c50fa7274db1cab40d67afe6d077941a5ef717546f31fd34f552",
+            "size": 70611
           },
           "lwc/fcbPromotedOfferLineItemExtraCosts/fcbPromotedOfferLineItemExtraCosts.js-meta.xml": {
             "sha256": "0865a63bdc35f991c10cb58cee0a395dbf3c01e5d319506ce50117fb2033696e",
@@ -12802,8 +12826,8 @@
             "size": 295
           },
           "lwc/fcbSupplierBidExtraCosts/fcbSupplierBidExtraCosts.html": {
-            "sha256": "271ee8ba2729cf59e914409b12a1d542fd466390e1426d416d2b1fa61e96a632",
-            "size": 18908
+            "sha256": "5c26d93bf6477a146a0eee20c6ea25247c6a36d575554c1d97c2cf75391cce3b",
+            "size": 18904
           },
           "lwc/fcbSupplierBidExtraCosts/fcbSupplierBidExtraCosts.js": {
             "sha256": "e69479aa422edb2f21329675ffbee2313f52a6b5077e1ba8a464435d1075f77a",
@@ -12886,8 +12910,8 @@
             "size": 6713
           },
           "lwc/fcosTradeCurrencyEditor/fcosTradeCurrencyEditor.js": {
-            "sha256": "981aa497ce2ede3148ac2d0fe38ae1e48db5765dc54ea2636b95f5085d3e1b72",
-            "size": 12322
+            "sha256": "744bd37d39867d8ad5da03856bde6d7a4fdf0e7a7dc8ab4d452f9c92d199487c",
+            "size": 14987
           },
           "lwc/fcosTradeCurrencyEditor/fcosTradeCurrencyEditor.js-meta.xml": {
             "sha256": "a1559fe03fcf9799fce9460c5cfc3b43110f8f820fda3c1fa4b93d986bfa86a8",
@@ -16182,8 +16206,8 @@
             "size": 7876
           },
           "profiles/Sales Support.profile-meta.xml": {
-            "sha256": "3f85cabe6b8d8d64ff5af8e38ac0f0a441c22107991b2e1a155879b32edfcdf7",
-            "size": 151378
+            "sha256": "995c3e647a7f71a97d2792119ab2383c57181c0b01c8eaaf142a455444b77cf9",
+            "size": 151519
           },
           "quickActions/Invoice__c.Finalize_Native_Proforma.quickAction-meta.xml": {
             "sha256": "29f670276215065291ccf4b42955e4278cbf2ae75d200898654b5ef7e6b267c3",
@@ -16246,8 +16270,8 @@
             "size": 178
           },
           "triggers/FcosTradeCurrencySideTrigger.trigger": {
-            "sha256": "8e7ae4ea2fe9b460ab54a2842ef3ad316024e7d7e381697d474d0d9fd61f57e6",
-            "size": 206
+            "sha256": "a983c0c150b6f2f5aff29a3f195474e1e5335e26815cf5d0cd2d90b030938494",
+            "size": 224
           },
           "triggers/FcosTradeCurrencySideTrigger.trigger-meta.xml": {
             "sha256": "3818dbe302a4fac9140d6748610634608f9cdce2e51193051a176011f5ea1599",
@@ -16542,7 +16566,7 @@
             "size": 178
           }
         },
-        "inventoryHash": "03f1febaecaad4f0b229f6ed715c627d94643ee6fe4d53cec60430ce94a51013"
+        "inventoryHash": "081cb8399f19d5c9e601c76fa76fa4c25f7cc9242bf8a7b44132b2a65c39d1ff"
       },
       "final": {
         "files": {
@@ -16735,18 +16759,26 @@
             "size": 174
           },
           "classes/FcosCompanyFxRateService.cls": {
-            "sha256": "86ee9d931f08dbb38eb829a3cb742114b126540c4305de34cba50e72b136b669",
-            "size": 4978
+            "sha256": "e1662cbfeabef5933260fb54b699d78d51c495274d5d2d12ad34e8bff939a81b",
+            "size": 21395
           },
           "classes/FcosCompanyFxRateService.cls-meta.xml": {
             "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
             "size": 174
           },
           "classes/FcosCompanyFxRateServiceTest.cls": {
-            "sha256": "6ff86b8882da0349fcfa4e495d28bfbdb7fb100196369875460f42157409ed55",
-            "size": 7017
+            "sha256": "50c4001209a139dc6d2b4588eae8ad07056ad8fecd260214cecd50af4870553a",
+            "size": 21410
           },
           "classes/FcosCompanyFxRateServiceTest.cls-meta.xml": {
+            "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
+            "size": 174
+          },
+          "classes/FcosDeveeEditorFixtureRehearsalTest.cls": {
+            "sha256": "682ad9c480576938f4f25b36f40e86945995b9f1fd8b1ce56fcf2203656e1a53",
+            "size": 27581
+          },
+          "classes/FcosDeveeEditorFixtureRehearsalTest.cls-meta.xml": {
             "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
             "size": 174
           },
@@ -16863,8 +16895,8 @@
             "size": 174
           },
           "classes/FcosTradeCurrencyController.cls": {
-            "sha256": "3c1bddc858422f260ac2fcde2508ed6a9b4f8f5beac32d14239b36e02330929d",
-            "size": 4182
+            "sha256": "e12c1c1833224fcc2d72c440e09fae8bfd079a3632a55702c5f1799ec4b17202",
+            "size": 5488
           },
           "classes/FcosTradeCurrencyController.cls-meta.xml": {
             "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
@@ -16895,8 +16927,8 @@
             "size": 174
           },
           "classes/FcosTradeCurrencyGuard.cls": {
-            "sha256": "19272e06e05ab99775c0bc8522244cc330e7233c34bc5370e107afb49d9f1c35",
-            "size": 26910
+            "sha256": "efa9224d81d95598c54ebc4c51d3cb93c3f73ce9c07fb3e9896e58eb897553c3",
+            "size": 27278
           },
           "classes/FcosTradeCurrencyGuard.cls-meta.xml": {
             "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
@@ -16927,16 +16959,16 @@
             "size": 174
           },
           "classes/FcosTradeCurrencyParentGuard.cls": {
-            "sha256": "e6f340321c0c05217c4b6ac10550f6053428c9bf4db7e126c362a159bb36ec19",
-            "size": 1738
+            "sha256": "d02ec1368732d2bb691a606d6a87f59ac18ae339721ed85a7ba29db2f7e3cfb2",
+            "size": 1813
           },
           "classes/FcosTradeCurrencyParentGuard.cls-meta.xml": {
             "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
             "size": 174
           },
           "classes/FcosTradeCurrencyService.cls": {
-            "sha256": "e7d9013e1cd2c0238e8508bc197a04fd28cecfa118f8c6702fb3f0c361b26ad4",
-            "size": 26834
+            "sha256": "262ee9dcdc819249efbfd3c64ab5669880f115842c452c7cdabd3a4f41d46a67",
+            "size": 38538
           },
           "classes/FcosTradeCurrencyService.cls-meta.xml": {
             "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
@@ -17751,12 +17783,12 @@
             "size": 253
           },
           "lwc/fcbEditOfferLineItemModal/fcbEditOfferLineItemModal.html": {
-            "sha256": "71df045a0d1d75d2b8f04df01007a07512e5a92754ea461056a1143088aaf4c8",
-            "size": 14536
+            "sha256": "cc04cd31f10ddd3d03b55c57bca7e1245d0a526c8659255b3e704a3d0c5e7c47",
+            "size": 15451
           },
           "lwc/fcbEditOfferLineItemModal/fcbEditOfferLineItemModal.js": {
-            "sha256": "46eafd79908b366ea6050566ce3e83116bdca575095f32ca0631050cc1cd574d",
-            "size": 20599
+            "sha256": "258dcb634ff79d9f87aad77ba2f7d963337ee3662cf0a64fc3bf1a28a05b60d6",
+            "size": 22557
           },
           "lwc/fcbEditOfferLineItemModal/fcbEditOfferLineItemModal.js-meta.xml": {
             "sha256": "facac1b383dbf5f67c7fba58bdc8a771ba99166184fd5b9e3cf77eb26e992f4a",
@@ -17783,12 +17815,12 @@
             "size": 172
           },
           "lwc/fcbEditSupplierBidModal/fcbEditSupplierBidModal.html": {
-            "sha256": "c8b59198560ed043d822721c20df4c5bd22f187f0dd5c39e8238e285f1006b6a",
-            "size": 11156
+            "sha256": "e0dac2989415d2c0d11bd42ab6b7e86f1f9fa3044e4ceaf990bab95f1b069c3d",
+            "size": 11538
           },
           "lwc/fcbEditSupplierBidModal/fcbEditSupplierBidModal.js": {
-            "sha256": "697f3d68ea0a00868d8eed6f7628f4ac66e4fc4dd6a186efb7ce34d9c0873ef8",
-            "size": 18051
+            "sha256": "3b5083e902b9781f7798de16663b3392f4c57fed96703861efc629b77ac7f163",
+            "size": 19603
           },
           "lwc/fcbEditSupplierBidModal/fcbEditSupplierBidModal.js-meta.xml": {
             "sha256": "75c472b1559f1b2b64262aaf768b247ffc13613741e699fe87f0c828c5910205",
@@ -17871,8 +17903,8 @@
             "size": 22463
           },
           "lwc/fcbPromotedOfferLineItemExtraCosts/fcbPromotedOfferLineItemExtraCosts.js": {
-            "sha256": "a66218b962b995ac3a1a3b8362c6087830d2064a87108ec9ad474f33c43f43f9",
-            "size": 69345
+            "sha256": "873031dfd7b9c50fa7274db1cab40d67afe6d077941a5ef717546f31fd34f552",
+            "size": 70611
           },
           "lwc/fcbPromotedOfferLineItemExtraCosts/fcbPromotedOfferLineItemExtraCosts.js-meta.xml": {
             "sha256": "0865a63bdc35f991c10cb58cee0a395dbf3c01e5d319506ce50117fb2033696e",
@@ -17915,8 +17947,8 @@
             "size": 295
           },
           "lwc/fcbSupplierBidExtraCosts/fcbSupplierBidExtraCosts.html": {
-            "sha256": "271ee8ba2729cf59e914409b12a1d542fd466390e1426d416d2b1fa61e96a632",
-            "size": 18908
+            "sha256": "5c26d93bf6477a146a0eee20c6ea25247c6a36d575554c1d97c2cf75391cce3b",
+            "size": 18904
           },
           "lwc/fcbSupplierBidExtraCosts/fcbSupplierBidExtraCosts.js": {
             "sha256": "e69479aa422edb2f21329675ffbee2313f52a6b5077e1ba8a464435d1075f77a",
@@ -17999,8 +18031,8 @@
             "size": 6713
           },
           "lwc/fcosTradeCurrencyEditor/fcosTradeCurrencyEditor.js": {
-            "sha256": "981aa497ce2ede3148ac2d0fe38ae1e48db5765dc54ea2636b95f5085d3e1b72",
-            "size": 12322
+            "sha256": "744bd37d39867d8ad5da03856bde6d7a4fdf0e7a7dc8ab4d452f9c92d199487c",
+            "size": 14987
           },
           "lwc/fcosTradeCurrencyEditor/fcosTradeCurrencyEditor.js-meta.xml": {
             "sha256": "a1559fe03fcf9799fce9460c5cfc3b43110f8f820fda3c1fa4b93d986bfa86a8",
@@ -21295,8 +21327,8 @@
             "size": 7876
           },
           "profiles/Sales Support.profile-meta.xml": {
-            "sha256": "3f85cabe6b8d8d64ff5af8e38ac0f0a441c22107991b2e1a155879b32edfcdf7",
-            "size": 151378
+            "sha256": "995c3e647a7f71a97d2792119ab2383c57181c0b01c8eaaf142a455444b77cf9",
+            "size": 151519
           },
           "quickActions/Invoice__c.Finalize_Native_Proforma.quickAction-meta.xml": {
             "sha256": "29f670276215065291ccf4b42955e4278cbf2ae75d200898654b5ef7e6b267c3",
@@ -21359,8 +21391,8 @@
             "size": 178
           },
           "triggers/FcosTradeCurrencySideTrigger.trigger": {
-            "sha256": "8e7ae4ea2fe9b460ab54a2842ef3ad316024e7d7e381697d474d0d9fd61f57e6",
-            "size": 206
+            "sha256": "a983c0c150b6f2f5aff29a3f195474e1e5335e26815cf5d0cd2d90b030938494",
+            "size": 224
           },
           "triggers/FcosTradeCurrencySideTrigger.trigger-meta.xml": {
             "sha256": "3818dbe302a4fac9140d6748610634608f9cdce2e51193051a176011f5ea1599",
@@ -21655,7 +21687,7 @@
             "size": 178
           }
         },
-        "inventoryHash": "965d45c5490bd6587299f3a8eb6598766f7014b1e3220b45a47003e1dde5f093",
+        "inventoryHash": "054c2938a61543eca605619ae96a88132a8fc360faffcfd1110522f1050e1e71",
         "projected": true
       }
     },
@@ -21852,18 +21884,26 @@
             "size": 174
           },
           "classes/FcosCompanyFxRateService.cls": {
-            "sha256": "86ee9d931f08dbb38eb829a3cb742114b126540c4305de34cba50e72b136b669",
-            "size": 4978
+            "sha256": "e1662cbfeabef5933260fb54b699d78d51c495274d5d2d12ad34e8bff939a81b",
+            "size": 21395
           },
           "classes/FcosCompanyFxRateService.cls-meta.xml": {
             "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
             "size": 174
           },
           "classes/FcosCompanyFxRateServiceTest.cls": {
-            "sha256": "6ff86b8882da0349fcfa4e495d28bfbdb7fb100196369875460f42157409ed55",
-            "size": 7017
+            "sha256": "50c4001209a139dc6d2b4588eae8ad07056ad8fecd260214cecd50af4870553a",
+            "size": 21410
           },
           "classes/FcosCompanyFxRateServiceTest.cls-meta.xml": {
+            "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
+            "size": 174
+          },
+          "classes/FcosDeveeEditorFixtureRehearsalTest.cls": {
+            "sha256": "682ad9c480576938f4f25b36f40e86945995b9f1fd8b1ce56fcf2203656e1a53",
+            "size": 27581
+          },
+          "classes/FcosDeveeEditorFixtureRehearsalTest.cls-meta.xml": {
             "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
             "size": 174
           },
@@ -21980,8 +22020,8 @@
             "size": 174
           },
           "classes/FcosTradeCurrencyController.cls": {
-            "sha256": "3c1bddc858422f260ac2fcde2508ed6a9b4f8f5beac32d14239b36e02330929d",
-            "size": 4182
+            "sha256": "e12c1c1833224fcc2d72c440e09fae8bfd079a3632a55702c5f1799ec4b17202",
+            "size": 5488
           },
           "classes/FcosTradeCurrencyController.cls-meta.xml": {
             "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
@@ -22012,8 +22052,8 @@
             "size": 174
           },
           "classes/FcosTradeCurrencyGuard.cls": {
-            "sha256": "19272e06e05ab99775c0bc8522244cc330e7233c34bc5370e107afb49d9f1c35",
-            "size": 26910
+            "sha256": "efa9224d81d95598c54ebc4c51d3cb93c3f73ce9c07fb3e9896e58eb897553c3",
+            "size": 27278
           },
           "classes/FcosTradeCurrencyGuard.cls-meta.xml": {
             "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
@@ -22044,16 +22084,16 @@
             "size": 174
           },
           "classes/FcosTradeCurrencyParentGuard.cls": {
-            "sha256": "e6f340321c0c05217c4b6ac10550f6053428c9bf4db7e126c362a159bb36ec19",
-            "size": 1738
+            "sha256": "d02ec1368732d2bb691a606d6a87f59ac18ae339721ed85a7ba29db2f7e3cfb2",
+            "size": 1813
           },
           "classes/FcosTradeCurrencyParentGuard.cls-meta.xml": {
             "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
             "size": 174
           },
           "classes/FcosTradeCurrencyService.cls": {
-            "sha256": "e7d9013e1cd2c0238e8508bc197a04fd28cecfa118f8c6702fb3f0c361b26ad4",
-            "size": 26834
+            "sha256": "262ee9dcdc819249efbfd3c64ab5669880f115842c452c7cdabd3a4f41d46a67",
+            "size": 38538
           },
           "classes/FcosTradeCurrencyService.cls-meta.xml": {
             "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
@@ -22900,12 +22940,12 @@
             "size": 253
           },
           "lwc/fcbEditOfferLineItemModal/fcbEditOfferLineItemModal.html": {
-            "sha256": "71df045a0d1d75d2b8f04df01007a07512e5a92754ea461056a1143088aaf4c8",
-            "size": 14536
+            "sha256": "cc04cd31f10ddd3d03b55c57bca7e1245d0a526c8659255b3e704a3d0c5e7c47",
+            "size": 15451
           },
           "lwc/fcbEditOfferLineItemModal/fcbEditOfferLineItemModal.js": {
-            "sha256": "46eafd79908b366ea6050566ce3e83116bdca575095f32ca0631050cc1cd574d",
-            "size": 20599
+            "sha256": "258dcb634ff79d9f87aad77ba2f7d963337ee3662cf0a64fc3bf1a28a05b60d6",
+            "size": 22557
           },
           "lwc/fcbEditOfferLineItemModal/fcbEditOfferLineItemModal.js-meta.xml": {
             "sha256": "facac1b383dbf5f67c7fba58bdc8a771ba99166184fd5b9e3cf77eb26e992f4a",
@@ -22932,12 +22972,12 @@
             "size": 172
           },
           "lwc/fcbEditSupplierBidModal/fcbEditSupplierBidModal.html": {
-            "sha256": "c8b59198560ed043d822721c20df4c5bd22f187f0dd5c39e8238e285f1006b6a",
-            "size": 11156
+            "sha256": "e0dac2989415d2c0d11bd42ab6b7e86f1f9fa3044e4ceaf990bab95f1b069c3d",
+            "size": 11538
           },
           "lwc/fcbEditSupplierBidModal/fcbEditSupplierBidModal.js": {
-            "sha256": "697f3d68ea0a00868d8eed6f7628f4ac66e4fc4dd6a186efb7ce34d9c0873ef8",
-            "size": 18051
+            "sha256": "3b5083e902b9781f7798de16663b3392f4c57fed96703861efc629b77ac7f163",
+            "size": 19603
           },
           "lwc/fcbEditSupplierBidModal/fcbEditSupplierBidModal.js-meta.xml": {
             "sha256": "75c472b1559f1b2b64262aaf768b247ffc13613741e699fe87f0c828c5910205",
@@ -23040,8 +23080,8 @@
             "size": 22463
           },
           "lwc/fcbPromotedOfferLineItemExtraCosts/fcbPromotedOfferLineItemExtraCosts.js": {
-            "sha256": "a66218b962b995ac3a1a3b8362c6087830d2064a87108ec9ad474f33c43f43f9",
-            "size": 69345
+            "sha256": "873031dfd7b9c50fa7274db1cab40d67afe6d077941a5ef717546f31fd34f552",
+            "size": 70611
           },
           "lwc/fcbPromotedOfferLineItemExtraCosts/fcbPromotedOfferLineItemExtraCosts.js-meta.xml": {
             "sha256": "0865a63bdc35f991c10cb58cee0a395dbf3c01e5d319506ce50117fb2033696e",
@@ -23104,8 +23144,8 @@
             "size": 295
           },
           "lwc/fcbSupplierBidExtraCosts/fcbSupplierBidExtraCosts.html": {
-            "sha256": "271ee8ba2729cf59e914409b12a1d542fd466390e1426d416d2b1fa61e96a632",
-            "size": 18908
+            "sha256": "5c26d93bf6477a146a0eee20c6ea25247c6a36d575554c1d97c2cf75391cce3b",
+            "size": 18904
           },
           "lwc/fcbSupplierBidExtraCosts/fcbSupplierBidExtraCosts.js": {
             "sha256": "e69479aa422edb2f21329675ffbee2313f52a6b5077e1ba8a464435d1075f77a",
@@ -23188,8 +23228,8 @@
             "size": 6713
           },
           "lwc/fcosTradeCurrencyEditor/fcosTradeCurrencyEditor.js": {
-            "sha256": "981aa497ce2ede3148ac2d0fe38ae1e48db5765dc54ea2636b95f5085d3e1b72",
-            "size": 12322
+            "sha256": "744bd37d39867d8ad5da03856bde6d7a4fdf0e7a7dc8ab4d452f9c92d199487c",
+            "size": 14987
           },
           "lwc/fcosTradeCurrencyEditor/fcosTradeCurrencyEditor.js-meta.xml": {
             "sha256": "a1559fe03fcf9799fce9460c5cfc3b43110f8f820fda3c1fa4b93d986bfa86a8",
@@ -26492,8 +26532,8 @@
             "size": 7876
           },
           "profiles/Sales Support.profile-meta.xml": {
-            "sha256": "6b4b6c579320ffce9e03173d4f7173fa2c866b224d2a51fb026e456c07de8a7b",
-            "size": 151948
+            "sha256": "eb126ed0d3f6933adc36b75cb4920b6edba8303ac6a38b2b4344664883b140d8",
+            "size": 152089
           },
           "quickActions/Invoice__c.Finalize_Native_Proforma.quickAction-meta.xml": {
             "sha256": "29f670276215065291ccf4b42955e4278cbf2ae75d200898654b5ef7e6b267c3",
@@ -26556,8 +26596,8 @@
             "size": 178
           },
           "triggers/FcosTradeCurrencySideTrigger.trigger": {
-            "sha256": "8e7ae4ea2fe9b460ab54a2842ef3ad316024e7d7e381697d474d0d9fd61f57e6",
-            "size": 206
+            "sha256": "a983c0c150b6f2f5aff29a3f195474e1e5335e26815cf5d0cd2d90b030938494",
+            "size": 224
           },
           "triggers/FcosTradeCurrencySideTrigger.trigger-meta.xml": {
             "sha256": "3818dbe302a4fac9140d6748610634608f9cdce2e51193051a176011f5ea1599",
@@ -26852,7 +26892,7 @@
             "size": 178
           }
         },
-        "inventoryHash": "68bccc8c4b0d9b1835adbf8bb016701bedbae7eca5551ea8952f7c35f9ebd349"
+        "inventoryHash": "d04a4d3ce87aad088066444884ed22c18e17e998f0700232f9ed843eed619026"
       },
       "final": {
         "files": {
@@ -27045,18 +27085,26 @@
             "size": 174
           },
           "classes/FcosCompanyFxRateService.cls": {
-            "sha256": "86ee9d931f08dbb38eb829a3cb742114b126540c4305de34cba50e72b136b669",
-            "size": 4978
+            "sha256": "e1662cbfeabef5933260fb54b699d78d51c495274d5d2d12ad34e8bff939a81b",
+            "size": 21395
           },
           "classes/FcosCompanyFxRateService.cls-meta.xml": {
             "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
             "size": 174
           },
           "classes/FcosCompanyFxRateServiceTest.cls": {
-            "sha256": "6ff86b8882da0349fcfa4e495d28bfbdb7fb100196369875460f42157409ed55",
-            "size": 7017
+            "sha256": "50c4001209a139dc6d2b4588eae8ad07056ad8fecd260214cecd50af4870553a",
+            "size": 21410
           },
           "classes/FcosCompanyFxRateServiceTest.cls-meta.xml": {
+            "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
+            "size": 174
+          },
+          "classes/FcosDeveeEditorFixtureRehearsalTest.cls": {
+            "sha256": "682ad9c480576938f4f25b36f40e86945995b9f1fd8b1ce56fcf2203656e1a53",
+            "size": 27581
+          },
+          "classes/FcosDeveeEditorFixtureRehearsalTest.cls-meta.xml": {
             "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
             "size": 174
           },
@@ -27173,8 +27221,8 @@
             "size": 174
           },
           "classes/FcosTradeCurrencyController.cls": {
-            "sha256": "3c1bddc858422f260ac2fcde2508ed6a9b4f8f5beac32d14239b36e02330929d",
-            "size": 4182
+            "sha256": "e12c1c1833224fcc2d72c440e09fae8bfd079a3632a55702c5f1799ec4b17202",
+            "size": 5488
           },
           "classes/FcosTradeCurrencyController.cls-meta.xml": {
             "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
@@ -27205,8 +27253,8 @@
             "size": 174
           },
           "classes/FcosTradeCurrencyGuard.cls": {
-            "sha256": "19272e06e05ab99775c0bc8522244cc330e7233c34bc5370e107afb49d9f1c35",
-            "size": 26910
+            "sha256": "efa9224d81d95598c54ebc4c51d3cb93c3f73ce9c07fb3e9896e58eb897553c3",
+            "size": 27278
           },
           "classes/FcosTradeCurrencyGuard.cls-meta.xml": {
             "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
@@ -27237,16 +27285,16 @@
             "size": 174
           },
           "classes/FcosTradeCurrencyParentGuard.cls": {
-            "sha256": "e6f340321c0c05217c4b6ac10550f6053428c9bf4db7e126c362a159bb36ec19",
-            "size": 1738
+            "sha256": "d02ec1368732d2bb691a606d6a87f59ac18ae339721ed85a7ba29db2f7e3cfb2",
+            "size": 1813
           },
           "classes/FcosTradeCurrencyParentGuard.cls-meta.xml": {
             "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
             "size": 174
           },
           "classes/FcosTradeCurrencyService.cls": {
-            "sha256": "e7d9013e1cd2c0238e8508bc197a04fd28cecfa118f8c6702fb3f0c361b26ad4",
-            "size": 26834
+            "sha256": "262ee9dcdc819249efbfd3c64ab5669880f115842c452c7cdabd3a4f41d46a67",
+            "size": 38538
           },
           "classes/FcosTradeCurrencyService.cls-meta.xml": {
             "sha256": "331f43ffe1e36ef113340345573b656cd4c9d663b8c3547d5e6778f46d70523a",
@@ -28061,12 +28109,12 @@
             "size": 253
           },
           "lwc/fcbEditOfferLineItemModal/fcbEditOfferLineItemModal.html": {
-            "sha256": "71df045a0d1d75d2b8f04df01007a07512e5a92754ea461056a1143088aaf4c8",
-            "size": 14536
+            "sha256": "cc04cd31f10ddd3d03b55c57bca7e1245d0a526c8659255b3e704a3d0c5e7c47",
+            "size": 15451
           },
           "lwc/fcbEditOfferLineItemModal/fcbEditOfferLineItemModal.js": {
-            "sha256": "46eafd79908b366ea6050566ce3e83116bdca575095f32ca0631050cc1cd574d",
-            "size": 20599
+            "sha256": "258dcb634ff79d9f87aad77ba2f7d963337ee3662cf0a64fc3bf1a28a05b60d6",
+            "size": 22557
           },
           "lwc/fcbEditOfferLineItemModal/fcbEditOfferLineItemModal.js-meta.xml": {
             "sha256": "facac1b383dbf5f67c7fba58bdc8a771ba99166184fd5b9e3cf77eb26e992f4a",
@@ -28093,12 +28141,12 @@
             "size": 172
           },
           "lwc/fcbEditSupplierBidModal/fcbEditSupplierBidModal.html": {
-            "sha256": "c8b59198560ed043d822721c20df4c5bd22f187f0dd5c39e8238e285f1006b6a",
-            "size": 11156
+            "sha256": "e0dac2989415d2c0d11bd42ab6b7e86f1f9fa3044e4ceaf990bab95f1b069c3d",
+            "size": 11538
           },
           "lwc/fcbEditSupplierBidModal/fcbEditSupplierBidModal.js": {
-            "sha256": "697f3d68ea0a00868d8eed6f7628f4ac66e4fc4dd6a186efb7ce34d9c0873ef8",
-            "size": 18051
+            "sha256": "3b5083e902b9781f7798de16663b3392f4c57fed96703861efc629b77ac7f163",
+            "size": 19603
           },
           "lwc/fcbEditSupplierBidModal/fcbEditSupplierBidModal.js-meta.xml": {
             "sha256": "75c472b1559f1b2b64262aaf768b247ffc13613741e699fe87f0c828c5910205",
@@ -28181,8 +28229,8 @@
             "size": 22463
           },
           "lwc/fcbPromotedOfferLineItemExtraCosts/fcbPromotedOfferLineItemExtraCosts.js": {
-            "sha256": "a66218b962b995ac3a1a3b8362c6087830d2064a87108ec9ad474f33c43f43f9",
-            "size": 69345
+            "sha256": "873031dfd7b9c50fa7274db1cab40d67afe6d077941a5ef717546f31fd34f552",
+            "size": 70611
           },
           "lwc/fcbPromotedOfferLineItemExtraCosts/fcbPromotedOfferLineItemExtraCosts.js-meta.xml": {
             "sha256": "0865a63bdc35f991c10cb58cee0a395dbf3c01e5d319506ce50117fb2033696e",
@@ -28225,8 +28273,8 @@
             "size": 295
           },
           "lwc/fcbSupplierBidExtraCosts/fcbSupplierBidExtraCosts.html": {
-            "sha256": "271ee8ba2729cf59e914409b12a1d542fd466390e1426d416d2b1fa61e96a632",
-            "size": 18908
+            "sha256": "5c26d93bf6477a146a0eee20c6ea25247c6a36d575554c1d97c2cf75391cce3b",
+            "size": 18904
           },
           "lwc/fcbSupplierBidExtraCosts/fcbSupplierBidExtraCosts.js": {
             "sha256": "e69479aa422edb2f21329675ffbee2313f52a6b5077e1ba8a464435d1075f77a",
@@ -28309,8 +28357,8 @@
             "size": 6713
           },
           "lwc/fcosTradeCurrencyEditor/fcosTradeCurrencyEditor.js": {
-            "sha256": "981aa497ce2ede3148ac2d0fe38ae1e48db5765dc54ea2636b95f5085d3e1b72",
-            "size": 12322
+            "sha256": "744bd37d39867d8ad5da03856bde6d7a4fdf0e7a7dc8ab4d452f9c92d199487c",
+            "size": 14987
           },
           "lwc/fcosTradeCurrencyEditor/fcosTradeCurrencyEditor.js-meta.xml": {
             "sha256": "a1559fe03fcf9799fce9460c5cfc3b43110f8f820fda3c1fa4b93d986bfa86a8",
@@ -31613,8 +31661,8 @@
             "size": 7876
           },
           "profiles/Sales Support.profile-meta.xml": {
-            "sha256": "6b4b6c579320ffce9e03173d4f7173fa2c866b224d2a51fb026e456c07de8a7b",
-            "size": 151948
+            "sha256": "eb126ed0d3f6933adc36b75cb4920b6edba8303ac6a38b2b4344664883b140d8",
+            "size": 152089
           },
           "quickActions/Invoice__c.Finalize_Native_Proforma.quickAction-meta.xml": {
             "sha256": "29f670276215065291ccf4b42955e4278cbf2ae75d200898654b5ef7e6b267c3",
@@ -31677,8 +31725,8 @@
             "size": 178
           },
           "triggers/FcosTradeCurrencySideTrigger.trigger": {
-            "sha256": "8e7ae4ea2fe9b460ab54a2842ef3ad316024e7d7e381697d474d0d9fd61f57e6",
-            "size": 206
+            "sha256": "a983c0c150b6f2f5aff29a3f195474e1e5335e26815cf5d0cd2d90b030938494",
+            "size": 224
           },
           "triggers/FcosTradeCurrencySideTrigger.trigger-meta.xml": {
             "sha256": "3818dbe302a4fac9140d6748610634608f9cdce2e51193051a176011f5ea1599",
@@ -31973,55 +32021,55 @@
             "size": 178
           }
         },
-        "inventoryHash": "fe569a2159df5c3d16de22a7ac9bac78dfcc2106be5aa44a59fee3b0ce9f84ed",
+        "inventoryHash": "414ea522a1e5643f88c88127b26f82dc34e504f6aede9494fa59a5d0914d6710",
         "projected": true
       }
     }
   },
   "inventoryManifests": {
-    "9ffbbb9ffa49eac54ca0487d463107addaf9ecf72d6d9ee8dc604601c53d6ac0": {
+    "3ded03975ad5658fa0c8cd5649c7369cf205b3aec2ae4d698ebf726e8937d328": {
       "path": "manifest/invoice-trader-reminders-devee-stable.xml",
-      "sha256": "d5871b87a83a672616ef3ae46b3714db661372b08706f088b157cb2d71698c0b",
+      "sha256": "6f17e41fff8531fa9768715a561f07d55523ee61ab1753a9bd8a66f5d799327f",
       "metadata": {
         "path": "manifest/invoice-trader-reminders.xml",
         "sha256": "77b59e77d0c42a45d6dc5198848bbeba804ed87599946e8cbc9af17987992c89"
       }
     },
-    "10b4f7b61863efb5b0717793eb5a4191a423719bd4b64ac83f279fc5592070f1": {
+    "1932265857cb63e01b299385285117c30f1bfa546022c62d6938c6d5c5c8c9f3": {
       "path": "manifest/invoice-trader-reminders-devee-stable.xml",
-      "sha256": "d5871b87a83a672616ef3ae46b3714db661372b08706f088b157cb2d71698c0b",
+      "sha256": "6f17e41fff8531fa9768715a561f07d55523ee61ab1753a9bd8a66f5d799327f",
       "metadata": {
         "path": "manifest/invoice-trader-reminders.xml",
         "sha256": "77b59e77d0c42a45d6dc5198848bbeba804ed87599946e8cbc9af17987992c89"
       }
     },
-    "03f1febaecaad4f0b229f6ed715c627d94643ee6fe4d53cec60430ce94a51013": {
+    "081cb8399f19d5c9e601c76fa76fa4c25f7cc9242bf8a7b44132b2a65c39d1ff": {
       "path": "manifest/invoice-trader-reminders-qat-stable.xml",
-      "sha256": "d5871b87a83a672616ef3ae46b3714db661372b08706f088b157cb2d71698c0b",
+      "sha256": "6f17e41fff8531fa9768715a561f07d55523ee61ab1753a9bd8a66f5d799327f",
       "metadata": {
         "path": "manifest/invoice-trader-reminders.xml",
         "sha256": "77b59e77d0c42a45d6dc5198848bbeba804ed87599946e8cbc9af17987992c89"
       }
     },
-    "965d45c5490bd6587299f3a8eb6598766f7014b1e3220b45a47003e1dde5f093": {
+    "054c2938a61543eca605619ae96a88132a8fc360faffcfd1110522f1050e1e71": {
       "path": "manifest/invoice-trader-reminders-qat-stable.xml",
-      "sha256": "d5871b87a83a672616ef3ae46b3714db661372b08706f088b157cb2d71698c0b",
+      "sha256": "6f17e41fff8531fa9768715a561f07d55523ee61ab1753a9bd8a66f5d799327f",
       "metadata": {
         "path": "manifest/invoice-trader-reminders.xml",
         "sha256": "77b59e77d0c42a45d6dc5198848bbeba804ed87599946e8cbc9af17987992c89"
       }
     },
-    "68bccc8c4b0d9b1835adbf8bb016701bedbae7eca5551ea8952f7c35f9ebd349": {
+    "d04a4d3ce87aad088066444884ed22c18e17e998f0700232f9ed843eed619026": {
       "path": "manifest/invoice-trader-reminders-production-stable.xml",
-      "sha256": "1824e0655bcb892708452a90e5f84112561ba45c8b5b2f33e7d311d4e46da443",
+      "sha256": "256c8ec134a167c41b1d997d9f30444ec28ae66822b5664a755d2bc98529fba4",
       "metadata": {
         "path": "manifest/invoice-trader-reminders.xml",
         "sha256": "77b59e77d0c42a45d6dc5198848bbeba804ed87599946e8cbc9af17987992c89"
       }
     },
-    "fe569a2159df5c3d16de22a7ac9bac78dfcc2106be5aa44a59fee3b0ce9f84ed": {
+    "414ea522a1e5643f88c88127b26f82dc34e504f6aede9494fa59a5d0914d6710": {
       "path": "manifest/invoice-trader-reminders-production-stable.xml",
-      "sha256": "1824e0655bcb892708452a90e5f84112561ba45c8b5b2f33e7d311d4e46da443",
+      "sha256": "256c8ec134a167c41b1d997d9f30444ec28ae66822b5664a755d2bc98529fba4",
       "metadata": {
         "path": "manifest/invoice-trader-reminders.xml",
         "sha256": "77b59e77d0c42a45d6dc5198848bbeba804ed87599946e8cbc9af17987992c89"

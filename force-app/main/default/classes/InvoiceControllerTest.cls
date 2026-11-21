@@ -6,6 +6,44 @@ public class InvoiceControllerTest {
 	}
 
     @IsTest
+    static void restrictedSalesSupportCanReadInvoiceBlockerAndCaptureOneReminder() {
+        Profile profile = [SELECT Id, PermissionsViewAllData, PermissionsModifyAllData
+            FROM Profile WHERE Name = 'Sales Support' LIMIT 1];
+        System.assertEquals(false, profile.PermissionsViewAllData);
+        System.assertEquals(false, profile.PermissionsModifyAllData);
+        User accounts = makeReminderTrader('FCOS QA', 'Accounts CLI Only', 'accounts-cli-only-233');
+        accounts.ProfileId = profile.Id;
+        User trader = makeReminderTrader('Otto', 'Lai', 'accounts-cli-trader-233');
+        System.runAs(new User(Id = UserInfo.getUserId())) {
+            insert new List<User>{accounts, trader};
+            PermissionSet charges = [SELECT Id FROM PermissionSet WHERE Name = 'FCOS_Variable_Charges_User' LIMIT 1];
+            insert new PermissionSetAssignment(AssigneeId = accounts.Id, PermissionSetId = charges.Id);
+        }
+        InvoiceController.buyerChargeReminderFixtureTraderIds = new Set<Id>{trader.Id};
+        Id stemId = preparePendingBuyerChargeReminder('Otto Lai', 'Otto Lai', null);
+        String requestId = 'fcos-accounts-cli-233';
+        Test.startTest();
+        System.runAs(accounts) {
+            System.assertEquals(accounts.Id, UserInfo.getUserId());
+            VariableChargeInvoiceReadinessService.Readiness readiness = InvoiceController.getBuyerInvoiceTabReadiness(String.valueOf(stemId));
+            System.assertEquals(false, readiness.ready, readiness.reason);
+            System.assertEquals(true, readiness.pendingBuyerApproval, readiness.reason);
+            System.assertEquals('Buyer charge reminder sent.', InvoiceController.sendBuyerChargeReminder(String.valueOf(stemId), requestId));
+            Messaging.SingleEmailMessage captured = InvoiceController.capturedBuyerChargeReminder;
+            System.assertNotEquals(null, captured);
+            System.assertEquals(new List<String>{String.valueOf(trader.Id)}, captured.getToAddresses());
+            System.assert(captured.getPlainTextBody().contains(readiness.fcosUrl));
+            System.assert(captured.getPlainTextBody().contains('Test Supplier'));
+            InvoiceController.capturedBuyerChargeReminder = null;
+            System.assertEquals('Buyer charge reminder sent.', InvoiceController.sendBuyerChargeReminder(String.valueOf(stemId), requestId));
+            System.assertEquals(null, InvoiceController.capturedBuyerChargeReminder);
+            System.assertEquals(0, Limits.getEmailInvocations());
+        }
+        Test.stopTest();
+        System.assertEquals(1, [SELECT COUNT() FROM Task WHERE WhatId = :stemId AND CreatedById = :accounts.Id]);
+    }
+
+    @IsTest
     static void buyerChargeReminderEmailsExactTradersOnceAndReplaysTheCommittedResult() {
         User buyer = makeReminderTrader('Otto', 'Lai', 'buyer-reminder');
         User firstSupplier = makeReminderTrader('Stanley', 'Chui', 'first-supplier-reminder');
