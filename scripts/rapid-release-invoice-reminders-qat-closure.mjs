@@ -8,10 +8,10 @@ import { cliSalesforceProvider, loadReviewedSalesforcePlan } from './deploy-sale
 import { expectedManifest, sourceInventory } from './sync-salesforce-shared-repository.mjs';
 import { assertReviewedJobReport, reviewedCheckpointInventory, reviewedJobExpectations, verifyReviewedOrgInventory }
   from './lib/salesforce-reviewed-release.mjs';
-import { assertNativeHandoverState, nativeCompatibilityReader } from './lib/rapid-release/compatibility.mjs';
+import { SCHEMA_FINGERPRINT_SQL, verifyNativeHandoverDatabase, withPinnedReadOnlyDatabase } from './lib/rapid-release/compatibility.mjs';
 import { digest, git, isDigest, isSha, requireCondition as check, targets } from './lib/rapid-release/contract.mjs';
-import { appendReminderClosure, assertClosureApproval, isClosureOwner, original, productionEnvironment,
-  readStoppedReminder, reminderClosureJournal, verifyJournalBoundary, workflowPath, workflowTitle }
+import { appendReminderClosure, assertClosureApproval, assertClosureSchemaProof, isClosureOwner, original, productionEnvironment,
+  readStoppedReminder, reminderClosureJournal, schemaPins, verifyJournalBoundary, workflowPath, workflowTitle }
   from './lib/rapid-release/invoice-reminders-qat-closure.mjs';
 import { assertPermanentHandover, githubClient, nativeWorkflowPath, vercelProvider } from './lib/rapid-release/providers.mjs';
 import { authenticateHostedSalesforce } from './lib/rapid-release/salesforce-hosted-auth.mjs';
@@ -171,6 +171,77 @@ async function readSalesforce({ env, cwd, reviewed, checkpoints, goLive }) {
   }
 }
 
+// Reuse the catalog expression so every non-ACL field is hashed exactly as in the original release.
+const catalogExpression = SCHEMA_FINGERPRINT_SQL.slice(SCHEMA_FINGERPRINT_SQL.indexOf('jsonb_build_object('),
+  SCHEMA_FINGERPRINT_SQL.lastIndexOf("::text,'UTF8'")).trim();
+const storageEightiethMigrationProof = `with snapshot as materialized (select ${catalogExpression} as catalog),
+  live as materialized (
+    select catalog, encode(sha256(convert_to(catalog::text,'UTF8')),'hex') as observed from snapshot
+  ),
+  relation_entries as (
+    select entry, ord, entry->>0='storage' and entry->>1 in ('bucket_lifecycle_states','lifecycle_abandoned_artifacts') as selected
+    from live cross join lateral jsonb_array_elements(catalog->'relations') with ordinality items(entry,ord)
+    where live.observed=$1
+  ),
+  function_entries as (
+    select entry, ord, entry->>0='storage' and entry->>2 in ('storage.reconcile_lifecycle_state(text,boolean)',
+      'storage.delete_lifecycle_objects(uuid[])') as selected
+    from live cross join lateral jsonb_array_elements(catalog->'functions') with ordinality items(entry,ord)
+    where live.observed=$1
+  ),
+  relations as (
+    select count(*) filter (where selected)::int as selected,
+      count(*) filter (where selected and entry->>2='r' and entry->3='true'::jsonb and entry->4='false'::jsonb
+        and entry->5=$2::jsonb)::int as exact,
+      jsonb_agg(case when selected then jsonb_set(entry,'{5}',$3::jsonb) else entry end order by ord) as reconstructed
+    from relation_entries
+  ),
+  functions as (
+    select count(*) filter (where selected)::int as selected,
+      count(*) filter (where selected and entry->4=$4::jsonb)::int as exact,
+      jsonb_agg(case when selected then jsonb_set(entry,'{4}',$5::jsonb) else entry end order by ord) as reconstructed
+    from function_entries
+  )
+  select live.observed, relations.selected as relation_count, relations.exact as relation_matches,
+    functions.selected as function_count, functions.exact as function_matches,
+    case when live.observed=$1 and relations.selected=2 and relations.exact=2 and functions.selected=2 and functions.exact=2
+      then encode(sha256(convert_to(jsonb_set(jsonb_set(live.catalog,'{relations}',relations.reconstructed),
+        '{functions}',functions.reconstructed)::text,'UTF8')),'hex') else null end as historical
+  from live cross join relations cross join functions`;
+
+const tableOwnerAcl = 'supabase_storage_admin=arwdDxtm/supabase_storage_admin';
+const tableServiceAcl = 'service_role=arwdDxtm/supabase_storage_admin';
+const functionOwnerAcl = 'supabase_storage_admin=X/supabase_storage_admin';
+const functionServiceAcl = 'service_role=X/supabase_storage_admin';
+
+export async function readClosureSchema(db, approvedDigest) {
+  check(approvedDigest === schemaPins.approved && catalogExpression.startsWith('jsonb_build_object(')
+    && catalogExpression.endsWith(')'), 'REMINDER_CLOSURE_SCHEMA_BASELINE_MISMATCH');
+  const { rows } = await db.query(storageEightiethMigrationProof, [schemaPins.storageMigration80,
+    JSON.stringify([tableOwnerAcl, tableServiceAcl, 'postgres=r/supabase_storage_admin']),
+    JSON.stringify([tableOwnerAcl, 'postgres=arwdDxtm/supabase_storage_admin', tableServiceAcl]),
+    JSON.stringify([functionOwnerAcl, functionServiceAcl]),
+    JSON.stringify([functionOwnerAcl, 'postgres=X/supabase_storage_admin', functionServiceAcl]),
+  ]);
+  const [row] = rows;
+  check(rows.length === 1 && (row.observed === approvedDigest || row.observed === schemaPins.storageMigration80),
+    'REMINDER_CLOSURE_SCHEMA_LIVE_MISMATCH');
+  const drift = row.observed !== approvedDigest;
+  if (drift) {
+    check(row.relation_count === 2 && row.relation_matches === 2 && row.function_count === 2 && row.function_matches === 2,
+      'REMINDER_CLOSURE_STORAGE_ACL_SCOPE_MISMATCH');
+    check(row.historical === approvedDigest, 'REMINDER_CLOSURE_SCHEMA_RECONSTRUCTION_MISMATCH');
+  }
+  return assertClosureSchemaProof({ approved: approvedDigest, observed: row.observed,
+    historical: drift ? row.historical : row.observed, storageMigrationId: drift ? 80 : null });
+}
+
+function compareProductionPreimage(baseline, schemaProof, manifest) {
+  check(manifest.previous.schemaDigest === schemaProof.approved
+    && same(baseline, { ...manifest.previous, schemaDigest: schemaProof.observed }),
+  'REMINDER_CLOSURE_PRODUCTION_PREIMAGE_CHANGED');
+}
+
 async function verifyPreimage({ closure, env, handoverRecord }) {
   const cwd = join(process.cwd(), 'original-application');
   check(git(cwd, ['rev-parse', 'HEAD']) === original.candidate && !git(cwd, ['status', '--porcelain']),
@@ -186,25 +257,30 @@ async function verifyPreimage({ closure, env, handoverRecord }) {
   const handover = assertPermanentHandover(handoverRecord, manifest, original.ownerId);
   const provider = vercelProvider({ manifest, env });
   await provider.project();
-  const [alias, deployment, handoverEvidence] = await Promise.all([
-    nativeCompatibilityReader({ provider, env })({ manifest }), provider.rawDeployment(staged.id), assertNativeHandoverState({ handover, env }),
+  const [alias, configuration, deployment, { schemaProof, handoverEvidence }] = await Promise.all([
+    provider.currentProduction(), provider.nativeConfiguration(), provider.rawDeployment(staged.id),
+    withPinnedReadOnlyDatabase({ env }, async db => ({
+      schemaProof: await readClosureSchema(db, manifest.previous.schemaDigest),
+      handoverEvidence: await verifyNativeHandoverDatabase(db, handover),
+    })),
   ]);
-  const baseline = { sha: alias.sha, deploymentId: alias.currentDeploymentId, configurationDigest: alias.configurationDigest,
-    schemaDigest: alias.schemaDigest };
-  check(same(baseline, manifest.previous), 'REMINDER_CLOSURE_PRODUCTION_PREIMAGE_CHANGED');
+  const baseline = { sha: alias.sha, deploymentId: alias.id, configurationDigest: digest(configuration), schemaDigest: schemaProof.observed };
+  compareProductionPreimage(baseline, schemaProof, manifest);
   check(deployment.id === staged.id && deployment.readyState === 'READY' && deployment.aliasAssigned === false
     && deployment.meta?.githubCommitSha === staged.sha && deployment.meta.fcosRapidBuildId === staged.buildId
     && deployment.meta.fcosRapidArtifactDigest === staged.artifactDigest && deployment.meta.fcosRapidManifestHash === original.manifestHash
     && deployment.meta.fcosRapidOperationId === staged.operationId && `https://${deployment.url}` === staged.url,
   'REMINDER_CLOSURE_STAGED_DEPLOYMENT_CHANGED');
-  return { baseline, salesforce, mirror: mirrorEvidence, handoverEvidence, stagedDeploymentId: deployment.id,
+  return { baseline, schemaProof, salesforce, mirror: mirrorEvidence, handoverEvidence, stagedDeploymentId: deployment.id,
     stagedArtifactDigest: staged.artifactDigest, observedAt: new Date().toISOString() };
 }
 
 export function verifyFreshEvidence({ stamp, evidence }, expectedStamp, manifest) {
+  const schemaProof = assertClosureSchemaProof(evidence?.schemaProof);
+  compareProductionPreimage(evidence.baseline, schemaProof, manifest);
   const observed = Date.parse(evidence?.observedAt);
   check(same(stamp, expectedStamp) && observed <= Date.now() && Date.now() - observed < 180_000
-    && same(evidence.baseline, manifest.previous) && evidence.mirror?.commit === original.mirrorCommit
+    && evidence.mirror?.commit === original.mirrorCommit
     && evidence.mirror.pullRequest === original.mirrorPullRequest && isSha(evidence.mirror.tree)
     && evidence.mirror.sourceTreeHash === original.sourceTreeHash && evidence.stagedDeploymentId === original.stagedDeploymentId
     && evidence.stagedArtifactDigest === original.stagedArtifactDigest && isDigest(evidence.handoverEvidence?.evidenceDigest)
@@ -239,7 +315,8 @@ async function main(env) {
     return boundary.receipt && boundary.receipt.payload.data.closureRunId !== run.id
       ? readStoppedReminder(github, journal, run.id) : boundary;
   };
-  const receipt = await appendReminderClosure({ read, journal, evidenceDigest: digest(saved.evidence), closureRunId: run.id });
+  const receipt = await appendReminderClosure({ read, journal, evidenceDigest: digest(saved.evidence), closureRunId: run.id,
+    schemaProof: saved.evidence.schemaProof });
   return { ...summary, receiptId: receipt.id };
 }
 

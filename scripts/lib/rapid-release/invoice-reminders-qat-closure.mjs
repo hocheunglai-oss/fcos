@@ -8,6 +8,10 @@ import { assertFrozenWorkflow, nativeWorkflowPath } from './providers.mjs';
 export const workflowPath = '.github/workflows/fcos-rapid-invoice-reminders-qat-closure.yml';
 export const workflowTitle = 'Close stopped FCOS Invoice Reminders QAT validation';
 export const productionEnvironment = Object.freeze({ id: 23178773471, name: 'fcos-production-release' });
+export const schemaPins = Object.freeze({
+  approved: '1a269959f2cc8ea07b8b440f3421ec8c230cab11b07c8b28b3fa025e745af413',
+  storageMigration80: 'dcfa6fea815dacc3c75c8249d8651d1e7c2cb8713bf19106cca563bcb7246a4f',
+});
 export const original = Object.freeze({
   runId: 44908835387,
   repositoryId: 1278654816,
@@ -49,11 +53,21 @@ export function assertClosureApproval(approvals) {
     'REMINDER_CLOSURE_NATIVE_APPROVAL_REQUIRED');
 }
 
-export function closureResult({ evidenceDigest, closureRunId }) {
+export function assertClosureSchemaProof(proof) {
+  check(proof?.approved === schemaPins.approved && proof.historical === schemaPins.approved
+    && (proof.observed === schemaPins.approved && proof.storageMigrationId === null
+      || proof.observed === schemaPins.storageMigration80 && proof.storageMigrationId === 80),
+  'REMINDER_CLOSURE_SCHEMA_PROOF_MISMATCH');
+  const { approved, observed, historical, storageMigrationId } = proof;
+  return { approved, observed, historical, storageMigrationId };
+}
+
+export function closureResult({ evidenceDigest, closureRunId, schemaProof }) {
   check(isDigest(evidenceDigest) && Number.isSafeInteger(closureRunId) && closureRunId > 0,
     'REMINDER_CLOSURE_EVIDENCE_INVALID');
   return {
     operationId, outcome: 'stopped_invoice_reminders_qat_validation_failed', closureRunId, evidenceDigest,
+    schemaProof: assertClosureSchemaProof(schemaProof),
     originalHead: original.head, originalRunId: original.runId, approvalReceiptId: original.approvalReceiptId,
     stagedDeploymentId: original.stagedDeploymentId, salesforceFingerprint: original.fingerprint,
     salesforceSourceTreeHash: original.sourceTreeHash, deveeValidationJobId: original.deveeValidationId,
@@ -219,10 +233,10 @@ export function reminderClosureJournal(github) {
     actorIds: [original.ownerId, original.botId] });
 }
 
-export async function appendReminderClosure({ read, journal, evidenceDigest, closureRunId }) {
+export async function appendReminderClosure({ read, journal, evidenceDigest, closureRunId, schemaProof }) {
   const { receipt } = await read();
   if (receipt) return receipt;
-  const data = closureResult({ evidenceDigest, closureRunId });
+  const data = closureResult({ evidenceDigest, closureRunId, schemaProof });
   try {
     await journal.append('prerequisites.result', data, { expectedPreviousHash: original.head });
   } catch (error) {

@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
 import { appendReminderClosure, assertClosureApproval, closureResult, original, productionEnvironment,
-  reminderClosureJournal, verifyJournalBoundary } from '../scripts/lib/rapid-release/invoice-reminders-qat-closure.mjs';
-import { assertTerminalQatReport, readTerminalQatReport, verifyFreshEvidence }
+  reminderClosureJournal, schemaPins, verifyJournalBoundary } from '../scripts/lib/rapid-release/invoice-reminders-qat-closure.mjs';
+import { assertTerminalQatReport, readClosureSchema, readTerminalQatReport, verifyFreshEvidence }
   from '../scripts/rapid-release-invoice-reminders-qat-closure.mjs';
 
 const evidenceDigest = 'a'.repeat(64);
@@ -11,7 +11,11 @@ const closureRunId = 44910000000;
 const owner = { id: original.ownerId, login: 'hocheunglai-oss' };
 const bot = { id: original.botId, login: 'github-actions[bot]' };
 const completedAt = '2026-11-21T13:54:23Z';
-const result = closureResult({ evidenceDigest, closureRunId });
+const unchangedSchema = { approved: schemaPins.approved, observed: schemaPins.approved, historical: schemaPins.approved,
+  storageMigrationId: null };
+const verifiedStorageDrift = { ...unchangedSchema, observed: schemaPins.storageMigration80, storageMigrationId: 80 };
+const closureInputs = { evidenceDigest, closureRunId, schemaProof: unchangedSchema };
+const result = closureResult(closureInputs);
 
 const event = (name, data, creator = bot) => ({
   sha: original.candidate, ref: original.candidate, task: 'fcos-release-journal', environment: 'fcos-release-journal-v1',
@@ -73,9 +77,9 @@ test('two native Deployment objects cannot be mistaken for one journal result', 
 });
 
 test('preflight must still bind the exact approved live schema and be recent', () => {
-  const baseline = { sha: 'b'.repeat(40), deploymentId: 'dpl_previous', configurationDigest: 'c'.repeat(64), schemaDigest: 'd'.repeat(64) };
+  const baseline = { sha: 'b'.repeat(40), deploymentId: 'dpl_previous', configurationDigest: 'c'.repeat(64), schemaDigest: schemaPins.approved };
   const stamp = { runId: closureRunId, attempt: 1, source: 'e'.repeat(40), journalHead: original.head };
-  const evidence = { baseline, observedAt: new Date().toISOString(), stagedDeploymentId: original.stagedDeploymentId,
+  const evidence = { baseline, schemaProof: unchangedSchema, observedAt: new Date().toISOString(), stagedDeploymentId: original.stagedDeploymentId,
     stagedArtifactDigest: original.stagedArtifactDigest, handoverEvidence: { evidenceDigest },
     mirror: { commit: original.mirrorCommit, pullRequest: original.mirrorPullRequest, tree: 'f'.repeat(40), sourceTreeHash: original.sourceTreeHash },
     salesforce: { deveeValidationDigest: evidenceDigest, deveeDeploymentDigest: evidenceDigest,
@@ -87,9 +91,50 @@ test('preflight must still bind the exact approved live schema and be recent', (
   const preflight = { stamp, evidence };
   assert.doesNotThrow(() => verifyFreshEvidence(preflight, stamp, { previous: baseline }));
   assert.throws(() => verifyFreshEvidence(preflight, stamp, { previous: { ...baseline, schemaDigest: evidenceDigest } }),
-    /REMINDER_CLOSURE_FRESH_PREFLIGHT_REQUIRED/u);
+    /REMINDER_CLOSURE_PRODUCTION_PREIMAGE_CHANGED/u);
+  assert.throws(() => verifyFreshEvidence({ stamp, evidence: { ...evidence, baseline: { ...baseline, schemaDigest: schemaPins.storageMigration80 } } },
+    stamp, { previous: baseline }), /REMINDER_CLOSURE_PRODUCTION_PREIMAGE_CHANGED/u);
+  assert.doesNotThrow(() => verifyFreshEvidence({ stamp, evidence: { ...evidence, schemaProof: verifiedStorageDrift,
+    baseline: { ...baseline, schemaDigest: schemaPins.storageMigration80 } } }, stamp, { previous: baseline }));
   assert.throws(() => verifyFreshEvidence({ stamp, evidence: { ...evidence, observedAt: '2020-01-01T00:00:00Z' } }, stamp,
     { previous: baseline }), /REMINDER_CLOSURE_FRESH_PREFLIGHT_REQUIRED/u);
+});
+
+test('the unchanged approved catalog passes without a Storage migration exception', async () => {
+  const db = { query: async () => ({ rows: [{ observed: schemaPins.approved, historical: null }] }) };
+  assert.deepEqual(await readClosureSchema(db, schemaPins.approved), unchangedSchema);
+});
+
+const storageMigrationReadback = { observed: schemaPins.storageMigration80, historical: schemaPins.approved,
+  relation_count: 2, relation_matches: 2, function_count: 2, function_matches: 2 };
+
+test('only the four observed Storage ACL entries reconstruct the exact original catalog', async () => {
+  const db = { query: async (sql, inputs) => {
+    assert.match(sql, /^with snapshot as materialized \(select jsonb_build_object\(/u);
+    assert.match(sql, /storage\.reconcile_lifecycle_state\(text,boolean\)/u);
+    assert.match(sql, /storage\.delete_lifecycle_objects\(uuid\[\]\)/u);
+    assert.match(sql, /'bucket_lifecycle_states','lifecycle_abandoned_artifacts'/u);
+    assert.equal(inputs[0], schemaPins.storageMigration80);
+    assert.deepEqual(JSON.parse(inputs[3]), ['supabase_storage_admin=X/supabase_storage_admin', 'service_role=X/supabase_storage_admin']);
+    return { rows: [storageMigrationReadback] };
+  } };
+  assert.deepEqual(await readClosureSchema(db, schemaPins.approved), verifiedStorageDrift);
+  assert.deepEqual(closureResult({ ...closureInputs, schemaProof: verifiedStorageDrift }).schemaProof, verifiedStorageDrift);
+});
+
+test('an unknown catalog fingerprint, reconstruction, or ACL selector refuses the closure', async () => {
+  const changes = [
+    [{ observed: evidenceDigest }, /REMINDER_CLOSURE_SCHEMA_LIVE_MISMATCH/u],
+    [{ historical: evidenceDigest }, /REMINDER_CLOSURE_SCHEMA_RECONSTRUCTION_MISMATCH/u],
+    [{ relation_matches: 1 }, /REMINDER_CLOSURE_STORAGE_ACL_SCOPE_MISMATCH/u],
+    [{ function_count: 3 }, /REMINDER_CLOSURE_STORAGE_ACL_SCOPE_MISMATCH/u],
+  ];
+  for (const [change, failure] of changes) {
+    const db = { query: async () => ({ rows: [{ ...storageMigrationReadback, ...change }] }) };
+    await assert.rejects(readClosureSchema(db, schemaPins.approved), failure);
+  }
+  const unreadable = { query: async () => { throw new Error('Unexpected query'); } };
+  await assert.rejects(readClosureSchema(unreadable, evidenceDigest), /REMINDER_CLOSURE_SCHEMA_BASELINE_MISMATCH/u);
 });
 
 const nativeFailure = {
@@ -132,8 +177,8 @@ test('readback resolves a lost append acknowledgement and a later call is idempo
     receipt = savedReceipt(data);
     throw new Error('transport dropped the acknowledgement');
   } };
-  assert.equal(await appendReminderClosure({ read, journal, evidenceDigest, closureRunId }), receipt);
-  assert.equal(await appendReminderClosure({ read, journal, evidenceDigest, closureRunId }), receipt);
+  assert.equal(await appendReminderClosure({ read, journal, ...closureInputs }), receipt);
+  assert.equal(await appendReminderClosure({ read, journal, ...closureInputs }), receipt);
   assert.equal(writes, 1);
 });
 
@@ -148,7 +193,7 @@ test('an unknown append is reported after one readback and is never submitted tw
     writes += 1;
     throw new Error('transport failed');
   } };
-  await assert.rejects(appendReminderClosure({ read, journal, evidenceDigest, closureRunId }),
+  await assert.rejects(appendReminderClosure({ read, journal, ...closureInputs }),
     /REMINDER_CLOSURE_APPEND_OUTCOME_UNCERTAIN/u);
   assert.deepEqual([reads, writes], [2, 1]);
 });
@@ -164,6 +209,6 @@ test('an advanced journal head stops the closure without a second append', async
     writes += 1;
     throw new Error('JOURNAL_ADVANCED');
   } };
-  await assert.rejects(appendReminderClosure({ read, journal, evidenceDigest, closureRunId }), /JOURNAL_ADVANCED/u);
+  await assert.rejects(appendReminderClosure({ read, journal, ...closureInputs }), /JOURNAL_ADVANCED/u);
   assert.deepEqual([reads, writes], [1, 1]);
 });
