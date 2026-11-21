@@ -1975,9 +1975,50 @@ test('schema-free Lightning and Apex can verify a projected final inventory with
   altered.inventoryManifests[newHash] = retrieval;
   assert.throws(() => create(altered), /outside the reviewed transition/u);
   assert.throws(() => create({ ...review, nativeProjection: 'any-metadata' }), /explicit Lightning package/u);
+  assert.throws(() => create({ ...review, nativeProjection: 'schema-free-permission-set' }), /permission-set-only package/u);
   const fakeBootstrap = structuredClone(review);
   fakeBootstrap.nativeInventories.devee.bootstrap = rawBaseline;
   assert.throws(() => create(fakeBootstrap), /matching post-write checkpoint modes/u);
+});
+
+test('permission-only native projection preserves the raw baseline and unrelated file pins', () => {
+  const id = 'PermissionSet:Reviewed';
+  const permission = 'permissionsets/Reviewed.permissionset-meta.xml';
+  const unrelated = 'classes/Example.cls';
+  const baselineInventory = inventoryFromFiles({ ...files, [permission]: Buffer.from('<PermissionSet/>\n') });
+  const finalInventory = inventoryFromFiles({ ...files, [permission]: Buffer.from('<PermissionSet><label>Reviewed</label></PermissionSet>\n') });
+  const manifestBytes = packageXml([id]);
+  const raw = { files: baselineInventory.files, inventoryHash: baselineInventory.inventoryHash };
+  const stableFiles = Object.fromEntries(Object.keys(files).map(name => [name, baselineInventory.files[name]]));
+  const final = { projected: true, files: stableFiles, inventoryHash: projectedNativeInventoryHash(stableFiles, [permission]) };
+  const retrieval = { path: 'manifest/stable.xml', sha256: hash('stable'), metadata: { path: 'manifest/permission.xml', sha256: hash(manifestBytes) } };
+  const review = {
+    schemaVersion: 1, releaseMode: REVIEWED_SALESFORCE_MODE, baselineMode: INVENTORY_BASELINE_MODE,
+    sourceTreeHash: finalInventory.sourceTreeHash, manifestSha256: hash(manifestBytes), baselineCommit: 'a'.repeat(40),
+    baselineSourceTreeHash: baselineInventory.sourceTreeHash, baselineInventoryHash: baselineInventory.inventoryHash,
+    components: [{ id, files: [permission], dependsOn: [] }],
+    dependencyReview: { complete: true, reviewer: 'reviewer', evidence: 'reviewed permission fixture' },
+    testPlan: { level: 'RunSpecifiedTests', tests: ['ExampleTest'], minimumTests: 1 },
+    nativeProjection: 'schema-free-permission-set',
+    nativeInventories: Object.fromEntries(policy.environments.map(({ key, orgId }) => [key, { orgId, baseline: raw, final }])),
+    inventoryManifests: { [raw.inventoryHash]: retrieval, [final.inventoryHash]: retrieval },
+  };
+  const create = descriptor => createReviewedSalesforcePlan({ review: descriptor, baselineInventory, finalInventory, manifestBytes, policy });
+  const plan = create(review);
+  assert.deepEqual(plan.changedFiles, [permission]);
+  assert.deepEqual(plan.binding.permissionSets, []);
+  assert.equal(plan.binding.bootstrapSha256, null);
+  assert.deepEqual(plan.nativeInventories.devee.baseline.files, baselineInventory.files);
+  assert.deepEqual(plan.nativeInventories.devee.final.projectionPaths, [permission]);
+  assert.throws(() => create({ ...review, permissionSets: ['Reviewed'] }), /permission assignments/u);
+  assert.throws(() => create({ ...review, nativeInventories: undefined }), /permission-set native projection/u);
+  const altered = structuredClone(review);
+  altered.nativeInventories.devee.final = structuredClone(final);
+  altered.nativeInventories.devee.final.files[unrelated].sha256 = hash('changed outside the permission set');
+  const alteredHash = projectedNativeInventoryHash(altered.nativeInventories.devee.final.files, [permission]);
+  altered.nativeInventories.devee.final.inventoryHash = alteredHash;
+  altered.inventoryManifests[alteredHash] = retrieval;
+  assert.throws(() => create(altered), /outside the reviewed transition/u);
 });
 
 test('only the exact extended Editors desktop review may project the currency side trigger', () => {
