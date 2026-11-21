@@ -4,13 +4,50 @@ import { readFileSync } from 'node:fs';
 import {
   HSFO_VLSFO_MT_PER_KL,
   LSMGO_MT_PER_KL,
+  addDashboardMetricTonQuantity,
   dashboardLineItemVolume,
+  dashboardMetricTonQuantity,
   dashboardMtPerKl,
   dashboardVolumeLabel,
   findDashboardUomField,
   normalizeDashboardVolume,
   resolveDashboardItemUom,
 } from '../api/_dashboardVolume.js';
+
+test('pail quantities retain their own units when mass is missing', () => {
+  const options = { lineItemUomField: 'UOM__c', fallbackQuantity: 900 };
+  const ordered = dashboardLineItemVolume({ UOM__c: 'pails', Quantity__c: 10, Quantity_Max__c: 20, Is_Quantity_Range__c: true, Quantity_Delivered_Per_BDN__c: 12 }, false, options);
+  assert.deepEqual(ordered, { quantity: 15, unitOfMeasure: 'PAILS', minimum: 10, maximum: 20, isRange: true });
+  assert.equal(dashboardVolumeLabel(ordered), '10-20 PAILS');
+  const delivered = dashboardLineItemVolume({ UOM__c: 'PAIL', Quantity__c: 10, Quantity_Delivered_Per_BDN__c: 12 }, true, options);
+  assert.equal(dashboardVolumeLabel(delivered), '12 PAIL');
+  assert.equal(dashboardMetricTonQuantity(delivered), null);
+  const absent = dashboardLineItemVolume({ UOM__c: 'PAIL' }, true, options);
+  assert.equal(absent.quantity, null);
+  assert.equal(dashboardVolumeLabel(absent), 'Unavailable PAIL');
+});
+
+test('pail mass uses the explicit Salesforce mass including zero', () => {
+  for (const mass of [1.25, 0]) {
+    const volume = dashboardLineItemVolume({ UOM__c: 'PAILS', Quantity__c: 10, Quantity_in_MT__c: mass }, false, { lineItemUomField: 'UOM__c', fallbackQuantity: 10 });
+    assert.equal(volume.quantity, mass);
+    assert.equal(volume.unitOfMeasure, 'MT');
+    assert.equal(dashboardMetricTonQuantity(volume), mass);
+  }
+});
+
+test('metric ton aggregation preserves known zero and propagates missing mass', () => {
+  assert.equal(addDashboardMetricTonQuantity(0, 0), 0);
+  assert.equal(addDashboardMetricTonQuantity(0, dashboardMetricTonQuantity({ unitOfMeasure: 'MT', quantity: 3 })), 3);
+  assert.equal(addDashboardMetricTonQuantity(3, dashboardMetricTonQuantity({ unitOfMeasure: 'PAILS', quantity: 5 })), null);
+  assert.equal(addDashboardMetricTonQuantity(null, 3), null);
+  assert.equal(dashboardMetricTonQuantity({ unitOfMeasure: 'MT', quantity: null }), null);
+});
+
+test('unrecognized unit aliases retain their existing fallback behavior', () => {
+  const volume = dashboardLineItemVolume({ UOM__c: 'BUCKET', Quantity__c: 7 }, false, { lineItemUomField: 'UOM__c', fallbackQuantity: 7 });
+  assert.equal(dashboardVolumeLabel(volume), '7 MT');
+});
 
 const apiSource = readFileSync(new URL('../api/functions/[name].js', import.meta.url), 'utf8');
 const dashboardSource = readFileSync(new URL('../src/pages/DashboardSettings.jsx', import.meta.url), 'utf8');

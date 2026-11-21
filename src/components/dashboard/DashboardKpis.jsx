@@ -130,6 +130,7 @@ function ProductVolumeCard({ productVolume, asOf, warnings = [] }) {
   return <KpiCard>
     <div className="flex items-start justify-between gap-2"><h2 className="text-[13px] font-medium text-muted-foreground">Product Volume</h2><CalculationEvidence title="Product volume" value={display} complete={quantity != null} formula="Ordered quantity until delivery; then BDN quantity. Compatible units only." sources={EVIDENCE_SOURCES} warnings={warnings} asOf={asOf} /></div>
     <p className={`mt-3 text-[22px] font-semibold leading-7 tabular-nums ${quantity == null ? 'text-muted-foreground' : ''}`}>{display}</p>
+    {productVolume?.packageMassMissing ? <p className="mt-1 text-xs text-muted-foreground">Tonnage is unavailable for some package quantities.</p> : null}
     <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">{(productVolume?.breakdown || []).map((item) => <span key={`${item.family}:${item.unitOfMeasure}`} className="inline-flex items-center gap-1.5 text-[11px]"><span className={`h-2 w-2 shrink-0 rounded-sm ${PRODUCT_COLORS[String(item.family).toUpperCase()] || 'bg-slate-500'}`} />{item.family} {number(item.quantity)?.toLocaleString(undefined, { maximumFractionDigits: 2 }) ?? 'Unavailable'} {item.unitOfMeasure || 'MT'}</span>)}</div>
   </KpiCard>;
 }

@@ -1,4 +1,4 @@
-import { dashboardLineItemVolume, resolveDashboardItemUom } from './_dashboardVolume.js';
+import { dashboardLineItemVolume, dashboardMetricTonQuantity, addDashboardMetricTonQuantity, resolveDashboardItemUom } from './_dashboardVolume.js';
 import { SALESFORCE_CORPORATE_CURRENCY, decisionDashboardSupplierAmount } from './_decisionDashboard.js';
 import { grossMarginPercent } from './_dashboardMetrics.js';
 import { isBuyerCreditNote, isFinalBuyerInvoice, resolveBuyerFinancialAmount } from './_buyerFinancialAmount.js';
@@ -436,7 +436,7 @@ function summarizeRows(rows, { today, allHistory = false } = {}) {
     if (key) {
       const bucket = trend.get(key) || { period: key, stems: 0, volumeMt: 0, turnover: 0, spend: 0, grossProfit: 0 };
       bucket.stems += 1;
-      bucket.volumeMt += valueOrZero(row.volumeMt);
+      bucket.volumeMt = addDashboardMetricTonQuantity(bucket.volumeMt, row.volumeMt);
       bucket.turnover += valueOrZero(row.turnover);
       bucket.spend += valueOrZero(row.spend);
       bucket.grossProfit += valueOrZero(row.grossProfit);
@@ -445,7 +445,7 @@ function summarizeRows(rows, { today, allHistory = false } = {}) {
       const byPeriod = currencyTrends.get(currency) || new Map();
       const currencyBucket = byPeriod.get(key) || { period: key, stems: 0, volumeMt: 0, turnover: 0, spend: 0, grossProfit: 0 };
       currencyBucket.stems += 1;
-      currencyBucket.volumeMt += valueOrZero(row.volumeMt);
+      currencyBucket.volumeMt = addDashboardMetricTonQuantity(currencyBucket.volumeMt, row.volumeMt);
       currencyBucket.turnover += valueOrZero(row.turnover);
       currencyBucket.spend += valueOrZero(row.spend);
       currencyBucket.grossProfit += valueOrZero(row.grossProfit);
@@ -485,7 +485,8 @@ function summarizeRows(rows, { today, allHistory = false } = {}) {
     if (row.portCountry) addMapAmount(countries, row.portCountry, row.volumeMt || 1);
     if (row.vesselName) addMapAmount(vessels, row.vesselName, row.volumeMt || 1);
   }
-  const totalVolume = financialRows.reduce((sum, row) => sum + valueOrZero(row.volumeMt), 0);
+  const totalVolume = financialRows.reduce((sum, row) => addDashboardMetricTonQuantity(sum, row.volumeMt), 0);
+  const missingVolumeStemCount = financialRows.filter((row) => row.volumeMt == null).length;
   const totalActivity = totalVolume || financialRows.length;
   const vesselCounts = new Map();
   for (const row of financialRows) if (row.vesselName) vesselCounts.set(row.vesselName, (vesselCounts.get(row.vesselName) || 0) + 1);
@@ -514,12 +515,13 @@ function summarizeRows(rows, { today, allHistory = false } = {}) {
   const grossProfitTotal = singleCurrency?.grossProfit ?? null;
   const comparableTrend = moneyByCurrency.length <= 1 ? [...trend.values()] : [];
   const deliveredVolumeRows = financialRows.filter((row) => row.deliveryDate);
-  const orderedVolumeMt = deliveredVolumeRows.reduce((sum, row) => sum + valueOrZero(row.orderedVolumeMt), 0);
-  const deliveredVolumeMt = deliveredVolumeRows.reduce((sum, row) => sum + valueOrZero(row.deliveredVolumeMt), 0);
+  const orderedVolumeMt = deliveredVolumeRows.reduce((sum, row) => addDashboardMetricTonQuantity(sum, row.orderedVolumeMt), 0);
+  const deliveredVolumeMt = deliveredVolumeRows.reduce((sum, row) => addDashboardMetricTonQuantity(sum, row.deliveredVolumeMt), 0);
+  const missingDeliveryVolumeStemCount = deliveredVolumeRows.filter((row) => row.orderedVolumeMt == null || row.deliveredVolumeMt == null).length;
   const sortedTrend = [...trend.values()].sort((left, right) => left.period.localeCompare(right.period));
-  const peakPeriod = [...sortedTrend].sort((left, right) => right.volumeMt - left.volumeMt || left.period.localeCompare(right.period))[0] || null;
-  const topProducts = topDistribution(products, totalVolume);
-  const topPorts = topDistribution(ports, totalActivity);
+  const peakPeriod = totalVolume == null ? null : [...sortedTrend].sort((left, right) => right.volumeMt - left.volumeMt || left.period.localeCompare(right.period))[0] || null;
+  const topProducts = totalVolume == null ? [] : topDistribution(products, totalVolume);
+  const topPorts = totalVolume == null ? [] : topDistribution(ports, totalActivity);
   return {
     stemCount: rows.length,
     deliveredStems: rows.filter((row) => row.deliveryDate && !row.cancelled).length,
@@ -537,12 +539,14 @@ function summarizeRows(rows, { today, allHistory = false } = {}) {
     averageStemsPerActiveMonth: months.size ? rows.length / months.size : null,
     peakPeriod,
     totalVolumeMt: totalVolume,
-    averageVolumeMt: financialRows.length ? totalVolume / financialRows.length : null,
-    medianVolumeMt: median(financialRows.map((row) => row.volumeMt)),
+    missingVolumeStemCount,
+    missingDeliveryVolumeStemCount,
+    averageVolumeMt: financialRows.length && totalVolume != null ? totalVolume / financialRows.length : null,
+    medianVolumeMt: totalVolume == null ? null : median(financialRows.map((row) => row.volumeMt)),
     orderedVolumeMt,
     deliveredVolumeMt,
-    quantityVarianceMt: deliveredVolumeMt - orderedVolumeMt,
-    underDeliveryRatePct: percentage(deliveredVolumeRows.filter((row) => valueOrZero(row.deliveredVolumeMt) + ZERO_TOLERANCE < valueOrZero(row.orderedVolumeMt)).length, deliveredVolumeRows.length),
+    quantityVarianceMt: deliveredVolumeMt == null || orderedVolumeMt == null ? null : deliveredVolumeMt - orderedVolumeMt,
+    underDeliveryRatePct: deliveredVolumeMt == null || orderedVolumeMt == null ? null : percentage(deliveredVolumeRows.filter((row) => valueOrZero(row.deliveredVolumeMt) + ZERO_TOLERANCE < valueOrZero(row.orderedVolumeMt)).length, deliveredVolumeRows.length),
     turnover,
     supplierSpend: spend,
     moneyByCurrency,
@@ -577,10 +581,10 @@ function summarizeRows(rows, { today, allHistory = false } = {}) {
     hedgedStems: financialRows.filter((row) => row.hedgeLinked).length,
     hedgeCoveragePct: percentage(financialRows.filter((row) => row.hedgeLinked).length, financialRows.length),
     topProducts,
-    productMix: topDistribution(families, totalVolume),
+    productMix: totalVolume == null ? [] : topDistribution(families, totalVolume),
     topPorts,
-    topCountries: topDistribution(countries, totalActivity),
-    topVessels: topDistribution(vessels, totalActivity),
+    topCountries: totalVolume == null ? [] : topDistribution(countries, totalActivity),
+    topVessels: totalVolume == null ? [] : topDistribution(vessels, totalActivity),
     topOneProductConcentrationPct: topProducts[0]?.percentage ?? null,
     topThreeProductConcentrationPct: topProducts.slice(0, 3).reduce((sum, row) => sum + valueOrZero(row.percentage), 0) || null,
     topOnePortConcentrationPct: topPorts[0]?.percentage ?? null,
@@ -838,7 +842,7 @@ function buildStemFinancialRow(stem, context) {
       fallbackQuantity: financialQuantity(item, stemHasDelivery),
       productFamily: family,
     });
-    volumeMt += valueOrZero(volume.quantity);
+    volumeMt = addDashboardMetricTonQuantity(volumeMt, dashboardMetricTonQuantity(volume));
     const orderedVolume = dashboardLineItemVolume(item, false, {
       lineItemUomField: context.lineItemUomField,
       productUomField: context.productUomField,
@@ -851,13 +855,13 @@ function buildStemFinancialRow(stem, context) {
       fallbackQuantity: item.Quantity_Delivered_Per_BDN__c,
       productFamily: family,
     });
-    orderedVolumeMt += valueOrZero(orderedVolume.quantity);
-    deliveredVolumeMt += valueOrZero(deliveredVolume?.quantity);
+    orderedVolumeMt = addDashboardMetricTonQuantity(orderedVolumeMt, dashboardMetricTonQuantity(orderedVolume));
+    deliveredVolumeMt = addDashboardMetricTonQuantity(deliveredVolumeMt, deliveredVolume ? dashboardMetricTonQuantity(deliveredVolume) : (dashboardMetricTonQuantity(orderedVolume) == null ? null : 0));
     if (!item.Supplier_Invoice__c) uninvoicedCost += lineBuyAmount(item, stemHasDelivery);
     products.push({
       name: productName(item),
       family,
-      volumeMt: valueOrZero(volume.quantity),
+      volumeMt: dashboardMetricTonQuantity(volume),
       unitOfMeasure: volume.unitOfMeasure,
       originalUom: resolveDashboardItemUom(item, { lineItemUomField: context.lineItemUomField, productUomField: context.productUomField }) || 'UOM not set',
       nativeQuantity: financialQuantity(item, stemHasDelivery),
@@ -917,7 +921,7 @@ function buildStemFinancialRow(stem, context) {
     volumeMt,
     orderedVolumeMt,
     deliveredVolumeMt,
-    quantityVarianceMt: stemHasDelivery || deliveredVolumeMt > 0 ? deliveredVolumeMt - orderedVolumeMt : null,
+    quantityVarianceMt: (stemHasDelivery || deliveredVolumeMt > 0) && deliveredVolumeMt != null && orderedVolumeMt != null ? deliveredVolumeMt - orderedVolumeMt : null,
     invoiceAmount: buyer,
     invoiceValueSource: buyerResolution.source === 'issued_invoice'
       ? 'invoiced'
@@ -1001,7 +1005,7 @@ export function buildDashboardAccountInsight(dataset, {
     && summary.moneyByCurrency[0].currency === previous.moneyByCurrency[0].currency;
   const comparisons = previousRows.length ? {
     stemCountPct: percentage(summary.stemCount - previous.stemCount, previous.stemCount),
-    volumePct: percentage(summary.totalVolumeMt - previous.totalVolumeMt, previous.totalVolumeMt),
+    volumePct: summary.totalVolumeMt == null || previous.totalVolumeMt == null ? null : percentage(summary.totalVolumeMt - previous.totalVolumeMt, previous.totalVolumeMt),
     turnoverPct: comparisonCurrencyCompatible ? percentage(summary.turnover - previous.turnover, previous.turnover) : null,
     spendPct: comparisonCurrencyCompatible ? percentage(summary.supplierSpend - previous.supplierSpend, previous.supplierSpend) : null,
     grossProfitPct: comparisonCurrencyCompatible ? percentage(summary.grossProfit - previous.grossProfit, Math.abs(previous.grossProfit)) : null,
@@ -1108,6 +1112,8 @@ export function buildDashboardAccountInsight(dataset, {
   }).length;
   const missingFinancialUomCount = missingLineItemUomCount + missingExtraCostUomCount;
   const warnings = unique([
+    ...(summary.missingVolumeStemCount ? [`Metric tonnes are unavailable for ${summary.missingVolumeStemCount} STEM${summary.missingVolumeStemCount === 1 ? "" : "s"}; affected volume totals and comparisons are unavailable.`] : []),
+    ...(summary.missingDeliveryVolumeStemCount && !summary.missingVolumeStemCount ? [`Ordered or delivered metric tonnes are unavailable for ${summary.missingDeliveryVolumeStemCount} STEM${summary.missingDeliveryVolumeStemCount === 1 ? "" : "s"}; affected variance and under-delivery metrics are unavailable.`] : []),
     ...(dataset.warnings || []),
     ...(!dataset.identity.clKey ? ['CL Key is not set for this Salesforce Account.'] : []),
     ...(summary.multipleCurrencies ? ['Financial totals and profitability comparisons are separated by currency. FCOS does not net currencies without an authoritative exchange rate.'] : []),

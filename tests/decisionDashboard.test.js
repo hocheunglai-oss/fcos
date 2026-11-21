@@ -241,6 +241,46 @@ test('combines actual current and prior-year gross profit, margin, and MT volume
   assert.equal(rows.find((row) => row.month === '2026-08').priorGrossProfit, null);
 });
 
+test('package quantities without tonnes make the monthly mass unavailable while profit and verified tonne details remain', () => {
+  const [mixed, zero, noLines] = dashboardMonthlyComparison({
+    currentFinancial: [
+      { month: '2026-07', currency: 'USD', netPnl: 100 },
+      { month: '2026-08', currency: 'USD', netPnl: 23 },
+      { month: '2026-09', currency: 'USD', netPnl: 0 },
+    ],
+    priorFinancial: [{ month: '2025-07', currency: 'USD', netPnl: 50 }],
+    currentVolume: [
+      { month: '2026-07', currency: 'USD', family: 'VLSFO', unitOfMeasure: 'MT', quantity: 20 },
+      { month: '2026-07', currency: 'USD', family: 'Other', unitOfMeasure: 'PAILS', quantity: 10 },
+      { month: '2026-08', currency: 'USD', family: 'Other', unitOfMeasure: 'MT', quantity: 0 },
+    ],
+    priorVolume: [{ month: '2025-07', currency: 'USD', family: 'Other', unitOfMeasure: 'PAIL', quantity: null }],
+  });
+  assert.equal(mixed.currentVolume, null);
+  assert.equal(mixed.priorVolume, null);
+  assert.equal(mixed.currentPackageMassMissing, true);
+  assert.equal(mixed.priorPackageMassMissing, true);
+  assert.equal(mixed.currentGrossProfit, 100);
+  assert.deepEqual(mixed.currentProductVolumes, [{ family: 'VLSFO', unitOfMeasure: 'MT', quantity: 20 }]);
+  assert.equal(zero.currentVolume, 0);
+  assert.equal(noLines.currentVolume, 0);
+});
+
+test('unit-separated year-over-year comparisons preserve unavailable and zero package quantities', () => {
+  const [pail, tonnes] = dashboardMonthlyYearOverYear([
+    { month: '2026-07', currency: 'USD', unitOfMeasure: 'PAIL', quantity: null },
+    { month: '2026-07', currency: 'USD', unitOfMeasure: 'MT', quantity: 0 },
+  ], [
+    { month: '2025-07', currency: 'USD', unitOfMeasure: 'PAIL', quantity: 10 },
+    { month: '2025-07', currency: 'USD', unitOfMeasure: 'MT', quantity: 20 },
+  ], { valueField: 'quantity', dimensions: ['currency', 'unitOfMeasure'] });
+  assert.equal(pail.currentValue, null);
+  assert.equal(pail.difference, null);
+  assert.equal(pail.differencePct, null);
+  assert.equal(tonnes.currentValue, 0);
+  assert.equal(tonnes.differencePct, -100);
+});
+
 test('calendar-year monthly comparison always returns January through December with honest gaps', () => {
   const rows = dashboardMonthlyComparison({
     calendarYear: '2026',

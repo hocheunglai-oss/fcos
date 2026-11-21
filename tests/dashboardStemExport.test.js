@@ -10,6 +10,7 @@ import {
 
 import { read, utils } from 'xlsx';
 import { buildDashboardStemWorkbook, dashboardStemWorkbookInternals as dashboardStemExportInternals } from '../src/lib/dashboardStemWorkbook.js';
+import { dashboardLineItemVolume, dashboardVolumeLabel } from '../api/_dashboardVolume.js';
 
 const finance = {
   annualInterestRatePct: 5,
@@ -274,6 +275,24 @@ test('native XLS groups all amounts and quantity ranges while retaining numeric 
   assert.equal(sheet.A2.v, 'STEM-2026001');
   const scopeCells = Object.values(book.Sheets.Scope).filter((cell) => cell?.t === 'n' && cell.v === 1234567.89);
   assert.equal(scopeCells.length, 1); assert.equal(scopeCells[0].w, '1,234,567.89');
+});
+
+test('native XLS keeps package quantities in the existing product column without relabeling them as tonnes', async () => {
+  const options = { lineItemUomField: 'UOM__c' };
+  const packageRange = dashboardLineItemVolume({
+    UOM__c: 'PAILS', Quantity__c: 2500, Quantity_Max__c: 3500, Is_Quantity_Range__c: true,
+  }, false, options);
+  const unavailable = dashboardLineItemVolume({ UOM__c: 'PAIL' }, false, options);
+  const blob = await createDashboardStemWorkbook({ rows: [{
+    name: 'STEM-2026001', currency: 'USD', buyer: 1234567.89,
+    productQuantities: [{ productName: 'Lubricant', quantityLabel: dashboardVolumeLabel(packageRange) }],
+    supplierProductRows: [{ itemName: 'Lubricant A', quantityLabel: dashboardVolumeLabel(unavailable) }],
+  }] });
+  const sheet = read(await blob.arrayBuffer(), { type: 'array', cellNF: true }).Sheets.STEMs;
+  assert.equal(sheet.G2.v, 'Lubricant; 2,500-3,500 PAILS; Lubricant A; Unavailable PAIL');
+  assert.equal(sheet.J1.v, 'Turnover (USD)');
+  assert.equal(sheet.J2.v, 1234567.89);
+  assert.equal(sheet.J2.w, '1,234,567.89');
 });
 
 test('XLS currency summaries label verified subsets without including profit from missing-evidence STEMs', () => {

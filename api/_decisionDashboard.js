@@ -7,6 +7,23 @@ function finite(value) {
   return Number.isFinite(number) ? number : 0;
 }
 
+export function addReportedDashboardQuantity(total, quantity) {
+  if (total === null || quantity === null) return null;
+  return finite(total) + finite(quantity);
+}
+
+export function dashboardVolumeWarnings(missingUomCount, rows) {
+  const warnings = [];
+  if (missingUomCount) {
+    const lines = missingUomCount === 1 ? 'line has' : 'lines have';
+    warnings.push(`${missingUomCount} financial ${lines} no Salesforce UOM. Native quantities were used without inferred conversion.`);
+  }
+  if (rows.some((row) => row.volumeMt === null)) {
+    warnings.push('Tonnage is unavailable for one or more package quantities. Package quantities are shown separately.');
+  }
+  return warnings;
+}
+
 export const SALESFORCE_CORPORATE_CURRENCY = 'USD';
 
 export function isDecisionDashboardSalesforceId(value) {
@@ -207,16 +224,20 @@ export function dashboardMonthlyComparison({
   const volumeFor = (rows, month, currency) => {
     const byFamily = new Map();
     let found = false;
+    let packageMassMissing = false;
     for (const row of rows || []) {
-      if (row?.month !== month || dashboardCurrency(row?.currency) !== currency || String(row?.unitOfMeasure || 'MT').toUpperCase() !== 'MT') continue;
+      if (row?.month !== month || dashboardCurrency(row?.currency) !== currency) continue;
+      const unit = String(row.unitOfMeasure || 'MT').toUpperCase();
+      if (unit === 'PAIL' || unit === 'PAILS') packageMassMissing = true;
+      if (unit !== 'MT') continue;
       found = true;
       const family = String(row?.family || 'Other').trim() || 'Other';
-      byFamily.set(family, finite(byFamily.get(family)) + finite(row?.quantity));
+      byFamily.set(family, addReportedDashboardQuantity(byFamily.get(family), row?.quantity));
     }
     const productVolumes = [...byFamily.entries()]
       .map(([family, quantity]) => ({ family, quantity, unitOfMeasure: 'MT' }))
       .sort((left, right) => left.family.localeCompare(right.family));
-    return { found, total: productVolumes.reduce((sum, row) => sum + row.quantity, 0), productVolumes };
+    return { found, packageMassMissing, total: productVolumes.reduce((sum, row) => addReportedDashboardQuantity(sum, row.quantity), 0), productVolumes };
   };
   const normalizedCalendarYear = /^\d{4}$/.test(String(calendarYear || '')) ? String(calendarYear) : null;
   const currencies = [...new Set([
@@ -246,8 +267,10 @@ export function dashboardMonthlyComparison({
       priorGrossProfit: prior ? finite(prior.netPnl) : null,
       currentGrossMarginPct: current?.grossMarginPct == null ? null : finite(current.grossMarginPct),
       priorGrossMarginPct: prior?.grossMarginPct == null ? null : finite(prior.grossMarginPct),
-      currentVolume: current ? currentVolumes.found ? currentVolumes.total : 0 : null,
-      priorVolume: priorVolumes.found ? priorVolumes.total : null,
+      currentVolume: current && !currentVolumes.packageMassMissing ? currentVolumes.total : null,
+      priorVolume: priorVolumes.found && !priorVolumes.packageMassMissing ? priorVolumes.total : null,
+      ...(currentVolumes.packageMassMissing ? { currentPackageMassMissing: true } : {}),
+      ...(priorVolumes.packageMassMissing ? { priorPackageMassMissing: true } : {}),
       currentProductVolumes: currentVolumes.productVolumes,
       priorProductVolumes: priorVolumes.productVolumes,
       ...(normalizedCalendarYear ? { currentAvailable: Boolean(current) } : {}),
@@ -266,21 +289,21 @@ export function dashboardMonthlyYearOverYear(currentRows = [], priorYearRows = [
   const priorByCurrentMonth = new Map();
   for (const row of priorYearRows || []) {
     const alignedMonth = shiftMonthYear(row?.month, 1);
-    const value = Number(row?.[valueField]);
-    if (!alignedMonth || !Number.isFinite(value)) continue;
+    const value = row?.[valueField] === null && valueField === 'quantity' ? null : Number(row?.[valueField]);
+    if (!alignedMonth || (value !== null && !Number.isFinite(value))) continue;
     const alignedKey = key(row, alignedMonth);
     const current = priorByCurrentMonth.get(alignedKey) || { value: 0, priorMonth: row.month };
-    current.value += value;
+    current.value = addReportedDashboardQuantity(current.value, value);
     priorByCurrentMonth.set(alignedKey, current);
   }
   return (currentRows || []).flatMap((row) => {
-    const currentValue = Number(row?.[valueField]);
-    if (!/^\d{4}-\d{2}$/.test(String(row?.month || '')) || !Number.isFinite(currentValue)) return [];
+    const currentValue = row?.[valueField] === null && valueField === 'quantity' ? null : Number(row?.[valueField]);
+    if (!/^\d{4}-\d{2}$/.test(String(row?.month || '')) || (currentValue !== null && !Number.isFinite(currentValue))) return [];
     const priorKey = key(row);
     const hasPrior = priorByCurrentMonth.has(priorKey);
     const prior = hasPrior ? priorByCurrentMonth.get(priorKey) : null;
     const priorValue = prior?.value ?? null;
-    const difference = hasPrior ? currentValue - priorValue : null;
+    const difference = hasPrior && currentValue !== null && priorValue !== null ? currentValue - priorValue : null;
     return [{
       month: row.month,
       priorMonth: prior?.priorMonth || shiftMonthYear(row.month, -1),
@@ -289,7 +312,7 @@ export function dashboardMonthlyYearOverYear(currentRows = [], priorYearRows = [
       currentValue,
       priorValue,
       difference,
-      differencePct: hasPrior && priorValue !== 0 ? (difference / Math.abs(priorValue)) * 100 : null,
+      differencePct: difference !== null && priorValue !== 0 ? (difference / Math.abs(priorValue)) * 100 : null,
     }];
   });
 }

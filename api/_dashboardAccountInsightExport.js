@@ -60,7 +60,7 @@ function csvRows(insight) {
       'STEM', insight.identity?.name, insight.identity?.clKey, insight.identity?.accountId, insight.activeRole, row.stemName, row.stemId,
       row.buyerName, row.buyerClKey, row.buyerGroupName, row.deliveryDate, row.expectedDeliveryDate, row.effectiveDate, row.invoiceDate, row.dueDate, row.status,
       row.disputeStatus, row.currency, row.portName, row.portCountry, row.vesselName, (row.products || []).map((item) => item.name).join(' | '),
-      [...new Set((row.products || []).map((item) => item.family))].join(' | '), row.volumeMt, row.turnover, row.spend, row.grossProfit,
+      [...new Set((row.products || []).map((item) => item.family))].join(' | '), row.volumeMt ?? 'Unavailable', row.turnover, row.spend, row.grossProfit,
       row.grossMarginPct, row.invoiceAmount, row.buyerPaymentsReceived, row.receivableBalance, row.latestBuyerPaymentDate, row.brokerCommissions, row.extraCostAmount, row.supplierAllocation?.share == null ? null : row.supplierAllocation.share * 100,
       row.supplierInvoiceAmount, row.supplierPaidAmount, row.supplierPayable, row.latestSupplierPaymentDate,
       row.cancelledLineCount, row.cancelledExtraCostCount, row.collectionStatus || '', row.reconciliationState || '',
@@ -80,7 +80,7 @@ function csvRows(insight) {
   }
   rows.push([
     'TOTALS', insight.identity?.name, insight.identity?.clKey, insight.identity?.accountId, insight.activeRole, `${kpis.stemCount || 0} STEMs`, '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '',
-    kpis.totalVolumeMt, kpis.turnover, kpis.supplierSpend, kpis.grossProfit, kpis.grossMarginPct, '', '', '', '', '', '', '', '', '', '', '', kpis.cancelledChildRecords, '', '', '', insight.payments?.buyer?.paymentCount ?? '', insight.payments?.supplier?.rows?.length ?? '', (insight.warnings || []).join(' | '), PAYMENT_DATA_RELIABILITY_LABEL,
+    kpis.totalVolumeMt ?? 'Unavailable', kpis.turnover, kpis.supplierSpend, kpis.grossProfit, kpis.grossMarginPct, '', '', '', '', '', '', '', '', '', '', '', kpis.cancelledChildRecords, '', '', '', insight.payments?.buyer?.paymentCount ?? '', insight.payments?.supplier?.rows?.length ?? '', (insight.warnings || []).join(' | '), PAYMENT_DATA_RELIABILITY_LABEL,
   ]);
   return `\uFEFF${[headers, ...rows].map((row) => row.map(csvCell).join(',')).join('\r\n')}`;
 }

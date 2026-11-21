@@ -33,8 +33,8 @@ import {
 } from '../../src/lib/paymentDataReliability.js';
 import { grossMarginPercent } from '../_dashboardMetrics.js';
 import { buildDashboardDateScopeWhere } from '../_dashboardDateScope.js';
-import { dashboardLineItemVolume, dashboardVolumeLabel, findDashboardUomField } from '../_dashboardVolume.js';
-import { dashboardCurrency, dashboardCurrentYearDateWindows, dashboardMonthlyComparison, dashboardMonthlyFinancialTrend, dashboardMonthlyYearOverYear, dashboardSupplierProductRows, decodeDashboardCursor, decisionDashboardCompleteness, decisionDashboardSummary, decisionDashboardSupplierAmount, encodeDashboardCursor, normalizeDecisionDashboardFilters, priorEquivalentDateWindows, yearOverYearDateWindows } from '../_decisionDashboard.js';
+import { addDashboardMetricTonQuantity, dashboardLineItemVolume, dashboardMetricTonQuantity, dashboardVolumeLabel, findDashboardUomField } from '../_dashboardVolume.js';
+import { addReportedDashboardQuantity, dashboardCurrency, dashboardCurrentYearDateWindows, dashboardMonthlyComparison, dashboardMonthlyFinancialTrend, dashboardMonthlyYearOverYear, dashboardSupplierProductRows, dashboardVolumeWarnings, decodeDashboardCursor, decisionDashboardCompleteness, decisionDashboardSummary, decisionDashboardSupplierAmount, encodeDashboardCursor, normalizeDecisionDashboardFilters, priorEquivalentDateWindows, yearOverYearDateWindows } from '../_decisionDashboard.js';
 import { dashboardAccountRankings } from '../../src/lib/dashboardAccountRankings.js';
 import { loadDashboardAccountInsight } from '../_dashboardAccountInsightService.js';
 import { generateDashboardAccountInsightExport } from '../_dashboardAccountInsightExport.js';
@@ -8298,7 +8298,7 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
       productVolumes[productKey] = {
         family: productFamily,
         unitOfMeasure: volume.unitOfMeasure || 'MT',
-        quantity: Number(productVolumes[productKey]?.quantity || 0) + Number(volume.quantity || 0),
+        quantity: addReportedDashboardQuantity(productVolumes[productKey]?.quantity, volume.quantity),
       };
       const productName = item.Product__r?.Name || item.Name || 'Unspecified';
       return {
@@ -8308,7 +8308,7 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
         hasSupplierInvoice: total.hasSupplierInvoice || Boolean(item.Supplier_Invoice__c),
         buyerComm: total.buyerComm + buyerBrokerCommission(item, delivered),
         supplierComm: total.supplierComm + supplierBrokerCommission(item, delivered),
-        volumeMt: total.volumeMt + Number(volume.quantity || 0),
+        volumeMt: addDashboardMetricTonQuantity(total.volumeMt, dashboardMetricTonQuantity(volume)),
         productVolumes,
         productQuantities: [...total.productQuantities, {
           productName,
@@ -8462,7 +8462,7 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
       processedCount: rows.length,
       cache: force ? 'bypassed' : 'live',
     },
-    dataWarnings: uomWarningCount ? [`${uomWarningCount} financial line${uomWarningCount === 1 ? '' : 's'} have no Salesforce UOM. Native quantities were used without inferred conversion.`] : [],
+    dataWarnings: dashboardVolumeWarnings(uomWarningCount, rows),
   };
 }
 
@@ -8474,10 +8474,11 @@ function decisionDashboardOverviewMetrics(scope, body = {}) {
   const buyerAccounts = new Set(scope.rows.map((row) => row.account?.id).filter(Boolean));
   const supplierAccounts = new Set(scope.rows.flatMap((row) => (row.supplierAccounts || []).map((account) => account.id)).filter(Boolean));
   const productVolumeByKey = new Map();
+  const totalMetricTons = scope.rows.reduce((sum, row) => addDashboardMetricTonQuantity(sum, row.volumeMt), 0);
   for (const product of scope.rows.flatMap((row) => row.productVolumes || [])) {
     const key = `${product.family}\u001f${product.unitOfMeasure || 'MT'}`;
     const current = productVolumeByKey.get(key) || { family: product.family, unitOfMeasure: product.unitOfMeasure || 'MT', quantity: 0 };
-    current.quantity += Number(product.quantity || 0);
+    current.quantity = addReportedDashboardQuantity(current.quantity, product.quantity);
     productVolumeByKey.set(key, current);
   }
   const breakdown = [...productVolumeByKey.values()].sort((left, right) => {
@@ -8493,8 +8494,9 @@ function decisionDashboardOverviewMetrics(scope, body = {}) {
     supplierAccountCount: supplierAccounts.size,
     accountCount: body.counterpartyMode === 'supplier' ? supplierAccounts.size : buyerAccounts.size,
     productVolume: {
-      quantity: scope.rows.reduce((sum, row) => sum + Number(row.volumeMt || 0), 0),
+      quantity: totalMetricTons,
       unitOfMeasure: 'MT',
+      ...(totalMetricTons === null ? { packageMassMissing: true } : {}),
       breakdown,
     },
   };
@@ -8614,7 +8616,7 @@ async function dashboardAnalyticsUncached(body = {}, req = null, accessContext =
       const currency = dashboardCurrency(row.currency);
       const key = `${month}\u001f${currency}\u001f${product.family}\u001f${product.unitOfMeasure || 'MT'}`;
       if (!result[key]) result[key] = { month, currency, family: product.family, unitOfMeasure: product.unitOfMeasure || 'MT', quantity: 0 };
-      result[key].quantity += Number(product.quantity || 0);
+      result[key].quantity = addReportedDashboardQuantity(result[key].quantity, product.quantity);
     }
     return result;
   }, {})).sort((left, right) => left.month.localeCompare(right.month) || left.family.localeCompare(right.family));
@@ -8626,7 +8628,7 @@ async function dashboardAnalyticsUncached(body = {}, req = null, accessContext =
       const unitOfMeasure = product.unitOfMeasure || 'MT';
       const key = `${month}\u001f${currency}\u001f${unitOfMeasure}`;
       if (!result[key]) result[key] = { month, currency, unitOfMeasure, quantity: 0 };
-      result[key].quantity += Number(product.quantity || 0);
+      result[key].quantity = addReportedDashboardQuantity(result[key].quantity, product.quantity);
     }
     return result;
   }, {}));
@@ -8646,7 +8648,7 @@ async function dashboardAnalyticsUncached(body = {}, req = null, accessContext =
       const unitOfMeasure = product.unitOfMeasure || 'MT';
       const key = `${month}\u001f${currency}\u001f${product.family}\u001f${unitOfMeasure}`;
       if (!result[key]) result[key] = { month, currency, family: product.family, unitOfMeasure, quantity: 0 };
-      result[key].quantity += Number(product.quantity || 0);
+      result[key].quantity = addReportedDashboardQuantity(result[key].quantity, product.quantity);
     }
     return result;
   }, {}));
@@ -9119,7 +9121,7 @@ async function salesforceDashboardFilteredUncached(body, req = null, accessConte
         unitOfMeasure: dashboardVolume.unitOfMeasure,
         quantity: 0,
       };
-      current.quantity += Number(dashboardVolume.quantity || 0);
+      current.quantity = addReportedDashboardQuantity(current.quantity, dashboardVolume.quantity);
       productFamilyQuantityByUnit.set(volumeKey, current);
     }
     const monthlyFamily = dashboardFamily;
@@ -9131,7 +9133,7 @@ async function salesforceDashboardFilteredUncached(body, req = null, accessConte
         unitOfMeasure: dashboardVolume.unitOfMeasure,
         months: Array(12).fill(0),
       };
-      current.months[monthlyMonth - 1] += Number(dashboardVolume.quantity || 0);
+      current.months[monthlyMonth - 1] = addReportedDashboardQuantity(current.months[monthlyMonth - 1], dashboardVolume.quantity);
       monthlyProductVolumeByUnit.set(volumeKey, current);
     }
     lineItemSellByStem[id] = (lineItemSellByStem[id] || 0) + lineSell;
@@ -9443,7 +9445,7 @@ async function salesforceDashboardFilteredUncached(body, req = null, accessConte
       grossMarginPct: item.grossMarginPct,
     };
     for (const series of monthlyProductVolumeSeries) {
-      row[series.key] = series.months[idx] || 0;
+      row[series.key] = series.months[idx];
     }
     return row;
   });

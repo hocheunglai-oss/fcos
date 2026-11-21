@@ -136,6 +136,25 @@ export function dashboardLineItemVolume(item, stemHasDelivery, {
     ? [deliveredQuantity, finiteNumber(item?.Quantity__c)]
     : [finiteNumber(item?.Quantity__c), deliveredQuantity];
   const minimumSource = orderedNativeQuantities.find((value) => value != null);
+  const packageUnit = normalizedUomToken(explicitUom);
+  if (packageUnit === 'PAIL' || packageUnit === 'PAILS') {
+    const mass = finiteNumber(item?.Quantity_in_MT__c);
+    if (mass != null) {
+      return { quantity: mass, unitOfMeasure: 'MT', minimum: mass, maximum: mass, isRange: false };
+    }
+    const maximum = !stemHasDelivery && item?.Is_Quantity_Range__c
+      ? finiteNumber(item?.Quantity_Max__c)
+      : null;
+    const minimum = minimumSource ?? null;
+    const isRange = minimum != null && maximum != null;
+    return {
+      quantity: isRange ? (minimum + maximum) / 2 : minimum,
+      unitOfMeasure: packageUnit,
+      minimum,
+      maximum: isRange ? maximum : minimum,
+      isRange,
+    };
+  }
   if (minimumSource == null) {
     const metricTonQuantity = finiteNumber(item?.Quantity_in_MT__c) ?? finiteNumber(fallbackQuantity) ?? 0;
     const normalized = normalizeDashboardVolume(metricTonQuantity, 'MT', { productFamily });
@@ -174,12 +193,27 @@ export function dashboardLineItemVolume(item, stemHasDelivery, {
   };
 }
 
+export function dashboardMetricTonQuantity(volume) {
+  return normalizedUomToken(volume?.unitOfMeasure) === 'MT'
+    ? finiteNumber(volume?.quantity)
+    : null;
+}
+
+export function addDashboardMetricTonQuantity(total, quantity) {
+  const numericTotal = finiteNumber(total);
+  const numericQuantity = finiteNumber(quantity);
+  return numericTotal == null || numericQuantity == null ? null : numericTotal + numericQuantity;
+}
+
 export function dashboardVolumeLabel(volume) {
   const format = (value) => Number(value || 0).toLocaleString('en-US', {
     maximumFractionDigits: 3,
   });
   if (volume?.isRange) {
     return `${format(volume.minimum)}-${format(volume.maximum)} ${volume.unitOfMeasure}`;
+  }
+  if (volume?.quantity == null && ['PAIL', 'PAILS'].includes(normalizedUomToken(volume?.unitOfMeasure))) {
+    return `Unavailable ${volume.unitOfMeasure}`;
   }
   return `${format(volume?.quantity)} ${volume?.unitOfMeasure || 'MT'}`;
 }
