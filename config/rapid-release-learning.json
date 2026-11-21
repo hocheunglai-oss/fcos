@@ -715,6 +715,24 @@
       "measuredTimeSavedMs": null,
       "measuredCallsSaved": 4,
       "prevention": "Verify the unchanged pinned contract during quality with the local reviewed inputs. Refuse missing or drifting files and candidate changes to the provider pin. The measured call difference was reproduced locally using mocked fetches, and original hosted cause and latency savings remain unconfirmed."
+    },
+    {
+      "id": "invoice-reminders-qat-accounts-read-fixture",
+      "cause": "QAT Sales Support lacks the two Cancellation field reads available to the comparable DEVEE and Production role. Apex API 67 applies field permissions to this readiness query.",
+      "correction": "Assert the unaugmented test role remains blocked. Grant only the two established read permissions to the synthetic test user inside the rolled-back test transaction, then verify exact no-mail capture and idempotence.",
+      "verification": {
+        "originalRunId": 44908835387,
+        "originalQatCheckOnly": "0AfBh000006lnBVKAY",
+        "correctedCandidate": "175c055a03d37beac22de940224899c7dbc876b8",
+        "deveeCheckOnly": "0AfHF000007JHE10AO",
+        "qatCheckOnly": "0AfBh000006lnEjKAI",
+        "testsPassedPerOrg": 101,
+        "providerWrites": 0,
+        "failureToVerifiedCorrectionMs": 961192
+      },
+      "measuredTimeSavedMs": null,
+      "measuredCallsSaved": null,
+      "prevention": "Verify exact role-specific read dependencies for sensitive validations in DEVEE and QAT before opening Production promotion. Preserve independently verified Production role permissions and run runtime checks in user mode."
     }
   ]
 }
