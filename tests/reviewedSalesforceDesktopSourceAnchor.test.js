@@ -2,10 +2,11 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { FCOS_CONNECTION_POLICY, fcosSalesforceEnvironment } from '../config/fcosConnections.js';
 import { createManifest, digest, targets } from '../scripts/lib/rapid-release/contract.mjs';
-import { createLocalMirrorRequest, LOCAL_MIRROR_ENVIRONMENT } from '../scripts/lib/rapid-release/local-mirror-handoff.mjs';
+import { createLocalMirrorReceipt, createLocalMirrorRequest, LOCAL_MIRROR_ENVIRONMENT } from '../scripts/lib/rapid-release/local-mirror-handoff.mjs';
 import { createDeveeDesktopReceipt, createDeveeDesktopRequest, DEVEE_DESKTOP_WORKFLOW,
   editorDesktopCases, editorDesktopCaseSetDigest } from '../scripts/lib/rapid-release/salesforce-devee-desktop-checkpoint.mjs';
-import { verifyCompletedDesktopApproval, verifyPublishedDesktopMirror, selectCompletedSalesforceJob } from '../scripts/verify-completed-reviewed-salesforce-source.mjs';
+import { verifyCompletedDesktopApproval, verifyCompletedReviewedJournal, verifyPublishedDesktopMirror,
+  selectCompletedSalesforceJob } from '../scripts/verify-completed-reviewed-salesforce-source.mjs';
 import { EDITOR_PREFLIGHT_ATTESTATION_ENVIRONMENT, EDITOR_PREFLIGHT_ATTESTATION_TASK }
   from '../scripts/lib/rapid-release/salesforce-editor-preflight-transport.mjs';
 
@@ -292,4 +293,161 @@ test('source anchor permits only identical adopted invoice jobs before the mirro
   const qat = [row(7, { stage: 'qat' }), row(12, { stage: 'qat' })];
   assert.throws(() => check(qat, { stageName: 'qat' }), /SALESFORCE_JOB_MISMATCH/);
   assert.equal(check([prior], { manifest: { prerequisites: { plan: {} } } }), prior);
+});
+
+function completedEditorsAdoption() {
+  const { manifest: predecessor } = approvalFixture({ resume: false });
+  const { candidate, previous, prerequisites, build: { publicEnvironment }, paths } = predecessor;
+  const devee = fcosSalesforceEnvironment('devee');
+  const reviewed = { review: { nativeDeveeDesktop: { caseSetDigest: editorDesktopCaseSetDigest } },
+    fingerprint: hash('a'), binding: { sourceTreeHash: hash('b'), orgIds: { devee: devee.orgId } } };
+  const attestation = {
+    kind: 'fcos_editor_native_preflight_attestation', schemaVersion: 2, repository: targets().repository,
+    candidateSha: candidate.sha, sourceDigest: candidate.sourceDigest, controllerSha: predecessor.controllerSha,
+    baselineSha: previous.sha, sourceTreeHash: reviewed.binding.sourceTreeHash, salesforceFingerprint: reviewed.fingerprint,
+    caseSetDigest: editorDesktopCaseSetDigest, evidenceDigest: hash('1'),
+    qualificationValidationJobId: '0Af000000000000007', qualificationDeploymentJobId: '0Af000000000000008',
+    installedInventoryHash: hash('2'), cleanupEvidenceDigest: hash('3'), nativeExportProjectionDigest: hash('4'),
+    nativeComponentFilesDigest: hash('5'), observedNativeInventoryHash: hash('6'), completedAt: at(-90_000), expiresAt: at(60_000),
+  };
+  const editorAttestation = {
+    id: 50, ref: candidate.sha, sha: candidate.sha, created_at: at(-89_000),
+    creator: { ...owner, type: 'User' }, repository_url: 'https://api.github.com/repos/' + targets().repository,
+    environment: EDITOR_PREFLIGHT_ATTESTATION_ENVIRONMENT, original_environment: EDITOR_PREFLIGHT_ATTESTATION_ENVIRONMENT,
+    task: EDITOR_PREFLIGHT_ATTESTATION_TASK, production_environment: false, transient_environment: false, payload: attestation,
+  };
+  Object.assign(prerequisites.plan, { salesforceFingerprint: reviewed.fingerprint, salesforceSourceTreeHash: reviewed.binding.sourceTreeHash,
+    editorPreflightReceiptId: editorAttestation.id, editorPreflightReceiptDigest: digest(attestation) });
+  const receipt = { id: 51, created_at: at(-2000), payload: { manifestHash: digest(predecessor),
+    data: { originalRunId: originalId, continuationRunId: originalId + 1, closureRunId: originalId + 2 } } };
+  const releaseId = 'completed-editors-adoption-test';
+  const manifest = createManifest({ candidate, previous, publicEnvironment, paths, releaseId, controllerSha: sha('f'), now: at(-1000),
+    prerequisites: { ...prerequisites, plan: { ...prerequisites.plan, editorsProductionValidationAdoptionReceiptId: receipt.id } } });
+  const manifestHash = digest(manifest);
+  const staged = { id: 'dpl_newstage', sha: candidate.sha, buildId: manifest.build.buildId, artifactDigest: hash('7'), manifestHash };
+  const run = { id: originalId + 3, run_attempt: 1, created_at: at(0) };
+  const approval = { manifestHash, candidateSha: candidate.sha, buildId: staged.buildId, deploymentId: staged.id,
+    previousDeploymentId: previous.deploymentId, environment: 'fcos-production-release', reviewer: targets().account,
+    nativeReviewVerified: true, runId: run.id, approvedAt: run.created_at };
+  const records = [], requests = [], checkpoints = {}, retained = [];
+  const add = (event, data) => {
+    const sequence = records.length;
+    const row = { creator: actor, id: 100 + sequence, created_at: at(sequence * 1000),
+      payload: { event, data, sequence, manifestHash } };
+    records.push(row);
+    return row;
+  };
+  const checkpoint = (stage, operation, outcome, details = {}) => add('salesforce.checkpoint',
+    { fingerprint: reviewed.fingerprint, stage, operation, outcome, evidenceDigest: digest([stage, operation, records.length]), ...details });
+  const operation = (phase, request) => add(phase + '.intent', { operationId: releaseId + '-' + phase, request, requestHash: digest(request) });
+  const result = (phase, result) => add(phase + '.result', { operationId: releaseId + '-' + phase, outcome: 'applied', result });
+  const smoke = { passed: true, deploymentId: staged.id, buildId: staged.buildId, login: true, restrictedAccess: true, businessWrites: 0,
+    modules: manifest.selection.modules, normalRole: true };
+  add('release.prepared', { manifest });
+  add('build.passed', { schemaVersion: 1, buildId: staged.buildId, candidateSha: candidate.sha,
+    sourceDigest: candidate.sourceDigest, lockDigest: candidate.lockDigest, artifactDigest: staged.artifactDigest,
+    controllerSha: manifest.controllerSha, qualityPassed: true, performancePassed: true, node: manifest.build.node });
+  operation('stage', { buildId: staged.buildId, artifactDigest: staged.artifactDigest, candidateSha: candidate.sha,
+    previousDeploymentId: previous.deploymentId, target: 'production', skipDomain: true });
+  result('stage', staged);
+  add('smoke.passed', smoke);
+  add('approval.accepted', approval);
+  operation('prerequisites', { planDigest: digest(manifest.prerequisites), candidateSha: candidate.sha });
+  for (const stage of ['devee', 'qat', 'production']) checkpoint(stage, 'inventory-checkpoint', 'evidence');
+  const keep = (stage, operation, id, validationId = null) => {
+    const job = { id, validationId, submittedAt: at(-80_000), ...(operation === 'validation' ? { packageSha256: hash('c') } : {}) };
+    const row = checkpoint(stage, operation, 'resolved', { job });
+    retained.push(row);
+    checkpoints[stage + ':' + operation] = { payload: { data: { ...structuredClone(dataOf(row)), evidenceDigest: hash('9') } } };
+  };
+  keep('devee', 'validation', '0Af000000000000001');
+  keep('devee', 'deployment', '0Af000000000000002', '0Af000000000000001');
+  const desktop = { runId: run.id, proofId: editorAttestation.id, proofDigest: digest(attestation), finalInventoryReceiptDigest: hash('8') };
+  const native = checkpoint('devee', 'native-desktop-preflight', 'evidence',
+    { desktop, evidenceDigest: digest({ status: 'observed', ...desktop }) });
+  const mirror = { commit: sha('b'), pullRequest: 9 };
+  let last = checkpoint('shared_mirror', 'publication', 'resolved', { mirror });
+  const inherited = last;
+  checkpoints['shared_mirror:publication'] = { payload: { data: { ...dataOf(last), evidenceDigest: hash('9') } } };
+  const mirrorProof = { releaseMode: 'reviewed-manifest-incremental-v1', sourceTreeHash: reviewed.binding.sourceTreeHash,
+    sourceEnvironment: 'devee', sourceDeploymentJobId: '0Af000000000000002', repository: publication.repository,
+    account: publication.requiredAccount, branch: 'editors', commit: mirror.commit,
+    pullRequest: { number: mirror.pullRequest, state: 'OPEN', isDraft: true, baseRefName: publication.defaultBranch,
+      headRefName: 'editors', headRefOid: mirror.commit } };
+  const check = sequence => {
+    const requestTime = records.length * 1000;
+    const metadata = { status: 'Succeeded', fingerprint: reviewed.fingerprint, orgId: devee.orgId,
+      jobId: '0Af000000000000002', validationJobId: '0Af000000000000001' };
+    const request = createLocalMirrorRequest({ manifest, approval, reviewed, deployment: metadata, runAttempt: 1,
+      mode: 'check', sequence, intentHash: dataOf(last).evidenceDigest, now: base + requestTime, expiresAt: at(requestTime + 5000) });
+    const row = { id: 80 + sequence, creator: actor, payload: request, created_at: at(requestTime),
+      environment: LOCAL_MIRROR_ENVIRONMENT, task: 'fcos-local-mirror-handoff', sha: candidate.sha, ref: candidate.sha };
+    requests.push(row, { ...row, id: 90 + sequence, creator: owner,
+      payload: createLocalMirrorReceipt({ request, requestId: row.id, reviewed, report: mirrorProof }) });
+    last = checkpoint('shared_mirror', 'publication', 'resolved', { mirror });
+    return last;
+  };
+  check(1);
+  keep('qat', 'validation', '0Af000000000000003');
+  keep('qat', 'deployment', '0Af000000000000004', '0Af000000000000003');
+  check(2);
+  keep('production', 'validation', '0Af000000000000005');
+  const job = { id: '0Af000000000000006', validationId: '0Af000000000000005', submittedAt: at(20_500) };
+  checkpoint('production', 'preparation', 'evidence', { preparation: { validationJobId: job.validationId } });
+  check(3);
+  const pending = checkpoint('production', 'deployment', 'pending', { job: { ...job, id: null } });
+  checkpoint('production', 'deployment', 'pending', { job });
+  const production = checkpoint('production', 'deployment', 'resolved', { job });
+  const final = check(4);
+  const verified = { passed: true, manifestHash, backwardCompatible: true,
+    completedOperations: [...retained, production, final].map(row => ({ operationId: 'salesforce:' + dataOf(row).stage + ':' + dataOf(row).operation,
+      evidenceDigest: dataOf(row).evidenceDigest, verified: true, intentRecorded: true })),
+    salesforce: { order: 'devee-mirror-qat-production', mirrorVerified: true, sourceTreeHash: reviewed.binding.sourceTreeHash } };
+  result('prerequisites', verified);
+  add('prerequisites.passed', verified);
+  add('prerequisites.smoke_passed', { ...smoke, prerequisiteDigest: digest(verified) });
+  operation('promote', { deploymentId: staged.id, previousDeploymentId: previous.deploymentId, buildId: staged.buildId });
+  result('promote', staged);
+  add('live.passed', { ...smoke, observationMs: 300000 });
+  add('release.complete', { deploymentId: staged.id });
+  return { records, requests, manifest, reviewed, run, editorAttestation, editorsRecovery: {
+    manifest: predecessor, receipt, staged: { id: 'dpl_oldstage' }, checkpoints,
+  }, native, inherited, retained, production, pending, verified, approval };
+}
+
+const dataOf = row => row.payload.data;
+
+test('completed Editors adoption proves the inherited publication and four successor readbacks', () => {
+  const fixture = completedEditorsAdoption();
+  const verified = verifyCompletedReviewedJournal(fixture);
+  assert.equal(verified.validationId, '0Af000000000000001');
+  assert.equal(verified.deploymentId, '0Af000000000000002');
+  assert.equal(verified.productionJob.id, '0Af000000000000006');
+  assert.deepEqual(verified.mirror, { commit: sha('b'), pullRequest: 9 });
+});
+
+test('completed Editors adoption rejects changed authority, retained jobs, and promotion boundaries', () => {
+  const changes = {
+    'missing typed closure': fixture => { fixture.editorsRecovery = undefined; },
+    'different closure': ({ editorsRecovery }) => { editorsRecovery.receipt.id += 1; },
+    'reused stage': ({ editorsRecovery, approval }) => { editorsRecovery.staged.id = approval.deploymentId; },
+    'changed historical deploy time': ({ retained }) => { dataOf(retained[3]).job.submittedAt = at(-80_001); },
+    'borrowed native checkpoint': ({ native }) => { dataOf(native).desktop.runId = originalId; },
+    'changed native proof controller': ({ editorAttestation, manifest }) => { editorAttestation.payload.controllerSha = manifest.controllerSha; },
+    'unexpected new mirror intent': ({ inherited }) => { dataOf(inherited).outcome = 'pending'; },
+    'successor requests publication': ({ requests }) => { requests[0].payload.mode = 'publish'; },
+    'reuses earlier readback intent': ({ requests }) => { requests[2].payload.intentHash = requests[0].payload.intentHash; },
+    'checks before QAT readback': ({ requests }) => { requests[2].created_at = at(11_000); },
+    'checks before Production deploy completes': ({ requests }) => { requests[6].created_at = at(22_000); },
+    'does not preserve original Production quick-deploy intent': ({ pending }) => { dataOf(pending).job.submittedAt = at(20_501); },
+    'does not bind passed prerequisites to final mirror check': ({ verified, inherited, records }) => {
+      verified.completedOperations.at(-1).evidenceDigest = dataOf(inherited).evidenceDigest;
+      dataOf(records.find(row => row.payload.event === 'prerequisites.smoke_passed')).prerequisiteDigest = digest(verified);
+    },
+  };
+  for (const [label, change] of Object.entries(changes)) {
+    const fixture = completedEditorsAdoption();
+    change(fixture);
+    assert.throws(() => verifyCompletedReviewedJournal(fixture), undefined, label);
+  }
 });
