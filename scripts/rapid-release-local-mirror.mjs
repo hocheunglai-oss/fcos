@@ -15,10 +15,10 @@ import { readTradingFxSalesSupportNoEffectClosure } from './lib/rapid-release/tr
 import { readTradingFxFieldBoundNoEffectClosure } from './lib/rapid-release/trading-fx-field-bound-no-effect-checkpoint.mjs';
 import { assertTradingFxFieldBoundCorrectionSuccessor, assertTradingFxProductionBootstrapSuccessor, assertTradingFxViewAllFieldsCorrectionSuccessor } from './lib/rapid-release/trading-fx-production-bootstrap-successor.mjs';
 import { runReviewedMirror } from './sync-salesforce-reviewed-repository.mjs';
-import { digest, git, isDigest, requireCondition, sourceSnapshot, targets, validateManifest } from './lib/rapid-release/contract.mjs';
+import { digest, git, requireCondition, sourceSnapshot, targets, validateManifest } from './lib/rapid-release/contract.mjs';
 import { DeploymentJournal } from './lib/rapid-release/journal.mjs';
 import { assertFrozenWorkflow, assertPermanentHandover, nativeWorkflowPath } from './lib/rapid-release/providers.mjs';
-import { createLocalMirrorReceipt, readLocalMirrorApproval, readLocalMirrorStage, recordLocalMirrorDeployment,
+import { assertEditorMirrorCheckpointOrder, createLocalMirrorReceipt, readLocalMirrorApproval, readLocalMirrorStage, recordLocalMirrorDeployment,
   usesLocalCollaboratorMirror, verifyLocalMirrorRequest } from './lib/rapid-release/local-mirror-handoff.mjs';
 import { requiresDeveeDesktopCheckpoint } from './lib/rapid-release/salesforce-devee-desktop-checkpoint.mjs';
 import { hasEditorPreflightLocator } from './lib/rapid-release/salesforce-editor-preflight-transport.mjs';
@@ -133,12 +133,7 @@ async function main() {
   const deployment = latest('devee', correction ? 'sales-support-correction' : 'deployment');
   const mirror = latest('shared_mirror', 'publication');
   if (hasEditorPreflightLocator(plan)) {
-    const desktop = checkpoints.findLast(item => item.stage === 'devee' && item.operation === 'native-desktop-preflight'
-      && item.desktop?.runId === request.runId);
-    requireCondition(desktop?.outcome === 'evidence' && desktop.desktop?.proofId === plan.editorPreflightReceiptId
-      && desktop.desktop?.proofDigest === plan.editorPreflightReceiptDigest
-      && isDigest(desktop.desktop.finalInventoryReceiptDigest) && checkpoints.indexOf(deployment) < checkpoints.indexOf(desktop)
-      && checkpoints.indexOf(desktop) < checkpoints.indexOf(mirror), 'LOCAL_MIRROR_EDITOR_PREFLIGHT_REQUIRED');
+    assertEditorMirrorCheckpointOrder({ checkpoints, deployment, mirror, request, plan });
   }
   requireCondition((correction || (validation?.outcome === 'resolved' && validation.job?.id === request.validationJobId))
     && deployment?.outcome === 'resolved' && deployment.job?.id === request.deploymentJobId
