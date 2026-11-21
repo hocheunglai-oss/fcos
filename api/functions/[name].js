@@ -8246,7 +8246,7 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
   const stemIds = pageStems.map((stem) => stem.Id);
   const lineItemUomField = findDashboardUomField(lineItemDescribe.fields, 'lineItem');
   const productUomField = findDashboardUomField(productDescribe.fields || [], 'product');
-  const lineSelect = ['Id', 'CreatedDate', 'STEM__c', 'Cancelled__c', 'Supplier_Invoice__c', 'Supplier_Name__c', 'Original_Supplier__c', 'Quantity__c', 'Quantity_Delivered_Per_BDN__c', 'Quantity_Max__c', 'Quantity_in_MT__c', 'Is_Quantity_Range__c', 'Total_Price__c', 'Total_Cost__c', 'Price_Per_Unit__c', 'Cost_Per_Unit__c', 'Unit_Sell_At__c', 'Unit_Buy_At__c', 'Unit_Cost__c', 'Commission_Cost__c', 'Buyers_Brokers_Commission_Per_Unit__c', 'Suppliers_Brokers_Commission_Per_Unit__c'].filter((field) => lineFields.has(field));
+  const lineSelect = ['Id', 'CreatedDate', 'STEM__c', 'Cancelled__c', 'Supplier_Invoice__c', 'Supplier_Name__c', 'Original_Supplier__c', 'Quantity__c', 'Quantity_Delivered_Per_BDN__c', 'Quantity_Max__c', 'Quantity_in_MT__c', 'Unit_of_Measure__c', 'Is_Quantity_Range__c', 'Total_Price__c', 'Total_Cost__c', 'Price_Per_Unit__c', 'Cost_Per_Unit__c', 'Unit_Sell_At__c', 'Unit_Buy_At__c', 'Unit_Cost__c', 'Commission_Cost__c', 'Buyers_Brokers_Commission_Per_Unit__c', 'Suppliers_Brokers_Commission_Per_Unit__c'].filter((field) => lineFields.has(field));
   if (lineSupplier.valid) lineSelect.push(lineSupplier.fieldName);
   if (lineSupplier.valid && lineSupplier.relationshipName) lineSelect.push(`${lineSupplier.relationshipName}.Name`);
   if (lineSupplier.valid && lineSupplier.relationshipName) lineSelect.push(`${lineSupplier.relationshipName}.Inactive_Suspended__c`);
@@ -8978,6 +8978,8 @@ async function salesforceDashboardFilteredUncached(body, req = null, accessConte
       if (accountFieldNameSet.has('Inactive_Suspended__c')) lineItemFields.push(`${originalSupplierRelationship}.Inactive_Suspended__c`);
     }
     if (lineItemUomField) lineItemFields.push(lineItemUomField);
+    const hasSalesforceFormulaUom = (lineItemDescribe.fields || []).some(({ name }) => name === 'Unit_of_Measure__c');
+    if (hasSalesforceFormulaUom && lineItemUomField !== 'Unit_of_Measure__c') lineItemFields.push('Unit_of_Measure__c');
     if (productUomField) lineItemFields.push(`Product__r.${productUomField}`);
     const stemChunks = chunkIds(allStemIds);
     const [lineItemChunks, buyerBrokerChunks, extraCostChunks] = await Promise.all([

@@ -27,12 +27,21 @@ test('pail quantities retain their own units when mass is missing', () => {
   assert.equal(dashboardVolumeLabel(absent), 'Unavailable PAIL');
 });
 
-test('pail mass uses the explicit Salesforce mass including zero', () => {
-  for (const mass of [1.25, 0]) {
-    const volume = dashboardLineItemVolume({ UOM__c: 'PAILS', Quantity__c: 10, Quantity_in_MT__c: mass }, false, { lineItemUomField: 'UOM__c', fallbackQuantity: 10 });
-    assert.equal(volume.quantity, mass);
-    assert.equal(volume.unitOfMeasure, 'MT');
-    assert.equal(dashboardMetricTonQuantity(volume), mass);
+test('pail tonnage applies only to the delivered quantity with the exact Salesforce formula unit', () => {
+  const options = { lineItemUomField: 'UOM__c', productUomField: 'QuantityUnitOfMeasure' };
+  const item = { UOM__c: 'PAIL', Unit_of_Measure__c: 'PAIL', Quantity__c: 15, Quantity_Delivered_Per_BDN__c: 12, Quantity_in_MT__c: 0.24 };
+  assert.equal(dashboardVolumeLabel(dashboardLineItemVolume(item, false, options)), '15 PAIL');
+  assert.equal(dashboardMetricTonQuantity(dashboardLineItemVolume(item, false, options)), null);
+  assert.equal(dashboardMetricTonQuantity(dashboardLineItemVolume(item, true, options)), 0.24);
+  const zero = { ...item, Quantity_Delivered_Per_BDN__c: 0, Quantity_in_MT__c: 0 };
+  assert.equal(dashboardMetricTonQuantity(dashboardLineItemVolume(zero, true, options)), 0);
+  for (const unbound of [
+    { ...item, Unit_of_Measure__c: null, Quantity_in_MT__c: 12 },
+    { ...item, Unit_of_Measure__c: 'PAILS', Quantity_in_MT__c: 12 },
+    { ...item, UOM__c: null, Unit_of_Measure__c: 'DRUM', Product__r: { QuantityUnitOfMeasure: 'PAIL' } },
+    { ...item, Quantity_Delivered_Per_BDN__c: null, Quantity_in_MT__c: 0 },
+  ]) {
+    assert.equal(dashboardMetricTonQuantity(dashboardLineItemVolume(unbound, true, options)), null);
   }
 });
 

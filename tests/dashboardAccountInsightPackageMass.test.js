@@ -121,10 +121,18 @@ test('supplier scope excludes other supplier packages and explicit zero mass sta
   const other = line('other', STEM_A, SUPPLIER_B, 40, 400, 300);
   const supplier = buildDashboardAccountInsight(dataset({ identity: { accountId: SUPPLIER_B, name: 'Supplier', clKey: 'SUP-B' }, role: 'supplier', availableRoles: ['supplier'], scopeAccounts: [{ accountId: SUPPLIER_B, name: 'Supplier', root: true }], lineItems: [packageLine, other] }), { today: '2026-08-05' });
   assert.equal(supplier.kpis.totalVolumeMt, 40);
-  const zero = buildDashboardAccountInsight(dataset({ lineItems: [{ ...packageLine, Quantity_in_MT__c: 0 }] }), { today: '2026-08-05' });
+  const delivered = { ...packageLine, Unit_of_Measure__c: 'PAIL', Quantity_in_MT__c: 0.24 };
+  const measured = buildDashboardAccountInsight(dataset({ lineItems: [delivered] }), { today: '2026-08-05' });
+  assert.equal(measured.kpis.totalVolumeMt, 0.24);
+  assert.equal(measured.exportRows[0].deliveredVolumeMt, 0.24);
+  assert.equal(measured.exportRows[0].orderedVolumeMt, null);
+  assert.equal(measured.exportRows[0].quantityVarianceMt, null);
+  assert.equal(measured.kpis.underDeliveryRatePct, null);
+
+  const zero = buildDashboardAccountInsight(dataset({ lineItems: [{ ...delivered, Quantity_Delivered_Per_BDN__c: 0, Quantity_in_MT__c: 0 }] }), { today: '2026-08-05' });
   assert.equal(zero.kpis.totalVolumeMt, 0);
   assert.equal(zero.kpis.missingVolumeStemCount, 0);
-  assert.equal(zero.exportRows[0].quantityVarianceMt, 0);
+  assert.equal(zero.exportRows[0].quantityVarianceMt, null);
 });
 
 test('package mass warnings and unavailable values survive CSV and PDF exports', () => {

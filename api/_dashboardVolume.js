@@ -139,7 +139,8 @@ export function dashboardLineItemVolume(item, stemHasDelivery, {
   const packageUnit = normalizedUomToken(explicitUom);
   if (packageUnit === 'PAIL' || packageUnit === 'PAILS') {
     const mass = finiteNumber(item?.Quantity_in_MT__c);
-    if (mass != null) {
+    // Salesforce calculates this field from the BDN quantity only for the exact PAIL value.
+    if (stemHasDelivery && deliveredQuantity != null && item?.Unit_of_Measure__c === 'PAIL' && mass != null) {
       return { quantity: mass, unitOfMeasure: 'MT', minimum: mass, maximum: mass, isRange: false };
     }
     const maximum = !stemHasDelivery && item?.Is_Quantity_Range__c

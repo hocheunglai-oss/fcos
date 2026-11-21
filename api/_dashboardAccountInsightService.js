@@ -410,7 +410,7 @@ async function queryInsightStems({ role, scopeAccountIds, supplierIds, dateWindo
 }
 
 function lineItemSelectFields(lineFields, accountFields, productFields, lookup) {
-  const values = ['Id', 'STEM__c', ...selected(lineFields, ['Name', 'Supplier_Name__c', 'Supplier_Invoice__c', 'Cancelled__c', 'Payment_Term__c', 'Product__c', 'Quantity__c', 'Quantity_Delivered_Per_BDN__c', 'Quantity_Max__c', 'Quantity_in_MT__c', 'Is_Quantity_Range__c', 'Price_Per_Unit__c', 'Cost_Per_Unit__c', 'Unit_Sell_At__c', 'Unit_Buy_At__c', 'Unit_Cost__c', 'Subtotal_Sell_At__c', 'Subtotal_Buy_At__c', 'Total_Price__c', 'Total_Cost__c', 'Commission_Cost__c', 'Buyers_Brokers_Commission_Per_Unit__c', 'Suppliers_Brokers_Commission_Per_Unit__c'])];
+  const values = ['Id', 'STEM__c', ...selected(lineFields, ['Name', 'Supplier_Name__c', 'Supplier_Invoice__c', 'Cancelled__c', 'Payment_Term__c', 'Product__c', 'Quantity__c', 'Quantity_Delivered_Per_BDN__c', 'Quantity_Max__c', 'Quantity_in_MT__c', 'Unit_of_Measure__c', 'Is_Quantity_Range__c', 'Price_Per_Unit__c', 'Cost_Per_Unit__c', 'Unit_Sell_At__c', 'Unit_Buy_At__c', 'Unit_Cost__c', 'Subtotal_Sell_At__c', 'Subtotal_Buy_At__c', 'Total_Price__c', 'Total_Cost__c', 'Commission_Cost__c', 'Buyers_Brokers_Commission_Per_Unit__c', 'Suppliers_Brokers_Commission_Per_Unit__c'])];
   if (lineFields.has('Product__c')) {
     values.push('Product__r.Name');
     if (productFields.has('Family')) values.push('Product__r.Family');
@@ -665,7 +665,7 @@ async function loadSalesforceDataset({ accountId, role, entityType, includedAcco
   const extraCostUomField = findDashboardUomField(extraDescribe.fields || [], 'lineItem');
   const productUomField = findDashboardUomField(productDescribe.fields || [], 'product');
   const lineFieldsToQuery = lineItemSelectFields(lineFields, accountFields, productFields, originalSupplierLookup);
-  if (lineItemUomField) lineFieldsToQuery.push(lineItemUomField);
+  if (lineItemUomField && !lineFieldsToQuery.includes(lineItemUomField)) lineFieldsToQuery.push(lineItemUomField);
   if (productUomField) lineFieldsToQuery.push(`Product__r.${productUomField}`);
   const extraFieldsToQuery = extraCostSelectFields(extraFields, accountFields, productFields, extraCostSupplierLookup, {
     extraCostUomField,
