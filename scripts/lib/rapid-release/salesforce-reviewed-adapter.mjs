@@ -15,6 +15,8 @@ import { awaitLocalMirrorReceipt, createLocalMirrorRequest, LOCAL_MIRROR_ENVIRON
 import { githubClient, verifyExecution } from './providers.mjs';
 import { awaitDeveeDesktopReceipt, createDeveeDesktopRequest, recordVerifiedDeveeDesktopCheckpoint } from './salesforce-devee-desktop-checkpoint.mjs';
 import { hasEditorPreflightLocator, verifyEditorPreflightPostimage } from './salesforce-editor-preflight-transport.mjs';
+import { assertEditorsAdoptionApproval, assertEditorsValidationUsable, readEditorsProductionValidationAdoption,
+  recoverEditorsProductionValidation } from './editors-production-validation-adoption.mjs';
 import { applyTradingFxSalesSupportCorrection, applyTradingFxSalesSupportSandboxCorrection, verifyTradingFxSalesSupportReadGrants } from './trading-fx-sales-support-transport.mjs';
 import { verifySalesSupportRepairSource } from './trading-fx-sales-support-source.mjs';
 import { promoteSalesSupportCorrection } from './trading-fx-sales-support-promotion.mjs';
@@ -285,6 +287,10 @@ export function prepareReviewedSalesforcePrerequisites({
     && (schemaBootstrap || reviewed.invoiceAppPlacement) && localMirror
     && reviewed.nativeInventories?.devee?.final && Number.isSafeInteger(promotionReceiptId) && promotionReceiptId > 0),
   'SALESFORCE_DEVEE_PROMOTION_ADOPTION_INVALID');
+  const editorsAdoption = plan.editorsProductionValidationAdoptionReceiptId;
+  requireCondition(editorsAdoption === undefined || (!withDatabase && !schemaBootstrap && localMirror && editorPreflight
+    && desktopCaseSet !== undefined && adoption === undefined && promotionReceiptId === undefined
+    && Number.isSafeInteger(editorsAdoption) && editorsAdoption > 0), 'EDITORS_PRODUCTION_VALIDATION_ADOPTION_INVALID');
   requireCondition(tradingFxRecovery === undefined ? plan.tradingFxRecoveryReceiptId === undefined
     : withDatabase && schemaBootstrap && localMirror && reviewed.nativeInventories?.devee?.final
       && adoption === undefined && promotionReceiptId === undefined
@@ -307,7 +313,7 @@ export function prepareReviewedSalesforcePrerequisites({
   'SALESFORCE_TRADING_FX_PRODUCTION_BOOTSTRAP_ADOPTION_INVALID');
   return () => applyPreparedSalesforce({ manifest, manifestHash, approval, salesforce, cwd, correctionDirectory, env, reviewed, schemaBootstrap,
     localMirror, adoption, promotionReceiptId, tradingFxRecovery, tradingFxQatRecovery, tradingFxPostQatRecovery,
-    tradingFxProductionBootstrapRecovery, editorPreflight });
+    tradingFxProductionBootstrapRecovery, editorPreflight, editorsAdoption });
 }
 
 export async function hostedLocalMirrorTransport({ manifest, approval, env, reviewed, salesforce }) {
@@ -497,8 +503,16 @@ export async function recoverTradingFxProductionReadbacks({ recovery, reviewed, 
 
 async function applyPreparedSalesforce({ manifest, manifestHash, approval, salesforce, cwd, correctionDirectory, env, reviewed, schemaBootstrap, localMirror,
   adoption, promotionReceiptId, tradingFxRecovery, tradingFxQatRecovery, tradingFxPostQatRecovery, tradingFxProductionBootstrapRecovery,
-  editorPreflight }) {
+  editorPreflight, editorsAdoption }) {
   const saved = await salesforce.journal.readCheckpoints();
+  let editorsRecovery;
+  if (editorsAdoption) {
+    const github = githubClient({ token: env.GITHUB_TOKEN, candidateSha: manifest.candidate.sha, actions: true });
+    editorsRecovery = await readEditorsProductionValidationAdoption({ manifest, github });
+    assertEditorsAdoptionApproval({ recovery: editorsRecovery, approval, manifest });
+    await salesforce.ownership.assert({ fingerprint: reviewed.fingerprint, stage: 'production',
+      orgId: reviewed.binding.orgIds.production, operation: 'deployment' });
+  }
   const localTransport = localMirror ? await hostedLocalMirrorTransport({ manifest, approval, env, reviewed, salesforce }) : null;
   const directory = mkdtempSync(join(tmpdir(), 'fcos-salesforce-hosted-'));
   const credentials = mkdtempSync(join(tmpdir(), 'fcos-salesforce-credentials-'));
@@ -511,6 +525,27 @@ async function applyPreparedSalesforce({ manifest, manifestHash, approval, sales
       provider.reconcile = (environment, jobId, { operation, submittedAt, validationJobId, packageSha256 }) =>
         reconcileHostedSalesforceJob({ environment, jobId, reviewed, operation, submittedAt, validationJobId,
           packageSha256, provider, journal: salesforce.journal });
+      if (editorsRecovery) {
+        const records = await recoverEditorsProductionValidation({ recovery: editorsRecovery, reviewed, provider, saved });
+        await assertReviewedInputsUnchanged(reviewed, { cwd, policy });
+        for (const { stage, operation, record } of records) {
+          const local = journal.update(stage, operation, record);
+          // The engine records missing successor jobs in promotion order as it
+          // verifies them. Rebind existing durable receipts to this local readback.
+          if (saved.some(item => item.stage === stage && item.operation === operation)) {
+            await salesforce.journal.checkpoint({ fingerprint: reviewed.fingerprint, stage, operation, record: local });
+          }
+        }
+        const deploy = provider.deploy;
+        provider.deploy = (environment, validationJobId) => {
+          const validation = journal.state.stages.production.validation;
+          requireCondition(environment.key === 'production' && validationJobId === validation.jobId,
+            'EDITORS_ADOPTION_UNEXPECTED_DEPLOYMENT');
+          assertEditorsValidationUsable(validation);
+          return deploy(environment, validationJobId);
+        };
+        provider.prepareValidation = () => requireCondition(false, 'EDITORS_ADOPTION_UNEXPECTED_VALIDATION');
+      }
       if (adoption && !saved.some(item => item.stage === 'devee' && item.operation === 'bootstrap')) {
         const github = githubClient({ token: env.GITHUB_TOKEN, candidateSha: manifest.candidate.sha, actions: true });
         const record = await recoverReviewedDeveeBootstrap({ adoption, manifest, reviewed, provider, github });
@@ -588,7 +623,10 @@ async function applyPreparedSalesforce({ manifest, manifestHash, approval, sales
         }
       }
       provider.mirror = localTransport
-        ? (mode, { deveeDeployment }) => localTransport(mode, deveeDeployment, journal.state.stages.shared_mirror?.publication)
+        ? (mode, { deveeDeployment }) => {
+          requireCondition(!editorsRecovery || mode === 'check', 'EDITORS_ADOPTION_MIRROR_CHECK_REQUIRED');
+          return localTransport(mode, deveeDeployment, journal.state.stages.shared_mirror?.publication);
+        }
         : mode => runReviewedMirror({ mode, cwd, plan: reviewed, state: journal.state, policy,
           provider, ownership: salesforce.ownership });
       if (localTransport) {
@@ -607,7 +645,11 @@ async function applyPreparedSalesforce({ manifest, manifestHash, approval, sales
             preflightSharedMirrorPublication();
             mirrorPreflightPassed = true;
           }
-          return salesforce.ownership.assert(binding);
+          const receipt = await salesforce.ownership.assert(binding);
+          if (editorsRecovery && binding.stage === 'production' && binding.operation === 'deployment') {
+            assertEditorsValidationUsable(journal.state.stages.production.validation);
+          }
+          return receipt;
         },
       };
       const retainedTradingFxMirror = tradingFxProductionBootstrapRecovery?.checkpoint.mirror.publication.proof;
@@ -650,6 +692,13 @@ async function applyPreparedSalesforce({ manifest, manifestHash, approval, sales
           const checkpoint = await salesforce.journal.checkpoint({ fingerprint: reviewed.fingerprint, stage: 'devee',
             operation: 'native-desktop-preflight', record: { status: 'observed', runId: approval.runId, ...observed } });
           requireCondition(checkpoint?.payload?.data?.desktop?.proofId === observed.proofId, 'EDITOR_PREFLIGHT_CHECKPOINT_ACK_UNCERTAIN');
+          if (editorsRecovery) {
+            // The successor records the inherited publication after its own
+            // DEVEE evidence, then independently checks the live mirror head.
+            const publication = journal.update('shared_mirror', 'publication', journal.state.stages.shared_mirror.publication);
+            await salesforce.journal.checkpoint({ fingerprint: reviewed.fingerprint, stage: 'shared_mirror',
+              operation: 'publication', record: publication });
+          }
           return observed;
         };
       const result = await runReviewedSalesforceRelease({ plan: reviewed, mode: hasPreparation ? 'apply' : 'approved-continuation',

@@ -48,6 +48,33 @@ export function readLocalMirrorApproval({ chain, manifest, staged, request, requ
   return approval;
 }
 
+export function assertEditorMirrorCheckpointOrder({ checkpoints, deployment, mirror, request, plan }) {
+  const isDesktop = item => item?.stage === 'devee' && item.operation === 'native-desktop-preflight';
+  const isDesktopProof = item => isDesktop(item) && item.outcome === 'evidence' && positiveId(item.desktop?.runId)
+    && item.desktop.proofId === plan.editorPreflightReceiptId
+    && item.desktop.proofDigest === plan.editorPreflightReceiptDigest
+    && isDigest(item.desktop.finalInventoryReceiptDigest);
+  const desktopIndex = checkpoints.findLastIndex(item => isDesktop(item) && item.desktop?.runId === request.runId);
+  const deploymentIndex = checkpoints.indexOf(deployment);
+  const mirrorIndex = checkpoints.indexOf(mirror);
+  const currentProofFollowsDeployment = deploymentIndex >= 0 && deploymentIndex < desktopIndex
+    && isDesktopProof(checkpoints[desktopIndex]);
+  if (currentProofFollowsDeployment && desktopIndex < mirrorIndex) return;
+
+  // A resumed check only rereads an existing publication. Its own desktop
+  // proof follows the reread of the same DEVEE deployment. The publication
+  // must still have its own earlier proof of that deployment and source.
+  const priorDesktopIndex = checkpoints.findLastIndex((item, index) => index < mirrorIndex && isDesktopProof(item)
+    && item.desktop.runId !== request.runId);
+  const priorDeploymentIndex = checkpoints.findLastIndex((item, index) => index < priorDesktopIndex
+    && item.stage === 'devee' && item.operation === 'deployment' && item.outcome === 'resolved'
+    && item.job?.id === request.deploymentJobId && item.job?.validationId === request.validationJobId);
+  requireCondition(request.mode === 'check' && mirror?.outcome === 'resolved'
+    && currentProofFollowsDeployment && priorDeploymentIndex >= 0
+    && priorDeploymentIndex < priorDesktopIndex && priorDesktopIndex < mirrorIndex && mirrorIndex < deploymentIndex,
+  'LOCAL_MIRROR_EDITOR_PREFLIGHT_REQUIRED');
+}
+
 export function createLocalMirrorRequest({ manifest, approval, reviewed, deployment, runAttempt, intentHash, expiresAt, mode = 'publish', sequence = 1, now = Date.now() }) {
   const manifestHash = digest(manifest);
   const deadline = Date.parse(expiresAt);
