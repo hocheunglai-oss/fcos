@@ -8,12 +8,14 @@ import { githubConfigDirectory } from './fcos-connections.mjs';
 import { executeSharedMirror } from './sync-salesforce-shared-repository.mjs';
 import { reviewedDeveePublicationProof } from './sync-salesforce-reviewed-repository.mjs';
 import { verifyCompletedSalesforceReviewSource } from './verify-salesforce-review-source.mjs';
-import { assertReviewedMirror } from './lib/salesforce-reviewed-release.mjs';
+import { assertReviewedMirror, verifyReviewedJobPair } from './lib/salesforce-reviewed-release.mjs';
 import { assertAuthorization, digest, isDigest, isSha, requireCondition, targets, validateManifest } from './lib/rapid-release/contract.mjs';
 import { recoverReviewedDeveePromotion } from './lib/rapid-release/salesforce-reviewed-adapter.mjs';
 import { assertBuildReceipt, assertSmokeProof } from './lib/rapid-release/engine.mjs';
+import { assertEditorsAdoptionApproval, assertEditorsProductionValidationSuccessor, assertEditorsValidationUsable,
+  readEditorsProductionValidationAdoption, recoverEditorsProductionValidation } from './lib/rapid-release/editors-production-validation-adoption.mjs';
 import { DeploymentJournal, pendingOperations } from './lib/rapid-release/journal.mjs';
-import { LOCAL_MIRROR_ENVIRONMENT, readLocalMirrorDeployments, verifyLocalMirrorReceipt } from './lib/rapid-release/local-mirror-handoff.mjs';
+import { LOCAL_MIRROR_ENVIRONMENT, readLocalMirrorDeployments, readLocalMirrorStage, verifyLocalMirrorReceipt } from './lib/rapid-release/local-mirror-handoff.mjs';
 import { assertFrozenWorkflow, nativeWorkflowPath } from './lib/rapid-release/providers.mjs';
 import { requiresDeveeDesktopCheckpoint, verifyDeveeDesktopReceipt } from './lib/rapid-release/salesforce-devee-desktop-checkpoint.mjs';
 import { hasEditorPreflightLocator, verifyEditorPreflightAttestation } from './lib/rapid-release/salesforce-editor-preflight-transport.mjs';
@@ -31,7 +33,12 @@ const allow = (value, code) => requireCondition(value, 'REVIEWED_SOURCE_ANCHOR_'
 const owner = actor => actor?.id === ownerId && actor.login === targets().account;
 const data = row => row.payload.data;
 const sequence = row => row.payload.sequence;
+const time = row => Date.parse(row.created_at);
 const trusted = row => row.creator?.id === botId && row.creator.login === 'github-actions[bot]';
+const checkpointKey = row => data(row).stage + ':' + data(row).operation;
+const ordered = rows => rows.every((row, index) => index === 0 || sequence(row) > sequence(rows[index - 1])
+  && time(row) >= time(rows[index - 1]));
+const jobId = value => /^0Af[A-Za-z0-9]{15}$/u.test(value ?? '');
 
 export function verifyCompletedDesktopApproval({ records, run, manifest, staged, promote, completion = promote }) {
   const approvals = records.filter(row => ['approval.accepted', 'approval.reconfirmed'].includes(row.payload.event));
@@ -57,7 +64,7 @@ export function verifyCompletedDesktopApproval({ records, run, manifest, staged,
 }
 
 export function verifyPublishedDesktopMirror({ approvedRuns, records, requests, manifest, reviewed, requestRow,
-  publication, deployment, validation, run, staged, editorAttestation }) {
+  publication, deployment, validation, run, staged, editorAttestation, editorsRecovery }) {
   const mirrorRequest = requestRow.payload;
   const approval = approvedRuns.get(mirrorRequest.runId);
   allow(approval && mirrorRequest.runAttempt === 1, 'DESKTOP_MIRROR_RUN_UNAPPROVED');
@@ -70,11 +77,16 @@ export function verifyPublishedDesktopMirror({ approvedRuns, records, requests, 
       && sequence(row) < sequence(publication) && Date.parse(row.created_at) <= Date.parse(requestRow.created_at));
     allow(matching.length > 0, 'DESKTOP_CHECKPOINT_REQUIRED');
     const checkpoint = matching.at(-1);
-    const proof = verifyEditorPreflightAttestation({ manifest, record: editorAttestation,
+    const proof = verifyEditorPreflightAttestation({ manifest: editorsRecovery?.manifest ?? manifest, record: editorAttestation,
       approvalAt: data(approval).approvedAt, now: Date.parse(checkpoint.created_at) });
     const evidence = data(checkpoint).desktop;
     allow(evidence.proofId === proof.proofId && evidence.proofDigest === proof.proofDigest
       && isDigest(evidence.finalInventoryReceiptDigest), 'DESKTOP_NATIVE_PROOF_MISMATCH');
+    if (editorsRecovery) {
+      allow(matching.length === 1 && ordered([deployment, checkpoint, publication])
+        && digest({ status: 'observed', ...evidence }) === data(checkpoint).evidenceDigest
+        && proof.qualificationDeploymentJobId !== data(deployment).job.id, 'DESKTOP_NATIVE_PROOF_MISMATCH');
+    }
     assertAuthorization(data(approval), manifest, staged, Date.parse(requestRow.created_at));
     return;
   }
@@ -145,7 +157,119 @@ export function selectCompletedSalesforceJob({ completed, manifest, reviewed, st
   return found[0];
 }
 
-export function verifyCompletedReviewedJournal({ records, requests, manifest, reviewed, run, editorAttestation, adoptedJobs }) {
+function verifyEditorsAdoptionJournal({ records, requests, manifest, reviewed, run, editorAttestation, editorsRecovery,
+  event, approvedRuns, staged }) {
+  assertEditorsProductionValidationSuccessor(manifest, editorsRecovery);
+  const approval = approvedRuns.get(run.id);
+  assertEditorsAdoptionApproval({ recovery: editorsRecovery, approval: data(approval), manifest });
+  const manifestHash = digest(manifest);
+  const stage = event('stage.result');
+  readLocalMirrorStage(stage, { manifest, workflowActorId: botId });
+  allow(time(event('release.prepared')) >= time(editorsRecovery.receipt)
+    && time(stage) > time(editorsRecovery.receipt) && data(approval).approvedAt === run.created_at,
+  'EDITORS_STAGE_APPROVAL_MISMATCH');
+
+  for (const [phase, request] of [
+    ['stage', { buildId: staged.buildId, artifactDigest: staged.artifactDigest, candidateSha: staged.sha,
+      previousDeploymentId: manifest.previous.deploymentId, target: 'production', skipDomain: true }],
+    ['prerequisites', { planDigest: digest(manifest.prerequisites), candidateSha: staged.sha }],
+    ['promote', { deploymentId: staged.id, previousDeploymentId: manifest.previous.deploymentId, buildId: staged.buildId }],
+  ]) {
+    const operationId = manifest.releaseId + '-' + phase;
+    const result = data(event(phase + '.result'));
+    allow(digest(data(event(phase + '.intent'))) === digest({ operationId, request, requestHash: digest(request) })
+      && result.operationId === operationId && result.outcome === 'applied', 'EDITORS_OPERATION_MISMATCH');
+  }
+  const prerequisites = event('prerequisites.passed');
+  const verified = data(prerequisites);
+  const promoted = data(event('promote.result')).result;
+  allow(verified.manifestHash === manifestHash && verified.backwardCompatible === true
+    && digest(data(event('prerequisites.result')).result) === digest(verified)
+    && promoted.sha === staged.sha && promoted.artifactDigest === staged.artifactDigest
+    && promoted.manifestHash === manifestHash, 'EDITORS_RELEASE_RESULT_MISMATCH');
+
+  const checkpoints = records.filter(row => row.payload.event === 'salesforce.checkpoint');
+  const byKey = (key, outcome) => checkpoints.filter(row => checkpointKey(row) === key && data(row).outcome === outcome);
+  const resolved = key => {
+    const rows = byKey(key, 'resolved');
+    allow(rows.length === 1 && jobId(data(rows[0]).job?.id), 'EDITORS_SALESFORCE_JOB_MISMATCH');
+    return rows[0];
+  };
+  const retained = ['devee:validation', 'devee:deployment', 'qat:validation', 'qat:deployment', 'production:validation']
+    .map(key => {
+      const predecessor = editorsRecovery.checkpoints[key];
+      const row = resolved(key);
+      allow(digest(data(row).job) === digest(data(predecessor).job)
+        && data(row).evidenceDigest !== data(predecessor).evidenceDigest, 'EDITORS_ADOPTED_JOB_CHANGED');
+      return row;
+    });
+  const [validation, deployment, qatValidation, qat, productionValidation] = retained;
+  const production = resolved('production:deployment');
+  const productionJob = data(production).job;
+  const pending = byKey('production:deployment', 'pending');
+  const preparation = byKey('production:preparation', 'evidence');
+  allow(new Set([...retained, production].map(row => data(row).job.id)).size === 6
+    && productionJob.validationId === data(productionValidation).job.id
+    && preparation.length === 1 && data(preparation[0]).preparation?.validationJobId === productionJob.validationId
+    && pending.length === 2 && digest(data(pending[0]).job) === digest({ ...productionJob, id: null })
+    && digest(data(pending[1]).job) === digest(productionJob)
+    && Date.parse(productionJob.submittedAt) >= Date.parse(data(approval).approvedAt)
+    && Date.parse(productionJob.submittedAt) <= time(pending[1]), 'EDITORS_PRODUCTION_DEPLOYMENT_MISMATCH');
+
+  const publications = byKey('shared_mirror:publication', 'resolved');
+  const mirror = data(editorsRecovery.checkpoints['shared_mirror:publication']).mirror;
+  const inherited = publications[0];
+  allow(publications.length === 5 && publications.every(row => digest(data(row).mirror) === digest(mirror))
+    && data(inherited).evidenceDigest !== data(editorsRecovery.checkpoints['shared_mirror:publication']).evidenceDigest,
+  'EDITORS_MIRROR_LINEAGE_MISMATCH');
+  const [beforeQat, afterQat, beforeProduction, afterProduction] = publications.slice(1);
+  const native = byKey('devee:native-desktop-preflight', 'evidence');
+  const inventory = ['devee', 'qat', 'production'].map(key => byKey(key + ':inventory-checkpoint', 'evidence'));
+  const expected = new Set([...retained, ...preparation, ...pending, production, ...publications, ...native, ...inventory.flat()]);
+  allow(native.length === 1 && inventory.every(rows => rows.length === 1) && checkpoints.every(row => expected.has(row)
+    && data(row).fingerprint === reviewed.fingerprint && isDigest(data(row).evidenceDigest)), 'EDITORS_CHECKPOINT_SCOPE_MISMATCH');
+  allow(ordered([event('release.prepared'), event('build.passed'), event('stage.intent'), stage, event('smoke.passed'),
+    approval, event('prerequisites.intent'), ...inventory.flat(), validation, deployment, native[0], inherited,
+    beforeQat, qatValidation, qat, afterQat, productionValidation, preparation[0], beforeProduction,
+    ...pending, production, afterProduction, event('prerequisites.result'), prerequisites,
+    event('prerequisites.smoke_passed'), event('promote.intent'), event('promote.result'), event('live.passed'), event('release.complete')]),
+  'EDITORS_CHECKPOINT_ORDER_MISMATCH');
+
+  const completedOperations = [...retained, production, afterProduction].map(row => ({
+    operationId: 'salesforce:' + checkpointKey(row), evidenceDigest: data(row).evidenceDigest, verified: true, intentRecorded: true,
+  }));
+  allow(Array.isArray(verified.completedOperations) && verified.completedOperations.length === completedOperations.length
+    && completedOperations.every(operation => verified.completedOperations.some(item => digest(item) === digest(operation))),
+  'EDITORS_COMPLETED_OPERATIONS_MISMATCH');
+
+  const checks = requests.filter(row => row.payload?.kind === 'fcos_local_mirror_request' && row.payload.manifestHash === manifestHash);
+  const phases = [[inherited, inherited, beforeQat], [beforeQat, qat, afterQat],
+    [afterQat, preparation[0], beforeProduction], [beforeProduction, production, afterProduction]];
+  allow(checks.length === phases.length, 'EDITORS_MIRROR_CHECK_COUNT_MISMATCH');
+  for (const [index, [previous, boundary, checkpoint]] of phases.entries()) {
+    const matches = checks.filter(row => row.payload.sequence === index + 1);
+    allow(matches.length === 1, 'EDITORS_MIRROR_CHECK_SEQUENCE_MISMATCH');
+    const [request] = matches, payload = request.payload;
+    const receipts = requests.filter(row => row.payload?.kind === 'fcos_local_mirror_receipt' && row.payload.requestId === request.id);
+    allow(receipts.length === 1 && trusted(request) && owner(receipts[0].creator)
+      && [request, receipts[0]].every(row => row.ref === staged.sha && row.task === 'fcos-local-mirror-handoff')
+      && payload.candidateSha === staged.sha && payload.controllerSha === manifest.controllerSha && payload.runId === run.id
+      && payload.runAttempt === 1 && payload.mode === 'check' && payload.intentHash === data(previous).evidenceDigest
+      && payload.deveeOrgId === fcosSalesforceEnvironment('devee').orgId && payload.deploymentJobId === data(deployment).job.id
+      && payload.validationJobId === data(validation).job.id && time(request) >= time(boundary) && time(receipts[0]) <= time(checkpoint),
+    'EDITORS_MIRROR_CHECK_MISMATCH');
+    assertAuthorization(data(approval), manifest, staged, time(request));
+    const proof = verifyLocalMirrorReceipt({ request: payload, requestDeployment: request, receiptDeployment: receipts[0], reviewed,
+      workflowActorId: botId, publisherId: ownerId, now: time(receipts[0]) });
+    allow(proof.commit === mirror.commit && proof.pullRequest.number === mirror.pullRequest, 'EDITORS_MIRROR_HEAD_CHANGED');
+    if (index === 0) verifyPublishedDesktopMirror({ approvedRuns, records, requests, manifest, reviewed,
+      requestRow: request, publication: inherited, deployment, validation, run, staged, editorAttestation, editorsRecovery });
+  }
+  return { validationId: data(validation).job.id, deploymentId: data(deployment).job.id, mirror, productionJob,
+    productionResolvedAt: time(production) };
+}
+
+export function verifyCompletedReviewedJournal({ records, requests, manifest, reviewed, run, editorAttestation, adoptedJobs, editorsRecovery }) {
   const event = name => {
     const found = records.filter(row => row.payload.event === name);
     allow(found.length === 1, 'REQUIRED_EVENT_MISMATCH');
@@ -185,6 +309,13 @@ export function verifyCompletedReviewedJournal({ records, requests, manifest, re
     && data(completion).deploymentId === staged.id
     && [prerequisites, promote, promotion, observed, completion].every((row, index, rows) =>
       index === 0 || sequence(row) > sequence(rows[index - 1])), 'LIVE_EVIDENCE_MISMATCH');
+
+  if (Object.hasOwn(manifest.prerequisites.plan, 'editorsProductionValidationAdoptionReceiptId')) {
+    allow(desktop && editorsRecovery && hasEditorPreflightLocator(manifest.prerequisites.plan)
+      && !manifest.prerequisites.plan.deveePromotionAdoptionReceiptId, 'EDITORS_ADOPTION_SCOPE_MISMATCH');
+    return verifyEditorsAdoptionJournal({ records, requests, manifest, reviewed, run, editorAttestation, editorsRecovery,
+      event, approvedRuns, staged });
+  }
 
   const completed = records.filter(row => row.payload.event === 'salesforce.checkpoint'
     && data(row).fingerprint === reviewed.fingerprint && data(row).outcome === 'resolved');
@@ -297,14 +428,39 @@ async function main() {
   verifySource();
   const reviewed = loadReviewedSalesforcePlan({ cwd, manifestPath: plan.salesforceManifestPath, reviewPath: plan.salesforceReviewPath });
   const journal = new DeploymentJournal({ github, actorIds: [botId], releaseId: manifest.releaseId, manifestHash: hash });
-  const [records, requests, editorAttestation] = await Promise.all([journal.read(), readLocalMirrorDeployments(github, candidate),
-    hasEditorPreflightLocator(plan) ? github.read(repoPath + '/deployments/' + plan.editorPreflightReceiptId) : undefined]);
+  const [records, requests, editorAttestation, editorsRecovery] = await Promise.all([journal.read(), readLocalMirrorDeployments(github, candidate),
+    hasEditorPreflightLocator(plan) ? github.read(repoPath + '/deployments/' + plan.editorPreflightReceiptId) : undefined,
+    Object.hasOwn(plan, 'editorsProductionValidationAdoptionReceiptId') ? readEditorsProductionValidationAdoption({ manifest, github }) : undefined]);
   const provider = cliSalesforceProvider({ cwd, policy, commandEnvironment: process.env });
   const adoptionReceiptId = plan.deveePromotionAdoptionReceiptId;
   const adoptedJobs = adoptionReceiptId === undefined ? undefined : await recoverReviewedDeveePromotion({
     receiptId: adoptionReceiptId, manifest, reviewed, provider, github,
   });
-  const { deploymentId, validationId, mirror } = verifyCompletedReviewedJournal({ records, requests, manifest, reviewed, run, editorAttestation, adoptedJobs });
+  const { deploymentId, validationId, mirror, productionJob, productionResolvedAt } = verifyCompletedReviewedJournal({
+    records, requests, manifest, reviewed, run, editorAttestation, adoptedJobs, editorsRecovery,
+  });
+  if (editorsRecovery) {
+    // Reuse provider reports during this verification pass. Preparation builds
+    // the package locally for hashing, and report() only reads the saved jobs.
+    const readReport = provider.report;
+    const reports = new Map();
+    provider.report = (environment, id) => {
+      const key = environment.key + ':' + id;
+      if (!reports.has(key)) reports.set(key, readReport(environment, id));
+      return reports.get(key);
+    };
+    const saved = records.filter(row => row.payload.event === 'salesforce.checkpoint').map(data);
+    const retained = await recoverEditorsProductionValidation({ recovery: editorsRecovery, reviewed, provider, saved });
+    const validation = retained.find(row => row.stage === 'production' && row.operation === 'validation').record;
+    const submittedAt = Date.parse(productionJob.submittedAt);
+    assertEditorsValidationUsable(validation, submittedAt);
+    const deployed = await verifyReviewedJobPair({ provider, environment: fcosSalesforceEnvironment('production'),
+      validationJobId: productionJob.validationId, deploymentJobId: productionJob.id, testPlan: reviewed.binding.testPlan,
+      expectedComponents: reviewed.manifest });
+    const completedAt = Date.parse(deployed.completedAt);
+    allow(Date.parse(validation.completedAt) <= submittedAt && completedAt >= submittedAt - 30_000
+      && completedAt <= productionResolvedAt + 999, 'EDITORS_PRODUCTION_REPORT_TIMING_CHANGED');
+  }
   const devee = fcosSalesforceEnvironment('devee');
   const job = jobId => ({ jobId, status: 'Succeeded', fingerprint: reviewed.fingerprint, orgId: devee.orgId });
   const native = await reviewedDeveePublicationProof({ plan: reviewed,
