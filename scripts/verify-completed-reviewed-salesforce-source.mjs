@@ -10,6 +10,7 @@ import { reviewedDeveePublicationProof } from './sync-salesforce-reviewed-reposi
 import { verifyCompletedSalesforceReviewSource } from './verify-salesforce-review-source.mjs';
 import { assertReviewedMirror } from './lib/salesforce-reviewed-release.mjs';
 import { assertAuthorization, digest, isDigest, isSha, requireCondition, targets, validateManifest } from './lib/rapid-release/contract.mjs';
+import { recoverReviewedDeveePromotion } from './lib/rapid-release/salesforce-reviewed-adapter.mjs';
 import { assertBuildReceipt, assertSmokeProof } from './lib/rapid-release/engine.mjs';
 import { DeploymentJournal, pendingOperations } from './lib/rapid-release/journal.mjs';
 import { LOCAL_MIRROR_ENVIRONMENT, readLocalMirrorDeployments, verifyLocalMirrorReceipt } from './lib/rapid-release/local-mirror-handoff.mjs';
@@ -120,7 +121,31 @@ export function assertStandardReviewedSourceManifest(manifest, candidate) {
   return hash;
 }
 
-export function verifyCompletedReviewedJournal({ records, requests, manifest, reviewed, run, editorAttestation }) {
+// Adopted DEVEE jobs are re-attested after recovery, producing a second
+// checkpoint with fresh evidence for the same immutable provider operation.
+export function selectCompletedSalesforceJob({ completed, manifest, reviewed, stageName, operation, firstMirrorIntent, adoptedJobs }) {
+  const found = completed.filter(row => data(row).stage === stageName && data(row).operation === operation);
+  const adoptionId = manifest.prerequisites.plan.deveePromotionAdoptionReceiptId;
+  if (found.length === 2) {
+    const isInvoiceAdoption = stageName === 'devee' && ['validation', 'deployment'].includes(operation)
+      && Number.isSafeInteger(adoptionId) && adoptionId > 0 && reviewed.invoiceAppPlacement
+      && !reviewed.review?.bootstrap && !reviewed.review?.nativeDeveeDesktop;
+    const adopted = adoptedJobs?.find(item => item.operation === operation)?.record;
+    const adoptedJob = adopted && { id: adopted.jobId, validationId: adopted.validationJobId,
+      submittedAt: adopted.submittedAt, ...(adopted.packageSha256 ? { packageSha256: adopted.packageSha256 } : {}) };
+    allow(isInvoiceAdoption && adoptedJob && digest(adoptedJob) === digest(data(found[0]).job) && firstMirrorIntent && sequence(found[0]) < sequence(found[1])
+      && sequence(found[1]) < sequence(firstMirrorIntent)
+      && found.every(row => data(row).fingerprint === reviewed.fingerprint)
+      && data(found[0]).job?.id && digest(data(found[0]).job) === digest(data(found[1]).job)
+      && isDigest(data(found[0]).evidenceDigest) && isDigest(data(found[1]).evidenceDigest),
+    'SALESFORCE_JOB_MISMATCH');
+    return found[1];
+  }
+  allow(found.length === 1 && data(found[0]).job?.id, 'SALESFORCE_JOB_MISMATCH');
+  return found[0];
+}
+
+export function verifyCompletedReviewedJournal({ records, requests, manifest, reviewed, run, editorAttestation, adoptedJobs }) {
   const event = name => {
     const found = records.filter(row => row.payload.event === name);
     allow(found.length === 1, 'REQUIRED_EVENT_MISMATCH');
@@ -163,10 +188,18 @@ export function verifyCompletedReviewedJournal({ records, requests, manifest, re
 
   const completed = records.filter(row => row.payload.event === 'salesforce.checkpoint'
     && data(row).fingerprint === reviewed.fingerprint && data(row).outcome === 'resolved');
+  const mirrorIntents = records.filter(row => row.payload.event === 'salesforce.checkpoint'
+    && data(row).fingerprint === reviewed.fingerprint && data(row).stage === 'shared_mirror'
+    && data(row).operation === 'publication' && data(row).outcome === 'pending');
+  const firstMirrorIntent = mirrorIntents.length === 1 ? mirrorIntents[0] : undefined;
   const job = (stageName, operation) => {
-    const found = completed.filter(row => data(row).stage === stageName && data(row).operation === operation);
-    allow(found.length === 1 && data(found[0]).job?.id, 'SALESFORCE_JOB_MISMATCH');
-    return found[0];
+    const scopedInvoiceAdoption = stageName === 'devee' && reviewed.invoiceAppPlacement
+      && Number.isSafeInteger(manifest.prerequisites.plan.deveePromotionAdoptionReceiptId);
+    const candidates = scopedInvoiceAdoption ? records.filter(row => row.payload.event === 'salesforce.checkpoint'
+      && data(row).outcome === 'resolved') : completed;
+    return selectCompletedSalesforceJob({
+      completed: candidates, manifest, reviewed, stageName, operation, firstMirrorIntent, adoptedJobs,
+    });
   };
   const validation = job('devee', 'validation'), deployment = job('devee', 'deployment');
   const qat = job('qat', 'deployment'), production = job('production', 'deployment');
@@ -266,9 +299,13 @@ async function main() {
   const journal = new DeploymentJournal({ github, actorIds: [botId], releaseId: manifest.releaseId, manifestHash: hash });
   const [records, requests, editorAttestation] = await Promise.all([journal.read(), readLocalMirrorDeployments(github, candidate),
     hasEditorPreflightLocator(plan) ? github.read(repoPath + '/deployments/' + plan.editorPreflightReceiptId) : undefined]);
-  const { deploymentId, validationId, mirror } = verifyCompletedReviewedJournal({ records, requests, manifest, reviewed, run, editorAttestation });
-  const devee = fcosSalesforceEnvironment('devee');
   const provider = cliSalesforceProvider({ cwd, policy, commandEnvironment: process.env });
+  const adoptionReceiptId = plan.deveePromotionAdoptionReceiptId;
+  const adoptedJobs = adoptionReceiptId === undefined ? undefined : await recoverReviewedDeveePromotion({
+    receiptId: adoptionReceiptId, manifest, reviewed, provider, github,
+  });
+  const { deploymentId, validationId, mirror } = verifyCompletedReviewedJournal({ records, requests, manifest, reviewed, run, editorAttestation, adoptedJobs });
+  const devee = fcosSalesforceEnvironment('devee');
   const job = jobId => ({ jobId, status: 'Succeeded', fingerprint: reviewed.fingerprint, orgId: devee.orgId });
   const native = await reviewedDeveePublicationProof({ plan: reviewed,
     state: { fingerprint: reviewed.fingerprint, binding: reviewed.binding, stages: { devee: {

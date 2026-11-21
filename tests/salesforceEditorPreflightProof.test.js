@@ -265,6 +265,20 @@ test('the preapproval receipt is checked against a fresh DEVEE promotion postima
     observedNativeInventoryHash: proof.installedInventoryHash, evidenceSha256: hash('real fresh inventory receipt'), verifiedAt: at(30) };
   const args = { ...input, proof, reviewed, deployment, readInstalledInventory: async () => inventory };
   assert.equal((await verifyEditorPreflightPostimage(args)).finalInventoryReceiptDigest, inventory.evidenceSha256);
+
+  const successor = { ...input.manifest, controllerSha: '5'.repeat(40), prerequisites: {
+    ...input.manifest.prerequisites, plan: { ...input.manifest.prerequisites.plan, editorsProductionValidationAdoptionReceiptId: 4600 },
+  } };
+  const adopted = { ...proof, admittedControllerSha: successor.controllerSha, adoptionReceiptId: 4600 };
+  const adoptedArgs = { ...args, manifest: successor, proof: adopted };
+  assert.equal((await verifyEditorPreflightPostimage(adoptedArgs)).proofDigest, proof.proofDigest);
+  await assert.rejects(verifyEditorPreflightPostimage({
+    ...adoptedArgs, proof: { ...adopted, adoptionReceiptId: 4601 },
+  }), /PROMOTION_BINDING_INVALID/);
+  await assert.rejects(verifyEditorPreflightPostimage({
+    ...adoptedArgs, proof: { ...adopted, admittedControllerSha: proof.controllerSha },
+  }), /PROMOTION_BINDING_INVALID/);
+
   inventory.observedNativeInventoryHash = hash('provider drift');
   await assert.rejects(verifyEditorPreflightPostimage(args), /DEVEE_POSTIMAGE_CHANGED/);
   deployment.jobId = proof.qualificationDeploymentJobId;

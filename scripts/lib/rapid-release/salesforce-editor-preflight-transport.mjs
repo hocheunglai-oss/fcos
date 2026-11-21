@@ -67,6 +67,13 @@ export async function readEditorPreflightAttestation({ manifest, github, approva
   const { editorPreflightReceiptId: id, editorPreflightReceiptDigest: proofDigest } = plan;
   check(requiresDeveeDesktopCheckpoint(manifest) && positive(id) && isDigest(proofDigest),
     'EDITOR_PREFLIGHT_LOCATOR_INVALID');
+  if (Object.hasOwn(plan, 'editorsProductionValidationAdoptionReceiptId')) {
+    const { readEditorsProductionValidationAdoption } = await import('./editors-production-validation-adoption.mjs');
+    const predecessor = await readEditorsProductionValidationAdoption({ manifest, github });
+    const record = await github.read('/repos/' + targets().repository + '/deployments/' + id);
+    const original = verifyEditorPreflightAttestation({ manifest: predecessor.manifest, record, approvalAt, now });
+    return { ...original, admittedControllerSha: manifest.controllerSha, adoptionReceiptId: predecessor.receipt.id };
+  }
   const record = await github.read('/repos/' + targets().repository + '/deployments/' + id);
   return verifyEditorPreflightAttestation({ manifest, record, approvalAt, now });
 }
@@ -104,7 +111,11 @@ export function verifyEditorPreflightAttestation({ manifest, record, approvalAt,
 }
 
 export async function verifyEditorPreflightPostimage({ manifest, proof, reviewed, deployment, readInstalledInventory, now = Date.now() }) {
-  check(proof && proof.candidateSha === manifest.candidate.sha && proof.controllerSha === manifest.controllerSha
+  const adoptionId = manifest.prerequisites.plan.editorsProductionValidationAdoptionReceiptId;
+  const controllerMatches = adoptionId === undefined ? proof?.controllerSha === manifest.controllerSha
+    : positive(adoptionId) && proof?.adoptionReceiptId === adoptionId && proof.admittedControllerSha === manifest.controllerSha
+      && proof.controllerSha !== manifest.controllerSha;
+  check(proof && proof.candidateSha === manifest.candidate.sha && controllerMatches
     && proof.baselineSha === manifest.previous.sha && proof.caseSetDigest === editorDesktopCaseSetDigest
     && proof.proofId === manifest.prerequisites.plan.editorPreflightReceiptId
     && proof.proofDigest === manifest.prerequisites.plan.editorPreflightReceiptDigest
