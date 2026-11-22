@@ -902,17 +902,28 @@ async function publishAttestation(attestation) {
   }
 }
 
-function printCachedDiagnostics(command, args) {
-  const supported = new Set(['--read-only', '--json', '--no-publish']);
+export function parseConnectionDiagnosticArguments(args = []) {
+  const flags = new Set(['--read-only', '--json', '--publish', '--no-publish']);
   const providerArgs = args.filter((arg) => !arg.startsWith('-'));
-  if (!['verify', 'doctor'].includes(command)
-    || args.some((arg) => arg.startsWith('-') && !supported.has(arg))
-    || providerArgs.length > 1) {
-    throw new Error('Read-only diagnostics accept one optional provider, --json and --no-publish.');
+  if (args.some((arg) => arg.startsWith('-') && !flags.has(arg)) || new Set(args).size !== args.length) {
+    throw new Error('Unknown or repeated connection diagnostic option.');
   }
+  if (providerArgs.length > 1) throw new Error('Choose one provider or all four providers.');
+  const readOnly = args.includes('--read-only');
+  const publish = args.includes('--publish');
+  if (publish && (readOnly || args.includes('--no-publish'))) {
+    throw new Error('Publication conflicts with read-only or non-publishing diagnostics.');
+  }
+  const providers = selectedProviders(providerArgs[0]);
+  if (publish && providers.length !== CONNECTION_TARGETS.length) {
+    throw new Error('Publication requires complete four-provider verification.');
+  }
+  return { providers, readOnly, publish, json: args.includes('--json') };
+}
 
+function printCachedDiagnostics({ providers, json }) {
   const snapshot = readSafeStatus();
-  const reports = selectedProviders(providerArgs[0]).map((provider) => {
+  const reports = providers.map((provider) => {
     const cached = sanitizeConnectionProviderReport(snapshot?.providers?.[provider], provider);
     return {
       provider,
@@ -927,37 +938,40 @@ function printCachedDiagnostics(command, args) {
       lastVerifiedAt: cached?.lastVerifiedAt ?? null,
     };
   });
-  const asJson = args.includes('--json');
-  if (!asJson) console.log('Cached connection status. Live identities and permissions were not verified.');
+  if (!json) console.log('Cached connection status. Live identities and permissions were not verified.');
   const status = mergeSafeConnectionStatus(null, reports, { status: 'skipped' });
-  printReports({ ...status, readOnly: true, observation: 'cached; not live verified' }, asJson);
+  printReports({ ...status, readOnly: true, observation: 'cached; not live verified' }, json);
   return 2;
 }
 
-async function verifyCommand(args, { doctor = false } = {}) {
+export async function collectLiveConnectionDiagnostics(args, {
+  verify = verifyProvider, publishAttestationResult = publishAttestation, persist = writeSafeStatus,
+} = {}) {
+  const options = parseConnectionDiagnosticArguments(args);
+  if (options.readOnly) throw new Error('Cached diagnostics cannot invoke live verification.');
   const startedAt = Date.now();
-  const providers = selectedProviders(args.find((value) => !value.startsWith('--')));
-  const reports = await Promise.all(providers.map(verifyProvider));
-  let publication = null;
-  const fullVerification = providers.length === CONNECTION_TARGETS.length;
-  if (fullVerification && !args.includes('--no-publish')) {
+  const reports = await Promise.all(options.providers.map((provider) => verify(provider)));
+  let publication = options.providers.length === CONNECTION_TARGETS.length ? { status: 'skipped' } : undefined;
+  if (options.publish) {
     try {
-      publication = await publishAttestation(buildAttestation(reports, startedAt));
-    } catch (error) {
-      publication = { status: 'failed', error: error instanceof Error ? error.message : 'Publication failed safely.' };
+      publication = await publishAttestationResult(buildAttestation(reports, startedAt));
+    } catch {
+      publication = { status: 'failed', code: 'attestation_publication_failed' };
     }
-  } else if (fullVerification) {
-    publication = { status: 'skipped' };
   }
-  const value = writeSafeStatus(reports, publication);
-  printReports(value, args.includes('--json'));
-  if (doctor) {
+  const value = persist(reports, publication);
+  return { value, json: options.json, exitCode: publication?.status === 'failed' ? 5 : exitCodeFor(reports) };
+}
+
+async function verifyCommand(args, { doctor = false } = {}) {
+  const { value, json, exitCode } = await collectLiveConnectionDiagnostics(args);
+  printReports(value, json);
+  if (doctor && !json) {
     const salesforceProfiles = salesforceEnvironments().map(({ label, browserProfile }) => `${label}=${browserProfile}`).join(', ');
     console.log(`Approved Chrome fallback: FCOS=${APPROVED_CONNECTION_BROWSER_PROFILE}; Salesforce ${salesforceProfiles}; shared Salesforce GitHub=${target('salesforce').publication.browserProfile} (authentication only)`);
     console.log(`Credential metadata: ${path.relative(REPO_ROOT, CREDENTIAL_METADATA_PATH)} (non-secret, mode 0600)`);
   }
-  if (publication?.status === 'failed') return 5;
-  return exitCodeFor(reports);
+  return exitCode;
 }
 
 async function pinSupabase() {
@@ -1296,8 +1310,8 @@ function credentialMetadataCommand(args) {
 
 function printHelp() {
   console.log(`Usage:
-  npm run connections:verify [-- <provider>] [-- --json] [-- --no-publish] [-- --read-only]
-  npm run connections:doctor [-- --json] [-- --no-publish] [-- --read-only]
+  npm run connections:verify [-- <provider>] [-- --json] [-- --publish | --no-publish] [-- --read-only]
+  npm run connections:doctor [-- --json] [-- --publish | --no-publish] [-- --read-only]
   npm run connections:bootstrap [-- <provider>]
   npm run connections:auth -- <provider>
   npm run connections:keychain
@@ -1308,13 +1322,16 @@ function printHelp() {
 export async function main(argv = process.argv.slice(2)) {
   try {
     const [command, ...args] = argv;
-    if (args.includes('--read-only')) return printCachedDiagnostics(command, args);
+    if (args.includes('--read-only')) {
+      if (!['verify', 'doctor'].includes(command)) throw new Error('Read-only diagnostics require verify or doctor.');
+      return printCachedDiagnostics(parseConnectionDiagnosticArguments(args));
+    }
     if (!command || command === 'help' || command === '--help') {
       printHelp();
       return 0;
     }
-    if (command === 'verify') return verifyCommand(args);
-    if (command === 'doctor') return verifyCommand(args, { doctor: true });
+    if (command === 'verify') return await verifyCommand(args);
+    if (command === 'doctor') return await verifyCommand(args, { doctor: true });
     if (command === 'bootstrap') return bootstrapCommand(args);
     if (command === 'auth') return authCommand(args);
     if (command === 'keychain') return keychainCommand();

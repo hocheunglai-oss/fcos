@@ -7,9 +7,11 @@ import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import {
   canonicalGitRemote,
+  collectLiveConnectionDiagnostics,
   githubConfigDirectory,
   githubCredentialHelperValue,
   mergeSafeConnectionStatus,
+  parseConnectionDiagnosticArguments,
   providerCliRunnable,
   providerRuntime,
   runManagedConnectionOperation,
@@ -226,6 +228,43 @@ test('cached diagnostics return one sanitized JSON report without provider or st
   }
   assert.equal(await readFile(statusFile, 'utf8'), fixture);
   assert.deepEqual(await readdir(stateDirectory), ['status.json']);
+});
+
+test('live CLI diagnostics publish only on explicit full-verification request', async () => {
+  const calls = [];
+  const dependencies = {
+    verify: async (provider) => {
+      calls.push(provider);
+      return { provider, identityStatus: 'verified', identityVerified: true, targetPin: 'verified',
+        permissionStatus: 'verified', cliVersionStatus: 'approved' };
+    },
+    publishAttestationResult: async (attestation) => {
+      calls.push('publish');
+      assert.deepEqual(Object.keys(attestation.providers), connectionProviderIds);
+      return { status: 'published' };
+    },
+    persist: (reports, publication) => ({ reports, publication }),
+  };
+  const ordinary = await collectLiveConnectionDiagnostics(['--json'], dependencies);
+  assert.equal(ordinary.exitCode, 0);
+  assert.equal(ordinary.value.publication.status, 'skipped');
+  assert.deepEqual(calls.splice(0), connectionProviderIds);
+
+  const explicit = await collectLiveConnectionDiagnostics(['--publish'], dependencies);
+  assert.equal(explicit.exitCode, 0);
+  assert.equal(explicit.value.publication.status, 'published');
+  assert.deepEqual(calls.splice(0), [...connectionProviderIds, 'publish']);
+
+  const partial = await collectLiveConnectionDiagnostics(['github'], dependencies);
+  assert.equal(partial.value.publication, undefined);
+  assert.deepEqual(calls.splice(0), ['github']);
+
+  for (const args of [['github', '--publish'], ['--publish', '--read-only'],
+    ['--publish', '--no-publish'], ['--publish', '--publish'], ['--unknown'], ['github', 'vercel']]) {
+    assert.throws(() => parseConnectionDiagnosticArguments(args));
+    await assert.rejects(collectLiveConnectionDiagnostics(args, dependencies));
+  }
+  assert.deepEqual(calls, []);
 });
 
 test('provider CLI rejects alternate targets in attached, repeated and relative forms', () => {
