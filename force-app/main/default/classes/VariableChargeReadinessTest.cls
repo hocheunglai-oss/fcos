@@ -544,6 +544,42 @@ private class VariableChargeReadinessTest {
     }
 
     @IsTest
+    static void buyerInvoiceUsesItsApprovedChargesWhenSupplierCurrencyIsUnreviewed() {
+        Map<String, Id> ids = prepareRequiredSupplier(false);
+        Port__c hongKong = TestDataFactory.createTestPort('HONG KONG', 'HONG KONG', true);
+        ContextManager.skipTriggers = true;
+        try {
+            update new STEM__c(Id = ids.get('stem'), Port__c = hongKong.Id, Variable_Charges_Confirmed__c = false);
+            update new Account(Id = ids.get('supplier'), Agency_Fee_Currency__c = null);
+        } finally {
+            ContextManager.skipTriggers = false;
+        }
+        verifyBuyerSide(ids);
+
+        Test.startTest();
+        VariableChargeInvoiceReadinessService.Readiness supplier =
+            VariableChargeInvoiceReadinessService.evaluateSupplier(ids.get('stem'), ids.get('supplier'));
+        System.assertEquals(false, supplier.ready);
+        System.assert(supplier.reason.contains('Agreed Agency Fee Currency'), supplier.reason);
+
+        VariableChargeInvoiceReadinessService.Readiness unconfirmedBuyer =
+            VariableChargeInvoiceReadinessService.evaluateBuyer(ids.get('stem'));
+        System.assertEquals(false, unconfirmedBuyer.ready);
+        System.assert(unconfirmedBuyer.reason.contains('STEM-level Buyer Charges Confirmed flag is off'), unconfirmedBuyer.reason);
+
+        ContextManager.skipTriggers = true;
+        try {
+            update new STEM__c(Id = ids.get('stem'), Variable_Charges_Confirmed__c = true);
+        } finally {
+            ContextManager.skipTriggers = false;
+        }
+        VariableChargeInvoiceReadinessService.Readiness confirmedBuyer =
+            VariableChargeInvoiceReadinessService.evaluateBuyer(ids.get('stem'));
+        System.assertEquals(true, confirmedBuyer.ready, confirmedBuyer.reason);
+        Test.stopTest();
+    }
+
+    @IsTest
     static void noRequirementBypassesBothGates() {
         Map<String, Id> ids = prepareRequiredSupplier(false);
         Test.startTest();

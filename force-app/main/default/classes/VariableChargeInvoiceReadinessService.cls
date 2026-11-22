@@ -215,8 +215,6 @@ public without sharing class VariableChargeInvoiceReadinessService {
         if (context.required != true) return new Readiness(true, false, null, stemId, supplierId);
         Actionability actionability = calculateActionability(context.stem, context.hasProductLineItems);
         if (actionability.ready != true) return blockedForActionability(actionability, stemId, supplierId, true);
-        String currencyProblem = agentCurrencyProblem(stemId, supplierId);
-        if (String.isNotBlank(currencyProblem)) return blocked(currencyProblem, stemId, supplierId, true);
         String bundleProblem = hongKongBundleProblem(stemId, supplierId, false);
         if (String.isNotBlank(bundleProblem)) return blocked(bundleProblem, stemId, supplierId, true);
         String anchorageProblem = hongKongAnchorageProblem(stemId, supplierId, false);
