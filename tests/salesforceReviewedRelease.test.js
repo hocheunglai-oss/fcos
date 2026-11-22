@@ -2031,7 +2031,7 @@ test('existing-layout-only native projection preserves the raw baseline and unre
   const raw = { files: baselineInventory.files, inventoryHash: baselineInventory.inventoryHash };
   const stableFiles = Object.fromEntries(Object.keys(files).map(name => [name, baselineInventory.files[name]]));
   const final = { projected: true, files: stableFiles, inventoryHash: projectedNativeInventoryHash(stableFiles, [layout]) };
-  const retrieval = { path: 'manifest/stable.xml', sha256: hash('stable'), metadata: { path: 'manifest/layout.xml', sha256: hash(manifestBytes) } };
+  const retrieval = { path: 'manifest/stable.xml', sha256: hash('stable') };
   const review = {
     schemaVersion: 1, releaseMode: REVIEWED_SALESFORCE_MODE, baselineMode: INVENTORY_BASELINE_MODE,
     sourceTreeHash: finalInventory.sourceTreeHash, manifestSha256: hash(manifestBytes), baselineCommit: 'a'.repeat(40),
@@ -2050,6 +2050,9 @@ test('existing-layout-only native projection preserves the raw baseline and unre
   assert.equal(plan.binding.bootstrapSha256, null);
   assert.deepEqual(plan.nativeInventories.devee.baseline.files, baselineInventory.files);
   assert.deepEqual(plan.nativeInventories.devee.final.projectionPaths, [layout]);
+  const splitRetrieval = structuredClone(review);
+  splitRetrieval.inventoryManifests[raw.inventoryHash].metadata = { path: 'manifest/layout.xml', sha256: hash(manifestBytes) };
+  assert.throws(() => create(splitRetrieval), /exact retrieval manifest/u);
   assert.throws(() => create({ ...review, nativeProjection: 'schema-free-permission-set' }), /permission-set-only package/u);
   assert.throws(() => create({ ...review, nativeInventories: undefined }), /only existing owned layouts/u);
   const withoutLayout = inventoryFromFiles(files);

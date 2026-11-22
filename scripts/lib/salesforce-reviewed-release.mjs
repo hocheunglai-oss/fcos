@@ -151,6 +151,7 @@ function reviewedProjectedInventories(review, policy, baselineInventory, orgBase
         || name.split('/').some(part => !part || part === '.' || part === '..') || Object.hasOwn(finalInventory.files, name))))) {
     failCoverage('Native projection context must name exact unowned object XML paths for every org.');
   }
+  const inlineLayouts = review.nativeProjection === 'schema-free-layout';
   const bootstrapComponents = new Set(review.bootstrap?.components || []);
   const bootstrapFiles = new Set(components.filter(({ id }) => bootstrapComponents.has(id)).flatMap(({ files }) => files));
   const releaseFiles = new Set(components.flatMap(({ files }) => files));
@@ -175,8 +176,8 @@ function reviewedProjectedInventories(review, policy, baselineInventory, orgBase
       failCoverage('Native projected checkpoint contains a partially present component.');
     }
     if (descriptor.inventoryHash !== inventoryHash || !validManifest(retrieval) || retrieval.apex !== undefined
-      || (present.length ? !validManifest(retrieval.metadata) : retrieval.metadata !== undefined)) {
-      failCoverage('Native projected checkpoint lacks its exact split retrieval manifest.');
+      || (present.length && !inlineLayouts ? !validManifest(retrieval.metadata) : retrieval.metadata !== undefined)) {
+      failCoverage('Native projected checkpoint lacks its exact retrieval manifest.');
     }
     return { files: ordered, inventoryHash, nativeExport: true, nativeBootstrap: true,
       ...(projected ? { projectedNativeInventory: true } : {}),
