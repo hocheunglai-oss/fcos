@@ -414,3 +414,80 @@ export function fcosSalesforceEnvironment(environmentKey) {
 }
 
 export default FCOS_CONNECTION_POLICY;
+
+// These are runtime connection inputs, separate from operator CLI credentials.
+const runtimeConnectionInputs = deepFreeze([
+  {
+    id: 'supabase',
+    provider: 'Supabase',
+    environmentKeys: ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_SECRET_KEY', 'VITE_SUPABASE_URL', 'VITE_SUPABASE_ANON_KEY'],
+    identityPins: { projectRef: fcosConnectionIdentifier('supabase', 'Project ref') },
+  },
+  {
+    id: 'salesforce',
+    provider: 'Salesforce',
+    environmentKeys: ['SALESFORCE_INSTANCE_URL', 'SALESFORCE_JWT_CLIENT_ID', 'SALESFORCE_JWT_USERNAME', 'SALESFORCE_JWT_PRIVATE_KEY',
+      'SALESFORCE_CLIENT_ID', 'SALESFORCE_CLIENT_SECRET', 'SALESFORCE_REFRESH_TOKEN', 'SALESFORCE_ACCESS_TOKEN'],
+    identityPins: {
+      orgId: fcosSalesforceEnvironment('production').orgId,
+      username: fcosSalesforceEnvironment('production').username,
+      instanceUrl: fcosSalesforceEnvironment('production').instanceUrl,
+      isSandbox: fcosSalesforceEnvironment('production').isSandbox,
+    },
+  },
+  {
+    id: 'xero',
+    provider: 'Xero',
+    environmentKeys: ['XERO_TENANT_ID', 'XERO_TENANT_NAME', 'XERO_CLIENT_ID', 'XERO_CLIENT_SECRET', 'XERO_REFRESH_TOKEN'],
+  },
+  {
+    id: 'drive',
+    provider: 'Google Drive market reports',
+    environmentKeys: ['GOOGLE_DRIVE_CLIENT_ID', 'GOOGLE_DRIVE_CLIENT_SECRET', 'GOOGLE_DRIVE_MARKET_REFRESH_TOKEN'],
+    identityPins: {
+      accountEmail: FCOS_CONNECTION_POLICY.integrations.googleDriveMarketReports.accountEmail,
+      rootFolderId: FCOS_CONNECTION_POLICY.integrations.googleDriveMarketReports.rootFolderId,
+      browserProfile: FCOS_CONNECTION_POLICY.integrations.googleDriveMarketReports.browserProfile,
+    },
+  },
+  {
+    id: 'identity',
+    provider: 'FCUNO identity federation',
+    environmentKeys: ['FCUNO_IDENTITY_ISSUER', 'FCUNO_IDENTITY_SYNC_AUDIENCE', 'FCUNO_IDENTITY_JWKS_URI', 'FCUNO_IDENTITY_JWT_ALGORITHMS'],
+    identityPins: {
+      issuer: FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation.issuer,
+      audience: FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation.syncAudience,
+      jwksEndpoint: FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation.syncJwksEndpoint,
+    },
+  },
+  {
+    id: 'microsoft',
+    provider: 'Microsoft Graph mail',
+    environmentKeys: ['FCOS_MICROSOFT_TENANT_ID', 'FCOS_MICROSOFT_CLIENT_ID'],
+  },
+  {
+    id: 'microsoft-growth',
+    provider: 'Microsoft Graph growth mailbox',
+    environmentKeys: ['MICROSOFT_TENANT_ID', 'MICROSOFT_CLIENT_ID', 'MICROSOFT_CLIENT_SECRET'],
+  },
+  {
+    id: 'openai',
+    provider: 'OpenAI',
+    environmentKeys: ['OPENAI_API_KEY'],
+  },
+]);
+
+export function fcosRuntimeConnectionCatalogue(environment = {}) {
+  return runtimeConnectionInputs.map(({ id, provider, environmentKeys, identityPins }) => ({
+    id,
+    provider,
+    connectionKind: 'application_runtime',
+    configurationSource: 'local_process_environment',
+    identityPins: identityPins || { status: 'requires_independent_verification' },
+    configuredEnv: Object.fromEntries(environmentKeys.map((key) =>
+      [key, typeof environment[key] === 'string' && Boolean(environment[key].trim())])),
+    authenticationStatus: 'unknown',
+    writePermission: 'unknown',
+    humanAuthorization: 'not_granted',
+  }));
+}

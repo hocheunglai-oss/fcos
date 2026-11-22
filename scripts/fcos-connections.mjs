@@ -15,7 +15,7 @@ import {
   sanitizeConnectionAttestation,
   sanitizeConnectionProviderReport,
 } from '../src/lib/connectionChecklist.js';
-import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
+import { FCOS_CONNECTION_POLICY, fcosRuntimeConnectionCatalogue } from '../config/fcosConnections.js';
 import {
   assertConnectionOperationAccess,
   sanitizeConnectionOperationOutput,
@@ -940,7 +940,8 @@ function printCachedDiagnostics({ providers, json }) {
   });
   if (!json) console.log('Cached connection status. Live identities and permissions were not verified.');
   const status = mergeSafeConnectionStatus(null, reports, { status: 'skipped' });
-  printReports({ ...status, readOnly: true, observation: 'cached; not live verified' }, json);
+  printReports({ ...status, readOnly: true, observation: 'cached; not live verified',
+    runtimeConnections: fcosRuntimeConnectionCatalogue(process.env) }, json);
   return 2;
 }
 
@@ -965,7 +966,7 @@ export async function collectLiveConnectionDiagnostics(args, {
 
 async function verifyCommand(args, { doctor = false } = {}) {
   const { value, json, exitCode } = await collectLiveConnectionDiagnostics(args);
-  printReports(value, json);
+  printReports({ ...value, runtimeConnections: fcosRuntimeConnectionCatalogue(process.env) }, json);
   if (doctor && !json) {
     const salesforceProfiles = salesforceEnvironments().map(({ label, browserProfile }) => `${label}=${browserProfile}`).join(', ');
     console.log(`Approved Chrome fallback: FCOS=${APPROVED_CONNECTION_BROWSER_PROFILE}; Salesforce ${salesforceProfiles}; shared Salesforce GitHub=${target('salesforce').publication.browserProfile} (authentication only)`);

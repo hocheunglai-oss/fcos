@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
-import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
+import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier, fcosRuntimeConnectionCatalogue, fcosSalesforceEnvironment } from '../config/fcosConnections.js';
 import {
   canonicalGitRemote,
   collectLiveConnectionDiagnostics,
@@ -202,7 +202,7 @@ test('cached diagnostics return one sanitized JSON report without provider or st
     syncBuiltinESMExports();
   `);
   const run = (...args) => spawnSync(process.execPath, ['--import', sentinel, 'scripts/fcos-connections.mjs', ...args], {
-    cwd: root, env: { PATH: process.env.PATH }, encoding: 'utf8', timeout: 5000,
+    cwd: root, env: { PATH: process.env.PATH, OPENAI_API_KEY: 'private-test-value' }, encoding: 'utf8', timeout: 5000,
   });
 
   const result = run('doctor', 'github', '--read-only', '--json');
@@ -215,6 +215,8 @@ test('cached diagnostics return one sanitized JSON report without provider or st
   assert.deepEqual(Object.keys(report.providers), ['github']);
   assert.equal(report.providers.github.identityVerified, false);
   assert.equal(report.providers.github.lastVerifiedAt, now);
+  assert.equal(report.runtimeConnections.find(({ id }) => id === 'openai').configuredEnv.OPENAI_API_KEY, true);
+  assert(report.runtimeConnections.every(({ authenticationStatus }) => authenticationStatus === 'unknown'));
 
   const missing = run('verify', 'salesforce', '--read-only', '--json');
   assert.equal(missing.status, 2, missing.stderr);
@@ -228,6 +230,30 @@ test('cached diagnostics return one sanitized JSON report without provider or st
   }
   assert.equal(await readFile(statusFile, 'utf8'), fixture);
   assert.deepEqual(await readdir(stateDirectory), ['status.json']);
+});
+
+test('runtime catalog exposes local key presence and canonical pins without attesting identity', () => {
+  const runtime = fcosRuntimeConnectionCatalogue({
+    OPENAI_API_KEY: 'private-test-value', XERO_TENANT_ID: 'private-tenant',
+    FCOS_MICROSOFT_CLIENT_ID: 'private-client', SUPABASE_SERVICE_ROLE_KEY: '  ', SALESFORCE_JWT_PRIVATE_KEY: 'private-key',
+    GOOGLE_DRIVE_REFRESH_TOKEN: 'retired-workflow-only',
+  });
+  assert.deepEqual(runtime.map(({ id }) => id), ['supabase', 'salesforce', 'xero', 'drive', 'identity', 'microsoft', 'microsoft-growth', 'openai']);
+  const byId = Object.fromEntries(runtime.map((entry) => [entry.id, entry]));
+  assert.equal(byId.supabase.identityPins.projectRef, fcosConnectionIdentifier('supabase', 'Project ref'));
+  assert.equal(byId.salesforce.identityPins.orgId, fcosSalesforceEnvironment('production').orgId);
+  assert.equal(byId.drive.identityPins.accountEmail, FCOS_CONNECTION_POLICY.integrations.googleDriveMarketReports.accountEmail);
+  assert.equal(byId.supabase.configuredEnv.SUPABASE_SERVICE_ROLE_KEY, false);
+  assert.equal(byId.salesforce.configuredEnv.SALESFORCE_JWT_PRIVATE_KEY, true);
+  assert.equal(byId.openai.configuredEnv.OPENAI_API_KEY, true);
+  for (const id of ['xero', 'microsoft', 'microsoft-growth', 'openai']) {
+    assert.deepEqual(byId[id].identityPins, { status: 'requires_independent_verification' });
+  }
+  assert(runtime.every(({ configurationSource, authenticationStatus, writePermission, humanAuthorization }) =>
+    configurationSource === 'local_process_environment' && authenticationStatus === 'unknown'
+    && writePermission === 'unknown' && humanAuthorization === 'not_granted'));
+  assert.doesNotMatch(JSON.stringify(runtime), /private-|retired-workflow-only|GOOGLE_DRIVE_REFRESH_TOKEN/);
+  assert.equal(FCOS_CONNECTION_POLICY.providers.length, 4);
 });
 
 test('live CLI diagnostics publish only on explicit full-verification request', async () => {
