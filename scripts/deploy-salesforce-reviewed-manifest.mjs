@@ -523,13 +523,18 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
       if (salesforcePromotionHash(bytes) !== manifest.sha256) throw new Error('Salesforce inventory retrieval manifest digest mismatch.');
       const presentComponents = parseReviewedPackage(bytes.toString('utf8'), { inventory: true });
       const stableMembers = new Set(presentComponents);
+      const inlineLayouts = plan.review.nativeProjection === 'schema-free-layout';
       const supplementalManifest = nativeBootstrap ? manifest.metadata : manifest.apex;
       const presentReviewed = nativeExport
         ? plan.review.components.filter(({ id }) => !expectedAbsentComponents.includes(id)) : [];
       let supplementalBytes;
       if (nativeExport) {
         const supplementalLabel = nativeBootstrap ? 'metadata' : 'Apex';
-        if (plan.review.components.some(({ id }) => presentComponents.includes(id)) || Boolean(supplementalManifest) !== Boolean(presentReviewed.length)) {
+        if (inlineLayouts) {
+          if (supplementalManifest || presentReviewed.some(({ id }) => !stableMembers.has(id))) {
+            throw new Error('Layout inventory must retrieve every reviewed layout together with its profile assignments.');
+          }
+        } else if (plan.review.components.some(({ id }) => presentComponents.includes(id)) || Boolean(supplementalManifest) !== Boolean(presentReviewed.length)) {
           throw new Error(`Stable native retrieval must keep the reviewed ${supplementalLabel} package separate.`);
         }
         if (supplementalManifest) {
@@ -622,7 +627,7 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
         }
         if (verifyApexProjection) verifyNativeApexProjection({ root: supplementalRoot, sourceRoot: path.join(cwd, policy.publication.sourceRoot), plan });
         const metadataEvidence = nativeBootstrap && projectionPaths.length
-          ? verifyNativeMetadataProjection({ root: supplementalRoot, sourceRoot: path.join(cwd, policy.publication.sourceRoot),
+          ? verifyNativeMetadataProjection({ root: inlineLayouts ? root : supplementalRoot, sourceRoot: path.join(cwd, policy.publication.sourceRoot),
             plan, projectionPaths, query: soql => sf(['data', 'query', '--target-org', environment.alias, '--api-version', '67.0',
               '--query', soql, '--json'], project) }) : null;
         const absence = expectedAbsentComponents.length ? proveSalesforceInventoryAbsence({ expectedAbsentComponents,
