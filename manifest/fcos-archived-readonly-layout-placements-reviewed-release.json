@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "releaseMode": "reviewed-manifest-incremental-v1",
   "baselineMode": "read-only-owned-tree-inventory",
-  "baselineCommit": "55752fe8db2c2e34599822cbdd25356e779d9ab4",
+  "baselineCommit": "7c193c906cd1f9be44679b2731664e355a16ed8b",
   "baselineSourceTreeHash": "8dfd55f500448bf6b074d391c7b2c7f7394d26d98ffeb803b5b780fe1c36fece",
   "baselineInventoryHash": "83a3d54ef57b0dacdd02c49cae78b10e612e5149eadd57baeb1602c6dfd448bb",
   "manifestSha256": "ef5a1214200409bda14ea6a78e47a3de8f3a159c508a7fb4f5c076cdedafd4d2",
