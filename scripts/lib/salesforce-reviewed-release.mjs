@@ -410,7 +410,12 @@ export function createReviewedSalesforcePlan({ review, manifestBytes, bootstrapB
   const nativeProjection = review.nativeProjection;
   // The exact Editors desktop component contract is checked below after its native inventory loads.
   const editorFixtureTrigger = review.nativeDeveeDesktop === undefined ? null : 'ApexTrigger:FcosTradeCurrencySideTrigger';
-  if (nativeProjection !== undefined && (nativeProjection !== 'schema-free-apex-lightning' || bootstrap
+  if (nativeProjection === 'schema-free-permission-set') {
+    if (bootstrap || !review.nativeInventories || components.some(({ id }) => !id.startsWith('PermissionSet:'))) {
+      failCoverage('A permission-set native projection requires exact native inventories and a permission-set-only package.');
+    }
+    if (permissions.length) failCoverage('A permission-set native projection does not allow permission assignments.');
+  } else if (nativeProjection !== undefined && (nativeProjection !== 'schema-free-apex-lightning' || bootstrap
     || !review.nativeInventories || components.some(({ id }) => id !== editorFixtureTrigger
       && !(invoiceAppPlacement && id.startsWith('FlexiPage:')) && !/^(?:ApexClass|LightningComponentBundle):/u.test(id))
     || !components.some(({ id }) => id.startsWith('LightningComponentBundle:')))) {
