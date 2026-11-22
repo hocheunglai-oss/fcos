@@ -74,3 +74,33 @@ test('lost save responses invalidate snapshots even when fetch itself fails or a
   }
   } finally { globalThis.window = previousWindow; globalThis.CustomEvent = previousEvent; }
 });
+
+test('FCUNO provider proof is sent only to authContext with a paired access token', async () => {
+  const auth = globalThis.__responseAuth.auth;
+  const previousGetSession = auth.getSession;
+  const previousFetch = globalThis.fetch;
+  let session = { user: { id: 'fixture-user' }, provider_token: 'fixture-provider' };
+  let headers;
+  auth.getSession = async () => ({ data: { session } });
+  globalThis.fetch = async (_url, request) => {
+    headers = new Headers(request.headers);
+    return response(async () => ({}));
+  };
+
+  try {
+    await appClient.functions.invoke('authContext', {});
+    assert.equal(headers.get('x-fcos-fcuno-provider-token'), null);
+
+    session = { ...session, access_token: 'fixture-access' };
+    await appClient.functions.invoke('authContext', {});
+    assert.equal(headers.get('authorization'), 'Bearer fixture-access');
+    assert.equal(headers.get('x-fcos-fcuno-provider-token'), 'fixture-provider');
+
+    await appClient.functions.invoke('snapshot', {});
+    assert.equal(headers.get('authorization'), 'Bearer fixture-access');
+    assert.equal(headers.get('x-fcos-fcuno-provider-token'), null);
+  } finally {
+    auth.getSession = previousGetSession;
+    globalThis.fetch = previousFetch;
+  }
+});

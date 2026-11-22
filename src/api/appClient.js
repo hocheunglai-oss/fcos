@@ -176,7 +176,9 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
   if (DEDICATED_FUNCTION_ENDPOINTS[name]) headers['x-fcos-function-name'] = name;
   if (options.force) headers['x-fcos-cache-bypass'] = '1';
   if (authContext.accessToken) headers.authorization = `Bearer ${authContext.accessToken}`;
-  if (name === 'authContext' && authContext.fcunoProviderToken) headers['x-fcos-fcuno-provider-token'] = authContext.fcunoProviderToken;
+  if (name === 'authContext' && authContext.accessToken && authContext.fcunoProviderToken) {
+    headers['x-fcos-fcuno-provider-token'] = authContext.fcunoProviderToken;
+  }
   const invalidateAfterRequest = (mutationHeader = null) => {
     const shouldInvalidateCache = options.invalidateCache === true
       || (options.invalidateCache !== false && (mutationHeader === '1' || (!cacheKey && mutationHeader !== '0')));
