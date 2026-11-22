@@ -894,6 +894,38 @@ async function publishAttestation(attestation) {
   }
 }
 
+function printCachedDiagnostics(command, args) {
+  const supported = new Set(['--read-only', '--json', '--no-publish']);
+  const providerArgs = args.filter((arg) => !arg.startsWith('-'));
+  if (!['verify', 'doctor'].includes(command)
+    || args.some((arg) => arg.startsWith('-') && !supported.has(arg))
+    || providerArgs.length > 1) {
+    throw new Error('Read-only diagnostics accept one optional provider, --json and --no-publish.');
+  }
+
+  const snapshot = readSafeStatus();
+  const reports = selectedProviders(providerArgs[0]).map((provider) => {
+    const cached = sanitizeConnectionProviderReport(snapshot?.providers?.[provider], provider);
+    return {
+      provider,
+      identityStatus: cached ? 'cached' : 'unavailable',
+      identityVerified: false,
+      targetPin: 'pending',
+      permissionStatus: 'unavailable',
+      cliVersion: null,
+      cliVersionStatus: 'unavailable',
+      latencyMs: 0,
+      permissions: [],
+      lastVerifiedAt: cached?.lastVerifiedAt ?? null,
+    };
+  });
+  const asJson = args.includes('--json');
+  if (!asJson) console.log('Cached connection status. Live identities and permissions were not verified.');
+  const status = mergeSafeConnectionStatus(null, reports, { status: 'skipped' });
+  printReports({ ...status, readOnly: true, observation: 'cached; not live verified' }, asJson);
+  return 2;
+}
+
 async function verifyCommand(args, { doctor = false } = {}) {
   const startedAt = Date.now();
   const providers = selectedProviders(args.find((value) => !value.startsWith('--')));
@@ -1175,8 +1207,8 @@ function credentialMetadataCommand(args) {
 
 function printHelp() {
   console.log(`Usage:
-  npm run connections:verify [-- <provider>] [-- --json] [-- --no-publish]
-  npm run connections:doctor [-- --no-publish]
+  npm run connections:verify [-- <provider>] [-- --json] [-- --no-publish] [-- --read-only]
+  npm run connections:doctor [-- --json] [-- --no-publish] [-- --read-only]
   npm run connections:bootstrap [-- <provider>]
   npm run connections:auth -- <provider>
   npm run connections:keychain
@@ -1186,6 +1218,7 @@ function printHelp() {
 export async function main(argv = process.argv.slice(2)) {
   try {
     const [command, ...args] = argv;
+    if (args.includes('--read-only')) return printCachedDiagnostics(command, args);
     if (!command || command === 'help' || command === '--help') {
       printHelp();
       return 0;
@@ -1199,7 +1232,11 @@ export async function main(argv = process.argv.slice(2)) {
     if (command === 'run') return runCommand(args);
     throw new Error(`Unknown command: ${command}`);
   } catch (error) {
-    console.error(error instanceof Error ? error.message : 'Connection command failed safely.');
+    if (argv.includes('--read-only') && argv.includes('--json')) {
+      process.stdout.write(JSON.stringify({ code: 'connection_command_failed' }) + '\n');
+    } else {
+      console.error(error instanceof Error ? error.message : 'Connection command failed safely.');
+    }
     return 1;
   }
 }

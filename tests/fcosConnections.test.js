@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
-import { readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import {
   canonicalGitRemote,
   githubConfigDirectory,
@@ -157,4 +159,69 @@ test('full-stack development uses the verified Vercel runner', async () => {
     packageJson.scripts['dev:full'],
     'node scripts/dev-server.mjs -- node scripts/fcos-connections.mjs run vercel -- dev',
   );
+});
+
+test('cached diagnostics return one sanitized JSON report without provider or state writes', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'fcos-cached-diagnostic-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  for (const file of [
+    'config/fcosConnections.js',
+    'scripts/fcos-connections.mjs',
+    'scripts/lib/supabase-project-access.mjs',
+    'src/lib/connectionChecklist.js',
+  ]) {
+    const destination = path.join(root, file);
+    await mkdir(path.dirname(destination), { recursive: true });
+    await copyFile(new URL('../' + file, import.meta.url), destination);
+  }
+  await writeFile(path.join(root, 'package.json'), '{"type":"module"}');
+  const stateDirectory = path.join(root, FCOS_CONNECTION_POLICY.localStateDirectory);
+  const statusFile = path.join(stateDirectory, 'status.json');
+  await mkdir(stateDirectory);
+  const now = new Date().toISOString();
+  const fixture = JSON.stringify({
+    schemaVersion: 2, policyVersion: FCOS_CONNECTION_POLICY.policyVersion,
+    profile: FCOS_CONNECTION_POLICY.profile, generatedAt: now,
+    providers: { github: { identityVerified: true, identityStatus: 'verified', targetPin: 'verified',
+      permissionStatus: 'verified', permissions: ['repository.push'], lastVerifiedAt: now,
+      cliVersion: 'private-test-value', extra: 'private-test-value' } },
+  });
+  await writeFile(statusFile, fixture);
+  const sentinel = path.join(root, 'no-effects.mjs');
+  await writeFile(sentinel, `
+    import subprocess from 'node:child_process';
+    import fs from 'node:fs';
+    import { syncBuiltinESMExports } from 'node:module';
+    const fail = () => { throw new Error('unexpected diagnostic side effect'); };
+    subprocess.spawn = subprocess.spawnSync = globalThis.fetch = fail;
+    fs.writeFileSync = fs.mkdirSync = fs.chmodSync = fail;
+    syncBuiltinESMExports();
+  `);
+  const run = (...args) => spawnSync(process.execPath, ['--import', sentinel, 'scripts/fcos-connections.mjs', ...args], {
+    cwd: root, env: { PATH: process.env.PATH }, encoding: 'utf8', timeout: 5000,
+  });
+
+  const result = run('doctor', 'github', '--read-only', '--json');
+  assert.equal(result.status, 2, result.stderr);
+  assert.equal(result.stderr, '');
+  assert.doesNotMatch(result.stdout, /private-test-value|repository\.push/);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.readOnly, true);
+  assert.equal(report.observation, 'cached; not live verified');
+  assert.deepEqual(Object.keys(report.providers), ['github']);
+  assert.equal(report.providers.github.identityVerified, false);
+  assert.equal(report.providers.github.lastVerifiedAt, now);
+
+  const missing = run('verify', 'salesforce', '--read-only', '--json');
+  assert.equal(missing.status, 2, missing.stderr);
+  assert.equal(JSON.parse(missing.stdout).providers.salesforce.identityStatus, 'unavailable');
+
+  for (const args of [['doctor', '--publish'], ['doctor', '--retarget'], ['bootstrap']]) {
+    const invalid = run(...args, '--read-only', '--json');
+    assert.equal(invalid.status, 1);
+    assert.equal(invalid.stderr, '');
+    assert.equal(JSON.parse(invalid.stdout).code, 'connection_command_failed');
+  }
+  assert.equal(await readFile(statusFile, 'utf8'), fixture);
+  assert.deepEqual(await readdir(stateDirectory), ['status.json']);
 });
