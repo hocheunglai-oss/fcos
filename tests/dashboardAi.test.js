@@ -396,3 +396,29 @@ test('keeps Dashboard AI usage storage service-only and exposes an invoker summa
     /grant execute on function public\.dashboard_ai_usage_summary\(date\) to service_role/i,
   );
 });
+
+test('routes early buyer payment analysis without forcing a STEM text condition', async () => {
+  const interpretation = readyInterpretation({ analysis: 'buyer_payment_timing', groups: [] });
+  assert.equal(parseDashboardAiInterpretation(interpretation).analysis, 'buyer_payment_timing');
+  assert.match(compileDashboardAiWhere(interpretation, schema, { selectedYears: [2026], selectedMonths: [9] }), /2026-09-01/);
+  const result = await interpretDashboardAiSearch({
+    prompt: 'which buyers usually pay earlier than buyer payment due date if buyer invoices are created earlier?',
+    apiKey: 'test-key', selectedPeriodLabel: 'September 2026', today: '2026-10-05',
+    fetchImpl: async (_url, options) => {
+      const request = JSON.parse(options.body);
+      assert.ok(request.text.format.schema.required.includes('analysis'));
+      assert.match(request.input[0].content[0].text, /at least 7 calendar days/);
+      assert.match(request.input[0].content[0].text, /full settlement strictly before due/);
+      assert.match(request.input[0].content[0].text, /different threshold or invoice sent-date analysis needs clarification/);
+      return { ok: true, json: async () => ({ output_text: JSON.stringify(interpretation) }) };
+    },
+  });
+  assert.equal(result.analysis, 'buyer_payment_timing');
+  assert.throws(() => parseDashboardAiInterpretation(readyInterpretation({ analysis: 'arbitrary_sql' })));
+  assert.throws(() => parseDashboardAiInterpretation(readyInterpretation({ groups: [] })), /supported record condition/);
+});
+
+test('all-history buyer payment analysis has a safe nonempty scope predicate', () => {
+  const interpretation = parseDashboardAiInterpretation(readyInterpretation({ analysis: 'buyer_payment_timing', groups: [], dateScope: { mode: 'all_time', start: null, end: null, label: 'All history' } }));
+  assert.equal(compileDashboardAiWhere(interpretation, schema), 'Id != null');
+});
