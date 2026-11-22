@@ -60,6 +60,14 @@
                 <field>Manual_Invoice_Due_Date__c</field>
             </layoutItems>
             <layoutItems>
+                <behavior>Readonly</behavior>
+                <field>Supplier_Name__c</field>
+            </layoutItems>
+            <layoutItems>
+                <behavior>Readonly</behavior>
+                <field>Vessel_Name__c</field>
+            </layoutItems>
+            <layoutItems>
                 <behavior>Edit</behavior>
                 <field>Refcode_Index__c</field>
             </layoutItems>
@@ -74,6 +82,10 @@
             <layoutItems>
                 <behavior>Readonly</behavior>
                 <field>Memo__c</field>
+            </layoutItems>
+            <layoutItems>
+                <behavior>Readonly</behavior>
+                <field>Payment_Term_Number__c</field>
             </layoutItems>
         </layoutColumns>
         <layoutColumns/>
