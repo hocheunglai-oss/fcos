@@ -12,6 +12,7 @@ import {
   mergeSafeConnectionStatus,
   providerCliRunnable,
   providerRuntime,
+  runManagedConnectionOperation,
   validateProviderArgs,
   versionPolicyStatus,
 } from '../scripts/fcos-connections.mjs';
@@ -168,6 +169,7 @@ test('cached diagnostics return one sanitized JSON report without provider or st
     'config/fcosConnections.js',
     'scripts/fcos-connections.mjs',
     'scripts/lib/supabase-project-access.mjs',
+    'scripts/lib/connection-operation.mjs',
     'src/lib/connectionChecklist.js',
   ]) {
     const destination = path.join(root, file);
@@ -232,6 +234,7 @@ test('provider CLI rejects alternate targets in attached, repeated and relative 
     ['github', ['api', 'repos/fixture/unapproved']],
     ['github', ['api', 'user', '--hostname=fixture.invalid']],
     ['vercel', ['inspect', 'fixture-deployment', '--scope=fixture-team']],
+    ['vercel', ['inspect', 'fixture-deployment', '-S=fixture-team']],
     ['supabase', ['projects', 'list', '--profile=fixture']],
     ['supabase', ['db', 'pull', '--project-ref=pjforfvchygdyqfcgpmw', '--project-ref=fixture-ref']],
     ['salesforce', ['data', 'query', '--target-org=fixture-org']],
@@ -243,4 +246,71 @@ test('provider CLI rejects alternate targets in attached, repeated and relative 
   assert.equal(validateProviderArgs('github', ['api', 'repos/hocheunglai-oss/fcos/actions/runs']), true);
   assert.equal(validateProviderArgs('github', ['pr', 'view', '1', '-R', 'hocheunglai-oss/fcos']), true);
   assert.equal(validateProviderArgs('salesforce', ['data', 'query', '--target-org=fcos-devee']), true);
+});
+
+test('managed API reads require current capability and emit only projected evidence', async () => {
+  const when = new Date('2026-11-23T01:00:00Z');
+  const context = { provider: 'github', environment: 'tooling', operation: 'github.api.read', capability: 'repository.read' };
+  const repo = FCOS_CONNECTION_POLICY.providers.find(({ id }) => id === 'github').identifiers
+    .find(({ label }) => label === 'Repository').value;
+  const args = ['api', `repos/${repo}/actions/runs`];
+  const operations = [];
+  const safeReport = {
+    provider: 'github', cliVersionStatus: 'approved', targetPin: 'missing', readTargetPinned: true,
+    identityVerified: true, identityStatus: 'verified', observedAt: when.toISOString(),
+    permissions: ['repository.read'], permissionStatus: 'missing',
+  };
+  const dependencies = {
+    now: () => when,
+    verifier: async () => { operations.push('verify'); return safeReport; },
+    capture: async () => {
+      operations.push('read');
+      return { ok: true, stdout: JSON.stringify({ workflow_runs: [{ id: 72, status: 'completed',
+        workflow_run: { id: 5, workflow_run: { id: 6 } }, secret: 'fixture-private' }], raw: 'fixture-private' }) };
+    },
+    print: (value) => operations.push(value),
+  };
+  assert.equal(await runManagedConnectionOperation(context, args, dependencies), 0);
+  assert.deepEqual(operations, ['verify', 'read', { workflow_runs: [{ id: 72, status: 'completed', workflow_run: { id: 5 } }] }]);
+
+  await assert.rejects(runManagedConnectionOperation({ ...context, capability: 'repository.push' }, args, {
+    ...dependencies, verifier: () => assert.fail('Invalid operation context reached provider verification'),
+  }), /operation and capability/);
+  await assert.rejects(runManagedConnectionOperation(context, args, {
+    ...dependencies, verifier: async () => ({ ...safeReport, observationMode: 'cached' }),
+    capture: () => assert.fail('Cached evidence reached the provider'),
+  }), /expired, cached or missing/);
+  await assert.rejects(runManagedConnectionOperation(context, args, {
+    ...dependencies, verifier: async () => ({ ...safeReport, readTargetPinned: false }),
+    capture: () => assert.fail('Missing read target reached the provider'),
+  }), /exact identity, target/);
+  await assert.rejects(runManagedConnectionOperation(context, args, {
+    ...dependencies, verifier: async () => ({ ...safeReport, permissions: [] }),
+    capture: () => assert.fail('Missing capability reached the provider'),
+  }), /capability has not been/);
+});
+
+test('managed deployment reads stop before output when exact resource ownership is unverified', async () => {
+  const when = new Date('2026-11-23T01:00:00Z');
+  const context = { provider: 'vercel', environment: 'preview', operation: 'vercel.api.read', capability: 'deployment.read' };
+  const seen = [];
+  const deps = {
+    now: () => when,
+    verifier: async () => ({
+      provider: 'vercel', cliVersionStatus: 'approved', targetPin: 'verified',
+      identityVerified: true, identityStatus: 'verified', observedAt: when.toISOString(), permissions: ['deployment.read'],
+    }),
+    verifyResource: async (resource, operation) => { seen.push([resource, operation.environment]); return false; },
+    capture: () => assert.fail('Unverified deployment reached the read path'),
+    print: () => assert.fail('Unverified deployment output was published'),
+  };
+  await assert.rejects(runManagedConnectionOperation(context, ['api', '/v13/deployments/dpl_fixture'], deps),
+    /ownership or environment/);
+  assert.deepEqual(seen, [['dpl_fixture', 'preview']]);
+
+  const project = FCOS_CONNECTION_POLICY.providers.find(({ id }) => id === 'vercel').identifiers
+    .find(({ label }) => label === 'Project ID').value;
+  await assert.rejects(runManagedConnectionOperation(context, ['api', `/v13/deployments?projectId=${project}&target=production`], {
+    ...deps, verifier: () => assert.fail('Mismatched environment reached provider verification'),
+  }), /exact operation environment/);
 });

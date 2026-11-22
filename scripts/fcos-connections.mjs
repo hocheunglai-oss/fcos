@@ -16,6 +16,11 @@ import {
   sanitizeConnectionProviderReport,
 } from '../src/lib/connectionChecklist.js';
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
+import {
+  assertConnectionOperationAccess,
+  sanitizeConnectionOperationOutput,
+  validateConnectionOperation,
+} from './lib/connection-operation.mjs';
 import { probeSupabaseProjectAccess, shouldProbeScopedSupabaseProject } from './lib/supabase-project-access.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -759,12 +764,16 @@ export async function verifyProvider(providerId) {
     case 'salesforce': report = await verifySalesforce(version, metadata, startedAt); break;
     default: throw new Error(`Unsupported provider: ${providerId}`);
   }
+  const observedAt = new Date().toISOString();
   if (providerOperational(report)) {
-    const verifiedAt = new Date().toISOString();
+    const verifiedAt = observedAt;
     recordCredentialVerification(providerId, verifiedAt);
-    return { ...report, lastVerifiedAt: verifiedAt };
+    return { ...report, lastVerifiedAt: verifiedAt, observedAt };
   }
-  return report;
+  // GitHub API reads use GH_REPO and the isolated login. The push-helper
+  // pin is required for Git writes, even when the API read target is verified.
+  const githubReadPinned = providerId === 'github' && report.identityVerified && report.targetPin === 'missing';
+  return { ...report, observedAt, ...(githubReadPinned ? { readTargetPinned: true } : {}) };
 }
 
 function readSafeStatus() {
@@ -1041,7 +1050,7 @@ export function validateProviderArgs(providerId, args) {
       throw new Error('The GitHub command targets a host or repository outside the approved FCOS repository.');
     }
   }
-  if (providerId === 'vercel' && optionValues(args, ['--global-config', '-q', '--scope', '-s', '--team']).length) {
+  if (providerId === 'vercel' && optionValues(args, ['--global-config', '-q', '-Q', '--scope', '-s', '-S', '--team']).length) {
     throw new Error('Vercel config, scope, and team overrides are blocked; the FCOS wrapper injects the approved values.');
   }
   if (providerId === 'supabase') {
@@ -1062,6 +1071,65 @@ export function validateProviderArgs(providerId, args) {
     }
   }
   return true;
+}
+
+async function verifyManagedVercelResource(resource, context) {
+  const team = identifier('vercel', 'Team ID');
+  const result = await runCaptured('vercel', ['api', `/v13/deployments/${encodeURIComponent(resource)}?teamId=${team}`]);
+  const value = result.ok ? safeJson(result.stdout) : null;
+  return value?.projectId === identifier('vercel', 'Project ID')
+    && (value.teamId != null || value.ownerId != null)
+    && (value.teamId == null || value.teamId === team)
+    && (value.ownerId == null || value.ownerId === team)
+    && (context.environment === 'tooling' || (value.target || 'preview') === context.environment);
+}
+
+export async function runManagedConnectionOperation(context, args, {
+  verifier = verifyProvider, capture = runCaptured, verifyResource = verifyManagedVercelResource,
+  print = (result) => process.stdout.write(`${JSON.stringify(result, null, 2)}\n`),
+  now = () => new Date(),
+} = {}) {
+  const operation = validateConnectionOperation(context, args);
+  validateProviderArgs(context.provider, args);
+  const report = await verifier(context.provider);
+  assertConnectionOperationAccess(operation, report, { now: now() });
+  if (operation.resource && !(await verifyResource(operation.resource, context))) {
+    throw new Error('Deployment ownership or environment does not match the approved project.');
+  }
+  if (operation.operation.endsWith('.api.read')) {
+    const result = await capture(context.provider, args);
+    const parsed = result.ok ? safeJson(result.stdout) : null;
+    if (!parsed || typeof parsed !== 'object') throw new Error('Managed provider read failed without printing its output.');
+    print(sanitizeConnectionOperationOutput(operation, parsed));
+    return 0;
+  }
+  const runtime = providerRuntime(context.provider);
+  return new Promise((resolve) => {
+    const child = spawn(runtime.command, [...args, ...runtime.injectedArgs], { cwd: REPO_ROOT, env: runtime.env, stdio: 'inherit' });
+    child.on('error', () => resolve(1));
+    child.on('close', (status) => resolve(Number.isInteger(status) ? status : 1));
+  });
+}
+
+function runManagedCommand(args) {
+  const separator = args.indexOf('--');
+  const provider = args[0];
+  const options = args.slice(1, separator);
+  const names = new Map([['--environment', 'environment'], ['--operation', 'operation'], ['--capability', 'capability']]);
+  const context = { provider };
+  if (separator < 1) throw new Error('Use -- between the managed context and provider command.');
+  for (let index = 0; index < options.length; index += 1) {
+    const argument = options[index];
+    const delimiter = argument.indexOf('=');
+    const flag = delimiter < 0 ? argument : argument.slice(0, delimiter);
+    const field = names.get(flag);
+    const value = delimiter < 0 ? options[++index] : argument.slice(delimiter + 1);
+    if (!field || context[field] || !value || value.startsWith('-')) {
+      throw new Error('Supply one environment, operation and capability for the managed read.');
+    }
+    context[field] = value;
+  }
+  return runManagedConnectionOperation(context, args.slice(separator + 1));
 }
 
 async function runCommand(args) {
@@ -1226,7 +1294,8 @@ function printHelp() {
   npm run connections:bootstrap [-- <provider>]
   npm run connections:auth -- <provider>
   npm run connections:keychain
-  npm run connections:cli -- <provider> -- <provider CLI arguments>`);
+  npm run connections:cli -- <provider> -- <provider CLI arguments>
+  node scripts/fcos-connections.mjs managed <provider> --environment <environment> --operation <operation> --capability <capability> -- <provider command>`);
 }
 
 export async function main(argv = process.argv.slice(2)) {
@@ -1244,6 +1313,7 @@ export async function main(argv = process.argv.slice(2)) {
     if (command === 'keychain') return keychainCommand();
     if (command === 'credential-metadata') return credentialMetadataCommand(args);
     if (command === 'run') return runCommand(args);
+    if (command === 'managed') return await runManagedCommand(args);
     throw new Error(`Unknown command: ${command}`);
   } catch (error) {
     if (argv.includes('--read-only') && argv.includes('--json')) {
