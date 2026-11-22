@@ -1,12 +1,14 @@
 import { requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
 import { isExternalActionEnabled, requireExternalActionGate } from './_externalActionGates.js';
 import { getFreshXeroConnection, readStoredXeroConnection, splitScopes, xeroContactSyncServiceClient } from './_xeroContactSync.js';
-import { loadPrepaymentContactChoices, loadPrepaymentQueueContext, loadXeroPrepaymentReviewContext, resolvePrepaymentStemKey } from './_xeroPrepaymentContext.js';
+import { loadPrepaymentContactChoices, loadPrepaymentQueueContext, loadXeroPrepaymentContextForStem, loadXeroPrepaymentReviewContext, resolvePrepaymentStemKey } from './_xeroPrepaymentContext.js';
 import { requireSupportedXeroPrepaymentCurrency } from './_xeroPrepaymentCurrency.js';
 import { executeXeroPrepayment } from './_xeroPrepaymentExecution.js';
 import { prepaymentLedgerFor } from './_xeroPrepaymentLedger.js';
 import { buildPrepaymentReview } from './_xeroPrepaymentReview.js';
 import { createXeroPrepaymentTransport } from './_xeroPrepaymentTransport.js';
+import { prepaymentSourceFingerprint, reconcilePrepaymentLedger } from './_xeroPrepaymentReconciliation.js';
+import { boundedSettlementReads } from './_xeroSettlementReads.js';
 
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const SALESFORCE_ID = /^[a-z0-9]{15}(?:[a-z0-9]{3})?$/i;
@@ -156,6 +158,27 @@ export async function xeroPrepaymentReconcile(body = {}, options = {}) {
 const UNRESOLVED = new Set(['processing', 'unknown', 'exception']);
 const sourceKey = (id) => isId(id, SALESFORCE_ID) ? id.slice(0, 15) : null;
 
+async function verifiedQueueOperations(stemId, operations, dependencies, options) {
+  if (!operations.some(({ status }) => status === 'applied')) return new Map();
+  const { client, connection, env, fetchImpl } = dependencies;
+  try {
+    const transport = boundedSettlementReads({
+      client, tenantId: connection.tenantId, env, maxXeroReads: 25,
+      fail: (message, status) => fail(message, 'XERO_PREPAYMENT_QUEUE_UNVERIFIED', status),
+      readConnection: () => connection, accountingFetch: options.accountingFetch, now: options.now,
+    });
+    const ledger = await (options.loadLedger || loadXeroPrepaymentContextForStem)(stemId, {
+      client, connection: await transport.getConnection(), env, fetchImpl, accountingFetch: transport.read,
+    });
+    if (ledger.tenantId !== connection.tenantId) return new Map();
+    const { appliedOperations } = reconcilePrepaymentLedger(ledger);
+    return new Map(appliedOperations.map((operation) => [operation.operation_id, operation]));
+  } catch {
+    // The saved receipt survives incomplete or unavailable live evidence.
+    return new Map();
+  }
+}
+
 export async function xeroPrepaymentQueue(body = {}, options = {}) {
   if ((body.stemId != null && !isId(body.stemId, SALESFORCE_ID))
     || (body.stemId == null && (typeof body.stemKey !== 'string' || !/^[a-z0-9][a-z0-9-]{1,39}$/i.test(body.stemKey)))) {
@@ -177,30 +200,49 @@ export async function xeroPrepaymentQueue(body = {}, options = {}) {
   }
   const reversed = new Set(queue.allocations.filter((row) => row.Kind__c === 'Reversal'
     && !originalBySource.has(`reverse:${sourceKey(row.Id)}`)).map((row) => sourceKey(row.Reverses_Allocation__c)));
-  const rows = [...queue.events, ...queue.allocations].map((row) => {
-    const action = { Payment: 'create', Refund: 'refund', Applied: 'allocate', Reversal: 'reverse' }[row.Kind__c];
+  const verifiedOperations = await verifiedQueueOperations(stemId, queue.operations, dependencies, options);
+  const actions = { Payment: 'create', Refund: 'refund', Applied: 'allocate', Reversal: 'reverse' };
+  const sources = [...queue.events, ...queue.allocations];
+  const verifiedSources = new Set();
+  const blockedCash = new Set();
+  for (const source of sources) {
+    const key = `${actions[source.Kind__c]}:${sourceKey(source.Id)}`;
+    const operation = originalBySource.get(key);
+    if (operation?.status !== 'applied') continue;
+    const confirmed = verifiedOperations.get(operation.operation_id);
+    if (confirmed && confirmed.request_hash === operation.request_hash && confirmed.source_hash === prepaymentSourceFingerprint(source)) {
+      verifiedSources.add(key);
+    } else {
+      blockedCash.add(sourceKey(operation.cash_event_id));
+    }
+  }
+  const rows = sources.map((row) => {
+    const action = actions[row.Kind__c];
     const event = events.get(sourceKey(row.Cash_Event__c || row.Original_Cash_Event__c || row.Id));
     if (!ACTIONS.includes(action) || !sourceKey(row.Id) || !event || event.Kind__c !== 'Payment'
       || !['USD', 'HKD'].includes(row.Currency__c) || (action === 'reverse' && !sourceKey(row.Reverses_Allocation__c))) {
       fail('The selected STEM contains incomplete cash history.', 'XERO_PREPAYMENT_QUEUE_INCOMPLETE');
     }
-    const operation = originalBySource.get(`${action}:${sourceKey(row.Id)}`);
-    const deposit = originalBySource.get(`create:${sourceKey(event.Id)}`);
+    const key = `${action}:${sourceKey(row.Id)}`;
+    const cashKey = sourceKey(event.Id);
+    const operation = originalBySource.get(key);
     const reversedBeforePosting = action === 'allocate' && reversed.has(sourceKey(row.Id))
       || action === 'reverse' && !originalBySource.has(`allocate:${sourceKey(row.Reverses_Allocation__c)}`);
     const hkdUnsupported = row.Currency__c === 'HKD' || event.Currency__c === 'HKD';
-    const available = !unresolvedCash.has(sourceKey(event.Id)) && !reversedBeforePosting
-      && (action === 'create' || deposit?.status === 'applied');
+    const verified = verifiedSources.has(key);
+    const available = !unresolvedCash.has(cashKey) && !blockedCash.has(cashKey) && !reversedBeforePosting
+      && (action === 'create' || verifiedSources.has(`create:${cashKey}`));
     const usd = row.Cash_Event__c ? row.Allocated_Cash_USD__c : row.Cash_USD_Amount__c;
     const hkd = row.Cash_Event__c ? row.Allocated_HKD__c : row.Cash_HKD_Amount__c;
     const amount = row.Currency__c === 'HKD' ? hkd : usd;
     if (amount == null || !Number.isFinite(Number(amount))) fail('The cash amount is incomplete.', 'XERO_PREPAYMENT_QUEUE_INCOMPLETE');
-    const canRecover = operation?.actor_id === actorId && (UNRESOLVED.has(operation.status) || operation.status === 'applied');
+    const canRecover = operation?.actor_id === actorId && UNRESOLVED.has(operation.status);
     return {
       sourceId: row.Id, name: row.Name || row.Id, partyName: event.Party__r?.Name || null,
       action, date: row.Allocation_Date__c || row.Payment_Date__c, currency: row.Currency__c,
       nativeAmount: Math.abs(Number(amount)),
-      status: operation?.status || (reversedBeforePosting ? 'reversed_in_salesforce'
+      ...(operation?.status === 'applied' ? { operationStatus: 'applied', verified } : {}),
+      status: (operation?.status === 'applied' && !verified ? 'blocked' : operation?.status) || (reversedBeforePosting ? 'reversed_in_salesforce'
         : hkdUnsupported ? 'hkd_unsupported' : available ? 'ready_for_review' : 'held'),
       recovery: canRecover ? { operationId: operation.operation_id, reviewFingerprint: operation.review_hash } : null,
     };

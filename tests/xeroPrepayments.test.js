@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { xeroPrepaymentApply, xeroPrepaymentContacts, xeroPrepaymentPreview, xeroPrepaymentQueue, xeroPrepaymentReconcile } from '../api/_xeroPrepayments.js';
 import { fixture, id } from './fixtures/xeroPrepayment.js';
+import { prepaymentSourceFingerprint } from '../api/_xeroPrepaymentReconciliation.js';
+import { xeroPrepaymentEvidenceFingerprint } from '../api/_xeroPrepaymentCurrency.js';
 
 const tenantId = id(9);
 const actorId = id(20);
@@ -200,4 +202,62 @@ test('contact choices use the selected STEM and deposit identity', async () => {
     return [contact];
   } });
   assert.deepEqual(result, { tenantId, sourceId, contacts: [contact] });
+});
+
+test('a saved applied row is verified only after the exact current provider graph agrees', async () => {
+  const context = fixture();
+  const event = context.events[0];
+  Object.assign(event, { Id: sourceId, STEM__c: stemId });
+  context.invoices[0].STEM__c = stemId;
+  const operation = context.operations[0];
+  const fingerprint = prepaymentSourceFingerprint(event);
+  Object.assign(operation, { actor_id: actorId, source_id: sourceId, cash_event_id: sourceId, source_hash: fingerprint });
+  Object.assign(operation.request_evidence, { sourceId, cashEventId: sourceId, sourceFingerprint: fingerprint });
+  operation.request_hash = xeroPrepaymentEvidenceFingerprint(operation.request_evidence);
+  const storedConnection = { tenantId, scope: 'accounting.transactions.read',
+    accessToken: 'fixture-read-only', expiresAt: '2026-12-01T00:00:00Z' };
+  const calls = [];
+  let matching = false;
+  let scopeDrift = false;
+  const options = {
+    accessContext: { profile: { id: actorId } }, env: {}, client: {},
+    getConnection: () => assert.fail('Queue cannot refresh the connection'),
+    getStoredConnection: async () => storedConnection,
+    loadQueue: async () => ({ events: [event], allocations: [], operations: [operation] }),
+    now: () => Date.parse('2026-11-22T00:00:00Z'),
+    accountingFetch: async (connection, path, request) => {
+      assert.equal(connection, storedConnection);
+      assert.equal(request.method, 'GET');
+      assert.equal(request.retryOnRateLimit, false);
+      assert.equal(path, `/BankTransactions/${operation.xero_bank_transaction_id}`);
+      calls.push(path);
+      return { BankTransactions: matching ? context.xeroBankTransactions : [] };
+    },
+    loadLedger: async (stem, { accountingFetch, connection }) => {
+      assert.equal(stem, stemId);
+      const reply = await accountingFetch(connection, `/BankTransactions/${operation.xero_bank_transaction_id}`, { method: 'GET' });
+      return { ...context, xeroBankTransactions: reply.BankTransactions,
+        operations: scopeDrift ? [{ ...operation, operation_id: id(109) }] : context.operations };
+    },
+    ledgerFor: () => assert.fail('Queue cannot write the journal'),
+  };
+
+  const blocked = (await xeroPrepaymentQueue({ tenantId, stemId }, options)).rows[0];
+  assert.equal(blocked.status, 'blocked');
+  assert.equal(blocked.operationStatus, 'applied');
+  assert.equal(blocked.verified, false);
+  assert.equal(blocked.recovery, null);
+  assert.doesNotMatch(JSON.stringify(blocked), /fixture-read-only|request_evidence/);
+
+  matching = true;
+  const verified = (await xeroPrepaymentQueue({ tenantId, stemId }, options)).rows[0];
+  assert.equal(verified.status, 'applied');
+  assert.equal(verified.verified, true);
+  assert.equal(verified.recovery, null);
+
+  scopeDrift = true;
+  const drifted = (await xeroPrepaymentQueue({ tenantId, stemId }, options)).rows[0];
+  assert.equal(drifted.status, 'blocked');
+  assert.equal(drifted.verified, false);
+  assert.equal(calls.length, 3);
 });

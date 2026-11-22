@@ -8,7 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 const labels = { create: 'Deposit', allocate: 'Allocation', reverse: 'Reversal', refund: 'Refund' };
 const states = { ready_for_review: 'Ready for review', held: 'Held', processing: 'Processing', unknown: 'Needs verification',
   exception: 'Needs verification', applied: 'Verified', reversed_in_salesforce: 'Reversed before Xero posting',
-  hkd_unsupported: 'HKD posting unavailable in Xero' };
+  hkd_unsupported: 'HKD posting unavailable in Xero', blocked: 'Current verification unavailable' };
 const callOptions = { force: true, cache: false };
 const definitive = new Set(['XERO_PREPAYMENT_STALE', 'XERO_PREPAYMENT_REVIEW_REQUIRED', 'XERO_PREPAYMENT_DISABLED',
   'XERO_PREPAYMENT_CANCELLED', 'XERO_PREPAYMENT_SCOPE_MISSING', 'XERO_PREPAYMENT_HKD_UNSUPPORTED']);
