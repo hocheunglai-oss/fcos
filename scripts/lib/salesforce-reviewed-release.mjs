@@ -415,6 +415,12 @@ export function createReviewedSalesforcePlan({ review, manifestBytes, bootstrapB
       failCoverage('A permission-set native projection requires exact native inventories and a permission-set-only package.');
     }
     if (permissions.length) failCoverage('A permission-set native projection does not allow permission assignments.');
+  } else if (nativeProjection === 'schema-free-layout') {
+    if (bootstrap || !review.nativeInventories || review.orgBaselines || permissions.length
+      || components.some(({ id, files }) => !id.startsWith('Layout:')
+        || files.some(name => !Object.hasOwn(baselineInventory.files, name)))) {
+      failCoverage('A layout native projection requires exact native inventories and only existing owned layouts.');
+    }
   } else if (nativeProjection !== undefined && (nativeProjection !== 'schema-free-apex-lightning' || bootstrap
     || !review.nativeInventories || components.some(({ id }) => id !== editorFixtureTrigger
       && !(invoiceAppPlacement && id.startsWith('FlexiPage:')) && !/^(?:ApexClass|LightningComponentBundle):/u.test(id))
