@@ -2,6 +2,8 @@
 
 This guide describes the Trading FX behavior in FCOS source `01ae784a`, verified live on 22 November 2026 Hong Kong time. Provider settings and permission assignments require current readback before operational use.
 
+The source links point to verified FCOS Production commit `55752fe8`.
+
 ## Pricing and Salesforce access
 
 - The STEM and Quote principal currency is USD. Trading FX records Buy and Sell currency independently through [the trade-side metadata](https://github.com/hocheunglai-oss/fcos/blob/55752fe8db2c2e34599822cbdd25356e779d9ab4/force-app/main/default/objects/Trade_Currency_Side__c/Trade_Currency_Side__c.object-meta.xml). The [currency service](https://github.com/hocheunglai-oss/fcos/blob/55752fe8db2c2e34599822cbdd25356e779d9ab4/force-app/main/default/classes/FcosTradeCurrencyService.cls) permits HKD only for eligible fixed-price Hong Kong delivery. HKD-native amounts retain the reviewed rate revision and effective time alongside their USD equivalents.
