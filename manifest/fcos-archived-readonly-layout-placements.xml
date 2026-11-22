@@ -2,6 +2,7 @@
 <Package xmlns="http://soap.sforce.com/2006/04/metadata">
     <types>
         <members>STEM__c-STEM Layout</members>
+        <members>Supplier_Invoice__c-Supplier Invoice Layout</members>
         <name>Layout</name>
     </types>
     <version>67.0</version>
