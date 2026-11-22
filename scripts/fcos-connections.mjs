@@ -248,8 +248,9 @@ export function providerRuntime(providerId, { requireCredential = true } = {}) {
   }
 }
 
-function runCaptured(providerId, args, { inject = true, requireCredential = true } = {}) {
-  const runtime = providerRuntime(providerId, { requireCredential });
+function runCaptured(providerId, args, {
+  inject = true, requireCredential = true, runtime = providerRuntime(providerId, { requireCredential }),
+} = {}) {
   return new Promise((resolve) => {
     const startedAt = Date.now();
     let stdout = '';
@@ -608,15 +609,14 @@ function readVercelLink() {
   return null;
 }
 
-async function verifyVercel(version, metadata, startedAt) {
+async function verifyVercel(version, metadata, startedAt, runtime) {
   const report = baseReport('vercel', version, startedAt, metadata);
   if (!version.available) return finalizeReport(report, startedAt);
-  const runtime = providerRuntime('vercel');
   if (!runtime.credentialAvailable) return finalizeReport({ ...report, identityStatus: 'authentication_blocked' }, startedAt);
   const [account, project, deployments] = await Promise.all([
-    runCaptured('vercel', ['whoami']),
-    runCaptured('vercel', ['project', 'inspect', identifier('vercel', 'Project')]),
-    runCaptured('vercel', ['list', identifier('vercel', 'Project')]),
+    runCaptured('vercel', ['whoami'], { runtime }),
+    runCaptured('vercel', ['project', 'inspect', identifier('vercel', 'Project')], { runtime }),
+    runCaptured('vercel', ['list', identifier('vercel', 'Project')], { runtime }),
   ]);
   if (!account.ok || !project.ok || !deployments.ok) {
     return finalizeReport({ ...report, identityStatus: classifyFailedIdentity(account, project, deployments) }, startedAt);
@@ -651,15 +651,14 @@ function readSupabasePin() {
   }
 }
 
-async function verifySupabase(version, metadata, startedAt) {
+async function verifySupabase(version, metadata, startedAt, runtime) {
   const report = baseReport('supabase', version, startedAt, metadata);
   if (!version.available) return finalizeReport(report, startedAt);
-  const runtime = providerRuntime('supabase');
   if (!runtime.credentialAvailable) return finalizeReport({ ...report, identityStatus: 'authentication_blocked' }, startedAt);
   const expectedRef = identifier('supabase', 'Project ref');
   const expectedName = identifier('supabase', 'Project name');
   const exactLink = readSupabasePin() === expectedRef;
-  const projects = await runCaptured('supabase', ['projects', 'list', '--output-format', 'json']);
+  const projects = await runCaptured('supabase', ['projects', 'list', '--output-format', 'json'], { runtime });
   let identityStatus;
   if (projects.ok) {
     const parsed = safeJson(projects.stdout);
@@ -755,13 +754,13 @@ export async function verifyProvider(providerId) {
   ensureStateDirectories();
   const startedAt = Date.now();
   const version = await cliVersion(providerId);
-  const runtime = providerRuntime(providerId);
+  const runtime = providerRuntime(providerId, { requireCredential: version.available });
   const metadata = ensureCredentialMetadata(providerId, runtime.credentialAvailable);
   let report;
   switch (providerId) {
     case 'github': report = await verifyGitHub(version, metadata, startedAt); break;
-    case 'vercel': report = await verifyVercel(version, metadata, startedAt); break;
-    case 'supabase': report = await verifySupabase(version, metadata, startedAt); break;
+    case 'vercel': report = await verifyVercel(version, metadata, startedAt, runtime); break;
+    case 'supabase': report = await verifySupabase(version, metadata, startedAt, runtime); break;
     case 'salesforce': report = await verifySalesforce(version, metadata, startedAt); break;
     default: throw new Error(`Unsupported provider: ${providerId}`);
   }

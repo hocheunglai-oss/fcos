@@ -320,19 +320,34 @@ test('Keychain reads have a bounded wait and leave failed credentials unavailabl
 }, () => {
   const script = `
     import fs from 'node:fs';
+    import { EventEmitter } from 'node:events';
     import processes from 'node:child_process';
     import { syncBuiltinESMExports } from 'node:module';
     const originalExists = fs.existsSync;
+    const originalRead = fs.readFileSync;
+    fs.mkdirSync = () => {};
+    fs.readFileSync = (file, ...args) => typeof file === 'string' && file.endsWith('/credential-metadata.json')
+      ? '{}' : originalRead(file, ...args);
+    let requests = 0;
+    processes.spawn = (_command, args) => {
+      if (args.length !== 1 || args[0] !== '--version') throw new Error('Unverified provider execution');
+      const process = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter() });
+      queueMicrotask(() => { process.stdout.emit('data', '54.20.1'); process.emit('close', 0); });
+      return process;
+    };
     fs.existsSync = (file) => typeof file === 'string' && file.endsWith('/.fcos-cli/bin/fcos-keychain') || originalExists(file);
     processes.spawnSync = (command, args, options) => {
       if (!command.endsWith('/.fcos-cli/bin/fcos-keychain') || args[0] !== 'get') throw new Error('Unexpected child process');
       if (options.timeout !== 20000 || options.killSignal !== 'SIGKILL') throw new Error('Credential read is unbounded');
+      requests += 1;
       return { status: null, error: Object.assign(new Error('fixture timeout'), { code: 'ETIMEDOUT' }) };
     };
     syncBuiltinESMExports();
-    const { providerRuntime } = await import('./scripts/fcos-connections.mjs');
-    const result = providerRuntime('vercel');
-    if (result.credentialAvailable || result.env.VERCEL_TOKEN) throw new Error('Credential incorrectly admitted after timeout');
+    const { verifyProvider } = await import('./scripts/fcos-connections.mjs');
+    const result = await verifyProvider('vercel');
+    if (result.identityStatus !== 'authentication_blocked' || requests !== 1) {
+      throw new Error('Credential verification must fail closed after exactly one bounded attempt');
+    }
   `;
   const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
     cwd: new URL('..', import.meta.url), env: { PATH: process.env.PATH }, encoding: 'utf8', timeout: 5000,
