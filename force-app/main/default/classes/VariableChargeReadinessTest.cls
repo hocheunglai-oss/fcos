@@ -575,7 +575,7 @@ private class VariableChargeReadinessTest {
         }
         VariableChargeInvoiceReadinessService.Readiness confirmedBuyer =
             VariableChargeInvoiceReadinessService.evaluateBuyer(ids.get('stem'));
-        System.assertEquals(true, confirmedBuyer.ready, confirmedBuyer.reason);
+        System.assertEquals(true, confirmedBuyer.ready, 'Current buyer approval should allow the buyer invoice.');
         Test.stopTest();
     }
 
