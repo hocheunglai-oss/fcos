@@ -4,14 +4,17 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
-import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
+import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier, fcosRuntimeConnectionCatalogue, fcosSalesforceEnvironment } from '../config/fcosConnections.js';
 import {
   canonicalGitRemote,
+  collectLiveConnectionDiagnostics,
   githubConfigDirectory,
   githubCredentialHelperValue,
   mergeSafeConnectionStatus,
+  parseConnectionDiagnosticArguments,
   providerCliRunnable,
   providerRuntime,
+  runManagedConnectionOperation,
   validateProviderArgs,
   versionPolicyStatus,
 } from '../scripts/fcos-connections.mjs';
@@ -168,6 +171,7 @@ test('cached diagnostics return one sanitized JSON report without provider or st
     'config/fcosConnections.js',
     'scripts/fcos-connections.mjs',
     'scripts/lib/supabase-project-access.mjs',
+    'scripts/lib/connection-operation.mjs',
     'src/lib/connectionChecklist.js',
   ]) {
     const destination = path.join(root, file);
@@ -198,7 +202,7 @@ test('cached diagnostics return one sanitized JSON report without provider or st
     syncBuiltinESMExports();
   `);
   const run = (...args) => spawnSync(process.execPath, ['--import', sentinel, 'scripts/fcos-connections.mjs', ...args], {
-    cwd: root, env: { PATH: process.env.PATH }, encoding: 'utf8', timeout: 5000,
+    cwd: root, env: { PATH: process.env.PATH, OPENAI_API_KEY: 'private-test-value' }, encoding: 'utf8', timeout: 5000,
   });
 
   const result = run('doctor', 'github', '--read-only', '--json');
@@ -211,6 +215,8 @@ test('cached diagnostics return one sanitized JSON report without provider or st
   assert.deepEqual(Object.keys(report.providers), ['github']);
   assert.equal(report.providers.github.identityVerified, false);
   assert.equal(report.providers.github.lastVerifiedAt, now);
+  assert.equal(report.runtimeConnections.find(({ id }) => id === 'openai').configuredEnv.OPENAI_API_KEY, true);
+  assert(report.runtimeConnections.every(({ authenticationStatus }) => authenticationStatus === 'unknown'));
 
   const missing = run('verify', 'salesforce', '--read-only', '--json');
   assert.equal(missing.status, 2, missing.stderr);
@@ -224,4 +230,265 @@ test('cached diagnostics return one sanitized JSON report without provider or st
   }
   assert.equal(await readFile(statusFile, 'utf8'), fixture);
   assert.deepEqual(await readdir(stateDirectory), ['status.json']);
+});
+
+test('runtime catalog exposes local key presence and canonical pins without attesting identity', () => {
+  const runtime = fcosRuntimeConnectionCatalogue({
+    OPENAI_API_KEY: 'private-test-value', XERO_TENANT_ID: 'private-tenant',
+    FCOS_MICROSOFT_CLIENT_ID: 'private-client', SUPABASE_SERVICE_ROLE_KEY: '  ', SALESFORCE_JWT_PRIVATE_KEY: 'private-key',
+    GOOGLE_DRIVE_REFRESH_TOKEN: 'retired-workflow-only',
+  });
+  assert.deepEqual(runtime.map(({ id }) => id), ['supabase', 'salesforce', 'xero', 'drive', 'identity', 'microsoft', 'microsoft-growth', 'openai']);
+  const byId = Object.fromEntries(runtime.map((entry) => [entry.id, entry]));
+  assert.equal(byId.supabase.identityPins.projectRef, fcosConnectionIdentifier('supabase', 'Project ref'));
+  assert.equal(byId.salesforce.identityPins.orgId, fcosSalesforceEnvironment('production').orgId);
+  assert.equal(byId.drive.identityPins.accountEmail, FCOS_CONNECTION_POLICY.integrations.googleDriveMarketReports.accountEmail);
+  assert.equal(byId.supabase.configuredEnv.SUPABASE_SERVICE_ROLE_KEY, false);
+  assert.equal(byId.salesforce.configuredEnv.SALESFORCE_JWT_PRIVATE_KEY, true);
+  assert.equal(byId.openai.configuredEnv.OPENAI_API_KEY, true);
+  for (const id of ['xero', 'microsoft', 'microsoft-growth', 'openai']) {
+    assert.deepEqual(byId[id].identityPins, { status: 'requires_independent_verification' });
+  }
+  assert(runtime.every(({ configurationSource, authenticationStatus, writePermission, humanAuthorization }) =>
+    configurationSource === 'local_process_environment' && authenticationStatus === 'unknown'
+    && writePermission === 'unknown' && humanAuthorization === 'not_granted'));
+  assert.doesNotMatch(JSON.stringify(runtime), /private-|retired-workflow-only|GOOGLE_DRIVE_REFRESH_TOKEN/);
+  assert.equal(FCOS_CONNECTION_POLICY.providers.length, 4);
+});
+
+test('live CLI diagnostics publish only on explicit full-verification request', async () => {
+  const calls = [];
+  const dependencies = {
+    verify: async (provider) => {
+      calls.push(provider);
+      return { provider, identityStatus: 'verified', identityVerified: true, targetPin: 'verified',
+        permissionStatus: 'verified', cliVersionStatus: 'approved' };
+    },
+    publishAttestationResult: async (attestation) => {
+      calls.push('publish');
+      assert.deepEqual(Object.keys(attestation.providers), connectionProviderIds);
+      return { status: 'published' };
+    },
+    persist: (reports, publication) => ({ reports, publication }),
+  };
+  const ordinary = await collectLiveConnectionDiagnostics(['--json'], dependencies);
+  assert.equal(ordinary.exitCode, 0);
+  assert.equal(ordinary.value.publication.status, 'skipped');
+  assert.deepEqual(calls.splice(0), connectionProviderIds);
+
+  const explicit = await collectLiveConnectionDiagnostics(['--publish'], dependencies);
+  assert.equal(explicit.exitCode, 0);
+  assert.equal(explicit.value.publication.status, 'published');
+  assert.deepEqual(calls.splice(0), [...connectionProviderIds, 'publish']);
+
+  const partial = await collectLiveConnectionDiagnostics(['github'], dependencies);
+  assert.equal(partial.value.publication, undefined);
+  assert.deepEqual(calls.splice(0), ['github']);
+
+  for (const args of [['github', '--publish'], ['--publish', '--read-only'],
+    ['--publish', '--no-publish'], ['--publish', '--publish'], ['--unknown'], ['github', 'vercel']]) {
+    assert.throws(() => parseConnectionDiagnosticArguments(args));
+    await assert.rejects(collectLiveConnectionDiagnostics(args, dependencies));
+  }
+  assert.deepEqual(calls, []);
+});
+
+test('provider CLI rejects alternate targets in attached, repeated and relative forms', () => {
+  const cases = [
+    ['github', ['pr', 'view', '1', '--repo=fixture/unapproved']],
+    ['github', ['api', 'repos/fixture/unapproved']],
+    ['github', ['api', 'user', '--hostname=fixture.invalid']],
+    ['vercel', ['inspect', 'fixture-deployment', '--scope=fixture-team']],
+    ['vercel', ['inspect', 'fixture-deployment', '-S=fixture-team']],
+    ['supabase', ['projects', 'list', '--profile=fixture']],
+    ['supabase', ['db', 'pull', '--project-ref=pjforfvchygdyqfcgpmw', '--project-ref=fixture-ref']],
+    ['salesforce', ['data', 'query', '--target-org=fixture-org']],
+    ['salesforce', ['data', 'query', '-o=fixture-org']],
+  ];
+  for (const [provider, args] of cases) {
+    assert.throws(() => validateProviderArgs(provider, args), /approved|overrides are blocked/, provider);
+  }
+  assert.equal(validateProviderArgs('github', ['api', 'repos/hocheunglai-oss/fcos/actions/runs']), true);
+  assert.equal(validateProviderArgs('github', ['pr', 'view', '1', '-R', 'hocheunglai-oss/fcos']), true);
+  assert.equal(validateProviderArgs('salesforce', ['data', 'query', '--target-org=fcos-devee']), true);
+});
+
+test('managed API reads require current capability and emit only projected evidence', async () => {
+  const when = new Date('2026-11-23T01:00:00Z');
+  const context = { provider: 'github', environment: 'tooling', operation: 'github.api.read', capability: 'repository.read' };
+  const repo = FCOS_CONNECTION_POLICY.providers.find(({ id }) => id === 'github').identifiers
+    .find(({ label }) => label === 'Repository').value;
+  const args = ['api', `repos/${repo}/actions/runs`];
+  const operations = [];
+  const safeReport = {
+    provider: 'github', cliVersionStatus: 'approved', targetPin: 'missing', readTargetPinned: true,
+    identityVerified: true, identityStatus: 'verified', observedAt: when.toISOString(),
+    permissions: ['repository.read'], permissionStatus: 'missing',
+  };
+  const dependencies = {
+    now: () => when,
+    verifier: async () => { operations.push('verify'); return safeReport; },
+    capture: async () => {
+      operations.push('read');
+      return { ok: true, stdout: JSON.stringify({ workflow_runs: [{ id: 72, status: 'completed',
+        workflow_run: { id: 5, workflow_run: { id: 6 } }, secret: 'fixture-private' }], raw: 'fixture-private' }) };
+    },
+    print: (value) => operations.push(value),
+  };
+  assert.equal(await runManagedConnectionOperation(context, args, dependencies), 0);
+  assert.deepEqual(operations, ['verify', 'read', { workflow_runs: [{ id: 72, status: 'completed', workflow_run: { id: 5 } }] }]);
+
+  await assert.rejects(runManagedConnectionOperation({ ...context, capability: 'repository.push' }, args, {
+    ...dependencies, verifier: () => assert.fail('Invalid operation context reached provider verification'),
+  }), /operation and capability/);
+  await assert.rejects(runManagedConnectionOperation(context, args, {
+    ...dependencies, verifier: async () => ({ ...safeReport, observationMode: 'cached' }),
+    capture: () => assert.fail('Cached evidence reached the provider'),
+  }), /expired, cached or missing/);
+  await assert.rejects(runManagedConnectionOperation(context, args, {
+    ...dependencies, verifier: async () => ({ ...safeReport, readTargetPinned: false }),
+    capture: () => assert.fail('Missing read target reached the provider'),
+  }), /exact identity, target/);
+  await assert.rejects(runManagedConnectionOperation(context, args, {
+    ...dependencies, verifier: async () => ({ ...safeReport, permissions: [] }),
+    capture: () => assert.fail('Missing capability reached the provider'),
+  }), /capability has not been/);
+});
+
+test('managed deployment reads stop before output when exact resource ownership is unverified', async () => {
+  const when = new Date('2026-11-23T01:00:00Z');
+  const context = { provider: 'vercel', environment: 'preview', operation: 'vercel.api.read', capability: 'deployment.read' };
+  const seen = [];
+  const deps = {
+    now: () => when,
+    verifier: async () => ({
+      provider: 'vercel', cliVersionStatus: 'approved', targetPin: 'verified',
+      identityVerified: true, identityStatus: 'verified', observedAt: when.toISOString(), permissions: ['deployment.read'],
+    }),
+    verifyResource: async (resource, operation) => { seen.push([resource, operation.environment]); return false; },
+    capture: () => assert.fail('Unverified deployment reached the read path'),
+    print: () => assert.fail('Unverified deployment output was published'),
+  };
+  await assert.rejects(runManagedConnectionOperation(context, ['api', '/v13/deployments/dpl_fixture'], deps),
+    /ownership or environment/);
+  assert.deepEqual(seen, [['dpl_fixture', 'preview']]);
+
+  const project = FCOS_CONNECTION_POLICY.providers.find(({ id }) => id === 'vercel').identifiers
+    .find(({ label }) => label === 'Project ID').value;
+  await assert.rejects(runManagedConnectionOperation(context, ['api', `/v13/deployments?projectId=${project}&target=production`], {
+    ...deps, verifier: () => assert.fail('Mismatched environment reached provider verification'),
+  }), /exact operation environment/);
+});
+
+test('Keychain reads have a bounded wait and leave failed credentials unavailable', {
+  skip: process.platform !== 'darwin',
+}, () => {
+  const script = `
+    import fs from 'node:fs';
+    import { EventEmitter } from 'node:events';
+    import processes from 'node:child_process';
+    import { syncBuiltinESMExports } from 'node:module';
+    const originalExists = fs.existsSync;
+    const originalRead = fs.readFileSync;
+    fs.mkdirSync = () => {};
+    fs.readFileSync = (file, ...args) => typeof file === 'string' && file.endsWith('/credential-metadata.json')
+      ? '{}' : originalRead(file, ...args);
+    let requests = 0;
+    processes.spawn = (_command, args) => {
+      if (args.length !== 1 || args[0] !== '--version') throw new Error('Unverified provider execution');
+      const process = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter() });
+      queueMicrotask(() => { process.stdout.emit('data', '54.20.1'); process.emit('close', 0); });
+      return process;
+    };
+    fs.existsSync = (file) => typeof file === 'string' && file.endsWith('/.fcos-cli/bin/fcos-keychain') || originalExists(file);
+    processes.spawnSync = (command, args, options) => {
+      if (!command.endsWith('/.fcos-cli/bin/fcos-keychain') || args[0] !== 'get') throw new Error('Unexpected child process');
+      if (options.timeout !== 20000 || options.killSignal !== 'SIGKILL') throw new Error('Credential read is unbounded');
+      requests += 1;
+      return { status: null, error: Object.assign(new Error('fixture timeout'), { code: 'ETIMEDOUT' }) };
+    };
+    syncBuiltinESMExports();
+    const { verifyProvider } = await import('./scripts/fcos-connections.mjs');
+    const result = await verifyProvider('vercel');
+    if (result.identityStatus !== 'authentication_blocked' || requests !== 1) {
+      throw new Error('Credential verification must fail closed after exactly one bounded attempt');
+    }
+  `;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+    cwd: new URL('..', import.meta.url), env: { PATH: process.env.PATH }, encoding: 'utf8', timeout: 5000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('a managed Vercel deployment read uses one Keychain lookup across verification and readback', {
+  skip: process.platform !== 'darwin',
+}, () => {
+  const script = `
+    import assert from 'node:assert/strict';
+    import fs from 'node:fs';
+    import { EventEmitter } from 'node:events';
+    import processes from 'node:child_process';
+    import { syncBuiltinESMExports } from 'node:module';
+    import { fcosConnectionIdentifier as pin } from './config/fcosConnections.js';
+    const originalExists = fs.existsSync;
+    const originalRead = fs.readFileSync;
+    const project = pin('vercel', 'Project ID');
+    const team = pin('vercel', 'Team ID');
+    const deployment = { id: 'dpl_fixture', projectId: project, ownerId: team, target: 'production',
+      readyState: 'READY', environmentDump: 'private fixture' };
+    let requests = 0;
+    const commands = [];
+    fs.mkdirSync = () => {};
+    fs.writeFileSync = () => {};
+    fs.chmodSync = () => {};
+    fs.existsSync = file => typeof file === 'string' && file.endsWith('/.fcos-cli/bin/fcos-keychain') || originalExists(file);
+    fs.readFileSync = (file, ...args) => {
+      const name = String(file);
+      if (name.endsWith('/credential-metadata.json')) return '{}';
+      if (name.endsWith('/.vercel/repo.json')) return JSON.stringify({ projects: [
+        { directory: '.', id: project, orgId: team, name: pin('vercel', 'Project') },
+      ] });
+      return originalRead(file, ...args);
+    };
+    processes.spawnSync = (command, args) => {
+      assert(command.endsWith('/.fcos-cli/bin/fcos-keychain') && args[0] === 'get');
+      return { status: 0, stdout: 'fixture-' + ++requests };
+    };
+    processes.spawn = (_command, args, options) => {
+      const [first, second] = args;
+      commands.push(first);
+      let output;
+      if (first === '--version') {
+        assert.equal(options.env.VERCEL_TOKEN, undefined);
+        output = '54.20.1';
+      } else {
+        assert.equal(options.env.VERCEL_TOKEN, 'fixture-1');
+        if (first === 'whoami') output = pin('vercel', 'Account');
+        else if (first === 'project') output = project + ' ' + pin('vercel', 'Target');
+        else if (first === 'list') output = 'Ready';
+        else if (first === 'api') {
+          assert(second.startsWith('/v13/deployments/dpl_fixture'));
+          output = JSON.stringify(deployment);
+        } else assert.fail('Unexpected provider command');
+      }
+      const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter() });
+      queueMicrotask(() => { child.stdout.emit('data', output); child.emit('close', 0); });
+      return child;
+    };
+    syncBuiltinESMExports();
+    const { runManagedConnectionOperation } = await import('./scripts/fcos-connections.mjs');
+    const context = { provider: 'vercel', environment: 'production', operation: 'vercel.api.read', capability: 'deployment.read' };
+    const outputs = [];
+    const outcome = await runManagedConnectionOperation(context, ['api', '/v13/deployments/dpl_fixture'],
+      { print: result => outputs.push(result) });
+    assert.equal(outcome, 0);
+    assert.equal(requests, 1);
+    assert.deepEqual(commands, ['--version', 'whoami', 'project', 'list', 'api', 'api']);
+    assert.equal(outputs[0].id, deployment.id);
+    assert(!JSON.stringify(outputs).includes('private fixture'));
+  `;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+    cwd: new URL('..', import.meta.url), env: { PATH: process.env.PATH }, encoding: 'utf8', timeout: 5000,
+  });
+  assert.equal(result.status, 0, result.stderr);
 });

@@ -15,7 +15,12 @@ import {
   sanitizeConnectionAttestation,
   sanitizeConnectionProviderReport,
 } from '../src/lib/connectionChecklist.js';
-import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
+import { FCOS_CONNECTION_POLICY, fcosRuntimeConnectionCatalogue } from '../config/fcosConnections.js';
+import {
+  assertConnectionOperationAccess,
+  sanitizeConnectionOperationOutput,
+  validateConnectionOperation,
+} from './lib/connection-operation.mjs';
 import { probeSupabaseProjectAccess, shouldProbeScopedSupabaseProject } from './lib/supabase-project-access.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -24,6 +29,7 @@ const STATUS_PATH = path.join(LOCAL_STATE_ROOT, 'status.json');
 const CREDENTIAL_METADATA_PATH = path.join(LOCAL_STATE_ROOT, 'credential-metadata.json');
 const PROVIDER_IDS = new Set(CONNECTION_TARGETS.map(({ id }) => id));
 const COMMAND_TIMEOUT_MS = 90_000;
+const KEYCHAIN_TIMEOUT_MS = 20_000;
 const KEYCHAIN_HELPER_SOURCE = path.join(REPO_ROOT, 'scripts', 'fcos-keychain-migrate.swift');
 let keychainHelperReady = false;
 
@@ -97,7 +103,7 @@ function keychainValue(service) {
     'get',
     FCOS_CONNECTION_POLICY.keychainAccount,
     service,
-  ], { encoding: 'utf8', maxBuffer: 1024 * 1024 });
+  ], { encoding: 'utf8', maxBuffer: 1024 * 1024, timeout: KEYCHAIN_TIMEOUT_MS, killSignal: 'SIGKILL' });
   return result.status === 0 ? String(result.stdout || '').trim() : '';
 }
 
@@ -242,8 +248,9 @@ export function providerRuntime(providerId, { requireCredential = true } = {}) {
   }
 }
 
-function runCaptured(providerId, args, { inject = true, requireCredential = true } = {}) {
-  const runtime = providerRuntime(providerId, { requireCredential });
+function runCaptured(providerId, args, {
+  inject = true, requireCredential = true, runtime = providerRuntime(providerId, { requireCredential }),
+} = {}) {
   return new Promise((resolve) => {
     const startedAt = Date.now();
     let stdout = '';
@@ -550,15 +557,14 @@ function configureGithubCredentialHelper() {
     && githubCredentialHelperConfigured();
 }
 
-async function verifyGitHub(version, metadata, startedAt) {
+async function verifyGitHub(version, metadata, startedAt, runtime) {
   const report = baseReport('github', version, startedAt, metadata);
   if (!version.available) return finalizeReport(report, startedAt);
-  const runtime = providerRuntime('github');
   if (!runtime.credentialAvailable) return finalizeReport({ ...report, identityStatus: 'authentication_blocked', targetPin: 'verified' }, startedAt);
   const [account, repository, auth] = await Promise.all([
-    runCaptured('github', ['api', 'user', '--jq', '.login']),
-    runCaptured('github', ['api', `repos/${identifier('github', 'Repository')}`]),
-    runCaptured('github', ['auth', 'status', '--active', '--hostname', 'github.com', '--json', 'hosts']),
+    runCaptured('github', ['api', 'user', '--jq', '.login'], { runtime }),
+    runCaptured('github', ['api', `repos/${identifier('github', 'Repository')}`], { runtime }),
+    runCaptured('github', ['auth', 'status', '--active', '--hostname', 'github.com', '--json', 'hosts'], { runtime }),
   ]);
   if (!account.ok || !repository.ok || !auth.ok) {
     return finalizeReport({ ...report, identityStatus: classifyFailedIdentity(account, repository, auth) }, startedAt);
@@ -602,15 +608,14 @@ function readVercelLink() {
   return null;
 }
 
-async function verifyVercel(version, metadata, startedAt) {
+async function verifyVercel(version, metadata, startedAt, runtime) {
   const report = baseReport('vercel', version, startedAt, metadata);
   if (!version.available) return finalizeReport(report, startedAt);
-  const runtime = providerRuntime('vercel');
   if (!runtime.credentialAvailable) return finalizeReport({ ...report, identityStatus: 'authentication_blocked' }, startedAt);
   const [account, project, deployments] = await Promise.all([
-    runCaptured('vercel', ['whoami']),
-    runCaptured('vercel', ['project', 'inspect', identifier('vercel', 'Project')]),
-    runCaptured('vercel', ['list', identifier('vercel', 'Project')]),
+    runCaptured('vercel', ['whoami'], { runtime }),
+    runCaptured('vercel', ['project', 'inspect', identifier('vercel', 'Project')], { runtime }),
+    runCaptured('vercel', ['list', identifier('vercel', 'Project')], { runtime }),
   ]);
   if (!account.ok || !project.ok || !deployments.ok) {
     return finalizeReport({ ...report, identityStatus: classifyFailedIdentity(account, project, deployments) }, startedAt);
@@ -645,15 +650,14 @@ function readSupabasePin() {
   }
 }
 
-async function verifySupabase(version, metadata, startedAt) {
+async function verifySupabase(version, metadata, startedAt, runtime) {
   const report = baseReport('supabase', version, startedAt, metadata);
   if (!version.available) return finalizeReport(report, startedAt);
-  const runtime = providerRuntime('supabase');
   if (!runtime.credentialAvailable) return finalizeReport({ ...report, identityStatus: 'authentication_blocked' }, startedAt);
   const expectedRef = identifier('supabase', 'Project ref');
   const expectedName = identifier('supabase', 'Project name');
   const exactLink = readSupabasePin() === expectedRef;
-  const projects = await runCaptured('supabase', ['projects', 'list', '--output-format', 'json']);
+  const projects = await runCaptured('supabase', ['projects', 'list', '--output-format', 'json'], { runtime });
   let identityStatus;
   if (projects.ok) {
     const parsed = safeJson(projects.stdout);
@@ -692,14 +696,14 @@ function readSalesforcePin() {
   }
 }
 
-async function verifySalesforce(version, metadata, startedAt) {
+async function verifySalesforce(version, metadata, startedAt, runtime) {
   const report = baseReport('salesforce', version, startedAt, metadata);
   if (!version.available) return finalizeReport(report, startedAt);
   const [checks, sharedAccount, sharedRepository, sharedMirror] = await Promise.all([
     Promise.all(salesforceEnvironments().map(async (environment) => {
     const [display, organization] = await Promise.all([
-      runCaptured('salesforce', ['org', 'display', '--target-org', environment.alias, '--json']),
-      runCaptured('salesforce', ['data', 'query', '--target-org', environment.alias, '--query', 'SELECT Id, IsSandbox FROM Organization LIMIT 1', '--json']),
+      runCaptured('salesforce', ['org', 'display', '--target-org', environment.alias, '--json'], { runtime }),
+      runCaptured('salesforce', ['data', 'query', '--target-org', environment.alias, '--query', 'SELECT Id, IsSandbox FROM Organization LIMIT 1', '--json'], { runtime }),
     ]);
     const parsed = safeJson(display.stdout);
     const record = safeJson(organization.stdout)?.result?.records?.[0];
@@ -745,26 +749,30 @@ async function verifySalesforce(version, metadata, startedAt) {
   }, startedAt);
 }
 
-export async function verifyProvider(providerId) {
+export async function verifyProvider(providerId, { resolveRuntime = providerRuntime } = {}) {
   ensureStateDirectories();
   const startedAt = Date.now();
   const version = await cliVersion(providerId);
-  const runtime = providerRuntime(providerId);
+  const runtime = resolveRuntime(providerId, { requireCredential: version.available });
   const metadata = ensureCredentialMetadata(providerId, runtime.credentialAvailable);
   let report;
   switch (providerId) {
-    case 'github': report = await verifyGitHub(version, metadata, startedAt); break;
-    case 'vercel': report = await verifyVercel(version, metadata, startedAt); break;
-    case 'supabase': report = await verifySupabase(version, metadata, startedAt); break;
-    case 'salesforce': report = await verifySalesforce(version, metadata, startedAt); break;
+    case 'github': report = await verifyGitHub(version, metadata, startedAt, runtime); break;
+    case 'vercel': report = await verifyVercel(version, metadata, startedAt, runtime); break;
+    case 'supabase': report = await verifySupabase(version, metadata, startedAt, runtime); break;
+    case 'salesforce': report = await verifySalesforce(version, metadata, startedAt, runtime); break;
     default: throw new Error(`Unsupported provider: ${providerId}`);
   }
+  const observedAt = new Date().toISOString();
   if (providerOperational(report)) {
-    const verifiedAt = new Date().toISOString();
+    const verifiedAt = observedAt;
     recordCredentialVerification(providerId, verifiedAt);
-    return { ...report, lastVerifiedAt: verifiedAt };
+    return { ...report, lastVerifiedAt: verifiedAt, observedAt };
   }
-  return report;
+  // GitHub API reads use GH_REPO and the isolated login. The push-helper
+  // pin is required for Git writes, even when the API read target is verified.
+  const githubReadPinned = providerId === 'github' && report.identityVerified && report.targetPin === 'missing';
+  return { ...report, observedAt, ...(githubReadPinned ? { readTargetPinned: true } : {}) };
 }
 
 function readSafeStatus() {
@@ -894,17 +902,28 @@ async function publishAttestation(attestation) {
   }
 }
 
-function printCachedDiagnostics(command, args) {
-  const supported = new Set(['--read-only', '--json', '--no-publish']);
+export function parseConnectionDiagnosticArguments(args = []) {
+  const flags = new Set(['--read-only', '--json', '--publish', '--no-publish']);
   const providerArgs = args.filter((arg) => !arg.startsWith('-'));
-  if (!['verify', 'doctor'].includes(command)
-    || args.some((arg) => arg.startsWith('-') && !supported.has(arg))
-    || providerArgs.length > 1) {
-    throw new Error('Read-only diagnostics accept one optional provider, --json and --no-publish.');
+  if (args.some((arg) => arg.startsWith('-') && !flags.has(arg)) || new Set(args).size !== args.length) {
+    throw new Error('Unknown or repeated connection diagnostic option.');
   }
+  if (providerArgs.length > 1) throw new Error('Choose one provider or all four providers.');
+  const readOnly = args.includes('--read-only');
+  const publish = args.includes('--publish');
+  if (publish && (readOnly || args.includes('--no-publish'))) {
+    throw new Error('Publication conflicts with read-only or non-publishing diagnostics.');
+  }
+  const providers = selectedProviders(providerArgs[0]);
+  if (publish && providers.length !== CONNECTION_TARGETS.length) {
+    throw new Error('Publication requires complete four-provider verification.');
+  }
+  return { providers, readOnly, publish, json: args.includes('--json') };
+}
 
+function printCachedDiagnostics({ providers, json }) {
   const snapshot = readSafeStatus();
-  const reports = selectedProviders(providerArgs[0]).map((provider) => {
+  const reports = providers.map((provider) => {
     const cached = sanitizeConnectionProviderReport(snapshot?.providers?.[provider], provider);
     return {
       provider,
@@ -919,37 +938,41 @@ function printCachedDiagnostics(command, args) {
       lastVerifiedAt: cached?.lastVerifiedAt ?? null,
     };
   });
-  const asJson = args.includes('--json');
-  if (!asJson) console.log('Cached connection status. Live identities and permissions were not verified.');
+  if (!json) console.log('Cached connection status. Live identities and permissions were not verified.');
   const status = mergeSafeConnectionStatus(null, reports, { status: 'skipped' });
-  printReports({ ...status, readOnly: true, observation: 'cached; not live verified' }, asJson);
+  printReports({ ...status, readOnly: true, observation: 'cached; not live verified',
+    runtimeConnections: fcosRuntimeConnectionCatalogue(process.env) }, json);
   return 2;
 }
 
-async function verifyCommand(args, { doctor = false } = {}) {
+export async function collectLiveConnectionDiagnostics(args, {
+  verify = verifyProvider, publishAttestationResult = publishAttestation, persist = writeSafeStatus,
+} = {}) {
+  const options = parseConnectionDiagnosticArguments(args);
+  if (options.readOnly) throw new Error('Cached diagnostics cannot invoke live verification.');
   const startedAt = Date.now();
-  const providers = selectedProviders(args.find((value) => !value.startsWith('--')));
-  const reports = await Promise.all(providers.map(verifyProvider));
-  let publication = null;
-  const fullVerification = providers.length === CONNECTION_TARGETS.length;
-  if (fullVerification && !args.includes('--no-publish')) {
+  const reports = await Promise.all(options.providers.map((provider) => verify(provider)));
+  let publication = options.providers.length === CONNECTION_TARGETS.length ? { status: 'skipped' } : undefined;
+  if (options.publish) {
     try {
-      publication = await publishAttestation(buildAttestation(reports, startedAt));
-    } catch (error) {
-      publication = { status: 'failed', error: error instanceof Error ? error.message : 'Publication failed safely.' };
+      publication = await publishAttestationResult(buildAttestation(reports, startedAt));
+    } catch {
+      publication = { status: 'failed', code: 'attestation_publication_failed' };
     }
-  } else if (fullVerification) {
-    publication = { status: 'skipped' };
   }
-  const value = writeSafeStatus(reports, publication);
-  printReports(value, args.includes('--json'));
-  if (doctor) {
+  const value = persist(reports, publication);
+  return { value, json: options.json, exitCode: publication?.status === 'failed' ? 5 : exitCodeFor(reports) };
+}
+
+async function verifyCommand(args, { doctor = false } = {}) {
+  const { value, json, exitCode } = await collectLiveConnectionDiagnostics(args);
+  printReports({ ...value, runtimeConnections: fcosRuntimeConnectionCatalogue(process.env) }, json);
+  if (doctor && !json) {
     const salesforceProfiles = salesforceEnvironments().map(({ label, browserProfile }) => `${label}=${browserProfile}`).join(', ');
     console.log(`Approved Chrome fallback: FCOS=${APPROVED_CONNECTION_BROWSER_PROFILE}; Salesforce ${salesforceProfiles}; shared Salesforce GitHub=${target('salesforce').publication.browserProfile} (authentication only)`);
     console.log(`Credential metadata: ${path.relative(REPO_ROOT, CREDENTIAL_METADATA_PATH)} (non-secret, mode 0600)`);
   }
-  if (publication?.status === 'failed') return 5;
-  return exitCodeFor(reports);
+  return exitCode;
 }
 
 async function pinSupabase() {
@@ -1007,6 +1030,16 @@ async function bootstrapCommand(args) {
   return exitCodeFor(final);
 }
 
+function optionValues(args, names) {
+  return args.flatMap((argument, index) => {
+    const delimiter = argument.indexOf('=');
+    const flag = delimiter < 0 ? argument : argument.slice(0, delimiter);
+    const name = flag.startsWith('--') ? flag.toLowerCase() : flag;
+    if (!names.includes(name)) return [];
+    return [delimiter < 0 ? args[index + 1] ?? '' : argument.slice(delimiter + 1)];
+  });
+}
+
 export function validateProviderArgs(providerId, args) {
   if (!Array.isArray(args) || args.length === 0) throw new Error('Provide the provider CLI arguments after --.');
   const joined = args.join(' ').toLowerCase();
@@ -1017,37 +1050,108 @@ export function validateProviderArgs(providerId, args) {
   if (/\b(login|logout)\b/.test(joined)) throw new Error('Login and logout are blocked in the verified runner. Use connections:auth for authentication.');
   if (providerId === 'github') {
     if (/auth token|auth status .*--show-token/.test(joined)) throw new Error('Commands that reveal GitHub tokens are blocked.');
-    const foreignRepo = args.find((arg) => /github\.com[:/]/i.test(arg)
-      && canonicalGitRemote(arg) !== identifier('github', 'Repository').toLowerCase());
-    if (foreignRepo) throw new Error('The GitHub command targets a repository outside the approved FCOS repository.');
+    const repository = identifier('github', 'Repository').toLowerCase();
+    const repoTargets = [
+      ...optionValues(args, ['--repo', '-R']),
+      ...args.filter((arg) => /github\.com[:/]/i.test(arg)).map(canonicalGitRemote),
+      ...args.flatMap((arg) => {
+        const endpoint = /^\/?repos\/([^/?]+)\/([^/?]+)/i.exec(arg);
+        return endpoint ? [`${endpoint[1]}/${endpoint[2]}`] : [];
+      }),
+    ];
+    if (repoTargets.some((repo) => repo.toLowerCase() !== repository && canonicalGitRemote(repo) !== repository)
+      || optionValues(args, ['--hostname']).some((host) => host.toLowerCase() !== 'github.com')) {
+      throw new Error('The GitHub command targets a host or repository outside the approved FCOS repository.');
+    }
   }
-  if (providerId === 'vercel' && args.some((arg) => ['--global-config', '-q', '--scope', '-s', '--team'].includes(arg.toLowerCase()))) {
+  if (providerId === 'vercel' && optionValues(args, ['--global-config', '-q', '-Q', '--scope', '-s', '-S', '--team']).length) {
     throw new Error('Vercel config, scope, and team overrides are blocked; the FCOS wrapper injects the approved values.');
   }
   if (providerId === 'supabase') {
-    if (args.some((arg) => ['--profile', '--workdir'].includes(arg.toLowerCase()))) {
+    if (optionValues(args, ['--profile', '--workdir']).length) {
       throw new Error('Supabase profile and workdir overrides are blocked; the FCOS wrapper injects the approved local home and workdir.');
     }
-    const projectIndex = args.findIndex((arg) => arg === '--project-ref' || arg.startsWith('--project-ref='));
-    if (projectIndex >= 0) {
-      const supplied = args[projectIndex].includes('=') ? args[projectIndex].split('=').slice(1).join('=') : args[projectIndex + 1];
-      if (supplied !== identifier('supabase', 'Project ref')) throw new Error('The Supabase command targets an unapproved project ref.');
+    if (optionValues(args, ['--project-ref']).some((ref) => ref !== identifier('supabase', 'Project ref'))) {
+      throw new Error('The Supabase command targets an unapproved project ref.');
     }
   }
   if (providerId === 'salesforce') {
     if (/\borg display\b|\borg list auth\b|\bforce:org:display\b/.test(joined)) {
       throw new Error('Salesforce commands that expose access tokens or auth URLs are blocked by the FCOS wrapper.');
     }
-    for (let index = 0; index < args.length; index += 1) {
-      if (args[index] === '--target-org' || args[index] === '-o') {
-        const supplied = args[index + 1];
-        if (!approvedSalesforceTargets().has(supplied)) {
-          throw new Error('The Salesforce command targets an unapproved org.');
-        }
-      }
+    const targets = approvedSalesforceTargets();
+    if (optionValues(args, ['--target-org', '-o']).some((org) => !targets.has(org))) {
+      throw new Error('The Salesforce command targets an unapproved org.');
     }
   }
   return true;
+}
+
+async function verifyManagedVercelResource(resource, context, capture) {
+  const team = identifier('vercel', 'Team ID');
+  const result = await capture('vercel', ['api', `/v13/deployments/${encodeURIComponent(resource)}?teamId=${team}`]);
+  const value = result.ok ? safeJson(result.stdout) : null;
+  return value?.projectId === identifier('vercel', 'Project ID')
+    && (value.teamId != null || value.ownerId != null)
+    && (value.teamId == null || value.teamId === team)
+    && (value.ownerId == null || value.ownerId === team)
+    && (context.environment === 'tooling' || (value.target || 'preview') === context.environment);
+}
+
+export async function runManagedConnectionOperation(context, args, {
+  verifier = verifyProvider, capture, verifyResource = verifyManagedVercelResource,
+  print = (result) => process.stdout.write(`${JSON.stringify(result, null, 2)}\n`),
+  now = () => new Date(),
+} = {}) {
+  const operation = validateConnectionOperation(context, args);
+  validateProviderArgs(context.provider, args);
+  let runtime;
+  const resolveRuntime = (provider, options) => {
+    if (provider !== context.provider) throw new Error('Managed operation attempted a different provider runtime.');
+    runtime ??= providerRuntime(provider, options);
+    return runtime;
+  };
+  const captureOperation = capture ?? ((provider, command) =>
+    runCaptured(provider, command, { runtime: resolveRuntime(provider) }));
+  const report = await verifier(context.provider, { resolveRuntime });
+  assertConnectionOperationAccess(operation, report, { now: now() });
+  if (operation.resource && !(await verifyResource(operation.resource, context, captureOperation))) {
+    throw new Error('Deployment ownership or environment does not match the approved project.');
+  }
+  if (operation.operation.endsWith('.api.read')) {
+    const result = await captureOperation(context.provider, args);
+    const parsed = result.ok ? safeJson(result.stdout) : null;
+    if (!parsed || typeof parsed !== 'object') throw new Error('Managed provider read failed without printing its output.');
+    print(sanitizeConnectionOperationOutput(operation, parsed));
+    return 0;
+  }
+  const commandRuntime = resolveRuntime(context.provider);
+  return new Promise((resolve) => {
+    const child = spawn(commandRuntime.command, [...args, ...commandRuntime.injectedArgs], { cwd: REPO_ROOT, env: commandRuntime.env, stdio: 'inherit' });
+    child.on('error', () => resolve(1));
+    child.on('close', (status) => resolve(Number.isInteger(status) ? status : 1));
+  });
+}
+
+function runManagedCommand(args) {
+  const separator = args.indexOf('--');
+  const provider = args[0];
+  const options = args.slice(1, separator);
+  const names = new Map([['--environment', 'environment'], ['--operation', 'operation'], ['--capability', 'capability']]);
+  const context = { provider };
+  if (separator < 1) throw new Error('Use -- between the managed context and provider command.');
+  for (let index = 0; index < options.length; index += 1) {
+    const argument = options[index];
+    const delimiter = argument.indexOf('=');
+    const flag = delimiter < 0 ? argument : argument.slice(0, delimiter);
+    const field = names.get(flag);
+    const value = delimiter < 0 ? options[++index] : argument.slice(delimiter + 1);
+    if (!field || context[field] || !value || value.startsWith('-')) {
+      throw new Error('Supply one environment, operation and capability for the managed read.');
+    }
+    context[field] = value;
+  }
+  return runManagedConnectionOperation(context, args.slice(separator + 1));
 }
 
 async function runCommand(args) {
@@ -1207,29 +1311,34 @@ function credentialMetadataCommand(args) {
 
 function printHelp() {
   console.log(`Usage:
-  npm run connections:verify [-- <provider>] [-- --json] [-- --no-publish] [-- --read-only]
-  npm run connections:doctor [-- --json] [-- --no-publish] [-- --read-only]
+  npm run connections:verify [-- <provider>] [-- --json] [-- --publish | --no-publish] [-- --read-only]
+  npm run connections:doctor [-- --json] [-- --publish | --no-publish] [-- --read-only]
   npm run connections:bootstrap [-- <provider>]
   npm run connections:auth -- <provider>
   npm run connections:keychain
-  npm run connections:cli -- <provider> -- <provider CLI arguments>`);
+  npm run connections:cli -- <provider> -- <provider CLI arguments>
+  node scripts/fcos-connections.mjs managed <provider> --environment <environment> --operation <operation> --capability <capability> -- <provider command>`);
 }
 
 export async function main(argv = process.argv.slice(2)) {
   try {
     const [command, ...args] = argv;
-    if (args.includes('--read-only')) return printCachedDiagnostics(command, args);
+    if (args.includes('--read-only')) {
+      if (!['verify', 'doctor'].includes(command)) throw new Error('Read-only diagnostics require verify or doctor.');
+      return printCachedDiagnostics(parseConnectionDiagnosticArguments(args));
+    }
     if (!command || command === 'help' || command === '--help') {
       printHelp();
       return 0;
     }
-    if (command === 'verify') return verifyCommand(args);
-    if (command === 'doctor') return verifyCommand(args, { doctor: true });
+    if (command === 'verify') return await verifyCommand(args);
+    if (command === 'doctor') return await verifyCommand(args, { doctor: true });
     if (command === 'bootstrap') return bootstrapCommand(args);
     if (command === 'auth') return authCommand(args);
     if (command === 'keychain') return keychainCommand();
     if (command === 'credential-metadata') return credentialMetadataCommand(args);
     if (command === 'run') return runCommand(args);
+    if (command === 'managed') return await runManagedCommand(args);
     throw new Error(`Unknown command: ${command}`);
   } catch (error) {
     if (argv.includes('--read-only') && argv.includes('--json')) {
