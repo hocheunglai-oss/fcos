@@ -354,3 +354,76 @@ test('Keychain reads have a bounded wait and leave failed credentials unavailabl
   });
   assert.equal(result.status, 0, result.stderr);
 });
+
+test('a managed Vercel deployment read uses one Keychain lookup across verification and readback', {
+  skip: process.platform !== 'darwin',
+}, () => {
+  const script = `
+    import assert from 'node:assert/strict';
+    import fs from 'node:fs';
+    import { EventEmitter } from 'node:events';
+    import processes from 'node:child_process';
+    import { syncBuiltinESMExports } from 'node:module';
+    import { fcosConnectionIdentifier as pin } from './config/fcosConnections.js';
+    const originalExists = fs.existsSync;
+    const originalRead = fs.readFileSync;
+    const project = pin('vercel', 'Project ID');
+    const team = pin('vercel', 'Team ID');
+    const deployment = { id: 'dpl_fixture', projectId: project, ownerId: team, target: 'production',
+      readyState: 'READY', environmentDump: 'private fixture' };
+    let requests = 0;
+    const commands = [];
+    fs.mkdirSync = () => {};
+    fs.writeFileSync = () => {};
+    fs.chmodSync = () => {};
+    fs.existsSync = file => typeof file === 'string' && file.endsWith('/.fcos-cli/bin/fcos-keychain') || originalExists(file);
+    fs.readFileSync = (file, ...args) => {
+      const name = String(file);
+      if (name.endsWith('/credential-metadata.json')) return '{}';
+      if (name.endsWith('/.vercel/repo.json')) return JSON.stringify({ projects: [
+        { directory: '.', id: project, orgId: team, name: pin('vercel', 'Project') },
+      ] });
+      return originalRead(file, ...args);
+    };
+    processes.spawnSync = (command, args) => {
+      assert(command.endsWith('/.fcos-cli/bin/fcos-keychain') && args[0] === 'get');
+      return { status: 0, stdout: 'fixture-' + ++requests };
+    };
+    processes.spawn = (_command, args, options) => {
+      const [first, second] = args;
+      commands.push(first);
+      let output;
+      if (first === '--version') {
+        assert.equal(options.env.VERCEL_TOKEN, undefined);
+        output = '54.20.1';
+      } else {
+        assert.equal(options.env.VERCEL_TOKEN, 'fixture-1');
+        if (first === 'whoami') output = pin('vercel', 'Account');
+        else if (first === 'project') output = project + ' ' + pin('vercel', 'Target');
+        else if (first === 'list') output = 'Ready';
+        else if (first === 'api') {
+          assert(second.startsWith('/v13/deployments/dpl_fixture'));
+          output = JSON.stringify(deployment);
+        } else assert.fail('Unexpected provider command');
+      }
+      const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter() });
+      queueMicrotask(() => { child.stdout.emit('data', output); child.emit('close', 0); });
+      return child;
+    };
+    syncBuiltinESMExports();
+    const { runManagedConnectionOperation } = await import('./scripts/fcos-connections.mjs');
+    const context = { provider: 'vercel', environment: 'production', operation: 'vercel.api.read', capability: 'deployment.read' };
+    const outputs = [];
+    const outcome = await runManagedConnectionOperation(context, ['api', '/v13/deployments/dpl_fixture'],
+      { print: result => outputs.push(result) });
+    assert.equal(outcome, 0);
+    assert.equal(requests, 1);
+    assert.deepEqual(commands, ['--version', 'whoami', 'project', 'list', 'api', 'api']);
+    assert.equal(outputs[0].id, deployment.id);
+    assert(!JSON.stringify(outputs).includes('private fixture'));
+  `;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+    cwd: new URL('..', import.meta.url), env: { PATH: process.env.PATH }, encoding: 'utf8', timeout: 5000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+});

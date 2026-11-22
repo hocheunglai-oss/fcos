@@ -557,15 +557,14 @@ function configureGithubCredentialHelper() {
     && githubCredentialHelperConfigured();
 }
 
-async function verifyGitHub(version, metadata, startedAt) {
+async function verifyGitHub(version, metadata, startedAt, runtime) {
   const report = baseReport('github', version, startedAt, metadata);
   if (!version.available) return finalizeReport(report, startedAt);
-  const runtime = providerRuntime('github');
   if (!runtime.credentialAvailable) return finalizeReport({ ...report, identityStatus: 'authentication_blocked', targetPin: 'verified' }, startedAt);
   const [account, repository, auth] = await Promise.all([
-    runCaptured('github', ['api', 'user', '--jq', '.login']),
-    runCaptured('github', ['api', `repos/${identifier('github', 'Repository')}`]),
-    runCaptured('github', ['auth', 'status', '--active', '--hostname', 'github.com', '--json', 'hosts']),
+    runCaptured('github', ['api', 'user', '--jq', '.login'], { runtime }),
+    runCaptured('github', ['api', `repos/${identifier('github', 'Repository')}`], { runtime }),
+    runCaptured('github', ['auth', 'status', '--active', '--hostname', 'github.com', '--json', 'hosts'], { runtime }),
   ]);
   if (!account.ok || !repository.ok || !auth.ok) {
     return finalizeReport({ ...report, identityStatus: classifyFailedIdentity(account, repository, auth) }, startedAt);
@@ -697,14 +696,14 @@ function readSalesforcePin() {
   }
 }
 
-async function verifySalesforce(version, metadata, startedAt) {
+async function verifySalesforce(version, metadata, startedAt, runtime) {
   const report = baseReport('salesforce', version, startedAt, metadata);
   if (!version.available) return finalizeReport(report, startedAt);
   const [checks, sharedAccount, sharedRepository, sharedMirror] = await Promise.all([
     Promise.all(salesforceEnvironments().map(async (environment) => {
     const [display, organization] = await Promise.all([
-      runCaptured('salesforce', ['org', 'display', '--target-org', environment.alias, '--json']),
-      runCaptured('salesforce', ['data', 'query', '--target-org', environment.alias, '--query', 'SELECT Id, IsSandbox FROM Organization LIMIT 1', '--json']),
+      runCaptured('salesforce', ['org', 'display', '--target-org', environment.alias, '--json'], { runtime }),
+      runCaptured('salesforce', ['data', 'query', '--target-org', environment.alias, '--query', 'SELECT Id, IsSandbox FROM Organization LIMIT 1', '--json'], { runtime }),
     ]);
     const parsed = safeJson(display.stdout);
     const record = safeJson(organization.stdout)?.result?.records?.[0];
@@ -750,18 +749,18 @@ async function verifySalesforce(version, metadata, startedAt) {
   }, startedAt);
 }
 
-export async function verifyProvider(providerId) {
+export async function verifyProvider(providerId, { resolveRuntime = providerRuntime } = {}) {
   ensureStateDirectories();
   const startedAt = Date.now();
   const version = await cliVersion(providerId);
-  const runtime = providerRuntime(providerId, { requireCredential: version.available });
+  const runtime = resolveRuntime(providerId, { requireCredential: version.available });
   const metadata = ensureCredentialMetadata(providerId, runtime.credentialAvailable);
   let report;
   switch (providerId) {
-    case 'github': report = await verifyGitHub(version, metadata, startedAt); break;
+    case 'github': report = await verifyGitHub(version, metadata, startedAt, runtime); break;
     case 'vercel': report = await verifyVercel(version, metadata, startedAt, runtime); break;
     case 'supabase': report = await verifySupabase(version, metadata, startedAt, runtime); break;
-    case 'salesforce': report = await verifySalesforce(version, metadata, startedAt); break;
+    case 'salesforce': report = await verifySalesforce(version, metadata, startedAt, runtime); break;
     default: throw new Error(`Unsupported provider: ${providerId}`);
   }
   const observedAt = new Date().toISOString();
@@ -1073,9 +1072,9 @@ export function validateProviderArgs(providerId, args) {
   return true;
 }
 
-async function verifyManagedVercelResource(resource, context) {
+async function verifyManagedVercelResource(resource, context, capture) {
   const team = identifier('vercel', 'Team ID');
-  const result = await runCaptured('vercel', ['api', `/v13/deployments/${encodeURIComponent(resource)}?teamId=${team}`]);
+  const result = await capture('vercel', ['api', `/v13/deployments/${encodeURIComponent(resource)}?teamId=${team}`]);
   const value = result.ok ? safeJson(result.stdout) : null;
   return value?.projectId === identifier('vercel', 'Project ID')
     && (value.teamId != null || value.ownerId != null)
@@ -1085,27 +1084,35 @@ async function verifyManagedVercelResource(resource, context) {
 }
 
 export async function runManagedConnectionOperation(context, args, {
-  verifier = verifyProvider, capture = runCaptured, verifyResource = verifyManagedVercelResource,
+  verifier = verifyProvider, capture, verifyResource = verifyManagedVercelResource,
   print = (result) => process.stdout.write(`${JSON.stringify(result, null, 2)}\n`),
   now = () => new Date(),
 } = {}) {
   const operation = validateConnectionOperation(context, args);
   validateProviderArgs(context.provider, args);
-  const report = await verifier(context.provider);
+  let runtime;
+  const resolveRuntime = (provider, options) => {
+    if (provider !== context.provider) throw new Error('Managed operation attempted a different provider runtime.');
+    runtime ??= providerRuntime(provider, options);
+    return runtime;
+  };
+  const captureOperation = capture ?? ((provider, command) =>
+    runCaptured(provider, command, { runtime: resolveRuntime(provider) }));
+  const report = await verifier(context.provider, { resolveRuntime });
   assertConnectionOperationAccess(operation, report, { now: now() });
-  if (operation.resource && !(await verifyResource(operation.resource, context))) {
+  if (operation.resource && !(await verifyResource(operation.resource, context, captureOperation))) {
     throw new Error('Deployment ownership or environment does not match the approved project.');
   }
   if (operation.operation.endsWith('.api.read')) {
-    const result = await capture(context.provider, args);
+    const result = await captureOperation(context.provider, args);
     const parsed = result.ok ? safeJson(result.stdout) : null;
     if (!parsed || typeof parsed !== 'object') throw new Error('Managed provider read failed without printing its output.');
     print(sanitizeConnectionOperationOutput(operation, parsed));
     return 0;
   }
-  const runtime = providerRuntime(context.provider);
+  const commandRuntime = resolveRuntime(context.provider);
   return new Promise((resolve) => {
-    const child = spawn(runtime.command, [...args, ...runtime.injectedArgs], { cwd: REPO_ROOT, env: runtime.env, stdio: 'inherit' });
+    const child = spawn(commandRuntime.command, [...args, ...commandRuntime.injectedArgs], { cwd: REPO_ROOT, env: commandRuntime.env, stdio: 'inherit' });
     child.on('error', () => resolve(1));
     child.on('close', (status) => resolve(Number.isInteger(status) ? status : 1));
   });
