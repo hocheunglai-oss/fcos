@@ -314,3 +314,28 @@ test('managed deployment reads stop before output when exact resource ownership 
     ...deps, verifier: () => assert.fail('Mismatched environment reached provider verification'),
   }), /exact operation environment/);
 });
+
+test('Keychain reads have a bounded wait and leave failed credentials unavailable', {
+  skip: process.platform !== 'darwin',
+}, () => {
+  const script = `
+    import fs from 'node:fs';
+    import processes from 'node:child_process';
+    import { syncBuiltinESMExports } from 'node:module';
+    const originalExists = fs.existsSync;
+    fs.existsSync = (file) => typeof file === 'string' && file.endsWith('/.fcos-cli/bin/fcos-keychain') || originalExists(file);
+    processes.spawnSync = (command, args, options) => {
+      if (!command.endsWith('/.fcos-cli/bin/fcos-keychain') || args[0] !== 'get') throw new Error('Unexpected child process');
+      if (options.timeout !== 20000 || options.killSignal !== 'SIGKILL') throw new Error('Credential read is unbounded');
+      return { status: null, error: Object.assign(new Error('fixture timeout'), { code: 'ETIMEDOUT' }) };
+    };
+    syncBuiltinESMExports();
+    const { providerRuntime } = await import('./scripts/fcos-connections.mjs');
+    const result = providerRuntime('vercel');
+    if (result.credentialAvailable || result.env.VERCEL_TOKEN) throw new Error('Credential incorrectly admitted after timeout');
+  `;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+    cwd: new URL('..', import.meta.url), env: { PATH: process.env.PATH }, encoding: 'utf8', timeout: 5000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+});

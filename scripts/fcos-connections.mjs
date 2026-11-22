@@ -29,6 +29,7 @@ const STATUS_PATH = path.join(LOCAL_STATE_ROOT, 'status.json');
 const CREDENTIAL_METADATA_PATH = path.join(LOCAL_STATE_ROOT, 'credential-metadata.json');
 const PROVIDER_IDS = new Set(CONNECTION_TARGETS.map(({ id }) => id));
 const COMMAND_TIMEOUT_MS = 90_000;
+const KEYCHAIN_TIMEOUT_MS = 20_000;
 const KEYCHAIN_HELPER_SOURCE = path.join(REPO_ROOT, 'scripts', 'fcos-keychain-migrate.swift');
 let keychainHelperReady = false;
 
@@ -102,7 +103,7 @@ function keychainValue(service) {
     'get',
     FCOS_CONNECTION_POLICY.keychainAccount,
     service,
-  ], { encoding: 'utf8', maxBuffer: 1024 * 1024 });
+  ], { encoding: 'utf8', maxBuffer: 1024 * 1024, timeout: KEYCHAIN_TIMEOUT_MS, killSignal: 'SIGKILL' });
   return result.status === 0 ? String(result.stdout || '').trim() : '';
 }
 
