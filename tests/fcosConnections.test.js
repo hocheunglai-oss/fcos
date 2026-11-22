@@ -225,3 +225,22 @@ test('cached diagnostics return one sanitized JSON report without provider or st
   assert.equal(await readFile(statusFile, 'utf8'), fixture);
   assert.deepEqual(await readdir(stateDirectory), ['status.json']);
 });
+
+test('provider CLI rejects alternate targets in attached, repeated and relative forms', () => {
+  const cases = [
+    ['github', ['pr', 'view', '1', '--repo=fixture/unapproved']],
+    ['github', ['api', 'repos/fixture/unapproved']],
+    ['github', ['api', 'user', '--hostname=fixture.invalid']],
+    ['vercel', ['inspect', 'fixture-deployment', '--scope=fixture-team']],
+    ['supabase', ['projects', 'list', '--profile=fixture']],
+    ['supabase', ['db', 'pull', '--project-ref=pjforfvchygdyqfcgpmw', '--project-ref=fixture-ref']],
+    ['salesforce', ['data', 'query', '--target-org=fixture-org']],
+    ['salesforce', ['data', 'query', '-o=fixture-org']],
+  ];
+  for (const [provider, args] of cases) {
+    assert.throws(() => validateProviderArgs(provider, args), /approved|overrides are blocked/, provider);
+  }
+  assert.equal(validateProviderArgs('github', ['api', 'repos/hocheunglai-oss/fcos/actions/runs']), true);
+  assert.equal(validateProviderArgs('github', ['pr', 'view', '1', '-R', 'hocheunglai-oss/fcos']), true);
+  assert.equal(validateProviderArgs('salesforce', ['data', 'query', '--target-org=fcos-devee']), true);
+});

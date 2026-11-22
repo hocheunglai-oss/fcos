@@ -1007,6 +1007,16 @@ async function bootstrapCommand(args) {
   return exitCodeFor(final);
 }
 
+function optionValues(args, names) {
+  return args.flatMap((argument, index) => {
+    const delimiter = argument.indexOf('=');
+    const flag = delimiter < 0 ? argument : argument.slice(0, delimiter);
+    const name = flag.startsWith('--') ? flag.toLowerCase() : flag;
+    if (!names.includes(name)) return [];
+    return [delimiter < 0 ? args[index + 1] ?? '' : argument.slice(delimiter + 1)];
+  });
+}
+
 export function validateProviderArgs(providerId, args) {
   if (!Array.isArray(args) || args.length === 0) throw new Error('Provide the provider CLI arguments after --.');
   const joined = args.join(' ').toLowerCase();
@@ -1017,34 +1027,38 @@ export function validateProviderArgs(providerId, args) {
   if (/\b(login|logout)\b/.test(joined)) throw new Error('Login and logout are blocked in the verified runner. Use connections:auth for authentication.');
   if (providerId === 'github') {
     if (/auth token|auth status .*--show-token/.test(joined)) throw new Error('Commands that reveal GitHub tokens are blocked.');
-    const foreignRepo = args.find((arg) => /github\.com[:/]/i.test(arg)
-      && canonicalGitRemote(arg) !== identifier('github', 'Repository').toLowerCase());
-    if (foreignRepo) throw new Error('The GitHub command targets a repository outside the approved FCOS repository.');
+    const repository = identifier('github', 'Repository').toLowerCase();
+    const repoTargets = [
+      ...optionValues(args, ['--repo', '-R']),
+      ...args.filter((arg) => /github\.com[:/]/i.test(arg)).map(canonicalGitRemote),
+      ...args.flatMap((arg) => {
+        const endpoint = /^\/?repos\/([^/?]+)\/([^/?]+)/i.exec(arg);
+        return endpoint ? [`${endpoint[1]}/${endpoint[2]}`] : [];
+      }),
+    ];
+    if (repoTargets.some((repo) => repo.toLowerCase() !== repository && canonicalGitRemote(repo) !== repository)
+      || optionValues(args, ['--hostname']).some((host) => host.toLowerCase() !== 'github.com')) {
+      throw new Error('The GitHub command targets a host or repository outside the approved FCOS repository.');
+    }
   }
-  if (providerId === 'vercel' && args.some((arg) => ['--global-config', '-q', '--scope', '-s', '--team'].includes(arg.toLowerCase()))) {
+  if (providerId === 'vercel' && optionValues(args, ['--global-config', '-q', '--scope', '-s', '--team']).length) {
     throw new Error('Vercel config, scope, and team overrides are blocked; the FCOS wrapper injects the approved values.');
   }
   if (providerId === 'supabase') {
-    if (args.some((arg) => ['--profile', '--workdir'].includes(arg.toLowerCase()))) {
+    if (optionValues(args, ['--profile', '--workdir']).length) {
       throw new Error('Supabase profile and workdir overrides are blocked; the FCOS wrapper injects the approved local home and workdir.');
     }
-    const projectIndex = args.findIndex((arg) => arg === '--project-ref' || arg.startsWith('--project-ref='));
-    if (projectIndex >= 0) {
-      const supplied = args[projectIndex].includes('=') ? args[projectIndex].split('=').slice(1).join('=') : args[projectIndex + 1];
-      if (supplied !== identifier('supabase', 'Project ref')) throw new Error('The Supabase command targets an unapproved project ref.');
+    if (optionValues(args, ['--project-ref']).some((ref) => ref !== identifier('supabase', 'Project ref'))) {
+      throw new Error('The Supabase command targets an unapproved project ref.');
     }
   }
   if (providerId === 'salesforce') {
     if (/\borg display\b|\borg list auth\b|\bforce:org:display\b/.test(joined)) {
       throw new Error('Salesforce commands that expose access tokens or auth URLs are blocked by the FCOS wrapper.');
     }
-    for (let index = 0; index < args.length; index += 1) {
-      if (args[index] === '--target-org' || args[index] === '-o') {
-        const supplied = args[index + 1];
-        if (!approvedSalesforceTargets().has(supplied)) {
-          throw new Error('The Salesforce command targets an unapproved org.');
-        }
-      }
+    const targets = approvedSalesforceTargets();
+    if (optionValues(args, ['--target-org', '-o']).some((org) => !targets.has(org))) {
+      throw new Error('The Salesforce command targets an unapproved org.');
     }
   }
   return true;
