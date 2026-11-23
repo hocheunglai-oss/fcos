@@ -8428,6 +8428,7 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
       status: stem.Status__c || null,
       type: stem.Type__c || null,
       dispute: stem.Dispute__c === true || (stem.Dispute_Status__c && stem.Dispute_Status__c !== 'No Dispute'),
+      disputeStatus: stem.Dispute_Status__c || null,
       account: accountField && stem[accountField] && stem.Account__r?.Inactive_Suspended__c !== true ? { id: stem[accountField], name: stem.Account__r?.Name || null } : accountField && stem[accountField] ? { id: null, name: 'Account unavailable' } : null,
       port: portField && stem[portField] ? { id: stem[portField], name: stem.Port__r?.Name || null, countryCode: stem.Port__r?.Country__c || null } : null,
       vessel: stem.Vessel__c ? { id: stem.Vessel__c, name: stem.Vessel__r?.Name || null } : null,
@@ -8705,7 +8706,7 @@ async function cachedDecisionDashboard(handler, body, req, accessContext, ttlSec
   delete cachePayload.refresh;
   const cached = await cachedSalesforceValue({
     namespace: handler === 'stems'
-      ? 'decision-dashboard-v9-stems'
+      ? 'decision-dashboard-v10-stems'
       : handler === 'analytics'
         ? 'decision-dashboard-v10-analytics-calendar-year'
         : `decision-dashboard-v9-${handler}`,
