@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier } from '../../../config/fcosConnections.js';
 import { FCOS_READ_ONLY_CI } from '../../../config/fcosCiIdentity.js';
-import { READ_ONLY_CI_HANDLERS, isReadOnlyMarketAction, CI_DENIAL_PROBES } from './smoke-policy.mjs';
+import { BASELINE_NAVIGATION_CATEGORIES, READ_ONLY_CI_HANDLERS, isReadOnlyMarketAction, CI_DENIAL_PROBES } from './smoke-policy.mjs';
 import { canonicalFcosE2eCandidateUrl } from '../../verify-e2e-candidate.mjs';
 import { candidateAuthenticationState, writePrivateE2eState, removePrivateE2eState } from '../../e2e-private-state.mjs';
 import { candidateProtectionState } from '../../e2e-protection-state.mjs';
@@ -402,6 +402,16 @@ async function verifyGroupedPetroleumRoutes(route, origin, normal) {
   return true;
 }
 
+function baselineNavigationCategory(reason) {
+  if (reason?.name === 'TimeoutError') return 'timeout';
+  const message = typeof reason?.message === 'string' ? reason.message : '';
+  if (/^page\.goto: (?:net::ERR_ABORTED\b|Navigation [^\r\n]+ is interrupted by another navigation\b)/u.test(message)) return 'interrupted';
+  if (/^page\.goto: Target page, context or browser has been closed\b/u.test(message)) return 'context_closed';
+  if (/^page\.goto: net::ERR_TOO_MANY_REDIRECTS\b/u.test(message)) return 'redirect_limit';
+  if (/^page\.goto: net::ERR_[A-Z_]+\b/u.test(message)) return 'network_error';
+  return 'unclassified';
+}
+
 async function browserBaselineResponse(page, origin, module, reader) {
   const reject = code => Object.assign(fail(code), { smokeModule: module, smokeSurface: 'read' });
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -409,7 +419,11 @@ async function browserBaselineResponse(page, origin, module, reader) {
       page.waitForResponse(response => response.url() === `${origin}${reader.path}` && response.request().method() === 'POST', { timeout: 45000 }),
       page.goto(`${origin}${reader.route}`, { waitUntil: 'domcontentloaded', timeout: 45000 }),
     ]);
-    if (navigation.status === 'rejected') throw reject('SMOKE_BASELINE_NAVIGATION_FAILED');
+    if (navigation.status === 'rejected') {
+      throw Object.assign(reject('SMOKE_BASELINE_NAVIGATION_FAILED'), {
+        smokeNavigationCategory: baselineNavigationCategory(navigation.reason),
+      });
+    }
     if (new URL(page.url()).origin !== origin) throw reject('SMOKE_CANDIDATE_NAVIGATION_CHANGED');
     if (read.status === 'fulfilled') return read.value;
     if (read.reason?.name !== 'TimeoutError') throw reject('SMOKE_BASELINE_RESPONSE_FAILED');
@@ -612,6 +626,9 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
     const failure = fail(/^(?:SMOKE_|NORMAL_ROLE_)[A-Z0-9_]+$/.test(cause?.code || '') ? cause.code : `SMOKE_BROWSER_${phase}_FAILED`);
     if (Object.hasOwn(moduleReaders, cause?.smokeModule) && ['read', 'desktop'].includes(cause.smokeSurface)) {
       Object.assign(failure, { smokeModule: cause.smokeModule, smokeSurface: cause.smokeSurface });
+      if (failure.code === 'SMOKE_BASELINE_NAVIGATION_FAILED' && BASELINE_NAVIGATION_CATEGORIES.includes(cause.smokeNavigationCategory)) {
+        failure.smokeNavigationCategory = cause.smokeNavigationCategory;
+      }
     }
     throw failure;
   } finally {

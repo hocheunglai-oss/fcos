@@ -48,7 +48,7 @@ const readPayloads = {
 
 // Fixtures replace browser/provider transports. They simulate the app-owned
 // bootstrap response and actual response events; they never establish live proof.
-function browserFixture({ badIdentity = false, badRead = false, badDenial = false, unexpected = false, missingModule = false, background = false, optionalRequest = null, badPayload = false, badDesktop = false, deniedModule = null, role = 'manager', companyFxRows = undefined, supplierBoundaryRegression = null, groupedBoundaryRegression = false, groupedDesktopMissing = false, tradingFxRouteRegression = false, tradingFxActionVisible = false, existingDraftActionVisible = false, existingDraftRouteRegression = false, marketReadTimeouts = 0, marketResponseStatus = 200, moduleReadTimeouts = {} } = {}) {
+function browserFixture({ badIdentity = false, badRead = false, badDenial = false, unexpected = false, missingModule = false, background = false, optionalRequest = null, badPayload = false, badDesktop = false, deniedModule = null, role = 'manager', companyFxRows = undefined, supplierBoundaryRegression = null, groupedBoundaryRegression = false, groupedDesktopMissing = false, tradingFxRouteRegression = false, tradingFxActionVisible = false, existingDraftActionVisible = false, existingDraftRouteRegression = false, marketReadTimeouts = 0, marketResponseStatus = 200, marketNavigationError = null, moduleReadTimeouts = {} } = {}) {
   const observations = { launches: [], reads: [], contextsClosed: 0, browsersClosed: 0, nativeAborts: 0 };
   const remainingTimeouts = { ...moduleReadTimeouts };
   const browserFactory = async options => {
@@ -145,6 +145,10 @@ function browserFixture({ badIdentity = false, badRead = false, badDenial = fals
         const handler = new URL(url).pathname === '/' ? 'dashboardSummary' : new URL(url).pathname === '/markets' ? 'marketPulseSnapshot' : null;
         if (handler === 'marketPulseSnapshot') {
           observations.marketNavigations = (observations.marketNavigations || 0) + 1;
+          if (marketNavigationError) {
+            responseWaiters.shift().reject(Error('PRIVATE_FIXTURE_READ_FAILURE'));
+            throw marketNavigationError;
+          }
           if (observations.marketNavigations <= marketReadTimeouts) {
             responseWaiters.shift().reject(Object.assign(new Error('PRIVATE_FIXTURE_TIMEOUT'), { name: 'TimeoutError' }));
             return;
@@ -216,6 +220,31 @@ test('Markets fails after two read timeouts and does not retry an HTTP rejection
     await assert.rejects(runStagedSmoke({ manifest: manifest(), staged, env, fetchImpl: publicFetch(), browserFactory: fixture.browserFactory }),
       { code, smokeModule: 'markets', smokeSurface: 'read' });
     assert.equal(fixture.observations.marketNavigations, navigations);
+    assert.equal(fixture.observations.contextsClosed, 1);
+  }
+});
+
+test('Markets navigation reports only a safe category and never retries a failed navigation', async () => {
+  const secret = 'PRIVATE_BROWSER_DETAIL';
+  for (const [reason, expected] of [
+    [Object.assign(Error(secret), { name: 'TimeoutError' }), 'timeout'],
+    [Error('page.goto: net::ERR_ABORTED at ' + secret), 'interrupted'],
+    [Error('page.goto: Navigation to ' + secret + ' is interrupted by another navigation'), 'interrupted'],
+    [Error('page.goto: Target page, context or browser has been closed ' + secret), 'context_closed'],
+    [Error('page.goto: net::ERR_TOO_MANY_REDIRECTS at ' + secret), 'redirect_limit'],
+    [Error('page.goto: net::ERR_CONNECTION_RESET at ' + secret), 'network_error'],
+    [Error(secret), 'unclassified'],
+  ]) {
+    const fixture = browserFixture({ marketNavigationError: reason });
+    await assert.rejects(runStagedSmoke({ manifest: manifest(), staged, env, fetchImpl: publicFetch(), browserFactory: fixture.browserFactory }), error => {
+      assert.equal(error.code, 'SMOKE_BASELINE_NAVIGATION_FAILED');
+      assert.equal(error.smokeModule, 'markets');
+      assert.equal(error.smokeSurface, 'read');
+      assert.equal(error.smokeNavigationCategory, expected);
+      assert.ok(!String(error).includes(secret) && !JSON.stringify(error).includes(secret));
+      return true;
+    });
+    assert.equal(fixture.observations.marketNavigations, 1);
     assert.equal(fixture.observations.contextsClosed, 1);
   }
 });
