@@ -168,6 +168,9 @@ private class BuyerInvoiceApprovalServiceTest {
             List<FieldPermissions> businessFields = new List<FieldPermissions>();
             for (String field : new List<String>{'STEM__c.Master_Contract_Source__c', 'STEM__c.Master_Contract_Key__c',
                 'STEM_Line_Item__c.Master_Contract_Source__c', 'STEM_Line_Item__c.DON_Price_Status__c',
+                'STEM_Line_Item__c.Cancelled__c', 'STEM__c.Payment_Term__c',
+                'Invoice__c.Proforma__c', 'Invoice__c.Deprecated__c', 'Invoice__c.Amount__c', 'Invoice__c.File__c',
+                'Invoice__c.Invoice_Date__c', 'Invoice__c.Delivery_Date__c', 'Invoice__c.Invoice_Due_Date__c',
                 'Invoice__c.Buyer_Charge_Snapshot__c'}) {
                 businessFields.add(new FieldPermissions(ParentId=businessAccess.Id, SObjectType=field.substringBefore('.'),
                     Field=field, PermissionsRead=true, PermissionsEdit=false));
@@ -183,7 +186,14 @@ private class BuyerInvoiceApprovalServiceTest {
         insert new ContentDocumentLink(ContentDocumentId=issued.documentId, LinkedEntityId=accounts.Id,
             ShareType='V', Visibility='AllUsers');
         System.runAs(accounts) {
-            System.assertEquals(false, Invoice__c.Document_FX_Side__c.getDescribe().isAccessible());
+            Id invoiceId = issued.invoiceId;
+            Boolean privateFxDenied = false;
+            try {
+                Database.query('SELECT Document_FX_Side__c FROM Invoice__c WHERE Id = :invoiceId', AccessLevel.USER_MODE);
+            } catch (QueryException expected) {
+                privateFxDenied = true;
+            }
+            System.assert(privateFxDenied, 'The invoice operator must lack query access to the private FX lookup.');
             EmailInvoiceController.EmailData email = new EmailInvoiceController.EmailData();
             email.stemId = String.valueOf(issued.stemId);
             email.toAddress = 'accounts-test@example.invalid';
