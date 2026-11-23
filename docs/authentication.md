@@ -1,5 +1,8 @@
 # FCOS authentication and protected routes
 
+This guide describes the deployed application. The default-branch local setup
+is called out separately where it differs.
+
 FCOS uses the Supabase project pinned in [the connection policy](../config/fcosConnections.js).
 FCUNO owns federated identity and entitlement. FCOS owns local application
 activation, organizational roles and permission groups. Activating a federated
@@ -8,9 +11,12 @@ requires a valid FCUNO session and entitlement.
 
 ## Configuration
 
-Use the ignored `.env.local` for local development and the pinned FCOS Vercel
-project for hosted configuration. The browser reads `VITE_SUPABASE_URL` and
-prefers `VITE_SUPABASE_PUBLISHABLE_KEY`. It falls back to
+For local development on the maintained default branch, set
+`VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in the ignored `.env.local`.
+
+For hosted settings, use the pinned FCOS Vercel project. The deployed
+application reads `VITE_SUPABASE_URL` and prefers
+`VITE_SUPABASE_PUBLISHABLE_KEY`. It falls back to
 `VITE_SUPABASE_ANON_KEY` when the preferred value is missing or empty after
 trimming whitespace. The fallback accepts a publishable key or a legacy
 anonymous key for the pinned project. The protected build validates the project
