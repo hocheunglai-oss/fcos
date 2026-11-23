@@ -1,5 +1,9 @@
 // Trusted controller policy copied from the reviewed rapid-release source.
 // Keep application authorization and existing main harness behavior unchanged.
+export const BASELINE_NAVIGATION_CATEGORIES = Object.freeze([
+  'timeout', 'interrupted', 'context_closed', 'redirect_limit', 'network_error', 'unclassified',
+]);
+
 export const READ_ONLY_CI_HANDLERS = Object.freeze([
   'authContext', 'portalApplicationsList', 'navigationPreferencesGet', 'workspacePreferencesGet',
   'workNotificationsList',
