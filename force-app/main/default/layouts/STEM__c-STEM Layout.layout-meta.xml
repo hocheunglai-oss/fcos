@@ -201,6 +201,10 @@
                 <field>First_Invoice_Date__c</field>
             </layoutItems>
             <layoutItems>
+                <behavior>Edit</behavior>
+                <field>Label__c</field>
+            </layoutItems>
+            <layoutItems>
                 <behavior>Readonly</behavior>
                 <field>Total_Paying_Amount__c</field>
             </layoutItems>
