@@ -151,6 +151,52 @@ private class BuyerInvoiceApprovalServiceTest {
         return new IssuedInvoice(invoice.Id, ids.get('stem'), ids.get('supplier'), ids.get('stage'), line.Id, documentId);
     }
 
+    @IsTest
+    static void accountsOperatorCanSendTrackedUsdWithoutPrivateFxAccess() {
+        Profile profile = [SELECT Id FROM Profile WHERE Name = 'Sales Support' LIMIT 1];
+        PermissionSet chargePermission = [SELECT Id FROM PermissionSet WHERE Name = 'FCOS_Variable_Charges_User'];
+        User accounts = new User(Alias='acctmail', LastName='Invoice Email Accounts Test',
+            Email='accounts-test@example.invalid',
+            Username='tracked-invoice-' + UserInfo.getOrganizationId() + '-' + System.now().getTime() + '@example.invalid',
+            EmailEncodingKey='UTF-8', LanguageLocaleKey='en_US', LocaleSidKey='en_US',
+            TimeZoneSidKey='Asia/Hong_Kong', ProfileId=profile.Id);
+        System.runAs(new User(Id=UserInfo.getUserId())) {
+            insert accounts;
+            PermissionSet businessAccess = new PermissionSet(Name='TrackedInvoiceEmailTestBusinessAccess',
+                Label='Tracked Invoice Email Test Business Access');
+            insert businessAccess;
+            List<FieldPermissions> businessFields = new List<FieldPermissions>();
+            for (String field : new List<String>{'STEM__c.Master_Contract_Source__c', 'STEM__c.Master_Contract_Key__c',
+                'STEM_Line_Item__c.Master_Contract_Source__c', 'STEM_Line_Item__c.DON_Price_Status__c'}) {
+                businessFields.add(new FieldPermissions(ParentId=businessAccess.Id, SObjectType=field.substringBefore('.'),
+                    Field=field, PermissionsRead=true, PermissionsEdit=false));
+            }
+            insert businessFields;
+            insert new List<PermissionSetAssignment>{
+                new PermissionSetAssignment(AssigneeId=accounts.Id, PermissionSetId=chargePermission.Id),
+                new PermissionSetAssignment(AssigneeId=accounts.Id, PermissionSetId=businessAccess.Id)
+            };
+        }
+
+        IssuedInvoice issued = issueApprovedInvoice();
+        insert new ContentDocumentLink(ContentDocumentId=issued.documentId, LinkedEntityId=accounts.Id,
+            ShareType='V', Visibility='AllUsers');
+        System.runAs(accounts) {
+            System.assertEquals(false, Invoice__c.Document_FX_Side__c.getDescribe().isAccessible());
+            EmailInvoiceController.EmailData email = new EmailInvoiceController.EmailData();
+            email.stemId = String.valueOf(issued.stemId);
+            email.toAddress = 'accounts-test@example.invalid';
+            email.subject = 'Tracked USD invoice test';
+            email.textBody = 'Sandbox fixture';
+            Integer emailInvocations = Limits.getEmailInvocations();
+            EmailInvoiceController.sendEmail(email, new List<Invoice__c>{new Invoice__c(Id=issued.invoiceId)},
+                new List<String>{String.valueOf(issued.documentId)});
+            System.assertEquals(emailInvocations + 1, Limits.getEmailInvocations());
+            System.assertEquals(true, [SELECT Sent__c FROM Invoice__c WHERE Id=:issued.invoiceId].Sent__c);
+        }
+        Test.stopTest();
+    }
+
     private static void assertBlocked(Id invoiceId) {
         try {
             BuyerInvoiceApprovalService.assertPersistedInvoicesCanSend(new Set<Id>{invoiceId});
