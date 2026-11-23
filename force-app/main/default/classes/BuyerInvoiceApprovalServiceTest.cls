@@ -167,7 +167,8 @@ private class BuyerInvoiceApprovalServiceTest {
             insert businessAccess;
             List<FieldPermissions> businessFields = new List<FieldPermissions>();
             for (String field : new List<String>{'STEM__c.Master_Contract_Source__c', 'STEM__c.Master_Contract_Key__c',
-                'STEM_Line_Item__c.Master_Contract_Source__c', 'STEM_Line_Item__c.DON_Price_Status__c'}) {
+                'STEM_Line_Item__c.Master_Contract_Source__c', 'STEM_Line_Item__c.DON_Price_Status__c',
+                'Invoice__c.Buyer_Charge_Snapshot__c'}) {
                 businessFields.add(new FieldPermissions(ParentId=businessAccess.Id, SObjectType=field.substringBefore('.'),
                     Field=field, PermissionsRead=true, PermissionsEdit=false));
             }
