@@ -2021,6 +2021,54 @@ test('permission-only native projection preserves the raw baseline and unrelated
   assert.throws(() => create(altered), /outside the reviewed transition/u);
 });
 
+test('existing-layout-only native projection preserves the raw baseline and unrelated file pins', () => {
+  const id = 'Layout:STEM__c-STEM Layout';
+  const layout = 'layouts/STEM__c-STEM Layout.layout-meta.xml';
+  const unrelated = 'classes/Example.cls';
+  const baselineInventory = inventoryFromFiles({ ...files, [layout]: Buffer.from('<Layout/>\n') });
+  const finalInventory = inventoryFromFiles({ ...files, [layout]: Buffer.from('<Layout><layoutSections/></Layout>\n') });
+  const manifestBytes = packageXml([id]);
+  const raw = { files: baselineInventory.files, inventoryHash: baselineInventory.inventoryHash };
+  const stableFiles = Object.fromEntries(Object.keys(files).map(name => [name, baselineInventory.files[name]]));
+  const final = { projected: true, files: stableFiles, inventoryHash: projectedNativeInventoryHash(stableFiles, [layout]) };
+  const retrieval = { path: 'manifest/stable.xml', sha256: hash('stable') };
+  const review = {
+    schemaVersion: 1, releaseMode: REVIEWED_SALESFORCE_MODE, baselineMode: INVENTORY_BASELINE_MODE,
+    sourceTreeHash: finalInventory.sourceTreeHash, manifestSha256: hash(manifestBytes), baselineCommit: 'a'.repeat(40),
+    baselineSourceTreeHash: baselineInventory.sourceTreeHash, baselineInventoryHash: baselineInventory.inventoryHash,
+    components: [{ id, files: [layout], dependsOn: [] }],
+    dependencyReview: { complete: true, reviewer: 'reviewer', evidence: 'reviewed layout fixture' },
+    testPlan: { level: 'RunSpecifiedTests', tests: ['ExampleTest'], minimumTests: 1 },
+    nativeProjection: 'schema-free-layout',
+    nativeInventories: Object.fromEntries(policy.environments.map(({ key, orgId }) => [key, { orgId, baseline: raw, final }])),
+    inventoryManifests: { [raw.inventoryHash]: retrieval, [final.inventoryHash]: retrieval },
+  };
+  const create = descriptor => createReviewedSalesforcePlan({ review: descriptor, baselineInventory, finalInventory, manifestBytes, policy });
+  const plan = create(review);
+  assert.deepEqual(plan.changedFiles, [layout]);
+  assert.deepEqual(plan.binding.permissionSets, []);
+  assert.equal(plan.binding.bootstrapSha256, null);
+  assert.deepEqual(plan.nativeInventories.devee.baseline.files, baselineInventory.files);
+  assert.deepEqual(plan.nativeInventories.devee.final.projectionPaths, [layout]);
+  const splitRetrieval = structuredClone(review);
+  splitRetrieval.inventoryManifests[raw.inventoryHash].metadata = { path: 'manifest/layout.xml', sha256: hash(manifestBytes) };
+  assert.throws(() => create(splitRetrieval), /exact retrieval manifest/u);
+  assert.throws(() => create({ ...review, nativeProjection: 'schema-free-permission-set' }), /permission-set-only package/u);
+  assert.throws(() => create({ ...review, nativeInventories: undefined }), /only existing owned layouts/u);
+  const withoutLayout = inventoryFromFiles(files);
+  assert.throws(() => createReviewedSalesforcePlan({
+    review: { ...review, baselineSourceTreeHash: withoutLayout.sourceTreeHash, baselineInventoryHash: withoutLayout.inventoryHash },
+    baselineInventory: withoutLayout, finalInventory, manifestBytes, policy,
+  }), /only existing owned layouts/u);
+  const altered = structuredClone(review);
+  altered.nativeInventories.devee.final = structuredClone(final);
+  altered.nativeInventories.devee.final.files[unrelated].sha256 = hash('changed outside the layout');
+  const alteredHash = projectedNativeInventoryHash(altered.nativeInventories.devee.final.files, [layout]);
+  altered.nativeInventories.devee.final.inventoryHash = alteredHash;
+  altered.inventoryManifests[alteredHash] = retrieval;
+  assert.throws(() => create(altered), /outside the reviewed transition/u);
+});
+
 test('only the exact extended Editors desktop review may project the currency side trigger', () => {
   const triggerName = 'FcosTradeCurrencySideTrigger';
   const rehearsalName = 'FcosDeveeEditorFixtureRehearsalTest';

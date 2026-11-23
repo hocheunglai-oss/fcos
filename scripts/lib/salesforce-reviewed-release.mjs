@@ -151,6 +151,7 @@ function reviewedProjectedInventories(review, policy, baselineInventory, orgBase
         || name.split('/').some(part => !part || part === '.' || part === '..') || Object.hasOwn(finalInventory.files, name))))) {
     failCoverage('Native projection context must name exact unowned object XML paths for every org.');
   }
+  const inlineLayouts = review.nativeProjection === 'schema-free-layout';
   const bootstrapComponents = new Set(review.bootstrap?.components || []);
   const bootstrapFiles = new Set(components.filter(({ id }) => bootstrapComponents.has(id)).flatMap(({ files }) => files));
   const releaseFiles = new Set(components.flatMap(({ files }) => files));
@@ -175,8 +176,8 @@ function reviewedProjectedInventories(review, policy, baselineInventory, orgBase
       failCoverage('Native projected checkpoint contains a partially present component.');
     }
     if (descriptor.inventoryHash !== inventoryHash || !validManifest(retrieval) || retrieval.apex !== undefined
-      || (present.length ? !validManifest(retrieval.metadata) : retrieval.metadata !== undefined)) {
-      failCoverage('Native projected checkpoint lacks its exact split retrieval manifest.');
+      || (present.length && !inlineLayouts ? !validManifest(retrieval.metadata) : retrieval.metadata !== undefined)) {
+      failCoverage('Native projected checkpoint lacks its exact retrieval manifest.');
     }
     return { files: ordered, inventoryHash, nativeExport: true, nativeBootstrap: true,
       ...(projected ? { projectedNativeInventory: true } : {}),
@@ -415,6 +416,12 @@ export function createReviewedSalesforcePlan({ review, manifestBytes, bootstrapB
       failCoverage('A permission-set native projection requires exact native inventories and a permission-set-only package.');
     }
     if (permissions.length) failCoverage('A permission-set native projection does not allow permission assignments.');
+  } else if (nativeProjection === 'schema-free-layout') {
+    if (bootstrap || !review.nativeInventories || review.orgBaselines || permissions.length
+      || components.some(({ id, files }) => !id.startsWith('Layout:')
+        || files.some(name => !Object.hasOwn(baselineInventory.files, name)))) {
+      failCoverage('A layout native projection requires exact native inventories and only existing owned layouts.');
+    }
   } else if (nativeProjection !== undefined && (nativeProjection !== 'schema-free-apex-lightning' || bootstrap
     || !review.nativeInventories || components.some(({ id }) => id !== editorFixtureTrigger
       && !(invoiceAppPlacement && id.startsWith('FlexiPage:')) && !/^(?:ApexClass|LightningComponentBundle):/u.test(id))
