@@ -281,8 +281,9 @@ test('existing shared publication branches are resumed without corrupting the JS
 test('shared Salesforce commits are permanently attributed to the approved GitHub identity', async () => {
   const source = await readFile(new URL('../scripts/sync-salesforce-shared-repository.mjs', import.meta.url), 'utf8');
   const publication = FCOS_CONNECTION_POLICY.providers.find(({ id }) => id === 'salesforce').publication;
-  assert.equal(publication.requiredAccount, 'vincelessxai');
-  assert.equal(publication.requiredAccountId, 304336732);
+  assert.equal(publication.requiredAccount, 'hocheunglai-oss');
+  assert.equal(publication.requiredAccountId, 265701760);
+  assert.equal(publication.repositoryId, 1318388488);
   assert.match(source, /requiredAccountId.*requiredAccount.*users\.noreply\.github\.com/);
   assert.match(source, /configurePushIdentity\(checkout\)[\s\S]*git', \['add'/);
   assert.match(source, /force-with-lease=refs\/heads\/\$\{branch\}:\$\{expectedRemoteHead\}/);

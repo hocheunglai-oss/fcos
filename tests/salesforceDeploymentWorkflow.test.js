@@ -155,7 +155,7 @@ test('shared proof requires the configured repository and exact open draft head'
   const valid = {
     releaseMode: SALESFORCE_RELEASE_MODE, sourceTreeHash: sourceHash,
     sourceEnvironment: 'devee', sourceDeploymentJobId: '0Af000000000005AAA',
-    repository: 'ivanyk20/fcbhk', account: 'vincelessxai', branch: 'fcos-salesforce-sync-test', commit,
+    repository: 'ivanyk20/fcbhk', account: 'hocheunglai-oss', branch: 'fcos-salesforce-sync-test', commit,
     pullRequest: { number: 12, url: 'https://github.com/ivanyk20/fcbhk/pull/12', state: 'OPEN', isDraft: true, baseRefName: 'main', headRefName: 'fcos-salesforce-sync-test', headRefOid: commit },
   };
   assert.equal(selectedMirrorProof(valid, frozen).commit, commit);

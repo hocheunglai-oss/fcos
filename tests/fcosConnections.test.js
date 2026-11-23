@@ -44,6 +44,8 @@ test('connection runtimes select pinned executables and repo-local provider conf
   const repoRoot = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
   const expectedGitHubConfig = path.join(path.dirname(commonDirectory), '.fcos-cli/github');
   assert.equal(githubConfigDirectory(), expectedGitHubConfig);
+  const mirrorProfile = FCOS_CONNECTION_POLICY.providers.find(({ id }) => id === 'salesforce').publication.configPath;
+  assert.equal(githubConfigDirectory({ configPath: mirrorProfile }), expectedGitHubConfig);
   assert.equal(
     githubConfigDirectory({ repoRoot: '/tmp/fcos-detached', commonDirectory: '' }),
     '/tmp/fcos-detached/.fcos-cli/github',

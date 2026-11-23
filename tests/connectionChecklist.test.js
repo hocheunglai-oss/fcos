@@ -111,9 +111,9 @@ test('one schema-validated policy owns the approved targets and CLI-first order'
   assert.equal(targets.salesforce['DEVEE browser authentication profile'], 'Otto');
   assert.equal(targets.salesforce['QAT browser authentication profile'], 'Otto');
   assert.equal(targets.salesforce['Production browser authentication profile'], 'Vincent');
-  assert.equal(targets.salesforce['Shared GitHub account'], 'vincelessxai');
+  assert.equal(targets.salesforce['Shared GitHub account'], 'hocheunglai-oss');
   assert.equal(targets.salesforce['Shared Salesforce repository'], 'ivanyk20/fcbhk');
-  assert.equal(targets.salesforce['Shared browser fallback profile'], 'vincexai');
+  assert.equal(targets.salesforce['Shared browser fallback profile'], 'Otto');
   assert.equal(targets.salesforce['Development source'], 'DEVEE only');
   assert.equal(targets.salesforce['Promotion order'], 'DEVEE → GitHub → QAT → Production');
   const salesforce = CONNECTION_TARGETS.find(({ id }) => id === 'salesforce');
@@ -122,7 +122,9 @@ test('one schema-validated policy owns the approved targets and CLI-first order'
   assert.equal(salesforce.environments.find(({ key }) => key === 'production').username, 'vincent@cosulich.com.hk');
   assert.equal(salesforce.environments.find(({ key }) => key === 'production').instanceUrl, 'https://fratellicosulich.my.salesforce.com');
   assert.equal(salesforce.profileName, 'fcos-devee');
-  assert.equal(salesforce.publication.browserProfile, 'vincexai');
+  assert.equal(salesforce.publication.browserProfile, 'Otto');
+  assert.equal(salesforce.publication.requiredAccountId, 265701760);
+  assert.equal(salesforce.publication.repositoryId, 1318388488);
   assert.equal(salesforce.publication.sourceEnvironmentKey, 'devee');
   assert.deepEqual(CONNECTION_TARGETS.map(({ id, credentialStorage }) => [id, credentialStorage]), [
     ['github', 'provider_secure_store'],

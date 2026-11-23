@@ -49,6 +49,8 @@ const ghEnvironment = {
 };
 delete ghEnvironment.GH_TOKEN;
 delete ghEnvironment.GITHUB_TOKEN;
+delete ghEnvironment.GH_ENTERPRISE_TOKEN;
+delete ghEnvironment.GITHUB_ENTERPRISE_TOKEN;
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -125,6 +127,7 @@ function assertIdentity() {
   const repository = json('gh', ['api', `repos/${PUBLICATION.repository}`], { env: ghEnvironment });
   if (account?.login !== PUBLICATION.requiredAccount
     || account?.id !== PUBLICATION.requiredAccountId
+    || repository?.id !== PUBLICATION.repositoryId
     || repository?.full_name?.toLowerCase() !== PUBLICATION.repository.toLowerCase()
     || repository?.permissions?.pull !== true
     || repository?.permissions?.push !== true
