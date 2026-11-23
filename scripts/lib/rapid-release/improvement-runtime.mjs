@@ -4,6 +4,7 @@ import { constants, lstat, mkdir, open, readFile, readdir, realpath, rename } fr
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { MODULE_READERS } from './normal-role-readers.mjs';
+import { BASELINE_NAVIGATION_CATEGORIES } from './smoke-policy.mjs';
 import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier } from '../../../config/fcosConnections.js';
 
 const canonical = value => JSON.stringify(value, (_, item) => item && typeof item === 'object' && !Array.isArray(item)
@@ -146,6 +147,9 @@ export async function handleReleaseObstacle({ error, phase, manifest, journal, p
   if (code.startsWith('SMOKE_') && Object.hasOwn(MODULE_READERS, error?.smokeModule)
     && ['read', 'desktop'].includes(error.smokeSurface)) {
     Object.assign(inputs, { smokeModule: error.smokeModule, smokeSurface: error.smokeSurface });
+    if (code === 'SMOKE_BASELINE_NAVIGATION_FAILED' && BASELINE_NAVIGATION_CATEGORIES.includes(error.smokeNavigationCategory)) {
+      inputs.smokeNavigationCategory = error.smokeNavigationCategory;
+    }
   }
   const incident = module.obstacle({ kind: ownedCodes[code] || 'unknown', phase: safePhase(phase), code,
     inputs, completedSteps: completedSteps.filter(step => steps.has(step)),

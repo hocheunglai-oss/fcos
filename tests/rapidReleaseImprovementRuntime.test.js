@@ -129,3 +129,16 @@ test('smoke obstacles keep allowlisted attribution and distinct module signature
   assert.equal(resumed.incident.signature, original.signature);
   assert.equal(log.records.filter(({ payload }) => payload.event === 'obstacle.detected').length, 3);
 }));
+
+test('baseline navigation incidents retain only allowlisted diagnostic categories', async () => fixture(async ({ outputFile }) => {
+  const log = journal();
+  const inputs = { code: 'SMOKE_BASELINE_NAVIGATION_FAILED', smokeModule: 'markets', smokeSurface: 'read' };
+  const incidents = [];
+  for (const category of ['timeout', 'interrupted', 'PRIVATE_BROWSER_DETAIL']) {
+    const result = await call({ outputFile, journal: log, error: { ...inputs, smokeNavigationCategory: category } });
+    incidents.push(result.incident);
+  }
+  assert.deepEqual(incidents.map(({ inputs }) => inputs.smokeNavigationCategory), ['timeout', 'interrupted', undefined]);
+  assert.equal(new Set(incidents.map(({ signature }) => signature)).size, 3);
+  assert.ok(!JSON.stringify(log.records).includes('PRIVATE_BROWSER_DETAIL'));
+}));
