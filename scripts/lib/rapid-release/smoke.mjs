@@ -402,7 +402,8 @@ async function verifyGroupedPetroleumRoutes(route, origin, normal) {
   return true;
 }
 
-function baselineNavigationCategory(reason) {
+function baselineNavigationCategory(reason, pageClosed) {
+  if (pageClosed) return 'context_closed';
   if (reason?.name === 'TimeoutError') return 'timeout';
   const message = typeof reason?.message === 'string' ? reason.message : '';
   if (/^page\.goto: (?:net::ERR_ABORTED\b|Navigation [^\r\n]+ is interrupted by another navigation\b)/u.test(message)) return 'interrupted';
@@ -421,7 +422,7 @@ async function browserBaselineResponse(page, origin, module, reader) {
     ]);
     if (navigation.status === 'rejected') {
       throw Object.assign(reject('SMOKE_BASELINE_NAVIGATION_FAILED'), {
-        smokeNavigationCategory: baselineNavigationCategory(navigation.reason),
+        smokeNavigationCategory: baselineNavigationCategory(navigation.reason, page.isClosed()),
       });
     }
     if (new URL(page.url()).origin !== origin) throw reject('SMOKE_CANDIDATE_NAVIGATION_CHANGED');

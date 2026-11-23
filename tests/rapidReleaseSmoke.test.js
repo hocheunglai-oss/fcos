@@ -48,7 +48,7 @@ const readPayloads = {
 
 // Fixtures replace browser/provider transports. They simulate the app-owned
 // bootstrap response and actual response events; they never establish live proof.
-function browserFixture({ badIdentity = false, badRead = false, badDenial = false, unexpected = false, missingModule = false, background = false, optionalRequest = null, badPayload = false, badDesktop = false, deniedModule = null, role = 'manager', companyFxRows = undefined, supplierBoundaryRegression = null, groupedBoundaryRegression = false, groupedDesktopMissing = false, tradingFxRouteRegression = false, tradingFxActionVisible = false, existingDraftActionVisible = false, existingDraftRouteRegression = false, marketReadTimeouts = 0, marketResponseStatus = 200, marketNavigationError = null, moduleReadTimeouts = {} } = {}) {
+function browserFixture({ badIdentity = false, badRead = false, badDenial = false, unexpected = false, missingModule = false, background = false, optionalRequest = null, badPayload = false, badDesktop = false, deniedModule = null, role = 'manager', companyFxRows = undefined, supplierBoundaryRegression = null, groupedBoundaryRegression = false, groupedDesktopMissing = false, tradingFxRouteRegression = false, tradingFxActionVisible = false, existingDraftActionVisible = false, existingDraftRouteRegression = false, marketReadTimeouts = 0, marketResponseStatus = 200, marketNavigationError = null, marketPageClosed = false, moduleReadTimeouts = {} } = {}) {
   const observations = { launches: [], reads: [], contextsClosed: 0, browsersClosed: 0, nativeAborts: 0 };
   const remainingTimeouts = { ...moduleReadTimeouts };
   const browserFactory = async options => {
@@ -131,6 +131,7 @@ function browserFixture({ badIdentity = false, badRead = false, badDenial = fals
     });
     const page = {
       url: () => location,
+      isClosed: () => marketPageClosed,
       on: () => {},
       waitForLoadState: async () => {}, waitForFunction: async () => {},
       locator: selector => ({ or() { return this; }, count: async () => badDesktop ? 0 : 1, first() { return this; }, waitFor: async () => { if (badDesktop) throw Error('MISSING_DESKTOP_SURFACE'); }, innerText: async () => badDesktop ? 'Something went wrong' : 'Verified fixture business surface' }),
@@ -226,16 +227,17 @@ test('Markets fails after two read timeouts and does not retry an HTTP rejection
 
 test('Markets navigation reports only a safe category and never retries a failed navigation', async () => {
   const secret = 'PRIVATE_BROWSER_DETAIL';
-  for (const [reason, expected] of [
+  for (const [reason, expected, marketPageClosed] of [
     [Object.assign(Error(secret), { name: 'TimeoutError' }), 'timeout'],
     [Error('page.goto: net::ERR_ABORTED at ' + secret), 'interrupted'],
+    [Error('page.goto: net::ERR_ABORTED at ' + secret), 'context_closed', true],
     [Error('page.goto: Navigation to ' + secret + ' is interrupted by another navigation'), 'interrupted'],
     [Error('page.goto: Target page, context or browser has been closed ' + secret), 'context_closed'],
     [Error('page.goto: net::ERR_TOO_MANY_REDIRECTS at ' + secret), 'redirect_limit'],
     [Error('page.goto: net::ERR_CONNECTION_RESET at ' + secret), 'network_error'],
     [Error(secret), 'unclassified'],
   ]) {
-    const fixture = browserFixture({ marketNavigationError: reason });
+    const fixture = browserFixture({ marketNavigationError: reason, marketPageClosed });
     await assert.rejects(runStagedSmoke({ manifest: manifest(), staged, env, fetchImpl: publicFetch(), browserFactory: fixture.browserFactory }), error => {
       assert.equal(error.code, 'SMOKE_BASELINE_NAVIGATION_FAILED');
       assert.equal(error.smokeModule, 'markets');
