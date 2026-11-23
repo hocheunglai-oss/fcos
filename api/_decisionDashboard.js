@@ -7,6 +7,15 @@ function finite(value) {
   return Number.isFinite(number) ? number : 0;
 }
 
+export function dashboardStemStatusFields(stem) {
+  return {
+    status: stem.Status__c || null,
+    type: stem.Type__c || null,
+    dispute: stem.Dispute__c === true || (stem.Dispute_Status__c && stem.Dispute_Status__c !== 'No Dispute'),
+    disputeStatus: stem.Dispute_Status__c || null,
+  };
+}
+
 export const SALESFORCE_CORPORATE_CURRENCY = 'USD';
 
 export function isDecisionDashboardSalesforceId(value) {
