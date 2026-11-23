@@ -46,6 +46,10 @@
                 <behavior>Readonly</behavior>
                 <field>Customer_PO__c</field>
             </layoutItems>
+            <layoutItems>
+                <behavior>Edit</behavior>
+                <field>Pumping_Completion_Date__c</field>
+            </layoutItems>
         </layoutColumns>
         <layoutColumns/>
         <style>TwoColumnsTopToBottom</style>
