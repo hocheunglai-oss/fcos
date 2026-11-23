@@ -155,49 +155,50 @@ public without sharing class BuyerInvoiceApprovalService {
         if (invoices.size() != invoiceIds.size()) throw blocked('Invoice approval could not be checked.');
 
         Set<Id> authorizedIds = new Map<Id, Invoice__c>(invoices).keySet();
-        Set<Id> fxReadIds = invoicesRequiringFullRead(authorizedIds);
-        Map<Id, Invoice__c> fullInvoices = new Map<Id, Invoice__c>();
-        if (!fxReadIds.isEmpty()) {
-            List<String> fullFields = queryFieldsWithFx(INVOICE_FIELDS, FX_INVOICE_FIELDS, Invoice__c.SObjectType);
-            List<Invoice__c> fullRows = Database.query(selected + 'Buyer_Charge_Snapshot__c,' + String.join(fullFields, ',')
-                + ' FROM Invoice__c WHERE Id IN :fxReadIds', AccessLevel.USER_MODE);
-            fullInvoices.putAll(fullRows);
-            if (fullInvoices.size() != fxReadIds.size()) throw blocked('Invoice approval could not be checked.');
-        }
-        for (Invoice__c invoice : invoices) {
-            if (fullInvoices.containsKey(invoice.Id)) assertCanSend(fullInvoices.get(invoice.Id));
-            else assertCanSend(invoice, null);
-        }
-    }
-
-    private static Set<Id> invoicesRequiringFullRead(Set<Id> authorizedIds) {
-        Set<Id> result = new Set<Id>();
-        List<String> fields = new List<String>(FX_INVOICE_FIELDS);
-        fields.addAll(new List<String>{
+        List<String> fxFields = optionalQueryFields(FX_INVOICE_FIELDS, Invoice__c.SObjectType);
+        List<String> markers = new List<String>(fxFields);
+        markers.addAll(optionalQueryFields(new List<String>{
             'Document_FX_Fingerprint__c', 'Reissue_Of_Invoice__c', 'Original_Invoice__c', 'Final_Of_Proforma__c'
-        });
-        List<String> markers = optionalQueryFields(fields, Invoice__c.SObjectType);
+        }, Invoice__c.SObjectType));
         List<String> columns = new List<String>{'Id', 'Buyer_Charge_Snapshot__c'};
         columns.addAll(markers);
-        // The initial user-mode query established access to each of these invoice IDs.
-        // Use the private evidence solely to select the approval checks that apply.
-        List<Invoice__c> evidence = Database.query('SELECT ' + String.join(columns, ',')
+        // Read private approval evidence only for invoices already admitted in user mode.
+        List<Invoice__c> evidenceRows = Database.query('SELECT ' + String.join(columns, ',')
             + ' FROM Invoice__c WHERE Id IN :authorizedIds', AccessLevel.SYSTEM_MODE);
+        Map<Id, Invoice__c> evidence = new Map<Id, Invoice__c>(evidenceRows);
         if (evidence.size() != authorizedIds.size()) throw blocked('Invoice approval could not be checked.');
-        for (Invoice__c invoice : evidence) {
-            if (String.isNotBlank(invoice.Buyer_Charge_Snapshot__c)) {
-                result.add(invoice.Id);
-                continue;
-            }
+
+        Set<Id> managedIds = new Set<Id>();
+        for (Invoice__c row : evidenceRows) {
             for (String marker : markers) {
-                Object value = invoice.get(marker);
+                Object value = row.get(marker);
                 if (value != null && (marker != 'Document_Currency__c' || value != 'USD')) {
-                    result.add(invoice.Id);
+                    managedIds.add(row.Id);
                     break;
                 }
             }
         }
-        return result;
+        Map<Id, Invoice__c> managedInvoices = new Map<Id, Invoice__c>();
+        if (!managedIds.isEmpty()) {
+            List<String> fullFields = queryFieldsWithFx(INVOICE_FIELDS, FX_INVOICE_FIELDS, Invoice__c.SObjectType);
+            List<Invoice__c> fullRows = Database.query(selected + 'Buyer_Charge_Snapshot__c,' + String.join(fullFields, ',')
+                + ' FROM Invoice__c WHERE Id IN :managedIds', AccessLevel.USER_MODE);
+            managedInvoices.putAll(fullRows);
+            if (managedInvoices.size() != managedIds.size()) throw blocked('Invoice approval could not be checked.');
+        }
+        for (Invoice__c invoice : invoices) {
+            if (managedInvoices.containsKey(invoice.Id)) {
+                assertCanSend(managedInvoices.get(invoice.Id));
+                continue;
+            }
+            Invoice__c privateEvidence = evidence.get(invoice.Id);
+            // For a tracked ordinary invoice, compare the saved PDF and charges without
+            // requiring the sender to have read access to the private FX lookup.
+            if (String.isNotBlank(privateEvidence.Buyer_Charge_Snapshot__c)) {
+                for (String field : fxFields) invoice.put(field, privateEvidence.get(field));
+            }
+            assertCanSend(invoice, privateEvidence.Buyer_Charge_Snapshot__c);
+        }
     }
 
     public static void assertCanSend(Invoice__c invoice) {
