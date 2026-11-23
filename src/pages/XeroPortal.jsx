@@ -463,7 +463,7 @@ export default function XeroPortal() {
           <div>
             <div className={PORTAL_ACTIONS_CLASS}>
               <h1 className="text-2xl font-semibold tracking-normal">{copy.header.title}</h1>
-              <StatusBadge ok={xero.connected} trueLabel={copy.header.connected} falseLabel={copy.header.disconnected} />
+              <StatusBadge ok={xero.connected} trueLabel={copy.header.connected} falseLabel={xero.suspended ? 'Xero access suspended' : copy.header.disconnected} />
               <StatusBadge ok={status?.externalActions?.xero_financial_sync?.enabled} trueLabel="Financial sync enabled" falseLabel="Financial sync disabled" tone={status?.externalActions?.xero_financial_sync?.enabled ? 'emerald' : 'amber'} />
             </div>
             <p className={PORTAL_DESCRIPTION_CLASS}>{copy.header.subtitle}</p>

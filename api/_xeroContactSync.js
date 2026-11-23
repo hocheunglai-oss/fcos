@@ -2,7 +2,7 @@ import { requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
 import { deploymentSafeSupabaseFetch } from './_deploymentReadOnlyFetch.js';
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
-import { requireExternalActionGate } from './_externalActionGates.js';
+import { requireExternalActionGate, requireXeroAccess } from './_externalActionGates.js';
 import { serverSupabaseConfig } from './_supabaseConfig.js';
 import { sfQuery } from './_salesforce.js';
 import { recordSupabaseRequest } from './_requestTelemetry.js';
@@ -626,6 +626,7 @@ async function xeroAuditStatus(client, env) {
 }
 
 export async function getFreshXeroConnection(client, { env = process.env, fetchImpl = fetch, sharedControl } = {}) {
+  requireXeroAccess(env);
   const control = sharedControl || createXeroSharedControl(client);
   const stored = await readStoredXeroConnection(client, { sharedControl: control });
   // Existing valid access does not depend on renewal configuration being present.
@@ -645,7 +646,7 @@ export async function getFreshXeroConnection(client, { env = process.env, fetchI
   if (claim.state !== 'claimed') throw xeroControlError(claim.state === 'revoked' ? 'XERO_CONNECTION_REVOKED' : claim.state === 'uncertain' ? 'XERO_RENEWAL_OUTCOME_UNKNOWN' : 'XERO_RENEWAL_IN_PROGRESS', { outcomeUnknown: claim.state === 'uncertain' });
   let token;
   try {
-    token = await requestXeroToken(config, new URLSearchParams({ grant_type: 'refresh_token', refresh_token: config.refreshToken }), fetchImpl);
+    token = await requestXeroToken(config, new URLSearchParams({ grant_type: 'refresh_token', refresh_token: config.refreshToken }), fetchImpl, env);
   } catch (error) {
     const state = error?.code === 'XERO_CONNECTION_REVOKED' ? 'revoked' : error?.safeRenewalRetry === true ? 'superseded' : 'uncertain';
     const recorded = await control.failRefresh({ ...identity, state }).catch(() => null);
@@ -711,7 +712,8 @@ export function xeroConfig(env, stored = null) {
   return { clientId, clientSecret, refreshToken, configured: missing.length === 0, missing };
 }
 
-export async function requestXeroToken(config, body, fetchImpl) {
+export async function requestXeroToken(config, body, fetchImpl, env = process.env) {
+  requireXeroAccess(env);
   requireDeploymentMutationAllowed(true);
   const response = await fetchImpl(`${XERO_IDENTITY_BASE}/connect/token`, {
     method: 'POST',
@@ -734,6 +736,7 @@ export async function requestXeroToken(config, body, fetchImpl) {
 }
 
 export async function resolveXeroTenant({ accessToken, stored, env, fetchImpl }) {
+  requireXeroAccess(env);
   const expectedTenantId = nonBlank(stored?.tenantId || env.XERO_TENANT_ID);
   const expectedTenantName = nonBlank(stored?.tenantName || env.XERO_TENANT_NAME);
   if (expectedTenantId) return { tenantId: expectedTenantId, tenantName: expectedTenantName };
@@ -833,6 +836,7 @@ export async function createXeroContactsBatch(connection, contacts, runId, { env
 
 export async function xeroAccountingFetch(connection, pathName, options = {}) {
   const { method, body, rawBody, idempotencyKey, retryOnRateLimit, env = process.env, fetchImpl = fetch, headers: extraHeaders = {}, onResponse = null, callsPerMinute = 0, wait = sleep, requestGate = xeroRequestGate(fetchImpl) } = options;
+  requireXeroAccess(env);
   // Even accounting reads need durable admission/observation writes. A staged
   // runtime must not consume or change the live Xero coordination state.
   requireDeploymentMutationAllowed(true, env);

@@ -95,7 +95,7 @@ test('Xero Portal status refreshes a stale access token before reporting expiry'
   assert.deepEqual(requests.map((url) => new URL(url).pathname), ['/connect/token']);
 });
 
-test('staged Xero status skips the extra token-renewal read', async (t) => {
+test('hosted Xero status reports the suspension without refreshing even a saved connection', async (t) => {
   const scenarios = [
     { name: 'expired access', expiresAt: '2026-08-27T00:00:00.000Z', forceRefresh: false },
     { name: 'forced refresh with valid access', expiresAt: '2099-01-01T00:00:00.000Z', forceRefresh: true },
@@ -112,11 +112,13 @@ test('staged Xero status skips the extra token-renewal read', async (t) => {
         client, env, fetchImpl: () => assert.fail('Staged status contacted Xero'),
       }), env);
 
-      assert.equal(response.xero.connected, true);
-      assert.equal(response.xero.expiresAt, expiresAt);
+      assert.equal(response.xero.suspended, true);
+      assert.equal(response.xero.configured, false);
+      assert.equal(response.xero.connected, false);
+      assert.equal(response.xero.expiresAt, null);
       assert.equal(response.xero.refreshError, null);
-      // Connection status and the separate usage cache summary each read once.
-      assert.equal(client.connectionReads, 2);
+      // The local usage cache still resolves the tenant without refreshing.
+      assert.equal(client.connectionReads, 1);
       assert.deepEqual(client.controlCalls, []);
       assert.equal(client.connection.token_version, 4);
     });

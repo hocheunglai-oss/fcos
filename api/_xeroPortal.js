@@ -19,7 +19,7 @@ import {
   xeroContactSyncServiceClient,
 } from './_xeroContactSync.js';
 import { getInstanceUrl, salesforceAuthMode, sfCompositeQueries, sfQuery } from './_salesforce.js';
-import { externalActionGates, requireExternalActionGate } from './_externalActionGates.js';
+import { externalActionGates, isHostedXeroAccessSuspended, requireExternalActionGate, requireXeroAccess } from './_externalActionGates.js';
 import { xeroRateLimitSnapshot } from './_xeroRateLimit.js';
 import { addUsageYear, hasUsageYearBreakdown, usageYearFields } from './_xeroUsageYears.js';
 import { contactIdentityDecision, contactIdentityFingerprint, contactMatchesSalesforceIdentity, loadAllSalesforceIdentityAccounts, loadContactIdentityDecisions } from './_xeroContactIdentity.js';
@@ -150,6 +150,7 @@ export function xeroPortalReturnPath(value) {
 }
 
 export async function xeroPortalConnectStart(body = {}, { req = null, env = process.env } = {}) {
+  requireXeroAccess(env);
   const config = xeroPortalConfig(env, req);
   if (!config.configured) {
     throw portalError(`Missing Xero credentials: ${config.missing.join(', ')}`, 503, 'XERO_PORTAL_XERO_CONFIG_MISSING');
@@ -170,6 +171,7 @@ export async function xeroPortalConnectStart(body = {}, { req = null, env = proc
 }
 
 export async function exchangeXeroAuthorizationCode({ code, state, req = null, env = process.env, fetchImpl = fetch } = {}) {
+  requireXeroAccess(env);
   if (!nonBlank(code)) throw portalError('Xero did not return an authorization code.', 400, 'XERO_PORTAL_AUTH_CODE_MISSING');
   const payload = verifyXeroOAuthState(state, env);
   const returnPath = xeroPortalReturnPath(payload.returnPath);
@@ -181,7 +183,7 @@ export async function exchangeXeroAuthorizationCode({ code, state, req = null, e
     grant_type: 'authorization_code',
     code: String(code || ''),
     redirect_uri: config.redirectUri,
-  }), fetchImpl);
+  }), fetchImpl, env);
   const tenant = await resolveXeroTenant({
     accessToken: token.access_token,
     stored: null,
@@ -208,6 +210,7 @@ export async function exchangeXeroAuthorizationCode({ code, state, req = null, e
 }
 
 export async function xeroPortalDisconnect(_body = {}, { env = process.env } = {}) {
+  requireXeroAccess(env);
   const client = xeroContactSyncServiceClient(env);
   const { error } = await client.from('xero_contact_sync_connections').delete().eq('id', 'primary');
   if (error) throw storageError(error, 'xero_contact_sync_connections');
@@ -736,6 +739,21 @@ export function canApplyContactLifecycleRow(row) {
 }
 
 async function readXeroPublicStatus(client, { env, fetchImpl, refresh = false }) {
+  if (isHostedXeroAccessSuspended(env)) {
+    return {
+      suspended: true,
+      configured: false,
+      connected: false,
+      tenantId: null,
+      tenantName: null,
+      expiresAt: null,
+      scopes: [],
+      scopeFlags: xeroScopeFlags([]),
+      hasContactsScope: false,
+      missing: [],
+      refreshError: null,
+    };
+  }
   const stored = await readStoredXeroConnection(client).catch((error) => {
     throw storageError(error, 'xero_contact_sync_connections');
   });

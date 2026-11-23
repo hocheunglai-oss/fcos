@@ -74,7 +74,21 @@ function enabledValue(value) {
   return String(value || '').trim().toLowerCase() === 'true';
 }
 
-function definitionEnabled(definition, env) {
+// Operator hold for hosted FCOS. Local qualification can still use Xero Demo.
+export function isHostedXeroAccessSuspended(env = process.env) {
+  return env.VERCEL === '1' || Boolean(env.VERCEL_ENV || env.VERCEL_TARGET_ENV);
+}
+
+export function requireXeroAccess(env = process.env) {
+  if (!isHostedXeroAccessSuspended(env)) return;
+  throw Object.assign(new Error('FCOS access to Xero is suspended until further notice.'), {
+    status: 403,
+    code: 'FCOS_XERO_ACCESS_SUSPENDED',
+  });
+}
+
+function definitionEnabled(key, definition, env) {
+  if (key.startsWith('xero_') && isHostedXeroAccessSuspended(env)) return false;
   if (isDeploymentReadOnly(env)) return false;
   return definition.defaultEnabled
     ? !enabledValue(env[definition.envName])
@@ -86,7 +100,7 @@ export function externalActionGates(env = process.env) {
     key,
     label: definition.label,
     description: definition.description,
-    enabled: definitionEnabled(definition, env),
+    enabled: definitionEnabled(key, definition, env),
     expectedState: definition.expectedState || (definition.defaultEnabled ? 'live' : 'uat_gated'),
     control: isDeploymentReadOnly(env) ? 'deployment_read_only' : definition.defaultEnabled ? 'emergency_kill_switch' : 'explicit_enablement',
   }]));
@@ -95,7 +109,7 @@ export function externalActionGates(env = process.env) {
 export function isExternalActionEnabled(key, env = process.env) {
   const definition = GATE_DEFINITIONS[key];
   if (!definition) return false;
-  return definitionEnabled(definition, env);
+  return definitionEnabled(key, definition, env);
 }
 
 export function requireExternalActionGate(key, env = process.env) {
@@ -106,6 +120,7 @@ export function requireExternalActionGate(key, env = process.env) {
     error.code = 'UNKNOWN_EXTERNAL_ACTION_GATE';
     throw error;
   }
+  if (key.startsWith('xero_')) requireXeroAccess(env);
   if (isExternalActionEnabled(key, env)) return;
   const error = new Error(definition.defaultEnabled
     ? `${definition.label} has been paused by an emergency operational control.`
