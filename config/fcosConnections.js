@@ -193,7 +193,7 @@ const connectionPolicy = {
       credentialStorage: 'protected_host_store',
       rotationWarningDays: 90,
       expiryWarningDays: 30,
-      persistence: 'Salesforce CLI retains protected host sessions for DEVEE, QAT, and Production. FCOS pins DEVEE as the development/source target and revalidates every exact org ID, username, environment type, and query capability before use. The shared Salesforce mirror uses the project-isolated GitHub CLI profile with its own repository and permission checks.',
+      persistence: 'Salesforce CLI keeps protected sessions for DEVEE, QAT and Production. Development uses DEVEE. FCOS verifies each org ID, username, environment and query access before use. The mirror uses the isolated GitHub CLI profile and verifies repository access.',
       nonBrowserRoute: 'Use Salesforce CLI only after DEVEE, QAT, and Production match their exact identities. Deploy and verify in DEVEE, publish the byte-equivalent DEVEE source to the shared repository, then promote the same source to QAT and Production in order.',
       publication: {
         requiredAccount: 'hocheunglai-oss',
