@@ -18,6 +18,8 @@ not run FCOS serverless API routes and is appropriate only for UI-only work.
 
 ### Authenticated browser CI
 
+See [FCOS authentication and protected routes](docs/authentication.md) for the application configuration and authorization contract.
+
 Local administrator UI is available only on a loopback Vite development server
 when both Supabase settings are absent. Hosted builds and production bundles
 never use that fallback; incomplete or unapproved authentication configuration
