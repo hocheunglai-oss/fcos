@@ -18,12 +18,12 @@ test('Preview and explicit read-only deployments deny every external-action gate
   }
 });
 
-test('Canonical Production retains established controls without introducing financial authority', () => runWithDeploymentRequestSafety({ headers: { host: 'fcos.fcuno.com' } }, () => {
+test('Canonical Production retains established controls and suspends Xero even with its enable flag', () => runWithDeploymentRequestSafety({ headers: { host: 'fcos.fcuno.com' } }, () => {
   const env = { VERCEL_ENV: 'production' };
   assert.equal(isDeploymentReadOnly(env), false);
   assert.equal(isExternalActionEnabled('salesforce_write', env), true);
   assert.equal(isExternalActionEnabled('xero_financial_sync', env), false);
-  assert.equal(isExternalActionEnabled('xero_financial_sync', { ...env, FCOS_ENABLE_XERO_FINANCIAL_SYNC: 'true' }), true);
+  assert.equal(isExternalActionEnabled('xero_financial_sync', { ...env, FCOS_ENABLE_XERO_FINANCIAL_SYNC: 'true' }), false);
   assert.equal(isExternalActionEnabled('salesforce_write', { ...env, FCOS_DISABLE_SALESFORCE_WRITE: 'true' }), false);
   assert.doesNotThrow(() => requireDeploymentMutationAllowed(true, env));
 }, { VERCEL_ENV: 'production' }));
