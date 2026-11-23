@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
   dashboardCurrentYearDateWindows,
+  dashboardStemStatusFields,
   dashboardFinancialBuckets,
   dashboardMonthlyComparison,
   dashboardMonthlyFinancialTrend,
@@ -17,6 +18,18 @@ import {
   decisionDashboardSupplierAmount,
   yearOverYearDateWindows,
 } from '../api/_decisionDashboard.js';
+
+test('STEM rows retain recorded dispute status without changing legacy flags or other status fields', () => {
+  for (const status of ['Closed', 'Opened', 'Open - Trader Review', 'No Dispute', null]) {
+    for (const flag of [false, true]) {
+      const stem = { Status__c: 'Delivered', Type__c: 'Trading', Dispute__c: flag, Dispute_Status__c: status };
+      assert.deepEqual(dashboardStemStatusFields(stem), {
+        status: 'Delivered', type: 'Trading', dispute: flag || (status && status !== 'No Dispute'), disputeStatus: status,
+      });
+    }
+  }
+  assert.deepEqual(dashboardStemStatusFields({}), { status: null, type: null, dispute: undefined, disputeStatus: null });
+});
 
 test('Dashboard calendar-year analytics use the Hong Kong current year', () => {
   assert.deepEqual(dashboardCurrentYearDateWindows(new Date('2025-12-31T16:30:00.000Z')), [

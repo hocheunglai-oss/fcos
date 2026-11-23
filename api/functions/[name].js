@@ -34,7 +34,7 @@ import {
 import { grossMarginPercent } from '../_dashboardMetrics.js';
 import { buildDashboardDateScopeWhere } from '../_dashboardDateScope.js';
 import { addDashboardMetricTonQuantity, dashboardLineItemVolume, dashboardMetricTonQuantity, dashboardVolumeLabel, findDashboardUomField } from '../_dashboardVolume.js';
-import { addReportedDashboardQuantity, dashboardCurrency, dashboardCurrentYearDateWindows, dashboardMonthlyComparison, dashboardMonthlyFinancialTrend, dashboardMonthlyYearOverYear, dashboardSupplierProductRows, dashboardVolumeWarnings, decodeDashboardCursor, decisionDashboardCompleteness, decisionDashboardSummary, decisionDashboardSupplierAmount, encodeDashboardCursor, normalizeDecisionDashboardFilters, priorEquivalentDateWindows, yearOverYearDateWindows } from '../_decisionDashboard.js';
+import { addReportedDashboardQuantity, dashboardCurrency, dashboardCurrentYearDateWindows, dashboardMonthlyComparison, dashboardMonthlyFinancialTrend, dashboardMonthlyYearOverYear, dashboardStemStatusFields, dashboardSupplierProductRows, dashboardVolumeWarnings, decodeDashboardCursor, decisionDashboardCompleteness, decisionDashboardSummary, decisionDashboardSupplierAmount, encodeDashboardCursor, normalizeDecisionDashboardFilters, priorEquivalentDateWindows, yearOverYearDateWindows } from '../_decisionDashboard.js';
 import { dashboardAccountRankings } from '../../src/lib/dashboardAccountRankings.js';
 import { loadDashboardAccountInsight } from '../_dashboardAccountInsightService.js';
 import { generateDashboardAccountInsightExport } from '../_dashboardAccountInsightExport.js';
@@ -8425,10 +8425,7 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
       createdDate: stem.CreatedDate,
       deliveryDate: stem.Delivery_Date__c || stem.Expected_Delivery_Date__c || null,
       deliveryDateSource: stem.Delivery_Date__c ? 'delivery' : stem.Expected_Delivery_Date__c ? 'expected' : null,
-      status: stem.Status__c || null,
-      type: stem.Type__c || null,
-      dispute: stem.Dispute__c === true || (stem.Dispute_Status__c && stem.Dispute_Status__c !== 'No Dispute'),
-      disputeStatus: stem.Dispute_Status__c || null,
+      ...dashboardStemStatusFields(stem),
       account: accountField && stem[accountField] && stem.Account__r?.Inactive_Suspended__c !== true ? { id: stem[accountField], name: stem.Account__r?.Name || null } : accountField && stem[accountField] ? { id: null, name: 'Account unavailable' } : null,
       port: portField && stem[portField] ? { id: stem[portField], name: stem.Port__r?.Name || null, countryCode: stem.Port__r?.Country__c || null } : null,
       vessel: stem.Vessel__c ? { id: stem.Vessel__c, name: stem.Vessel__r?.Name || null } : null,
