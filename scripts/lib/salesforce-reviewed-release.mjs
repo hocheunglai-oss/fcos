@@ -433,6 +433,23 @@ export function createReviewedSalesforcePlan({ review, manifestBytes, bootstrapB
       || !policy.environments.every(({ key }) => same(review.nativeInventories[key]?.presentComponents, [page]))) {
       failCoverage('The Historical STEM projection requires the exact page and display-only bundle pair with only the page present in every pinned org.');
     }
+  } else if (nativeProjection === 'schema-free-historical-stem-buyer-brokers') {
+    const page = 'FlexiPage:STEM_Historical_RecordType';
+    const bundle = 'LightningComponentBundle:fcosHistoricalStemBuyerBrokers';
+    const pageComponent = components.find(({ id }) => id === page);
+    const bundleComponent = components.find(({ id }) => id === bundle);
+    const disputesFiles = ['html', 'js', 'js-meta.xml'].map(extension =>
+      `lwc/fcosHistoricalStemDisputes/fcosHistoricalStemDisputes.${extension}`);
+    if (bootstrap || !review.nativeInventories || review.orgBaselines || permissions.length
+      || components.length !== 2 || !pageComponent || !bundleComponent
+      || !same(pageComponent.dependsOn, [bundle]) || bundleComponent.dependsOn.length
+      || pageComponent.files.some(name => !baselineInventory.files[name])
+      || bundleComponent.files.some(name => baselineInventory.files[name])
+      || disputesFiles.some(name => !baselineInventory.files[name]
+        || !same(baselineInventory.files[name], finalInventory.files[name]))
+      || !policy.environments.every(({ key }) => same(review.nativeInventories[key]?.presentComponents, [page]))) {
+      failCoverage('The Historical STEM Buyer Brokers projection requires the exact page and new bundle pair with only the page present in every pinned org.');
+    }
   } else if (nativeProjection !== undefined && (nativeProjection !== 'schema-free-apex-lightning' || bootstrap
     || !review.nativeInventories || components.some(({ id }) => id !== editorFixtureTrigger
       && !(invoiceAppPlacement && id.startsWith('FlexiPage:')) && !/^(?:ApexClass|LightningComponentBundle):/u.test(id))
