@@ -5,7 +5,7 @@
   "baselineCommit": "fd5c8f7119e99827cac2d45a3552109cb63a7216",
   "baselineSourceTreeHash": "83828042b6fd66b9b9a6de4cbcf768d82e3ba24e303d53aedd23eabcfb387fb0",
   "baselineInventoryHash": "63f055374fa4638357724e04d7bfb07c7d5861c8a00ee6c05f375667591fa41b",
-  "sourceTreeHash": "a7d1c63e431ad8cc1193fe65fabdb471e23138cb9f63654fe4c70c680ed00a0b",
+  "sourceTreeHash": "79474c41e3238538732cd91db82a7dc469a1d1652ca28a745da864522caf3916",
   "manifestSha256": "6c4b7595880ae88a078b2601597eaf9b773e59727966284c0f0e362e68bcf073",
   "components": [
     {
@@ -158,7 +158,7 @@
   "dependencyReview": {
     "complete": true,
     "reviewer": "FCOS Salesforce release operator",
-    "evidence": "Korea Desk metadata and UI plus new transaction guard. DEVEE check-only 0AfHF000007K2Uh0AK passed 13 tests against source hashes. Exact existing components and incumbent object header were retrieved from all three target orgs and matched apart from the reviewed history flag. Extra native STEM children are separately pinned per org and are outside deployment scope. Historical field values remain blank until user review."
+    "evidence": "Korea Desk metadata and UI plus new transaction guard. DEVEE check-only 0AfHF000007K2Uh0AK passed 13 tests against source hashes. Exact existing components and incumbent object header were retrieved from all three target orgs and matched apart from the reviewed history flag. Extra native STEM children are separately pinned per org and are outside deployment scope. Historical field values remain blank until user review. QAT job 0AfBh000006mW3lKAE rejected the empty historical STEM fixture. The only Salesforce source change adds an active delivery line before the membership edit. DEVEE validation 0AfHF000007K9eD0AS passed. The DEVEE and QAT baselines retain verified metadata from run 45430058964."
   },
   "testPlan": {
     "level": "RunLocalTests",
@@ -190,12 +190,23 @@
       "orgId": "00D1m0000008kioEAA",
       "presentComponents": [
         "ApexClass:EnquiryProgressBarController",
+        "ApexClass:KoreaDeskCloseService",
+        "ApexClass:KoreaDeskCloseServiceTest",
+        "ApexClass:KoreaDeskStemMembershipTest",
         "ApexClass:QuoteProgressBarController",
+        "ApexTrigger:KoreaDeskEnquiryCloseGuard",
+        "ApexTrigger:KoreaDeskQuoteTransition",
+        "ApexTrigger:KoreaDeskStemInsert",
+        "CustomField:STEM__c.Korea_Desk_Member__c",
+        "CustomField:STEM__c.Korea_Desk__c",
         "CustomObject:STEM__c",
         "FlexiPage:STEM_Historical_RecordType",
         "LightningComponentBundle:fcbEnquiryProgressBar",
         "LightningComponentBundle:fcbQuoteProgressBar",
-        "LightningComponentBundle:fcbStemProcessing"
+        "LightningComponentBundle:fcbStemProcessing",
+        "LightningComponentBundle:fcosHistoricalStemKoreaDesk",
+        "PermissionSet:FCOS_Korea_Desk_Editor",
+        "PermissionSet:FCOS_Korea_Desk_Reader"
       ],
       "baseline": {
         "files": {
@@ -380,8 +391,8 @@
             "size": 174
           },
           "classes/EnquiryProgressBarController.cls": {
-            "sha256": "18f0d6f811656d5640a978a9d86e549df62bdbd1da51d44e8ced45fbbab862f2",
-            "size": 573
+            "sha256": "f3efbb8d9b5b7ace68ec43a15b92a103dde67091f2595c97c0efd0d743983468",
+            "size": 981
           },
           "classes/EnquiryProgressBarController.cls-meta.xml": {
             "sha256": "8ec13a9efa4848b48546f3207002a644827732e072c0f8bd8e6751701b180a9f",
@@ -827,6 +838,30 @@
             "sha256": "b0b6d220338d435e875c9ff0e2477ef5a7e80897db3c7529a61dbec471a943e4",
             "size": 174
           },
+          "classes/KoreaDeskCloseService.cls": {
+            "sha256": "0ba89a7f23571feaf93ea5da5d88618c312de51ecdcb9943f9fe06200e273238",
+            "size": 8357
+          },
+          "classes/KoreaDeskCloseService.cls-meta.xml": {
+            "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
+            "size": 174
+          },
+          "classes/KoreaDeskCloseServiceTest.cls": {
+            "sha256": "9577c8b38549f0cde7ed621d9e2578422877ad1ef798c3ffdb87042295f79359",
+            "size": 8777
+          },
+          "classes/KoreaDeskCloseServiceTest.cls-meta.xml": {
+            "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
+            "size": 174
+          },
+          "classes/KoreaDeskStemMembershipTest.cls": {
+            "sha256": "cf434e7481e03590c29f5ef84f89bfde10a71f86e62cc18a2637e8f0f2a97d1f",
+            "size": 3568
+          },
+          "classes/KoreaDeskStemMembershipTest.cls-meta.xml": {
+            "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
+            "size": 174
+          },
           "classes/MasterContractGenerationRest.cls": {
             "sha256": "6c3ed2019ddd0da82c94ed83490ee7ae3885ac8d27dc2032885654304fa953a2",
             "size": 2225
@@ -956,8 +991,8 @@
             "size": 174
           },
           "classes/QuoteProgressBarController.cls": {
-            "sha256": "8ab15710ebff091e02f1454487bc24ee54ad5c113700cdbeda6d0221673ad3e9",
-            "size": 1229
+            "sha256": "1536b46e7f6f060f521866e9de9be2c9ef3c1ea18dc05eb12b27ecf28a66ac31",
+            "size": 1637
           },
           "classes/QuoteProgressBarController.cls-meta.xml": {
             "sha256": "a61e37b18ba9d57fa759172efbef606598726708e2519b4ceb0ec9791d57b401",
@@ -1364,8 +1399,8 @@
             "size": 5838
           },
           "flexipages/STEM_Historical_RecordType.flexipage-meta.xml": {
-            "sha256": "81f4426f894d0588f9e6c2dd4ee9ae9773896e1fcdf835848b562f593d571113",
-            "size": 5785
+            "sha256": "b295681e6de6ec8ec0e14b7e0d0dda6eace363587d278c7d192601176edeb8a2",
+            "size": 6043
           },
           "layouts/Invoice__c-Invoice Layout.layout-meta.xml": {
             "sha256": "a8e25daa5d694609887d6f2a9d4d8d6d10e204ad126fd0a593f548816abc47e1",
@@ -1536,12 +1571,12 @@
             "size": 249
           },
           "lwc/fcbEnquiryProgressBar/fcbEnquiryProgressBar.html": {
-            "sha256": "2834bf14fe046d96e7933309f4ff5367e72ad8a0ba5ea26df0bf4ec060970920",
-            "size": 4169
+            "sha256": "d647f2a3e435d027213ca01fa1965e799e0b739d41ff39385636a39ebdd66d12",
+            "size": 5146
           },
           "lwc/fcbEnquiryProgressBar/fcbEnquiryProgressBar.js": {
-            "sha256": "35c2d0537b9af17954fb25e4d47d6b62cb59364cc95a54f0c9ca9262075a0bc6",
-            "size": 6089
+            "sha256": "30eaef4cdc52cec8876caccc52d5bc1e056226da95e021d9291bb885b8384822",
+            "size": 8175
           },
           "lwc/fcbEnquiryProgressBar/fcbEnquiryProgressBar.js-meta.xml": {
             "sha256": "154ea15daed7a29027808456df921ef3d09aafecde9d73c2223ced05b27eb533",
@@ -1624,12 +1659,12 @@
             "size": 378
           },
           "lwc/fcbQuoteProgressBar/fcbQuoteProgressBar.html": {
-            "sha256": "76b3dbd9d640d56a7f1ae11581dc2d1094973a45503eb101ade8993e5180e64a",
-            "size": 2890
+            "sha256": "aa57175cd71527da034b3e7876b0a060dc2257aa14ef760dac4123a4a2781eee",
+            "size": 3851
           },
           "lwc/fcbQuoteProgressBar/fcbQuoteProgressBar.js": {
-            "sha256": "6e93f6cad4048335affa3c91f35ebd110b85cc19d1d17373e5b3d905f3d92d9b",
-            "size": 14282
+            "sha256": "ae3ce903dbe0645c7ad213f2639fbc397407f09f172544f173f7c2ebf495f161",
+            "size": 16729
           },
           "lwc/fcbQuoteProgressBar/fcbQuoteProgressBar.js-meta.xml": {
             "sha256": "0e5bc95b4707510bbd8c66e8b02831c84b917ff6806e10a43811fe46126ba2cb",
@@ -1672,12 +1707,12 @@
             "size": 745
           },
           "lwc/fcbStemProcessing/fcbStemProcessing.html": {
-            "sha256": "0b5c94329da4087b0f214a73a212adeecde16d00b945f746c414267eebff19f7",
-            "size": 31561
+            "sha256": "dda940545368c4a2aef5245b5c806bf8d588810cdae7bd201918c159f170f1f1",
+            "size": 32627
           },
           "lwc/fcbStemProcessing/fcbStemProcessing.js": {
-            "sha256": "c3bd5c1d82cc163992c5eb430ab40e1c76fe770e79ea66069922158946bb68e7",
-            "size": 48468
+            "sha256": "721fcb58bd568e1c78cc57ee02e896ae2c483383cc008e793b9ca6f5c0f4687f",
+            "size": 49032
           },
           "lwc/fcbStemProcessing/fcbStemProcessing.js-meta.xml": {
             "sha256": "70e6f162268d57442bf6ae24982f53bd9181d842c8841aab4295013c2c3bfd67",
@@ -1762,6 +1797,18 @@
           "lwc/fcosHistoricalStemDisputes/fcosHistoricalStemDisputes.js-meta.xml": {
             "sha256": "9b444c4d581dcc6378ea116996a9644002613fc4fe1e505fb7c94b076c50e8e8",
             "size": 668
+          },
+          "lwc/fcosHistoricalStemKoreaDesk/fcosHistoricalStemKoreaDesk.html": {
+            "sha256": "ac1e7d16045ab2c561dff1b6d3dd44e306a74485084f93c8d7616340ccbc87df",
+            "size": 1757
+          },
+          "lwc/fcosHistoricalStemKoreaDesk/fcosHistoricalStemKoreaDesk.js": {
+            "sha256": "d5a341e76d7f97d04fcf6ba6a292e239b6ace842ade0304de54bb678bf83c17e",
+            "size": 1982
+          },
+          "lwc/fcosHistoricalStemKoreaDesk/fcosHistoricalStemKoreaDesk.js-meta.xml": {
+            "sha256": "841bbd164f857d2c175a1afcb85e0616ce152185ddf6ca9f79c7b88d0ceb12ae",
+            "size": 596
           },
           "lwc/fcosTradeCashEditor/fcosTradeCashEditor.css": {
             "sha256": "77f29b9b3302f73fda8b0cdc2ba906c0081893e803b1b250e59f03056ac6abb6",
@@ -3460,8 +3507,8 @@
             "size": 513
           },
           "objects/STEM__c/STEM__c.object-meta.xml": {
-            "sha256": "ef9a23577bda2e3fd11ee2900e7efa795813dfc3770b321a5403eceeee18370e",
-            "size": 5793
+            "sha256": "76b34819ba7fcfb071db930b69f3c80166e8ea90eea79957665d40938bcb02c3",
+            "size": 5894
           },
           "objects/STEM__c/fields/Buyer_Broker__c.field-meta.xml": {
             "sha256": "ff101c0c5da9e431e1a7881bc9847fa59132d759d52d8e24b5abc7cf6c39a61e",
@@ -3474,6 +3521,14 @@
           "objects/STEM__c/fields/Delivery_Date_Or_Expected__c.field-meta.xml": {
             "sha256": "0b1e055a408ec7c4b4d5e2d7bfad3db6b72a75da429e35298e77d6e217039c73",
             "size": 411
+          },
+          "objects/STEM__c/fields/Korea_Desk_Member__c.field-meta.xml": {
+            "sha256": "26ff7ceba47e4a4a3b7fbeffe6e5d5189b24ebfcb569827548bac95fa604d1b3",
+            "size": 706
+          },
+          "objects/STEM__c/fields/Korea_Desk__c.field-meta.xml": {
+            "sha256": "1d83d7598172afcbf2918e767e1a9c3397df80148d662d5e6fd9891a34141ef9",
+            "size": 928
           },
           "objects/STEM__c/fields/Master_Contract_Delivery_Key__c.field-meta.xml": {
             "sha256": "0b7af23ae17f868848f5e98741590e0b8a8f7b2729457966b9ad99c2bfa014ea",
@@ -4619,6 +4674,14 @@
             "sha256": "7b124d900670eee2b7c09017f0096f4b057188c01702ebf8d202ef7ef32a24de",
             "size": 405
           },
+          "permissionsets/FCOS_Korea_Desk_Editor.permissionset-meta.xml": {
+            "sha256": "4a0ddbbd055ccb4b9bbbaecc28166d89db626e6c3a82eec905d5ecb9c8908062",
+            "size": 673
+          },
+          "permissionsets/FCOS_Korea_Desk_Reader.permissionset-meta.xml": {
+            "sha256": "c8e635ea271fb7549c18f809868bad0fc29c60a309d539803935ba423815eb70",
+            "size": 694
+          },
           "permissionsets/FCOS_Master_Contracts_API.permissionset-meta.xml": {
             "sha256": "0d1041b66e407194ee22cad41f04bb6c476076b70578292fbbd7d43e218ab79f",
             "size": 4735
@@ -4831,6 +4894,30 @@
             "sha256": "b452c1fd048a91563f5255e612d53182f1a0a2302313a309b8e05b03203ca833",
             "size": 178
           },
+          "triggers/KoreaDeskEnquiryCloseGuard.trigger": {
+            "sha256": "6e339bab6ff5dfd1ee3c028b6e310e5621c73e6292f3b07dbd1398064f8746d8",
+            "size": 1280
+          },
+          "triggers/KoreaDeskEnquiryCloseGuard.trigger-meta.xml": {
+            "sha256": "18a9f7cd9d86eb4e7a191f499acd3b8e2f9aadacf869085fe85472913c6d0748",
+            "size": 178
+          },
+          "triggers/KoreaDeskQuoteTransition.trigger": {
+            "sha256": "41a512921c6e592efa98d96613e0f78f5a50624a277da4a9f484dffe2b109624",
+            "size": 279
+          },
+          "triggers/KoreaDeskQuoteTransition.trigger-meta.xml": {
+            "sha256": "18a9f7cd9d86eb4e7a191f499acd3b8e2f9aadacf869085fe85472913c6d0748",
+            "size": 178
+          },
+          "triggers/KoreaDeskStemInsert.trigger": {
+            "sha256": "2bf36b1433609184bfa0c9d3c83c31f1ba02da30678d21a9129eb5b49fa21a23",
+            "size": 1930
+          },
+          "triggers/KoreaDeskStemInsert.trigger-meta.xml": {
+            "sha256": "18a9f7cd9d86eb4e7a191f499acd3b8e2f9aadacf869085fe85472913c6d0748",
+            "size": 178
+          },
           "triggers/NominationTrigger.trigger": {
             "sha256": "bf5380cf5e2707d70ff4101417cc2ae1b4d34bf7995df5790b3d3fb0f35031e8",
             "size": 1519
@@ -5024,10 +5111,9 @@
             "size": 178
           }
         },
-        "inventoryHash": "72f4b643672493e1ca3c0c69659c73a8555cdaeadf7c5455e41e0cf00dcb239a"
+        "inventoryHash": "db424acc0d975178d3e48fa7abbdde19fa441d936884b6878f96753ba9553bf9"
       },
       "bootstrap": {
-        "projected": true,
         "files": {
           "aura/NewVesselOverride/NewVesselOverride.auradoc": {
             "sha256": "cd1c64e9050cb08167d3aa5c26687b7e7b7599f4f44c873f46e5787ed68f762a",
@@ -5210,8 +5296,8 @@
             "size": 174
           },
           "classes/EnquiryProgressBarController.cls": {
-            "sha256": "18f0d6f811656d5640a978a9d86e549df62bdbd1da51d44e8ced45fbbab862f2",
-            "size": 573
+            "sha256": "f3efbb8d9b5b7ace68ec43a15b92a103dde67091f2595c97c0efd0d743983468",
+            "size": 981
           },
           "classes/EnquiryProgressBarController.cls-meta.xml": {
             "sha256": "8ec13a9efa4848b48546f3207002a644827732e072c0f8bd8e6751701b180a9f",
@@ -5657,6 +5743,30 @@
             "sha256": "b0b6d220338d435e875c9ff0e2477ef5a7e80897db3c7529a61dbec471a943e4",
             "size": 174
           },
+          "classes/KoreaDeskCloseService.cls": {
+            "sha256": "0ba89a7f23571feaf93ea5da5d88618c312de51ecdcb9943f9fe06200e273238",
+            "size": 8357
+          },
+          "classes/KoreaDeskCloseService.cls-meta.xml": {
+            "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
+            "size": 174
+          },
+          "classes/KoreaDeskCloseServiceTest.cls": {
+            "sha256": "9577c8b38549f0cde7ed621d9e2578422877ad1ef798c3ffdb87042295f79359",
+            "size": 8777
+          },
+          "classes/KoreaDeskCloseServiceTest.cls-meta.xml": {
+            "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
+            "size": 174
+          },
+          "classes/KoreaDeskStemMembershipTest.cls": {
+            "sha256": "cf434e7481e03590c29f5ef84f89bfde10a71f86e62cc18a2637e8f0f2a97d1f",
+            "size": 3568
+          },
+          "classes/KoreaDeskStemMembershipTest.cls-meta.xml": {
+            "sha256": "a242f6e22b472afffbd726be71165de394e417355cdf1edd81b5601278ddea32",
+            "size": 174
+          },
           "classes/MasterContractGenerationRest.cls": {
             "sha256": "6c3ed2019ddd0da82c94ed83490ee7ae3885ac8d27dc2032885654304fa953a2",
             "size": 2225
@@ -5786,8 +5896,8 @@
             "size": 174
           },
           "classes/QuoteProgressBarController.cls": {
-            "sha256": "8ab15710ebff091e02f1454487bc24ee54ad5c113700cdbeda6d0221673ad3e9",
-            "size": 1229
+            "sha256": "1536b46e7f6f060f521866e9de9be2c9ef3c1ea18dc05eb12b27ecf28a66ac31",
+            "size": 1637
           },
           "classes/QuoteProgressBarController.cls-meta.xml": {
             "sha256": "a61e37b18ba9d57fa759172efbef606598726708e2519b4ceb0ec9791d57b401",
@@ -6194,8 +6304,8 @@
             "size": 5838
           },
           "flexipages/STEM_Historical_RecordType.flexipage-meta.xml": {
-            "sha256": "81f4426f894d0588f9e6c2dd4ee9ae9773896e1fcdf835848b562f593d571113",
-            "size": 5785
+            "sha256": "b295681e6de6ec8ec0e14b7e0d0dda6eace363587d278c7d192601176edeb8a2",
+            "size": 6043
           },
           "layouts/Invoice__c-Invoice Layout.layout-meta.xml": {
             "sha256": "a8e25daa5d694609887d6f2a9d4d8d6d10e204ad126fd0a593f548816abc47e1",
@@ -6366,12 +6476,12 @@
             "size": 249
           },
           "lwc/fcbEnquiryProgressBar/fcbEnquiryProgressBar.html": {
-            "sha256": "2834bf14fe046d96e7933309f4ff5367e72ad8a0ba5ea26df0bf4ec060970920",
-            "size": 4169
+            "sha256": "d647f2a3e435d027213ca01fa1965e799e0b739d41ff39385636a39ebdd66d12",
+            "size": 5146
           },
           "lwc/fcbEnquiryProgressBar/fcbEnquiryProgressBar.js": {
-            "sha256": "35c2d0537b9af17954fb25e4d47d6b62cb59364cc95a54f0c9ca9262075a0bc6",
-            "size": 6089
+            "sha256": "30eaef4cdc52cec8876caccc52d5bc1e056226da95e021d9291bb885b8384822",
+            "size": 8175
           },
           "lwc/fcbEnquiryProgressBar/fcbEnquiryProgressBar.js-meta.xml": {
             "sha256": "154ea15daed7a29027808456df921ef3d09aafecde9d73c2223ced05b27eb533",
@@ -6454,12 +6564,12 @@
             "size": 378
           },
           "lwc/fcbQuoteProgressBar/fcbQuoteProgressBar.html": {
-            "sha256": "76b3dbd9d640d56a7f1ae11581dc2d1094973a45503eb101ade8993e5180e64a",
-            "size": 2890
+            "sha256": "aa57175cd71527da034b3e7876b0a060dc2257aa14ef760dac4123a4a2781eee",
+            "size": 3851
           },
           "lwc/fcbQuoteProgressBar/fcbQuoteProgressBar.js": {
-            "sha256": "6e93f6cad4048335affa3c91f35ebd110b85cc19d1d17373e5b3d905f3d92d9b",
-            "size": 14282
+            "sha256": "ae3ce903dbe0645c7ad213f2639fbc397407f09f172544f173f7c2ebf495f161",
+            "size": 16729
           },
           "lwc/fcbQuoteProgressBar/fcbQuoteProgressBar.js-meta.xml": {
             "sha256": "0e5bc95b4707510bbd8c66e8b02831c84b917ff6806e10a43811fe46126ba2cb",
@@ -6502,12 +6612,12 @@
             "size": 745
           },
           "lwc/fcbStemProcessing/fcbStemProcessing.html": {
-            "sha256": "0b5c94329da4087b0f214a73a212adeecde16d00b945f746c414267eebff19f7",
-            "size": 31561
+            "sha256": "dda940545368c4a2aef5245b5c806bf8d588810cdae7bd201918c159f170f1f1",
+            "size": 32627
           },
           "lwc/fcbStemProcessing/fcbStemProcessing.js": {
-            "sha256": "c3bd5c1d82cc163992c5eb430ab40e1c76fe770e79ea66069922158946bb68e7",
-            "size": 48468
+            "sha256": "721fcb58bd568e1c78cc57ee02e896ae2c483383cc008e793b9ca6f5c0f4687f",
+            "size": 49032
           },
           "lwc/fcbStemProcessing/fcbStemProcessing.js-meta.xml": {
             "sha256": "70e6f162268d57442bf6ae24982f53bd9181d842c8841aab4295013c2c3bfd67",
@@ -6592,6 +6702,18 @@
           "lwc/fcosHistoricalStemDisputes/fcosHistoricalStemDisputes.js-meta.xml": {
             "sha256": "9b444c4d581dcc6378ea116996a9644002613fc4fe1e505fb7c94b076c50e8e8",
             "size": 668
+          },
+          "lwc/fcosHistoricalStemKoreaDesk/fcosHistoricalStemKoreaDesk.html": {
+            "sha256": "ac1e7d16045ab2c561dff1b6d3dd44e306a74485084f93c8d7616340ccbc87df",
+            "size": 1757
+          },
+          "lwc/fcosHistoricalStemKoreaDesk/fcosHistoricalStemKoreaDesk.js": {
+            "sha256": "d5a341e76d7f97d04fcf6ba6a292e239b6ace842ade0304de54bb678bf83c17e",
+            "size": 1982
+          },
+          "lwc/fcosHistoricalStemKoreaDesk/fcosHistoricalStemKoreaDesk.js-meta.xml": {
+            "sha256": "841bbd164f857d2c175a1afcb85e0616ce152185ddf6ca9f79c7b88d0ceb12ae",
+            "size": 596
           },
           "lwc/fcosTradeCashEditor/fcosTradeCashEditor.css": {
             "sha256": "77f29b9b3302f73fda8b0cdc2ba906c0081893e803b1b250e59f03056ac6abb6",
@@ -9657,6 +9779,30 @@
             "sha256": "b452c1fd048a91563f5255e612d53182f1a0a2302313a309b8e05b03203ca833",
             "size": 178
           },
+          "triggers/KoreaDeskEnquiryCloseGuard.trigger": {
+            "sha256": "6e339bab6ff5dfd1ee3c028b6e310e5621c73e6292f3b07dbd1398064f8746d8",
+            "size": 1280
+          },
+          "triggers/KoreaDeskEnquiryCloseGuard.trigger-meta.xml": {
+            "sha256": "18a9f7cd9d86eb4e7a191f499acd3b8e2f9aadacf869085fe85472913c6d0748",
+            "size": 178
+          },
+          "triggers/KoreaDeskQuoteTransition.trigger": {
+            "sha256": "41a512921c6e592efa98d96613e0f78f5a50624a277da4a9f484dffe2b109624",
+            "size": 279
+          },
+          "triggers/KoreaDeskQuoteTransition.trigger-meta.xml": {
+            "sha256": "18a9f7cd9d86eb4e7a191f499acd3b8e2f9aadacf869085fe85472913c6d0748",
+            "size": 178
+          },
+          "triggers/KoreaDeskStemInsert.trigger": {
+            "sha256": "2bf36b1433609184bfa0c9d3c83c31f1ba02da30678d21a9129eb5b49fa21a23",
+            "size": 1930
+          },
+          "triggers/KoreaDeskStemInsert.trigger-meta.xml": {
+            "sha256": "18a9f7cd9d86eb4e7a191f499acd3b8e2f9aadacf869085fe85472913c6d0748",
+            "size": 178
+          },
           "triggers/NominationTrigger.trigger": {
             "sha256": "bf5380cf5e2707d70ff4101417cc2ae1b4d34bf7995df5790b3d3fb0f35031e8",
             "size": 1519
@@ -9850,7 +9996,8 @@
             "size": 178
           }
         },
-        "inventoryHash": "5d60cdddf6d70b07f7e370250acae814ff287af8a7dffed97214006c42b5b6ee"
+        "inventoryHash": "d505f2147336e525611d1ae6cdaaae9120a3f69b4282341736706385231d76a0",
+        "projected": true
       },
       "final": {
         "projected": true,
@@ -14620,11 +14767,15 @@
       "presentComponents": [
         "ApexClass:EnquiryProgressBarController",
         "ApexClass:QuoteProgressBarController",
+        "CustomField:STEM__c.Korea_Desk_Member__c",
+        "CustomField:STEM__c.Korea_Desk__c",
         "CustomObject:STEM__c",
         "FlexiPage:STEM_Historical_RecordType",
         "LightningComponentBundle:fcbEnquiryProgressBar",
         "LightningComponentBundle:fcbQuoteProgressBar",
-        "LightningComponentBundle:fcbStemProcessing"
+        "LightningComponentBundle:fcbStemProcessing",
+        "PermissionSet:FCOS_Korea_Desk_Editor",
+        "PermissionSet:FCOS_Korea_Desk_Reader"
       ],
       "baseline": {
         "files": {
@@ -17877,8 +18028,8 @@
             "size": 513
           },
           "objects/STEM__c/STEM__c.object-meta.xml": {
-            "sha256": "ef9a23577bda2e3fd11ee2900e7efa795813dfc3770b321a5403eceeee18370e",
-            "size": 5793
+            "sha256": "76b34819ba7fcfb071db930b69f3c80166e8ea90eea79957665d40938bcb02c3",
+            "size": 5894
           },
           "objects/STEM__c/fields/Buyer_Broker__c.field-meta.xml": {
             "sha256": "ff101c0c5da9e431e1a7881bc9847fa59132d759d52d8e24b5abc7cf6c39a61e",
@@ -17891,6 +18042,14 @@
           "objects/STEM__c/fields/Delivery_Date_Or_Expected__c.field-meta.xml": {
             "sha256": "0b1e055a408ec7c4b4d5e2d7bfad3db6b72a75da429e35298e77d6e217039c73",
             "size": 411
+          },
+          "objects/STEM__c/fields/Korea_Desk_Member__c.field-meta.xml": {
+            "sha256": "26ff7ceba47e4a4a3b7fbeffe6e5d5189b24ebfcb569827548bac95fa604d1b3",
+            "size": 706
+          },
+          "objects/STEM__c/fields/Korea_Desk__c.field-meta.xml": {
+            "sha256": "1d83d7598172afcbf2918e767e1a9c3397df80148d662d5e6fd9891a34141ef9",
+            "size": 928
           },
           "objects/STEM__c/fields/Master_Contract_Delivery_Key__c.field-meta.xml": {
             "sha256": "0b7af23ae17f868848f5e98741590e0b8a8f7b2729457966b9ad99c2bfa014ea",
@@ -19036,6 +19195,14 @@
             "sha256": "7b124d900670eee2b7c09017f0096f4b057188c01702ebf8d202ef7ef32a24de",
             "size": 405
           },
+          "permissionsets/FCOS_Korea_Desk_Editor.permissionset-meta.xml": {
+            "sha256": "4a0ddbbd055ccb4b9bbbaecc28166d89db626e6c3a82eec905d5ecb9c8908062",
+            "size": 673
+          },
+          "permissionsets/FCOS_Korea_Desk_Reader.permissionset-meta.xml": {
+            "sha256": "c8e635ea271fb7549c18f809868bad0fc29c60a309d539803935ba423815eb70",
+            "size": 694
+          },
           "permissionsets/FCOS_Master_Contracts_API.permissionset-meta.xml": {
             "sha256": "0d1041b66e407194ee22cad41f04bb6c476076b70578292fbbd7d43e218ab79f",
             "size": 4735
@@ -19441,10 +19608,9 @@
             "size": 178
           }
         },
-        "inventoryHash": "866757e5caa7644c3ebe117006455eabb239198a75028e0079142ce86a29d821"
+        "inventoryHash": "48922f8371d283dc4149349b647041102ca38f96146246f58a3c03f9c964d1d5"
       },
       "bootstrap": {
-        "projected": true,
         "files": {
           "aura/NewVesselOverride/NewVesselOverride.auradoc": {
             "sha256": "cd1c64e9050cb08167d3aa5c26687b7e7b7599f4f44c873f46e5787ed68f762a",
@@ -24255,7 +24421,8 @@
             "size": 178
           }
         },
-        "inventoryHash": "404d2d5eae75ecae75a576ac393940650c655495e733248a41054f384eab21a7"
+        "inventoryHash": "404d2d5eae75ecae75a576ac393940650c655495e733248a41054f384eab21a7",
+        "projected": true
       },
       "final": {
         "projected": true,
@@ -43521,6 +43688,30 @@
       "metadata": {
         "path": "manifest/fcos-korea-desk-production-full-native.xml",
         "sha256": "0f74ebf79e85b4c4ce7e29b1b5861d5127f2e5c632bb9862b5e779c995b1c5f4"
+      }
+    },
+    "db424acc0d975178d3e48fa7abbdde19fa441d936884b6878f96753ba9553bf9": {
+      "path": "manifest/fcos-korea-desk-devee-stable.xml",
+      "sha256": "e5c0df3cc93e98fb03d2c33550ffaaf5eab95a33b7cc6145dc7f6dd14887b650",
+      "metadata": {
+        "path": "manifest/fcos-korea-desk-devee-full-native.xml",
+        "sha256": "0f74ebf79e85b4c4ce7e29b1b5861d5127f2e5c632bb9862b5e779c995b1c5f4"
+      }
+    },
+    "d505f2147336e525611d1ae6cdaaae9120a3f69b4282341736706385231d76a0": {
+      "path": "manifest/fcos-korea-desk-devee-stable.xml",
+      "sha256": "e5c0df3cc93e98fb03d2c33550ffaaf5eab95a33b7cc6145dc7f6dd14887b650",
+      "metadata": {
+        "path": "manifest/fcos-korea-desk-devee-full-native.xml",
+        "sha256": "0f74ebf79e85b4c4ce7e29b1b5861d5127f2e5c632bb9862b5e779c995b1c5f4"
+      }
+    },
+    "48922f8371d283dc4149349b647041102ca38f96146246f58a3c03f9c964d1d5": {
+      "path": "manifest/fcos-korea-desk-qat-stable.xml",
+      "sha256": "e5c0df3cc93e98fb03d2c33550ffaaf5eab95a33b7cc6145dc7f6dd14887b650",
+      "metadata": {
+        "path": "manifest/fcos-korea-desk-qat-bootstrap-native.xml",
+        "sha256": "6910ddc8e218c78fb6ce73507d469fba30d26bfe633c9b0b29a955fc13630a54"
       }
     }
   },

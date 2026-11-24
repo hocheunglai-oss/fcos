@@ -2,11 +2,16 @@
 private class KoreaDeskStemMembershipTest {
     @IsTest
     static void reportsGeographyAndExplicitBuyerChoices() {
-        TestDataFactory.insertPricebook('Standard Price Book', true);
+        Pricebook2 pricebook = TestDataFactory.insertPricebook('Standard Price Book', true);
         Account singaporeBuyer = TestDataFactory.createTestAccount(
             'FRATELLI COSULICH BUNKERS (S) PTE LTD', 'BUYER', true
         );
         Account otherBuyer = TestDataFactory.createTestAccount('Other Korea Desk Test Buyer', 'BUYER', true);
+        Account supplier = TestDataFactory.createTestAccount('Korea Desk Test Supplier', 'SUPPLIER', true);
+        Product2 product = TestDataFactory.insertTestProduct('Korea Desk Test Fuel', pricebook.Id, 'PETROLEUM', true);
+        Payment_Term__c supplierTerm = TestDataFactory.createTestPaymentTerm(
+            '2 P', 'Supplier', true
+        );
         Port__c korea = TestDataFactory.createTestPort('Korea Desk Test Korea', activeKoreaCountry(), true);
         Port__c singapore = TestDataFactory.createTestPort('Korea Desk Test Singapore', 'SINGAPORE', true);
         Vessel__c vessel = TestDataFactory.createTestVessel('Korea Desk Vessel', '9876543', otherBuyer.Id, true);
@@ -30,10 +35,22 @@ private class KoreaDeskStemMembershipTest {
             Assert.areEqual(expected[i], results.get(fixtures[i].Id).Korea_Desk_Member__c, fixtures[i].Name);
         }
         Id changedId = fixtures[1].Id;
+        TestDataFactory.createTestStemLineItem(
+            'Korea Desk Test Delivery', changedId, supplier.Id, product.Id, 10, 600, 500, 10, supplierTerm.Id, true
+        );
+        STEM__c beforeEdit = [
+            SELECT Invoice_Status__c, Not_Cancelled_STEM_Line_Item_Quantity__c
+            FROM STEM__c WHERE Id = :changedId WITH SYSTEM_MODE
+        ];
+        Assert.isTrue(beforeEdit.Not_Cancelled_STEM_Line_Item_Quantity__c > 0,
+            'Exercise the edit on a STEM with an active delivery line.');
         STEM__c changed = new STEM__c(Id = changedId, Korea_Desk__c = 'No');
         update as system changed;
-        changed = [SELECT Korea_Desk_Member__c FROM STEM__c WHERE Id = :changedId WITH SYSTEM_MODE];
+        changed = [
+            SELECT Invoice_Status__c, Korea_Desk_Member__c FROM STEM__c WHERE Id = :changedId WITH SYSTEM_MODE
+        ];
         Assert.isFalse(changed.Korea_Desk_Member__c);
+        Assert.areEqual(beforeEdit.Invoice_Status__c, changed.Invoice_Status__c);
         Test.stopTest();
     }
 
