@@ -61,19 +61,21 @@ test('dashboard defaults and resets to year to date', async () => {
   assert.match(bar, /countryCode: option\?\.countryCode \|\| optionValue\(option\), port: '', portId: '', koreaDeskMode: 'all'/);
 });
 
-test('Korea Desk modes produce mutually exclusive country filters and clear manual locations', () => {
+test('Korea Desk modes carry an independent scope and clear manual locations', () => {
   const included = normalizeDashboardFilters({
     selectedYears: [2026], selectedMonths: [8], koreaDeskMode: 'include',
     port: 'Busan', portId: 'a0P123456789012AAA', country: 'Korea', countryCode: 'KOREA',
   });
   assert.equal(included.portId, '');
   assert.equal(included.countryCode, '');
-  assert.deepEqual(dashboardFilterPayload(included).filters.countryCodes, ['KOREA']);
+  assert.deepEqual(dashboardFilterPayload(included).filters.countryCodes, []);
+  assert.equal(dashboardFilterPayload(included).filters.koreaDeskMode, 'include');
   assert.deepEqual(dashboardFilterPayload(included).filters.excludedCountryCodes, []);
 
   const excluded = dashboardFilterPayload({ selectedYears: [2026], selectedMonths: [8], koreaDeskMode: 'exclude' });
   assert.deepEqual(excluded.filters.countryCodes, []);
-  assert.deepEqual(excluded.filters.excludedCountryCodes, ['KOREA']);
+  assert.deepEqual(excluded.filters.excludedCountryCodes, []);
+  assert.equal(excluded.filters.koreaDeskMode, 'exclude');
 
   const invalidMode = normalizeDashboardFilters({ koreaDeskMode: 'somewhere_else', countryCode: 'SINGAPORE' });
   assert.equal(invalidMode.koreaDeskMode, 'all');

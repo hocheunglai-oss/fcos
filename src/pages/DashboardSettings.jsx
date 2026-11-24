@@ -110,8 +110,9 @@ export default function DashboardSettings() {
         accountIds: splitQueryList(searchParams.get('insightAccountIds')),
         supplierIds: splitQueryList(searchParams.get('insightSupplierIds')),
         portIds: splitQueryList(searchParams.get('insightPortIds')),
-        countryCodes: splitQueryList(searchParams.get('insightCountryCodes')),
-        excludedCountryCodes: splitQueryList(searchParams.get('insightExcludedCountryCodes')),
+        countryCodes: splitQueryList(searchParams.get('insightCountryCodes')).filter((country) => !(searchParams.get('insightKoreaDeskMode') === 'include' && country.toUpperCase() === 'KOREA')),
+        excludedCountryCodes: splitQueryList(searchParams.get('insightExcludedCountryCodes')).filter((country) => !(searchParams.get('insightKoreaDeskMode') === 'exclude' && country.toUpperCase() === 'KOREA')),
+        koreaDeskMode: ['include', 'exclude'].includes(searchParams.get('insightKoreaDeskMode')) ? searchParams.get('insightKoreaDeskMode') : 'all',
       },
       labels: { company: searchParams.get('insightCompany') || '', group: searchParams.get('insightGroup') || '', port: searchParams.get('insightPort') || '', country: searchParams.get('insightCountry') || '', desk: searchParams.get('insightKoreaDeskMode') === 'include' ? 'Korea Desk' : searchParams.get('insightKoreaDeskMode') === 'exclude' ? 'Exclude Korea Desk' : '' },
     };
@@ -308,7 +309,7 @@ export default function DashboardSettings() {
     ];
     queryValues.forEach(([key, values]) => { if (values.length) next.set(key, values.join(',')); else next.delete(key); });
     if (filters.koreaDeskMode !== 'all') next.set('insightKoreaDeskMode', filters.koreaDeskMode); else next.delete('insightKoreaDeskMode');
-    const labels = { insightCompany: filters.counterparty?.entityType === 'account' ? filters.counterparty.name : filters.company, insightGroup: filters.counterparty?.entityType === 'group' ? filters.counterparty.name : filters.group, insightPort: filters.port, insightCountry: filters.country || (filters.koreaDeskMode === 'include' ? 'KOREA Desk' : filters.koreaDeskMode === 'exclude' ? 'Excluding KOREA Desk' : '') };
+    const labels = { insightCompany: filters.counterparty?.entityType === 'account' ? filters.counterparty.name : filters.company, insightGroup: filters.counterparty?.entityType === 'group' ? filters.counterparty.name : filters.group, insightPort: filters.port, insightCountry: filters.country };
     Object.entries(labels).forEach(([key, value]) => { if (value) next.set(key, value); else next.delete(key); });
     navigate({ pathname: '/', search: `?${next.toString()}` }, { state: { ...location.state, dashboardInsightOverlay: true } });
   }, [filterPayload.filters.accountIds, filterPayload.filters.countryCodes, filterPayload.filters.excludedCountryCodes, filterPayload.filters.portIds, filterPayload.filters.supplierIds, filters.company, filters.counterparty?.entityType, filters.counterparty?.name, filters.country, filters.disputeOnly, filters.group, filters.koreaDeskMode, filters.port, filters.selectedMonths, filters.selectedYears, location.state, navigate, searchParams]);

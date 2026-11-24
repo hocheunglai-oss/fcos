@@ -14,6 +14,7 @@ export function accountInsightStatementRequest(body, side = null) {
       portIds: body.dashboardScope?.portIds || body.dashboardScope?.filters?.portIds || [],
       countryCodes: body.dashboardScope?.countryCodes || body.dashboardScope?.filters?.countryCodes || [],
       excludedCountryCodes: body.dashboardScope?.excludedCountryCodes || body.dashboardScope?.filters?.excludedCountryCodes || [],
+      koreaDeskMode: body.dashboardScope?.koreaDeskMode || body.dashboardScope?.filters?.koreaDeskMode || 'all',
     },
     disputeOnly: body.dashboardScope?.mode !== 'account_wide' && body.dashboardScope?.disputeOnly === true,
   };
