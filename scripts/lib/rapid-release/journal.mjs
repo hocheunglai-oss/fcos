@@ -65,12 +65,12 @@ export class DeploymentJournal {
   async checkpoint({ fingerprint, stage, operation, record }) {
     requireCondition(/^[a-f0-9]{64}$/.test(fingerprint || '')
       && ['devee', 'shared_mirror', 'qat', 'production'].includes(stage)
-      && /^(?:validation|deployment|bootstrap|sales-support-correction|publication|inventory-checkpoint|native-desktop-smoke|native-desktop-preflight|preparation|restoration-checkpoint|permission:[A-Za-z][A-Za-z0-9_]*)$/.test(operation || '')
-      && (operation !== 'sales-support-correction' || stage !== 'shared_mirror')
+      && /^(?:validation|deployment|bootstrap|sales-support-correction|buyer-history-correction|publication|inventory-checkpoint|native-desktop-smoke|native-desktop-preflight|preparation|restoration-checkpoint|permission:[A-Za-z][A-Za-z0-9_]*)$/.test(operation || '')
+      && (!['sales-support-correction', 'buyer-history-correction'].includes(operation) || stage !== 'shared_mirror')
       && record && typeof record === 'object' && !Array.isArray(record), 'SALESFORCE_CHECKPOINT_INVALID');
-    const providerOperation = /^(?:validation|deployment|bootstrap|sales-support-correction|publication|permission:)/.test(operation);
+    const providerOperation = /^(?:validation|deployment|bootstrap|sales-support-correction|buyer-history-correction|publication|permission:)/.test(operation);
     const status = record.status;
-    const correctionTerminal = operation === 'sales-support-correction' && ['Failed', 'Canceled'].includes(status);
+    const correctionTerminal = ['sales-support-correction', 'buyer-history-correction'].includes(operation) && ['Failed', 'Canceled'].includes(status);
     if (correctionTerminal) {
       requireCondition(record.terminalOutcome === (status === 'Failed' ? 'failed_rolled_back' : 'canceled_rolled_back')
         && /^[a-f0-9]{64}$/u.test(record.reportDigest || '') && record.validationJobId === null
@@ -102,7 +102,7 @@ export class DeploymentJournal {
       'EDITOR_PREFLIGHT_CHECKPOINT_INVALID');
       data.desktop = { runId, proofId, proofDigest, finalInventoryReceiptDigest };
     }
-    if (['validation', 'deployment', 'bootstrap', 'sales-support-correction'].includes(operation) && Object.hasOwn(record, 'jobId')) {
+    if (['validation', 'deployment', 'bootstrap', 'sales-support-correction', 'buyer-history-correction'].includes(operation) && Object.hasOwn(record, 'jobId')) {
       const validJob = value => typeof value === 'string' && /^0Af[A-Za-z0-9]{12}(?:[A-Za-z0-9]{3})?$/u.test(value);
       const { jobId, validationJobId, submittedAt } = record;
       const submitted = Date.parse(submittedAt);

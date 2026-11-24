@@ -46,11 +46,14 @@ function protectedSalesforceContext({ manifest, approval, staged, journal, provi
   const correctionFingerprint = plan.paymentRepair
     ? assertPaymentSalesSupportRepairBinding(plan.paymentRepair).correctionFingerprint : legacyCorrection?.correctionFingerprint;
   const allowedOperation = /^(?:validation|deployment|bootstrap|sales-support-correction|shared-publication|permission:[A-Za-z][A-Za-z0-9_]*)$/;
+  const buyerHistoryCorrection = Number.isSafeInteger(plan.koreaDeskBuyerHistoryReceiptId)
+    && plan.koreaDeskBuyerHistoryReceiptId > 0 && manifest.prerequisites.adapter === 'salesforce-reviewed-manifest';
   const scoped = (scope, correction) => ({
     ownership: {
       async assert(binding) {
         const { stage, orgId, operation } = binding;
-        requireCondition(binding.fingerprint === scope && allowedOperation.test(operation || '')
+        requireCondition(binding.fingerprint === scope
+          && (allowedOperation.test(operation || '') || buyerHistoryCorrection && !correction && operation === 'buyer-history-correction')
           && policy.environments.some(environment => environment.key === stage && environment.orgId === orgId)
           && (correction ? ['sales-support-correction', 'shared-publication'].includes(operation) : operation !== 'sales-support-correction')
           && (operation !== 'shared-publication' || stage === 'devee'), 'SALESFORCE_PROTECTED_OPERATION_MISMATCH');
@@ -146,6 +149,11 @@ export async function runPrerequisites({ manifest, approval, staged, journal, pr
     && (!manifest.selection.database || result.database?.destructiveRollback === false && result.database.readbackVerified === true)
     && (!databaseWriter || isDigest(result.database?.schemaDigest)), 'PREREQUISITE_VERIFICATION_REQUIRED');
   const repair = descriptor.plan.paymentRepair ?? descriptor.plan.salesSupportRepair;
+  if (descriptor.plan.koreaDeskBuyerHistoryReceiptId !== undefined) {
+    const required = ['devee', 'qat', 'production'].map(stage => 'salesforce:' + stage + ':buyer-history-correction');
+    requireCondition(required.every(operationId => result.completedOperations.filter(row => row.operationId === operationId).length === 1),
+      'KOREA_BUYER_HISTORY_COMPLETION_REQUIRED');
+  }
   if (repair) {
     const correction = result.salesforce?.correction;
     const required = ['devee', 'shared_mirror', 'qat', 'production'].map(stage => 'salesforce:' + stage + ':sales-support-correction');

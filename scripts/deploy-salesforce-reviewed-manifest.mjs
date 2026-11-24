@@ -558,6 +558,22 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
         || org?.Id !== environment.orgId || org?.IsSandbox !== environment.isSandbox) throw new Error(`${environment.label} Salesforce identity mismatch.`);
       return display;
     },
+    readKoreaDeskBuyerAccountXml(environment) {
+      this.verifyIdentity(environment);
+      const project = mkdtempSync(path.join(tmpdir(), 'fcos-buyer-history-readback-'));
+      try {
+        copyFileSync(safeProjectFile(cwd, 'sfdx-project.json'), path.join(project, 'sfdx-project.json'));
+        mkdirSync(path.join(project, 'force-app'));
+        const result = sf(['project', 'retrieve', 'start', '--target-org', environment.alias,
+          '--metadata', 'CustomField:STEM__c.Account__c', '--output-dir', 'readback', '--wait', '3', '--json'], project);
+        if (result.success !== true || result.status !== 'Succeeded' || result.done !== true || result.messages?.length) {
+          throw new Error('Korea Desk Buyer field metadata retrieval did not complete successfully.');
+        }
+        return readFileSync(safeProjectFile(path.join(project, 'readback'), 'objects/STEM__c/fields/Account__c.field-meta.xml'));
+      } finally {
+        rmSync(project, { recursive: true, force: true });
+      }
+    },
     report(environment, jobId) { return sf(['project', 'deploy', 'report', '--target-org', environment.alias, '--job-id', jobId, '--wait', '60', '--json']); },
     prepareValidation(environment, plan) {
       const command = ['project', 'deploy', 'validate', '--target-org', environment.alias, '--test-level', plan.binding.testPlan.level];
