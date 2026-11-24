@@ -1,0 +1,28 @@
+<template>
+    <lightning-card title="Disputes">
+        <div class="slds-p-horizontal_small">
+            <template lwc:if={loading}>
+                <p role="status">Loading disputes…</p>
+            </template>
+            <template lwc:elseif={loadError}>
+                <p role="status">Disputes could not be loaded for this record.</p>
+            </template>
+            <template lwc:elseif={hasRows}>
+                <ul class="slds-list_dotted" aria-label="Linked disputes">
+                    <template for:each={rows} for:item="row">
+                        <li key={row.id}>{row.name}</li>
+                    </template>
+                </ul>
+            </template>
+            <template lwc:else>
+                <p>No linked disputes.</p>
+            </template>
+            <template lwc:if={canReturnToFirstPage}>
+                <lightning-button label="First page" onclick={goToFirstPage} disabled={loading}></lightning-button>
+            </template>
+            <template lwc:if={hasNextPage}>
+                <lightning-button label="Next page" onclick={goToNextPage}></lightning-button>
+            </template>
+        </div>
+    </lightning-card>
+</template>
