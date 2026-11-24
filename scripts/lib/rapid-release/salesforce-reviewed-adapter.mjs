@@ -124,6 +124,8 @@ export const koreaDeskBootstrap = Object.freeze({
   sourceTreeHash: 'a7d1c63e431ad8cc1193fe65fabdb471e23138cb9f63654fe4c70c680ed00a0b',
   jobId: '0AfHF000007K4t60AC',
   packageSha256: '51bc3f22200c04eeca1b4f339deb4cc4b82168b2d17b57f05922825308b09857',
+  ownerClosureReportSha256: 'cece340bbe76e97cc61e4bb500a65b7754c627a7f8d786477ebdd90006c8761d',
+  nativeReportFactsSha256: 'd4be4deed1708c882863dcd5737e2aaaf6f13398e47c74a4776f859c92100d70',
   submittedAt: '2026-11-24T11:46:35.845Z',
   oldHead: '09765faaeb3d8f19415586e59ca64778ab8f7a180998fd505c7991390db6d071',
   intentId: 8026784662,
@@ -259,7 +261,11 @@ export async function verifyKoreaDeskDeveeBootstrap({ history, reviewed, provide
   const inventory = await verifyReviewedOrgInventory({ provider, environment, plan: reviewed,
     expected: reviewed.nativeInventories.devee.bootstrap, now });
   requireCondition(isDigest(inventory.observedNativeInventoryHash), 'KOREA_DESK_BOOTSTRAP_INVENTORY_REQUIRED');
-  return { proof, inventory };
+  // The pinned CLI adds a top-level files array populated from absolute local
+  // source paths. Keep its full output digest alongside the native job facts.
+  const nativeReport = { ...report };
+  delete nativeReport.files;
+  return { proof, inventory, reportFactsSha256: digest(nativeReport) };
 }
 
 async function recoverKoreaDeskDeveeBootstrap({ adoption, manifest, reviewed, provider, github, now }) {
@@ -276,15 +282,19 @@ async function recoverKoreaDeskDeveeBootstrap({ adoption, manifest, reviewed, pr
     && digest(plan) === digest(prior.prerequisites.plan)
     && evidence.alias === digest(prior.previous),
   'KOREA_DESK_BOOTSTRAP_SUCCESSOR_SCOPE_CHANGED');
-  const { proof, inventory } = await verifyKoreaDeskDeveeBootstrap({ history, reviewed, provider, now });
-  requireCondition(proof.reportSha256 === evidence.deveeReport
-    && inventory.observedNativeInventoryHash === evidence.deveeObservedInventory,
-  'KOREA_DESK_BOOTSTRAP_RECEIPT_POSTIMAGE_CHANGED');
+  requireCondition(evidence.deveeReport === koreaDeskBootstrap.ownerClosureReportSha256,
+    'KOREA_DESK_BOOTSTRAP_CLOSURE_REPORT_CHANGED');
+  const { proof, inventory, reportFactsSha256 } = await verifyKoreaDeskDeveeBootstrap({ history, reviewed, provider, now });
+  requireCondition(reportFactsSha256 === koreaDeskBootstrap.nativeReportFactsSha256,
+    'KOREA_DESK_BOOTSTRAP_NATIVE_REPORT_CHANGED');
+  requireCondition(inventory.observedNativeInventoryHash === evidence.deveeObservedInventory,
+    'KOREA_DESK_BOOTSTRAP_RECEIPT_POSTIMAGE_CHANGED');
   const verifiedAt = now().toISOString();
   return { ...proof, fingerprint: reviewed.fingerprint, validationJobId: null, submittedAt: history.job.submittedAt,
-    packageSha256: history.job.packageSha256, verifiedAt, reconciledAt: verifiedAt,
+    packageSha256: history.job.packageSha256, verifiedAt, reconciledAt: verifiedAt, reportFactsSha256,
     recoveredEvidenceDigest: digest({ receiptId: receipt.id, originalCheckpoint: koreaDeskBootstrap.checkpointId,
-      providerReportSha256: proof.reportSha256, inventoryReceiptSha256: inventory.evidenceSha256 }) };
+      ownerClosureReportSha256: evidence.deveeReport, providerReportSha256: proof.reportSha256, reportFactsSha256,
+      inventoryReceiptSha256: inventory.evidenceSha256 }) };
 }
 
 export async function recoverReviewedDeveePromotion({ receiptId, manifest, reviewed, provider, github, now = () => new Date() }) {
