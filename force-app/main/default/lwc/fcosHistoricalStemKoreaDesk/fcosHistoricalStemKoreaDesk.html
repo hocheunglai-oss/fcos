@@ -1,0 +1,32 @@
+<template>
+    <template lwc:if={visible}>
+        <lightning-card title="Korea Desk">
+            <div class="slds-p-horizontal_small">
+                <template lwc:if={fixed}>
+                    <lightning-input label="Korea Desk" value="Yes" read-only></lightning-input>
+                </template>
+                <template lwc:elseif={editable}>
+                    <lightning-record-edit-form record-id={recordId} object-api-name="STEM__c"
+                        onsubmit={handleSubmit} onsuccess={handleSuccess} onerror={handleError}>
+                        <lightning-messages></lightning-messages>
+                        <lightning-input-field field-name="Korea_Desk__c" onchange={handleChange}>
+                        </lightning-input-field>
+                        <template lwc:if={changed}>
+                            <div class="slds-m-bottom_small">
+                                <lightning-button label="Cancel" onclick={handleCancel} disabled={saving}>
+                                </lightning-button>
+                                <lightning-button label="Save" type="submit" variant="brand" disabled={saving}
+                                    class="slds-m-left_small"></lightning-button>
+                            </div>
+                        </template>
+                    </lightning-record-edit-form>
+                </template>
+                <template lwc:else>
+                    <lightning-record-view-form record-id={recordId} object-api-name="STEM__c">
+                        <lightning-output-field field-name="Korea_Desk__c"></lightning-output-field>
+                    </lightning-record-view-form>
+                </template>
+            </div>
+        </lightning-card>
+    </template>
+</template>

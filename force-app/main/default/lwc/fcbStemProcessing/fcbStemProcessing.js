@@ -325,11 +325,29 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
   @wire(getObjectInfo, { objectApiName: STEM_OBJECT })
   wiredObjectInfo({error, data}) {
     if (data) {
+      this.koreaDeskField = data.fields?.Korea_Desk__c;
       const rtis = data.recordTypeInfos;
       this.recordTypeId = Object.keys(rtis).find(rti => rtis[rti].name === 'Originated');
     } else if (error) {
       console.error(error);
     }
+  }
+
+  koreaDeskField;
+
+  get isKoreaDeskFixed() {
+    const country = this.stem?.Port__r?.value?.fields?.Country__c?.value;
+    return country === KOREA_PORT || country === 'KOREA, REPUBLIC OF';
+  }
+
+  get isKoreaDeskChoiceVisible() {
+    const buyer = this.stem?.Account__r?.value?.fields?.Name?.value;
+    return !this.isKoreaDeskFixed && Boolean(this.koreaDeskField)
+      && buyer?.trim().toUpperCase() === FCBS_NAME;
+  }
+
+  get canEditKoreaDesk() {
+    return this.koreaDeskField?.updateable === true;
   }
 
   @wire(getPicklistValues, { recordTypeId: "$recordTypeId", fieldApiName: DISPUTE_STATUS_FIELD })

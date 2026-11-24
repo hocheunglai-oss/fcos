@@ -71,6 +71,12 @@
                 <identifier>force_detailPanel</identifier>
             </componentInstance>
         </itemInstances>
+        <itemInstances>
+            <componentInstance>
+                <componentName>fcosHistoricalStemKoreaDesk</componentName>
+                <identifier>fcosHistoricalStemKoreaDesk</identifier>
+            </componentInstance>
+        </itemInstances>
         <name>Facet-b81778e6-acc1-4f6d-942e-d0bcd4274477</name>
         <type>Facet</type>
     </flexiPageRegions>

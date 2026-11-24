@@ -1,0 +1,86 @@
+<template>
+    <div class="slds-box slds-theme_default">
+        <lightning-progress-indicator current-step={currentStage} type="path" variant="base" onchange={handleChange}>
+            <template for:each={stages} for:item="stage">
+                <template if:true={isClosedLost}>
+                    <lightning-progress-step class="slds-is-lost" label={stage.label} value={stage.value} key={stage.label} onclick={handleClick}></lightning-progress-step>
+                </template>
+                <template if:false={isClosedLost}>
+                    <lightning-progress-step label={stage.label} value={stage.value} key={stage.label} onclick={handleClick}></lightning-progress-step>    
+                </template>
+            </template>
+            <lightning-button label="Mark as Current Stage" onclick={nextStage} variant="brand" class="slds-m-left_medium"></lightning-button>
+        </lightning-progress-indicator>   
+    </div>
+    <template if:true={openModal}>
+        <section role="dialog" tabindex="-1" aria-labelledby="modal-heading-01" aria-modal="true"
+        aria-describedby="modal-content-id-1" class="slds-modal slds-fade-in-open">
+        <div class="slds-modal__container">
+            <header class="slds-modal__header">
+              <button class="slds-button slds-button_icon slds-modal__close slds-button_icon-inverse"
+                      title="Close" onclick={closeModal}>
+                <lightning-icon icon-name="utility:close" alternative-text="close" variant="inverse"
+                                size="small"></lightning-icon>
+                <span class="slds-assistive-text">Close</span>
+              </button>
+              <h2 id="modal-heading-01" class="slds-text-heading_medium slds-hyphenate">Close This Enquiry</h2>
+            </header>
+            <div class="slds-modal__content slds-p-around_medium" id="modal-content-id-1" style="max-height: 65vh; overflow-y: auto;">
+                <lightning-combobox
+                                name="progress"
+                                label="Stage"
+                                value={value}
+                                placeholder="Select Closed Stage"
+                                options={options}
+                                onchange={handleChange} >
+                </lightning-combobox>
+                <template if:true={showKoreaDeskChoices}>
+                    <template for:each={koreaDeskChoices} for:item="choice">
+                        <div key={choice.key} class="slds-m-top_small">
+                            <template if:true={choice.isFixed}>
+                                <p>{choice.label} — Korea Desk: Yes</p>
+                            </template>
+                            <template if:true={choice.isRequired}>
+                                <lightning-combobox data-korea-choice data-key={choice.key} label={choice.label}
+                                    value={choice.answer} placeholder="Select Korea Desk" options={koreaDeskOptions}
+                                    onchange={handleKoreaDeskChange} required></lightning-combobox>
+                            </template>
+                        </div>
+                    </template>
+                </template>
+                            </div>
+        
+            <footer class="slds-modal__footer">
+                <button class="slds-button slds-button_neutral" onclick={closeModal}>Cancel</button>
+                <button class="slds-button slds-button_brand" onclick={handleSave} disabled={actionExecuting}>Save</button>
+            </footer>
+        </div>
+        </section>
+        <div class="slds-backdrop slds-backdrop_open"></div>
+    </template>
+    <template if:true={changedToClosedLost}>
+        <section role="dialog" tabindex="-1" aria-modal="true"
+        aria-describedby="modal-content-id-1" class="slds-modal slds-fade-in-open">
+        <div class="slds-modal__container">
+            <header class="slds-modal__header">
+              <button class="slds-button slds-button_icon slds-modal__close slds-button_icon-inverse"
+                      title="Close" onclick={closeModal}>
+                <lightning-icon icon-name="utility:close" alternative-text="close" variant="inverse"
+                                size="small"></lightning-icon>
+                <span class="slds-assistive-text">Close</span>
+              </button>
+              <h2 class="slds-text-heading_medium slds-hyphenate">Close This Enquiry</h2>
+            </header>
+            <lightning-record-edit-form object-api-name="Opportunity" record-id={recordId} onsuccess={handleSuccess}>
+            <div class="slds-modal__content slds-p-around_medium" style="height: 150px;">
+                    <lightning-input-field field-name="Loss_Reason__c" required></lightning-input-field>
+            </div>
+            <footer class="slds-modal__footer">
+                <lightning-button variant="brand" label="Save" type="submit"></lightning-button>
+            </footer>
+        </lightning-record-edit-form>
+        </div>
+        </section>
+        <div class="slds-backdrop slds-backdrop_open"></div>
+    </template>
+</template>

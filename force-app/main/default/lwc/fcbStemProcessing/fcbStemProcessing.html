@@ -35,6 +35,20 @@
                                     </lightning-input-field>
                                     <lightning-input-field style="margin-top: 21px;" name="main-form-field" field-name="Factoring_Invoice__c" variant="label-stacked">
                                     </lightning-input-field>
+                                    <template lwc:if={isKoreaDeskFixed}>
+                                        <lightning-input type="text" label="Korea Desk" value="Yes" read-only>
+                                        </lightning-input>
+                                    </template>
+                                    <template lwc:elseif={isKoreaDeskChoiceVisible}>
+                                        <template lwc:if={canEditKoreaDesk}>
+                                            <lightning-input-field name="main-form-field" field-name="Korea_Desk__c" variant="label-stacked">
+                                            </lightning-input-field>
+                                        </template>
+                                        <template lwc:else>
+                                            <lightning-output-field field-name="Korea_Desk__c" variant="label-stacked">
+                                            </lightning-output-field>
+                                        </template>
+                                    </template>
                                 </div>
                                 <div class="slds-col slds-size_1-of-4">
                                     <div class="slds-grid">

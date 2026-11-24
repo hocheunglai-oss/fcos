@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<PermissionSet xmlns="http://soap.sforce.com/2006/04/metadata">
+    <description>Allows existing STEM readers and dashboard service users to read the Korea Desk decision and reporting membership.</description>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>STEM__c.Korea_Desk__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>STEM__c.Korea_Desk_Member__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <label>FCOS Korea Desk Reader</label>
+</PermissionSet>

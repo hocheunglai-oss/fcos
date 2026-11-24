@@ -1,0 +1,66 @@
+<template>
+    <div class="slds-box slds-theme_default">
+        <lightning-progress-indicator current-step={currentStatus} type="path" variant="base" onchange={handleChange}>
+            <template for:each={statuses} for:item="status">
+                <lightning-progress-step label={status.label} value={status.value} key={status.label} onclick={handleClick}></lightning-progress-step>    
+            </template>
+            <lightning-button disabled={disabledButton} label="Mark as Current Status" onclick={nextStatus} variant="brand" class="slds-m-left_medium"></lightning-button>
+        </lightning-progress-indicator>   
+    </div>
+    <template if:true={openModal}>
+        <section role="dialog" tabindex="-1" aria-labelledby="modal-heading-01" aria-modal="true"
+        aria-describedby="modal-content-id-1" class="slds-modal slds-fade-in-open">
+        <div class="slds-modal__container">
+            <header class="slds-modal__header">
+              <button class="slds-button slds-button_icon slds-modal__close slds-button_icon-inverse"
+                      title="Close" onclick={closeModal}>
+                <lightning-icon icon-name="utility:close" alternative-text="close" variant="inverse"
+                                size="small"></lightning-icon>
+                <span class="slds-assistive-text">Close</span>
+              </button>
+              <h2 id="modal-heading-01" class="slds-text-heading_medium slds-hyphenate">Close This Quote</h2>
+            </header>
+            <div class="slds-modal__content slds-p-around_medium" id="modal-content-id-1" style="max-height: 65vh; overflow-y: auto;">
+                <template if:true={actionExecuting}>
+                    <lightning-spinner alternative-text="Loading..."></lightning-spinner>
+                </template>
+                <template if:true={showDatatable}>
+                    <c-fcb-data-table
+                        key-field="Id"
+                        data={quoteLineItems}
+                        columns={columns}
+                        onselectedpaymentterm={handleSelectedPaymentTerm}
+                        suppress-bottom-bar="true"
+                        hide-checkbox-column="true"
+                    >
+                    </c-fcb-data-table>
+                </template>
+                
+                <template if:true={showKoreaDeskChoices}>
+                    <template for:each={koreaDeskChoices} for:item="choice">
+                        <div key={choice.key} class="slds-m-top_small">
+                            <template if:true={choice.isFixed}>
+                                <p>{choice.label} — Korea Desk: Yes</p>
+                            </template>
+                            <template if:true={choice.isRequired}>
+                                <lightning-combobox data-korea-choice data-key={choice.key} label={choice.label}
+                                    value={choice.answer} placeholder="Select Korea Desk" options={koreaDeskOptions}
+                                    onchange={handleKoreaDeskChange} required></lightning-combobox>
+                            </template>
+                        </div>
+                    </template>
+                </template>
+                <lightning-textarea label="Message" type="text" variant="label-stacked" value={message}
+                    onchange={handleChangeMessage}>
+                </lightning-textarea>
+            </div>
+        
+            <footer class="slds-modal__footer">
+                <button class="slds-button slds-button_neutral" onclick={closeModal}>Cancel</button>
+                <button class="slds-button slds-button_brand" onclick={handleSave} disabled={actionExecuting}>Save</button>
+            </footer>
+        </div>
+        </section>
+        <div class="slds-backdrop slds-backdrop_open"></div>
+    </template>
+</template>
