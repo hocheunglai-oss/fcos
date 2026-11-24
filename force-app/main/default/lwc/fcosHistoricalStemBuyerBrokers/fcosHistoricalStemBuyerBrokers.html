@@ -1,0 +1,28 @@
+<template>
+    <lightning-card title="Buyer Brokers">
+        <div class="slds-p-horizontal_small">
+            <template lwc:if={loading}>
+                <p role="status">Loading buyer brokers…</p>
+            </template>
+            <template lwc:elseif={loadError}>
+                <p role="status">Buyer Brokers could not be loaded for this record.</p>
+            </template>
+            <template lwc:elseif={hasRows}>
+                <ul class="slds-list_dotted" aria-label="Linked buyer brokers">
+                    <template for:each={rows} for:item="row">
+                        <li key={row.id}>{row.name}</li>
+                    </template>
+                </ul>
+            </template>
+            <template lwc:else>
+                <p>No linked buyer brokers.</p>
+            </template>
+            <template lwc:if={canReturnToFirstPage}>
+                <lightning-button label="First page" onclick={goToFirstPage} disabled={loading}></lightning-button>
+            </template>
+            <template lwc:if={hasNextPage}>
+                <lightning-button label="Next page" onclick={goToNextPage}></lightning-button>
+            </template>
+        </div>
+    </lightning-card>
+</template>

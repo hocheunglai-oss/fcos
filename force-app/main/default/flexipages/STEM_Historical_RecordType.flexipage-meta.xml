@@ -55,6 +55,12 @@
                 <identifier>fcosHistoricalStemDisputes</identifier>
             </componentInstance>
         </itemInstances>
+        <itemInstances>
+            <componentInstance>
+                <componentName>fcosHistoricalStemBuyerBrokers</componentName>
+                <identifier>fcosHistoricalStemBuyerBrokers</identifier>
+            </componentInstance>
+        </itemInstances>
         <name>Facet-b21f7893-7bc8-48e1-85e9-fcaba668f6d6</name>
         <type>Facet</type>
     </flexiPageRegions>
