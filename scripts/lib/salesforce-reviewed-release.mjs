@@ -338,6 +338,24 @@ function componentFiles(id, inventory) {
   return sorted(result);
 }
 
+export function assertNativeSupplementalContext(review, manifest, components, bootstrap) {
+  const supplementalContext = review.nativeSupplementalContext;
+  if (supplementalContext === undefined) return;
+  const componentPaths = new Set(components.flatMap(component => component.files));
+  const validPath = /^objects\/STEM__c\/(?:fields\/[A-Za-z][A-Za-z0-9_]*\.field-meta\.xml|recordTypes\/[A-Za-z][A-Za-z0-9_]*\.recordType-meta\.xml|listViews\/[A-Za-z][A-Za-z0-9_]*\.listView-meta\.xml|validationRules\/[A-Za-z][A-Za-z0-9_]*\.validationRule-meta\.xml|webLinks\/[A-Za-z][A-Za-z0-9_]*\.webLink-meta\.xml)$/u;
+  if (!bootstrap || !review.nativeInventories || !manifest.includes('CustomObject:STEM__c')
+    || !bootstrap.components?.includes('CustomObject:STEM__c')
+    || !supplementalContext || typeof supplementalContext !== 'object' || Array.isArray(supplementalContext)
+    || !same(sorted(Object.keys(supplementalContext)), sorted(ENVIRONMENTS))
+    || Object.values(supplementalContext).some(entries => !entries || typeof entries !== 'object'
+      || Array.isArray(entries) || !Object.keys(entries).length
+      || Object.entries(entries).some(([name, pin]) => !validPath.test(name) || componentPaths.has(name)
+        || !pin || !same(sorted(Object.keys(pin)), ['sha256', 'size'])
+        || !HASH.test(pin.sha256 || '') || !Number.isSafeInteger(pin.size) || pin.size < 0))) {
+    throw new Error('Supplemental native STEM context must pin exact non-release children for every org of a reviewed schema bootstrap.');
+  }
+}
+
 /** Baselines bind a Git tree; native inventory or complete v2 deployment evidence establishes org state. */
 export function createReviewedSalesforcePlan({ review, manifestBytes, bootstrapBytes = null, baselineWorkflow, baselineInventory,
   orgBaselineInventories, finalInventory, policy }) {
@@ -401,6 +419,7 @@ export function createReviewedSalesforcePlan({ review, manifestBytes, bootstrapB
   const permissions = review.permissionSets || [];
   if (!Array.isArray(permissions) || permissions.some(name => !manifest.includes(`PermissionSet:${name}`)) || permissions.length !== new Set(permissions).size) throw new Error('Permissions must be explicitly scoped to PermissionSet components in the manifest.');
   const bootstrap = review.bootstrap || null;
+  assertNativeSupplementalContext(review, manifest, components, bootstrap);
   if (bootstrap) {
     if (!bootstrapBytes || hash(bootstrapBytes) !== bootstrap.sha256 || !same(parseReviewedPackage(bootstrapBytes.toString('utf8')), sorted(bootstrap.components || []))
       || bootstrap.components.some(id => !manifest.includes(id) || !/^(CustomObject|CustomField|PermissionSet):/u.test(id))
