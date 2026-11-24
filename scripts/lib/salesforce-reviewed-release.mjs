@@ -423,11 +423,15 @@ export function createReviewedSalesforcePlan({ review, manifestBytes, bootstrapB
       failCoverage('A layout native projection requires exact native inventories and only existing owned layouts.');
     }
   } else if (nativeProjection === 'schema-free-historical-stem-flexipage') {
-    const id = 'FlexiPage:STEM_Historical_RecordType';
+    const page = 'FlexiPage:STEM_Historical_RecordType';
+    const bundle = 'LightningComponentBundle:fcosHistoricalStemDisputes';
+    const pageComponent = components.find(({ id }) => id === page);
+    const bundleComponent = components.find(({ id }) => id === bundle);
     if (bootstrap || !review.nativeInventories || review.orgBaselines || permissions.length
-      || components.length !== 1 || components[0].id !== id || components[0].dependsOn.length
-      || !policy.environments.every(({ key }) => same(review.nativeInventories[key]?.presentComponents, [id]))) {
-      failCoverage('The Historical STEM FlexiPage projection requires the exact single existing component in every pinned org.');
+      || components.length !== 2 || !pageComponent || !bundleComponent
+      || !same(pageComponent.dependsOn, [bundle]) || bundleComponent.dependsOn.length
+      || !policy.environments.every(({ key }) => same(review.nativeInventories[key]?.presentComponents, [page]))) {
+      failCoverage('The Historical STEM projection requires the exact page and display-only bundle pair with only the page present in every pinned org.');
     }
   } else if (nativeProjection !== undefined && (nativeProjection !== 'schema-free-apex-lightning' || bootstrap
     || !review.nativeInventories || components.some(({ id }) => id !== editorFixtureTrigger

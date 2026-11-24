@@ -2072,20 +2072,27 @@ test('existing-layout-only native projection preserves the raw baseline and unre
 test('Historical STEM FlexiPage projection requires the exact existing component in each org', () => {
   const id = 'FlexiPage:STEM_Historical_RecordType';
   const page = 'flexipages/STEM_Historical_RecordType.flexipage-meta.xml';
+  const bundle = 'LightningComponentBundle:fcosHistoricalStemDisputes';
+  const bundleFiles = ['lwc/fcosHistoricalStemDisputes/fcosHistoricalStemDisputes.html',
+    'lwc/fcosHistoricalStemDisputes/fcosHistoricalStemDisputes.js',
+    'lwc/fcosHistoricalStemDisputes/fcosHistoricalStemDisputes.js-meta.xml'];
+  const projectionPaths = [page, ...bundleFiles].sort();
   const baselineInventory = inventoryFromFiles(files);
-  const finalInventory = inventoryFromFiles({ ...files, [page]: Buffer.from('<FlexiPage><label>Historical</label></FlexiPage>\n') });
-  const manifestBytes = packageXml([id]);
+  const finalInventory = inventoryFromFiles({ ...files, [page]: Buffer.from('<FlexiPage><label>Historical</label></FlexiPage>\n'),
+    ...Object.fromEntries(bundleFiles.map(name => [name, Buffer.from(name)])) });
+  const manifestBytes = packageXml([id, bundle]);
   const nativeBaseline = inventoryFromFiles({ ...files, [page]: Buffer.from('<FlexiPage/>\n') });
   const raw = { files: nativeBaseline.files, inventoryHash: nativeBaseline.inventoryHash };
   const final = { projected: true, files: baselineInventory.files,
-    inventoryHash: projectedNativeInventoryHash(baselineInventory.files, [page]) };
+    inventoryHash: projectedNativeInventoryHash(baselineInventory.files, projectionPaths) };
   const retrieval = { path: 'manifest/stable.xml', sha256: hash('stable'),
     metadata: { path: 'manifest/page.xml', sha256: hash(manifestBytes) } };
   const review = {
     schemaVersion: 1, releaseMode: REVIEWED_SALESFORCE_MODE, baselineMode: INVENTORY_BASELINE_MODE,
     sourceTreeHash: finalInventory.sourceTreeHash, manifestSha256: hash(manifestBytes), baselineCommit: 'a'.repeat(40),
     baselineSourceTreeHash: baselineInventory.sourceTreeHash, baselineInventoryHash: baselineInventory.inventoryHash,
-    components: [{ id, files: [page], dependsOn: [] }],
+    components: [{ id, files: [page], dependsOn: [bundle] },
+      { id: bundle, files: bundleFiles, dependsOn: [] }],
     dependencyReview: { complete: true, reviewer: 'reviewer', evidence: 'reviewed historical page fixture' },
     testPlan: { level: 'RunSpecifiedTests', tests: ['ExampleTest'], minimumTests: 1 },
     nativeProjection: 'schema-free-historical-stem-flexipage',
@@ -2095,12 +2102,12 @@ test('Historical STEM FlexiPage projection requires the exact existing component
   };
   const create = descriptor => createReviewedSalesforcePlan({ review: descriptor, baselineInventory, finalInventory, manifestBytes, policy });
   const plan = create(review);
-  assert.deepEqual(plan.nativeInventories.devee.baseline.absentComponents, []);
-  assert.deepEqual(plan.nativeInventories.production.final.projectionPaths, [page]);
+  assert.deepEqual(plan.nativeInventories.devee.baseline.absentComponents, [bundle]);
+  assert.deepEqual(plan.nativeInventories.production.final.projectionPaths, projectionPaths);
   for (const key of ['devee', 'qat', 'production']) {
     const missing = structuredClone(review);
     delete missing.nativeInventories[key].presentComponents;
-    assert.throws(() => create(missing), /exact single existing component/u);
+    assert.throws(() => create(missing), /exact page and display-only bundle pair/u);
     const wrongOrg = structuredClone(review);
     wrongOrg.nativeInventories[key].orgId = 'wrong';
     assert.throws(() => create(wrongOrg), /wrong pinned org/u);
@@ -2108,12 +2115,21 @@ test('Historical STEM FlexiPage projection requires the exact existing component
   const wrongPage = structuredClone(review);
   wrongPage.components[0].id = 'FlexiPage:Other';
   assert.throws(() => create(wrongPage), /coverage is incomplete/u);
+  const wrongDependency = structuredClone(review);
+  wrongDependency.components[0].dependsOn = [];
+  assert.throws(() => create(wrongDependency), /exact page and display-only bundle pair/u);
+  const bundleDependency = structuredClone(review);
+  bundleDependency.components[1].dependsOn = [id];
+  assert.throws(() => create(bundleDependency), /exact page and display-only bundle pair/u);
+  const alreadyPresent = structuredClone(review);
+  alreadyPresent.nativeInventories.devee.presentComponents.push(bundle);
+  assert.throws(() => create(alreadyPresent), /exact page and display-only bundle pair/u);
   const permission = structuredClone(review);
   permission.permissionSets = ['Unreviewed'];
   assert.throws(() => create(permission), /explicitly scoped/u);
   const drift = structuredClone(review);
   drift.nativeInventories.devee.final.files[Object.keys(files)[0]].sha256 = hash('unrelated drift');
-  const driftHash = projectedNativeInventoryHash(drift.nativeInventories.devee.final.files, [page]);
+  const driftHash = projectedNativeInventoryHash(drift.nativeInventories.devee.final.files, projectionPaths);
   drift.nativeInventories.devee.final.inventoryHash = driftHash;
   drift.inventoryManifests[driftHash] = retrieval;
   assert.throws(() => create(drift), /outside the reviewed transition/u);
