@@ -1,3 +1,4 @@
+import { normalizeKoreaDeskMode, koreaDeskCondition, koreaDeskMatches, requireKoreaDeskField } from './_koreaDeskScope.js';
 import { chunkIds, getApiVersion, getInstanceUrl, sfQuery, sfRequest } from './_salesforce.js';
 import { getOrLoadRuntimeCache } from './_runtimeCache.js';
 import { SALESFORCE_CORPORATE_CURRENCY } from './_decisionDashboard.js';
@@ -90,7 +91,7 @@ function directoryFilters(value = {}) {
   if (accountIds.length > 2_000 || portIds.length > 2_000 || countryCodes.length > 200 || excludedCountryCodes.length > 200) {
     throw serviceError('Dashboard Account Statement filters exceed the supported scope.', 400, 'ACCOUNT_CREDIT_FILTER_LIMIT');
   }
-  return { accountIds, portIds, countryCodes, excludedCountryCodes };
+  return { accountIds, portIds, countryCodes, excludedCountryCodes, koreaDeskMode: normalizeKoreaDeskMode(filters.koreaDeskMode) };
 }
 
 function stemMatchesDirectoryScope(stem, filters = {}, disputeOnly = false) {
@@ -98,7 +99,8 @@ function stemMatchesDirectoryScope(stem, filters = {}, disputeOnly = false) {
   const scopedCountries = new Set((filters.countryCodes || []).map((country) => country.toUpperCase()));
   const excludedCountries = new Set((filters.excludedCountryCodes || []).map((country) => country.toUpperCase()));
   const stemCountry = text(stem?.Port__r?.Country__c).toUpperCase();
-  return (!scopedPorts.size || scopedPorts.has(idKey(stem?.Port__c)))
+  return koreaDeskMatches(stem, filters.koreaDeskMode || 'all')
+    && (!scopedPorts.size || scopedPorts.has(idKey(stem?.Port__c)))
     && (!scopedCountries.size || scopedCountries.has(stemCountry))
     && (!excludedCountries.size || !excludedCountries.has(stemCountry))
     && (!disputeOnly || stem?.Dispute__c === true || Boolean(stem?.Dispute_Status__c && !/^no disputes?$/i.test(stem.Dispute_Status__c)));
@@ -279,7 +281,9 @@ export async function loadDashboardAccountCreditDirectory({ body = {}, accessCon
       const portFields = fieldMap(portDescribe);
       requireFields(accountFields, ['Id', 'Name', 'Inactive_Suspended__c'], 'Account');
       requireFields(stemFields, ['Account__c', 'QLIK_Receivable_Balance__c', 'Delivery_Date__c', 'Expected_Delivery_Date__c'], 'STEM__c');
+      requireKoreaDeskField(stemFields, filters.koreaDeskMode);
       const conditions = ['Inactive_Suspended__c = false', 'Id IN (SELECT Account__c FROM STEM__c WHERE Account__c != null)'];
+      if (filters.koreaDeskMode !== 'all') conditions.push(`Id IN (SELECT Account__c FROM STEM__c WHERE Account__c != null AND ${koreaDeskCondition(filters.koreaDeskMode)})`);
       if (filters.accountIds.length) conditions.push(`Id IN (${filters.accountIds.map((id) => `'${soql(id)}'`).join(',')})`);
       let locationPortIds = [...filters.portIds];
       if (filters.countryCodes.length) {
@@ -320,7 +324,7 @@ export async function loadDashboardAccountCreditDirectory({ body = {}, accessCon
       }
       const accountIds = accounts.map((account) => account.Id);
       const aggregates = accountIds.length
-        ? await queryAll(`SELECT Account__c accountId,COUNT(Id) openStemCount,SUM(QLIK_Receivable_Balance__c) openExposure FROM STEM__c WHERE Account__c IN (${accountIds.map((id) => `'${soql(id)}'`).join(',')}) AND QLIK_Receivable_Balance__c != 0 AND ${creditExposureDeliveryWhere()} GROUP BY Account__c`)
+        ? await queryAll(`SELECT Account__c accountId,COUNT(Id) openStemCount,SUM(QLIK_Receivable_Balance__c) openExposure FROM STEM__c WHERE Account__c IN (${accountIds.map((id) => `'${soql(id)}'`).join(',')}) AND QLIK_Receivable_Balance__c != 0 AND ${creditExposureDeliveryWhere()}${filters.koreaDeskMode !== 'all' ? ` AND ${koreaDeskCondition(filters.koreaDeskMode)}` : ''} GROUP BY Account__c`)
         : { records: [] };
       const exposureByAccount = new Map((aggregates.records || []).map((row) => [idKey(row.accountId ?? row.Account__c), {
         openStemCount: Number(row.openStemCount || 0),
@@ -443,7 +447,7 @@ function stemSelectFields(fields) {
     'Expected_Delivery_Date_Payment_Term__c', 'Payment_Term__c', 'Payment_Term_Number__c', 'Invoice_Due_Date__c',
     'QLIK_Invoice_Due_Date__c', 'Due_Date__c', 'Due_Date_Override__c', 'Not_Cancelled_STEM_Line_Item_Quantity__c',
     'Payment_Date__c', 'Invoice_Status__c', 'Total_Invoice_Amount__c',
-    'QLIK_Receivable_Balance__c', 'CurrencyIsoCode', 'Port__c', 'Dispute__c', 'Dispute_Status__c',
+    'QLIK_Receivable_Balance__c', 'CurrencyIsoCode', 'Port__c', 'Dispute__c', 'Dispute_Status__c', 'Korea_Desk_Member__c',
   ]);
   if (fields.has('Account__c')) result.push('Account__r.Name');
   if (fields.has('Port__c')) result.push('Port__r.Name', 'Port__r.Country__c');
@@ -911,6 +915,7 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
   const extraCostFields = fieldMap(extraCostDescribe);
   requireFields(accountFields, ['Id', 'Name', 'ParentId', 'Inactive_Suspended__c', 'CL_Category__c', 'CL_Group__c', 'CL_Individual__c', 'CL_Special_Group__c', 'CL_Special__c', 'CL_Used_Customer__c', 'CL_Used_Group__c', 'CL_Available_Credit__c'], 'Account');
   requireFields(stemFields, ['Id', 'Name', 'CreatedDate', 'Account__c', 'Delivery_Date__c', 'Expected_Delivery_Date__c', 'QLIK_Receivable_Balance__c'], 'STEM__c');
+  requireKoreaDeskField(stemFields, locationFilters.koreaDeskMode);
   requireFields(paymentFields, ['Id', 'STEM__c', 'Account__c'], 'Payment__c');
   requireFields(cashflowFields, ['Id', 'STEM__c', 'Account__c'], 'Cashflow__c');
   requireFields(buyerInvoiceFields, ['Id', 'Name', 'STEM__c', 'Amount__c', 'Invoice_Due_Date__c', 'Proforma__c', 'Deprecated__c'], 'Invoice__c');

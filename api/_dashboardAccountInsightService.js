@@ -1,3 +1,4 @@
+import { normalizeKoreaDeskMode, koreaDeskMatches, requireKoreaDeskField } from './_koreaDeskScope.js';
 import { chunkIds, getApiVersion, getInstanceUrl, sfCompositeQueries, sfQuery, sfRequest } from './_salesforce.js';
 import { getOrLoadRuntimeCache } from './_runtimeCache.js';
 import { resolveExtraCostSupplierLookup, resolveOriginalSupplierLookup } from './_disputeParties.js';
@@ -177,6 +178,7 @@ function normalizedDashboardScope(scope = {}) {
     portIds: unique(Array.isArray(filters.portIds) ? filters.portIds : []).filter((id) => SALESFORCE_ID.test(id)),
     countryCodes,
     excludedCountryCodes,
+    koreaDeskMode: normalizeKoreaDeskMode(filters.koreaDeskMode),
     disputeOnly: scope?.disputeOnly === true,
     labels: {
       company: text(scope?.labels?.company),
@@ -195,6 +197,7 @@ function applyDashboardScope(dataset, requestedScope) {
   const countries = new Set(scope.countryCodes.map((value) => value.toUpperCase()));
   const excludedCountries = new Set(scope.excludedCountryCodes.map((value) => value.toUpperCase()));
   const matches = (stem) => {
+    if (!koreaDeskMatches(stem, scope.koreaDeskMode)) return false;
     if (portKeys.size && !portKeys.has(idKey(stem.Port__c))) return false;
     if (countries.size && !countries.has(text(stem.Port__r?.Country__c).toUpperCase())) return false;
     if (excludedCountries.has(text(stem.Port__r?.Country__c).toUpperCase())) return false;
@@ -354,7 +357,7 @@ function interofficeStemCondition(accountFields) {
 
 function stemSelectFields(stemFields, accountFields) {
   const values = ['Id', 'Name', 'CreatedDate', ...selected(stemFields, ['LastModifiedDate', 'KeyStem__c', 'Account__c', 'Port__c', 'Vessel__c', 'Buyer_Name__c', 'Delivery_Date__c', 'Expected_Delivery_Date__c', 'ETA_ETB__c', 'ETA_Start_Date__c', 'ETA_End_Date__c', 'ETB_Start_Date__c', 'ETB_End_Date__c', 'Original_Invoice_Sent_Date__c', 'Status__c', 'Type__c', 'Dispute__c', 'Dispute_Status__c', 'Dispute_Type__c', 'Total_Invoice_Amount__c', 'Total_Invoiced_Amount_From_Suppliers__c', 'Costs_Total__c', 'QLIK_STEM_Line_Item_Total_Cost__c', 'QLIK_Costs_Total_Cost__c', 'QLIK_Total_Profit__c', 'Receivable_Balance__c', 'Payable_Balance__c', 'Payment_Term__c', 'Invoice_Due_Date__c', 'Buyer_Pay_Term_Date__c', 'Due_Date__c', 'Due_Date_Override__c', 'Not_Cancelled_STEM_Line_Item_Quantity__c', 'Payment_Date__c', 'CurrencyIsoCode'])];
-  values.push(...selected(stemFields, ['QLIK_Receivable_Balance__c']));
+  values.push(...selected(stemFields, ['QLIK_Receivable_Balance__c', 'Korea_Desk_Member__c']));
   if (stemFields.has('Account__c')) {
     values.push('Account__r.Name');
     if (accountFields.has('Company_Code__c')) values.push('Account__r.Company_Code__c');
@@ -988,7 +991,7 @@ export async function loadDashboardAccountInsight({ body = {}, accessContext, fo
   const cachePayload = { accountId: idKey(accountId), role, entityType, includedAccountIds, period, paymentEvidence };
   const cached = await getOrLoadRuntimeCache({
     namespace: 'salesforce-dashboard-account-insight',
-    version: '6-document-evidence',
+    version: '7-korea-desk-membership',
     accessScope: interoffice ? 'interoffice' : 'standard',
     apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
     payload: cachePayload,
@@ -997,6 +1000,11 @@ export async function loadDashboardAccountInsight({ body = {}, accessContext, fo
     force,
     loader: () => loadSalesforceDataset({ accountId, role, entityType, includedAccountIds, period, interoffice, force, paymentEvidence }),
   });
+  const requestedDeskMode = normalizedDashboardScope(body.dashboardScope).koreaDeskMode;
+  if (requestedDeskMode !== 'all' && body.dashboardScope?.mode !== 'account_wide') {
+    const stemDescribe = await describeObject('STEM__c', force);
+    requireKoreaDeskField(fieldMap(stemDescribe), requestedDeskMode);
+  }
   const scoped = applyDashboardScope(cached.value, body.dashboardScope);
   const live = await loadWorkflowState(accessContext.client, scoped.dataset, interoffice, force, relatedDetails);
   const dataset = {

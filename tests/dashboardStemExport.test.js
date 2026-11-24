@@ -345,13 +345,13 @@ test('enabled EBIT refreshes after a rate update and across Hong Kong date visib
 const halfYear = [1, 2, 3, 4, 5, 6].map((month) => ({ startDate: `2026-${String(month).padStart(2, '0')}-01`, endDate: new Date(Date.UTC(2026, month, 0)).toISOString().slice(0, 10) }));
 
 test('export filenames use selected delivery windows and active desk labels instead of generation date', async () => {
-  const filterPayload = { dateWindows: halfYear, filters: { countryCodes: ['KOREA'] } };
+  const filterPayload = { dateWindows: halfYear, filters: { koreaDeskMode: 'include' } };
   assert.equal(dashboardStemExportFileName({ filterPayload }), 'FCOS_Dashboard_STEMs_2026-01-01_to_2026-06-30_Korea_Desk.xls');
   assert.equal(dashboardStemExportPeriod(filterPayload), '2026-01-01 to 2026-06-30');
   const blob = await createDashboardStemWorkbook({ filterPayload, scopeLabels: { period: 'custom' } });
   const scope = utils.sheet_to_json(read(await blob.arrayBuffer(), { type: 'array' }).Sheets.Scope, { header: 1 });
   assert.equal(Object.fromEntries(scope).Period, '2026-01-01 to 2026-06-30');
-  assert.match(dashboardStemExportFileName({ filterPayload: { ...filterPayload, filters: { excludedCountryCodes: ['KOREA'] }, disputeOnly: true } }), /Exclude_Korea_Desk_Disputed_only\.xls$/);
+  assert.match(dashboardStemExportFileName({ filterPayload: { ...filterPayload, filters: { koreaDeskMode: 'exclude' }, disputeOnly: true } }), /Exclude_Korea_Desk_Disputed_only\.xls$/);
   assert.match(dashboardStemExportFileName({ filterPayload, scopeLabels: { counterparty: 'A/B: <buyer>?*' } }), /Korea_Desk_AB_buyer\.xls$/);
 });
 

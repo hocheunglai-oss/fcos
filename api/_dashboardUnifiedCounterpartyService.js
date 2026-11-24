@@ -1,3 +1,4 @@
+import { normalizeKoreaDeskMode, koreaDeskCondition, requireKoreaDeskField } from './_koreaDeskScope.js';
 import { chunkIds, getApiVersion, getInstanceUrl, sfQuery, sfRequest } from './_salesforce.js';
 import { getOrLoadRuntimeCache } from './_runtimeCache.js';
 import { resolveExtraCostSupplierLookup, resolveOriginalSupplierLookup } from './_disputeParties.js';
@@ -26,7 +27,7 @@ const currency = (value) => text(value).toUpperCase() || 'USD';
 const interoffice = (context) => context?.profile?.user_type === 'interoffice';
 const stemChildScope = (scope) => text(scope)
   .replace(/\bPort__r\.Country__c\b/g, 'STEM__r.Port__r.Country__c')
-  .replace(/\b(Expected_Delivery_Date__c|Delivery_Date__c|Port__c)\b/g, 'STEM__r.$1');
+  .replace(/\b(Expected_Delivery_Date__c|Delivery_Date__c|Port__c|Korea_Desk_Member__c)\b/g, 'STEM__r.$1');
 
 function countries(valuesToNormalize, label) {
   const result = [...new Set((Array.isArray(valuesToNormalize) ? valuesToNormalize : []).map((value) => text(value).toUpperCase()).filter(Boolean))];
@@ -249,10 +250,12 @@ function normalizedFilters(input = {}) {
   const countryCodes = countries(filters.countryCodes, 'Country filters');
   const excludedCountryCodes = countries(filters.excludedCountryCodes, 'Country exclusions');
   if (countryCodes.some((country) => excludedCountryCodes.includes(country))) throw error('Country filters and exclusions cannot overlap.', 400, 'UNIFIED_COUNTERPARTY_COUNTRY_CONFLICT');
-  return { portIds: ids(filters.portIds, 'Port'), countryCodes, excludedCountryCodes };
+  return { portIds: ids(filters.portIds, 'Port'), countryCodes, excludedCountryCodes, koreaDeskMode: normalizeKoreaDeskMode(filters.koreaDeskMode) };
 }
 async function scopeWhere(filters, stemFields, force, dateWindows = []) {
   const conditions = [];
+  requireKoreaDeskField(stemFields, filters.koreaDeskMode);
+  if (filters.koreaDeskMode !== 'all') conditions.push(koreaDeskCondition(filters.koreaDeskMode));
   if (filters.portIds.length) conditions.push(`Port__c IN (${values(filters.portIds)})`);
   if (filters.countryCodes.length) {
     const ports = await all(`SELECT Id FROM Port__c WHERE Country__c IN (${values(filters.countryCodes)})`);

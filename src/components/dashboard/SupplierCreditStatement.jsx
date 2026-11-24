@@ -155,7 +155,8 @@ export default function SupplierCreditStatement({ accountId, entityType = 'accou
     portIds: Array.isArray(filters?.portIds) ? filters.portIds : [],
     countryCodes: Array.isArray(filters?.countryCodes) ? filters.countryCodes : [],
     excludedCountryCodes: Array.isArray(filters?.excludedCountryCodes) ? filters.excludedCountryCodes : [],
-  }), [filters?.accountIds, filters?.countryCodes, filters?.excludedCountryCodes, filters?.portIds, filters?.supplierIds]);
+    koreaDeskMode: filters?.koreaDeskMode || 'all',
+  }), [filters?.accountIds, filters?.countryCodes, filters?.excludedCountryCodes, filters?.portIds, filters?.supplierIds, filters?.koreaDeskMode]);
 
   const load = useCallback(async ({ cursor = null, history = [], force = false } = {}) => {
     if (!active || !accountId) return;

@@ -185,10 +185,9 @@ export function dashboardStemExportPeriod(filterPayload) {
 }
 
 export function dashboardStemDeskLabel(filterPayload, scopeLabels = {}) {
-  if (filterPayload?.filters?.excludedCountryCodes?.includes('KOREA')) return 'Exclude Korea Desk';
-  if (scopeLabels.koreaDesk === 'Korea Desk') return 'Korea Desk';
-  const countries = filterPayload?.filters?.countryCodes || [];
-  return countries.length === 1 && countries[0] === 'KOREA' ? 'Korea Desk' : 'All';
+  if (filterPayload?.filters?.koreaDeskMode === 'exclude') return 'Exclude Korea Desk';
+  if (filterPayload?.filters?.koreaDeskMode === 'include') return 'Korea Desk';
+  return scopeLabels.koreaDesk || 'All';
 }
 
 export function dashboardStemExportFileName({ filterPayload = {}, scopeLabels = {} } = {}) {
