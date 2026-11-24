@@ -357,6 +357,29 @@ export function assertConvertedPackage(converted, roundTrip, members, files, sou
 
 const EMPTY_NATIVE_OBJECT = /^\s*(?:<\?xml version="1\.0" encoding="UTF-8"\?>\s*)?<CustomObject xmlns="http:\/\/soap\.sforce\.com\/2006\/04\/metadata"\s*(?:\/>|>\s*<\/CustomObject>)\s*$/u;
 
+// A reviewed STEM object header retrieval includes every installed child. Verify
+// those bytes independently, then remove only the pinned context from this
+// temporary readback. The primary owned inventory and deployed package stay intact.
+export function removeVerifiedStemSupplementalContext(root, reviewed, context) {
+  if (context === undefined) return;
+  if (!reviewed.some(({ id }) => id === 'CustomObject:STEM__c')) return;
+  const expected = new Set(reviewed.flatMap(({ files }) => files));
+  const observed = readReviewedInventory(root, { nativeExport: true }).files;
+  const stemChildren = Object.keys(observed).filter(name => name.startsWith('objects/STEM__c/')
+    && name !== 'objects/STEM__c/STEM__c.object-meta.xml' && !expected.has(name)).sort();
+  const pins = Object.keys(context).sort();
+  if (JSON.stringify(stemChildren) !== JSON.stringify(pins)) {
+    throw new Error('Native STEM supplemental context has unexpected or missing children.');
+  }
+  for (const name of pins) {
+    const actual = observed[name], pinned = context[name];
+    if (!actual || actual.sha256 !== pinned.sha256 || actual.size !== pinned.size) {
+      throw new Error(`Native STEM supplemental context differs from its pinned bytes: ${name}`);
+    }
+  }
+  for (const name of pins) rmSync(safeProjectFile(root, name));
+}
+
 function inspectNativeSupplementalFiles(root, reviewed, { allowObjectShells = false, retainedFields = new Set() } = {}) {
   const expected = new Set(reviewed.flatMap(({ files }) => files));
   const observed = readReviewedInventory(root, { nativeExport: true });
@@ -570,6 +593,10 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
         const supplementalJobId = supplementalBytes ? retrieve(supplementalBytes, `${supplementalName}.xml`, supplementalName) : null;
         const root = path.join(project, 'retrieved');
         const supplementalRoot = supplementalJobId ? path.join(project, supplementalName) : null;
+        if (supplementalRoot && nativeBootstrap && plan.review.nativeSupplementalContext !== undefined) {
+          removeVerifiedStemSupplementalContext(supplementalRoot, presentReviewed,
+            plan.review.nativeSupplementalContext[environment.key]);
+        }
         // A reviewed Custom Setting retrieval can also export installed fields
         // excluded from the package. Keep them only as exact stable inventory context.
         const reviewedObjects = new Set(presentReviewed.filter(({ id }) => id.startsWith('CustomObject:')).map(({ id }) => id));
@@ -586,7 +613,10 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
           if (!nativeBootstrap || !id.startsWith('CustomObject:')) continue;
           const object = files.find(name => name.endsWith('.object-meta.xml'));
           const folder = object && path.posix.dirname(object) + '/fields/';
-          if (!folder || ![...retainedFields].some(name => name.startsWith(folder)) || !existsSync(path.join(root, object))) continue;
+          const pinnedStemContext = id === 'CustomObject:STEM__c'
+            && plan.review.nativeSupplementalContext?.[environment.key] !== undefined;
+          if (!folder || (!pinnedStemContext && ![...retainedFields].some(name => name.startsWith(folder)))
+            || !existsSync(path.join(root, object))) continue;
           const file = safeProjectFile(root, object);
           const bytes = readFileSync(file);
           if (!EMPTY_NATIVE_OBJECT.test(bytes.toString('utf8'))) throw new Error('Stable Salesforce field retrieval returned a nonempty reviewed object descriptor.');
