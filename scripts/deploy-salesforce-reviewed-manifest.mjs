@@ -222,6 +222,12 @@ export function equivalentNativeSerialization(source, native, type, defaults) {
     === JSON.stringify(normalizedMetadataDefinition(native, nativeDocument));
 }
 
+export function equivalentNativeApexApiVersion(source, native) {
+  // Salesforce exports an integer Apex API version with a trailing decimal zero.
+  const normalize = xml => xml.replace(/<apiVersion>([1-9][0-9]*)\.0<\/apiVersion>/gu, '<apiVersion>$1</apiVersion>');
+  return equivalentNativeSerialization(normalize(source), normalize(native), 'ApexClass', []);
+}
+
 function verifyNativeMetadataProjection({ root, sourceRoot, plan, projectionPaths, query }) {
   const permissionSets = [];
   const formulaWitnesses = [];
@@ -261,6 +267,8 @@ function verifyNativeMetadataProjection({ root, sourceRoot, plan, projectionPath
     if (koreaDeskHistory && name === koreaDeskHistoryPaths.object
       && equivalentNativeSerialization(local, observed, 'CustomObject',
         [['nameField.trackHistory', 'false'], ['recordTypeTrackHistory', 'false']])) continue;
+    if (koreaDeskHistory && /^classes\/(?:Enquiry|Quote)ProgressBarController\.cls-meta\.xml$/u.test(name)
+      && equivalentNativeApexApiVersion(local, observed)) continue;
     if (formulaName && supportsTradingFxFormulaWitness(formulaName, salesforcePromotionHash(source))
       && !observed.includes('formulaTreatBlanksAs')
       && local.includes('<formulaTreatBlanksAs>BlankAsBlank</formulaTreatBlanksAs>')) {
