@@ -225,6 +225,7 @@ export function equivalentNativeSerialization(source, native, type, defaults) {
 function verifyNativeMetadataProjection({ root, sourceRoot, plan, projectionPaths, query }) {
   const permissionSets = [];
   const formulaWitnesses = [];
+  const koreaDeskHistory = isKoreaDeskHistoryCheckpoint(plan, projectionPaths);
   for (const name of projectionPaths) {
     const source = readFileSync(safeProjectFile(sourceRoot, name));
     const native = readFileSync(safeProjectFile(root, name));
@@ -249,6 +250,17 @@ function verifyNativeMetadataProjection({ root, sourceRoot, plan, projectionPath
     }
     const field = /^objects\/(\w+)\/fields\/(\w+)\.field-meta\.xml$/u.exec(name);
     const formulaName = field && field[1] + '.' + field[2];
+    if (koreaDeskHistory && name === koreaDeskHistoryPaths.member
+      && !observed.includes('formulaTreatBlanksAs')) {
+      // This exact checkbox takes only text and picklist operands. Salesforce
+      // omits the numeric blank-handling mode when retrieving it.
+      const withoutNumericMode = local.replace(/^[ \t]*<formulaTreatBlanksAs>BlankAsBlank<\/formulaTreatBlanksAs>\n/mu, '');
+      if (withoutNumericMode !== local && equivalentNativeSerialization(withoutNumericMode, observed, 'CustomField',
+        (falseFlags || []).map(flag => [flag, 'false']))) continue;
+    }
+    if (koreaDeskHistory && name === koreaDeskHistoryPaths.object
+      && equivalentNativeSerialization(local, observed, 'CustomObject',
+        [['nameField.trackHistory', 'false'], ['recordTypeTrackHistory', 'false']])) continue;
     if (formulaName && supportsTradingFxFormulaWitness(formulaName, salesforcePromotionHash(source))
       && !observed.includes('formulaTreatBlanksAs')
       && local.includes('<formulaTreatBlanksAs>BlankAsBlank</formulaTreatBlanksAs>')) {
@@ -356,6 +368,63 @@ export function assertConvertedPackage(converted, roundTrip, members, files, sou
 }
 
 const EMPTY_NATIVE_OBJECT = /^\s*(?:<\?xml version="1\.0" encoding="UTF-8"\?>\s*)?<CustomObject xmlns="http:\/\/soap\.sforce\.com\/2006\/04\/metadata"\s*(?:\/>|>\s*<\/CustomObject>)\s*$/u;
+
+const koreaDeskHistoryPaths = Object.freeze({
+  object: 'objects/STEM__c/STEM__c.object-meta.xml',
+  member: 'objects/STEM__c/fields/Korea_Desk_Member__c.field-meta.xml',
+  decision: 'objects/STEM__c/fields/Korea_Desk__c.field-meta.xml',
+});
+const koreaDeskHistorySource = Object.freeze({
+  object: '96448ae17f4ce7422ef8c81b7ee14469c5a071a58b793401a3ee93a3c89362d4',
+  member: '9a0e9eacdc2a51643f3c664204e3ee49aecdb92094f830808a8f56ae391c1b9e',
+  decision: 'b9e1189e36ba2ea8f74a2a8de9a37d6f69cea30ed9f218cab9fbeeb3d76b2f73',
+});
+function isKoreaDeskHistoryCheckpoint(plan, projectionPaths) {
+  return Boolean(plan.review.nativeSupplementalContext && plan.review.bootstrap
+    && Object.entries(koreaDeskHistoryPaths).every(([kind, name]) => projectionPaths.includes(name)
+      && plan.finalInventory.files[name]?.sha256 === koreaDeskHistorySource[kind]));
+}
+
+const nativeKoreaDeskRecordTypeValues = `    <picklistValues>
+        <picklist>Korea_Desk__c</picklist>
+        <values>
+            <fullName>No</fullName>
+            <default>false</default>
+        </values>
+        <values>
+            <fullName>Yes</fullName>
+            <default>false</default>
+        </values>
+    </picklistValues>
+`;
+
+// Apply only to retrieved copies. Every pre-existing definition must recover the
+// exact reviewed bytes after removing Salesforce's generated history defaults.
+export function normalizeKoreaDeskHistoryReadback(root, pinned) {
+  const effects = {};
+  for (const [name, pin] of Object.entries(pinned)) {
+    const field = /^objects\/STEM__c\/fields\/[A-Za-z][A-Za-z0-9_]*\.field-meta\.xml$/u.test(name);
+    const recordType = /^objects\/STEM__c\/recordTypes\/(Historical|Originated)\.recordType-meta\.xml$/u.test(name);
+    if ((!field && !recordType) || !existsSync(path.join(root, name))) continue;
+    const file = safeProjectFile(root, name);
+    const original = readFileSync(file);
+    const originalHash = salesforcePromotionHash(original);
+    if (originalHash === pin.sha256 && original.length === pin.size) {
+      if (recordType) throw new Error(`Native STEM record type lacks the reviewed Korea Desk choices: ${name}`);
+      continue;
+    }
+    const xml = original.toString('utf8');
+    if (!original.equals(Buffer.from(xml))) continue;
+    const generated = field ? '    <trackHistory>false</trackHistory>\n' : nativeKoreaDeskRecordTypeValues;
+    const offset = xml.indexOf(generated);
+    if (offset === -1 || xml.indexOf(generated, offset + 1) !== -1) continue;
+    const normalized = Buffer.from(xml.slice(0, offset) + xml.slice(offset + generated.length));
+    if (normalized.length !== pin.size || salesforcePromotionHash(normalized) !== pin.sha256) continue;
+    writeFileSync(file, normalized);
+    effects[name] = { sha256: originalHash, size: original.length };
+  }
+  return effects;
+}
 
 // A reviewed STEM object header retrieval includes every installed child. Verify
 // those bytes independently, then remove only the pinned context from this
@@ -593,6 +662,11 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
         const supplementalJobId = supplementalBytes ? retrieve(supplementalBytes, `${supplementalName}.xml`, supplementalName) : null;
         const root = path.join(project, 'retrieved');
         const supplementalRoot = supplementalJobId ? path.join(project, supplementalName) : null;
+        const historyReadback = nativeBootstrap && isKoreaDeskHistoryCheckpoint(plan, projectionPaths)
+          ? {
+            stable: normalizeKoreaDeskHistoryReadback(root, expectedInventory),
+            supplemental: normalizeKoreaDeskHistoryReadback(supplementalRoot, plan.review.nativeSupplementalContext[environment.key]),
+          } : null;
         if (supplementalRoot && nativeBootstrap && plan.review.nativeSupplementalContext !== undefined) {
           removeVerifiedStemSupplementalContext(supplementalRoot, presentReviewed,
             plan.review.nativeSupplementalContext[environment.key]);
@@ -677,6 +751,7 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
           ...(supplementalJobId ? (nativeBootstrap ? { metadataJobId: supplementalJobId, metadataManifestSha256: supplementalManifest.sha256 }
             : { apexJobId: supplementalJobId, apexManifestSha256: supplementalManifest.sha256 }) : {}),
           ...(nativeBootstrap ? { verifiedProjectionPaths: projectionPaths, supplementalObjectShells, ...(Object.keys(stableObjectShells).length ? { stableObjectShells } : {}), supplementalDuplicates: observed.supplementalDuplicates } : {}),
+          ...(historyReadback ? { historyReadback } : {}),
           ...metadataEvidence,
           ...(nativeExport ? { nativeSourceTreeHash: observed.sourceTreeHash, apexProjectionVerified: verifyApexProjection } : {}), ...absence });
         return { orgId: identity.orgId, identity, verifiedAt, sourceTreeHash, inventoryHash: expectedInventoryHash,
