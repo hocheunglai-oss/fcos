@@ -422,6 +422,13 @@ export function createReviewedSalesforcePlan({ review, manifestBytes, bootstrapB
         || files.some(name => !Object.hasOwn(baselineInventory.files, name)))) {
       failCoverage('A layout native projection requires exact native inventories and only existing owned layouts.');
     }
+  } else if (nativeProjection === 'schema-free-historical-stem-flexipage') {
+    const id = 'FlexiPage:STEM_Historical_RecordType';
+    if (bootstrap || !review.nativeInventories || review.orgBaselines || permissions.length
+      || components.length !== 1 || components[0].id !== id || components[0].dependsOn.length
+      || !policy.environments.every(({ key }) => same(review.nativeInventories[key]?.presentComponents, [id]))) {
+      failCoverage('The Historical STEM FlexiPage projection requires the exact single existing component in every pinned org.');
+    }
   } else if (nativeProjection !== undefined && (nativeProjection !== 'schema-free-apex-lightning' || bootstrap
     || !review.nativeInventories || components.some(({ id }) => id !== editorFixtureTrigger
       && !(invoiceAppPlacement && id.startsWith('FlexiPage:')) && !/^(?:ApexClass|LightningComponentBundle):/u.test(id))
