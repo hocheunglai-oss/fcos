@@ -8,7 +8,7 @@ import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import { createSalesforceWorkflowState, updateSalesforceEnvironmentState, SALESFORCE_RELEASE_MODE } from '../scripts/salesforce-workflow-state.mjs';
 import { openSalesforcePromotionJournal, salesforcePromotionHash as hash } from '../scripts/lib/salesforce-promotion-journal.mjs';
 import { INVENTORY_BASELINE_MODE, REVIEWED_SALESFORCE_MODE, assertNativeSupplementalContext, createReviewedSalesforcePlan, inventoryFromFiles, matchesProjectedNativeInventory, matchesSalesforceCheckpoint, parseReviewedPackage, projectedNativeInventoryHash, reviewedCheckpointInventory, verifyReviewedOrgInventory, runReviewedSalesforceRelease, assertReviewedJobReport, assertProductionAuthorization } from '../scripts/lib/salesforce-reviewed-release.mjs';
-import { assertSalesforceProductionSettingCompatibility, assertReviewedInputsUnchanged, baselineGitInventory, cliSalesforceProvider, equivalentNativeApexApiVersion, equivalentNativeSerialization, loadReviewedSalesforcePlan, normalizeKoreaDeskHistoryReadback, removeVerifiedStemSupplementalContext, reviewedSalesforceOptions } from '../scripts/deploy-salesforce-reviewed-manifest.mjs';
+import { assertSalesforceProductionSettingCompatibility, assertReviewedInputsUnchanged, baselineGitInventory, cliSalesforceProvider, equivalentNativeApexApiVersion, equivalentNativeSerialization, isKoreaDeskHistoryCheckpoint, loadReviewedSalesforcePlan, normalizeKoreaDeskHistoryReadback, removeVerifiedStemSupplementalContext, reviewedSalesforceOptions } from '../scripts/deploy-salesforce-reviewed-manifest.mjs';
 import { reviewedDeveePublicationProof } from '../scripts/sync-salesforce-reviewed-repository.mjs';
 import { applyReviewedPrerequisites, verifyPreBootstrapStage } from '../scripts/lib/rapid-release/salesforce-reviewed-adapter.mjs';
 import { digest, targets } from '../scripts/lib/rapid-release/contract.mjs';
@@ -79,6 +79,31 @@ test('Korea Desk readback preserves byte pins for unrelated STEM fields and both
     assert.deepEqual(normalizeKoreaDeskHistoryReadback(root, pins), {});
     for (const [name, value] of Object.entries(drift)) assert.equal(readFileSync(path.join(root, name), 'utf8'), value);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('Korea Desk recovery verifies installed history only for both exact field pins', () => {
+  const object = 'objects/STEM__c/STEM__c.object-meta.xml';
+  const member = 'objects/STEM__c/fields/Korea_Desk_Member__c.field-meta.xml';
+  const decision = 'objects/STEM__c/fields/Korea_Desk__c.field-meta.xml';
+  const plan = {
+    review: { nativeSupplementalContext: {}, bootstrap: {} },
+    finalInventory: { files: {
+      [object]: { sha256: '96448ae17f4ce7422ef8c81b7ee14469c5a071a58b793401a3ee93a3c89362d4' },
+      [member]: { sha256: '9a0e9eacdc2a51643f3c664204e3ee49aecdb92094f830808a8f56ae391c1b9e' },
+      [decision]: { sha256: 'b9e1189e36ba2ea8f74a2a8de9a37d6f69cea30ed9f218cab9fbeeb3d76b2f73' },
+    } },
+  };
+  const installed = {
+    [member]: { sha256: '26ff7ceba47e4a4a3b7fbeffe6e5d5189b24ebfcb569827548bac95fa604d1b3' },
+    [decision]: { sha256: '1d83d7598172afcbf2918e767e1a9c3397df80148d662d5e6fd9891a34141ef9' },
+  };
+  assert.equal(isKoreaDeskHistoryCheckpoint(plan, [object, member, decision]), true);
+  assert.equal(isKoreaDeskHistoryCheckpoint(plan, [], installed), true);
+  assert.equal(isKoreaDeskHistoryCheckpoint(plan, [], { [member]: installed[member] }), false);
+  assert.equal(isKoreaDeskHistoryCheckpoint(plan, [], { ...installed, [decision]: { sha256: '0'.repeat(64) } }), false);
+  assert.equal(isKoreaDeskHistoryCheckpoint(plan, []), false);
+  plan.finalInventory.files[object].sha256 = '0'.repeat(64);
+  assert.equal(isKoreaDeskHistoryCheckpoint(plan, [], installed), false);
 });
 
 function fixture({ bootstrap = false, level = 'RunLocalTests', inventoryBaseline = false, validationRule = false, asymmetric = false, nativeRaw = false } = {}) {
