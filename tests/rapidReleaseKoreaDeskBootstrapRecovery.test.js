@@ -6,7 +6,7 @@ import { koreaDeskBootstrap as original, koreaDeskBootstrapClosure, verifyKoreaD
 
 const environment = FCOS_CONNECTION_POLICY.providers.find(item => item.id === 'salesforce').environments[0];
 
-test('Korea Desk bootstrap recovery verifies the exact changed job without a second submission', async () => {
+test('Korea Desk bootstrap recovery binds native job facts across workspaces without resubmission', async () => {
   const expectedComponents = [
     ['CustomField', 'STEM__c.Korea_Desk_Member__c', true],
     ['CustomField', 'STEM__c.Korea_Desk__c', true],
@@ -27,7 +27,9 @@ test('Korea Desk bootstrap recovery verifies the exact changed job without a sec
   const descriptor = { componentType: '', fullName: 'package.xml', fileName: 'zip/package.xml', success: true };
   const report = { id: original.jobId, status: 'Succeeded', success: true, done: true, checkOnly: false, rollbackOnError: true,
     numberComponentsTotal: 5, numberComponentsDeployed: 5, numberTestsTotal: 0, numberTestsCompleted: 0,
-    completedDate: '2026-11-24T11:46:40.000Z', details: { componentSuccesses: [...successes, descriptor] } };
+    completedDate: '2026-11-24T11:46:40.000Z', lastModifiedDate: '2026-11-24T11:46:40.000Z',
+    details: { componentSuccesses: [...successes, descriptor] },
+    files: [{ type: 'CustomObject', fullName: 'STEM__c', filePath: '/Users/operator/candidate/STEM__c.object-meta.xml' }] };
   const now = () => new Date('2026-11-24T11:50:00Z');
   let convertedHash = original.packageSha256;
   let nativeInventoryHash = inventoryHash;
@@ -50,7 +52,15 @@ test('Korea Desk bootstrap recovery verifies the exact changed job without a sec
     },
   };
   const input = { history, reviewed, provider, now };
-  assert.equal((await verifyKoreaDeskDeveeBootstrap(input)).proof.jobId, original.jobId);
+  const local = await verifyKoreaDeskDeveeBootstrap(input);
+  assert.equal(local.proof.jobId, original.jobId);
+  report.files[0].filePath = '/home/runner/salesforce-candidate/STEM__c.object-meta.xml';
+  const hosted = await verifyKoreaDeskDeveeBootstrap(input);
+  assert.notEqual(hosted.proof.reportSha256, local.proof.reportSha256);
+  assert.equal(hosted.reportFactsSha256, local.reportFactsSha256);
+  report.lastModifiedDate = '2026-11-24T11:46:41.000Z';
+  assert.notEqual((await verifyKoreaDeskDeveeBootstrap(input)).reportFactsSha256, local.reportFactsSha256);
+  report.lastModifiedDate = '2026-11-24T11:46:40.000Z';
   convertedHash = 'f'.repeat(64);
   await assert.rejects(verifyKoreaDeskDeveeBootstrap(input), /KOREA_DESK_BOOTSTRAP_PACKAGE_CHANGED/);
   convertedHash = original.packageSha256;
