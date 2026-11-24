@@ -1,4 +1,4 @@
-import { koreaDeskCondition, requireKoreaDeskField } from '../_koreaDeskScope.js';
+import { koreaDeskDescribeCacheVersion, koreaDeskCondition, requireKoreaDeskField } from '../_koreaDeskScope.js';
 import { listCompanyFxHistory, saveHistoricalCompanyFxRate } from '../_companyFxHistoryAdmin.js';
 import { setManagedUserActivation } from '../_fcunoManagedActivation.js';
 import { deploymentSafeSupabaseFetch } from '../_deploymentReadOnlyFetch.js';
@@ -5090,7 +5090,7 @@ async function salesforceObjectFields(body) {
   const normalizedObjectName = String(objectName).trim();
   const cached = await getOrLoadRuntimeCache({
     namespace: 'salesforce-describe',
-    version: '1',
+    version: koreaDeskDescribeCacheVersion(normalizedObjectName, '1'),
     accessScope: 'schema',
     apiVersion: salesforceCacheApiIdentity(),
     payload: { objectName: normalizedObjectName.toLowerCase() },

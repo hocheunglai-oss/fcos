@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { koreaDeskCondition, koreaDeskMatches, normalizeKoreaDeskMode, requireKoreaDeskField } from '../api/_koreaDeskScope.js';
+import { koreaDeskCondition, koreaDeskDescribeCacheVersion, koreaDeskMatches, normalizeKoreaDeskMode, requireKoreaDeskField } from '../api/_koreaDeskScope.js';
+import { createMemoryRuntimeCacheAdapter, getOrLoadRuntimeCache } from '../api/_runtimeCache.js';
 import { normalizeDecisionDashboardFilters } from '../api/_decisionDashboard.js';
 import { dashboardFilterPayload } from '../src/lib/dashboardFilters.js';
 import { accountInsightStatementRequest } from '../api/_accountInsightReportScope.js';
@@ -9,6 +10,29 @@ import { dashboardUnifiedCounterpartyServiceInternals as unified } from '../api/
 import { dashboardAccountCreditStatementServiceInternals as buyer } from '../api/_dashboardAccountCreditStatementService.js';
 import { dashboardSupplierCreditStatementServiceInternals as supplier } from '../api/_dashboardSupplierCreditStatementService.js';
 import { dashboardAccountInsightServiceInternals as insight } from '../api/_dashboardAccountInsightService.js';
+
+test('Salesforce field discovery bypasses only the pre-rollout STEM cache entries', async () => {
+  const cacheAdapter = createMemoryRuntimeCacheAdapter();
+  const priorFields = [{ name: 'Id' }];
+  const currentFields = [...priorFields, { name: 'Korea_Desk_Member__c' }];
+  const request = (objectName, version, loader) => getOrLoadRuntimeCache({
+    namespace: 'salesforce-describe',
+    accessScope: 'schema',
+    payload: { objectName: objectName.toLowerCase() },
+    ttlSeconds: 21600,
+    version,
+    loader,
+    cacheAdapter,
+  });
+  for (const name of ['STEM__c', 'Account']) {
+    await request(name, '1', async () => priorFields);
+  }
+  const stem = await request('STEM__c', koreaDeskDescribeCacheVersion('STEM__c', '1'), async () => currentFields);
+  assert.deepEqual(stem.value, currentFields);
+  const account = await request('Account', koreaDeskDescribeCacheVersion('Account', '1'), async () => assert.fail('Unrelated cache was invalidated'));
+  assert.deepEqual(account.value, priorFields);
+  assert.equal(koreaDeskDescribeCacheVersion('stem__c', '2'), '2:korea-desk');
+});
 
 test('membership and complement preserve historical undecided records', () => {
   const rows = [true, false, null].map((value) => ({ Korea_Desk_Member__c: value }));

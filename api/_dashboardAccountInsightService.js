@@ -1,4 +1,4 @@
-import { normalizeKoreaDeskMode, koreaDeskMatches, requireKoreaDeskField } from './_koreaDeskScope.js';
+import { koreaDeskDescribeCacheVersion, normalizeKoreaDeskMode, koreaDeskMatches, requireKoreaDeskField } from './_koreaDeskScope.js';
 import { chunkIds, getApiVersion, getInstanceUrl, sfCompositeQueries, sfQuery, sfRequest } from './_salesforce.js';
 import { getOrLoadRuntimeCache } from './_runtimeCache.js';
 import { resolveExtraCostSupplierLookup, resolveOriginalSupplierLookup } from './_disputeParties.js';
@@ -80,7 +80,7 @@ function firstAvailable(fields, names) {
 async function describeObject(objectName, force = false) {
   const cached = await getOrLoadRuntimeCache({
     namespace: 'salesforce-dashboard-account-insight-describe',
-    version: '1',
+    version: koreaDeskDescribeCacheVersion(objectName, '1'),
     accessScope: 'schema',
     apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
     payload: { objectName: objectName.toLowerCase() },

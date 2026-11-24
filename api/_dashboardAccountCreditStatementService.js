@@ -1,4 +1,4 @@
-import { normalizeKoreaDeskMode, koreaDeskCondition, koreaDeskMatches, requireKoreaDeskField } from './_koreaDeskScope.js';
+import { koreaDeskDescribeCacheVersion, normalizeKoreaDeskMode, koreaDeskCondition, koreaDeskMatches, requireKoreaDeskField } from './_koreaDeskScope.js';
 import { chunkIds, getApiVersion, getInstanceUrl, sfQuery, sfRequest } from './_salesforce.js';
 import { getOrLoadRuntimeCache } from './_runtimeCache.js';
 import { SALESFORCE_CORPORATE_CURRENCY } from './_decisionDashboard.js';
@@ -149,7 +149,7 @@ function daysBetween(fromDate, toDate) {
 async function describeObject(objectName, force = false) {
   const result = await getOrLoadRuntimeCache({
     namespace: 'salesforce-account-credit-describe',
-    version: '1',
+    version: koreaDeskDescribeCacheVersion(objectName, '1'),
     accessScope: 'schema',
     apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
     payload: { objectName: objectName.toLowerCase() },

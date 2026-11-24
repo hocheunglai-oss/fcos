@@ -1,5 +1,10 @@
 export const KOREA_DESK_MEMBER_FIELD = 'Korea_Desk_Member__c';
 
+// STEM field lists cached before the Salesforce rollout cannot describe Korea Desk.
+export function koreaDeskDescribeCacheVersion(objectName, version) {
+  return objectName.toLowerCase() === 'stem__c' ? `${version}:korea-desk` : version;
+}
+
 export function normalizeKoreaDeskMode(value) {
   if (value == null || value === '') return 'all';
   if (['all', 'include', 'exclude'].includes(value)) return value;
