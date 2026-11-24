@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Package xmlns="http://soap.sforce.com/2006/04/metadata">
+    <types><members>STEM_Historical_RecordType</members><name>FlexiPage</name></types>
+    <types><members>fcosHistoricalStemBuyerBrokers</members><name>LightningComponentBundle</name></types>
+    <version>67.0</version>
+</Package>
