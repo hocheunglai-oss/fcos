@@ -422,6 +422,17 @@ export function createReviewedSalesforcePlan({ review, manifestBytes, bootstrapB
         || files.some(name => !Object.hasOwn(baselineInventory.files, name)))) {
       failCoverage('A layout native projection requires exact native inventories and only existing owned layouts.');
     }
+  } else if (nativeProjection === 'schema-free-historical-stem-flexipage') {
+    const page = 'FlexiPage:STEM_Historical_RecordType';
+    const bundle = 'LightningComponentBundle:fcosHistoricalStemDisputes';
+    const pageComponent = components.find(({ id }) => id === page);
+    const bundleComponent = components.find(({ id }) => id === bundle);
+    if (bootstrap || !review.nativeInventories || review.orgBaselines || permissions.length
+      || components.length !== 2 || !pageComponent || !bundleComponent
+      || !same(pageComponent.dependsOn, [bundle]) || bundleComponent.dependsOn.length
+      || !policy.environments.every(({ key }) => same(review.nativeInventories[key]?.presentComponents, [page]))) {
+      failCoverage('The Historical STEM projection requires the exact page and display-only bundle pair with only the page present in every pinned org.');
+    }
   } else if (nativeProjection !== undefined && (nativeProjection !== 'schema-free-apex-lightning' || bootstrap
     || !review.nativeInventories || components.some(({ id }) => id !== editorFixtureTrigger
       && !(invoiceAppPlacement && id.startsWith('FlexiPage:')) && !/^(?:ApexClass|LightningComponentBundle):/u.test(id))
