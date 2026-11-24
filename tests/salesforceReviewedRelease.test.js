@@ -7,8 +7,8 @@ import test from 'node:test';
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import { createSalesforceWorkflowState, updateSalesforceEnvironmentState, SALESFORCE_RELEASE_MODE } from '../scripts/salesforce-workflow-state.mjs';
 import { openSalesforcePromotionJournal, salesforcePromotionHash as hash } from '../scripts/lib/salesforce-promotion-journal.mjs';
-import { INVENTORY_BASELINE_MODE, REVIEWED_SALESFORCE_MODE, createReviewedSalesforcePlan, inventoryFromFiles, matchesProjectedNativeInventory, matchesSalesforceCheckpoint, parseReviewedPackage, projectedNativeInventoryHash, reviewedCheckpointInventory, verifyReviewedOrgInventory, runReviewedSalesforceRelease, assertReviewedJobReport, assertProductionAuthorization } from '../scripts/lib/salesforce-reviewed-release.mjs';
-import { assertSalesforceProductionSettingCompatibility, assertReviewedInputsUnchanged, baselineGitInventory, cliSalesforceProvider, equivalentNativeSerialization, loadReviewedSalesforcePlan, reviewedSalesforceOptions } from '../scripts/deploy-salesforce-reviewed-manifest.mjs';
+import { INVENTORY_BASELINE_MODE, REVIEWED_SALESFORCE_MODE, assertNativeSupplementalContext, createReviewedSalesforcePlan, inventoryFromFiles, matchesProjectedNativeInventory, matchesSalesforceCheckpoint, parseReviewedPackage, projectedNativeInventoryHash, reviewedCheckpointInventory, verifyReviewedOrgInventory, runReviewedSalesforceRelease, assertReviewedJobReport, assertProductionAuthorization } from '../scripts/lib/salesforce-reviewed-release.mjs';
+import { assertSalesforceProductionSettingCompatibility, assertReviewedInputsUnchanged, baselineGitInventory, cliSalesforceProvider, equivalentNativeSerialization, loadReviewedSalesforcePlan, removeVerifiedStemSupplementalContext, reviewedSalesforceOptions } from '../scripts/deploy-salesforce-reviewed-manifest.mjs';
 import { reviewedDeveePublicationProof } from '../scripts/sync-salesforce-reviewed-repository.mjs';
 import { applyReviewedPrerequisites, verifyPreBootstrapStage } from '../scripts/lib/rapid-release/salesforce-reviewed-adapter.mjs';
 import { digest, targets } from '../scripts/lib/rapid-release/contract.mjs';
@@ -1522,6 +1522,146 @@ test('native CustomObject retrieval retains only matching fields pinned in stabl
     supplemental[field] = legacy;
     review.nativeInventoryContext[environment.key] = [];
     assert.throws(verify, /unexpected path set/);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('STEM supplemental children are pinned byte-for-byte and cannot expand the reviewed package', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'fcos-native-stem-context-'));
+  const object = 'objects/STEM__c/STEM__c.object-meta.xml';
+  const reviewedField = 'objects/STEM__c/fields/Korea_Desk__c.field-meta.xml';
+  const ownedField = 'objects/STEM__c/fields/Port_Country__c.field-meta.xml';
+  const unownedLayout = 'objects/STEM__c/listViews/All.listView-meta.xml';
+  const contextBytes = {
+    [ownedField]: Buffer.from('<CustomField>exact owned bytes</CustomField>'),
+    [unownedLayout]: Buffer.from('<ListView>exact unowned bytes</ListView>'),
+  };
+  const context = Object.fromEntries(Object.entries(contextBytes).map(([name, bytes]) =>
+    [name, { sha256: hash(bytes), size: bytes.length }]));
+  const reviewed = [
+    { id: 'CustomObject:STEM__c', files: [object] },
+    { id: 'CustomField:STEM__c.Korea_Desk__c', files: [reviewedField] },
+  ];
+  function populate(children = contextBytes) {
+    rmSync(root, { recursive: true, force: true });
+    for (const [name, bytes] of Object.entries({ [object]: Buffer.from('<CustomObject/>'),
+      [reviewedField]: Buffer.from('<CustomField/>'), ...children })) {
+      const file = path.join(root, name);
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, bytes);
+    }
+  }
+  try {
+    populate();
+    removeVerifiedStemSupplementalContext(root, reviewed, context);
+    assert.deepEqual(Object.keys(inventoryFromFiles({
+      [object]: readFileSync(path.join(root, object)),
+      [reviewedField]: readFileSync(path.join(root, reviewedField)),
+    }).files), [reviewedField, object].sort());
+    assert.throws(() => readFileSync(path.join(root, ownedField)), /ENOENT/);
+    assert.throws(() => readFileSync(path.join(root, unownedLayout)), /ENOENT/);
+
+    populate({ ...contextBytes, [ownedField]: Buffer.from('<CustomField>changed</CustomField>') });
+    assert.throws(() => removeVerifiedStemSupplementalContext(root, reviewed, context), /differs from its pinned bytes/);
+    populate({ [ownedField]: contextBytes[ownedField] });
+    assert.throws(() => removeVerifiedStemSupplementalContext(root, reviewed, context), /unexpected or missing/);
+    populate({ ...contextBytes, 'objects/STEM__c/fields/Surprise__c.field-meta.xml': Buffer.from('<CustomField/>') });
+    assert.throws(() => removeVerifiedStemSupplementalContext(root, reviewed, context), /unexpected or missing/);
+
+    populate();
+    removeVerifiedStemSupplementalContext(root, [], context);
+    assert.deepEqual(readFileSync(path.join(root, ownedField)), contextBytes[ownedField]);
+    removeVerifiedStemSupplementalContext(root, reviewed, undefined);
+    assert.deepEqual(readFileSync(path.join(root, ownedField)), contextBytes[ownedField]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('STEM supplemental pin declarations are confined to reviewed schema bootstraps', () => {
+  const object = 'objects/STEM__c/STEM__c.object-meta.xml';
+  const released = 'objects/STEM__c/fields/Korea_Desk__c.field-meta.xml';
+  const context = 'objects/STEM__c/recordTypes/Historical.recordType-meta.xml';
+  const pin = { sha256: 'a'.repeat(64), size: 12 };
+  const manifest = ['CustomObject:STEM__c', 'CustomField:STEM__c.Korea_Desk__c'];
+  const bootstrap = { components: [...manifest] };
+  const components = [
+    { id: manifest[0], files: [object] },
+    { id: manifest[1], files: [released] },
+  ];
+  const valid = {
+    nativeInventories: {},
+    nativeSupplementalContext: Object.fromEntries(policy.environments.map(({ key }) => [key, { [context]: pin }])),
+  };
+  assert.doesNotThrow(() => assertNativeSupplementalContext(valid, manifest, components, bootstrap));
+  assert.throws(() => assertNativeSupplementalContext(valid, manifest, components, null), /reviewed schema bootstrap/);
+  assert.throws(() => assertNativeSupplementalContext(valid, [manifest[1]], components, bootstrap), /reviewed schema bootstrap/);
+  for (const change of [
+    review => { delete review.nativeSupplementalContext.qat; },
+    review => { review.nativeSupplementalContext.qat = {}; },
+    review => { review.nativeSupplementalContext.qat = { [released]: pin }; },
+    review => { review.nativeSupplementalContext.qat = { 'objects/Other__c/fields/Value__c.field-meta.xml': pin }; },
+    review => { review.nativeSupplementalContext.qat[context] = { sha256: 'a'.repeat(64), size: -1 }; },
+    review => { review.nativeSupplementalContext.qat[context] = { sha256: 'bad', size: 12 }; },
+  ]) {
+    const mutated = structuredClone(valid);
+    change(mutated);
+    assert.throws(() => assertNativeSupplementalContext(mutated, manifest, components, bootstrap), /reviewed schema bootstrap/);
+  }
+});
+
+test('STEM primary object shell and supplemental children preserve the reviewed stable inventory', () => {
+  const cwd = mkdtempSync(path.join(tmpdir(), 'fcos-stem-inventory-context-'));
+  try {
+    const environment = policy.environments[0];
+    const object = 'objects/STEM__c/STEM__c.object-meta.xml';
+    const field = 'objects/STEM__c/fields/Port_Country__c.field-meta.xml';
+    const link = 'objects/STEM__c/webLinks/Upload_BDN.webLink-meta.xml';
+    const view = 'objects/STEM__c/listViews/All.listView-meta.xml';
+    const header = Buffer.from('<CustomObject><label>STEM</label></CustomObject>');
+    const shell = Buffer.from('<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata"/>');
+    const fieldBytes = Buffer.from('<CustomField/>');
+    const linkBytes = Buffer.from('<WebLink/>');
+    const viewBytes = Buffer.from('<ListView/>');
+    const component = { id: 'CustomObject:STEM__c', files: [object] };
+    const manifest = packageXml(['CustomField:STEM__c.Port_Country__c', 'WebLink:STEM__c.Upload_BDN']);
+    const metadata = packageXml([component.id]);
+    const { files: expectedInventory, inventoryHash: expectedInventoryHash } = inventoryFromFiles({
+      [object]: header, [field]: fieldBytes, [link]: linkBytes,
+    });
+    for (const [name, contents] of [['inventory.xml', manifest], ['metadata.xml', metadata], ['sfdx-project.json', '{}']]) {
+      writeFileSync(path.join(cwd, name), contents);
+    }
+    let stable = { [object]: shell, [field]: fieldBytes, [link]: linkBytes };
+    let supplemental = { [object]: header, [field]: fieldBytes, [link]: linkBytes, [view]: viewBytes };
+    const context = Object.fromEntries([[field, fieldBytes], [link, linkBytes], [view, viewBytes]]
+      .map(([name, bytes]) => [name, { sha256: hash(bytes), size: bytes.length }]));
+    const provider = cliSalesforceProvider({ cwd, run(_program, args, project) {
+      if (args[0] === 'org') return { id: environment.orgId, username: environment.username, connectedStatus: 'Connected' };
+      if (args[0] === 'data') return { records: [{ Id: environment.orgId, IsSandbox: environment.isSandbox }] };
+      const directory = args[args.indexOf('--output-dir') + 1];
+      for (const [name, bytes] of Object.entries(directory === 'metadata' ? supplemental : stable)) {
+        const file = path.join(project, directory, name);
+        mkdirSync(path.dirname(file), { recursive: true });
+        writeFileSync(file, bytes);
+      }
+      return { id: '09SHF000002gTFl2AM', status: 'Succeeded', done: true, success: true };
+    } });
+    const review = {
+      components: [component],
+      nativeSupplementalContext: { [environment.key]: context },
+      inventoryManifests: { [expectedInventoryHash]: { path: 'inventory.xml', sha256: hash(manifest),
+        metadata: { path: 'metadata.xml', sha256: hash(metadata) } } },
+    };
+    const verify = () => provider.verifyInventory(environment, {
+      plan: { review }, expectedInventory, expectedInventoryHash, nativeExport: true, nativeBootstrap: true,
+    });
+    assert.deepEqual(verify().stableObjectShells, { [object]: { sha256: hash(shell), size: shell.length } });
+    stable = { ...stable, [object]: header };
+    assert.throws(verify, /nonempty reviewed object descriptor/);
+    stable = { ...stable, [object]: shell };
+    supplemental = { ...supplemental, [link]: Buffer.from('<WebLink>changed</WebLink>') };
+    assert.throws(verify, /differs from its pinned bytes/);
+    supplemental = { ...supplemental, [link]: linkBytes };
+    delete supplemental[view];
+    assert.throws(verify, /unexpected or missing/);
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
 
