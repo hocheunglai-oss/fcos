@@ -972,7 +972,7 @@ async function applyPreparedSalesforce({ manifest, manifestHash, approval, sales
           }
           return observed;
         };
-      const externalJournal = koreaRecovery ? { ...salesforce.journal, async readCheckpoints() {
+      const reviewedExternalJournal = koreaRecovery ? { ...salesforce.journal, async readCheckpoints() {
         return (await salesforce.journal.readCheckpoints()).filter(item => {
           if (item.operation !== 'buyer-history-correction') return true;
           requireCondition(item.outcome === 'resolved' && buyerHistoryCorrections.some(receipt =>
@@ -983,7 +983,7 @@ async function applyPreparedSalesforce({ manifest, manifestHash, approval, sales
       } } : salesforce.journal;
       const result = await runReviewedSalesforceRelease({ plan: reviewed, mode: hasPreparation ? 'apply' : 'approved-continuation',
         policy, journal, provider, verifyDeveeDesktop,
-        ownership, externalJournal, authorization, retainedDeveeInventory, retainedTradingFxMirror, repairProductionSalesSupport,
+        ownership, externalJournal: reviewedExternalJournal, authorization, retainedDeveeInventory, retainedTradingFxMirror, repairProductionSalesSupport,
         salesSupportViewAllFieldsCorrection: manifest.prerequisites.plan.salesSupportRepair?.viewAllFieldsCorrection === true,
         assertUnchanged: () => assertReviewedInputsUnchanged(reviewed, { cwd, policy }) });
       requireCondition(result.mode === 'applied', 'SALESFORCE_HOSTED_APPLY_REQUIRED');
