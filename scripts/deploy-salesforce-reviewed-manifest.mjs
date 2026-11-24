@@ -387,10 +387,16 @@ const koreaDeskHistorySource = Object.freeze({
   member: '9a0e9eacdc2a51643f3c664204e3ee49aecdb92094f830808a8f56ae391c1b9e',
   decision: 'b9e1189e36ba2ea8f74a2a8de9a37d6f69cea30ed9f218cab9fbeeb3d76b2f73',
 });
-function isKoreaDeskHistoryCheckpoint(plan, projectionPaths) {
+const installedKoreaDeskChoices = Object.freeze({
+  member: '26ff7ceba47e4a4a3b7fbeffe6e5d5189b24ebfcb569827548bac95fa604d1b3',
+  decision: '1d83d7598172afcbf2918e767e1a9c3397df80148d662d5e6fd9891a34141ef9',
+});
+export function isKoreaDeskHistoryCheckpoint(plan, projectionPaths, expectedInventory = {}) {
   return Boolean(plan.review.nativeSupplementalContext && plan.review.bootstrap
-    && Object.entries(koreaDeskHistoryPaths).every(([kind, name]) => projectionPaths.includes(name)
-      && plan.finalInventory.files[name]?.sha256 === koreaDeskHistorySource[kind]));
+    && Object.entries(koreaDeskHistoryPaths).every(([kind, name]) => plan.finalInventory.files[name]?.sha256 === koreaDeskHistorySource[kind])
+    && (Object.values(koreaDeskHistoryPaths).every(name => projectionPaths.includes(name))
+      // A successor can start with the exact previously installed fields.
+      || Object.entries(installedKoreaDeskChoices).every(([kind, hash]) => expectedInventory[koreaDeskHistoryPaths[kind]]?.sha256 === hash)));
 }
 
 const nativeKoreaDeskRecordTypeValues = `    <picklistValues>
@@ -670,7 +676,7 @@ export function cliSalesforceProvider({ cwd = ROOT, policy = POLICY, run = local
         const supplementalJobId = supplementalBytes ? retrieve(supplementalBytes, `${supplementalName}.xml`, supplementalName) : null;
         const root = path.join(project, 'retrieved');
         const supplementalRoot = supplementalJobId ? path.join(project, supplementalName) : null;
-        const historyReadback = nativeBootstrap && isKoreaDeskHistoryCheckpoint(plan, projectionPaths)
+        const historyReadback = nativeBootstrap && isKoreaDeskHistoryCheckpoint(plan, projectionPaths, expectedInventory)
           ? {
             stable: normalizeKoreaDeskHistoryReadback(root, expectedInventory),
             supplemental: normalizeKoreaDeskHistoryReadback(supplementalRoot, plan.review.nativeSupplementalContext[environment.key]),
