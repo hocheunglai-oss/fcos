@@ -183,17 +183,15 @@ export function dashboardFilterPayload(input = {}) {
     ? filters.groupAccountIds.length ? filters.groupAccountIds : filters.companyId ? [filters.companyId] : []
     : [];
   const legacySupplierIds = filters.counterpartyMode === 'supplier' && filters.companyId ? [filters.companyId] : [];
-  const countryCodes = filters.koreaDeskMode === 'include'
-    ? [KOREA_DESK_COUNTRY]
-    : filters.countryCode ? [filters.countryCode] : [];
-  const excludedCountryCodes = filters.koreaDeskMode === 'exclude' ? [KOREA_DESK_COUNTRY] : [];
+  const countryCodes = filters.countryCode ? [filters.countryCode] : [];
+  const excludedCountryCodes = [];
   const portIds = filters.portId ? [filters.portId] : [];
   return {
     dateWindows: buildDashboardDateWindows(filters.selectedYears, filters.selectedMonths),
     disputeOnly: filters.disputeOnly,
     counterpartyMode: filters.counterpartyMode,
     counterparty: filters.counterparty ? { entityType: filters.counterparty.entityType, entityId: filters.counterparty.entityId } : null,
-    filters: { accountIds: legacyAccountIds, supplierIds: legacySupplierIds, portIds, countryCodes, excludedCountryCodes },
+    filters: { accountIds: legacyAccountIds, supplierIds: legacySupplierIds, portIds, countryCodes, excludedCountryCodes, koreaDeskMode: filters.koreaDeskMode },
   };
 }
 

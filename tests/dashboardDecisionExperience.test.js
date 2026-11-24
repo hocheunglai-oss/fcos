@@ -92,7 +92,7 @@ test('saved Dashboard views normalize filters and reject duplicate names', () =>
 test('saved Dashboard views retain Korea exclusion mode', () => {
   const views = normalizeDashboardSavedViews([{ id: 'korea', name: 'Outside Korea', filters: { koreaDeskMode: 'exclude' } }]);
   assert.equal(views[0].filters.koreaDeskMode, 'exclude');
-  assert.deepEqual(JSON.parse(dashboardFilterKey(views[0].filters)).filters.excludedCountryCodes, ['KOREA']);
+  assert.equal(JSON.parse(dashboardFilterKey(views[0].filters)).filters.koreaDeskMode, 'exclude');
 });
 
 test('complete Account directory rankings retain Achieve Bunker outside the Top 10', () => {

@@ -128,7 +128,11 @@ test.describe('synthetic Dashboard EBIT, Korea, Finance settings, and XLS fixtur
     const exportRequests = await page.evaluate(() => window.__fixtureDashboardStemRequests);
     const completedRequests = exportRequests.slice(-2);
     expect(completedRequests).toHaveLength(2);
-    expect(completedRequests[0].filters.excludedCountryCodes).toEqual(['KOREA']);
+    for (const request of completedRequests) {
+      expect(request.filters.koreaDeskMode).toBe('exclude');
+      expect(request.filters.countryCodes).toEqual([]);
+      expect(request.filters.excludedCountryCodes).toEqual([]);
+    }
     expect(completedRequests[0].includeFinanceCosts).toBe(true);
     expect(completedRequests[1].financeSnapshot).toEqual({ annualInterestRatePct: 5, bankChargesUsd: { DBS: 15, UBS: 10 }, revision: 1, asOfDate: '2026-09-05' });
 

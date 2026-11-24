@@ -1,3 +1,4 @@
+import { normalizeKoreaDeskMode, koreaDeskCondition, koreaDeskMatches, requireKoreaDeskField } from './_koreaDeskScope.js';
 import { chunkIds, getApiVersion, getInstanceUrl, sfQuery, sfRequest } from './_salesforce.js';
 import { getOrLoadRuntimeCache } from './_runtimeCache.js';
 import { resolveExtraCostSupplierLookup, resolveOriginalSupplierLookup } from './_disputeParties.js';
@@ -185,7 +186,7 @@ function normalizeFilters(value = {}) {
     throw serviceError('Dashboard country filters and exclusions are invalid.', 400, 'SUPPLIER_CREDIT_COUNTRY_FILTER_INVALID');
   }
   if (countryCodes.length > 200 || excludedCountryCodes.length > 200) throw serviceError('Dashboard country filters exceed the supported scope.', 400, 'SUPPLIER_CREDIT_FILTER_LIMIT');
-  return { accountIds, supplierIds, portIds, countryCodes, excludedCountryCodes };
+  return { accountIds, supplierIds, portIds, countryCodes, excludedCountryCodes, koreaDeskMode: normalizeKoreaDeskMode(filters.koreaDeskMode) };
 }
 
 async function resolveLocationPortIds(filters, portFields) {
@@ -200,6 +201,8 @@ async function resolveLocationPortIds(filters, portFields) {
 
 function childStemConditions(filters, locationPortIds) {
   const conditions = [];
+  const deskCondition = koreaDeskCondition(filters.koreaDeskMode, 'STEM__r.');
+  if (deskCondition) conditions.push(deskCondition);
   if (filters.accountIds.length) conditions.push(`STEM__r.Account__c IN (${filters.accountIds.map((id) => `'${soql(id)}'`).join(',')})`);
   if (filters.portIds.length || filters.countryCodes.length) {
     conditions.push(locationPortIds.length ? `STEM__r.Port__c IN (${locationPortIds.map((id) => `'${soql(id)}'`).join(',')})` : 'Id = null');
@@ -233,12 +236,14 @@ export async function loadDashboardSupplierCreditDirectory({ body = {}, accessCo
     tags: ['salesforce:dashboard', 'salesforce:account', 'salesforce:stem', 'salesforce:line-item', 'salesforce:extra-cost', 'salesforce:supplier-invoice', 'salesforce:supplier-credit'],
     force,
     loader: async () => {
-      const [accountDescribe, lineDescribe, extraDescribe, portDescribe] = await Promise.all([
+      const [accountDescribe, lineDescribe, extraDescribe, portDescribe, stemDescribe] = await Promise.all([
         describeObject('Account', force),
         describeObject('STEM_Line_Item__c', force),
         describeObject('STEM_Extra_Cost__c', force),
         filters.countryCodes.length || filters.excludedCountryCodes.length ? describeObject('Port__c', force) : Promise.resolve({ fields: [] }),
+        filters.koreaDeskMode !== 'all' ? describeObject('STEM__c', force) : Promise.resolve({ fields: [] }),
       ]);
+      requireKoreaDeskField(fieldMap(stemDescribe), filters.koreaDeskMode);
       const accountMap = fieldMap(accountDescribe);
       const lineLookup = resolveOriginalSupplierLookup(lineDescribe.fields);
       const extraLookup = resolveExtraCostSupplierLookup(extraDescribe.fields);
@@ -287,7 +292,7 @@ export async function loadDashboardSupplierCreditDirectory({ body = {}, accessCo
           if (!row.Supplier_Invoice__c || openInvoiceIds.has(idKey(row.Supplier_Invoice__c))) stemIdsByAccount.get(idKey(row._supplierId))?.add(row.STEM__c);
         }
         for (const supplierIds of chunkIds(ids)) {
-          const directInvoices = await queryAll(`SELECT STEM__c,Supplier__c FROM Supplier_Invoice__c WHERE Supplier__c IN (${supplierIds.map((id) => `'${soql(id)}'`).join(',')}) AND Payable_Balance__c != 0 LIMIT ${MAX_ROWS}`, MAX_ROWS);
+          const directInvoices = await queryAll(`SELECT STEM__c,Supplier__c FROM Supplier_Invoice__c WHERE Supplier__c IN (${supplierIds.map((id) => `'${soql(id)}'`).join(',')}) AND Payable_Balance__c != 0${childWhere} LIMIT ${MAX_ROWS}`, MAX_ROWS);
           for (const invoice of directInvoices.records) stemIdsByAccount.get(idKey(invoice.Supplier__c))?.add(invoice.STEM__c);
         }
       }
@@ -316,13 +321,14 @@ export async function loadDashboardSupplierCreditDirectory({ body = {}, accessCo
 }
 
 function stemSelect(fields) {
-  const values = selected(fields, ['Id', 'Name', 'CreatedDate', 'LastModifiedDate', 'Account__c', 'Port__c', 'Delivery_Date__c', 'Expected_Delivery_Date__c', 'CurrencyIsoCode']);
+  const values = selected(fields, ['Id', 'Name', 'CreatedDate', 'LastModifiedDate', 'Account__c', 'Port__c', 'Delivery_Date__c', 'Expected_Delivery_Date__c', 'CurrencyIsoCode', 'Korea_Desk_Member__c']);
   if (fields.has('Account__c')) values.push('Account__r.Name', 'Account__r.Group_Name__c', 'Account__r.Parent.Name');
   if (fields.has('Port__c')) values.push('Port__r.Country__c');
   return [...new Set(values)];
 }
 
 function stemMatchesStatementScope(stem, filters, locationPortIds, interoffice) {
+  if (!koreaDeskMatches(stem, filters.koreaDeskMode || 'all')) return false;
   if (filters.accountIds.length && !filters.accountIds.some((id) => idKey(id) === idKey(stem.Account__c))) return false;
   if ((filters.portIds.length || filters.countryCodes.length) && !locationPortIds.some((id) => idKey(id) === idKey(stem.Port__c))) return false;
   const stemCountry = text(stem.Port__r?.Country__c).toUpperCase();
@@ -535,6 +541,7 @@ async function loadSupplierCreditStatementUncached({ body, accessContext, force 
   const cashflowMap = fieldMap(cashflowDescribe);
   requireFields(accountMap, ['Id', 'Name', 'ParentId', 'Inactive_Suspended__c'], 'Account');
   requireFields(stemMap, ['Id', 'Name', 'Account__c', 'Port__c'], 'STEM__c');
+  requireKoreaDeskField(stemMap, filters.koreaDeskMode);
   requireFields(invoiceMap, ['Id', 'Name', 'STEM__c', 'Supplier__c', 'Invoice_Amount__c', 'Payable_Balance__c', 'Invoice_Due_Date__c'], 'Supplier_Invoice__c');
   const lineLookup = resolveOriginalSupplierLookup(lineDescribe.fields);
   const extraLookup = resolveExtraCostSupplierLookup(extraDescribe.fields);

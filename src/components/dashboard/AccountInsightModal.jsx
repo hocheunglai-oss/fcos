@@ -388,9 +388,9 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
   const normalizedStemQuery = stemQuery.trim().toLowerCase();
   const visibleStemRows = normalizedStemQuery ? stemRows.filter((row) => [row.stemName, row.status, row.currency, row.vesselName, row.portName, ...(row.products || []).map((item) => item.name)].filter(Boolean).join(' ').toLowerCase().includes(normalizedStemQuery)) : stemRows;
   const inheritedDeskLabel = dashboardScope?.labels?.desk || (
-    (dashboardScope?.filters?.excludedCountryCodes || []).includes('KOREA')
+    dashboardScope?.filters?.koreaDeskMode === 'exclude'
       ? 'Exclude Korea Desk'
-      : (dashboardScope?.filters?.countryCodes || []).includes('KOREA') && !dashboardScope?.labels?.country ? 'Korea Desk' : null
+      : dashboardScope?.filters?.koreaDeskMode === 'include' ? 'Korea Desk' : null
   );
   const inheritedFilterLabels = [dashboardScope?.labels?.company, dashboardScope?.labels?.group, dashboardScope?.labels?.port, dashboardScope?.labels?.country, inheritedDeskLabel, dashboardScope?.disputeOnly ? 'Disputed only' : null].filter(Boolean);
   const changeInsightDirection = (side) => { pendingDirectionRef.current = side; setSections({}); setRole(side); setStatementSide(side); setDetailRole(side === 'supplier' ? 'supplier' : 'buyer'); onViewChange?.({ role: side, statementSide: side, tab: activeTab, periodMode, accountWide }); };

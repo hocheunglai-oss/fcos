@@ -203,7 +203,7 @@ export const DASHBOARD_METHODOLOGY = {
     },
     {
       title: 'Korea Desk scope',
-      body: 'Korea Desk matches the verified Salesforce delivery-port country value KOREA. Exclude Korea Desk removes that value; a missing country remains outside Korea Desk and is therefore retained by the exclusion. The two desk choices are mutually exclusive, selecting the active choice returns to All, selecting either choice clears a manual Port or COUNTRY selection, and selecting a manual location clears the desk choice. Date, dispute, and counterparty filters remain combinable. The resulting country inclusion or exclusion applies consistently to KPIs, STEMs, analytics, Accounts, Account Insight and credit statements, exports, saved views, filter persistence, and Dashboard AI interpretation; Reset clears it.',
+      body: 'Korea Desk includes STEMs at ports in Korea and separately designated STEMs for the Singapore buyer outside Korea. Exclude Korea Desk selects the remaining STEMs, including records without a desk designation outside Korea. A manual COUNTRY selection remains geographic. The two desk choices are mutually exclusive, selecting the active choice returns to All, selecting either choice clears a manual Port or COUNTRY selection, and selecting a manual location clears the desk choice. Date, dispute, and counterparty filters remain combinable. The desk selection applies consistently to KPIs, STEMs, analytics, Accounts, Account Insight and credit statements, exports, saved views, and filter persistence; Reset clears it.',
     },
     {
       title: 'Complete XLS export',

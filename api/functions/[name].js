@@ -1,3 +1,4 @@
+import { koreaDeskCondition, requireKoreaDeskField } from '../_koreaDeskScope.js';
 import { listCompanyFxHistory, saveHistoricalCompanyFxRate } from '../_companyFxHistoryAdmin.js';
 import { setManagedUserActivation } from '../_fcunoManagedActivation.js';
 import { deploymentSafeSupabaseFetch } from '../_deploymentReadOnlyFetch.js';
@@ -8133,6 +8134,8 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
       : (() => { throw appError('Select a valid dashboard date range.', 400, 'INVALID_DASHBOARD_DATE_SCOPE'); })();
   const interofficeWhere = await interofficeStemAccessCondition(accessContext, [...stemFields]);
   const conditions = [dateWhere, interofficeWhere, additionalWhere].filter(Boolean);
+  requireKoreaDeskField(stemFields, filters.koreaDeskMode);
+  if (filters.koreaDeskMode !== 'all') conditions.push(koreaDeskCondition(filters.koreaDeskMode));
   if (filters.accountIds.length) {
     if (!accountField) throw appError('Account filtering is unavailable because Salesforce Account metadata could not be validated.', 503, 'DASHBOARD_SCHEMA');
     const accountChunks = chunkIds(filters.accountIds);
@@ -9580,6 +9583,7 @@ async function dashboardAccountCreditDirectory(body = {}, req = null, accessCont
     portIds: Array.isArray(body.filters?.portIds) ? body.filters.portIds : [],
     countryCodes: Array.isArray(body.filters?.countryCodes) ? body.filters.countryCodes : [],
     excludedCountryCodes: Array.isArray(body.filters?.excludedCountryCodes) ? body.filters.excludedCountryCodes : [],
+    koreaDeskMode: body.filters?.koreaDeskMode || 'all',
   };
   const cached = await cachedSalesforceValue({
     namespace: 'dashboard-unified-account-directory-financials-v1',

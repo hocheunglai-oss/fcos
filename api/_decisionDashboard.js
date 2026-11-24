@@ -33,6 +33,8 @@ export function dashboardVolumeWarnings(missingUomCount, rows) {
   return warnings;
 }
 
+import { normalizeKoreaDeskMode } from './_koreaDeskScope.js';
+
 export const SALESFORCE_CORPORATE_CURRENCY = 'USD';
 
 export function isDecisionDashboardSalesforceId(value) {
@@ -68,6 +70,7 @@ export function normalizeDecisionDashboardFilters(input = {}) {
     portIds: ids(input.portIds || input.ports),
     countryCodes,
     excludedCountryCodes,
+    koreaDeskMode: normalizeKoreaDeskMode(input.koreaDeskMode),
     supplierIds: ids(input.supplierIds || input.suppliers),
     includeCancelled: input.includeCancelled === true,
   };

@@ -129,7 +129,7 @@ test('filters use exact IDs and normalized country codes without text matching',
     supplierIds: ['001000000000003'],
     supplierNames: ['Supplier A'],
   }), {
-    accountIds: ['001000000000001', '001000000000002'], portIds: ['a0P000000000001'], countryCodes: ['HK'], excludedCountryCodes: ['KR'], supplierIds: ['001000000000003'], includeCancelled: false,
+    accountIds: ['001000000000001', '001000000000002'], portIds: ['a0P000000000001'], countryCodes: ['HK'], excludedCountryCodes: ['KR'], koreaDeskMode: 'all', supplierIds: ['001000000000003'], includeCancelled: false,
   });
 });
 
