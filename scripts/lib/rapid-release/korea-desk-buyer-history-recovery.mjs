@@ -191,15 +191,19 @@ export function verifyKoreaDeskBuyerHistoryCompletion({ recovery, records, reque
       && row.payload.intentHash === data(previous).evidenceDigest
       && Date.parse(row.created_at) >= Date.parse(previous.created_at)
       && Date.parse(row.created_at) <= Date.parse(publication.created_at));
-    check(matches.length === 1, 'KOREA_BUYER_HISTORY_CURRENT_MIRROR_REQUEST_REQUIRED');
-    const [request] = matches;
-    const receipts = requests.filter(row => row.creator?.id === ownerId && row.payload?.kind === 'fcos_local_mirror_receipt'
-      && row.payload.requestId === request.id && Date.parse(row.created_at) <= Date.parse(publication.created_at));
-    check(receipts.length === 1, 'KOREA_BUYER_HISTORY_CURRENT_MIRROR_RECEIPT_REQUIRED');
-    const [receipt] = receipts;
-    const proof = verifyLocalMirrorReceipt({ request: request.payload, requestDeployment: request,
-      receiptDeployment: receipt, reviewed, workflowActorId, publisherId: ownerId, now: Date.parse(receipt.created_at) });
-    check(proof.commit === mirror.commit && proof.pullRequest.number === mirror.pullRequest, 'KOREA_BUYER_HISTORY_COMPLETED_MIRROR_CHANGED');
+    let verifiedCount = 0;
+    for (const request of matches) {
+      const receipts = requests.filter(row => row.creator?.id === ownerId && row.payload?.kind === 'fcos_local_mirror_receipt'
+        && row.payload.requestId === request.id && Date.parse(row.created_at) <= Date.parse(publication.created_at));
+      check(receipts.length <= 1, 'KOREA_BUYER_HISTORY_CURRENT_MIRROR_RECEIPT_REQUIRED');
+      for (const receipt of receipts) {
+        const proof = verifyLocalMirrorReceipt({ request: request.payload, requestDeployment: request,
+          receiptDeployment: receipt, reviewed, workflowActorId, publisherId: ownerId, now: Date.parse(receipt.created_at) });
+        check(proof.commit === mirror.commit && proof.pullRequest.number === mirror.pullRequest, 'KOREA_BUYER_HISTORY_COMPLETED_MIRROR_CHANGED');
+        verifiedCount++;
+      }
+    }
+    check(verifiedCount > 0, 'KOREA_BUYER_HISTORY_CURRENT_MIRROR_RECEIPT_REQUIRED');
     return publication;
   });
   check(verified.some(row => sequence(corrections[0]) < sequence(row) && sequence(row) < sequence(corrections[1]))
