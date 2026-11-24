@@ -17,6 +17,7 @@ import FinanceSettings from '../../src/components/settings/FinanceSettings';
 import { Button } from '../../src/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../src/components/ui/tabs';
 import { WorkspaceChromeProvider } from '../../src/components/workspace/WorkspaceChrome';
+import { dashboardFilterPayload } from '../../src/lib/dashboardFilters';
 
 // This module is a Vite-only visual fixture. Replacing the client call here keeps
 // the real filter component interactive without allowing any API request.
@@ -210,6 +211,7 @@ function FixtureDashboard() {
   const [tab, setTab] = useState('overview');
   const [ebitEnabled, setEbitEnabled] = useState(false);
   const [aiSearchActive, setAiSearchActive] = useState(false);
+  const exportFilterPayload = dashboardFilterPayload(filters);
   const dashboardRootRef = useRef(null);
   useEffect(() => {
     const root = dashboardRootRef.current;
@@ -231,7 +233,7 @@ function FixtureDashboard() {
       {tab !== 'finance' ? <DashboardFilterBar showPerspective={tab !== 'accounts'} filters={filters} years={[currentYear, currentYear - 1, currentYear - 2]} portOptions={[{ id: 'fixture-singapore', name: 'Singapore', kind: 'port' }, { value: 'SG', countryCode: 'SG', label: 'Singapore', kind: 'country' }, { value: 'KOREA', countryCode: 'KOREA', label: 'KOREA', kind: 'country' }]} loading={false} onChange={setFilters} onReset={() => setFilters(initialFilters)} onAiSearch={() => setAiSearchActive(true)} /> : null}
       <Tabs value={tab} onValueChange={setTab}><TabsList className="mb-4 w-full justify-start overflow-x-auto"><TabsTrigger value="overview">Overview</TabsTrigger><TabsTrigger value="stems">STEMs</TabsTrigger><TabsTrigger value="accounts">Accounts</TabsTrigger><TabsTrigger value="finance">Finance settings</TabsTrigger></TabsList>
         <TabsContent value="overview" className="space-y-4"><DashboardKpis summary={dashboardSummary} ebitEnabled={ebitEnabled} onEbitChange={setEbitEnabled} /><DashboardAnalytics data={analyticsData} loading={false} error="" onLoad={() => {}} counterpartyMode={filters.counterpartyMode} onAccountClick={() => {}} /></TabsContent>
-        <TabsContent value="stems"><DashboardStemTable result={{ rows: stemRows, page: 1, pageSize: 25, matchingCount: stemRows.length, sort: {} }} loading={false} search={search} wide={wide} onWideChange={setWide} onSearch={setSearch} onPrevious={() => {}} onNext={() => {}} onSortChange={() => {}} onStemClick={() => {}} onAccountClick={() => {}} exportFilterPayload={{ dateWindows: [{ startDate: '2026-01-01', endDate: '2026-12-31' }], disputeOnly: filters.disputeOnly, filters: { accountIds: [], supplierIds: [], portIds: filters.portId ? [filters.portId] : [], countryCodes: filters.koreaDeskMode === 'include' ? ['KOREA'] : filters.countryCode ? [filters.countryCode] : [], excludedCountryCodes: filters.koreaDeskMode === 'exclude' ? ['KOREA'] : [] } }} includeFinanceCosts={ebitEnabled} aiSearchActive={aiSearchActive} onClearAiSearch={() => setAiSearchActive(false)} /></TabsContent>
+        <TabsContent value="stems"><DashboardStemTable result={{ rows: stemRows, page: 1, pageSize: 25, matchingCount: stemRows.length, sort: {} }} loading={false} search={search} wide={wide} onWideChange={setWide} onSearch={setSearch} onPrevious={() => {}} onNext={() => {}} onSortChange={() => {}} onStemClick={() => {}} onAccountClick={() => {}} exportFilterPayload={exportFilterPayload} includeFinanceCosts={ebitEnabled} aiSearchActive={aiSearchActive} onClearAiSearch={() => setAiSearchActive(false)} /></TabsContent>
         <TabsContent value="accounts"><AccountCreditDirectory counterparty={null} dateWindows={[{ startDate: '2026-01-01', endDate: '2026-12-31' }]} disputeOnly={false} filters={{ portIds: [], countryCodes: [] }} onOpen={() => {}} /></TabsContent>
         <TabsContent value="finance"><FinanceSettings /></TabsContent>
       </Tabs>
