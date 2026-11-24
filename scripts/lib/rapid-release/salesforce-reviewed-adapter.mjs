@@ -21,6 +21,8 @@ import { assertEditorsAdoptionApproval, assertEditorsValidationUsable, readEdito
 import { applyTradingFxSalesSupportCorrection, applyTradingFxSalesSupportSandboxCorrection, verifyTradingFxSalesSupportReadGrants } from './trading-fx-sales-support-transport.mjs';
 import { verifySalesSupportRepairSource } from './trading-fx-sales-support-source.mjs';
 import { promoteSalesSupportCorrection } from './trading-fx-sales-support-promotion.mjs';
+import { koreaDeskOriginal, readKoreaDeskBuyerHistoryRecovery } from './korea-desk-buyer-history-recovery.mjs';
+import { applyKoreaDeskBuyerHistoryCorrection, productionBuyerHistoryPins } from './korea-desk-buyer-history-transport.mjs';
 import { runPreBootstrapSmoke } from './smoke.mjs';
 
 const policy = FCOS_CONNECTION_POLICY.providers.find(item => item.id === 'salesforce');
@@ -501,9 +503,14 @@ export function prepareReviewedSalesforcePrerequisites({
       && correctionDirectory && salesforce.correction && reviewed.nativeInventories?.production?.bootstrap
       && tradingFxProductionBootstrapRecovery.receipt?.id === plan.tradingFxProductionBootstrapRecoveryReceiptId,
   'SALESFORCE_TRADING_FX_PRODUCTION_BOOTSTRAP_ADOPTION_INVALID');
+  const koreaDeskBuyerHistory = plan.koreaDeskBuyerHistoryReceiptId;
+  requireCondition(koreaDeskBuyerHistory === undefined || (Number.isSafeInteger(koreaDeskBuyerHistory) && koreaDeskBuyerHistory > 0
+    && !withDatabase && schemaBootstrap && localMirror && !adoption && !promotionReceiptId && !editorsAdoption
+    && !editorPreflight && manifest.candidate.sha === koreaDeskOriginal.candidate && reviewed.nativeInventories?.production?.bootstrap),
+  'KOREA_BUYER_HISTORY_RECOVERY_SCOPE_INVALID');
   return () => applyPreparedSalesforce({ manifest, manifestHash, approval, salesforce, cwd, correctionDirectory, env, reviewed, schemaBootstrap,
     localMirror, adoption, promotionReceiptId, tradingFxRecovery, tradingFxQatRecovery, tradingFxPostQatRecovery,
-    tradingFxProductionBootstrapRecovery, editorPreflight, editorsAdoption });
+    tradingFxProductionBootstrapRecovery, editorPreflight, editorsAdoption, koreaDeskBuyerHistory });
 }
 
 export async function hostedLocalMirrorTransport({ manifest, approval, env, reviewed, salesforce }) {
@@ -659,7 +666,7 @@ export async function recoverTradingFxPostQat({ recovery, reviewed, provider, sa
   return records;
 }
 
-export async function recoverTradingFxProductionReadbacks({ recovery, reviewed, provider, saved, now = () => new Date() }) {
+export async function recoverSalesforceProductionBootstrap({ recovery, reviewed, provider, saved, now = () => new Date() }) {
   const { checkpoint, receipt } = recovery;
   const { salesforceOperations, mirror } = checkpoint;
   const original = salesforceOperations.find(({ stage, operation }) => stage === 'production' && operation === 'bootstrap');
@@ -691,9 +698,62 @@ export async function recoverTradingFxProductionReadbacks({ recovery, reviewed, 
   } }];
 }
 
+export { recoverSalesforceProductionBootstrap as recoverTradingFxProductionReadbacks };
+
+export async function repairKoreaDeskBuyerHistory({ reviewed, provider, cwd, commandEnvironment, salesforce, verifyMirror },
+  { applyCorrection = applyKoreaDeskBuyerHistoryCorrection, verifyInventory = verifyReviewedOrgInventory } = {}) {
+  const field = 'objects/STEM__c/fields/Account__c.field-meta.xml';
+  const production = policy.environments.find(environment => environment.key === 'production');
+  const checkpoints = await salesforce.journal.readCheckpoints();
+  const deployment = checkpoints.find(item => item.stage === 'production' && item.operation === 'deployment');
+  let finalProductionInventory = false;
+  if (deployment) {
+    requireCondition(deployment.job?.id, 'KOREA_BUYER_HISTORY_PRODUCTION_DEPLOYMENT_UNCERTAIN');
+    const report = await provider.report(production, deployment.job.id);
+    finalProductionInventory = report.done === true && report.success === true && report.status === 'Succeeded';
+  }
+  const verify = (environment, plan = reviewed) => verifyInventory({ provider, environment, plan,
+    expected: plan.nativeInventories[environment.key][environment.isSandbox || finalProductionInventory ? 'final' : 'bootstrap'] });
+  const original = await provider.readKoreaDeskBuyerAccountXml(production);
+  const observed = { sha256: digest(original), size: original.length };
+  const saved = checkpoints.find(item =>
+    item.stage === 'production' && item.operation === 'buyer-history-correction');
+  const preimage = structuredClone(reviewed);
+  if (digest(observed) === digest(productionBuyerHistoryPins.active)) {
+    requireCondition(!deployment, 'KOREA_BUYER_HISTORY_PRODUCTION_NOT_CORRECTED');
+    preimage.review.nativeSupplementalContext.production[field] = productionBuyerHistoryPins.active;
+  } else {
+    requireCondition(saved?.job?.id && digest(observed) === digest(productionBuyerHistoryPins.final),
+      'KOREA_BUYER_HISTORY_PRODUCTION_PREIMAGE_CHANGED');
+  }
+  await verify(production, preimage);
+  const correction = async environment => {
+    if (environment.isSandbox) await verify(environment);
+    const receipt = await applyCorrection({
+      environment, provider, cwd, commandEnvironment, fingerprint: reviewed.fingerprint,
+      journal: salesforce.journal, ownership: salesforce.ownership,
+      readAccountXml: current => provider.readKoreaDeskBuyerAccountXml(current),
+    });
+    await verify(environment);
+    requireCondition(receipt.verified === true && receipt.intentRecorded === true && isDigest(receipt.evidenceDigest),
+      'KOREA_BUYER_HISTORY_CORRECTION_CHECKPOINT_CHANGED');
+    return { operationId: receipt.operationId, evidenceDigest: receipt.evidenceDigest,
+      verified: receipt.verified === true, intentRecorded: receipt.intentRecorded === true };
+  };
+  const [devee, qat] = policy.environments;
+  const deveeResult = await correction(devee);
+  // Preserve the complete draft after the sandbox no-op packet.
+  await verifyMirror();
+  const qatResult = await correction(qat);
+  await verifyMirror();
+  await verify(production, preimage);
+  const productionResult = await correction(production);
+  return [deveeResult, qatResult, productionResult];
+}
+
 async function applyPreparedSalesforce({ manifest, manifestHash, approval, salesforce, cwd, correctionDirectory, env, reviewed, schemaBootstrap, localMirror,
   adoption, promotionReceiptId, tradingFxRecovery, tradingFxQatRecovery, tradingFxPostQatRecovery, tradingFxProductionBootstrapRecovery,
-  editorPreflight, editorsAdoption }) {
+  editorPreflight, editorsAdoption, koreaDeskBuyerHistory }) {
   const saved = await salesforce.journal.readCheckpoints();
   let editorsRecovery;
   if (editorsAdoption) {
@@ -743,16 +803,26 @@ async function applyPreparedSalesforce({ manifest, manifestHash, approval, sales
         const savedBootstrap = journal.update('devee', 'bootstrap', record);
         await salesforce.journal.checkpoint({ fingerprint: reviewed.fingerprint, stage: 'devee', operation: 'bootstrap', record: savedBootstrap });
       }
-      if (tradingFxPostQatRecovery || tradingFxProductionBootstrapRecovery) {
-        const adopted = tradingFxProductionBootstrapRecovery
-          ? await recoverTradingFxProductionReadbacks({ recovery: tradingFxProductionBootstrapRecovery, reviewed, provider, saved })
+      const koreaRecovery = koreaDeskBuyerHistory ? await readKoreaDeskBuyerHistoryRecovery({
+        manifest, github: githubClient({ token: env.GITHUB_TOKEN, candidateSha: manifest.candidate.sha, actions: true }),
+      }) : null;
+      const productionBootstrapRecovery = tradingFxProductionBootstrapRecovery || (koreaRecovery && {
+        receipt: koreaRecovery.closure,
+        checkpoint: { prior: koreaRecovery.manifest, salesforceOperations: koreaRecovery.salesforceOperations,
+          permissions: koreaRecovery.permissions, mirror: { publication: koreaRecovery.mirror } },
+      });
+      if (tradingFxPostQatRecovery || productionBootstrapRecovery) {
+        const adopted = productionBootstrapRecovery
+          ? await recoverSalesforceProductionBootstrap({ recovery: productionBootstrapRecovery, reviewed, provider, saved })
           : await recoverTradingFxPostQat({ recovery: tradingFxPostQatRecovery, reviewed, provider, saved });
         await assertReviewedInputsUnchanged(reviewed, { cwd, policy });
         for (const { stage, operation, record } of adopted) {
           const current = saved.find(item => item.stage === stage && item.operation === operation);
-          if (!current) {
+          if (!current || koreaRecovery) {
             const local = journal.update(stage, operation, record);
-            await salesforce.journal.checkpoint({ fingerprint: reviewed.fingerprint, stage, operation, record: local });
+            if (!current || stage !== 'shared_mirror') {
+              await salesforce.journal.checkpoint({ fingerprint: reviewed.fingerprint, stage, operation, record: local });
+            }
           }
         }
       }
@@ -822,6 +892,17 @@ async function applyPreparedSalesforce({ manifest, manifestHash, approval, sales
       if (localTransport) {
         provider.readPendingMirror = ({ deveeDeployment }) => localTransport('recover', deveeDeployment);
       }
+      const buyerHistoryCorrections = koreaRecovery ? await repairKoreaDeskBuyerHistory({
+        reviewed, provider, cwd, commandEnvironment, salesforce, verifyMirror: async () => {
+          const proof = await provider.mirror('check', { deveeDeployment: journal.state.stages.devee.deployment });
+          requireCondition(proof.commit === koreaDeskOriginal.mirrorCommit && proof.pullRequest?.number === koreaDeskOriginal.mirrorPullRequest,
+            'KOREA_BUYER_HISTORY_ORIGINAL_MIRROR_CHANGED');
+          const record = journal.update('shared_mirror', 'publication', {
+            status: 'Succeeded', result: proof, verifiedAt: new Date().toISOString(),
+          });
+          await salesforce.journal.checkpoint({ fingerprint: reviewed.fingerprint, stage: 'shared_mirror', operation: 'publication', record });
+        },
+      }) : [];
       const authorization = {
         productionMutation: true, fingerprint: reviewed.fingerprint, manifestSha256: reviewed.binding.manifestSha256,
         sourceTreeHash: reviewed.binding.sourceTreeHash, orgIds: reviewed.binding.orgIds,
@@ -891,9 +972,18 @@ async function applyPreparedSalesforce({ manifest, manifestHash, approval, sales
           }
           return observed;
         };
+      const reviewedExternalJournal = koreaRecovery ? { ...salesforce.journal, async readCheckpoints() {
+        return (await salesforce.journal.readCheckpoints()).filter(item => {
+          if (item.operation !== 'buyer-history-correction') return true;
+          requireCondition(item.outcome === 'resolved' && buyerHistoryCorrections.some(receipt =>
+            receipt.operationId === `salesforce:${item.stage}:${item.operation}` && receipt.evidenceDigest === item.evidenceDigest),
+          'KOREA_BUYER_HISTORY_CORRECTION_CHECKPOINT_CHANGED');
+          return false;
+        });
+      } } : salesforce.journal;
       const result = await runReviewedSalesforceRelease({ plan: reviewed, mode: hasPreparation ? 'apply' : 'approved-continuation',
         policy, journal, provider, verifyDeveeDesktop,
-        ownership, externalJournal: salesforce.journal, authorization, retainedDeveeInventory, retainedTradingFxMirror, repairProductionSalesSupport,
+        ownership, externalJournal: reviewedExternalJournal, authorization, retainedDeveeInventory, retainedTradingFxMirror, repairProductionSalesSupport,
         salesSupportViewAllFieldsCorrection: manifest.prerequisites.plan.salesSupportRepair?.viewAllFieldsCorrection === true,
         assertUnchanged: () => assertReviewedInputsUnchanged(reviewed, { cwd, policy }) });
       requireCondition(result.mode === 'applied', 'SALESFORCE_HOSTED_APPLY_REQUIRED');
@@ -917,6 +1007,7 @@ async function applyPreparedSalesforce({ manifest, manifestHash, approval, sales
         && reviewed.binding.permissionSets.every(name => completedIds.has(`salesforce:${key}:permission:${name}`))),
       'SALESFORCE_HOSTED_COMPLETION_EVIDENCE_REQUIRED');
       if (corrections) completedOperations.push(...corrections);
+      completedOperations.push(...buyerHistoryCorrections);
       finished = true;
       return { passed: true, manifestHash, backwardCompatible: true, completedOperations,
         salesforce: { order: 'devee-mirror-qat-production', mirrorVerified: true,
