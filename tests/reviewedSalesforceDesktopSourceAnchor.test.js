@@ -295,6 +295,41 @@ test('source anchor permits only identical adopted invoice jobs before the mirro
   assert.equal(check([prior], { manifest: { prerequisites: { plan: {} } } }), prior);
 });
 
+test('Korea Desk source anchor requires both reattestations of its exact adopted DEVEE jobs', () => {
+  const fingerprint = '9d704c3b5e525c6492a00a3ca94f4dca1bc82fd463a83b8dcfeb119fd8cdaa7a';
+  const sourceTreeHash = 'a7d1c63e431ad8cc1193fe65fabdb471e23138cb9f63654fe4c70c680ed00a0b';
+  const validationId = '0AfHF000007K6Bk0AK', deploymentId = '0AfHF000007K8a70AC';
+  const reviewed = { fingerprint, binding: { sourceTreeHash }, review: { bootstrap: {} } };
+  const manifest = { candidate: { sha: '86d106b199a1608050ecdac54dbe2a5c92387175' },
+    prerequisites: { plan: { deveePromotionAdoptionReceiptId: 123, mirrorPublication: 'local-collaborator',
+      salesforceFingerprint: fingerprint, salesforceSourceTreeHash: sourceTreeHash } } };
+  for (const operation of ['validation', 'deployment']) {
+    const job = operation === 'validation'
+      ? { id: validationId, validationId: null, packageSha256: hash('4'), submittedAt: at(0) }
+      : { id: deploymentId, validationId, submittedAt: at(1) };
+    const row = (sequence, evidenceDigest) => ({ payload: { sequence, data: {
+      stage: 'devee', operation, fingerprint, evidenceDigest, job: { ...job },
+    } } });
+    const prior = row(7, hash('3')), reattested = row(12, hash('5'));
+    const adoptedJobs = [{ operation, record: { jobId: job.id, validationJobId: job.validationId,
+      submittedAt: job.submittedAt, packageSha256: job.packageSha256 } }];
+    const check = (completed = [prior, reattested], additions = {}) => selectCompletedSalesforceJob({
+      completed, manifest, reviewed, stageName: 'devee', operation,
+      firstMirrorIntent: { payload: { sequence: 14 } }, adoptedJobs, ...additions,
+    });
+    assert.equal(check(), reattested);
+    assert.throws(() => check([prior]), /SALESFORCE_JOB_MISMATCH/);
+    assert.throws(() => check([prior, row(12, hash('3'))]), /SALESFORCE_JOB_MISMATCH/);
+    assert.throws(() => check([prior, row(15, hash('5'))]), /SALESFORCE_JOB_MISMATCH/);
+    assert.throws(() => check(undefined, { adoptedJobs: undefined }), /SALESFORCE_JOB_MISMATCH/);
+    assert.throws(() => check(undefined, { manifest: { ...manifest, candidate: { sha: 'd'.repeat(40) } } }),
+      /SALESFORCE_JOB_MISMATCH/);
+    const changed = row(12, hash('5'));
+    changed.payload.data.job.id = '0AfHF000007IeZG0A0';
+    assert.throws(() => check([prior, changed]), /SALESFORCE_JOB_MISMATCH/);
+  }
+});
+
 function completedEditorsAdoption() {
   const { manifest: predecessor } = approvalFixture({ resume: false });
   const { candidate, previous, prerequisites, build: { publicEnvironment }, paths } = predecessor;

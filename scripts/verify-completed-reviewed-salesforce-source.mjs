@@ -10,7 +10,7 @@ import { reviewedDeveePublicationProof } from './sync-salesforce-reviewed-reposi
 import { verifyCompletedSalesforceReviewSource } from './verify-salesforce-review-source.mjs';
 import { assertReviewedMirror, verifyReviewedJobPair } from './lib/salesforce-reviewed-release.mjs';
 import { assertAuthorization, digest, isDigest, isSha, requireCondition, targets, validateManifest } from './lib/rapid-release/contract.mjs';
-import { recoverReviewedDeveePromotion } from './lib/rapid-release/salesforce-reviewed-adapter.mjs';
+import { koreaDeskBootstrap, recoverReviewedDeveePromotion } from './lib/rapid-release/salesforce-reviewed-adapter.mjs';
 import { assertBuildReceipt, assertSmokeProof } from './lib/rapid-release/engine.mjs';
 import { assertEditorsAdoptionApproval, assertEditorsProductionValidationSuccessor, assertEditorsValidationUsable,
   readEditorsProductionValidationAdoption, recoverEditorsProductionValidation } from './lib/rapid-release/editors-production-validation-adoption.mjs';
@@ -133,19 +133,41 @@ export function assertStandardReviewedSourceManifest(manifest, candidate) {
   return hash;
 }
 
+const koreaDeskDeveeValidationJob = '0AfHF000007K6Bk0AK';
+const koreaDeskDeveeDeploymentJob = '0AfHF000007K8a70AC';
+
+function isKoreaDeskPromotionAdoption(manifest, reviewed) {
+  const plan = manifest.prerequisites.plan;
+  return manifest.candidate?.sha === koreaDeskBootstrap.candidate
+    && plan.salesforceFingerprint === koreaDeskBootstrap.fingerprint
+    && reviewed.fingerprint === koreaDeskBootstrap.fingerprint
+    && plan.salesforceSourceTreeHash === koreaDeskBootstrap.sourceTreeHash
+    && reviewed.binding?.sourceTreeHash === koreaDeskBootstrap.sourceTreeHash
+    && plan.mirrorPublication === 'local-collaborator'
+    && Number.isSafeInteger(plan.deveePromotionAdoptionReceiptId) && plan.deveePromotionAdoptionReceiptId > 0
+    && Boolean(reviewed.review?.bootstrap) && !reviewed.review.nativeDeveeDesktop && !reviewed.invoiceAppPlacement;
+}
+
 // Adopted DEVEE jobs are re-attested after recovery, producing a second
 // checkpoint with fresh evidence for the same immutable provider operation.
 export function selectCompletedSalesforceJob({ completed, manifest, reviewed, stageName, operation, firstMirrorIntent, adoptedJobs }) {
   const found = completed.filter(row => data(row).stage === stageName && data(row).operation === operation);
   const adoptionId = manifest.prerequisites.plan.deveePromotionAdoptionReceiptId;
+  const isDeveePair = stageName === 'devee' && ['validation', 'deployment'].includes(operation);
+  const koreaDeskAdoption = isDeveePair && isKoreaDeskPromotionAdoption(manifest, reviewed);
+  if (koreaDeskAdoption) allow(found.length === 2, 'SALESFORCE_JOB_MISMATCH');
   if (found.length === 2) {
-    const isInvoiceAdoption = stageName === 'devee' && ['validation', 'deployment'].includes(operation)
-      && Number.isSafeInteger(adoptionId) && adoptionId > 0 && reviewed.invoiceAppPlacement
+    const isInvoiceAdoption = isDeveePair && Number.isSafeInteger(adoptionId) && adoptionId > 0 && reviewed.invoiceAppPlacement
       && !reviewed.review?.bootstrap && !reviewed.review?.nativeDeveeDesktop;
     const adopted = adoptedJobs?.find(item => item.operation === operation)?.record;
     const adoptedJob = adopted && { id: adopted.jobId, validationId: adopted.validationJobId,
       submittedAt: adopted.submittedAt, ...(adopted.packageSha256 ? { packageSha256: adopted.packageSha256 } : {}) };
-    allow(isInvoiceAdoption && adoptedJob && digest(adoptedJob) === digest(data(found[0]).job) && firstMirrorIntent && sequence(found[0]) < sequence(found[1])
+    const expectedKoreaDeskJob = operation === 'validation' ? koreaDeskDeveeValidationJob : koreaDeskDeveeDeploymentJob;
+    const koreaDeskJobMatches = koreaDeskAdoption && adoptedJob?.id === expectedKoreaDeskJob
+      && adoptedJob.validationId === (operation === 'validation' ? null : koreaDeskDeveeValidationJob)
+      && data(found[0]).evidenceDigest !== data(found[1]).evidenceDigest;
+    allow((isInvoiceAdoption || koreaDeskJobMatches) && adoptedJob
+      && digest(adoptedJob) === digest(data(found[0]).job) && firstMirrorIntent && sequence(found[0]) < sequence(found[1])
       && sequence(found[1]) < sequence(firstMirrorIntent)
       && found.every(row => data(row).fingerprint === reviewed.fingerprint)
       && data(found[0]).job?.id && digest(data(found[0]).job) === digest(data(found[1]).job)
@@ -323,16 +345,26 @@ export function verifyCompletedReviewedJournal({ records, requests, manifest, re
     && data(row).fingerprint === reviewed.fingerprint && data(row).stage === 'shared_mirror'
     && data(row).operation === 'publication' && data(row).outcome === 'pending');
   const firstMirrorIntent = mirrorIntents.length === 1 ? mirrorIntents[0] : undefined;
+  const koreaDeskAdoption = isKoreaDeskPromotionAdoption(manifest, reviewed);
   const job = (stageName, operation) => {
     const scopedInvoiceAdoption = stageName === 'devee' && reviewed.invoiceAppPlacement
       && Number.isSafeInteger(manifest.prerequisites.plan.deveePromotionAdoptionReceiptId);
-    const candidates = scopedInvoiceAdoption ? records.filter(row => row.payload.event === 'salesforce.checkpoint'
+    const scopedKoreaDeskAdoption = stageName === 'devee' && koreaDeskAdoption;
+    const candidates = scopedInvoiceAdoption || scopedKoreaDeskAdoption ? records.filter(row => row.payload.event === 'salesforce.checkpoint'
       && data(row).outcome === 'resolved') : completed;
     return selectCompletedSalesforceJob({
       completed: candidates, manifest, reviewed, stageName, operation, firstMirrorIntent, adoptedJobs,
     });
   };
   const validation = job('devee', 'validation'), deployment = job('devee', 'deployment');
+  if (koreaDeskAdoption) {
+    const bootstrap = job('devee', 'bootstrap');
+    const adopted = adoptedJobs?.find(item => item.operation === 'bootstrap')?.record;
+    allow(adopted?.jobId === koreaDeskBootstrap.jobId && data(bootstrap).fingerprint === koreaDeskBootstrap.fingerprint
+      && isDigest(data(bootstrap).evidenceDigest) && digest(data(bootstrap).job) === digest({
+        id: adopted.jobId, validationId: adopted.validationJobId, submittedAt: adopted.submittedAt, packageSha256: adopted.packageSha256,
+      }) && sequence(bootstrap) < sequence(validation), 'SALESFORCE_BOOTSTRAP_MISMATCH');
+  }
   const qat = job('qat', 'deployment'), production = job('production', 'deployment');
   allow(data(deployment).job.validationId === data(validation).job.id, 'DEVEE_VALIDATION_LINK_MISMATCH');
   const publications = completed.filter(row => data(row).stage === 'shared_mirror' && data(row).operation === 'publication');

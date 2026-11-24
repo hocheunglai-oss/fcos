@@ -8,7 +8,7 @@ import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import { createSalesforceWorkflowState, updateSalesforceEnvironmentState, SALESFORCE_RELEASE_MODE } from '../scripts/salesforce-workflow-state.mjs';
 import { openSalesforcePromotionJournal, salesforcePromotionHash as hash } from '../scripts/lib/salesforce-promotion-journal.mjs';
 import { INVENTORY_BASELINE_MODE, REVIEWED_SALESFORCE_MODE, assertNativeSupplementalContext, createReviewedSalesforcePlan, inventoryFromFiles, matchesProjectedNativeInventory, matchesSalesforceCheckpoint, parseReviewedPackage, projectedNativeInventoryHash, reviewedCheckpointInventory, verifyReviewedOrgInventory, runReviewedSalesforceRelease, assertReviewedJobReport, assertProductionAuthorization } from '../scripts/lib/salesforce-reviewed-release.mjs';
-import { assertSalesforceProductionSettingCompatibility, assertReviewedInputsUnchanged, baselineGitInventory, cliSalesforceProvider, equivalentNativeSerialization, loadReviewedSalesforcePlan, normalizeKoreaDeskHistoryReadback, removeVerifiedStemSupplementalContext, reviewedSalesforceOptions } from '../scripts/deploy-salesforce-reviewed-manifest.mjs';
+import { assertSalesforceProductionSettingCompatibility, assertReviewedInputsUnchanged, baselineGitInventory, cliSalesforceProvider, equivalentNativeApexApiVersion, equivalentNativeSerialization, loadReviewedSalesforcePlan, normalizeKoreaDeskHistoryReadback, removeVerifiedStemSupplementalContext, reviewedSalesforceOptions } from '../scripts/deploy-salesforce-reviewed-manifest.mjs';
 import { reviewedDeveePublicationProof } from '../scripts/sync-salesforce-reviewed-repository.mjs';
 import { applyReviewedPrerequisites, verifyPreBootstrapStage } from '../scripts/lib/rapid-release/salesforce-reviewed-adapter.mjs';
 import { digest, targets } from '../scripts/lib/rapid-release/contract.mjs';
@@ -24,6 +24,15 @@ const packageXml = ids => Buffer.from(`<?xml version="1.0"?><Package xmlns="http
 const files = { 'classes/Example.cls': Buffer.from('class Example {}\n'), 'classes/Example.cls-meta.xml': Buffer.from('<ApexClass/>\n') };
 const validationRuleId = 'ValidationRule:Trade_Document_Line__c.Exactly_One_Document_Parent';
 const validationRulePath = 'objects/Trade_Document_Line__c/validationRules/Exactly_One_Document_Parent.validationRule-meta.xml';
+
+test('Native Apex metadata accepts a trailing decimal zero without changing API version or activation status', () => {
+  const definition = (version, status = 'Active') => `<ApexClass xmlns="http://soap.sforce.com/2006/04/metadata"><apiVersion>${version}</apiVersion><status>${status}</status></ApexClass>`;
+  assert.equal(equivalentNativeApexApiVersion(definition('55'), definition('55.0')), true);
+  assert.equal(equivalentNativeApexApiVersion(definition('64'), definition('64.0')), true);
+  assert.equal(equivalentNativeApexApiVersion(definition('55'), definition('56.0')), false);
+  assert.equal(equivalentNativeApexApiVersion(definition('55'), definition('55.1')), false);
+  assert.equal(equivalentNativeApexApiVersion(definition('55'), definition('55.0', 'Inactive')), false);
+});
 
 test('Korea Desk readback preserves byte pins for unrelated STEM fields and both record-type choices', () => {
   const root = mkdtempSync(path.join(tmpdir(), 'fcos-korea-history-'));
