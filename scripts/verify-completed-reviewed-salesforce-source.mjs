@@ -8,7 +8,7 @@ import { githubConfigDirectory } from './fcos-connections.mjs';
 import { executeSharedMirror } from './sync-salesforce-shared-repository.mjs';
 import { reviewedDeveePublicationProof } from './sync-salesforce-reviewed-repository.mjs';
 import { verifyCompletedSalesforceReviewSource } from './verify-salesforce-review-source.mjs';
-import { assertReviewedMirror, verifyReviewedJobPair } from './lib/salesforce-reviewed-release.mjs';
+import { assertReviewedMirror, verifyReviewedJobPair, verifyReviewedOrgInventory } from './lib/salesforce-reviewed-release.mjs';
 import { assertAuthorization, digest, isDigest, isSha, requireCondition, targets, validateManifest } from './lib/rapid-release/contract.mjs';
 import { koreaDeskBootstrap, recoverReviewedDeveePromotion } from './lib/rapid-release/salesforce-reviewed-adapter.mjs';
 import { assertBuildReceipt, assertSmokeProof } from './lib/rapid-release/engine.mjs';
@@ -19,6 +19,8 @@ import { LOCAL_MIRROR_ENVIRONMENT, readLocalMirrorDeployments, readLocalMirrorSt
 import { assertFrozenWorkflow, nativeWorkflowPath } from './lib/rapid-release/providers.mjs';
 import { requiresDeveeDesktopCheckpoint, verifyDeveeDesktopReceipt } from './lib/rapid-release/salesforce-devee-desktop-checkpoint.mjs';
 import { hasEditorPreflightLocator, verifyEditorPreflightAttestation } from './lib/rapid-release/salesforce-editor-preflight-transport.mjs';
+import { readKoreaDeskBuyerHistoryRecovery, verifyKoreaDeskBuyerHistoryCompletion } from './lib/rapid-release/korea-desk-buyer-history-recovery.mjs';
+import { productionBuyerHistoryPins } from './lib/rapid-release/korea-desk-buyer-history-transport.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const policy = FCOS_CONNECTION_POLICY.providers.find(provider => provider.id === 'salesforce');
@@ -291,7 +293,8 @@ function verifyEditorsAdoptionJournal({ records, requests, manifest, reviewed, r
     productionResolvedAt: time(production) };
 }
 
-export function verifyCompletedReviewedJournal({ records, requests, manifest, reviewed, run, editorAttestation, adoptedJobs, editorsRecovery }) {
+export function verifyCompletedReviewedJournal({ records, requests, manifest, reviewed, run, editorAttestation, adoptedJobs, editorsRecovery,
+  koreaBuyerHistoryRecovery }) {
   const event = name => {
     const found = records.filter(row => row.payload.event === name);
     allow(found.length === 1, 'REQUIRED_EVENT_MISMATCH');
@@ -337,6 +340,10 @@ export function verifyCompletedReviewedJournal({ records, requests, manifest, re
       && !manifest.prerequisites.plan.deveePromotionAdoptionReceiptId, 'EDITORS_ADOPTION_SCOPE_MISMATCH');
     return verifyEditorsAdoptionJournal({ records, requests, manifest, reviewed, run, editorAttestation, editorsRecovery,
       event, approvedRuns, staged });
+  }
+  if (Object.hasOwn(manifest.prerequisites.plan, 'koreaDeskBuyerHistoryReceiptId')) {
+    allow(!desktop && koreaBuyerHistoryRecovery, 'KOREA_BUYER_HISTORY_COMPLETION_SCOPE_CHANGED');
+    return verifyKoreaDeskBuyerHistoryCompletion({ recovery: koreaBuyerHistoryRecovery, records, requests, reviewed, manifest, run });
   }
 
   const completed = records.filter(row => row.payload.event === 'salesforce.checkpoint'
@@ -464,13 +471,22 @@ async function main() {
     hasEditorPreflightLocator(plan) ? github.read(repoPath + '/deployments/' + plan.editorPreflightReceiptId) : undefined,
     Object.hasOwn(plan, 'editorsProductionValidationAdoptionReceiptId') ? readEditorsProductionValidationAdoption({ manifest, github }) : undefined]);
   const provider = cliSalesforceProvider({ cwd, policy, commandEnvironment: process.env });
+  const koreaBuyerHistoryRecovery = plan.koreaDeskBuyerHistoryReceiptId === undefined ? undefined
+    : await readKoreaDeskBuyerHistoryRecovery({ manifest, github });
   const adoptionReceiptId = plan.deveePromotionAdoptionReceiptId;
   const adoptedJobs = adoptionReceiptId === undefined ? undefined : await recoverReviewedDeveePromotion({
     receiptId: adoptionReceiptId, manifest, reviewed, provider, github,
   });
   const { deploymentId, validationId, mirror, productionJob, productionResolvedAt } = verifyCompletedReviewedJournal({
-    records, requests, manifest, reviewed, run, editorAttestation, adoptedJobs, editorsRecovery,
+    records, requests, manifest, reviewed, run, editorAttestation, adoptedJobs, editorsRecovery, koreaBuyerHistoryRecovery,
   });
+  if (koreaBuyerHistoryRecovery) {
+    const production = fcosSalesforceEnvironment('production');
+    await verifyReviewedOrgInventory({ provider, environment: production, plan: reviewed, expected: reviewed.nativeInventories.production.final });
+    const buyer = await provider.readKoreaDeskBuyerAccountXml(production);
+    allow(digest(buyer) === productionBuyerHistoryPins.final.sha256 && buyer.length === productionBuyerHistoryPins.final.size,
+      'KOREA_BUYER_HISTORY_PRODUCTION_NOT_CORRECTED');
+  }
   if (editorsRecovery) {
     // Reuse provider reports during this verification pass. Preparation builds
     // the package locally for hashing, and report() only reads the saved jobs.
