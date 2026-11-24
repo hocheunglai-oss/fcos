@@ -9,6 +9,7 @@ import { digest, isDigest, requireCondition } from './contract.mjs';
 
 export const buyerHistoryOperation = 'buyer-history-correction';
 const field = 'STEM__c.Account__c';
+const terminalOutcomes = { Failed: 'failed_rolled_back', Canceled: 'canceled_rolled_back' };
 const jobIdPattern = /^0Af[A-Za-z0-9]{15}$/u;
 const xmlDeclaration = '<?xml version="1.0" encoding="UTF-8"?>\n';
 const ns = 'http://soap.sforce.com/2006/04/metadata';
@@ -74,8 +75,16 @@ function assertReport(report, jobId, target, testLevel, submittedAt, now) {
     && rows.filter(correctField).length === 1 && rows.filter(descriptor).length <= 1 && rows.every(row => correctField(row) || descriptor(row))
     && (warnings == null || (Array.isArray(warnings) && warnings.length === 0))
     && (!report.testLevel || report.testLevel === testLevel), 'JOB_SCOPE_CHANGED');
-  const completed = Date.parse(report.completedDate);
+  assertCompletedAt(report.completedDate, submittedAt, now);
+}
+
+function assertCompletedAt(completedDate, submittedAt, now) {
+  const completed = Date.parse(completedDate);
   check(completed >= Date.parse(submittedAt) - 30_000 && completed <= now().getTime() + 30_000, 'JOB_TIME_CHANGED');
+}
+
+function stopRolledBack(outcome) {
+  check(false, 'ORIGINAL_JOB_' + outcome.toUpperCase());
 }
 
 export async function applyKoreaDeskBuyerHistoryCorrection({
@@ -100,7 +109,8 @@ export async function applyKoreaDeskBuyerHistoryCorrection({
         && job?.packageSha256 === pins.packageSha256 && job.validationId === null
         && (jobIdPattern.test(job.id ?? '') || (row.outcome === 'pending' && job.id === null))
         && Number.isFinite(Date.parse(job.submittedAt)) && new Date(job.submittedAt).toISOString() === job.submittedAt
-        && row.terminalOutcome === undefined, 'CHECKPOINT_CHANGED');
+        && (row.terminalOutcome === undefined || (row.outcome === 'resolved' && jobIdPattern.test(job.id)
+          && Object.values(terminalOutcomes).includes(row.terminalOutcome) && isDigest(row.reportDigest))), 'CHECKPOINT_CHANGED');
     }
     return row;
   }
@@ -108,12 +118,14 @@ export async function applyKoreaDeskBuyerHistoryCorrection({
     await journal.checkpoint({ fingerprint, stage, operation, record });
     const row = await current();
     check(row?.job.id === record.jobId && row.job.submittedAt === record.submittedAt
-      && row.outcome === (record.status === 'Succeeded' ? 'resolved' : 'pending')
+      && row.outcome === (record.status === 'Succeeded' || record.terminalOutcome ? 'resolved' : 'pending')
+      && row.terminalOutcome === record.terminalOutcome && (!record.terminalOutcome || row.reportDigest === record.reportDigest)
       && row.evidenceDigest === digest(record), 'CHECKPOINT_NOT_DURABLE');
     return row;
   }
   await provider.verifyIdentity(target);
   let saved = await current();
+  if (saved?.terminalOutcome) stopRolledBack(saved.terminalOutcome);
   if (!saved) {
     const packet = buildKoreaDeskBuyerHistoryPacket(target, await readAccountXml(target));
     const folder = mkdtempSync(join(tmpdir(), 'fcos-korea-buyer-history-'));
@@ -140,6 +152,19 @@ export async function applyKoreaDeskBuyerHistoryCorrection({
   const { id: jobId, submittedAt } = saved.job;
   check(jobIdPattern.test(jobId ?? ''), 'ORIGINAL_JOB_UNCONFIRMED');
   const report = await provider.report(target, jobId);
+  if (Object.hasOwn(terminalOutcomes, report?.status)) {
+    check(saved.outcome === 'pending' && report.id === jobId && report.done === true && report.success === false
+      && report.checkOnly === false && report.rollbackOnError === true && (report.testLevel === undefined || report.testLevel === testLevel),
+    'TERMINAL_JOB_UNVERIFIED');
+    assertCompletedAt(report.completedDate, submittedAt, now);
+    await provider.verifyIdentity(target);
+    const before = verifyXml(await readAccountXml(target), pins.active);
+    const terminalOutcome = terminalOutcomes[report.status];
+    await save({ status: report.status, terminalOutcome, orgId, jobId, submittedAt, validationJobId: null,
+      packageSha256: pins.packageSha256, completedAt: report.completedDate, testLevel, checkOnly: false,
+      rollbackOnError: true, reportDigest: digest(report), preimageSha256: digest(before) });
+    stopRolledBack(terminalOutcome);
+  }
   assertReport(report, jobId, target, testLevel, submittedAt, now);
   await provider.verifyIdentity(target);
   verifyXml(await readAccountXml(target), pins.final);

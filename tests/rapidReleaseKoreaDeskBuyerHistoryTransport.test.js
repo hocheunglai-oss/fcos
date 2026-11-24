@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import { unzipSync } from 'fflate';
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
 import { digest } from '../scripts/lib/rapid-release/contract.mjs';
+import { DeploymentJournal, MemoryJournal, pendingOperations } from '../scripts/lib/rapid-release/journal.mjs';
 import { applyKoreaDeskBuyerHistoryCorrection, buildKoreaDeskBuyerHistoryPacket, productionBuyerHistoryPins }
   from '../scripts/lib/rapid-release/korea-desk-buyer-history-transport.mjs';
 
@@ -181,4 +182,76 @@ test('rejects a wrong org or ownership scope, expired lease, and unacknowledged 
     await assert.rejects(applyKoreaDeskBuyerHistoryCorrection(harness.input));
     assert.equal(harness.state.received.length, 0);
   }
+});
+
+function terminalScenario(status, org = 'production') {
+  const setup = scenario(org);
+  const { input, state, report } = setup;
+  Object.assign(report, { success: false, done: true, status });
+  const log = new MemoryJournal(), submitted = input.run;
+  // Exercise the deployed journal projection, including its pending-operations calculation.
+  input.journal = {
+    readCheckpoints: () => DeploymentJournal.prototype.readSalesforceCheckpoints.call(log, input.fingerprint),
+    async checkpoint(entry) {
+      const result = await DeploymentJournal.prototype.checkpoint.call(log, entry);
+      state.saved = result.payload.data;
+      state.operations.push(entry.record.status);
+      return result;
+    },
+  };
+  input.run = async args => {
+    const original = state.xml;
+    const response = await submitted(args);
+    state.xml = original;
+    return response;
+  };
+  return { ...setup, log };
+}
+
+test('verified failed and canceled original jobs close their correction checkpoint and keep promotion stopped', async () => {
+  for (const org of ['devee', 'production']) {
+    for (const [status, outcome] of [['Failed', 'failed_rolled_back'], ['Canceled', 'canceled_rolled_back']]) {
+      const { input, state, log, report } = terminalScenario(status, org);
+      const error = { code: 'KOREA_DESK_BUYER_HISTORY_ORIGINAL_JOB_' + outcome.toUpperCase() };
+      await assert.rejects(applyKoreaDeskBuyerHistoryCorrection(input), error);
+      assert.deepEqual(state.operations, ['submitting', 'submitted', status]);
+      assert.equal(state.saved.outcome, 'resolved');
+      assert.equal(state.saved.terminalOutcome, outcome);
+      assert.equal(state.saved.job.id, jobId);
+      assert.equal(state.saved.reportDigest, digest(report));
+      assert.deepEqual(pendingOperations(await log.read()), []);
+      await assert.rejects(applyKoreaDeskBuyerHistoryCorrection(input), error);
+      assert.deepEqual(state.operations, ['submitting', 'submitted', status]);
+      assert.equal(state.received.length, 1);
+      assert.equal(state.reports, 1);
+    }
+  }
+});
+
+test('incomplete, contradictory or time-mismatched rollback evidence leaves the original job pending', async () => {
+  for (const changes of [
+    { id: '0Af000000000009AAA' }, { done: false }, { success: true }, { rollbackOnError: false },
+    { checkOnly: true }, { testLevel: 'NoTestRun' }, { completedDate: 'invalid' }, { completedDate: '2025-12-01T00:00:00Z' },
+  ]) {
+    const { input, state, log, report } = terminalScenario('Failed');
+    Object.assign(report, changes);
+    await assert.rejects(applyKoreaDeskBuyerHistoryCorrection(input), /TERMINAL_JOB_UNVERIFIED|JOB_TIME_CHANGED/u);
+    assert.deepEqual(state.operations, ['submitting', 'submitted']);
+    assert.equal(pendingOperations(await log.read()).length, 1);
+    assert.equal(state.received.length, 1);
+  }
+});
+
+test('a failed job with changed field bytes remains pending until its unchanged native preimage is proved', async () => {
+  const { input, state, log } = terminalScenario('Failed');
+  const submit = input.run;
+  input.run = async args => { const result = await submit(args); state.xml = productionFinal; return result; };
+  await assert.rejects(applyKoreaDeskBuyerHistoryCorrection(input), /NATIVE_XML_CHANGED/u);
+  assert.deepEqual(state.operations, ['submitting', 'submitted']);
+  assert.equal(pendingOperations(await log.read()).length, 1);
+  state.xml = productionActive;
+  await assert.rejects(applyKoreaDeskBuyerHistoryCorrection(input), /ORIGINAL_JOB_FAILED_ROLLED_BACK/u);
+  assert.deepEqual(pendingOperations(await log.read()), []);
+  assert.equal(state.received.length, 1);
+  assert.equal(state.reports, 2);
 });
