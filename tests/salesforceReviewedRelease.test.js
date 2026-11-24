@@ -8,7 +8,7 @@ import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 import { createSalesforceWorkflowState, updateSalesforceEnvironmentState, SALESFORCE_RELEASE_MODE } from '../scripts/salesforce-workflow-state.mjs';
 import { openSalesforcePromotionJournal, salesforcePromotionHash as hash } from '../scripts/lib/salesforce-promotion-journal.mjs';
 import { INVENTORY_BASELINE_MODE, REVIEWED_SALESFORCE_MODE, assertNativeSupplementalContext, createReviewedSalesforcePlan, inventoryFromFiles, matchesProjectedNativeInventory, matchesSalesforceCheckpoint, parseReviewedPackage, projectedNativeInventoryHash, reviewedCheckpointInventory, verifyReviewedOrgInventory, runReviewedSalesforceRelease, assertReviewedJobReport, assertProductionAuthorization } from '../scripts/lib/salesforce-reviewed-release.mjs';
-import { assertSalesforceProductionSettingCompatibility, assertReviewedInputsUnchanged, baselineGitInventory, cliSalesforceProvider, equivalentNativeSerialization, loadReviewedSalesforcePlan, removeVerifiedStemSupplementalContext, reviewedSalesforceOptions } from '../scripts/deploy-salesforce-reviewed-manifest.mjs';
+import { assertSalesforceProductionSettingCompatibility, assertReviewedInputsUnchanged, baselineGitInventory, cliSalesforceProvider, equivalentNativeSerialization, loadReviewedSalesforcePlan, normalizeKoreaDeskHistoryReadback, removeVerifiedStemSupplementalContext, reviewedSalesforceOptions } from '../scripts/deploy-salesforce-reviewed-manifest.mjs';
 import { reviewedDeveePublicationProof } from '../scripts/sync-salesforce-reviewed-repository.mjs';
 import { applyReviewedPrerequisites, verifyPreBootstrapStage } from '../scripts/lib/rapid-release/salesforce-reviewed-adapter.mjs';
 import { digest, targets } from '../scripts/lib/rapid-release/contract.mjs';
@@ -24,6 +24,53 @@ const packageXml = ids => Buffer.from(`<?xml version="1.0"?><Package xmlns="http
 const files = { 'classes/Example.cls': Buffer.from('class Example {}\n'), 'classes/Example.cls-meta.xml': Buffer.from('<ApexClass/>\n') };
 const validationRuleId = 'ValidationRule:Trade_Document_Line__c.Exactly_One_Document_Parent';
 const validationRulePath = 'objects/Trade_Document_Line__c/validationRules/Exactly_One_Document_Parent.validationRule-meta.xml';
+
+test('Korea Desk readback preserves byte pins for unrelated STEM fields and both record-type choices', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'fcos-korea-history-'));
+  const field = 'objects/STEM__c/fields/Factoring_Invoice__c.field-meta.xml';
+  const recordType = 'objects/STEM__c/recordTypes/Historical.recordType-meta.xml';
+  const baseline = {
+    [field]: '<CustomField>\n    <label>Factoring Invoice</label>\n</CustomField>\n',
+    [recordType]: '<RecordType>\n    <active>true</active>\n</RecordType>\n',
+  };
+  const observed = {
+    [field]: baseline[field].replace('</CustomField>', '    <trackHistory>false</trackHistory>\n</CustomField>'),
+    [recordType]: baseline[recordType].replace('</RecordType>', `    <picklistValues>
+        <picklist>Korea_Desk__c</picklist>
+        <values>
+            <fullName>No</fullName>
+            <default>false</default>
+        </values>
+        <values>
+            <fullName>Yes</fullName>
+            <default>false</default>
+        </values>
+    </picklistValues>
+</RecordType>`),
+  };
+  const pins = Object.fromEntries(Object.entries(baseline).map(([name, value]) => [name, { sha256: hash(value), size: Buffer.byteLength(value) }]));
+  const write = (name, value) => {
+    const target = path.join(root, name);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, value);
+  };
+  try {
+    for (const [name, value] of Object.entries(observed)) write(name, value);
+    const effects = normalizeKoreaDeskHistoryReadback(root, pins);
+    for (const [name, value] of Object.entries(observed)) {
+      assert.deepEqual(effects[name], { sha256: hash(value), size: Buffer.byteLength(value) });
+      assert.equal(readFileSync(path.join(root, name), 'utf8'), baseline[name]);
+    }
+    assert.throws(() => normalizeKoreaDeskHistoryReadback(root, { [recordType]: pins[recordType] }), /lacks the reviewed Korea Desk choices/u);
+    const drift = {
+      [field]: observed[field].replace('History>false', 'History>true'),
+      [recordType]: observed[recordType].replace('<default>false', '<default>true'),
+    };
+    for (const [name, value] of Object.entries(drift)) write(name, value);
+    assert.deepEqual(normalizeKoreaDeskHistoryReadback(root, pins), {});
+    for (const [name, value] of Object.entries(drift)) assert.equal(readFileSync(path.join(root, name), 'utf8'), value);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 function fixture({ bootstrap = false, level = 'RunLocalTests', inventoryBaseline = false, validationRule = false, asymmetric = false, nativeRaw = false } = {}) {
   const baselineInventory = inventoryFromFiles(files);

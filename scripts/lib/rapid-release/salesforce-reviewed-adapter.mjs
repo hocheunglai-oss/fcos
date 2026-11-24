@@ -9,10 +9,11 @@ import { preflightSharedMirrorPublication } from '../../sync-salesforce-shared-r
 import { openSalesforcePromotionJournal } from '../salesforce-promotion-journal.mjs';
 import { assertReviewedMirror, assertReviewedJobReport, matchesSalesforceCheckpoint, reviewedJobExpectations, runReviewedSalesforceRelease, safeProjectFile, verifyReviewedOrgInventory } from '../salesforce-reviewed-release.mjs';
 import { assertHostedSalesforceRunner, authenticateHostedSalesforce } from './salesforce-hosted-auth.mjs';
-import { digest, git, isDigest, requireCondition, targets } from './contract.mjs';
+import { assertAuthorization, digest, git, isDigest, requireCondition, targets, validateManifest } from './contract.mjs';
+import { pendingOperations, validateChain } from './journal.mjs';
 import { awaitLocalMirrorReceipt, createLocalMirrorRequest, LOCAL_MIRROR_ENVIRONMENT, readLocalMirrorDeployments,
   recordLocalMirrorDeployment, usesLocalCollaboratorMirror } from './local-mirror-handoff.mjs';
-import { githubClient, verifyExecution } from './providers.mjs';
+import { assertFrozenWorkflow, githubClient, nativeWorkflowPath, verifyExecution } from './providers.mjs';
 import { awaitDeveeDesktopReceipt, createDeveeDesktopRequest, recordVerifiedDeveeDesktopCheckpoint } from './salesforce-devee-desktop-checkpoint.mjs';
 import { hasEditorPreflightLocator, verifyEditorPreflightPostimage } from './salesforce-editor-preflight-transport.mjs';
 import { assertEditorsAdoptionApproval, assertEditorsValidationUsable, readEditorsProductionValidationAdoption,
@@ -59,6 +60,9 @@ export async function reconcileHostedSalesforceJob({ environment, jobId, reviewe
 }
 
 export async function recoverReviewedDeveeBootstrap({ adoption, manifest, reviewed, provider, github, now = () => new Date() }) {
+  if (adoption.jobId === koreaDeskBootstrap.jobId) {
+    return recoverKoreaDeskDeveeBootstrap({ adoption, manifest, reviewed, provider, github, now });
+  }
   const environment = policy.environments[0];
   const endpoint = '/repos/' + targets().repository + '/deployments/';
   const receipt = await github.read(endpoint + adoption.receiptId);
@@ -104,6 +108,182 @@ export async function recoverReviewedDeveeBootstrap({ adoption, manifest, review
   return { ...proof, fingerprint: reviewed.fingerprint, validationJobId: null, submittedAt: reference.submittedAt,
     packageSha256: reference.packageSha256, verifiedAt, reconciledAt: verifiedAt,
     recoveredEvidenceDigest: digest({ receiptId: receipt.id, originalCheckpoint: original.id,
+      providerReportSha256: proof.reportSha256, inventoryReceiptSha256: inventory.evidenceSha256 }) };
+}
+
+export const koreaDeskBootstrap = Object.freeze({
+  runId: 45382062369,
+  goLiveJobId: 138407997755,
+  handoverId: 8026059961,
+  dispatcher: '811757591628135762acda6d4eabdfbfb9158d1f',
+  controller: 'e34a75eb2b1052bc547a50d6e429a4006b4b7f6f',
+  candidate: '86d106b199a1608050ecdac54dbe2a5c92387175',
+  releaseId: 'korea-desk-salesforce-86d106b1',
+  manifestHash: '9aa4fa4c91e837f11214ced411504812cc316268e7cf960df07f12299ff766b0',
+  fingerprint: '9d704c3b5e525c6492a00a3ca94f4dca1bc82fd463a83b8dcfeb119fd8cdaa7a',
+  sourceTreeHash: 'a7d1c63e431ad8cc1193fe65fabdb471e23138cb9f63654fe4c70c680ed00a0b',
+  jobId: '0AfHF000007K4t60AC',
+  packageSha256: '51bc3f22200c04eeca1b4f339deb4cc4b82168b2d17b57f05922825308b09857',
+  submittedAt: '2026-11-24T11:46:35.845Z',
+  oldHead: '09765faaeb3d8f19415586e59ca64778ab8f7a180998fd505c7991390db6d071',
+  intentId: 8026784662,
+  checkpointId: 8026867565,
+  repositoryId: 1278654816,
+  ownerId: policy.publication.requiredAccountId,
+  botId: 41898282,
+});
+const koreaDeskWorkflow = '.github/workflows/fcos-rapid-release.yml';
+const koreaDeskHistory = [
+  [8026155424, 'release.prepared'], [8026155772, 'build.passed'], [8026160779, 'stage.intent'],
+  [8026163303, 'stage.result'], [8026302611, 'smoke.passed'], [8026780353, 'approval.accepted'],
+  [8026784662, 'prerequisites.intent'], ...[8026802882, 8026816095, 8026831250, 8026864332, 8026865290, 8026867565,
+    8026875902].map(id => [id, 'salesforce.checkpoint']), [8026876181, 'obstacle.detected'],
+];
+
+export async function readKoreaDeskBootstrapHistory(github) {
+  const original = koreaDeskBootstrap;
+  const repo = '/repos/' + targets().repository;
+  const runPath = repo + '/actions/runs/' + original.runId;
+  const [run, jobs, approvals, records, mirror] = await Promise.all([
+    github.read(runPath),
+    github.read(runPath + '/jobs?filter=all&per_page=100'),
+    github.read(runPath + '/approvals'),
+    github.pages(repo + '/deployments?environment=fcos-release-journal-v1&sha=' + original.candidate + '&per_page=100'),
+    github.pages(repo + '/deployments?environment=fcos-release-mirror-handoff-v1&sha=' + original.candidate + '&per_page=100'),
+    assertFrozenWorkflow({ github, controllerSha: original.controller, dispatcherSha: original.dispatcher }),
+  ]);
+  const owner = person => person?.id === original.ownerId && person.login === targets().account;
+  requireCondition(run.id === original.runId && run.status === 'completed' && run.conclusion === 'failure'
+    && run.run_attempt === 1 && run.event === 'workflow_dispatch' && run.head_branch === 'main'
+    && run.head_sha === original.dispatcher && nativeWorkflowPath(run) === koreaDeskWorkflow
+    && run.repository?.id === original.repositoryId && owner(run.actor) && owner(run.triggering_actor)
+    && run.display_title === `FCOS rapid resume ${original.manifestHash} ${original.candidate}`,
+  'KOREA_DESK_ORIGINAL_RUN_CHANGED');
+  const goLive = jobs.jobs?.filter(job => job.name === 'go-live');
+  requireCondition(goLive?.length === 1 && goLive[0].id === original.goLiveJobId && goLive[0].run_id === run.id
+    && goLive[0].run_attempt === 1 && goLive[0].status === 'completed' && goLive[0].conclusion === 'failure'
+    && Date.parse(goLive[0].started_at) < Date.parse(original.submittedAt)
+    && Date.parse(original.submittedAt) < Date.parse(goLive[0].completed_at)
+    && approvals.filter(review => review.state === 'approved' && owner(review.user)
+      && review.environments?.some(environment => environment.name === 'fcos-production-release'
+        && environment.id === 23178773471)).length === 1,
+  'KOREA_DESK_ORIGINAL_APPROVAL_CHANGED');
+  requireCondition(!mirror.some(row => row.payload?.runId === original.runId || row.payload?.manifestHash === original.manifestHash),
+    'KOREA_DESK_ORIGINAL_MIRROR_HISTORY_CHANGED');
+  const recordsForRelease = records.filter(row => row.payload?.releaseId === original.releaseId);
+  const chain = validateChain(recordsForRelease, original.manifestHash, original.releaseId);
+  requireCondition(chain.length === recordsForRelease.length
+    && [koreaDeskHistory.length, koreaDeskHistory.length + 1].includes(chain.length)
+    && koreaDeskHistory.every(([id, event], index) => {
+      const row = chain[index];
+      return row.id === id && row.payload.event === event && row.sha === original.candidate
+        && row.environment === 'fcos-release-journal-v1' && row.creator?.id === original.botId
+        && row.creator.login === 'github-actions[bot]';
+    }) && chain[14].payload.recordHash === original.oldHead, 'KOREA_DESK_ORIGINAL_HISTORY_CHANGED');
+  const manifest = chain[0].payload.data.manifest;
+  const approval = chain[5].payload.data;
+  const intent = chain[6].payload.data;
+  const job = chain[12].payload.data.job;
+  requireCondition(validateManifest(manifest) === original.manifestHash && manifest.controllerSha === original.controller
+    && manifest.candidate.sha === original.candidate
+    && manifest.prerequisites.plan.salesforceFingerprint === original.fingerprint
+    && manifest.prerequisites.plan.salesforceSourceTreeHash === original.sourceTreeHash
+    && approval.runId === run.id && intent.operationId === original.releaseId + '-prerequisites'
+    && chain[12].payload.data.stage === 'devee' && chain[12].payload.data.operation === 'bootstrap'
+    && chain[12].payload.data.outcome === 'resolved' && chain[12].payload.data.fingerprint === original.fingerprint
+    && digest(chain[11].payload.data.job) === digest(job) && job.id === original.jobId && job.validationId === null
+    && job.packageSha256 === original.packageSha256 && job.submittedAt === original.submittedAt,
+  'KOREA_DESK_ORIGINAL_BOOTSTRAP_CHANGED');
+  assertAuthorization(approval, manifest, chain[3].payload.data.result, Date.parse(goLive[0].started_at));
+  const receipt = chain[koreaDeskHistory.length];
+  const pending = pendingOperations(chain);
+  if (receipt) {
+    const data = receipt.payload.data;
+    requireCondition(owner(receipt.creator) && receipt.sha === original.candidate
+      && receipt.environment === 'fcos-release-journal-v1' && receipt.payload.event === 'prerequisites.result'
+      && digest(data) === digest(koreaDeskBootstrapClosure(data.evidence)) && pending.length === 0,
+    'KOREA_DESK_BOOTSTRAP_CLOSURE_INVALID');
+  } else {
+    requireCondition(pending.length === 1 && pending[0].event === 'prerequisites.intent'
+      && digest(pending[0].data) === digest(intent), 'KOREA_DESK_ORIGINAL_PENDING_SCOPE_CHANGED');
+  }
+  return { manifest, receipt, job, completedAt: goLive[0].completed_at };
+}
+
+export function koreaDeskBootstrapClosure(evidence) {
+  const original = koreaDeskBootstrap;
+  requireCondition(evidence && Object.keys(evidence).length === 7
+    && ['alias', 'deveeInventory', 'deveeReport', 'deveeObservedInventory', 'qatInventory', 'productionInventory']
+      .every(key => isDigest(evidence[key])) && Number.isFinite(Date.parse(evidence.observedAt)),
+  'KOREA_DESK_BOOTSTRAP_CLOSURE_EVIDENCE_INVALID');
+  return { operationId: original.releaseId + '-prerequisites', outcome: 'devee_bootstrap_verified_before_promotion',
+    originalRunId: original.runId, originalGoLiveJobId: original.goLiveJobId, originalIntentId: original.intentId,
+    originalBootstrapCheckpoint: original.checkpointId, originalSalesforceJobId: original.jobId,
+    salesforceFingerprint: original.fingerprint, salesforceSourceTreeHash: original.sourceTreeHash,
+    packageSha256: original.packageSha256, evidence, evidenceDigest: digest(evidence) };
+}
+
+export async function verifyKoreaDeskDeveeBootstrap({ history, reviewed, provider, now = () => new Date() }) {
+  const original = koreaDeskBootstrap;
+  const environment = policy.environments.find(item => item.key === 'devee');
+  const reference = history.job;
+  requireCondition(reviewed.fingerprint === original.fingerprint && reviewed.binding.sourceTreeHash === original.sourceTreeHash
+    && reference.id === original.jobId && reference.packageSha256 === original.packageSha256
+    && reference.validationId === null && reference.submittedAt === original.submittedAt,
+  'KOREA_DESK_BOOTSTRAP_REVIEW_CHANGED');
+  await provider.verifyIdentity(environment);
+  const prepared = await provider.prepareBootstrap(environment, reviewed);
+  try {
+    requireCondition(prepared.packageSha256 === reference.packageSha256, 'KOREA_DESK_BOOTSTRAP_PACKAGE_CHANGED');
+  } finally { await prepared.cleanup(); }
+  const report = await provider.report(environment, reference.id);
+  const proof = assertReviewedJobReport(report, { environment, jobId: reference.id,
+    ...reviewedJobExpectations(reviewed, environment, 'bootstrap') });
+  const expectedEffects = new Map([
+    ['CustomField:STEM__c.Korea_Desk_Member__c', true], ['CustomField:STEM__c.Korea_Desk__c', true],
+    ['CustomObject:STEM__c', false],
+    ['PermissionSet:FCOS_Korea_Desk_Editor', true], ['PermissionSet:FCOS_Korea_Desk_Reader', true],
+  ]);
+  const successes = [report.details.componentSuccesses].flat();
+  const descriptors = successes.filter(entry => entry.componentType === '' && entry.fullName === 'package.xml'
+    && entry.success === true && ['package.xml', 'zip/package.xml'].includes(entry.fileName));
+  const components = successes.filter(entry => !descriptors.includes(entry));
+  const ids = components.map(entry => `${entry.componentType}:${entry.fullName}`);
+  const completed = Date.parse(proof.completedAt);
+  requireCondition(completed >= Date.parse(reference.submittedAt) - 30_000 && completed <= Date.parse(history.completedAt)
+    && completed <= now().getTime() && report.checkOnly === false && report.rollbackOnError === true
+    && descriptors.length === 1 && components.length === expectedEffects.size && new Set(ids).size === expectedEffects.size
+    && components.every((entry, index) => expectedEffects.has(ids[index])
+      && entry.created === expectedEffects.get(ids[index]) && entry.changed === true && entry.deleted === false && entry.success === true),
+  'KOREA_DESK_BOOTSTRAP_EFFECT_CHANGED');
+  const inventory = await verifyReviewedOrgInventory({ provider, environment, plan: reviewed,
+    expected: reviewed.nativeInventories.devee.bootstrap, now });
+  requireCondition(isDigest(inventory.observedNativeInventoryHash), 'KOREA_DESK_BOOTSTRAP_INVENTORY_REQUIRED');
+  return { proof, inventory };
+}
+
+async function recoverKoreaDeskDeveeBootstrap({ adoption, manifest, reviewed, provider, github, now }) {
+  const history = await readKoreaDeskBootstrapHistory(github);
+  const { manifest: prior, receipt } = history;
+  const { deveeBootstrapAdoption: locator, ...plan } = manifest.prerequisites.plan;
+  const evidence = receipt?.payload.data.evidence;
+  requireCondition(receipt?.id === adoption.receiptId && digest(locator) === digest(adoption)
+    && manifest.releaseId !== prior.releaseId && manifest.controllerSha !== prior.controllerSha
+    && digest(manifest.candidate) === digest(prior.candidate) && digest(manifest.previous) === digest(prior.previous)
+    && digest(manifest.selection) === digest(prior.selection) && digest(manifest.paths) === digest(prior.paths)
+    && digest(manifest.build.publicEnvironment) === digest(prior.build.publicEnvironment)
+    && manifest.prerequisites.adapter === prior.prerequisites.adapter
+    && digest(plan) === digest(prior.prerequisites.plan)
+    && evidence.alias === digest(prior.previous),
+  'KOREA_DESK_BOOTSTRAP_SUCCESSOR_SCOPE_CHANGED');
+  const { proof, inventory } = await verifyKoreaDeskDeveeBootstrap({ history, reviewed, provider, now });
+  requireCondition(proof.reportSha256 === evidence.deveeReport
+    && inventory.observedNativeInventoryHash === evidence.deveeObservedInventory,
+  'KOREA_DESK_BOOTSTRAP_RECEIPT_POSTIMAGE_CHANGED');
+  const verifiedAt = now().toISOString();
+  return { ...proof, fingerprint: reviewed.fingerprint, validationJobId: null, submittedAt: history.job.submittedAt,
+    packageSha256: history.job.packageSha256, verifiedAt, reconciledAt: verifiedAt,
+    recoveredEvidenceDigest: digest({ receiptId: receipt.id, originalCheckpoint: koreaDeskBootstrap.checkpointId,
       providerReportSha256: proof.reportSha256, inventoryReceiptSha256: inventory.evidenceSha256 }) };
 }
 
