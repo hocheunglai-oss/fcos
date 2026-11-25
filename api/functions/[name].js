@@ -211,7 +211,6 @@ import { handleHedgeDeskEntity, handleHedgeMarkets } from '../_hedgeDeskService.
 import { parseMopsText } from '../_hedgeMops.js';
 import { generateHedgeInvoicePdf, saveHedgeInvoicePdf, sendHedgeInvoiceEmailIdempotent } from '../_hedgeDocuments.js';
 import { approveAndSendHedgeSfsReport, getHedgeSfsFile, getHedgeSfsMonthReport, hedgeSfsHealth } from '../_hedgeSfsService.js';
-import { hedgeAssistantSettings, runHedgeAssistant } from '../_hedgeAssistant.js';
 import { getHedgeSalesforceMapping, previewHedgeSalesforce } from '../_hedgeSalesforce.js';
 import {
   applyPhysicalHedgeSalesforce,
@@ -470,7 +469,7 @@ const ADMIN_CAPABILITIES = [
   { id: 'hedge_book_manage', label: 'Manage Hedge Book', description: 'Create and maintain physical trades, paper hedges, markets, and counterparties.' },
   { id: 'hedge_settlement_manage', label: 'Manage Hedge Settlement', description: 'Manage clearing entries, settlement invoices, and settlement notices.' },
   { id: 'hedge_close_approve', label: 'Approve Hedge Close and Reports', description: 'Close or reopen months and approve SFS reports.' },
-  { id: 'hedge_admin', label: 'Administer Hedge Desk', description: 'Manage Hedge Desk configuration, integrations, and Trading Assistant model.' },
+  { id: 'hedge_admin', label: 'Administer Hedge Desk', description: 'Manage Hedge Desk configuration and integrations.' },
   { id: 'special_terms_manage', label: 'Manage Special Terms', description: 'Create, edit, and remove Salesforce Special Terms and matching rules.' },
   { id: 'special_terms_clause_approve', label: 'Approve Special Term Clauses', description: 'Approve, retire, migrate, and roll back versioned Salesforce clause wording.' },
   { id: 'broker_settings_manage', label: 'Manage Broker Commission Settings', description: 'Change the company exchange-rate provider used by Broker Commissions.' }, { id: 'xero_portal_manage', label: 'Manage Xero Portal', description: 'Connect Xero, create receipt draft bills, rename contacts, and archive unused contacts.' },
@@ -1264,8 +1263,6 @@ const HANDLER_MODULE_ACCESS = {
   hedgePhysicalSalesforceStatus: ['hedge_desk'],
   hedgePhysicalSalesforcePreview: ['hedge_desk'],
   hedgePhysicalSalesforceApply: ['hedge_desk'],
-  hedgeDeskAssistant: ['hedge_desk'],
-  hedgeDeskAssistantSettings: ['hedge_desk', 'settings'],
   hedgeDeskMaintenanceCron: [],
   marketReportDriveSyncCron: [],
   masterContractsList: ['master_contracts'],
@@ -6685,13 +6682,12 @@ async function fcosUpdatesMailHealthRow() {
 async function hedgeDeskHealthRow() {
   const client = supabaseAdminClient();
   const result = await timedCheck(async () => {
-    const [physical, hedge, market, settlement, sfs, assistant, registry] = await Promise.all([
+    const [physical, hedge, market, settlement, sfs, registry] = await Promise.all([
       client.from('hedge_physical_trades').select('id', { count: 'exact', head: true }),
       client.from('hedge_swap_hedges').select('id', { count: 'exact', head: true }),
       client.from('hedge_market_prices').select('id', { count: 'exact', head: true }),
       client.from('hedge_invoices').select('id', { count: 'exact', head: true }),
       hedgeSfsHealth(client),
-      hedgeAssistantSettings(client).catch((error) => ({ error: error.message })),
       listGraphEmailRegistry(client),
     ]);
     const databaseError = physical.error || hedge.error || market.error || settlement.error;
@@ -6705,8 +6701,6 @@ async function hedgeDeskHealthRow() {
       marketPrices: market.count || 0,
       settlementInvoices: settlement.count || 0,
       sfs,
-      assistantModel: assistant.modelId || null,
-      assistantApiConfigured: assistant.apiConfigured === true,
       missingEmailRoutes: missingRoutes,
       healthStatus: missingRoutes.length || sfs.status === 'Warning' ? 'warning' : 'online',
     };
@@ -6715,7 +6709,7 @@ async function hedgeDeskHealthRow() {
     id: 'hedge-desk',
     name: 'Hedge Desk Services',
     category: 'Trading',
-    purpose: 'Native physical trades, paper hedges, markets, settlement, SFS reporting, Salesforce synchronization, private documents, and Trading Assistant.',
+    purpose: 'Native physical trades, paper hedges, markets, settlement, SFS reporting, Salesforce synchronization, and private documents.',
     scope: 'server',
     provider: 'FCOS',
     endpoint: '/api/functions/hedgeDeskEntity',
@@ -18553,11 +18547,6 @@ async function hedgePhysicalSalesforceApply(body = {}, req = null, accessContext
   return applyPhysicalHedgeSalesforce(context.client, context.profile, body);
 }
 
-async function hedgeDeskAssistant(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  return runHedgeAssistant(context.client, context.profile, body);
-}
-
 async function marketAssistant(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
   return runMarketAssistant(context.client, context.profile, body);
@@ -18574,12 +18563,6 @@ async function marketAssistantSettingsSave(body = {}, req = null, accessContext 
   const result = await saveMarketAssistantSettings(context.client, context.profile, body, { canManage });
   await writeAdminAudit(context.client, context.profile, 'market_assistant_model_changed', null, null, { modelId: result.modelId, revision: result.revision });
   return result;
-}
-
-async function hedgeDeskAssistantSettings(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  const capabilities = await hedgeCapabilities(context);
-  return { ...(await hedgeAssistantSettings(context.client)), canManage: capabilities.hedge_admin === true };
 }
 
 async function hedgeDeskMaintenanceCron(body = {}, req = null) {
@@ -19208,8 +19191,6 @@ const handlers = {
   hedgePhysicalSalesforceStatus,
   hedgePhysicalSalesforcePreview,
   hedgePhysicalSalesforceApply,
-  hedgeDeskAssistant,
-  hedgeDeskAssistantSettings,
   hedgeDeskMaintenanceCron,
   marketReportDriveSyncCron,
   masterContractsList,

@@ -10,7 +10,6 @@ test('every live Hedge Desk valuation surface consumes the governed market snaps
   const hedges = read('src/hedge/views/HedgesView.jsx');
   const settlement = read('src/hedge/views/SettlementView.jsx');
   const domain = read('src/hedge/lib/domain.js');
-  const assistant = read('src/hedge/components/AssistantPanel.jsx');
 
   assert.match(overview, /governedValuation: data\.marketValuation/);
   assert.match(overview, /buildExposureRows\([\s\S]*data\.marketValuation/);
@@ -20,7 +19,6 @@ test('every live Hedge Desk valuation surface consumes the governed market snaps
   assert.match(settlement, /buildCounterpartySettlementGroups\(\s*summary\.monthSwaps,\s*data\.mops,\s*settings\.rates,\s*settings\.general\.sgo_bbl_per_mt,\s*data\.marketValuation,\s*data\.counterparties,?\s*\)/);
   assert.match(domain, /mtm: mtm == null \? null : roundMoney\(mtm\)/);
   assert.match(settlement, /Settlement document generation is blocked until every hedge has a governed market value/);
-  assert.match(assistant, /calcSwapMtm\([^\n]+data\.marketValuation\)/);
 });
 
 test('active governed valuation never accepts a monthly scalar or silently zeroes missing points', () => {

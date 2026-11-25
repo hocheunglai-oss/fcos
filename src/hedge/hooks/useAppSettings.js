@@ -92,6 +92,5 @@ export function useAppSettings() {
     forwardSpreads: values?.fwd_spreads || {},
     forwardSpreadsUpdatedAt: updatedAt.fwd_spreads || null,
     salesforceMapping: values?.salesforce_mapping || {},
-    assistantModel: typeof values?.assistant_model === 'string' ? values.assistant_model : values?.assistant_model?.modelId || null,
   }), [error, load, loading, savingKey, update, updatedAt, values]);
 }

@@ -18,4 +18,3 @@ export const getHedgeSalesforceMapping = () => invokeHedgeFunction('hedgeDeskSal
 export const getPhysicalHedgeSalesforceStatus = (payload) => invokeHedgeFunction('hedgePhysicalSalesforceStatus', payload);
 export const previewPhysicalHedgeSalesforce = (payload) => invokeHedgeFunction('hedgePhysicalSalesforcePreview', payload);
 export const applyPhysicalHedgeSalesforce = (payload) => invokeHedgeFunction('hedgePhysicalSalesforceApply', payload);
-export const runHedgeAssistant = (payload) => invokeHedgeFunction('hedgeDeskAssistant', payload);

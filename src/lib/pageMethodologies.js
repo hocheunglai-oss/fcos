@@ -719,7 +719,7 @@ export const SETTINGS_METHODOLOGIES = {
     sections: [
       {
         title: 'Purpose separation',
-        body: 'Dashboard Search, Hedge Trading Assistant, and Email Router Advisor use the same selection, status, token, cost, and last-used format while retaining independent models, usage totals, and management permissions.',
+        body: 'Dashboard Search, Market Assistant, and Email Router Advisor use the same selection, status, token, cost, and last-used format while retaining independent models, usage totals, and management permissions.',
       },
       {
         title: 'Data minimization',

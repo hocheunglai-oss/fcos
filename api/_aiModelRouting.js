@@ -20,7 +20,6 @@ const tasks = Object.freeze({
   market_image: { label: 'Market image extraction', modelId: SOL, effort: 'medium', reason: 'Exact prices, units, and dates require careful extraction' },
   market_report: { label: 'Market report analysis', modelId: SOL, effort: 'medium', reason: 'Evidence-backed analysis of selected series' },
   market_commentary: { label: 'Market commentary', modelId: SOL, effort: 'medium', reason: 'Source-grounded market drivers and risks' },
-  hedge_analysis: { label: 'Trading and exposure analysis', modelId: ASTRA, effort: 'high', reason: 'Financial exposure analysis requires the strongest route' },
   clause_drafting: { label: 'Special Terms drafting', modelId: ASTRA, effort: 'high', reason: 'Contractual qualifiers require the strongest route' },
 });
 

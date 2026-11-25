@@ -186,8 +186,6 @@ const HANDLER_BEHAVIOR = Object.freeze({
   hedgePhysicalSalesforceStatus: mutationPolicy({"cache":"none","externalAction":false,"capability":null}),
   hedgePhysicalSalesforcePreview: readPolicy({"cache":"none","externalAction":false,"capability":"hedge_book_manage"}),
   hedgePhysicalSalesforceApply: mutationPolicy({"cache":"none","externalAction":true,"capability":"hedge_book_manage"}),
-  hedgeDeskAssistant: readPolicy({"cache":"none","externalAction":true,"capability":null}),
-  hedgeDeskAssistantSettings: readPolicy({"cache":"none","externalAction":false,"capability":null}),
   hedgeDeskMaintenanceCron: mutationPolicy({"cache":"none","externalAction":true,"capability":null}),
   marketReportDriveSyncCron: mutationPolicy({"cache":"none","externalAction":true,"capability":null}),
   masterContractsList: readPolicy({"cache":"none","externalAction":false,"capability":null}),

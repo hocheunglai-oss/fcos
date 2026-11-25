@@ -1,4 +1,3 @@
-import { isAllowedAiSelection } from './_aiModelRouting.js';
 import { createHash } from 'node:crypto';
 import { isReadOnlyCiProfile, requireReadOnlyCiOperation } from './_readOnlyCiAccess.js';
 import { isDeploymentReadOnly, requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
@@ -296,11 +295,7 @@ function cleanPayload(config, payload, profile, { creating = false } = {}) {
 }
 
 function sanitizeAppConfigPayload(payload, configKey) {
-  if (configKey === 'assistant_model') {
-    const modelId = typeof payload?.value === 'string' ? payload.value : payload?.value?.modelId;
-    if (!isAllowedAiSelection(modelId)) throw httpError('Select a supported Trading Assistant model.');
-    return { ...payload, value: modelId };
-  }
+  if (configKey === 'assistant_model') throw httpError('The Hedge Desk Trading Assistant has been retired.', 410);
   if (configKey !== 'email_settings') return payload;
   const value = payload?.value && typeof payload.value === 'object' ? payload.value : {};
   const subject = String(value.email_subject || '').trim().slice(0, 500);

@@ -42,7 +42,7 @@ function readyInterpretation() {
   };
 }
 
-test('defines automatic routes for all eight server-owned AI tasks', () => {
+test('defines automatic routes for the supported server-owned AI tasks', () => {
   const cases = [
     ['dashboard_search', SOL, 'medium'],
     ['email_classification', LUNA, 'low'],
@@ -50,7 +50,6 @@ test('defines automatic routes for all eight server-owned AI tasks', () => {
     ['market_image', SOL, 'medium'],
     ['market_report', SOL, 'medium'],
     ['market_commentary', SOL, 'medium'],
-    ['hedge_analysis', ASTRA, 'high'],
     ['clause_drafting', ASTRA, 'high'],
   ];
 
@@ -132,12 +131,10 @@ test('escalates complex market reports to Astra with high reasoning', () => {
   }
 });
 
-test('keeps financial and contractual work on Astra', () => {
-  for (const task of ['hedge_analysis', 'clause_drafting']) {
-    const route = resolveAiModel({ task });
-    assert.equal(route.modelId, ASTRA);
-    assert.equal(route.reasoningEffort, 'high');
-  }
+test('keeps Special Terms drafting on Astra', () => {
+  const route = resolveAiModel({ task: 'clause_drafting' });
+  assert.equal(route.modelId, ASTRA);
+  assert.equal(route.reasoningEffort, 'high');
 });
 
 test('preserves valid manual overrides after complexity classification', () => {

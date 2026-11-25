@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Bot, Building2, ChartNoAxesCombined, FileSpreadsheet, Gauge, Handshake, RefreshCw, Settings2 } from 'lucide-react';
+import { Building2, ChartNoAxesCombined, FileSpreadsheet, Gauge, Handshake, RefreshCw, Settings2 } from 'lucide-react';
 import { ActionsProvider } from '@/hedge/data/ActionsContext';
 import { useDeskData } from '@/hedge/hooks/useDeskData';
 import { useAppSettings } from '@/hedge/hooks/useAppSettings';
@@ -9,7 +9,6 @@ import { PhysicalView } from '@/hedge/views/PhysicalView';
 import { HedgesView } from '@/hedge/views/HedgesView';
 import { SettlementView } from '@/hedge/views/SettlementView';
 import { CounterpartiesView } from '@/hedge/views/CounterpartiesView';
-import { AssistantPanel } from '@/hedge/components/AssistantPanel';
 import HedgeSettingsPanel from '@/hedge/components/HedgeSettingsPanel';
 import { Button, EmptyState, InlineError, StatusBadge } from '@/hedge/components/ui';
 import { useAuth } from '@/lib/AuthContext';
@@ -34,7 +33,6 @@ export default function HedgeDesk() {
   const canAdmin = hasSnapshot && !deploymentReadOnly && hasCapability('hedge_admin');
   const requestedTab = searchParams.get('tab');
   const [tab, setTab] = useState(() => requestedTab === 'administration' && canAdmin ? 'administration' : TABS.some((item) => item.id === requestedTab) ? requestedTab : 'overview');
-  const [assistantOpen, setAssistantOpen] = useState(false);
   const [quickCreateSignals] = useState({ physical: 0, hedges: 0 });
   const capabilities = deploymentReadOnly ? {} : data.capabilities || {};
   const readOnly = !Object.values(capabilities).some(Boolean);
@@ -81,7 +79,6 @@ export default function HedgeDesk() {
           </div>
           <div className="hedge-desk-commandbar__actions">
             <Button icon={RefreshCw} onClick={() => data.reload({ silent: true }).catch(() => {})} disabled={data.refreshing}>{data.refreshing ? 'Refreshing...' : 'Refresh'}</Button>
-            <Button icon={Bot} variant="primary" onClick={() => setAssistantOpen(true)} disabled={!showBook}>Trading Assistant</Button>
           </div>
         </div>
         <nav className="hedge-desk-tabs app-navigation-caption-material" aria-label="Hedge Desk views">
@@ -97,7 +94,6 @@ export default function HedgeDesk() {
         <main className="hedge-desk-content">
           {showBook ? content : <EmptyState title={settings.loading ? 'Loading Hedge Desk settings' : 'Hedge Desk unavailable'} description="Book and settings must load first." icon={RefreshCw} />}
         </main>
-        {showBook && <AssistantPanel open={assistantOpen} onClose={() => setAssistantOpen(false)} data={data} settings={settings} />}
       </div>
     </ActionsProvider>
   );

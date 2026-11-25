@@ -37,7 +37,6 @@ import { appClient } from '@/api/appClient';
 import { DOCUMENT_SOURCE_GROUPS, readDocumentSettings, saveDocumentSettings } from '@/lib/documentSettings';
 import { clearDraft, readDraft, sameDraftValue, useDraftAutosave } from '@/lib/draftAutosave';
 import { useAuth } from '@/lib/AuthContext';
-import HedgeAssistantAiSettings from '@/hedge/components/HedgeAssistantAiSettings';
 import MarketAssistantSettings from '@/components/markets/MarketAssistantSettings';
 import EmailRouterAdvisorAiSettings from '@/components/email-router/EmailRouterAdvisorAiSettings';
 import AiModelSettingsCard from '@/components/settings/AiModelSettingsCard';
@@ -1302,7 +1301,6 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
               privacyNote="Only the user’s search sentence is sent. FCOS validates the structured result and builds Salesforce filters server-side."
             />
           )}
-          {hasCapability('hedge_admin') && <HedgeAssistantAiSettings />}
           {(isAdministrator || hasCapability('hedge_admin')) && <MarketAssistantSettings />}
           {isAdministrator && <EmailRouterAdvisorAiSettings />}
           </div>

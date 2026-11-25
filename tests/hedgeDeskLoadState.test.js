@@ -14,7 +14,7 @@ const modules = {
   react: React,
   'react/jsx-runtime': jsxRuntime,
   'react-router-dom': { useNavigate: () => noop, useSearchParams: () => [new URLSearchParams(), noop] },
-  'lucide-react': Object.fromEntries(['Bot', 'Building2', 'ChartNoAxesCombined', 'FileSpreadsheet', 'Gauge', 'Handshake', 'RefreshCw', 'Settings2'].map((name) => [name, () => null])),
+  'lucide-react': Object.fromEntries(['Building2', 'ChartNoAxesCombined', 'FileSpreadsheet', 'Gauge', 'Handshake', 'RefreshCw', 'Settings2'].map((name) => [name, () => null])),
   '@/hedge/data/ActionsContext': { ActionsProvider: ({ children }) => children },
   '@/hedge/hooks/useDeskData': { useDeskData: () => deskData },
   '@/hedge/hooks/useAppSettings': { useAppSettings: () => appSettings },
@@ -23,7 +23,6 @@ const modules = {
   '@/hedge/views/HedgesView': { HedgesView: loadedView },
   '@/hedge/views/SettlementView': { SettlementView: loadedView },
   '@/hedge/views/CounterpartiesView': { CounterpartiesView: loadedView },
-  '@/hedge/components/AssistantPanel': { AssistantPanel: () => React.createElement('div', null, 'Loaded-book assistant') },
   '@/hedge/components/HedgeSettingsPanel': { default: loadedView },
   '@/lib/AuthContext': { useAuth: () => ({ hasCapability: () => true }) },
   '@/hedge/components/ui': {
@@ -56,14 +55,14 @@ test('initial Hedge Desk failure shows the actual error without invented empty p
   assert.match(markup, /role="alert"/);
   assert.match(markup, /This verification environment permits read-only operations/);
   assert.match(markup, /Hedge Desk unavailable/);
-  assert.doesNotMatch(markup, /No position exposure|No audit activity|Cash USD 0\.00|data-loaded-book|Loaded-book assistant/);
+  assert.doesNotMatch(markup, /No position exposure|No audit activity|Cash USD 0\.00|data-loaded-book/);
 });
 
 test('successful empty snapshots may show true empty states and cached refresh failures remain explicitly stale', () => {
   const lastUpdated = new Date('2026-10-01T04:00:00Z');
   const empty = render({ lastUpdated });
   assert.match(empty, /No position exposure/);
-  assert.doesNotMatch(empty, /last successfully loaded book/);
+  assert.doesNotMatch(empty, /last successfully loaded book|Trading Assistant/);
   const stale = render({ lastUpdated, error: new Error('Refresh read failed') });
   assert.match(stale, /Refresh read failed/);
   assert.match(stale, /last successfully loaded book/);
