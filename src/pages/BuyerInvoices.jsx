@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   CalendarClock,
@@ -20,8 +20,6 @@ import {
   Upload,
   X,
 } from 'lucide-react';
-import ReactQuill from 'react-quill-new';
-import 'react-quill-new/dist/quill.snow.css';
 import { appClient } from '@/api/appClient';
 import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
 import PageHeader from '@/components/common/PageHeader';
@@ -97,6 +95,8 @@ const DEFAULT_EMAIL_SETTINGS = {
   paymentReminderSubject: 'Payment Reminder - {{buyerName}} - Outstanding Buyer Invoices',
   paymentReminderBody: `<p>Dear {{primaryRecipientName}},</p><p>Please find below the outstanding buyer invoices for your attention.</p><p>${INVOICE_TABLE_TOKEN}</p><p>This reminder includes overdue invoices and invoices due within {{daysAhead}} days. Please arrange payment or let us know the expected payment date.</p><p><strong>Late payment interest warning:</strong> where payment remains overdue, a late payment interest charge of <strong>2.00% per month</strong> may apply.</p><p>Regards,<br>Fratelli Cosulich</p>`,
 };
+
+const PaymentEmailEditor = lazy(() => import('@/components/payments/PaymentEmailEditor'));
 
 const QUILL_MODULES = {
   toolbar: [
@@ -2321,14 +2321,16 @@ function PaymentReminderModal({ row, rows = [], initialSettings, open, daysAhead
                           onDragOver={(event) => templateEditing && event.preventDefault()}
                           onDrop={dropReminderBodyToken}
                         >
-                          <ReactQuill
-                            ref={reminderBodyEditorRef}
-                            theme="snow"
-                            modules={QUILL_MODULES}
-                            value={form.body}
-                            readOnly={!templateEditing}
-                            onChange={(value) => updateForm('body', value)}
-                          />
+                          <Suspense fallback={<p className="p-3 text-sm text-muted-foreground" role="status">Loading email editor…</p>}>
+                            <PaymentEmailEditor
+                              ref={reminderBodyEditorRef}
+                              theme="snow"
+                              modules={QUILL_MODULES}
+                              value={form.body}
+                              readOnly={!templateEditing}
+                              onChange={(value) => updateForm('body', value)}
+                            />
+                          </Suspense>
                         </div>
                         <p className="text-xs text-slate-500">Invoice table position: <span className="font-mono">{INVOICE_TABLE_TOKEN}</span></p>
                       </div>
@@ -2553,7 +2555,6 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
   const [copiedRowIds, setCopiedRowIds] = useState(() => new Set());
   const traderFilterInitialized = useRef(false);
   const initialBuyerTraderFilter = useRef(initialFilters);
-  const internalEmailEditorRef = useRef(null);
   const deepLinkedCollectionOpened = useRef(false);
 
   const emailDirty = useMemo(() => !sameSettings(emailSettings, savedEmailSettings), [emailSettings, savedEmailSettings]);
@@ -3238,14 +3239,15 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
                         !internalEmailEditing && 'opacity-85',
                       )}
                     >
-                      <ReactQuill
-                        ref={internalEmailEditorRef}
-                        theme="snow"
-                        modules={QUILL_MODULES}
-                        value={emailSettings.intro}
-                        readOnly={!internalEmailEditing}
-                        onChange={(value) => updateEmailSetting('intro', value)}
-                      />
+                      <Suspense fallback={<p className="p-3 text-sm text-muted-foreground" role="status">Loading email editor…</p>}>
+                        <PaymentEmailEditor
+                          theme="snow"
+                          modules={QUILL_MODULES}
+                          value={emailSettings.intro}
+                          readOnly={!internalEmailEditing}
+                          onChange={(value) => updateEmailSetting('intro', value)}
+                        />
+                      </Suspense>
                     </div>
                     <p className="text-xs text-muted-foreground">
                       Available placeholders: {'{{reportStart}}'}, {'{{reportEnd}}'}, {'{{daysAhead}}'}.

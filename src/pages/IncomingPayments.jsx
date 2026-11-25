@@ -1,8 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { format } from 'date-fns';
 import { AlertTriangle, Banknote, Eye, Loader2, Mail, Pencil, RefreshCw, Save, Search, Send, Settings2, WalletCards, X } from 'lucide-react';
-import ReactQuill from 'react-quill-new';
-import 'react-quill-new/dist/quill.snow.css';
 import { appClient } from '@/api/appClient';
 import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
 import PageHeader from '@/components/common/PageHeader';
@@ -32,6 +30,8 @@ import { useAuth } from '@/lib/AuthContext';
 import { readPageState, writePageState } from '@/lib/pageStateCache';
 import { clientSessionState } from '@/lib/clientSessionState';
 import { cn } from '@/lib/utils';
+
+const PaymentEmailEditor = lazy(() => import('@/components/payments/PaymentEmailEditor'));
 
 const PAGE_STATE_KEY = 'incoming-payments';
 const RECEIVABLE_PAYMENTS_TABLE_TOKEN = '{{receivablePaymentsTable}}';
@@ -1420,14 +1420,16 @@ export default function IncomingPayments({ reconciliationItems = [], embedded = 
                             if (token) insertEmailToken(token);
                           }}
                         >
-                          <ReactQuill
-                            ref={emailContentEditorRef}
-                            theme="snow"
-                            modules={QUILL_MODULES}
-                            value={emailSettings.intro}
-                            readOnly={!emailTemplateEditing}
-                            onChange={(value) => updateEmailSetting('intro', value)}
-                          />
+                          <Suspense fallback={<p className="p-3 text-sm text-muted-foreground" role="status">Loading email editor…</p>}>
+                            <PaymentEmailEditor
+                              ref={emailContentEditorRef}
+                              theme="snow"
+                              modules={QUILL_MODULES}
+                              value={emailSettings.intro}
+                              readOnly={!emailTemplateEditing}
+                              onChange={(value) => updateEmailSetting('intro', value)}
+                            />
+                          </Suspense>
                         </div>
                         <p className="text-xs text-slate-500">
                           Table tokens: <span className="font-mono">{RECEIVABLE_PAYMENTS_TABLE_TOKEN}</span> and <span className="font-mono">{BUYER_CIA_TABLE_TOKEN}</span>
@@ -1609,14 +1611,16 @@ export default function IncomingPayments({ reconciliationItems = [], embedded = 
                   onDragOver={(event) => interestTemplateEditing && event.preventDefault()}
                   onDrop={(event) => dropInterestToken('body', event)}
                 >
-                  <ReactQuill
-                    ref={interestContentEditorRef}
-                    theme="snow"
-                    modules={QUILL_MODULES}
-                    value={interestEmailSettings.body}
-                    readOnly={!interestTemplateEditing}
-                    onChange={(value) => updateInterestEmailSetting('body', value)}
-                  />
+                  <Suspense fallback={<p className="p-3 text-sm text-muted-foreground" role="status">Loading email editor…</p>}>
+                    <PaymentEmailEditor
+                      ref={interestContentEditorRef}
+                      theme="snow"
+                      modules={QUILL_MODULES}
+                      value={interestEmailSettings.body}
+                      readOnly={!interestTemplateEditing}
+                      onChange={(value) => updateInterestEmailSetting('body', value)}
+                    />
+                  </Suspense>
                 </div>
                 <p className="text-xs text-muted-foreground">
                   Place <span className="font-mono">{INTEREST_CALCULATION_TABLE_TOKEN}</span> where the calculation table should appear.
