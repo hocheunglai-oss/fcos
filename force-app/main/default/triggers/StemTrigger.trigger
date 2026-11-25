@@ -1,7 +1,4 @@
 trigger StemTrigger on STEM__c(before insert, before update, after insert, after update, before delete, after delete) {
-    if (Trigger.isBefore && !Trigger.isDelete) {
-        StemTriggerHandler.enforceKoreaDeskMaintenance(Trigger.new, Trigger.oldMap);
-    }
     if (ContextManager.skipTriggers) return;
     if(Trigger.isInsert && Trigger.isAfter){
         StemTriggerHandler.createCashflow(Trigger.new);
