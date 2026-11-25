@@ -276,9 +276,9 @@ test('special-discount finance uses dated receipts, reconciled credits and docum
   const verifiedDebit = { ...debit, Buyer_Invoice__c: creditId, Payment_Currency__c: 'USD', Bank_Currency__c: 'USD',
     Bank_Native_Amount__c: 15000, Bank_FX_Evidence__c: 'Reviewed statement',
     Payment_Operation_Id__c: 'Reviewed operation', Payment_Request_Fingerprint__c: 'Request fingerprint' };
-  const makeLoader = ({ supplierAmount, supplierDate, gross, discount, creditDate, buyerPayments }) => {
+  const makeLoader = ({ supplierAmount, supplierDate, gross, discount, creditDate, buyerPayments, receivable = 0, supplierBank = 'UBS' }) => {
     const evidence = {
-      STEM__c: [{ Id: stemId, Account__c: buyer, QLIK_Receivable_Balance__c: 0 }],
+      STEM__c: [{ Id: stemId, Account__c: buyer, QLIK_Receivable_Balance__c: receivable }],
       Supplier_Invoice__c: [{ Id: invoiceId, STEM__c: stemId, Supplier__c: supplier, Invoice_Amount__c: supplierAmount, Payable_Balance__c: 0 }],
       Invoice__c: [
         { Id: originalId, STEM__c: stemId, Name: 'TEST-INV-1', Amount__c: gross },
@@ -287,7 +287,7 @@ test('special-discount finance uses dated receipts, reconciled credits and docum
       STEM_Extra_Cost__c: [{ Id: 'a04000000000001', STEM__c: stemId, Product2Id__r: { Name: 'SPECIAL DISCOUNT' },
         Buyer_Invoice__c: creditId, Cancelled__c: false }],
       Payment__c: [{ Id: 'a03000000000001', STEM__c: stemId, Account__c: supplier, Supplier_Invoice__c: invoiceId,
-        Amount__c: supplierAmount, Date__c: supplierDate, Bank__c: 'UBS', RecordType: { DeveloperName: 'Payable' } }],
+        Amount__c: supplierAmount, Date__c: supplierDate, Bank__c: supplierBank, RecordType: { DeveloperName: 'Payable' } }],
       STEM_Line_Item__c: [],
     };
     return createDashboardFinanceLoader({
@@ -311,12 +311,23 @@ test('special-discount finance uses dated receipts, reconciled credits and docum
   const refundCase = { supplierAmount: 1000000, supplierDate: '2026-08-20', gross: 1050000, discount: 15000, creditDate: '2026-08-01' };
   const buyerReceipt = buyerPayment('a03000000000002', 1050000, '2026-08-22');
   const caseStem = { ...stem, buyer: 1035000, netPnl: 35000 };
-  for (const unresolvedDebit of [debit, { ...verifiedDebit, Cash_Event__c: 'Original cash event' }, { ...verifiedDebit, Bank_Native_Amount__c: 14999 }]) {
-    const [unverified] = await makeLoader({ ...refundCase, buyerPayments: [buyerReceipt, unresolvedDebit] })([caseStem], settings, '2026-11-25');
-    assert.equal(unverified.finance.financeCost, null);
-    assert.match(unverified.finance.issues.join(' '), /no verified refund or credit application/);
-  }
   const caseSettings = { ...settings, bankChargesUsd: { ...settings.bankChargesUsd, UBS: 12 } };
+  for (const unresolvedDebit of [debit, { ...verifiedDebit, Cash_Event__c: 'Original cash event' }, { ...verifiedDebit, Bank_Native_Amount__c: 14999 }]) {
+    const [unclassified] = await makeLoader({ ...refundCase, buyerPayments: [buyerReceipt, unresolvedDebit] })([caseStem], caseSettings, '2026-11-25');
+    assert.equal(unclassified.finance.status, 'settled');
+    assert.equal(unclassified.finance.financeCost, 273.97);
+    assert.equal(unclassified.finance.ebit, 34714.03);
+    assert.equal(unclassified.finance.buyerCashReceived, null);
+    assert.equal(unclassified.finance.throughDate, null);
+    assert.deepEqual(unclassified.finance.discountSettlement, { method: 'unclassified', minimumFinanceCost: 273.97, maximumFinanceCost: 273.97 });
+  }
+
+  for (const override of [{ supplierAmount: 1040000 }, { receivable: 1 }, { supplierBank: 'unverified' }]) {
+    const [incomplete] = await makeLoader({ ...refundCase, buyerPayments: [buyerReceipt, debit], ...override })([caseStem], caseSettings, '2026-11-25');
+    assert.equal(incomplete.finance.status, 'unavailable');
+    assert.equal(incomplete.finance.financeCost, null);
+    assert.equal(incomplete.finance.ebit, null);
+  }
   const [refunded] = await makeLoader({ ...refundCase, buyerPayments: [buyerReceipt, verifiedDebit] })([caseStem], caseSettings, '2026-11-25');
   assert.equal(refunded.finance.financeCost, 273.97);
   assert.equal(refunded.finance.buyerCashReceived, 1035000);

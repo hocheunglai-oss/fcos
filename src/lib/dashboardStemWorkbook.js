@@ -57,12 +57,13 @@ function exportRowCells(row, includeFinanceCosts, commonCurrency) {
   const bankCharge = finiteNumber(finance?.bankCharge);
   const ebit = finiteNumber(finance?.ebit);
   const issues = joined([...(finance?.issues || []), ...(finance?.bankChargeIssues || [])]);
-  const evidence = finance ? `${finance.status || (complete ? 'Complete' : 'Unavailable')}${issues ? `: ${issues}` : ''}` : 'Unavailable';
+  const status = finance?.status === 'settled' && !issues ? 'Settled' : finance?.status;
+  const evidence = finance ? `${status || (complete ? 'Complete' : 'Unavailable')}${issues ? `: ${issues}` : ''}` : 'Unavailable';
   cells.push(
     financeCost != null ? moneyCell(financeCost) : textCell('Unavailable'),
     finance?.bankChargeComplete === true && bankCharge != null ? moneyCell(bankCharge) : textCell('Unavailable'),
     complete && ebit != null ? moneyCell(ebit) : textCell('Unavailable'),
-    textCell(cancellationEvidence && finance ? `${cancellationEvidence} — ${evidence}` : cancellationEvidence || evidence),
+    textCell(cancellationEvidence || evidence),
   );
   return cells;
 }

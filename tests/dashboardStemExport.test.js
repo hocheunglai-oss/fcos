@@ -376,7 +376,7 @@ test('binary XLS retains cancelled STEMs and identifies them with or without fin
       const blob = await createDashboardStemWorkbook({
         rows: [
           { name, status: 'Cancelled', port: { name: port }, buyer: 0, netPnl: 0, currency: 'USD',
-            finance: { complete: false, status: 'missing_evidence', issues: ['No final invoice evidence'] } },
+            finance: { complete: true, bankChargeComplete: true, financeCost: 7.25, bankCharge: 3, ebit: -10.25, status: 'missing_evidence', issues: ['No final invoice evidence'] } },
           { name: 'Active STEM', status: 'Delivered', buyer: 10, netPnl: 2, currency: 'USD' },
         ],
         filterPayload: { filters: { koreaDeskMode } },
@@ -388,12 +388,23 @@ test('binary XLS retains cancelled STEMs and identifies them with or without fin
       const hasFinance = includeFinanceCosts || koreaDeskMode === 'include';
       assert.equal(evidenceIndex, hasFinance ? 15 : 12);
       assert.equal(cancelled[0], name);
-      assert.equal(cancelled[evidenceIndex], hasFinance
-        ? 'Cancelled STEM — missing_evidence: No final invoice evidence'
-        : 'Cancelled STEM');
+      assert.equal(cancelled[evidenceIndex], 'Cancelled STEM');
+      if (hasFinance) assert.deepEqual(cancelled.slice(12, 15), [7.25, 3, -10.25]);
       assert.equal(active[evidenceIndex], hasFinance ? 'Unavailable' : '');
     }
   }
+});
+
+test('XLS capitalizes settled only when finance has no issues and preserves finance input', () => {
+  const clean = { complete: true, bankChargeComplete: true, financeCost: 5, bankCharge: 2, ebit: 13, status: 'settled', issues: [], bankChargeIssues: [] };
+  const disputed = { ...clean, issues: ['Receipt needs review'], bankChargeIssues: ['Fee needs review'] };
+  const original = structuredClone(disputed);
+  const rows = utils.sheet_to_json(buildDashboardStemWorkbook({ includeFinanceCosts: true, rows: [
+    { currency: 'USD', finance: clean }, { currency: 'USD', finance: disputed },
+  ] }).Sheets.STEMs, { header: 1 });
+  assert.equal(rows[1][15], 'Settled');
+  assert.equal(rows[2][15], 'settled: Receipt needs review; Fee needs review');
+  assert.deepEqual(disputed, original);
 });
 
 test('oversized Dashboard selections split into bounded worksheet chunks', () => {

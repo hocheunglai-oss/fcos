@@ -8686,7 +8686,7 @@ async function dashboardAnalyticsUncached(body = {}, req = null, accessContext =
 }
 
 async function cachedDecisionDashboard(handler, body, req, accessContext, ttlSeconds, loader, financeContext = null) {
-  const cachePayload = { ...body, cancellationFilterVersion: 2, ...(body.disputeOnly === true ? { disputeFilterVersion: 2 } : {}), ...(financeContext ? { financeVersion: 6, financeSnapshot: { revision: financeContext.settings.revision, asOfDate: financeContext.asOfDate } } : {}) };
+  const cachePayload = { ...body, cancellationFilterVersion: 2, ...(body.disputeOnly === true ? { disputeFilterVersion: 2 } : {}), ...(financeContext ? { financeVersion: 7, financeSnapshot: { revision: financeContext.settings.revision, asOfDate: financeContext.asOfDate } } : {}) };
   delete cachePayload.force;
   delete cachePayload.forceRefresh;
   delete cachePayload.refresh;
