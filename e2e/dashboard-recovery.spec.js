@@ -211,6 +211,36 @@ test.describe('Dashboard selections and actions', () => {
     expect(exposureEntities).toEqual(['B-both', 'B-supplier']);
   });
 
+  test('cancels an EBIT download when finance settings change and waits for a current summary', async ({ page }) => {
+    const downloads = [];
+    page.on('download', (download) => downloads.push(download.suggestedFilename()));
+    await openSelection(page);
+    await expect(page.getByLabel('USD Gross Profit: 101')).toBeVisible();
+    await page.getByRole('switch', { name: 'Show EBIT in place of Gross Profit' }).click();
+    await page.getByRole('tab', { name: 'STEMs' }).click();
+    const exportButton = page.getByRole('button', { name: 'Export XLS' });
+    await expect(exportButton).toBeEnabled();
+    await page.evaluate(() => { window.dashboardRecovery.holdExport = true; });
+    await exportButton.click();
+    await expect.poll(() => page.evaluate(() => window.dashboardRecovery.pending.length)).toBe(1);
+
+    await block(page, [SUMMARY], 'A');
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent('fcos:finance-settings-updated')));
+    await expect(exportButton).toBeDisabled();
+    await expect(page.getByRole('cell', { name: 'STEM A ordinary' })).toBeVisible();
+    expect(await page.evaluate(() => window.dashboardRecovery.pending[0].signal.aborted)).toBe(true);
+    await page.evaluate(async () => {
+      const fixture = window.dashboardRecovery;
+      await fixture.pending.shift().resolve();
+    });
+    await settle(page, 'A', 1, 'reject');
+    await expect(exportButton).toBeDisabled();
+    expect(downloads).toEqual([]);
+    await unblock(page, [SUMMARY], 'A');
+    await page.getByRole('button', { name: 'Retry', exact: true }).click();
+    await expect(exportButton).toBeEnabled();
+  });
+
   test('discards a late AI result when the desk changes without aborting a pending finance summary on AI success', async ({ page }) => {
     await openSelection(page);
     await expect(page.getByLabel('USD Gross Profit: 101')).toBeVisible();
