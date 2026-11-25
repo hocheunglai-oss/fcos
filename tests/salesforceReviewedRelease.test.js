@@ -2652,3 +2652,57 @@ test('Trading FX resumes exact Production preparation after correction supersede
     assert.ok(!f.calls.some(([op]) => ['mirror', 'validate', 'bootstrap'].includes(op)));
   } finally { f.cleanup(); }
 });
+
+test('Korea Desk maintenance admits the exact atomic install or restoration package', () => {
+  const paths = {
+    'ApexClass:StemTriggerHandler': ['classes/StemTriggerHandler.cls', 'classes/StemTriggerHandler.cls-meta.xml'],
+    'ApexTrigger:StemTrigger': ['triggers/StemTrigger.trigger', 'triggers/StemTrigger.trigger-meta.xml'],
+    'CustomField:STEM__c.Account__c': ['objects/STEM__c/fields/Account__c.field-meta.xml'],
+  };
+  const ids = Object.keys(paths);
+  const dependencies = [[], [ids[0]], [ids[1]]];
+  const projectedPaths = Object.values(paths).flat().sort();
+  const original = Object.fromEntries(projectedPaths.map(name => [name, Buffer.from('original ' + name)]));
+  const maintenance = Object.fromEntries(projectedPaths.map(name => [name, Buffer.from('maintenance ' + name)]));
+  const manifestBytes = packageXml(ids);
+  for (const [before, after] of [[original, maintenance], [maintenance, original]]) {
+    const baselineInventory = inventoryFromFiles({ ...files, ...before });
+    const finalInventory = inventoryFromFiles({ ...files, ...after });
+    const stable = inventoryFromFiles(files).files;
+    const raw = { files: baselineInventory.files, inventoryHash: baselineInventory.inventoryHash };
+    const final = { projected: true, files: stable, inventoryHash: projectedNativeInventoryHash(stable, projectedPaths) };
+    const retrieval = { path: 'manifest/stable.xml', sha256: hash('stable'),
+      metadata: { path: 'manifest/maintenance.xml', sha256: hash(manifestBytes) } };
+    const review = {
+      schemaVersion: 1, releaseMode: REVIEWED_SALESFORCE_MODE, baselineMode: INVENTORY_BASELINE_MODE,
+      sourceTreeHash: finalInventory.sourceTreeHash, manifestSha256: hash(manifestBytes), baselineCommit: 'a'.repeat(40),
+      baselineSourceTreeHash: baselineInventory.sourceTreeHash, baselineInventoryHash: baselineInventory.inventoryHash,
+      components: ids.map((id, index) => ({ id, files: paths[id], dependsOn: dependencies[index] })),
+      dependencyReview: { complete: true, reviewer: 'reviewer', evidence: 'reviewed maintenance fixture' },
+      testPlan: { level: 'RunLocalTests', tests: [], minimumTests: 1 },
+      nativeProjection: 'schema-free-korea-desk-maintenance',
+      nativeInventories: Object.fromEntries(policy.environments.map(({ key, orgId }) => [key,
+        { orgId, presentComponents: ids, baseline: raw, final }])),
+      inventoryManifests: { [raw.inventoryHash]: retrieval, [final.inventoryHash]: retrieval },
+    };
+    const create = (descriptor, bootstrapBytes) =>
+      createReviewedSalesforcePlan({ review: descriptor, baselineInventory, finalInventory, manifestBytes, bootstrapBytes, policy });
+    const plan = create(review);
+    assert.equal(plan.binding.bootstrapSha256, null);
+    assert.deepEqual(plan.manifest, ids);
+    for (const { key } of policy.environments) {
+      assert.deepEqual(plan.nativeInventories[key].baseline.absentComponents, []);
+      assert.deepEqual(plan.nativeInventories[key].final.projectionPaths, [...projectedPaths].sort());
+    }
+    const split = structuredClone(review);
+    const bootstrapBytes = packageXml([ids[2]]);
+    split.bootstrap = { sha256: hash(bootstrapBytes), components: [ids[2]], permissionSets: [] };
+    assert.throws(() => create(split, bootstrapBytes), /one atomic package/u);
+    const missingGuard = structuredClone(review);
+    missingGuard.nativeInventories.qat.presentComponents = [ids[0], ids[2]];
+    assert.throws(() => create(missingGuard), /both guard components/u);
+    const missingDependency = structuredClone(review);
+    missingDependency.components[2].dependsOn = [];
+    assert.throws(() => create(missingDependency), /both guard components/u);
+  }
+});
