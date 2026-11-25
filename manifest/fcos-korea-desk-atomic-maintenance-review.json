@@ -3,10 +3,10 @@
   "releaseMode": "reviewed-manifest-incremental-v1",
   "baselineMode": "read-only-owned-tree-inventory",
   "nativeProjection": "schema-free-korea-desk-maintenance",
-  "baselineCommit": "9611d57e48b846c32c142b540a5717ee15cccb27",
+  "baselineCommit": "3c988ee150e1e4a3f4aad07bb2778553ae5b2bcf",
   "baselineSourceTreeHash": "c32d6b55988f3e7206cbb1d7eb7405423813b4f1e7d0ff88da79ad8f422d260f",
   "baselineInventoryHash": "ca9b168c3ef5fab28488d87df815c598f4e0cec90664bc57802c6ca62ef170ae",
-  "sourceTreeHash": "27dae985fbad891e0f988d5c857d0d077f66136c7c0dad8f6c34fe6e5482c9cd",
+  "sourceTreeHash": "287a1d5562ea7f434c93ee7446c470364f5168e59a50c09c9aca3b0f0596317a",
   "manifestSha256": "d375fc17fc2fd3ba3e2f9ce8a5e88803079a5c2db198bcc455accf3272604be3",
   "components": [
     {
@@ -58,7 +58,7 @@
   "dependencyReview": {
     "complete": true,
     "reviewer": "FCOS release operator",
-    "evidence": "Existing Buyer lookup and existing STEM trigger and handler require one all-or-none package. DEVEE and QAT exact package qualification, unchanged naming workflow, exact source-bound active cohort and closed restore baseline."
+    "evidence": "Existing Buyer lookup and existing STEM trigger and handler require one all-or-none package. DEVEE and QAT exact package qualification, unchanged naming workflow, exact source-bound active cohort and closed restore baseline. The Buyer lookup uses the exact error-message element order retrieved from the successful DEVEE deployment."
   },
   "permissionSets": [],
   "destructiveChanges": [],
