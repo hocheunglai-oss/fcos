@@ -38,7 +38,7 @@ import { grossMarginPercent } from '../_dashboardMetrics.js';
 import { buildDashboardDateScopeWhere } from '../_dashboardDateScope.js';
 import { dashboardExportScope } from '../_dashboardExportScope.js';
 import { addDashboardMetricTonQuantity, dashboardLineItemVolume, dashboardMetricTonQuantity, dashboardVolumeLabel, findDashboardUomField } from '../_dashboardVolume.js';
-import { addReportedDashboardQuantity, dashboardCurrency, dashboardCurrentYearDateWindows, dashboardDirectoryFinancialFilters, dashboardDisputeCondition, dashboardMonthlyComparison, dashboardMonthlyFinancialTrend, dashboardMonthlyYearOverYear, dashboardStemStatusFields, dashboardSupplierProductRows, dashboardVolumeWarnings, decodeDashboardCursor, decisionDashboardCompleteness, decisionDashboardSummary, decisionDashboardSupplierAmount, encodeDashboardCursor, normalizeDecisionDashboardFilters, priorEquivalentDateWindows, yearOverYearDateWindows } from '../_decisionDashboard.js';
+import { addReportedDashboardQuantity, dashboardCurrency, dashboardCurrentYearDateWindows, dashboardDirectoryFinancialFilters, dashboardDisputeCondition, dashboardMonthlyComparison, dashboardMonthlyFinancialTrend, dashboardMonthlyYearOverYear, dashboardStemCancelled, dashboardStemStatusFields, dashboardSupplierProductRows, dashboardVolumeWarnings, decodeDashboardCursor, decisionDashboardCompleteness, decisionDashboardSummary, decisionDashboardSupplierAmount, encodeDashboardCursor, normalizeDecisionDashboardFilters, priorEquivalentDateWindows, yearOverYearDateWindows } from '../_decisionDashboard.js';
 import { dashboardAccountRankings } from '../../src/lib/dashboardAccountRankings.js';
 import { loadDashboardAccountInsight } from '../_dashboardAccountInsightService.js';
 import { generateDashboardAccountInsightExport } from '../_dashboardAccountInsightExport.js';
@@ -7997,10 +7997,6 @@ function decisionDashboardNullable(value) {
   return value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)) ? Number(value) : null;
 }
 
-function decisionDashboardCancelled(stem) {
-  return /cancel/i.test(String(stem.Status__c || stem.Status || ''));
-}
-
 function decisionDashboardBuyerBrokerCommissionField(fields = []) {
   const names = new Set(fields.map((field) => field.name));
   return [
@@ -8139,6 +8135,9 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
     if (!portField) throw appError('Country exclusion is unavailable because Salesforce Port metadata could not be validated.', 503, 'DASHBOARD_SCHEMA');
     conditions.push(`(Port__c = null OR Port__r.Country__c = null OR Port__r.Country__c NOT IN (${decisionDashboardValues(filters.excludedCountryCodes)}))`);
   }
+  if (!filters.includeCancelled && stemFields.has('Invoice_Status__c')) {
+    conditions.push("(Invoice_Status__c = null OR Invoice_Status__c != 'Cancelled')");
+  }
   if (!filters.includeCancelled && stemFields.has('Status__c')) {
     const statusField = (stemDescribe.fields || []).find((field) => field.name === 'Status__c');
     const cancelledStatuses = (statusField?.picklistValues || []).map((item) => item.value).filter((value) => /cancel/i.test(String(value || '')));
@@ -8161,7 +8160,7 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
   const parentSelect = ['Id', 'Name', 'CreatedDate'];
   const exportScope = exporting ? dashboardExportScope(stemFields) : null;
   if (exportScope) parentSelect.push(exportScope.revisionField);
-  for (const name of ['Delivery_Date__c', 'Expected_Delivery_Date__c', 'Status__c', 'Type__c', 'Dispute__c', 'Dispute_Status__c', 'CurrencyIsoCode', 'Total_Invoice_Amount__c', 'Total_Invoiced_Amount_From_Suppliers__c', 'Costs_Total__c', 'QLIK_STEM_Line_Item_Total_Cost__c', 'QLIK_Costs_Total_Cost__c']) if (stemFields.has(name)) parentSelect.push(name);
+  for (const name of ['Delivery_Date__c', 'Expected_Delivery_Date__c', 'Status__c', 'Invoice_Status__c', 'Type__c', 'Dispute__c', 'Dispute_Status__c', 'CurrencyIsoCode', 'Total_Invoice_Amount__c', 'Total_Invoiced_Amount_From_Suppliers__c', 'Costs_Total__c', 'QLIK_STEM_Line_Item_Total_Cost__c', 'QLIK_Costs_Total_Cost__c']) if (stemFields.has(name)) parentSelect.push(name);
   if (accountField) parentSelect.push(accountField, 'Account__r.Name', 'Account__r.Inactive_Suspended__c');
   if (portField) parentSelect.push(portField, 'Port__r.Name', 'Port__r.Country__c');
   if (stemFields.has('Vessel__c')) parentSelect.push('Vessel__c', 'Vessel__r.Name');
@@ -8228,7 +8227,7 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
   }
   // The status condition is derived from live picklist metadata when possible;
   // retain this defensive check for non-picklist/custom cancellation values.
-  if (!filters.includeCancelled) stems = stems.filter((stem) => !decisionDashboardCancelled(stem));
+  if (!filters.includeCancelled) stems = stems.filter((stem) => !dashboardStemCancelled(stem));
   const hasMore = pageOnly && stems.length > pageSize;
   const pageStems = pageOnly ? stems.slice(0, pageSize) : stems;
   const stemIds = pageStems.map((stem) => stem.Id);
@@ -8687,7 +8686,7 @@ async function dashboardAnalyticsUncached(body = {}, req = null, accessContext =
 }
 
 async function cachedDecisionDashboard(handler, body, req, accessContext, ttlSeconds, loader, financeContext = null) {
-  const cachePayload = { ...body, ...(body.disputeOnly === true ? { disputeFilterVersion: 2 } : {}), ...(financeContext ? { financeVersion: 5, financeSnapshot: { revision: financeContext.settings.revision, asOfDate: financeContext.asOfDate } } : {}) };
+  const cachePayload = { ...body, cancellationFilterVersion: 2, ...(body.disputeOnly === true ? { disputeFilterVersion: 2 } : {}), ...(financeContext ? { financeVersion: 6, financeSnapshot: { revision: financeContext.settings.revision, asOfDate: financeContext.asOfDate } } : {}) };
   delete cachePayload.force;
   delete cachePayload.forceRefresh;
   delete cachePayload.refresh;

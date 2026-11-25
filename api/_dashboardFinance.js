@@ -1,6 +1,6 @@
 import { isPaymentDataReliableStem, PAYMENT_DATA_RELIABLE_FROM } from '../src/lib/paymentDataReliability.js';
 import { validateAnnualInterestRate, financeError } from './_dashboardFinanceSettings.js';
-import { isFinalBuyerInvoice } from './_buyerFinancialAmount.js';
+import { isBuyerCreditNote, isFinalBuyerInvoice } from './_buyerFinancialAmount.js';
 import { SALESFORCE_CORPORATE_CURRENCY } from './_decisionDashboard.js';
 import { allocateRemittanceCharge, calculateStemBankCharge, deductBankCharge, isSupplierRemittanceAllocation } from './_dashboardBankCharges.js';
 import { isPaymentRemittance } from './_paymentClassification.js';
@@ -43,9 +43,45 @@ function unavailable(issues) {
   return { financeCost: null, ebit: null, complete: false, status: 'unavailable', issues: unique(issues), accruing: false };
 }
 
+function specialDiscountEvidence(stem, invoices, children, asOfDate) {
+  const linkedIds = new Set(children
+    .filter((child) => /^special discount$/i.test(text(child.Product2Id__r?.Name || child.Product__r?.Name)))
+    .map((child) => idKey(child.Buyer_Invoice__c)).filter(Boolean));
+  const issued = invoices.filter((invoice) => invoice.Proforma__c !== true && invoice.Deprecated__c !== true);
+  const credits = issued.filter((invoice) => linkedIds.has(idKey(invoice.Id)) && isBuyerCreditNote(invoice)
+    && cents(invoice.Amount__c) < 0);
+  if (!credits.length) return { credits, settlementDate: null };
+  const amounts = issued.map((invoice) => cents(invoice.Amount__c));
+  const dates = credits.map((invoice) => financeDate(invoice.Invoice_Date__c));
+  // The credit is already in the net billed amount. Its issue date can close
+  // a residual receivable only when the active documents reproduce that amount.
+  const billed = cents(stem.buyer);
+  const reconciles = billed != null && amounts.every((amount) => amount != null)
+    && amounts.reduce((sum, amount) => sum + BigInt(amount), 0n) === BigInt(billed)
+    && dates.every((date) => date && date <= asOfDate);
+  return { credits, settlementDate: reconciles ? dates.sort().at(-1) : null };
+}
+
+function specialDiscountPaymentKind(payment, credits) {
+  if (typeToken(payment.RecordType?.DeveloperName) !== 'receivable' || !(cents(payment.Amount__c) < 0)) return null;
+  const credit = credits.find((invoice) => idKey(invoice.Id) === idKey(payment.Buyer_Invoice__c));
+  const possiblyDiscount = !payment.Buyer_Invoice__c
+    && credits.some((invoice) => cents(invoice.Amount__c) === cents(payment.Amount__c));
+  if (!credit && !possiblyDiscount) return null;
+  // The reviewed native payment action locks these fields and requires actual
+  // statement evidence. A bank name or an equal invoice amount proves no cash.
+  const verified = credit && !payment.Cash_Event__c && !payment.Remittance__c
+    && payment.Payment_Currency__c === 'USD' && payment.Bank_Currency__c === 'USD'
+    && cents(payment.Bank_Native_Amount__c) === -cents(payment.Amount__c)
+    && -cents(payment.Amount__c) <= -cents(credit.Amount__c)
+    && text(payment.Bank__c) && text(payment.Bank_FX_Evidence__c)
+    && text(payment.Payment_Operation_Id__c) && text(payment.Payment_Request_Fingerprint__c);
+  return verified ? 'cash_refund' : 'unverified';
+}
+
 /** Inputs are exact STEM cash allocations, not remittance headers or forecasts. */
 export function calculateStemFinance({ stem, payments = [], supplierInvoices = [], supplierAccountIds = [],
-  finalBuyerInvoiceIssued = false, sourceComplete = true }, { annualInterestRatePct, asOfDate }) {
+  finalBuyerInvoiceIssued = false, specialDiscountSettlementDate = null, sourceComplete = true }, { annualInterestRatePct, asOfDate }) {
   const rate = validateAnnualInterestRate(annualInterestRatePct);
   if (!financeDate(asOfDate)) throw financeError('The financing calculation date is invalid.');
   const issues = [];
@@ -59,7 +95,7 @@ export function calculateStemFinance({ stem, payments = [], supplierInvoices = [
   const invoiceById = new Map(supplierInvoices.map((invoice) => [idKey(invoice.id), invoice]));
   const supplierIds = new Set([...supplierAccountIds, ...supplierInvoices.map((invoice) => invoice.supplierId)].map(idKey).filter(Boolean));
   const seen = new Map(); const cashEvents = []; const invoicePaid = new Map();
-  let buyerAccounted = 0n; let buyerCash = 0n; let lastBuyerReceipt = null; let lastBuyerCashDate = null;
+  let buyerAccounted = 0n; let buyerCash = 0n; let lastBuyerReceipt = null; let lastVerifiedRefund = null; let lastUnverifiedBuyerDebit = null;
   for (const payment of payments) {
     const key = idKey(payment.id);
     if (!key) { issues.push('A payment allocation has no stable identifier.'); continue; }
@@ -97,10 +133,18 @@ export function calculateStemFinance({ stem, payments = [], supplierInvoices = [
       buyerAccounted += BigInt(amount);
       if (type !== 'receivable') continue;
       if (nonCash) { issues.push('A buyer allocation does not establish an actual cash receipt.'); continue; }
+      if (payment.specialDiscountKind === 'unverified') {
+        issues.push('The special discount is documented, but the negative buyer entry has no verified refund or credit application.');
+        continue;
+      }
       buyerCash += BigInt(amount);
       cashEvents.push({ date, amount: -amount });
       if (amount > 0 && (!lastBuyerReceipt || date > lastBuyerReceipt)) lastBuyerReceipt = date;
-      if (amount !== 0 && (!lastBuyerCashDate || date > lastBuyerCashDate)) lastBuyerCashDate = date;
+      if (amount < 0 && payment.specialDiscountKind === 'cash_refund') {
+        if (!lastVerifiedRefund || date > lastVerifiedRefund) lastVerifiedRefund = date;
+      } else if (amount < 0 && (!lastUnverifiedBuyerDebit || date > lastUnverifiedBuyerDebit)) {
+        lastUnverifiedBuyerDebit = date;
+      }
       continue;
     }
     const invoice = payment.supplierInvoiceId ? invoiceById.get(idKey(payment.supplierInvoiceId)) : null;
@@ -131,10 +175,16 @@ export function calculateStemFinance({ stem, payments = [], supplierInvoices = [
     if (difference == null || difference > 1n || difference < -1n) {
       issues.push('Buyer receipts and adjustments do not reconcile to the receivable balance.');
     } else if (balance <= 0) {
-      if (lastBuyerReceipt && lastBuyerCashDate === lastBuyerReceipt) { stopDate = lastBuyerReceipt; settled = true; }
-      else if (lastBuyerCashDate) issues.push('The final buyer cash movement does not establish a settled receipt date.');
-      else if (cashEvents.some((event) => event.amount > 0)) issues.push('The buyer balance is settled without a verifiable final cash receipt date.');
-      else settled = true;
+      if (lastUnverifiedBuyerDebit && (!lastBuyerReceipt || lastUnverifiedBuyerDebit > lastBuyerReceipt)) {
+        issues.push('The final buyer cash movement does not establish a settled receipt date.');
+      } else {
+        const creditDate = financeDate(specialDiscountSettlementDate);
+        const lastSettlement = [lastBuyerReceipt, lastVerifiedRefund, creditDate && creditDate <= asOfDate ? creditDate : null]
+          .filter(Boolean).sort().at(-1);
+        if (lastSettlement) { stopDate = lastSettlement; settled = true; }
+        else if (cashEvents.some((event) => event.amount > 0)) issues.push('The buyer balance is settled without a verifiable final cash receipt date.');
+        else settled = true;
+      }
     }
   } else if (cents(stem.receivableBalance) == null || (cents(stem.receivableBalance) <= 0 && cashEvents.length)) {
     issues.push('Open or settled buyer status cannot be established without final invoice evidence.');
@@ -235,14 +285,19 @@ export function createDashboardFinanceLoader({ queryAll, describeObject, chunkSi
       const stemIds = rows.map((row) => row.id);
       const invoiceSelect = select(invoiceFields, ['Id', 'STEM__c', 'Supplier__c', 'Invoice_Amount__c', 'Payable_Balance__c', 'CurrencyIsoCode']);
       const classificationFields = select(paymentFields, ['Name', 'Reference__c', 'Type__c', 'Payment_Type__c', 'Direction__c', 'Payment_Direction__c', 'Status__c', 'Payment_Status__c']);
-      const paymentSelect = [...select(paymentFields, ['Id', 'STEM__c', 'Account__c', 'Amount__c', 'Date__c', 'Supplier_Invoice__c', 'Volume_Discount__c', 'Is_Volume_Discount__c', 'Is_Deposit__c', 'Commission_Invoice__c', 'Remittance__c', 'Bank__c', 'CurrencyIsoCode']), ...classificationFields, 'RecordType.DeveloperName'];
+      const paymentSelect = [...select(paymentFields, ['Id', 'STEM__c', 'Account__c', 'Amount__c', 'Date__c', 'Supplier_Invoice__c', 'Volume_Discount__c', 'Is_Volume_Discount__c', 'Is_Deposit__c', 'Commission_Invoice__c', 'Remittance__c', 'Bank__c', 'CurrencyIsoCode',
+        'Buyer_Invoice__c', 'Cash_Event__c', 'Payment_Currency__c', 'Bank_Currency__c', 'Bank_Native_Amount__c',
+        'Bank_FX_Evidence__c', 'Payment_Operation_Id__c', 'Payment_Request_Fingerprint__c']), ...classificationFields, 'RecordType.DeveloperName'];
+      const extraProductLookup = ['Product2Id__c', 'Product__c'].find((field) => extraFields.has(field));
+      const extraSelect = select(extraFields, ['Id', 'STEM__c', 'Supplier_Invoice__c', 'Supplier__c', 'Cancelled__c', 'Buyer_Invoice__c']);
+      if (extraProductLookup) extraSelect.push(extraProductLookup.replace(/__c$/, '__r.Name'));
       const [stems, initialInvoices, stemPayments, buyers, lines, extras] = await Promise.all([
         queryByIds('STEM__c', ['Id', 'Account__c', 'QLIK_Receivable_Balance__c'], 'Id', stemIds),
         queryByIds('Supplier_Invoice__c', invoiceSelect, 'STEM__c', stemIds),
         queryByIds('Payment__c', paymentSelect, 'STEM__c', stemIds),
-        queryByIds('Invoice__c', select(buyerFields, ['Id', 'Name', 'STEM__c', 'Proforma__c', 'Deprecated__c', 'Is_Credit_Note__c', 'Credit_Note__c', 'CreditNote__c']), 'STEM__c', stemIds),
+        queryByIds('Invoice__c', select(buyerFields, ['Id', 'Name', 'STEM__c', 'Proforma__c', 'Deprecated__c', 'Is_Credit_Note__c', 'Credit_Note__c', 'CreditNote__c', 'Amount__c', 'Invoice_Date__c']), 'STEM__c', stemIds),
         queryByIds('STEM_Line_Item__c', select(lineFields, ['Id', 'STEM__c', 'Supplier_Invoice__c', 'Original_Supplier__c', 'Cancelled__c']), 'STEM__c', stemIds),
-        queryByIds('STEM_Extra_Cost__c', select(extraFields, ['Id', 'STEM__c', 'Supplier_Invoice__c', 'Supplier__c', 'Cancelled__c']), 'STEM__c', stemIds),
+        queryByIds('STEM_Extra_Cost__c', extraSelect, 'STEM__c', stemIds),
       ]);
       const linkedChildren = [...lines, ...extras].filter((row) => row.Cancelled__c !== true);
       const invoiceIds = unique([...initialInvoices.map((row) => row.Id), ...linkedChildren.map((row) => row.Supplier_Invoice__c), ...stemPayments.map((row) => row.Supplier_Invoice__c)]);
@@ -290,13 +345,19 @@ export function createDashboardFinanceLoader({ queryAll, describeObject, chunkSi
         const ownInvoices = invoices.filter(ownsInvoice);
         const invoiceKeys = new Set(ownInvoices.map((invoice) => idKey(invoice.Id)));
         const ownPayments = payments.filter((payment) => idKey(payment.STEM__c) === key || invoiceKeys.has(idKey(payment.Supplier_Invoice__c)));
-        const normalizedPayments = ownPayments.map(normalizePayment);
+        const ownBuyerInvoices = buyers.filter((invoice) => idKey(invoice.STEM__c) === key);
         const ownChildren = linkedChildren.filter((child) => idKey(child.STEM__c) === key);
+        const discount = specialDiscountEvidence(row, ownBuyerInvoices,
+          extras.filter((extra) => extra.Cancelled__c !== true && idKey(extra.STEM__c) === key), asOfDate);
+        const normalizedPayments = ownPayments.map((payment) => ({
+          ...normalizePayment(payment), specialDiscountKind: specialDiscountPaymentKind(payment, discount.credits),
+        }));
         const missingLink = ownChildren.some((child) => child.Supplier_Invoice__c && !invoiceById.has(idKey(child.Supplier_Invoice__c)));
         const sharedInvoice = ownInvoices.some((invoice) => (linkedStemIds.get(idKey(invoice.Id)) || []).some((stemKey) => stemKey !== key));
         const finance = calculateStemFinance({ stem: { ...row, buyerAccountId: rawStem?.Account__c, receivableBalance: rawStem?.QLIK_Receivable_Balance__c },
           sourceComplete: Boolean(rawStem) && !missingLink && !sharedInvoice,
-          finalBuyerInvoiceIssued: buyers.some((invoice) => idKey(invoice.STEM__c) === key && isFinalBuyerInvoice(invoice)),
+          finalBuyerInvoiceIssued: ownBuyerInvoices.some(isFinalBuyerInvoice),
+          specialDiscountSettlementDate: discount.settlementDate,
           supplierAccountIds: ownChildren.map((child) => child.Original_Supplier__c || child.Supplier__c),
           payments: normalizedPayments,
           supplierInvoices: ownInvoices.map((invoice) => ({ id: invoice.Id, stemId: invoice.STEM__c, supplierId: invoice.Supplier__c,

@@ -7,9 +7,13 @@ function finite(value) {
   return Number.isFinite(number) ? number : 0;
 }
 
+export function dashboardStemCancelled(stem) {
+  return stem.Invoice_Status__c === 'Cancelled' || /cancel/i.test(String(stem.Status__c || stem.Status || ''));
+}
+
 export function dashboardStemStatusFields(stem) {
   return {
-    status: stem.Status__c || null,
+    status: dashboardStemCancelled(stem) ? 'Cancelled' : stem.Status__c || null,
     type: stem.Type__c || null,
     dispute: stem.Dispute__c === true || (stem.Dispute_Status__c && stem.Dispute_Status__c !== 'No Dispute'),
     disputeStatus: stem.Dispute_Status__c || null,
@@ -81,7 +85,7 @@ export function normalizeDecisionDashboardFilters(input = {}) {
     excludedCountryCodes,
     koreaDeskMode: normalizeKoreaDeskMode(input.koreaDeskMode),
     supplierIds: ids(input.supplierIds || input.suppliers),
-    includeCancelled: input.includeCancelled === true,
+    includeCancelled: input.includeCancelled !== false,
   };
 }
 

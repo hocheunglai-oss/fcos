@@ -265,6 +265,84 @@ function loaderFixture({ broken = false, directStem = true, paymentDate = '2026-
   return { loader, queries };
 }
 
+test('special-discount finance uses dated receipts, reconciled credits and documented cash refunds', async () => {
+  const originalId = 'a0I000000000001';
+  const creditId = 'a0I000000000002';
+  const buyerPayment = (id, amount, date, extra = {}) => ({
+    Id: id, STEM__c: stemId, Account__c: buyer, Amount__c: amount, Date__c: date,
+    RecordType: { DeveloperName: 'Receivable' }, ...extra,
+  });
+  const debit = buyerPayment('a03000000000003', -15000, '2026-08-23', { Bank__c: 'DBS' });
+  const verifiedDebit = { ...debit, Buyer_Invoice__c: creditId, Payment_Currency__c: 'USD', Bank_Currency__c: 'USD',
+    Bank_Native_Amount__c: 15000, Bank_FX_Evidence__c: 'Reviewed statement',
+    Payment_Operation_Id__c: 'Reviewed operation', Payment_Request_Fingerprint__c: 'Request fingerprint' };
+  const makeLoader = ({ supplierAmount, supplierDate, gross, discount, creditDate, buyerPayments }) => {
+    const evidence = {
+      STEM__c: [{ Id: stemId, Account__c: buyer, QLIK_Receivable_Balance__c: 0 }],
+      Supplier_Invoice__c: [{ Id: invoiceId, STEM__c: stemId, Supplier__c: supplier, Invoice_Amount__c: supplierAmount, Payable_Balance__c: 0 }],
+      Invoice__c: [
+        { Id: originalId, STEM__c: stemId, Name: 'TEST-INV-1', Amount__c: gross },
+        { Id: creditId, STEM__c: stemId, Name: 'TEST-CN-1', Amount__c: -discount, Invoice_Date__c: creditDate },
+      ],
+      STEM_Extra_Cost__c: [{ Id: 'a04000000000001', STEM__c: stemId, Product2Id__r: { Name: 'SPECIAL DISCOUNT' },
+        Buyer_Invoice__c: creditId, Cancelled__c: false }],
+      Payment__c: [{ Id: 'a03000000000001', STEM__c: stemId, Account__c: supplier, Supplier_Invoice__c: invoiceId,
+        Amount__c: supplierAmount, Date__c: supplierDate, Bank__c: 'UBS', RecordType: { DeveloperName: 'Payable' } }],
+      STEM_Line_Item__c: [],
+    };
+    return createDashboardFinanceLoader({
+      describeObject: async (name) => ({
+        fields: [...new Set([...evidence[name].flatMap(Object.keys), ...({
+          Payment__c: ['RecordTypeId', 'Is_Volume_Discount__c', 'Is_Deposit__c', 'Commission_Invoice__c', 'Remittance__c'],
+          Invoice__c: ['Proforma__c', 'Deprecated__c'],
+          STEM_Extra_Cost__c: ['Supplier_Invoice__c', 'Supplier__c', 'Product2Id__c'],
+          STEM_Line_Item__c: ['Id', 'STEM__c', 'Supplier_Invoice__c', 'Original_Supplier__c', 'Cancelled__c'],
+        }[name] || []), ...(name === 'Payment__c' ? buyerPayments.flatMap(Object.keys) : [])])].map((name) => ({ name })),
+      }),
+      queryAll: async (soql) => {
+        const object = soql.match(/ FROM (\w+) /)[1];
+        if (object === 'STEM_Extra_Cost__c') assert.match(soql, /Buyer_Invoice__c.*Product2Id__r.Name/);
+        if (object !== 'Payment__c' || soql.includes('WHERE Supplier_Invoice__c')) return evidence[object];
+        return [...evidence.Payment__c, ...buyerPayments];
+      },
+    });
+  };
+
+  const refundCase = { supplierAmount: 1000000, supplierDate: '2026-08-20', gross: 1050000, discount: 15000, creditDate: '2026-08-01' };
+  const buyerReceipt = buyerPayment('a03000000000002', 1050000, '2026-08-22');
+  const caseStem = { ...stem, buyer: 1035000, netPnl: 35000 };
+  for (const unresolvedDebit of [debit, { ...verifiedDebit, Cash_Event__c: 'Original cash event' }, { ...verifiedDebit, Bank_Native_Amount__c: 14999 }]) {
+    const [unverified] = await makeLoader({ ...refundCase, buyerPayments: [buyerReceipt, unresolvedDebit] })([caseStem], settings, '2026-11-25');
+    assert.equal(unverified.finance.financeCost, null);
+    assert.match(unverified.finance.issues.join(' '), /no verified refund or credit application/);
+  }
+  const caseSettings = { ...settings, bankChargesUsd: { ...settings.bankChargesUsd, UBS: 12 } };
+  const [refunded] = await makeLoader({ ...refundCase, buyerPayments: [buyerReceipt, verifiedDebit] })([caseStem], caseSettings, '2026-11-25');
+  assert.equal(refunded.finance.financeCost, 273.97);
+  assert.equal(refunded.finance.buyerCashReceived, 1035000);
+  assert.equal(refunded.finance.throughDate, '2026-08-23');
+  assert.equal(refunded.finance.ebit, 34714.03);
+
+  const [credited] = await makeLoader({
+    supplierAmount: 100000, supplierDate: '2026-01-01', gross: 110000, discount: 20000, creditDate: '2026-01-26',
+    buyerPayments: [buyerPayment('a03000000000004', 60000, '2026-01-11'), buyerPayment('a03000000000005', 30000, '2026-01-21')],
+  })([{ ...stem, buyer: 90000, netPnl: -10000 }], settings, '2026-02-01');
+  assert.equal(credited.finance.financeCost, 198.63);
+  assert.equal(credited.finance.buyerCashReceived, 90000);
+  assert.equal(credited.finance.throughDate, '2026-01-26');
+});
+
+test('cancelled STEMs with reconciled cash costs retain their actual financing and loss', () => {
+  const result = run([
+    payment('Payable', 100000, '2026-01-01'), payment('Receivable', 90000, '2026-01-11'),
+  ], {
+    stem: { ...stem, status: 'Cancelled', buyer: 90000, netPnl: -10000, receivableBalance: 0 },
+    finalBuyerInvoiceIssued: true,
+  });
+  assert.equal(result.financeCost, 136.99);
+  assert.equal(result.ebit, -10136.99);
+});
+
 test('finance loader follows supplier invoice links, deduplicates reads and does not clip payment history to delivery scope', async () => {
   for (const directStem of [true, false]) {
     const { loader, queries } = loaderFixture({ directStem });
