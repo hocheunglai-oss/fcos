@@ -15,8 +15,8 @@ const baseline = [
       "MUTED_HEADER_LEFT": 7,
       "STANDARD_HEADER_LEFT": 5
     },
-    // Includes the reminder subtotal and two native-currency detail labels.
-    "hash": "11843b4c4253de279f58bd6bf6e90a75426e404e961c6a1284b3478d9cbbf3ad"
+    // Includes the reminder subtotal, native-currency labels, and email-editor loading states.
+    "hash": "bb0f74dbb10efda7c522b5195207168e09302b0f7fd2d9510ec5c35dc803277f"
   },
   {
     "file": "src/components/dashboard/StemDetailModal.jsx",
