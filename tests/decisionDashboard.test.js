@@ -28,6 +28,9 @@ test('STEM rows retain recorded dispute status without changing legacy flags or 
       });
     }
   }
+  assert.equal(dashboardStemStatusFields({ Invoice_Status__c: 'Cancelled' }).status, 'Cancelled');
+  assert.equal(dashboardStemStatusFields({ Invoice_Status__c: 'Un-Invoiced' }).status, null);
+  assert.equal(dashboardStemStatusFields({ Status__c: 'Canceled' }).status, 'Cancelled');
   assert.deepEqual(dashboardStemStatusFields({}), { status: null, type: null, dispute: undefined, disputeStatus: null });
 });
 
@@ -129,8 +132,15 @@ test('filters use exact IDs and normalized country codes without text matching',
     supplierIds: ['001000000000003'],
     supplierNames: ['Supplier A'],
   }), {
-    accountIds: ['001000000000001', '001000000000002'], portIds: ['a0P000000000001'], countryCodes: ['HK'], excludedCountryCodes: ['KR'], koreaDeskMode: 'all', supplierIds: ['001000000000003'], includeCancelled: false,
+    accountIds: ['001000000000001', '001000000000002'], portIds: ['a0P000000000001'], countryCodes: ['HK'], excludedCountryCodes: ['KR'], koreaDeskMode: 'all', supplierIds: ['001000000000003'], includeCancelled: true,
   });
+});
+
+test('Dashboard includes cancelled STEMs by default in each Korea Desk scope', () => {
+  for (const koreaDeskMode of ['all', 'include', 'exclude']) {
+    assert.equal(normalizeDecisionDashboardFilters({ koreaDeskMode }).includeCancelled, true);
+  }
+  assert.equal(normalizeDecisionDashboardFilters({ includeCancelled: false }).includeCancelled, false);
 });
 
 test('country exclusions reject malformed and overlapping values', () => {
@@ -351,6 +361,8 @@ test('new dashboard handlers are authenticated, live-only, and supplier matching
   assert.doesNotMatch(loader, /LIMIT 3000/);
   assert.match(loader, /limit: pageOnly \? pageSize \+ 1 : null/);
   assert.match(loader, /SELECT COUNT\(Id\) total FROM stem__c/);
+  assert.match(loader, /!filters\.includeCancelled && stemFields\.has\('Invoice_Status__c'\)/);
+  assert.match(loader, /Invoice_Status__c = null OR Invoice_Status__c != 'Cancelled'/);
   assert.match(loader, /decisionDashboardBuyerBrokerCommissionField\(buyerBrokerDescribe\.fields/);
   assert.match(loader, /buyerBrokerCommissionField\s*\?\s*decisionDashboardRowsForStemIds/);
   assert.doesNotMatch(api, /pricingFinancialQuantity/);

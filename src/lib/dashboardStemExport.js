@@ -2,6 +2,9 @@ import { dashboardExportSelectionDigest } from '../../shared/dashboardExportSele
 
 const EXPORT_PAGE_SIZE = 200;
 
+export const dashboardStemExportIncludesFinance = (filterPayload, includeFinanceCosts = false) =>
+  includeFinanceCosts || filterPayload?.filters?.koreaDeskMode === 'include';
+
 function abortError() {
   const error = new Error('Dashboard export cancelled.');
   error.name = 'AbortError';
@@ -45,6 +48,7 @@ export async function fetchAllDashboardStems({
   pageSize = EXPORT_PAGE_SIZE,
 } = {}) {
   if (typeof invoke !== 'function') throw new TypeError('An authenticated Dashboard API invoker is required.');
+  includeFinanceCosts = dashboardStemExportIncludesFinance(filterPayload, includeFinanceCosts);
   const safePageSize = Math.min(Math.max(Number(pageSize) || EXPORT_PAGE_SIZE, 1), EXPORT_PAGE_SIZE);
   const rows = [];
   const ids = new Set();
@@ -169,7 +173,7 @@ export async function fetchAllDashboardStems({
 
 export async function createDashboardStemWorkbook(options) {
   const { createDashboardStemWorkbookBytes } = await import('./dashboardStemWorkbook.js');
-  return new Blob([createDashboardStemWorkbookBytes({ ...options, scopeLabels: { ...options?.scopeLabels, period: dashboardStemExportPeriod(options?.filterPayload), koreaDesk: dashboardStemDeskLabel(options?.filterPayload, options?.scopeLabels) } })], { type: 'application/vnd.ms-excel' });
+  return new Blob([createDashboardStemWorkbookBytes({ ...options, includeFinanceCosts: dashboardStemExportIncludesFinance(options?.filterPayload, options?.includeFinanceCosts), scopeLabels: { ...options?.scopeLabels, period: dashboardStemExportPeriod(options?.filterPayload), koreaDesk: dashboardStemDeskLabel(options?.filterPayload, options?.scopeLabels) } })], { type: 'application/vnd.ms-excel' });
 }
 
 function deliveryWindows(filterPayload) {

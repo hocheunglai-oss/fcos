@@ -139,6 +139,22 @@ test('Dashboard XLS export rejects count drift, duplicate rows, and incomplete p
   });
 });
 
+test('Korea Desk include fetches finance even when the dashboard toggle is off', async () => {
+  const rows = [exportRow('one')];
+  const digest = await dashboardExportSelectionDigest(rows);
+  let payload;
+  const result = await fetchAllDashboardStems({
+    filterPayload: { filters: { koreaDeskMode: 'include' } },
+    includeFinanceCosts: false,
+    invoke: async (_name, request) => {
+      payload = request;
+      return { data: { matchingCount: 1, stems: rows, nextCursor: null, exportSelectionDigest: digest, finance } };
+    },
+  });
+  assert.equal(payload.includeFinanceCosts, true);
+  assert.equal(result.finance.revision, finance.revision);
+});
+
 test('Dashboard XLS export preserves callers that do not request finance columns', async () => {
   const calls = [];
   const stems = [exportRow('one')];
@@ -348,6 +364,36 @@ test('binary XLS contains visible STEM and Scope sheets, literal text, numeric a
   assert.equal(entries['Finance warnings'], 'One <warning>');
   assert.ok(scope.some((row) => row[0] === 'USD'));
   assert.ok(scope.some((row) => row[0] === 'EUR'));
+});
+
+test('binary XLS retains cancelled STEMs and identifies them with or without finance columns', async () => {
+  const deskCases = [
+    { koreaDeskMode: 'include', name: 'Cancelled Korea Desk STEM', port: 'Busan' },
+    { koreaDeskMode: 'exclude', name: 'Cancelled non-Korea STEM', port: 'Singapore' },
+  ];
+  for (const { koreaDeskMode, name, port } of deskCases) {
+    for (const includeFinanceCosts of [false, true]) {
+      const blob = await createDashboardStemWorkbook({
+        rows: [
+          { name, status: 'Cancelled', port: { name: port }, buyer: 0, netPnl: 0, currency: 'USD',
+            finance: { complete: false, status: 'missing_evidence', issues: ['No final invoice evidence'] } },
+          { name: 'Active STEM', status: 'Delivered', buyer: 10, netPnl: 2, currency: 'USD' },
+        ],
+        filterPayload: { filters: { koreaDeskMode } },
+        includeFinanceCosts,
+      });
+      const book = read(await blob.arrayBuffer(), { type: 'array' });
+      const [headers, cancelled, active] = utils.sheet_to_json(book.Sheets.STEMs, { header: 1 });
+      const evidenceIndex = headers.indexOf('Evidence Status');
+      const hasFinance = includeFinanceCosts || koreaDeskMode === 'include';
+      assert.equal(evidenceIndex, hasFinance ? 15 : 12);
+      assert.equal(cancelled[0], name);
+      assert.equal(cancelled[evidenceIndex], hasFinance
+        ? 'Cancelled STEM — missing_evidence: No final invoice evidence'
+        : 'Cancelled STEM');
+      assert.equal(active[evidenceIndex], hasFinance ? 'Unavailable' : '');
+    }
+  }
 });
 
 test('oversized Dashboard selections split into bounded worksheet chunks', () => {
