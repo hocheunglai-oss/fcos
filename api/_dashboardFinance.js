@@ -65,9 +65,9 @@ function specialDiscountEvidence(stem, invoices, children, asOfDate) {
 function specialDiscountPaymentKind(payment, credits) {
   if (typeToken(payment.RecordType?.DeveloperName) !== 'receivable' || !(cents(payment.Amount__c) < 0)) return null;
   const credit = credits.find((invoice) => idKey(invoice.Id) === idKey(payment.Buyer_Invoice__c));
-  const possiblyDiscount = !payment.Buyer_Invoice__c
-    && credits.some((invoice) => cents(invoice.Amount__c) === cents(payment.Amount__c));
-  if (!credit && !possiblyDiscount) return null;
+  const matching = payment.Buyer_Invoice__c ? [] : credits.filter((invoice) => cents(invoice.Amount__c) === cents(payment.Amount__c));
+  if (!credit && !matching.length) return null;
+  const matched = credit || (matching.length === 1 ? matching[0] : null);
   // The reviewed native payment action locks these fields and requires actual
   // statement evidence. A bank name or an equal invoice amount proves no cash.
   const verified = credit && !payment.Cash_Event__c && !payment.Remittance__c
@@ -76,8 +76,34 @@ function specialDiscountPaymentKind(payment, credits) {
     && -cents(payment.Amount__c) <= -cents(credit.Amount__c)
     && text(payment.Bank__c) && text(payment.Bank_FX_Evidence__c)
     && text(payment.Payment_Operation_Id__c) && text(payment.Payment_Request_Fingerprint__c);
-  return verified ? 'cash_refund' : 'unverified';
+  return {
+    specialDiscountKind: verified ? 'cash_refund' : 'unverified',
+    specialDiscountCreditId: matched ? idKey(matched.Id) : null,
+    specialDiscountCreditDate: matched?.Invoice_Date__c,
+    specialDiscountCreditAmount: matched?.Amount__c,
+  };
 }
+
+function calculateFundingCost(cashEvents, stopDate, rate) {
+  const byDate = new Map();
+  for (const event of cashEvents) {
+    if (event.date > stopDate) continue;
+    byDate.set(event.date, (byDate.get(event.date) || 0n) + BigInt(event.amount));
+  }
+  const dates = [...byDate.keys()].sort();
+  let funded = 0n; let amountDays = 0n;
+  for (let index = 0; index < dates.length; index += 1) {
+    const date = dates[index]; funded += byDate.get(date);
+    const nextDate = dates[index + 1] || stopDate;
+    const days = Math.round((Date.parse(`${nextDate}T00:00:00Z`) - Date.parse(`${date}T00:00:00Z`)) / DAY_MS);
+    if (funded > 0n) amountDays += funded * BigInt(days);
+  }
+  const numerator = amountDays * BigInt(Math.round(rate * 100));
+  const denominator = 365n * 10000n;
+  return { costCents: (numerator + denominator / 2n) / denominator, funded };
+}
+
+const unverifiedDiscountIssue = 'The special discount is documented, but the negative buyer entry has no verified refund or credit application that establishes an invariant finance result.';
 
 /** Inputs are exact STEM cash allocations, not remittance headers or forecasts. */
 export function calculateStemFinance({ stem, payments = [], supplierInvoices = [], supplierAccountIds = [],
@@ -95,7 +121,9 @@ export function calculateStemFinance({ stem, payments = [], supplierInvoices = [
   const invoiceById = new Map(supplierInvoices.map((invoice) => [idKey(invoice.id), invoice]));
   const supplierIds = new Set([...supplierAccountIds, ...supplierInvoices.map((invoice) => invoice.supplierId)].map(idKey).filter(Boolean));
   const seen = new Map(); const cashEvents = []; const invoicePaid = new Map();
-  let buyerAccounted = 0n; let buyerCash = 0n; let lastBuyerReceipt = null; let lastVerifiedRefund = null; let lastUnverifiedBuyerDebit = null;
+  const unverifiedDiscounts = []; const discountDebits = new Map();
+  let buyerAccounted = 0n; let buyerCash = 0n; let firstBuyerReceipt = null; let lastBuyerReceipt = null;
+  let lastVerifiedRefund = null; let lastUnverifiedBuyerDebit = null;
   for (const payment of payments) {
     const key = idKey(payment.id);
     if (!key) { issues.push('A payment allocation has no stable identifier.'); continue; }
@@ -133,13 +161,30 @@ export function calculateStemFinance({ stem, payments = [], supplierInvoices = [
       buyerAccounted += BigInt(amount);
       if (type !== 'receivable') continue;
       if (nonCash) { issues.push('A buyer allocation does not establish an actual cash receipt.'); continue; }
-      if (payment.specialDiscountKind === 'unverified') {
-        issues.push('The special discount is documented, but the negative buyer entry has no verified refund or credit application.');
-        continue;
+      if (amount < 0 && payment.specialDiscountKind) {
+        const creditId = payment.specialDiscountCreditId;
+        const creditDate = financeDate(payment.specialDiscountCreditDate);
+        const creditAmount = cents(payment.specialDiscountCreditAmount);
+        // A negative allocation can only support one identified active credit,
+        // and multiple allocations must stay within the face of that credit.
+        const debited = (discountDebits.get(creditId) || 0n) - BigInt(amount);
+        if (!creditId || creditAmount == null || debited > -BigInt(creditAmount)) {
+          issues.push(unverifiedDiscountIssue);
+          continue;
+        }
+        discountDebits.set(creditId, debited);
+        if (payment.specialDiscountKind === 'unverified') {
+          if (!creditDate || creditDate > date) issues.push(unverifiedDiscountIssue);
+          else unverifiedDiscounts.push({ amount: -amount, date });
+          continue;
+        }
       }
       buyerCash += BigInt(amount);
       cashEvents.push({ date, amount: -amount });
-      if (amount > 0 && (!lastBuyerReceipt || date > lastBuyerReceipt)) lastBuyerReceipt = date;
+      if (amount > 0) {
+        if (!firstBuyerReceipt || date < firstBuyerReceipt) firstBuyerReceipt = date;
+        if (!lastBuyerReceipt || date > lastBuyerReceipt) lastBuyerReceipt = date;
+      }
       if (amount < 0 && payment.specialDiscountKind === 'cash_refund') {
         if (!lastVerifiedRefund || date > lastVerifiedRefund) lastVerifiedRefund = date;
       } else if (amount < 0 && (!lastUnverifiedBuyerDebit || date > lastUnverifiedBuyerDebit)) {
@@ -189,30 +234,36 @@ export function calculateStemFinance({ stem, payments = [], supplierInvoices = [
   } else if (cents(stem.receivableBalance) == null || (cents(stem.receivableBalance) <= 0 && cashEvents.length)) {
     issues.push('Open or settled buyer status cannot be established without final invoice evidence.');
   }
+  if (unverifiedDiscounts.length && (!settled || cents(stem.receivableBalance) !== 0
+    || !specialDiscountSettlementDate || buyerAccounted !== BigInt(cents(stem.buyer) ?? -1)
+    || !firstBuyerReceipt || lastUnverifiedBuyerDebit
+    || unverifiedDiscounts.some(({ date }) => date < firstBuyerReceipt)
+    || buyerCash < unverifiedDiscounts.reduce((sum, { amount }) => sum + BigInt(amount), 0n))) {
+    issues.push(unverifiedDiscountIssue);
+  }
   if (issues.length) return unavailable(issues);
-  const byDate = new Map();
-  for (const event of cashEvents) {
-    if (event.date > stopDate) continue;
-    byDate.set(event.date, (byDate.get(event.date) || 0n) + BigInt(event.amount));
+  const rangeStart = calculateFundingCost(cashEvents, stopDate, rate);
+  let discountSettlement = null;
+  if (unverifiedDiscounts.length) {
+    // The lowest cost excludes the disputed cash movements and stops at the
+    // earliest reconciled close. Placing the full possible refund at the first
+    // eligible receipt and accruing through as-of bounds later or partial
+    // refunds and noncash credits without asserting that any refund occurred.
+    const earliest = unverifiedDiscounts.map(({ amount }) => ({ amount, date: firstBuyerReceipt }));
+    const rangeEnd = calculateFundingCost([...cashEvents, ...earliest], asOfDate, rate);
+    if (rangeStart.costCents !== rangeEnd.costCents) return unavailable([unverifiedDiscountIssue]);
+    discountSettlement = { method: 'unclassified', minimumFinanceCost: money(rangeStart.costCents), maximumFinanceCost: money(rangeEnd.costCents) };
   }
-  const dates = [...byDate.keys()].sort();
-  let funded = 0n; let amountDays = 0n;
-  for (let index = 0; index < dates.length; index += 1) {
-    const date = dates[index]; funded += byDate.get(date);
-    const nextDate = dates[index + 1] || stopDate;
-    const days = Math.round((Date.parse(`${nextDate}T00:00:00Z`) - Date.parse(`${date}T00:00:00Z`)) / DAY_MS);
-    if (funded > 0n) amountDays += funded * BigInt(days);
-  }
-  const numerator = amountDays * BigInt(Math.round(rate * 100));
-  const denominator = 365n * 10000n;
-  const costCents = (numerator + denominator / 2n) / denominator;
+  const { costCents, funded } = rangeStart;
   const ebitCents = BigInt(cents(stem.netPnl)) - costCents;
   if ([costCents, ebitCents, funded, buyerCash].some((value) => value > BigInt(Number.MAX_SAFE_INTEGER) || value < -BigInt(Number.MAX_SAFE_INTEGER))) return unavailable(['The financing calculation exceeds supported monetary precision.']);
   const financeCost = money(costCents);
   return { financeCost, ebit: money(ebitCents), complete: true,
     status: settled ? 'settled' : funded > 0n ? 'accruing' : 'no_funding', issues: [],
-    accruing: !settled && funded > 0n, fundedBalance: money(funded > 0n ? funded : 0n),
-    throughDate: stopDate, buyerCashReceived: money(buyerCash) };
+    accruing: !settled && funded > 0n,
+    fundedBalance: discountSettlement ? null : money(funded > 0n ? funded : 0n),
+    throughDate: discountSettlement ? null : stopDate, buyerCashReceived: discountSettlement ? null : money(buyerCash),
+    ...(discountSettlement ? { discountSettlement } : {}) };
 }
 
 export function summarizeDashboardFinance(rows, settings, asOfDate, { complete = true } = {}) {
@@ -350,7 +401,7 @@ export function createDashboardFinanceLoader({ queryAll, describeObject, chunkSi
         const discount = specialDiscountEvidence(row, ownBuyerInvoices,
           extras.filter((extra) => extra.Cancelled__c !== true && idKey(extra.STEM__c) === key), asOfDate);
         const normalizedPayments = ownPayments.map((payment) => ({
-          ...normalizePayment(payment), specialDiscountKind: specialDiscountPaymentKind(payment, discount.credits),
+          ...normalizePayment(payment), ...specialDiscountPaymentKind(payment, discount.credits),
         }));
         const missingLink = ownChildren.some((child) => child.Supplier_Invoice__c && !invoiceById.has(idKey(child.Supplier_Invoice__c)));
         const sharedInvoice = ownInvoices.some((invoice) => (linkedStemIds.get(idKey(invoice.Id)) || []).some((stemKey) => stemKey !== key));
@@ -367,7 +418,10 @@ export function createDashboardFinanceLoader({ queryAll, describeObject, chunkSi
         const bank = calculateStemBankCharge({ payments: normalizedPayments, groups: bankGroups, stemId: row.id, buyerAccountId: rawStem?.Account__c,
           sourceComplete: bankSourceComplete && Boolean(rawStem) && !missingLink && !sharedInvoice },
         { bankChargesUsd: settings.bankChargesUsd, asOfDate, currency: row.currency });
-        return { ...row, finance: deductBankCharge(finance, bank) };
+        const financeWithBank = deductBankCharge(finance, bank);
+        return { ...row, finance: finance.discountSettlement && !financeWithBank.complete
+          ? { ...financeWithBank, financeCost: null }
+          : financeWithBank };
       });
     } catch {
       return rows.map((row) => ({ ...row, finance: unavailable(['Payment evidence could not be loaded completely. Refresh to retry.']) }));
