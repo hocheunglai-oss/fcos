@@ -8,12 +8,14 @@ import { transform } from 'esbuild';
 
 let deskData;
 let appSettings;
+let requestedTab = '';
+const lazyLoads = [];
 const noop = () => {};
 const loadedView = ({ readOnly }) => React.createElement('div', { 'data-loaded-book': true, 'data-read-only': readOnly }, 'No position exposure · No audit activity · Cash USD 0.00');
 const modules = {
   react: React,
   'react/jsx-runtime': jsxRuntime,
-  'react-router-dom': { useNavigate: () => noop, useSearchParams: () => [new URLSearchParams(), noop] },
+  'react-router-dom': { useNavigate: () => noop, useSearchParams: () => [new URLSearchParams(requestedTab ? { tab: requestedTab } : {}), noop] },
   'lucide-react': Object.fromEntries(['Building2', 'ChartNoAxesCombined', 'FileSpreadsheet', 'Gauge', 'Handshake', 'RefreshCw', 'Settings2'].map((name) => [name, () => null])),
   '@/hedge/data/ActionsContext': { ActionsProvider: ({ children }) => children },
   '@/hedge/hooks/useDeskData': { useDeskData: () => deskData },
@@ -33,18 +35,27 @@ const modules = {
   },
 };
 globalThis.__hedgePageModules = modules;
-test.after(() => { delete globalThis.__hedgePageModules; });
+globalThis.__hedgePageImport = async path => {
+  lazyLoads.push(path);
+  return modules[path];
+};
+test.after(() => {
+  delete globalThis.__hedgePageModules;
+  delete globalThis.__hedgePageImport;
+});
 
 const source = await readFile(new URL('../src/pages/HedgeDesk.jsx', import.meta.url), 'utf8');
 const isolated = source
   .replace(/^import \{([^}]+)\} from '([^']+)';$/gm, (_line, names, path) => `const {${names}} = globalThis.__hedgePageModules[${JSON.stringify(path)}];`)
   .replace(/^import (\w+) from '([^']+)';$/gm, (_line, name, path) => `const ${name} = globalThis.__hedgePageModules[${JSON.stringify(path)}].default;`)
-  .replace(/^import '[^']+\.css';$/gm, '');
+  .replace(/^import '[^']+\.css';$/gm, '')
+  .replace(/\bimport\(('[^']+')\)/g, 'globalThis.__hedgePageImport($1)');
 const compiled = await transform(isolated, { loader: 'jsx', jsx: 'automatic', format: 'esm' });
 const code = compiled.code.replace(/import \{([^}]+)\} from "react\/jsx-runtime";/, (_line, names) => `const {${names.replace(/\bas\b/g, ':')}} = globalThis.__hedgePageModules['react/jsx-runtime'];`);
 const { default: HedgeDesk } = await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}`);
 
-function render(data = {}, settings = {}) {
+function render(data = {}, settings = {}, tab = '') {
+  requestedTab = tab;
   deskData = { physicals: [], swaps: [], capabilities: {}, loading: false, refreshing: false, error: null, lastUpdated: null, reload: async () => {}, ...data };
   appSettings = { loading: false, hasLoaded: true, error: null, reload: async () => {}, ...settings };
   return renderToStaticMarkup(React.createElement(HedgeDesk));
@@ -97,4 +108,26 @@ test('staging displays a loaded Hedge Desk as view-only even for a trading admin
   assert.match(live, /Live book/);
   assert.match(live, /data-read-only="false"/);
   assert.match(live, /Administration/);
+});
+
+test('Hedge Desk defers Settlement and Administration until the selected view is available', async () => {
+  const snapshot = { lastUpdated: new Date('2026-10-01T04:00:00Z') };
+  assert.match(render(snapshot), /data-loaded-book/);
+  assert.deepEqual(lazyLoads, []);
+
+  const readOnly = render({ ...snapshot, expiryAutomation: { readOnly: true } }, {}, 'administration');
+  assert.doesNotMatch(readOnly, /Loading view/);
+  assert.deepEqual(lazyLoads, []);
+
+  const settlement = render(snapshot, {}, 'settlement');
+  assert.match(settlement, /Loading view/);
+  assert.match(settlement, /Hedge Desk views/);
+  assert.deepEqual(lazyLoads, ['@/hedge/views/SettlementView']);
+
+  const administration = render(snapshot, {}, 'administration');
+  assert.match(administration, /Loading view/);
+  assert.deepEqual(lazyLoads, ['@/hedge/views/SettlementView', '@/hedge/components/HedgeSettingsPanel']);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(render(snapshot, {}, 'settlement'), /data-loaded-book/);
+  assert.match(render(snapshot, {}, 'administration'), /data-loaded-book/);
 });

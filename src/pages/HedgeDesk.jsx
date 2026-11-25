@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Building2, ChartNoAxesCombined, FileSpreadsheet, Gauge, Handshake, RefreshCw, Settings2 } from 'lucide-react';
 import { ActionsProvider } from '@/hedge/data/ActionsContext';
@@ -7,12 +7,13 @@ import { useAppSettings } from '@/hedge/hooks/useAppSettings';
 import { OverviewView } from '@/hedge/views/OverviewView';
 import { PhysicalView } from '@/hedge/views/PhysicalView';
 import { HedgesView } from '@/hedge/views/HedgesView';
-import { SettlementView } from '@/hedge/views/SettlementView';
 import { CounterpartiesView } from '@/hedge/views/CounterpartiesView';
-import HedgeSettingsPanel from '@/hedge/components/HedgeSettingsPanel';
 import { Button, EmptyState, InlineError, StatusBadge } from '@/hedge/components/ui';
 import { useAuth } from '@/lib/AuthContext';
 import '@/hedge/styles.css';
+
+const SettlementView = lazy(() => import('@/hedge/views/SettlementView').then(({ SettlementView }) => ({ default: SettlementView })));
+const HedgeSettingsPanel = lazy(() => import('@/hedge/components/HedgeSettingsPanel'));
 
 const TABS = [
   { id: 'overview', label: 'Overview', icon: Gauge },
@@ -92,7 +93,11 @@ export default function HedgeDesk() {
         {(data.error || settings.error) && <InlineError error={data.error || settings.error} action={<Button onClick={() => { data.reload().catch(() => {}); settings.reload(); }}>Retry</Button>} />}
         {showBook && data.error && <p role="status">Showing the last successfully loaded book from {data.lastUpdated.toLocaleString('en-GB', { timeZone: 'Asia/Hong_Kong' })}. Refresh did not complete.</p>}
         <main className="hedge-desk-content">
-          {showBook ? content : <EmptyState title={settings.loading ? 'Loading Hedge Desk settings' : 'Hedge Desk unavailable'} description="Book and settings must load first." icon={RefreshCw} />}
+          {showBook ? (
+            <Suspense fallback={<EmptyState title="Loading view" icon={RefreshCw} />}>
+              {content}
+            </Suspense>
+          ) : <EmptyState title={settings.loading ? 'Loading Hedge Desk settings' : 'Hedge Desk unavailable'} description="Book and settings must load first." icon={RefreshCw} />}
         </main>
       </div>
     </ActionsProvider>
