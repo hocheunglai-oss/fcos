@@ -158,3 +158,98 @@ test('ordinary dispatcher source changes reuse frozen controller only with ident
  const original=f.gh.read;f.gh.read=async path=>path.includes('/contents/')&&path.endsWith('f'.repeat(40))?{type:'file',sha:'9'.repeat(40)}:original(path);
  await assert.rejects(verifyExecution({github:f.gh,manifest:f.m,env:f.env,phase:'stage'}),/DISPATCHER_WORKFLOW_CHANGED/);
 });
+
+function recoveryFixture() {
+  const { m, gh, run } = nativeFixture();
+  const owner = { login: targets().account, id: 7 };
+  const repo = { id: 456, owner, default_branch: 'main' };
+  const read = gh.read;
+  Object.assign(run, { triggering_actor: owner, repository: { ...run.repository, id: repo.id }, status: 'waiting' });
+  const qualityRun = { ...run, id: 89, status: 'completed', conclusion: 'success' };
+  gh.identity = async () => ({ user: owner, repo });
+  const staged = { target: 'production', id: 'dpl_stage', state: 'READY', sha: m.candidate.sha,
+    buildId: m.build.buildId, artifactDigest: h, manifestHash: digest(m) };
+  const build = { schemaVersion: 1, buildId: m.build.buildId, candidateSha: m.candidate.sha, sourceDigest: m.candidate.sourceDigest,
+    lockDigest: m.candidate.lockDigest, artifactDigest: h, controllerSha: m.controllerSha, qualityPassed: true, performancePassed: true, node: m.build.node };
+  const records = [
+    { payload: { event: 'build.passed', data: build } },
+    { payload: { event: 'stage.result', data: { outcome: 'applied', result: staged } } },
+    { payload: { event: 'smoke.passed', data: { passed: true, deploymentId: staged.id, buildId: staged.buildId,
+      businessWrites: 0, normalRole: true, login: true, restrictedAccess: true, modules: m.selection.modules } } },
+  ];
+  const archive = { id: 101, name: 'rapid-build-89', expired: false, workflow_run: { id: 89 }, digest: `sha256:${h}` };
+  const activeRuns = [];
+  gh.read = async path => {
+    if (path.endsWith('_ENABLED')) return { value: 'true' };
+    if (path.endsWith('_HANDOVER_ID')) return { value: '100' };
+    if (path.endsWith('/branches/main')) return { protected: true, commit: { sha: m.controllerSha } };
+    if (path.endsWith('/runs/89')) return qualityRun;
+    if (path.includes('/runs/89/jobs')) return { jobs: [{ name: 'quality', conclusion: 'success' }] };
+    if (path.includes('/runs/89/artifacts')) return { artifacts: [archive] };
+    if (path.includes('/runs?event=')) return { workflow_runs: activeRuns };
+    if (path.includes('/runs/88/attempts/1/jobs')) return { jobs: [
+      { name: 'quality', conclusion: 'success' }, { name: 'stage-and-smoke', conclusion: 'success' },
+      { name: 'go-live', status: 'waiting' },
+    ] };
+    if (path.endsWith('/pending_deployments')) return [{ current_user_can_approve: true, environment: { id: 9, name: 'fcos-production-release' } }];
+    if (path.endsWith('/approvals')) return [];
+    if (path.includes('/environments/')) {
+      const environment = await read(path);
+      environment.protection_rules[0].reviewers[0].reviewer.id = owner.id;
+      return environment;
+    }
+    return read(path);
+  };
+  const live = { ...m.previous, currentDeploymentId: m.previous.deploymentId };
+  const journal = { read: async () => records, assertNoUnresolvedOtherRelease: async () => {} };
+  return { run, m, records, archive, live, activeRuns, staged, args: { github: gh, manifest: m, runId: 88,
+    buildRunId: 89, journal, provider: { ready: async () => staged }, readCompatibility: async () => live } };
+}
+
+test('approval preflight exposes only the eligible first attempt and rejects an expired run', async () => {
+  const { checkApprovalReadiness } = await import('../scripts/lib/rapid-release/recovery.mjs');
+  const f = recoveryFixture();
+  const ready = await checkApprovalReadiness(f.args);
+  assert.deepEqual([ready.state, ready.attempt, ready.runId, ready.deploymentId],
+    ['ready_for_exact_approval', 1, 88, 'dpl_stage']);
+  f.run.run_attempt = 2;
+  assert.equal((await checkApprovalReadiness(f.args)).state, 'fresh_attempt_one_required');
+  f.records.push({ payload: { event: 'approval.accepted', data: { runId: 88, manifestHash: digest(f.m),
+    candidateSha: f.m.candidate.sha, buildId: f.m.build.buildId, deploymentId: f.staged.id,
+    previousDeploymentId: f.m.previous.deploymentId, environment: 'fcos-production-release',
+    reviewer: targets().account, nativeReviewVerified: true, approvedAt: f.run.created_at } } });
+  assert.equal((await checkApprovalReadiness(f.args)).state, 'reuse_original_approval');
+  f.records.pop();
+  f.run.run_attempt = 1;
+  f.run.created_at = '2020-01-01T00:00:00Z';
+  assert.equal((await checkApprovalReadiness(f.args)).reason, 'review_window_expired');
+});
+
+test('fresh-run recovery binds the original archive, deployment and retained checks without dispatching', async () => {
+  const { planReleaseRecovery } = await import('../scripts/lib/rapid-release/recovery.mjs');
+  const f = recoveryFixture();
+  Object.assign(f.run, { run_attempt: 2, status: 'completed', conclusion: 'failure' });
+  const plan = await planReleaseRecovery(f.args);
+  assert.deepEqual([plan.state, plan.deploymentId, plan.originalBuildRunId, plan.retainedSmoke, plan.dispatched, plan.requiresExactApproval],
+    ['fresh_attempt_one_required', 'dpl_stage', 89, true, false, true]);
+  assert.deepEqual(plan.request, { ref: 'main', inputs: { mode: 'resume', candidate_sha: f.m.candidate.sha,
+    resume_build_run_id: '89', manifest_json: JSON.stringify(f.m), manifest_hash: digest(f.m) } });
+
+  f.archive.expired = true;
+  await assert.rejects(planReleaseRecovery(f.args), /PRIOR_QUALITY_ARTIFACT_REQUIRED/);
+  f.archive.expired = false;
+  f.staged.artifactDigest = 'e'.repeat(64);
+  await assert.rejects(planReleaseRecovery(f.args), /STAGED_ACCEPTANCE_CHANGED/);
+  f.staged.artifactDigest = h;
+  f.live.sha = 'e'.repeat(40);
+  await assert.rejects(planReleaseRecovery(f.args), /PRODUCTION_BASELINE_CHANGED/);
+  f.live.sha = f.m.previous.sha;
+  f.activeRuns.push({ status: 'queued' });
+  await assert.rejects(planReleaseRecovery(f.args), /COMPETING_RELEASE_RUN/);
+  f.activeRuns.pop();
+  f.records.push({ payload: { event: 'promote.intent', data: { operationId: 'original' } } });
+  await assert.rejects(planReleaseRecovery(f.args), /ORIGINAL_OPERATION_READBACK_REQUIRED/);
+  f.records.pop();
+  f.records.push({ payload: { event: 'approval.accepted', data: { runId: 88 } } });
+  await assert.rejects(planReleaseRecovery(f.args), /ORIGINAL_APPROVED_EXECUTION_REQUIRED/);
+});

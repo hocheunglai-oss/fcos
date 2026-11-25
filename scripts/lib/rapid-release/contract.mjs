@@ -149,13 +149,16 @@ export function validateManifest(manifest, options) {
   requireCondition(canonical(recreated) === canonical(manifest), 'MANIFEST_CHANGED');
   return digest(manifest);
 }
+export function approvalWindowOpen(startedAt, now = Date.now()) {
+  const time = Date.parse(startedAt);
+  return Number.isFinite(time) && time <= now && now - time <= 86400000;
+}
 export function assertAuthorization(receipt, manifest, staged, now = Date.now()) {
   const manifestHash = validateManifest(manifest);
   requireCondition(receipt?.manifestHash === manifestHash && receipt.candidateSha === manifest.candidate.sha
     && receipt.buildId === manifest.build.buildId && receipt.deploymentId === staged.id
     && receipt.previousDeploymentId === manifest.previous.deploymentId && receipt.environment === 'fcos-production-release'
     && receipt.reviewer === targets().account && receipt.nativeReviewVerified === true
-    && Number.isSafeInteger(receipt.runId) && receipt.runId > 0 && Number.isFinite(Date.parse(receipt.approvedAt))
-    && Date.parse(receipt.approvedAt) <= now && now - Date.parse(receipt.approvedAt) <= 86400000, 'EXACT_PRODUCTION_AUTHORIZATION_REQUIRED');
+    && Number.isSafeInteger(receipt.runId) && receipt.runId > 0 && approvalWindowOpen(receipt.approvedAt, now), 'EXACT_PRODUCTION_AUTHORIZATION_REQUIRED');
   return receipt;
 }

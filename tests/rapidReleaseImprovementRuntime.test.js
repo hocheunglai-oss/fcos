@@ -142,3 +142,18 @@ test('baseline navigation incidents retain only allowlisted diagnostic categorie
   assert.equal(new Set(incidents.map(({ signature }) => signature)).size, 3);
   assert.ok(!JSON.stringify(log.records).includes('PRIVATE_BROWSER_DETAIL'));
 }));
+
+test('browser failure classification survives persistence and never retains arbitrary diagnostic values', async () => fixture(async ({ outputFile }) => {
+  const j = journal();
+  const safe = { kind: 'gate_denial', role: 'normal', phase: 'desktop' };
+  const captured = await call({ error: { code: 'SMOKE_BROWSER_NETWORK_OR_RUNTIME_FAILURE', smokeBrowserDiagnostic: safe,
+    message: 'Bearer PRIVATE_CONTENT' }, outputFile, journal: j });
+  assert.equal(captured.incident.inputs.smokeBrowserKind, 'gate_denial');
+  assert.equal(captured.incident.inputs.smokeBrowserRole, 'normal');
+  assert.equal(captured.incident.inputs.smokeBrowserPhase, 'desktop');
+  const rejected = await call({ error: { code: 'SMOKE_BROWSER_NETWORK_OR_RUNTIME_FAILURE',
+    smokeBrowserDiagnostic: { ...safe, url: 'https://private.invalid' } }, outputFile, journal: j });
+  assert.equal(rejected.incident.inputs.smokeBrowserKind, undefined);
+  assert.doesNotMatch(await readFile(outputFile, 'utf8'), /PRIVATE_CONTENT|private\.invalid/);
+  assert.doesNotMatch(JSON.stringify(j.records), /PRIVATE_CONTENT|private\.invalid/);
+}));

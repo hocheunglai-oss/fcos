@@ -4,7 +4,7 @@ import { constants, lstat, mkdir, open, readFile, readdir, realpath, rename } fr
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { MODULE_READERS } from './normal-role-readers.mjs';
-import { BASELINE_NAVIGATION_CATEGORIES } from './smoke-policy.mjs';
+import { BASELINE_NAVIGATION_CATEGORIES, isSafeSmokeBrowserDiagnostic } from './smoke-policy.mjs';
 import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier } from '../../../config/fcosConnections.js';
 
 const canonical = value => JSON.stringify(value, (_, item) => item && typeof item === 'object' && !Array.isArray(item)
@@ -47,7 +47,7 @@ const ownedCodes = Object.freeze({
   ORIGINAL_OPERATION_READBACK_REQUIRED: 'write_uncertain', PROVIDER_OUTCOME_UNCERTAIN: 'write_uncertain',
   PROVIDER_ACKNOWLEDGEMENT_MISSING: 'write_uncertain', DEPLOYMENT_ACK_UNCERTAIN: 'write_uncertain', JOURNAL_WRITE_UNCERTAIN: 'write_uncertain',
   PRIOR_OPERATION_FAILED: 'known_job_failed', EXACT_PRODUCTION_AUTHORIZATION_REQUIRED: 'authorization_required',
-  NATIVE_PRODUCTION_REVIEW_REQUIRED: 'authorization_required', GOVERNED_CI_CREDENTIALS_MISSING: 'credential_entry_required',
+  FRESH_NATIVE_APPROVAL_REQUIRED: 'authorization_required', NATIVE_PRODUCTION_REVIEW_REQUIRED: 'authorization_required', GOVERNED_CI_CREDENTIALS_MISSING: 'credential_entry_required',
   SALESFORCE_PRODUCTION_PROTECTED_CUSTOM_SETTING: 'source_mismatch',
   TRADING_FX_SALES_SUPPORT_DENY_UNVERIFIED: 'test_failure',
   TRADING_FX_FINAL_NATIVE_INVENTORY_CHANGED: 'source_mismatch',
@@ -151,6 +151,10 @@ export async function handleReleaseObstacle({ error, phase, manifest, journal, p
       inputs.smokeNavigationCategory = error.smokeNavigationCategory;
     }
   }
+  if (code.startsWith('SMOKE_') && isSafeSmokeBrowserDiagnostic(error?.smokeBrowserDiagnostic)) {
+    const { kind, role, phase } = error.smokeBrowserDiagnostic;
+    Object.assign(inputs, { smokeBrowserKind: kind, smokeBrowserRole: role, smokeBrowserPhase: phase });
+  }
   const incident = module.obstacle({ kind: ownedCodes[code] || 'unknown', phase: safePhase(phase), code,
     inputs, completedSteps: completedSteps.filter(step => steps.has(step)),
     elapsedMs: elapsed(elapsedMs), providerCalls: count(providerCalls) });
@@ -218,7 +222,8 @@ export async function handleReleaseObstacle({ error, phase, manifest, journal, p
   return { ...result, incident, metrics, checkpoint: { releaseId: manifest.releaseId, manifestHash,
     completedSteps: incident.completedSteps, originalEvidencePreserved: true },
     ...(verified ? {} : { workRequest: { type: 'supervisor_work_request', kind: incident.kind, phase: incident.phase,
-      code: incident.code, inputs: incident.inputs, nextAction: incident.kind === 'write_uncertain' ? 'reconcile_original_operation' : 'focused_diagnosis',
+      code: incident.code, inputs: incident.inputs, nextAction: incident.kind === 'write_uncertain' ? 'reconcile_original_operation'
+        : code === 'FRESH_NATIVE_APPROVAL_REQUIRED' ? 'prepare_fresh_attempt_one' : 'focused_diagnosis',
       sourceChangesRequireNewCandidate: true, noAutomaticResubmission: true } }),
     measuredSavings: null };
 }
