@@ -1327,7 +1327,7 @@ export default function IncomingPayments({ reconciliationItems = [], embedded = 
                       { label: 'Created from', value: fmtDate(dateFrom) },
                       { label: 'Created to', value: fmtDate(dateTo) },
                       { label: 'Keyword', value: search || '-', truncate: true },
-                      { label: 'Settlement policy', value: `${thresholdCount.toLocaleString()} configured · fallback <0.005` },
+                      { label: 'Settlement policy', value: <>{thresholdCount.toLocaleString()} configured · fallback &lt;0.005</> },
                     ].map(({ label, value, truncate }) => (
                       <div key={label} className={REPORT_PANEL}>
                         <div className={REPORT_FIELD_LABEL}>{label}</div>
