@@ -23,9 +23,10 @@ function numberCell(value, format = '#,##0.00') {
 }
 
 const BASE_HEADERS = ['STEM', 'Delivery / Expected Date', 'Date Source', 'Vessel', 'Buyer', 'Suppliers', 'Products / Quantities', 'Port', 'Country', 'Turnover', 'Gross Profit', 'Dispute'];
-const FINANCE_HEADERS = ['Finance Cost', 'Bank Charge', 'EBIT', 'Evidence Status'];
+const FINANCE_HEADERS = ['Finance Cost', 'Bank Charge', 'EBIT'];
+const EVIDENCE_HEADER = 'Evidence Status';
 const MONEY_HEADERS = new Set(['Turnover', 'Gross Profit', 'Finance Cost', 'Bank Charge', 'EBIT']);
-const WIDE_HEADERS = new Set(['STEM', 'Buyer', 'Suppliers', 'Products / Quantities', 'Evidence Status']);
+const WIDE_HEADERS = new Set(['STEM', 'Buyer', 'Suppliers', 'Products / Quantities', EVIDENCE_HEADER]);
 const joined = (values) => [...new Set(values.filter(Boolean).map(String))].join('; ');
 const dated = (value) => value ? String(value).slice(0, 10) : '';
 const currencyCode = (value) => /^[A-Z]{3}$/.test(String(value || '')) ? value : 'Unspecified';
@@ -48,7 +49,8 @@ function exportRowCells(row, includeFinanceCosts, commonCurrency) {
     textCell(joined(products)), textCell(row.port?.name), textCell(row.port?.countryCode),
     moneyCell(row.buyer), moneyCell(row.netPnl), textCell(dispute),
   ];
-  if (!includeFinanceCosts) return cells;
+  const cancellationEvidence = row.status === 'Cancelled' ? 'Cancelled STEM' : '';
+  if (!includeFinanceCosts) return [...cells, textCell(cancellationEvidence)];
   const finance = row.finance;
   const complete = finance?.complete === true;
   const financeCost = finiteNumber(finance?.financeCost);
@@ -60,7 +62,7 @@ function exportRowCells(row, includeFinanceCosts, commonCurrency) {
     financeCost != null ? moneyCell(financeCost) : textCell('Unavailable'),
     finance?.bankChargeComplete === true && bankCharge != null ? moneyCell(bankCharge) : textCell('Unavailable'),
     complete && ebit != null ? moneyCell(ebit) : textCell('Unavailable'),
-    textCell(evidence),
+    textCell(cancellationEvidence && finance ? `${cancellationEvidence} — ${evidence}` : cancellationEvidence || evidence),
   );
   return cells;
 }
@@ -89,7 +91,7 @@ function scopeEntries({ filterPayload, scopeLabels = {}, search, sort, matchingC
       ['Finance snapshot', `${finance?.annualInterestRatePct ?? 'Unavailable'}% annual; revision ${finance?.revision ?? 'Unavailable'}; calculated ${finance?.asOfDate ?? 'Unavailable'}; ${finance?.dayCountBasis || 'ACT/365'}`],
       ['Bank charge snapshot', bankCharges],
       ['Finance evidence complete', finance?.complete === true ? 'Yes' : 'No'],
-      ['Finance methodology', 'Finance cost = sum of positive daily funded balances × annual rate ÷ 365 (Actual/365). Supplier payments increase funding, buyer receipts reduce it, same-day settlement costs zero, and open funding accrues through the calculation date.'],
+      ['Finance methodology', 'Finance cost = sum of positive daily funded balances × annual rate ÷ 365 (Actual/365). Supplier payments increase funding, buyer receipts reduce it, same-day settlement costs zero, and open funding accrues through the calculation date. Special-discount credits reconcile the invoice balance. Verified cash refunds enter funding on their actual date.'],
       ['Bank charge methodology', 'EBIT = gross profit minus finance cost minus bank charge. Bank Charge combines supplier remittance fees and actual recorded buyer receipt charges, net of signed fee refunds. No default fee is applied to buyer receipts. Receipt charges do not reduce cash received a second time. One configured supplier fee per remittance is allocated across its full positive cash allocations, including STEMs outside this export. Signed credits reconcile the net wire without another fee. Standalone supplier payments incur one fee each. No foreign exchange rate is invented.'],
       ['Missing-data note', 'Finance totals cover verified STEMs only; compare counts. Unknown costs are never zero; bank or currency costs without evidence are withheld.'],
     );
@@ -141,7 +143,7 @@ function buildWorkbook({
 } = {}) {
   if (!Array.isArray(rows)) throw new TypeError('Dashboard export rows must be an array.');
   const book = utils.book_new();
-  const headers = includeFinanceCosts ? [...BASE_HEADERS, ...FINANCE_HEADERS] : BASE_HEADERS;
+  const headers = [...BASE_HEADERS, ...(includeFinanceCosts ? FINANCE_HEADERS : []), EVIDENCE_HEADER];
   const currencies = [...new Set(rows.map((row) => currencyCode(row.currency)))];
   const commonCurrency = currencies.length === 1 ? currencies[0] : null;
   const displayHeaders = headers.map((header) => MONEY_HEADERS.has(header) && commonCurrency ? `${header} (${commonCurrency})` : header);
