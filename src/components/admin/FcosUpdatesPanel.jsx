@@ -38,6 +38,12 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 
+const UPDATE_HINT_CLASS = 'text-xs text-muted-foreground';
+const UPDATE_DETAIL_CLASS = 'mt-1 text-xs text-muted-foreground';
+const UPDATE_LABEL_CLASS = 'text-xs font-semibold text-muted-foreground';
+const BUSY_ICON_CLASS = 'h-4 w-4 animate-spin';
+const ICON_CLASS = 'h-4 w-4';
+
 const VIEW_OPTIONS = [
   { id: 'pending', label: 'Pending' },
   { id: 'batches', label: 'Batches' },
@@ -621,7 +627,7 @@ export default function FcosUpdatesPanel() {
     <div className="min-h-[calc(100vh-322px)]">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-2.5">
           <div>
-            <p className="text-xs text-muted-foreground">
+            <p className={UPDATE_HINT_CLASS}>
               Release history from {formatDate(model.settings?.backfillStart)} onward
             </p>
             {model.settings && (
@@ -645,7 +651,7 @@ export default function FcosUpdatesPanel() {
               disabled={loading || syncing || Boolean(working)}
               onClick={() => syncReleases({ announce: true })}
             >
-              {loading || syncing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              {loading || syncing ? <Loader2 className={BUSY_ICON_CLASS} /> : <RefreshCw className={ICON_CLASS} />}
               {syncing ? 'Checking releases' : 'Check releases'}
             </Button>
           </div>
@@ -683,7 +689,7 @@ export default function FcosUpdatesPanel() {
           </div>
           {view === 'pending' && (
             <Button size="sm" className="shrink-0" disabled={!selectedIds.length} onClick={openNewBatch}>
-              <Megaphone className="h-4 w-4" />
+              <Megaphone className={ICON_CLASS} />
               Create email ({selectedIds.length})
             </Button>
           )}
@@ -704,7 +710,7 @@ export default function FcosUpdatesPanel() {
               >
                 <div className="min-w-0">
                   <div className="truncate text-sm font-semibold text-foreground">{batch.subject}</div>
-                  <div className="mt-1 text-xs text-muted-foreground">
+                  <div className={UPDATE_DETAIL_CLASS}>
                     {batch.items.length} update{batch.items.length === 1 ? '' : 's'} · Updated {formatDate(batch.updatedAt, true)}
                   </div>
                 </div>
@@ -749,8 +755,8 @@ export default function FcosUpdatesPanel() {
               </div>
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-xs font-semibold text-muted-foreground">Version {item.sourceVersion}</span>
-                  <span className="text-xs text-muted-foreground">{formatDate(item.sourceReleaseDate)}</span>
+                  <span className={UPDATE_LABEL_CLASS}>Version {item.sourceVersion}</span>
+                  <span className={UPDATE_HINT_CLASS}>{formatDate(item.sourceReleaseDate)}</span>
                   <Badge variant="outline" className={CATEGORY_STYLES[item.category]}>
                     {CATEGORY_LABELS[item.category] || 'Needs classification'}
                   </Badge>
@@ -775,18 +781,18 @@ export default function FcosUpdatesPanel() {
                 {view === 'pending' && (
                   <>
                     <Button size="icon" variant="outline" title="Edit update wording" onClick={() => setEditItem({ ...item })}>
-                      <FilePenLine className="h-4 w-4" />
+                      <FilePenLine className={ICON_CLASS} />
                     </Button>
                     {canControl && (
                       <Button size="icon" variant="outline" title="Skip update" onClick={() => openReasonAction('skip', item)}>
-                        <SkipForward className="h-4 w-4" />
+                        <SkipForward className={ICON_CLASS} />
                       </Button>
                     )}
                   </>
                 )}
                 {view === 'skipped' && canControl && (
                   <Button size="sm" variant="outline" onClick={() => openReasonAction('restore', item)}>
-                    <RotateCcw className="h-4 w-4" />
+                    <RotateCcw className={ICON_CLASS} />
                     Restore
                   </Button>
                 )}
@@ -855,7 +861,7 @@ export default function FcosUpdatesPanel() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditItem(null)}>Cancel</Button>
             <Button onClick={saveItem} disabled={working === `item:${editItem?.id}`}>
-              {working === `item:${editItem?.id}` ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+              {working === `item:${editItem?.id}` ? <Loader2 className={BUSY_ICON_CLASS} /> : <Save className={ICON_CLASS} />}
               Save
             </Button>
           </DialogFooter>
@@ -909,11 +915,11 @@ export default function FcosUpdatesPanel() {
                   <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
                     <div>
                       <Label>Recipients</Label>
-                      <p className="mt-1 text-xs text-muted-foreground">
+                      <p className={UPDATE_DETAIL_CLASS}>
                         Each recipient receives a separate private email. Save all recipient changes before the General Manager sends.
                       </p>
                     </div>
-                    <span className="text-xs font-semibold text-muted-foreground">
+                    <span className={UPDATE_LABEL_CLASS}>
                       {batchDraft.recipients.length} selected
                     </span>
                   </div>
@@ -933,7 +939,7 @@ export default function FcosUpdatesPanel() {
                         ))}
                       </select>
                       <Button type="button" variant="outline" onClick={addRecipient} disabled={!addRecipientId}>
-                        <UserPlus className="h-4 w-4" />
+                        <UserPlus className={ICON_CLASS} />
                         Add
                       </Button>
                     </div>
@@ -967,7 +973,7 @@ export default function FcosUpdatesPanel() {
                             title="Remove recipient"
                             onClick={() => removeRecipient(index)}
                           >
-                            <X className="h-4 w-4" />
+                            <X className={ICON_CLASS} />
                           </Button>
                         )}
                       </div>
@@ -984,19 +990,19 @@ export default function FcosUpdatesPanel() {
                   {batchDraft.items.map((item, index) => (
                     <div key={item.itemId} className="space-y-3 border-b border-border py-4 last:border-b-0">
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="text-xs font-semibold text-muted-foreground">
+                        <div className={UPDATE_LABEL_CLASS}>
                           {index + 1}. Version {item.sourceVersion} · {formatDate(item.sourceReleaseDate)}
                         </div>
                         {!batchReadOnly && (
                           <div className="flex gap-1">
                             <Button size="icon" variant="ghost" disabled={index === 0} title="Move up" onClick={() => moveBatchItem(index, -1)}>
-                              <ArrowUp className="h-4 w-4" />
+                              <ArrowUp className={ICON_CLASS} />
                             </Button>
                             <Button size="icon" variant="ghost" disabled={index === batchDraft.items.length - 1} title="Move down" onClick={() => moveBatchItem(index, 1)}>
-                              <ArrowDown className="h-4 w-4" />
+                              <ArrowDown className={ICON_CLASS} />
                             </Button>
                             <Button size="icon" variant="ghost" title="Remove from email" onClick={() => removeBatchItem(index)}>
-                              <X className="h-4 w-4" />
+                              <X className={ICON_CLASS} />
                             </Button>
                           </div>
                         )}
@@ -1038,7 +1044,7 @@ export default function FcosUpdatesPanel() {
                   <div>
                     <div className="mb-2 flex items-center justify-between gap-2">
                       <Label>Recipient delivery results</Label>
-                      <span className="text-xs text-muted-foreground">
+                      <span className={UPDATE_HINT_CLASS}>
                         {batchDraft.sentCount} sent · {batchDraft.failedCount} failed · {batchDraft.uncertainCount} uncertain
                       </span>
                     </div>
@@ -1072,10 +1078,10 @@ export default function FcosUpdatesPanel() {
                 <div className="sticky top-0">
                   <div className="mb-2 flex items-center justify-between">
                     <div className="flex items-center gap-2 text-xs font-semibold uppercase text-muted-foreground">
-                      <Eye className="h-4 w-4" />
+                      <Eye className={ICON_CLASS} />
                       Email preview
                     </div>
-                    <span className="text-xs text-muted-foreground">{batchDraft.recipients.length} recipients</span>
+                    <span className={UPDATE_HINT_CLASS}>{batchDraft.recipients.length} recipients</span>
                   </div>
                   <div className="border-y border-border bg-slate-50 px-4 py-5">
                     <div className="text-xs font-bold text-blue-700">FCOS</div>
@@ -1116,19 +1122,19 @@ export default function FcosUpdatesPanel() {
                 && !['Sending', 'Sent', 'Partial Failure', 'Cancelled'].includes(batchDraft.status)
                 && batchDraft.status === 'Draft' && (
                 <Button variant="outline" onClick={() => openReasonAction('cancel', batchDraft)}>
-                  <Trash2 className="h-4 w-4" />
+                  <Trash2 className={ICON_CLASS} />
                   Cancel batch
                 </Button>
               )}
               {batchDraft.status === 'Partial Failure' && canControl && batchDraft.failedCount > 0 && (
                 <Button variant="outline" onClick={() => retryDeliveries(false)}>
-                  <RotateCcw className="h-4 w-4" />
+                  <RotateCcw className={ICON_CLASS} />
                   Retry failed
                 </Button>
               )}
               {batchDraft.status === 'Partial Failure' && canControl && batchDraft.uncertainCount > 0 && (
                 <Button variant="outline" onClick={() => retryDeliveries(true)}>
-                  <CircleAlert className="h-4 w-4" />
+                  <CircleAlert className={ICON_CLASS} />
                   Retry uncertain
                 </Button>
               )}
@@ -1141,13 +1147,13 @@ export default function FcosUpdatesPanel() {
                   onClick={saveAndCloseBatch}
                   disabled={!batchDraft.items.length || !batchDraft.recipients.length || (Boolean(batchDraft.id) && !batchIsDirty) || working === 'batch:save'}
                 >
-                  {working === 'batch:save' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                  {working === 'batch:save' ? <Loader2 className={BUSY_ICON_CLASS} /> : <Save className={ICON_CLASS} />}
                   Save draft
                 </Button>
               )}
               {batchDraft.status === 'Draft' && canControl && Boolean(batchDraft.id) && (
                 <Button onClick={openSendConfirmation} disabled={Boolean(working) || batchIsDirty}>
-                  {working === 'batch:preflight' ? <Loader2 className="h-4 w-4 animate-spin" /> : <MailCheck className="h-4 w-4" />}
+                  {working === 'batch:preflight' ? <Loader2 className={BUSY_ICON_CLASS} /> : <MailCheck className={ICON_CLASS} />}
                   Send now
                 </Button>
               )}
@@ -1207,7 +1213,7 @@ export default function FcosUpdatesPanel() {
               onClick={executeReasonAction}
               disabled={reason.trim().length < 8 || working.startsWith('reason:')}
             >
-              {working.startsWith('reason:') ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+              {working.startsWith('reason:') ? <Loader2 className={BUSY_ICON_CLASS} /> : <Check className={ICON_CLASS} />}
               Confirm
             </Button>
           </DialogFooter>
@@ -1241,14 +1247,14 @@ export default function FcosUpdatesPanel() {
             <div className="mt-3 text-xs text-muted-foreground">
               Sender: {model.sender?.name || 'FCOS Updates'} &lt;{model.sender?.address || 'Not configured'}&gt;
             </div>
-            <div className="mt-1 text-xs text-muted-foreground">
+            <div className={UPDATE_DETAIL_CLASS}>
               Microsoft Graph with Vercel OIDC · {model.sender?.authenticatedAddress || 'an unconfigured mailbox'}
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setSendConfirmation(null)}>Cancel</Button>
             <Button onClick={sendBatch} disabled={working === 'batch:send'}>
-              {working === 'batch:send' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              {working === 'batch:send' ? <Loader2 className={BUSY_ICON_CLASS} /> : <Send className={ICON_CLASS} />}
               Send to saved recipients
             </Button>
           </DialogFooter>

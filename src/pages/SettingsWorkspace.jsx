@@ -26,6 +26,8 @@ import { APP_VERSION } from '@/lib/appVersionMeta';
 const FinanceSettings = lazy(() => import('@/components/settings/FinanceSettings'));
 const FcosUpdatesPanel = lazy(() => import('@/components/admin/FcosUpdatesPanel'));
 
+const RELATED_SETTINGS_LINK_CLASS = 'block rounded px-3 py-1.5 text-muted-foreground hover:bg-muted hover:text-foreground';
+
 const SECTION_GROUPS = [
   {
     id: 'personal',
@@ -178,9 +180,9 @@ export default function SettingsWorkspace() {
         <div className="mt-5 hidden border-t border-border pt-4 lg:block">
           <div className="px-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Related workflow settings</div>
           <div className="mt-1 space-y-1 text-xs">
-            {hasModuleAccess('email_router') && isAdministrator && <Link className="block rounded px-3 py-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" to="/email-router?tab=routing-setup">Email Router setup</Link>}
-            {hasModuleAccess('brokers') && hasCapability('broker_settings_manage') && <Link className="block rounded px-3 py-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" to="/brokers?tab=configuration">Broker configuration</Link>}
-            {hasModuleAccess('hedge_desk') && hasCapability('hedge_admin') && <Link className="block rounded px-3 py-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" to="/hedge-desk?tab=administration">Hedge Desk administration</Link>}
+            {hasModuleAccess('email_router') && isAdministrator && <Link className={RELATED_SETTINGS_LINK_CLASS} to="/email-router?tab=routing-setup">Email Router setup</Link>}
+            {hasModuleAccess('brokers') && hasCapability('broker_settings_manage') && <Link className={RELATED_SETTINGS_LINK_CLASS} to="/brokers?tab=configuration">Broker configuration</Link>}
+            {hasModuleAccess('hedge_desk') && hasCapability('hedge_admin') && <Link className={RELATED_SETTINGS_LINK_CLASS} to="/hedge-desk?tab=administration">Hedge Desk administration</Link>}
           </div>
         </div>
 
