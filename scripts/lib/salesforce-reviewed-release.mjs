@@ -469,6 +469,20 @@ export function createReviewedSalesforcePlan({ review, manifestBytes, bootstrapB
       || !policy.environments.every(({ key }) => same(review.nativeInventories[key]?.presentComponents, [page]))) {
       failCoverage('The Historical STEM Buyer Brokers projection requires the exact page and new bundle pair with only the page present in every pinned org.');
     }
+  } else if (nativeProjection === 'schema-free-korea-desk-maintenance') {
+    const field = 'CustomField:STEM__c.Account__c';
+    const trigger = 'ApexTrigger:StemTrigger';
+    const handler = 'ApexClass:StemTriggerHandler';
+    const dependencies = { [field]: [trigger], [trigger]: [handler], [handler]: [] };
+    const exactPackage = sorted(Object.keys(dependencies));
+    if (bootstrap || !review.nativeInventories || permissions.length
+      || !same(manifest, exactPackage)
+      || components.some(({ id, dependsOn }) => !same(dependsOn, dependencies[id]))
+      || !policy.environments.every(({ key }) =>
+        Array.isArray(review.nativeInventories[key]?.presentComponents)
+        && same(sorted(review.nativeInventories[key].presentComponents), exactPackage))) {
+      failCoverage('Korea Desk maintenance requires the existing Buyer lookup and both guard components in one atomic package, with no bootstrap or permission assignments.');
+    }
   } else if (nativeProjection !== undefined && (nativeProjection !== 'schema-free-apex-lightning' || bootstrap
     || !review.nativeInventories || components.some(({ id }) => id !== editorFixtureTrigger
       && !(invoiceAppPlacement && id.startsWith('FlexiPage:')) && !/^(?:ApexClass|LightningComponentBundle):/u.test(id))
