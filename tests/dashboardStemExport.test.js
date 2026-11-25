@@ -478,13 +478,17 @@ test('discontinuous delivery periods stay explicit and filename lengths remain s
 });
 
 test('native XLS preserves Unicode and formula-like text without executing or silently truncating it', async () => {
-  const names = ['한국 선박 船舶', '=1+1', '+SUM(1,1)', '-1+1', '@SUM(1,1)', '<tag>&"quoted"', '韓'.repeat(4000)];
-  const blob = await createDashboardStemWorkbook({ rows: names.map((name) => ({ name })) });
-  const book = read(await blob.arrayBuffer(), { type: 'array' });
-  names.forEach((name, index) => {
-    const cell = book.Sheets.STEMs[`A${index + 2}`];
-    assert.equal(cell.v, name); assert.equal(cell.t, 's'); assert.equal(cell.f, undefined);
-  });
+  const short = ['한국 선박 船舶', '=1+1', '+SUM(1,1)', '-1+1', '@SUM(1,1)', '<tag>&"quoted"', '韓'.repeat(255)];
+  for (const names of [short, [...short, '韓'.repeat(256), '韓'.repeat(4000)]]) {
+    const blob = await createDashboardStemWorkbook({ rows: names.map(name => ({ name })) });
+    const book = read(await blob.arrayBuffer(), { type: 'array' });
+    names.forEach((name, index) => {
+      const cell = book.Sheets.STEMs[`A${index + 2}`];
+      assert.equal(cell.v, name);
+      assert.equal(cell.t, 's');
+      assert.equal(cell.f, undefined);
+    });
+  }
   await assert.rejects(createDashboardStemWorkbook({ rows: [{ name: 'a'.repeat(4001) }] }), /exceeds the supported XLS limit/);
 });
 

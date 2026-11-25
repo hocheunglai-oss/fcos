@@ -135,7 +135,7 @@ function splitRows(rows, maxRowsPerSheet = MAX_DATA_ROWS_PER_SHEET) {
   return chunks.length ? chunks : [[]];
 }
 
-export function buildDashboardStemWorkbook({
+function buildWorkbook({
   rows = [], filterPayload = {}, scopeLabels = {}, search = '', sort = null,
   includeFinanceCosts = false, finance = null, generatedAt = new Date().toISOString(),
 } = {}) {
@@ -145,15 +145,22 @@ export function buildDashboardStemWorkbook({
   const currencies = [...new Set(rows.map((row) => currencyCode(row.currency)))];
   const commonCurrency = currencies.length === 1 ? currencies[0] : null;
   const displayHeaders = headers.map((header) => MONEY_HEADERS.has(header) && commonCurrency ? `${header} (${commonCurrency})` : header);
+  let requiresSharedStrings = false;
+  const makeSheet = (cells) => {
+    // SheetJS BIFF8 inline labels truncate beyond 255 UTF-16 code units.
+    // For shorter strings they avoid the writer's linear shared-string lookup.
+    requiresSharedStrings ||= cells.some(row => row.some(cell => cell.t === 's' && cell.v.length > 255));
+    return utils.aoa_to_sheet(cells);
+  };
   const chunks = splitRows(rows);
   chunks.forEach((chunk, index) => {
-    const sheet = utils.aoa_to_sheet([displayHeaders.map(textCell), ...chunk.map((row) => exportRowCells(row, includeFinanceCosts, commonCurrency))]);
+    const sheet = makeSheet([displayHeaders.map(textCell), ...chunk.map((row) => exportRowCells(row, includeFinanceCosts, commonCurrency))]);
     sheet['!cols'] = headers.map((header) => ({ wch: WIDE_HEADERS.has(header) ? 36 : 19 }));
     utils.book_append_sheet(book, sheet, chunks.length === 1 ? 'STEMs' : `STEMs ${index + 1}`);
   });
   const entries = scopeEntries({ filterPayload, scopeLabels, search, sort, matchingCount: rows.length, generatedAt, includeFinanceCosts, finance });
   const totalHeaders = ['Currency', 'Row Count', 'Turnover', 'Gross Profit', ...(includeFinanceCosts ? ['Verified STEMs', 'Verified Gross Profit', 'Verified Finance Cost', 'Verified Bank Charge', 'Verified EBIT', 'Evidence Complete'] : [])];
-  const scope = utils.aoa_to_sheet([
+  const scope = makeSheet([
     [textCell('Dashboard STEM Export Scope'), textCell('')],
     ...entries.map(([label, value]) => [textCell(label), textCell(value)]),
     [textCell('Currency totals'), textCell('Totals remain separated by currency.')],
@@ -172,11 +179,17 @@ export function buildDashboardStemWorkbook({
   ]);
   scope['!cols'] = [{ wch: 30 }, { wch: 75 }, ...totalHeaders.slice(2).map(() => ({ wch: 24 }))];
   utils.book_append_sheet(book, scope, 'Scope');
-  return book;
+  return { book, requiresSharedStrings };
+}
+
+export function buildDashboardStemWorkbook(options) {
+  return buildWorkbook(options).book;
 }
 
 export function createDashboardStemWorkbookBytes(options) {
-  return write(buildDashboardStemWorkbook(options), { bookType: 'biff8', type: 'array', bookSST: true });
+  const { book, requiresSharedStrings } = buildWorkbook(options);
+  // The byte buffer avoids converting the entire XLS to an intermediate binary string.
+  return write(book, { bookType: 'biff8', type: 'buffer', bookSST: requiresSharedStrings });
 }
 
 export const dashboardStemWorkbookInternals = Object.freeze({ MAX_DATA_ROWS_PER_SHEET, currencyTotals, splitRows });
