@@ -46,6 +46,15 @@ export function dashboardCurrency(value) {
   return currency || SALESFORCE_CORPORATE_CURRENCY;
 }
 
+export function dashboardDirectoryFinancialFilters(filters) {
+  return {
+    portIds: Array.isArray(filters?.portIds) ? filters.portIds : [],
+    countryCodes: Array.isArray(filters?.countryCodes) ? filters.countryCodes : [],
+    excludedCountryCodes: Array.isArray(filters?.excludedCountryCodes) ? filters.excludedCountryCodes : [],
+    koreaDeskMode: filters?.koreaDeskMode || 'all',
+  };
+}
+
 export function normalizeDecisionDashboardFilters(input = {}) {
   const ids = (value) => {
     const output = [...new Set((Array.isArray(value) ? value : []).map((item) => String(item || '').trim()).filter(Boolean))].sort();

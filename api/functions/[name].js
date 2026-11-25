@@ -35,7 +35,7 @@ import {
 import { grossMarginPercent } from '../_dashboardMetrics.js';
 import { buildDashboardDateScopeWhere } from '../_dashboardDateScope.js';
 import { addDashboardMetricTonQuantity, dashboardLineItemVolume, dashboardMetricTonQuantity, dashboardVolumeLabel, findDashboardUomField } from '../_dashboardVolume.js';
-import { addReportedDashboardQuantity, dashboardCurrency, dashboardCurrentYearDateWindows, dashboardMonthlyComparison, dashboardMonthlyFinancialTrend, dashboardMonthlyYearOverYear, dashboardStemStatusFields, dashboardSupplierProductRows, dashboardVolumeWarnings, decodeDashboardCursor, decisionDashboardCompleteness, decisionDashboardSummary, decisionDashboardSupplierAmount, encodeDashboardCursor, normalizeDecisionDashboardFilters, priorEquivalentDateWindows, yearOverYearDateWindows } from '../_decisionDashboard.js';
+import { addReportedDashboardQuantity, dashboardCurrency, dashboardCurrentYearDateWindows, dashboardDirectoryFinancialFilters, dashboardMonthlyComparison, dashboardMonthlyFinancialTrend, dashboardMonthlyYearOverYear, dashboardStemStatusFields, dashboardSupplierProductRows, dashboardVolumeWarnings, decodeDashboardCursor, decisionDashboardCompleteness, decisionDashboardSummary, decisionDashboardSupplierAmount, encodeDashboardCursor, normalizeDecisionDashboardFilters, priorEquivalentDateWindows, yearOverYearDateWindows } from '../_decisionDashboard.js';
 import { dashboardAccountRankings } from '../../src/lib/dashboardAccountRankings.js';
 import { loadDashboardAccountInsight } from '../_dashboardAccountInsightService.js';
 import { generateDashboardAccountInsightExport } from '../_dashboardAccountInsightExport.js';
@@ -9579,12 +9579,7 @@ async function dashboardAccountCreditDirectory(body = {}, req = null, accessCont
   });
   if (!['both', 'buyer', 'supplier'].includes(body.direction) || !directory?.accounts?.length) return directory;
 
-  const financialFilters = {
-    portIds: Array.isArray(body.filters?.portIds) ? body.filters.portIds : [],
-    countryCodes: Array.isArray(body.filters?.countryCodes) ? body.filters.countryCodes : [],
-    excludedCountryCodes: Array.isArray(body.filters?.excludedCountryCodes) ? body.filters.excludedCountryCodes : [],
-    koreaDeskMode: body.filters?.koreaDeskMode || 'all',
-  };
+  const financialFilters = dashboardDirectoryFinancialFilters(body.filters);
   const cached = await cachedSalesforceValue({
     namespace: 'dashboard-unified-account-directory-financials-v1',
     ttlSeconds: 60,
