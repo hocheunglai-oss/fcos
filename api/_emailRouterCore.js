@@ -2134,16 +2134,22 @@ function attachmentSecret(env) {
   return secret;
 }
 
-export function createEmailRouterAttachmentToken({ mailboxId, messageId, attachmentId, expiresAt = Date.now() + 60_000 }, env = process.env) {
+function attachmentSignature(payload, actorId, env) {
+  if (typeof actorId !== 'string' || !UUID.test(actorId)) throw routerError('Attachment link is unavailable.', 403, 'EMAIL_ROUTER_ATTACHMENT_TOKEN_INVALID');
+  return createHmac('sha256', attachmentSecret(env))
+    .update('email-router-attachment:v2:').update(actorId.toLowerCase()).update(':').update(payload).digest('base64url');
+}
+
+export function createEmailRouterAttachmentToken({ actorId, mailboxId, messageId, attachmentId, expiresAt = Date.now() + 60_000 }, env = process.env) {
   const payload = Buffer.from(JSON.stringify({ mailboxId: safeId(mailboxId, 'mailbox identifier'), messageId: safeId(messageId, 'message identifier'), attachmentId: safeId(attachmentId, 'attachment identifier'), expiresAt: Number(expiresAt) })).toString('base64url');
-  const signature = createHmac('sha256', attachmentSecret(env)).update(payload).digest('base64url');
+  const signature = attachmentSignature(payload, actorId, env);
   return `${payload}.${signature}`;
 }
 
-export function verifyEmailRouterAttachmentToken(token, env = process.env) {
-  const [payload, signature] = String(token || '').split('.');
-  const expected = createHmac('sha256', attachmentSecret(env)).update(payload || '').digest('base64url');
-  if (!payload || !signature || Buffer.byteLength(signature) !== Buffer.byteLength(expected) || !timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) throw routerError('Attachment link is invalid.', 403, 'EMAIL_ROUTER_ATTACHMENT_TOKEN_INVALID');
+export function verifyEmailRouterAttachmentToken(token, actorId, env = process.env) {
+  const [payload, signature, extra] = String(token || '').split('.');
+  const expected = attachmentSignature(payload, actorId, env);
+  if (!payload || !signature || extra !== undefined || Buffer.byteLength(signature) !== Buffer.byteLength(expected) || !timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) throw routerError('Attachment link is invalid.', 403, 'EMAIL_ROUTER_ATTACHMENT_TOKEN_INVALID');
   let value;
   try { value = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')); } catch { throw routerError('Attachment link is invalid.', 403, 'EMAIL_ROUTER_ATTACHMENT_TOKEN_INVALID'); }
   if (!Number.isFinite(value.expiresAt) || value.expiresAt < Date.now()) throw routerError('Attachment link has expired.', 403, 'EMAIL_ROUTER_ATTACHMENT_TOKEN_EXPIRED');

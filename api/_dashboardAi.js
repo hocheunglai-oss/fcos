@@ -1,3 +1,5 @@
+import { fetchOpenAiResponses } from './_openAiResponses.js';
+import { requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
 import { z } from 'zod';
 
 import { DASHBOARD_AI_MODELS, DEFAULT_DASHBOARD_AI_MODEL } from '../shared/aiModelCatalog.js';
@@ -732,6 +734,7 @@ export async function interpretDashboardAiSearch({
   signal,
   onUsage,
 } = {}) {
+  requireDeploymentMutationAllowed(true);
   const normalizedPrompt = normalizeDashboardAiPrompt(prompt);
   const routing = resolveAiModel({ task: 'dashboard_search', selection: modelId, prompt: normalizedPrompt, clarification });
   modelId = routing.modelId;
@@ -744,7 +747,7 @@ export async function interpretDashboardAiSearch({
     : `Search request: ${normalizedPrompt}`;
   let response;
   try {
-    response = await fetchImpl('https://api.openai.com/v1/responses', {
+    response = await fetchOpenAiResponses(fetchImpl, {
       method: 'POST',
       headers: {
         authorization: `Bearer ${apiKey}`,

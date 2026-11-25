@@ -1,3 +1,4 @@
+import { fetchOpenAiResponses } from './_openAiResponses.js';
 import { AUTO_AI_MODEL, AI_MODEL_SELECTIONS, isAllowedAiSelection, resolveAiModel, aiRequestOptions } from './_aiModelRouting.js';
 import { createHash } from 'node:crypto';
 import {
@@ -195,7 +196,7 @@ export async function runEmailRouterAdvisor({ client, profile, mailbox, messageI
   const startedAt = Date.now();
   let response;
   try {
-    response = await (dependencies.fetchImpl || fetch)('https://api.openai.com/v1/responses', {
+    response = await fetchOpenAiResponses(dependencies.fetchImpl || fetch, {
       method: 'POST',
       headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
       body: JSON.stringify({

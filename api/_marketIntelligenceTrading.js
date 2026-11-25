@@ -1,3 +1,4 @@
+import { fetchOpenAiResponses } from './_openAiResponses.js';
 import { configuredAiSelection, resolveAiModel, aiRequestOptions } from './_aiModelRouting.js';
 import { createHash } from 'node:crypto';
 import {
@@ -1187,7 +1188,7 @@ export async function generateMarketCommentaryItems(contexts = [], dependencies 
       sourceRefs: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['sourceHash', 'page'], properties: { sourceHash: { type: 'string' }, page: { type: 'integer', minimum: 1 } } } },
       numericFacts: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['sourceHash', 'page', 'value', 'symbol'], properties: { sourceHash: { type: 'string' }, page: { type: 'integer', minimum: 1 }, value: { type: 'string' }, symbol: { type: 'string' } } } },
     };
-    const response = await (dependencies.fetchImpl || fetch)('https://api.openai.com/v1/responses', {
+    const response = await fetchOpenAiResponses(dependencies.fetchImpl || fetch, {
       method: 'POST',
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({

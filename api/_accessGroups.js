@@ -1,5 +1,19 @@
-// Each request resolves against current storage. No process-wide authorization cache.
 import { resolveGroupAccess } from '../shared/accessGroups.js';
+export const REPORT_ARCHIVE_MODULE_ID = 'report_archive';
+
+export function reportArchiveAccessLevel(value, canView = undefined) {
+  if (value === 'full' || value === true) return 'full';
+  if (value === 'read') return 'read';
+  if (canView === true) return 'full';
+  return 'none';
+}
+
+export function permissionCanView(moduleId, value) {
+  if (moduleId === REPORT_ARCHIVE_MODULE_ID) return reportArchiveAccessLevel(value) !== 'none';
+  return value === true;
+}
+
+// Each request resolves against current storage. No process-wide authorization cache.
 const requestAccess = new WeakMap();
 export async function loadEffectiveGroupAccess(client, profile) {
   if (!profile?.id) throw Object.assign(new Error('A registered user is required.'), { status: 403 });

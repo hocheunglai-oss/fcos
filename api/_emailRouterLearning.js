@@ -1,3 +1,4 @@
+import { fetchOpenAiResponses } from './_openAiResponses.js';
 import { AUTO_AI_MODEL, AI_MODEL_SELECTIONS, isAllowedAiSelection, resolveAiModel, aiRequestOptions } from './_aiModelRouting.js';
 import { createHmac } from 'node:crypto';
 import { dashboardAiUsageFromResponse } from './_dashboardAi.js';
@@ -278,7 +279,7 @@ async function classifyMessage(message, modelId, dependencies) {
   modelId = routing.modelId;
   const apiKey = String(dependencies.apiKey || process.env.OPENAI_API_KEY || '').trim();
   if (!apiKey) throw learningError('The protected OpenAI service is not configured.', 503, 'OPENAI_NOT_CONFIGURED');
-  const response = await (dependencies.fetchImpl || fetch)('https://api.openai.com/v1/responses', {
+  const response = await fetchOpenAiResponses(dependencies.fetchImpl || fetch, {
     method: 'POST',
     headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
     body: JSON.stringify({

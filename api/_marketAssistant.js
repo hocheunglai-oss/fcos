@@ -1,3 +1,4 @@
+import { fetchOpenAiResponses } from './_openAiResponses.js';
 import { createHash } from 'node:crypto';
 import { DASHBOARD_AI_MODELS, DEFAULT_DASHBOARD_AI_MODEL } from './_dashboardAi.js';
 import { loadMarketReportCatalogue, loadMarketReportFacts } from './_marketReportAnalysis.js';
@@ -238,7 +239,7 @@ export async function runMarketAssistant(client, profile, body = {}, dependencie
   for (let roundIndex = 0; roundIndex < 6; roundIndex++) {
     let response;
     try {
-      response = await (dependencies.fetchImpl || fetch)('https://api.openai.com/v1/responses', {
+      response = await fetchOpenAiResponses(dependencies.fetchImpl || fetch, {
         method: 'POST', signal,
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ model, store: false, include: ['reasoning.encrypted_content'], instructions, input, tools: MARKET_ASSISTANT_TOOLS,

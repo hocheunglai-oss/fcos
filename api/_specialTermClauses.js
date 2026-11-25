@@ -1,3 +1,4 @@
+import { fetchOpenAiResponses } from './_openAiResponses.js';
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { richTextToCopyText } from '../shared/specialTermsCopyText.js';
 import { SPECIAL_TERM_PENDING_REASON } from '../shared/specialTermDraftPolicy.js';
@@ -2524,7 +2525,7 @@ export async function draftSpecialTermClausesWithAi(client, profile, body = {}, 
         },
       },
     };
-    const response = await (dependencies.fetchImpl || fetch)('https://api.openai.com/v1/responses', {
+    const response = await fetchOpenAiResponses(dependencies.fetchImpl || fetch, {
       method: 'POST', headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
       body: JSON.stringify({ model, store: false, ...aiRequestOptions(routing, 12_000), safety_identifier: clauseHash(profile.id), input: [
         { role: 'system', content: [{ type: 'input_text', text: 'You draft proposed FCOS Special Term clause-bank entries. Copy every input id exactly. Preserve every amount, deadline, party, port, product, standard, jurisdiction, number format, and named entity character-for-character. Do not merge clauses. Do not add a top-level number or hyphen. If a professional rewrite would change a protected qualifier, return the source wording unchanged and improve only the short name, category, and rationale. Return only the required structured output. Each response is a DRAFT requiring human approval.' }] },

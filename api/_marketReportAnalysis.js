@@ -1,3 +1,4 @@
+import { fetchOpenAiResponses } from './_openAiResponses.js';
 import { AUTO_AI_MODEL, AI_MODEL_SELECTIONS, isAllowedAiSelection, resolveAiModel, aiRequestOptions } from './_aiModelRouting.js';
 import { createHash } from 'node:crypto';
 import {
@@ -314,7 +315,7 @@ export async function analyzeMarketReportLibrary(client, profile, body = {}, { a
 
   let response;
   try {
-    response = await fetchImpl('https://api.openai.com/v1/responses', {
+    response = await fetchOpenAiResponses(fetchImpl, {
       method: 'POST',
       signal: AbortSignal.timeout(90_000),
       headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },

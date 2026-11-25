@@ -1,3 +1,5 @@
+import { fetchOpenAiResponses } from './_openAiResponses.js';
+import { requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
 import { AUTO_AI_MODEL, AI_MODEL_SELECTIONS, isAllowedAiSelection, automaticRoutingFor, resolveAiModel, aiRequestOptions } from './_aiModelRouting.js';
 import {
   dashboardAiUsageFromResponse,
@@ -36,6 +38,7 @@ async function modelSetting(client) {
 }
 
 export async function runHedgeAssistant(client, profile, body = {}, dependencies = {}) {
+  requireDeploymentMutationAllowed(true);
   const messages = cleanMessages(body.messages);
   if (!messages.length) throw assistantError('Enter a question for the Trading Assistant.', 400);
   const apiKey = String(dependencies.apiKey || process.env.OPENAI_API_KEY || '').trim();
@@ -47,7 +50,7 @@ export async function runHedgeAssistant(client, profile, body = {}, dependencies
     paperHedges: compactRows(body.swaps, ['product', 'direction', 'swap_month', 'quantity', 'unit', 'price', 'venue', 'broker', 'trade_type', 'is_expired', 'trade_date', 'live_mtm'], 50),
     recentMarkets: compactRows(body.mops, ['price_date', 's380', 's05', 'sgo'], 20),
   };
-  const response = await (dependencies.fetchImpl || fetch)('https://api.openai.com/v1/responses', {
+  const response = await fetchOpenAiResponses(dependencies.fetchImpl || fetch, {
     method: 'POST',
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({

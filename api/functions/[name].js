@@ -4,7 +4,7 @@ import { setManagedUserActivation } from '../_fcunoManagedActivation.js';
 import { deploymentSafeSupabaseFetch } from '../_deploymentReadOnlyFetch.js';
 import { withDeploymentRequestSafety } from '../_deploymentReadOnly.js';
 import { activeStemLineItems } from '../../src/lib/stemLineVisibility.js';
-import { loadEffectiveGroupAccess, readAllAccessRows, serializeGroupUser, accessOperationError } from '../_accessGroups.js';
+import { loadEffectiveGroupAccess, permissionCanView, reportArchiveAccessLevel, REPORT_ARCHIVE_MODULE_ID, readAllAccessRows, serializeGroupUser, accessOperationError } from '../_accessGroups.js';
 import { AUTO_AI_MODEL, AI_MODEL_SELECTIONS, AI_ROUTING_VERSION, isAllowedAiSelection, automaticRoutingFor, resolveAiModel } from '../_aiModelRouting.js';
 import { createStemWorkspaceActivity } from '../_stemWorkspaceActivity.js';
 import { createWorkflowMetricsReader, recordWorkflowMetric } from '../_workflowMetrics.js';
@@ -474,7 +474,6 @@ const ADMIN_CAPABILITIES = [
 ];
 const ADMIN_CAPABILITY_IDS = new Set(ADMIN_CAPABILITIES.map((capability) => capability.id));
 const ADMIN_FULL_CAPABILITIES = Object.fromEntries(ADMIN_CAPABILITIES.map((capability) => [capability.id, true]));
-const REPORT_ARCHIVE_MODULE_ID = 'report_archive';
 const REPORT_ARCHIVE_MANAGE_MODULE_ID = 'report_archive_manage';
 const DEFAULT_USER_TYPES = [
   {
@@ -705,18 +704,6 @@ const FALLBACK_TYPE_CAPABILITIES = {
 };
 const INTEROFFICE_USER_TYPE_ID = 'interoffice';
 const INTEROFFICE_EXCLUDED_BUYER_GROUP = 'FRATELLI COSULICH';
-
-function reportArchiveAccessLevel(value, canView = undefined) {
-  if (value === 'full' || value === true) return 'full';
-  if (value === 'read') return 'read';
-  if (canView === true) return 'full';
-  return 'none';
-}
-
-function permissionCanView(moduleId, value) {
-  if (moduleId === REPORT_ARCHIVE_MODULE_ID) return reportArchiveAccessLevel(value) !== 'none';
-  return value === true;
-}
 
 function permissionValueFromRow(row) {
   return row?.can_view === true;

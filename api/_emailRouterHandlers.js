@@ -24,6 +24,7 @@ import {
   validEmailRouterWebhookNotifications,
   verifyEmailRouterAttachmentToken,
 } from './_emailRouterCore.js';
+import { loadEffectiveGroupAccess, permissionCanView } from './_accessGroups.js';
 import { emailRouterConfiguration, saveEmailRouterConfiguration } from './_emailRouterConfig.js';
 import { runEmailRouterAdvisor } from './_emailRouterAdvisor.js';
 import { discoverEmailRouterFolders, listEmailRouterRoutingFolders } from './_emailRouterFolders.js';
@@ -168,6 +169,7 @@ export async function emailRouterDetailHandler(req, body = {}, dependencies = {}
     if (!attachment?.id) return attachment;
     try {
       const token = createEmailRouterAttachmentToken({
+        actorId: value.profile.id,
         mailboxId: value.mailbox.id,
         messageId: body.messageId,
         attachmentId: attachment.id,
@@ -220,7 +222,7 @@ export async function emailRouterLeaveSaveHandler(req, body = {}, dependencies =
 export async function emailRouterAttachmentUrlHandler(req, body = {}, dependencies = {}) {
   const value = await context(req, dependencies);
   const expiresAtMs = Date.now() + 5 * 60_000;
-  const token = createEmailRouterAttachmentToken({ mailboxId: value.mailbox.id, messageId: body.messageId, attachmentId: body.attachmentId, expiresAt: expiresAtMs }, dependencies.env || process.env);
+  const token = createEmailRouterAttachmentToken({ actorId: value.profile.id, mailboxId: value.mailbox.id, messageId: body.messageId, attachmentId: body.attachmentId, expiresAt: expiresAtMs }, dependencies.env || process.env);
   const path = String(dependencies.attachmentStreamPath || '/api/email-router-attachment');
   return { token, url: `${path}?token=${encodeURIComponent(token)}`, expiresAt: new Date(expiresAtMs).toISOString() };
 }
@@ -230,8 +232,12 @@ export async function emailRouterAttachmentStreamHandler(req, body = {}, depende
   const queryToken = (() => {
     try { return new URL(req?.url || '', 'http://localhost').searchParams.get('token'); } catch { return null; }
   })();
-  const token = verifyEmailRouterAttachmentToken(body.token || queryToken, dependencies.env || process.env);
   const auth = await requireEmailRouterUser(req, dependencies);
+  const token = verifyEmailRouterAttachmentToken(body.token || queryToken, auth.profile.id, dependencies.env || process.env);
+  const access = await loadEffectiveGroupAccess(auth.client, auth.profile);
+  if (!permissionCanView('email_router', access.permissions?.email_router)) {
+    throw Object.assign(new Error('You do not have access to this module.'), { status: 403, code: 'FCOS_MODULE_FORBIDDEN' });
+  }
   const mailbox = await currentEmailRouterMailbox(auth.client);
   if (token.mailboxId !== mailbox.id) throw Object.assign(new Error('Attachment link is unavailable.'), { status: 403, code: 'EMAIL_ROUTER_ATTACHMENT_FORBIDDEN' });
   const attachment = await streamEmailRouterAttachment({ mailbox, messageId: token.messageId, attachmentId: token.attachmentId }, dependencies);

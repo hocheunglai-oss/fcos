@@ -1,3 +1,4 @@
+import { fetchOpenAiResponses } from './_openAiResponses.js';
 import { configuredAiSelection, resolveAiModel, aiRequestOptions } from './_aiModelRouting.js';
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { marketIntelligenceTradingInternals } from './_marketIntelligenceTrading.js';
@@ -268,7 +269,7 @@ async function extractMorningImage(buffer, mimeType, { apiKey, model, fetchImpl,
   };
   let response;
   try {
-    response = await fetchImpl('https://api.openai.com/v1/responses', {
+    response = await fetchOpenAiResponses(fetchImpl, {
       method: 'POST',
       headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
       signal: AbortSignal.timeout(45_000),

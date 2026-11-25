@@ -305,10 +305,11 @@ test('Market Report folder resolution supports nested folders and fails closed o
 
 test('attachment links are short-lived, signed, and contain no file name', () => {
   const env = { FCOS_EMAIL_ROUTER_ATTACHMENT_SECRET: 'attachment-test-secret' };
-  const token = createEmailRouterAttachmentToken({ mailboxId: 'mailbox-1', messageId: 'message-1', attachmentId: 'attachment-1', expiresAt: Date.now() + 1_000 }, env);
+  const actorId = '10000000-0000-4000-8000-000000000001';
+  const token = createEmailRouterAttachmentToken({ actorId, mailboxId: 'mailbox-1', messageId: 'message-1', attachmentId: 'attachment-1', expiresAt: Date.now() + 1_000 }, env);
   assert.doesNotMatch(token, /\.pdf|invoice|name/i);
-  assert.deepEqual(verifyEmailRouterAttachmentToken(token, env), { mailboxId: 'mailbox-1', messageId: 'message-1', attachmentId: 'attachment-1' });
-  assert.throws(() => verifyEmailRouterAttachmentToken(`${token}x`, env), (error) => error.code === 'EMAIL_ROUTER_ATTACHMENT_TOKEN_INVALID');
+  assert.deepEqual(verifyEmailRouterAttachmentToken(token, actorId, env), { mailboxId: 'mailbox-1', messageId: 'message-1', attachmentId: 'attachment-1' });
+  assert.throws(() => verifyEmailRouterAttachmentToken(`${token}x`, actorId, env), (error) => error.code === 'EMAIL_ROUTER_ATTACHMENT_TOKEN_INVALID');
 });
 
 test('routing versions use override, priority, specificity, ambiguity, and Standard fallback deterministically', () => {
