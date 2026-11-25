@@ -4,7 +4,7 @@
     <label>Buyer</label>
     <lookupFilter>
         <active>true</active>
-        <booleanFilter>((1 OR 2) AND 3) OR 4</booleanFilter>
+        <booleanFilter>((1 OR 2) AND 3) OR 4 OR (5 AND (6 OR 7 OR 8))</booleanFilter>
         <filterItems>
             <field>Account.RecordTypeId</field>
             <operation>equals</operation>
@@ -24,6 +24,26 @@
             <field>$Source.RecordTypeId</field>
             <operation>equals</operation>
             <value>Historical</value>
+        </filterItems>
+        <filterItems>
+            <field>$Source.Korea_Desk__c</field>
+            <operation>equals</operation>
+            <value>No</value>
+        </filterItems>
+        <filterItems>
+            <field>$User.Username</field>
+            <operation>equals</operation>
+            <value>vincent@cosulich.com.hk</value>
+        </filterItems>
+        <filterItems>
+            <field>$User.Username</field>
+            <operation>equals</operation>
+            <value>vincent@cosulich.com.hk.devee</value>
+        </filterItems>
+        <filterItems>
+            <field>$User.Username</field>
+            <operation>equals</operation>
+            <value>vincent@cosulich.com.hk.qat</value>
         </filterItems>
         <errorMessage>Buyer is inactive or has incorrect record type</errorMessage>
         <isOptional>false</isOptional>
