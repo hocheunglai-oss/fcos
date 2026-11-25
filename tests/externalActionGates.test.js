@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
-import { externalActionGates, isExternalActionEnabled, requireExternalActionGate } from '../api/_externalActionGates.js';
+import { externalActionGates, isExternalActionEnabled, requireExternalActionGate, summarizeExternalActionGates } from '../api/_externalActionGates.js';
 import { sfRequest } from '../api/_salesforce.js';
 
 test('established FCOS integrations stay live while new actions remain UAT gated', () => {
@@ -26,6 +26,32 @@ test('established FCOS integrations stay live while new actions remain UAT gated
 test('System Health does not report self-hosted interface fonts as an external connection', async () => {
   const source = await readFile(new URL('../api/functions/[name].js', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /googleFontsHealthRow|fonts\.googleapis\.com|Loads Inter and DM Sans/);
+});
+
+test('System Health treats the hosted Xero suspension as expected and still warns about enabled transport', () => {
+  const flags = {
+    FCOS_ENABLE_XERO_CONTACT_SYNC: 'true',
+    FCOS_ENABLE_XERO_FINANCIAL_SYNC: 'true',
+    FCOS_ENABLE_XERO_TRADING_FX_WRITES: 'true',
+  };
+  for (const host of [{ VERCEL_ENV: 'production' }, { VERCEL_TARGET_ENV: 'preview', FCOS_ENABLE_READ_ONLY_CI: 'true' }, { VERCEL: '1' }]) {
+    const xero = Object.fromEntries(Object.entries(externalActionGates({ ...flags, ...host })).filter(([key]) => key.startsWith('xero_')));
+    assert.equal(Object.keys(xero).length, 3);
+    const summary = summarizeExternalActionGates(xero);
+    assert.deepEqual(summary.unexpected, []);
+    for (const gate of Object.values(xero)) {
+      assert.equal(gate.enabled, false);
+      assert.equal(gate.expectedState, 'operator_suspended');
+      assert.equal(summary.details[gate.label], 'Suspended by operator');
+    }
+    xero.xero_contact_sync.enabled = true;
+    const invalid = summarizeExternalActionGates(xero);
+    assert.deepEqual(invalid.unexpected.map(gate => gate.key), ['xero_contact_sync']);
+    assert.equal(invalid.details[xero.xero_contact_sync.label], 'Enabled despite operator suspension');
+  }
+  const local = externalActionGates({ FCOS_ENABLE_XERO_CONTACT_SYNC: 'true' });
+  assert.equal(summarizeExternalActionGates(local).details[local.xero_contact_sync.label], 'Enabled (existing live function)');
+  assert.deepEqual(summarizeExternalActionGates(local).unexpected, []);
 });
 
 test('emergency-disabled legacy integrations return a stable conflict without exposing their environment variable', () => {

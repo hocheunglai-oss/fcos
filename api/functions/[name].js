@@ -65,7 +65,7 @@ import { normalizeAccountPicRowColorRules } from '../../src/lib/accountPicRowCol
 import { createClient } from '@supabase/supabase-js';
 import { waitUntil } from '@vercel/functions';
 import { createHash } from 'node:crypto';
-import { externalActionGates, isExternalActionEnabled, requireExternalActionGate } from '../_externalActionGates.js';
+import { externalActionGates, isExternalActionEnabled, requireExternalActionGate, summarizeExternalActionGates } from '../_externalActionGates.js';
 import { EXCEPTION_REVIEW_DATE_BASIS, EXCEPTION_SCHEDULE_FIELDS, buildExceptionReviewScheduleWhere, exceptionScheduleSchemaIssues, normalizeExceptionSchedule } from '../../src/lib/exceptionReviewSchedule.js';
 import { DISPUTE_BUYER_CLOSE_REASONS as DISPUTE_BETA_BUYER_CLOSE_REASONS, DISPUTE_SUPPLIER_CLOSE_REASONS as DISPUTE_BETA_SUPPLIER_CLOSE_REASONS } from '../../src/lib/disputeWorkflowOptions.js';
 import { zeroBalanceClosureEligibility, disputeAgreementSummary, disputeNotRequiredEligibility } from '../_disputeAccounting.js';
@@ -6515,8 +6515,7 @@ async function googleDriveHealthRow() {
 }
 
 function externalActionGateHealthRow() {
-  const gates = externalActionGates();
-  const unexpected = Object.values(gates).filter((gate) => (gate.expectedState === 'live' ? !gate.enabled : gate.enabled));
+  const { unexpected, details } = summarizeExternalActionGates(externalActionGates());
   return {
     id: 'external-action-gates',
     name: 'External action gates',
@@ -6532,7 +6531,7 @@ function externalActionGateHealthRow() {
     latencyMs: null,
     error: null,
     tokenExpiry: 'Not applicable.',
-    details: Object.fromEntries(Object.values(gates).map((gate) => [gate.label, `${gate.enabled ? 'Enabled' : 'Disabled'} (${gate.expectedState === 'live' ? 'existing live function' : 'UAT gated'})`])),
+    details,
     notes: unexpected.length ? [`Review unexpected connector state: ${unexpected.map((gate) => gate.label).join(', ')}.`] : ['Existing Salesforce, Google Drive, and operational email delivery functions are live. Growth & Coaching email and Outlook actions, bank execution, and payment promotion remain UAT gated.'],
   };
 }

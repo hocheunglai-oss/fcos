@@ -96,14 +96,31 @@ function definitionEnabled(key, definition, env) {
 }
 
 export function externalActionGates(env = process.env) {
+  const hostedHold = isHostedXeroAccessSuspended(env);
   return Object.fromEntries(Object.entries(GATE_DEFINITIONS).map(([key, definition]) => [key, {
     key,
     label: definition.label,
     description: definition.description,
     enabled: definitionEnabled(key, definition, env),
-    expectedState: definition.expectedState || (definition.defaultEnabled ? 'live' : 'uat_gated'),
+    expectedState: hostedHold && key.startsWith('xero_')
+      ? 'operator_suspended'
+      : definition.expectedState || (definition.defaultEnabled ? 'live' : 'uat_gated'),
     control: isDeploymentReadOnly(env) ? 'deployment_read_only' : definition.defaultEnabled ? 'emergency_kill_switch' : 'explicit_enablement',
   }]));
+}
+
+export function summarizeExternalActionGates(gates) {
+  const values = Object.values(gates);
+  const descriptions = { live: 'existing live function', uat_gated: 'UAT gated' };
+  return {
+    unexpected: values.filter(gate => gate.enabled !== (gate.expectedState === 'live')),
+    details: Object.fromEntries(values.map(({ label, enabled, expectedState }) => [
+      label,
+      expectedState === 'operator_suspended'
+        ? (enabled ? 'Enabled despite operator suspension' : 'Suspended by operator')
+        : `${enabled ? 'Enabled' : 'Disabled'} (${descriptions[expectedState]})`,
+    ])),
+  };
 }
 
 export function isExternalActionEnabled(key, env = process.env) {
