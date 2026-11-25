@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { runInNewContext } from 'node:vm';
 import {
   createDashboardStemWorkbook,
   dashboardStemExportFileName,
@@ -170,6 +171,59 @@ test('Dashboard export detects same-count replacements and edits across pages', 
   await assert.rejects(download(exportRow('C', '2026-11-24T11:00:00.000Z')), /selection changed/);
   await assert.rejects(download({ id: 'C' }), /cannot verify the STEM revision/);
   await assert.rejects(download(initial[2], null), /selection changed/);
+});
+
+test('Dashboard XLS bypasses shared result caching, refreshes schema once, and reads each data page', async () => {
+  const source = await readFile(new URL('../api/functions/[name].js', import.meta.url), 'utf8');
+  const scope = source.match(/^async function loadDecisionDashboardScope\([\s\S]*?^\}/m)?.[0];
+  const stemList = source.match(/^async function dashboardStemList\([\s\S]*?^\}/m)?.[0];
+  assert.ok(scope && stemList);
+  const rows = Array.from({ length: 1000 }, (_, i) => exportRow(String(i)));
+  const digest = await dashboardExportSelectionDigest(rows);
+  const metadata = new Set();
+  let describes = 0;
+  let pageReads = 0;
+  let financeChecks = 0;
+  let resultCacheCalls = 0;
+  const stopAfterSchema = new Error('schema boundary');
+  const [route, loader] = runInNewContext(`${scope}\n${stemList}\n[dashboardStemList, loadDecisionDashboardScope]`, {
+    requestForcesRefresh: (_body, req) => req?.headers?.['x-fcos-cache-bypass'] === '1',
+    normalizeDecisionDashboardFilters: () => ({}),
+    salesforceObjectFields: async ({ objectName, forceRefresh }) => {
+      if (forceRefresh || !metadata.has(objectName)) {
+        describes++;
+        metadata.add(objectName);
+      }
+      return { get fields() { throw stopAfterSchema; } };
+    },
+    dashboardFinanceContext: async () => { financeChecks++; return finance; },
+    cachedDecisionDashboard: async (_section, _body, _req, _access, _ttl, load) => {
+      resultCacheCalls++;
+      return load();
+    },
+    dashboardStemListUncached: async (body, req, access) => {
+      await assert.rejects(loader(body, req, access, { pageOnly: true }), error => error === stopAfterSchema);
+      const start = Number(body.cursor || 0);
+      const end = start + body.pageSize;
+      pageReads++;
+      return { stems: rows.slice(start, end), matchingCount: rows.length, finance,
+        ...(start === 0 ? { exportSelectionDigest: digest } : {}),
+        nextCursor: end < rows.length ? String(end) : null };
+    },
+  });
+  const result = await fetchAllDashboardStems({
+    invoke: async (_name, body, options) => ({ data: await route(body, {
+      headers: { 'x-fcos-cache-bypass': options.force ? '1' : '0' },
+    }) }),
+    includeFinanceCosts: true,
+  });
+  assert.deepEqual(result.rows, rows);
+  assert.deepEqual({ describes, pageReads, financeChecks, resultCacheCalls }, {
+    describes: 6, pageReads: 5, financeChecks: 5, resultCacheCalls: 0,
+  });
+  await route({ pageSize: 50 }, { headers: { 'x-fcos-cache-bypass': '1' } });
+  assert.equal(resultCacheCalls, 1);
+  assert.equal(describes, 12);
 });
 
 test('the export manifest reads only IDs and revision stamps within each supplied filter', async () => {

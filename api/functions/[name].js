@@ -8086,7 +8086,10 @@ function decisionDashboardCompareStems(left, right, sort) {
 
 async function loadDecisionDashboardScope(body = {}, req = null, accessContext = null, { additionalWhere = '', pageOnly = false } = {}) {
   const startedAt = Date.now();
-  const force = requestForcesRefresh(body, req);
+  const exporting = pageOnly && body.exportSnapshot === true;
+  const force = exporting || requestForcesRefresh(body, req);
+  // Export pages always read current records. Only the initial page refreshes shared schema.
+  const refreshSchema = exporting ? !body.cursor : force;
   let filters;
   try {
     filters = normalizeDecisionDashboardFilters(body.filters || body);
@@ -8100,12 +8103,12 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
     else filters = { ...filters, accountIds: [...new Set([...filters.accountIds, ...memberIds])] };
   }
   const [stemDescribe, lineItemDescribe, extraCostDescribe, productDescribe, buyerBrokerDescribe, accountDescribe] = await Promise.all([
-    salesforceObjectFields({ objectName: 'stem__c', forceRefresh: force }),
-    salesforceObjectFields({ objectName: 'STEM_Line_Item__c', forceRefresh: force }),
-    salesforceObjectFields({ objectName: 'STEM_Extra_Cost__c', forceRefresh: force }),
-    salesforceObjectFields({ objectName: 'Product2', forceRefresh: force }).catch(() => ({ fields: [] })),
-    salesforceObjectFields({ objectName: 'STEM_Buyer_Broker__c', forceRefresh: force }).catch(() => ({ fields: [] })),
-    salesforceObjectFields({ objectName: 'Account', forceRefresh: force }),
+    salesforceObjectFields({ objectName: 'stem__c', forceRefresh: refreshSchema }),
+    salesforceObjectFields({ objectName: 'STEM_Line_Item__c', forceRefresh: refreshSchema }),
+    salesforceObjectFields({ objectName: 'STEM_Extra_Cost__c', forceRefresh: refreshSchema }),
+    salesforceObjectFields({ objectName: 'Product2', forceRefresh: refreshSchema }).catch(() => ({ fields: [] })),
+    salesforceObjectFields({ objectName: 'STEM_Buyer_Broker__c', forceRefresh: refreshSchema }).catch(() => ({ fields: [] })),
+    salesforceObjectFields({ objectName: 'Account', forceRefresh: refreshSchema }),
   ]);
   const stemFields = new Set((stemDescribe.fields || []).map((field) => field.name));
   const lineFields = new Set((lineItemDescribe.fields || []).map((field) => field.name));
@@ -8162,7 +8165,7 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
   const cursor = decodeDashboardCursor(body.cursor);
   if (pageOnly && body.cursor && !cursor) throw appError('Dashboard cursor is invalid.', 400, 'DASHBOARD_CURSOR_INVALID');
   const parentSelect = ['Id', 'Name', 'CreatedDate'];
-  const exportScope = pageOnly && body.exportSnapshot === true ? dashboardExportScope(stemFields) : null;
+  const exportScope = exporting ? dashboardExportScope(stemFields) : null;
   if (exportScope) parentSelect.push(exportScope.revisionField);
   for (const name of ['Delivery_Date__c', 'Expected_Delivery_Date__c', 'Status__c', 'Type__c', 'Dispute__c', 'Dispute_Status__c', 'CurrencyIsoCode', 'Total_Invoice_Amount__c', 'Total_Invoiced_Amount_From_Suppliers__c', 'Costs_Total__c', 'QLIK_STEM_Line_Item_Total_Cost__c', 'QLIK_Costs_Total_Cost__c']) if (stemFields.has(name)) parentSelect.push(name);
   if (accountField) parentSelect.push(accountField, 'Account__r.Name', 'Account__r.Inactive_Suspended__c');
@@ -8734,7 +8737,9 @@ const dashboardNomBAuditRead = (body, req, context) => dashboardNomBOperation(lo
 
 async function dashboardStemList(body = {}, req = null, accessContext = null) {
   const financeContext = await dashboardFinanceContext(body, req, accessContext);
-  return cachedDecisionDashboard('stems', body, req, accessContext, 30, () => dashboardStemListUncached(body, req, accessContext, financeContext), financeContext);
+  const load = () => dashboardStemListUncached(body, req, accessContext, financeContext);
+  // A fresh export bypasses the result cache without expiring other Dashboard users' entries.
+  return body.exportSnapshot === true ? load() : cachedDecisionDashboard('stems', body, req, accessContext, 30, load, financeContext);
 }
 
 async function dashboardAnalytics(body = {}, req = null, accessContext = null) {
