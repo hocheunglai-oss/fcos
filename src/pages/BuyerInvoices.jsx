@@ -47,6 +47,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { accountClKeyLabel } from '@/lib/accountDisplay';
 import { canonicalizeBuyerInvoiceEmailValue } from '@/lib/buyerInvoiceEmailSettings';
+import { buyerInvoiceDaysAhead, DEFAULT_BUYER_INVOICE_DAYS_AHEAD } from '@/lib/buyerInvoiceHorizon';
 import { paymentReminderCopyLine } from '@/lib/paymentReminderClipboard';
 import { reminderAccountingTotal, reminderCurrency, reminderMoney, reminderTotals } from '@/lib/paymentReminderDisplay';
 import { latestPaymentReminderSentAt } from '@/lib/paymentReminderState';
@@ -83,7 +84,7 @@ const DEFAULT_EMAIL_SETTINGS = {
   to: '',
   cc: '',
   bcc: '',
-  daysAhead: 7,
+  daysAhead: DEFAULT_BUYER_INVOICE_DAYS_AHEAD,
   subject: '',
   intro: '',
   includeSummary: true,
@@ -793,9 +794,8 @@ async function writeClipboardTable({ html, text }) {
 }
 
 function readInitialFilters() {
-  if (typeof window === 'undefined') return { daysAhead: 7, buyerTraders: [], hasBuyerTraderFilter: false };
-  const params = new URLSearchParams(window.location.search);
-  const daysAhead = Math.max(0, Math.min(Number(params.get('daysAhead')) || 7, 365));
+  const params = new URLSearchParams(typeof window === 'undefined' ? '' : window.location.search);
+  const daysAhead = buyerInvoiceDaysAhead(params.get('daysAhead'));
   const buyerTraders = [
     ...params.getAll('buyerTrader'),
     ...params.getAll('buyerTraders'),
@@ -2714,7 +2714,7 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
   }, [closedRows, collectionRows, queueView]);
 
   const loadRows = async (options = {}) => {
-    const nextDays = Math.max(0, Math.min(Number(daysAhead) || 0, 365));
+    const nextDays = buyerInvoiceDaysAhead(daysAhead);
     setLoading(true);
     setError(null);
     await requestInvoices({
@@ -2799,7 +2799,7 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
     const hasBuyerTraderFilter = buyerTraderOptions.length > 0 && selectedBuyerTraders.length !== buyerTraderOptions.length;
     return {
       ...emailSettings,
-      daysAhead: Number(emailSettings.daysAhead || daysAhead || 7),
+      daysAhead: buyerInvoiceDaysAhead(emailSettings.daysAhead),
       buyerTraders: hasBuyerTraderFilter ? selectedBuyerTraders : [],
       hasBuyerTraderFilter,
     };
@@ -3346,7 +3346,7 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
 
       <div className="grid gap-3 md:grid-cols-3">
         <SummaryCard label="Overdue" value={`${fmtMoney(totals.overdueReceivable)} (${totals.overdueCount.toLocaleString()})`} tone="red" />
-        <SummaryCard label={`Due in ${Number(meta?.daysAhead ?? daysAhead ?? 7).toLocaleString()} Days`} value={`${fmtMoney(totals.dueSoonReceivable)} (${totals.dueSoonCount.toLocaleString()})`} tone="blue" />
+        <SummaryCard label={`Due in ${buyerInvoiceDaysAhead(meta?.daysAhead ?? daysAhead).toLocaleString()} Days`} value={`${fmtMoney(totals.dueSoonReceivable)} (${totals.dueSoonCount.toLocaleString()})`} tone="blue" />
         <SummaryCard label="Needs Action Today" value={`${fmtMoney(totals.needsActionReceivable)} (${totals.needsActionCount.toLocaleString()})`} tone="amber" />
       </div>
 
@@ -3585,7 +3585,7 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
         rows={collectionRows}
         initialSettings={savedEmailSettings}
         open={!!selectedReminderRow}
-        daysAhead={Math.max(0, Math.min(Number(daysAhead) || 0, 365))}
+        daysAhead={buyerInvoiceDaysAhead(daysAhead)}
         canManageSettings={canManageEmailSettings}
         onClose={() => setSelectedReminderRow(null)}
         onSent={handleReminderSent}

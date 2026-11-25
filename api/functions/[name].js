@@ -17,10 +17,11 @@ import { authorizeSalesforceDocument, headerBearerToken } from '../_salesforceDo
 import { disputeWorkflowDirectionLabel, disputeWorkflowEditableFilename, disputeWorkflowFileExtension, disputeWorkflowHongKongDateToken } from '../_disputeDocuments.js';
 import { buildDisputePartyRegistry, disputeSalesforceIdKey, findDisputeParty, resolveExtraCostSupplierLookup, resolveOriginalSupplierLookup } from '../_disputeParties.js';
 import { disputeQueueExtraCostProductName } from '../_disputeQueue.js';
-import { resolvedBuyerInvoiceDueDate } from '../_buyerInvoiceDates.js';
+import { buyerInvoiceDueCandidates, buyerInvoiceDueDateInRange, resolvedBuyerInvoiceDueDate } from '../_buyerInvoiceDates.js';
 import { scopeCollectionDocumentMetadata } from '../_salesforceDocumentAccess.js';
 import { isFinalBuyerInvoice, resolveBuyerFinancialAmount } from '../_buyerFinancialAmount.js';
 import { buyerInvoiceEmailSettingsPatch, canonicalizeBuyerInvoiceEmail } from '../../src/lib/buyerInvoiceEmailSettings.js';
+import { buyerInvoiceDaysAhead, DEFAULT_BUYER_INVOICE_DAYS_AHEAD } from '../../src/lib/buyerInvoiceHorizon.js';
 import { earliestEtaDate, summarizeBuyerPaymentEvidence } from '../../src/lib/paymentCollectionEvidence.js';
 import { PAYMENT_POSTING_ISSUE_STATES, reconcileBuyerPaymentPosting } from '../../src/lib/paymentPostingReconciliation.js';
 import {
@@ -5963,7 +5964,6 @@ function traderEmailLookupKey(value) {
     .toLowerCase();
 }
 
-const MIN_BUYER_INVOICE_DUE_DATE = '2026-01-01';
 const CASHFLOW_FORECAST_START_DATE = PAYMENT_DATA_RELIABLE_FROM;
 const INVOICE_TABLE_TOKEN_PATTERN = /\{\{\s*invoiceTable\s*\}\}/i;
 const DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS = {
@@ -5971,7 +5971,7 @@ const DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS = {
   to: [],
   cc: [],
   bcc: [],
-  daysAhead: 7,
+  daysAhead: DEFAULT_BUYER_INVOICE_DAYS_AHEAD,
   subject: '',
   intro: '',
   includeSummary: true,
@@ -6043,7 +6043,7 @@ function buyerInvoiceAppUrl() {
 
 function buyerInvoiceFilterUrl(settings, report, buyerTrader) {
   const url = new URL('/buyer-invoices', buyerInvoiceAppUrl());
-  url.searchParams.set('daysAhead', String(settings.daysAhead ?? report.daysAhead ?? DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS.daysAhead));
+  url.searchParams.set('daysAhead', String(buyerInvoiceDaysAhead(report.daysAhead ?? settings.daysAhead)));
   if (buyerTrader) url.searchParams.set('buyerTrader', buyerTrader);
   return url.toString();
 }
@@ -7577,7 +7577,7 @@ function normalizeBuyerInvoiceEmailSettings(input = {}, defaults = DEFAULT_BUYER
     to: parseEmailList(input.to, defaults.to),
     cc: parseEmailList(input.cc, defaults.cc),
     bcc: parseEmailList(input.bcc, defaults.bcc),
-    daysAhead: Math.max(0, Math.min(Number(input.daysAhead ?? defaults.daysAhead) || defaults.daysAhead, 365)),
+    daysAhead: buyerInvoiceDaysAhead(input.daysAhead ?? defaults.daysAhead),
     subject: String(input.subject ?? defaults.subject),
     intro: String(input.intro ?? defaults.intro),
     includeSummary: input.includeSummary ?? defaults.includeSummary,
@@ -9956,7 +9956,7 @@ async function stemPnlFull(body, req = null, accessContext = null) {
 }
 
 async function salesforceBuyerInvoicesSnapshot(body, req = null, accessContext = null) {
-  const daysAhead = Math.max(0, Math.min(Number(body.daysAhead) || 7, 365));
+  const daysAhead = buyerInvoiceDaysAhead(body.daysAhead);
   const thresholdState = body._thresholdState || (await loadPaymentCollectionThresholds(safeSupabaseAdminClient()));
   const rowLimit = 10000;
   const today = dateOnly(new Date());
@@ -9973,8 +9973,8 @@ async function salesforceBuyerInvoicesSnapshot(body, req = null, accessContext =
   const brokerInvoiceFormatFields = accountInvoiceFormatFields(accountDescribe.fields || []);
   const brokerEmailFields = accountBrokerEmailFields(accountDescribe.fields || []);
 
-  const dueFields = ['Invoice_Due_Date__c', 'Buyer_Pay_Term_Date__c', 'Due_Date__c'].filter((field) => fieldNames.includes(field));
-  if (!dueFields.length) {
+  const { dueFields, dueCondition } = buyerInvoiceDueCandidates(describe.fields, dueThrough);
+  if (!dueCondition) {
     return {
       allRows: [],
       today,
@@ -9994,7 +9994,6 @@ async function salesforceBuyerInvoicesSnapshot(body, req = null, accessContext =
   if (fieldNames.includes('KeyStem__c')) fields.push('KeyStem__c');
   if (fieldNames.includes('CurrencyIsoCode')) fields.push('CurrencyIsoCode');
   if (fieldNames.includes('Delivery_Date__c')) fields.push('Delivery_Date__c');
-  if (fieldNames.includes('Delivery_Date_Or_Expected__c')) fields.push('Delivery_Date_Or_Expected__c');
   if (fieldNames.includes('Expected_Delivery_Date__c')) fields.push('Expected_Delivery_Date__c');
   if (fieldNames.includes('ETA_Start_Date__c')) fields.push('ETA_Start_Date__c');
   if (fieldNames.includes('ETA_End_Date__c')) fields.push('ETA_End_Date__c');
@@ -10017,10 +10016,6 @@ async function salesforceBuyerInvoicesSnapshot(body, req = null, accessContext =
   }
   if (fieldNames.includes('Payment_Date__c')) fields.push('Payment_Date__c');
 
-  const storedDueCondition = dueFields.map((field) => `(${field} != null AND ${field} >= ${MIN_BUYER_INVOICE_DUE_DATE} AND ${field} <= ${dueThrough})`).join(' OR ');
-  const calculatedDueDateConditions = [fieldNames.includes('Delivery_Date__c') ? `Delivery_Date__c != null AND Delivery_Date__c <= ${dueThrough}` : '', fieldNames.includes('Delivery_Date_Or_Expected__c') ? `Delivery_Date_Or_Expected__c != null AND Delivery_Date_Or_Expected__c <= ${dueThrough}` : '', fieldNames.includes('Expected_Delivery_Date__c') ? `Expected_Delivery_Date__c != null AND Expected_Delivery_Date__c <= ${dueThrough}` : ''].filter(Boolean);
-  const calculatedDueCondition = fieldNames.includes('Payment_Term__c') && calculatedDueDateConditions.length ? `(Payment_Term__c != null AND (${calculatedDueDateConditions.map((condition) => `(${condition})`).join(' OR ')}))` : '';
-  const dueCondition = [storedDueCondition, calculatedDueCondition].filter(Boolean).join(' OR ');
   const outstandingConditions = [];
   if (fieldNames.includes('Payment_Date__c')) outstandingConditions.push('Payment_Date__c = null');
   const whereParts = [`(${dueCondition})`, paymentDataReliableSoql(), ...outstandingConditions];
@@ -10067,13 +10062,15 @@ async function salesforceBuyerInvoicesSnapshot(body, req = null, accessContext =
     SELECT ${[...new Set(fields)].join(', ')}
     FROM stem__c
     WHERE ${whereParts.join(' AND ')}
-    ORDER BY ${dueFields[0]} ASC NULLS LAST, Name ASC
+    ORDER BY ${dueFields[0] ? `${dueFields[0]} ASC NULLS LAST, ` : ''}Name ASC
     LIMIT ${rowLimit}
   `,
     { limit: rowLimit, softFail: true },
   );
 
-  const stemIds = stems.map((stem) => stem.Id);
+  const stemsInRange = stems.map((stem) => ({ stem, dueDate: buyerInvoiceDueDateInRange(stem, dueThrough) }))
+    .filter(({ dueDate }) => dueDate);
+  const stemIds = stemsInRange.map(({ stem }) => stem.Id);
   const traderByStem = {};
   const traderEmailByName = {};
   const prpspUploadDateByStem = {};
@@ -10244,11 +10241,8 @@ async function salesforceBuyerInvoicesSnapshot(body, req = null, accessContext =
   const hasBuyerTraderFilter = Object.prototype.hasOwnProperty.call(body, 'buyerTraders');
   const selectedBuyerTradersInput = Array.isArray(body.buyerTraders) ? body.buyerTraders : splitBuyerTraderNames(body.buyerTraders);
 
-  const allRows = stems
-    .map((stem) => {
-      const dueDate = resolvedBuyerInvoiceDueDate(stem);
-      if (!dueDate || dueDate > dueThrough) return null;
-      if (dueDate < MIN_BUYER_INVOICE_DUE_DATE) return null;
+  const allRows = stemsInRange
+    .map(({ stem, dueDate }) => {
       if (stem.KeyStem__c && stem.KeyStem__c.startsWith('T')) return null;
       const thresholdPolicy = paymentCollectionThresholdPolicy(thresholdState, stem.CurrencyIsoCode);
       if (stem.Receivable_Balance__c != null && paymentCollectionBalanceIsSettled(stem.Receivable_Balance__c, thresholdPolicy)) return null;
@@ -10359,11 +10353,11 @@ async function buyerInvoiceReportFromSnapshot(snapshot, body = {}) {
 }
 
 async function salesforceBuyerInvoicesDue(body, req = null, accessContext = null) {
-  const daysAhead = Math.max(0, Math.min(Number(body.daysAhead) || 7, 365));
+  const daysAhead = buyerInvoiceDaysAhead(body.daysAhead);
   const thresholdState = await loadPaymentCollectionThresholds(safeSupabaseAdminClient());
   const thresholdCacheKey = paymentCollectionThresholdCacheKey(thresholdState);
   const cached = await cachedSalesforceValue({
-    namespace: 'salesforce-buyer-invoices',
+    namespace: 'salesforce-buyer-invoices-v2',
     ttlSeconds: 60,
     payload: { daysAhead, thresholdCacheKey, paymentDataReliableFrom: PAYMENT_DATA_RELIABLE_FROM },
     tags: ['salesforce:buyer-invoices', 'salesforce:stem', 'salesforce:account'],
@@ -10376,7 +10370,7 @@ async function salesforceBuyerInvoicesDue(body, req = null, accessContext = null
 }
 
 async function salesforceBuyerInvoicesDueTargeted(body, req = null, accessContext = null) {
-  const daysAhead = Math.max(0, Math.min(Number(body.daysAhead) || 7, 365));
+  const daysAhead = buyerInvoiceDaysAhead(body.daysAhead);
   const thresholdState = await loadPaymentCollectionThresholds(safeSupabaseAdminClient());
   const snapshot = await salesforceBuyerInvoicesSnapshot({
     daysAhead,
@@ -13786,7 +13780,7 @@ function renderBuyerInvoiceEmailContent(template, report, settings) {
   return String(template || DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS.intro)
     .replaceAll('{{reportStart}}', prettyDate(report.today))
     .replaceAll('{{reportEnd}}', prettyDate(report.dueThrough))
-    .replaceAll('{{daysAhead}}', String(settings.daysAhead ?? report.daysAhead ?? DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS.daysAhead));
+    .replaceAll('{{daysAhead}}', String(buyerInvoiceDaysAhead(report.daysAhead ?? settings.daysAhead)));
 }
 
 function emailContentHtml(content) {
@@ -13830,7 +13824,7 @@ function buildBuyerInvoiceReportEmail(report, settings) {
   const rows = report.rows || [];
   const overdue = rows.filter((row) => row.status === 'Overdue');
   const dueSoon = rows.filter((row) => row.status !== 'Overdue');
-  const dueSoonLabel = `Due in ${Number(settings.daysAhead || report.daysAhead || 7).toLocaleString()} Days`;
+  const dueSoonLabel = `Due in ${buyerInvoiceDaysAhead(report.daysAhead ?? settings.daysAhead).toLocaleString()} Days`;
   const content = renderBuyerInvoiceEmailContent(settings.intro, report, settings);
   const totals = {
     overdueCount: overdue.length,
