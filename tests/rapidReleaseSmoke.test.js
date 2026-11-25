@@ -48,9 +48,10 @@ const readPayloads = {
 
 // Fixtures replace browser/provider transports. They simulate the app-owned
 // bootstrap response and actual response events; they never establish live proof.
-function browserFixture({ badIdentity = false, badRead = false, badDenial = false, unexpected = false, missingModule = false, background = false, optionalRequest = null, badPayload = false, badDesktop = false, deniedModule = null, role = 'manager', companyFxRows = undefined, supplierBoundaryRegression = null, groupedBoundaryRegression = false, groupedDesktopMissing = false, tradingFxRouteRegression = false, tradingFxActionVisible = false, existingDraftActionVisible = false, existingDraftRouteRegression = false, marketReadTimeouts = 0, marketResponseStatus = 200, marketNavigationError = null, marketPageClosed = false, moduleReadTimeouts = {} } = {}) {
+function browserFixture({ badIdentity = false, badRead = false, badDenial = false, unexpected = false, missingModule = false, background = false, optionalRequest = null, badPayload = false, badDesktop = false, deniedModule = null, role = 'manager', companyFxRows = undefined, supplierBoundaryRegression = null, groupedBoundaryRegression = false, groupedDesktopMissing = false, tradingFxRouteRegression = false, tradingFxActionVisible = false, existingDraftActionVisible = false, existingDraftRouteRegression = false, marketReadTimeouts = 0, marketResponseStatus = 200, marketNavigationError = null, marketPageClosed = false, closeFirstMarketsFor = null, nativeGateFailure = false, failContextCleanup = false, moduleReadTimeouts = {} } = {}) {
   const observations = { launches: [], reads: [], contextsClosed: 0, browsersClosed: 0, nativeAborts: 0 };
   const remainingTimeouts = { ...moduleReadTimeouts };
+  let firstClosure = Boolean(closeFirstMarketsFor);
   const browserFactory = async options => {
     observations.launches.push(options);
     let routeHandler, pausedHandler, websocketHandler, location = 'about:blank', email = '', password = '';
@@ -146,6 +147,12 @@ function browserFixture({ badIdentity = false, badRead = false, badDenial = fals
         const handler = new URL(url).pathname === '/' ? 'dashboardSummary' : new URL(url).pathname === '/markets' ? 'marketPulseSnapshot' : null;
         if (handler === 'marketPulseSnapshot') {
           observations.marketNavigations = (observations.marketNavigations || 0) + 1;
+          const roleName = email === ci.email ? 'restricted' : 'normal';
+          if (firstClosure && roleName === closeFirstMarketsFor) {
+            firstClosure = false;
+            responseWaiters.shift().reject(Error('PRIVATE_FIXTURE_READ_FAILURE'));
+            throw Error('page.goto: Target page, context or browser has been closed');
+          }
           if (marketNavigationError) {
             responseWaiters.shift().reject(Error('PRIVATE_FIXTURE_READ_FAILURE'));
             throw marketNavigationError;
@@ -164,9 +171,12 @@ function browserFixture({ badIdentity = false, badRead = false, badDenial = fals
       route: async (_pattern, handler) => { routeHandler = handler; },
       routeWebSocket: async (_pattern, handler) => { websocketHandler = handler; assert.equal(typeof websocketHandler, 'function'); },
       newPage: async () => page,
-      newCDPSession: async () => ({ on: (_name, handler) => { pausedHandler = handler; }, send: async command => { if (command === 'Fetch.failRequest') observations.nativeAborts++; } }),
+      newCDPSession: async () => ({ on: (_name, handler) => { pausedHandler = handler; }, send: async command => {
+        if (command === 'Fetch.failRequest') observations.nativeAborts++;
+        if (nativeGateFailure && command === 'Fetch.continueRequest') throw Error('PRIVATE_CDP_FAILURE');
+      } }),
       storageState: async () => ({ cookies: [], origins: [{ origin, localStorage: [{ name: 'opaque-fixture', value: 'opaque-fixture-state' }] }] }),
-      close: async () => { observations.contextsClosed++; },
+      close: async () => { observations.contextsClosed++; if (failContextCleanup) throw Error('PRIVATE_CLEANUP_FAILURE'); },
     };
     return { newContext: async config => { assert.equal(config.serviceWorkers, 'block'); return context; }, close: async () => { observations.browsersClosed++; } };
   };
@@ -225,7 +235,34 @@ test('Markets fails after two read timeouts and does not retry an HTTP rejection
   }
 });
 
-test('Markets navigation reports only a safe category and never retries a failed navigation', async () => {
+test('recovers a closed Markets browser by rerunning only the interrupted role', async () => {
+  const fixture = browserFixture({ closeFirstMarketsFor: 'normal' });
+  const proof = await runStagedSmoke({ manifest: manifest({ normalRole: true }), staged, env,
+    fetchImpl: publicFetch(), browserFactory: fixture.browserFactory });
+  assert.equal(proof.normalRole, true);
+  assert.equal(proof.businessWrites, 0);
+  assert.deepEqual(proof.restrictedEvidence.modules, ['dashboard', 'markets']);
+  assert.deepEqual(proof.normalRoleEvidence.modules, ['dashboard', 'markets']);
+  assert.deepEqual(proof.browserRecovery, { module: 'markets', category: 'context_closed', role: 'normal',
+    elapsedMs: proof.browserRecovery.elapsedMs });
+  assert.equal(fixture.observations.launches.length, 3);
+  assert.equal(fixture.observations.contextsClosed, 3);
+  assert.equal(fixture.observations.browsersClosed, 3);
+});
+
+test('closed Markets browser does not retry a request gate or cleanup failure', async () => {
+  for (const [options, code] of [
+    [{ nativeGateFailure: true }, 'SMOKE_BROWSER_NETWORK_OR_RUNTIME_FAILURE'],
+    [{ failContextCleanup: true }, 'SMOKE_PRIVATE_STATE_OR_BROWSER_CLEANUP_FAILED'],
+  ]) {
+    const fixture = browserFixture({ ...options, closeFirstMarketsFor: 'restricted' });
+    await assert.rejects(runStagedSmoke({ manifest: manifest(), staged, env,
+      fetchImpl: publicFetch(), browserFactory: fixture.browserFactory }), { code });
+    assert.equal(fixture.observations.launches.length, 1);
+  }
+});
+
+test('Markets reports safe categories and bounds recovery to a single closed-context retry', async () => {
   const secret = 'PRIVATE_BROWSER_DETAIL';
   for (const [reason, expected, marketPageClosed] of [
     [Object.assign(Error(secret), { name: 'TimeoutError' }), 'timeout'],
@@ -246,8 +283,9 @@ test('Markets navigation reports only a safe category and never retries a failed
       assert.ok(!String(error).includes(secret) && !JSON.stringify(error).includes(secret));
       return true;
     });
-    assert.equal(fixture.observations.marketNavigations, 1);
-    assert.equal(fixture.observations.contextsClosed, 1);
+    const expectedAttempts = expected === 'context_closed' ? 2 : 1;
+    assert.equal(fixture.observations.marketNavigations, expectedAttempts);
+    assert.equal(fixture.observations.contextsClosed, expectedAttempts);
   }
 });
 

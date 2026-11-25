@@ -474,7 +474,7 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
     return receipt;
   }
   let phase = 'SETUP';
-  let browser, context, privateEnv, readNormalModules, companyFxHistory, supplierBucketVerified, groupedPetroleumVerified;
+  let browser, context, gate, privateEnv, readNormalModules, companyFxHistory, supplierBucketVerified, groupedPetroleumVerified;
   let tradingFxVerified, signingRateDigest, existingDraftDenialsVerified, cleanupFailed = false;
   let denialReceipts = [], extraReads = [], desktopChecks = [], authProbed = false, probeError, rejectProbe, resolveProbe;
   const probeFailure = new Promise((_, reject) => { rejectProbe = reject; });
@@ -493,7 +493,7 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
         state: candidateProtectionState(await context.storageState(), origin) });
       await response.dispose();
     }
-    const gate = await installGate(context, { origin, credentials, normal }, async route => {
+    gate = await installGate(context, { origin, credentials, normal }, async route => {
       if (authProbed) return false;
       authProbed = true;
       let actual;
@@ -624,6 +624,9 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
       ...(existingDraftDenialsVerified ? { existingDraftDenialsVerified } : {}) };
   } catch (error) {
     const cause = probeError || error;
+    // A context deliberately closed by the request gate is a hard failure.
+    // Keep it distinct from an interruption of a healthy, read-only browser.
+    if (isClosedMarketsNavigation(cause)) gate.assertHealthy();
     const failure = fail(/^(?:SMOKE_|NORMAL_ROLE_)[A-Z0-9_]+$/.test(cause?.code || '') ? cause.code : `SMOKE_BROWSER_${phase}_FAILED`);
     if (Object.hasOwn(moduleReaders, cause?.smokeModule) && ['read', 'desktop'].includes(cause.smokeSurface)) {
       Object.assign(failure, { smokeModule: cause.smokeModule, smokeSurface: cause.smokeSurface });
@@ -681,6 +684,11 @@ export async function diagnoseStagedSmoke(options, { desktop = true, desktopModu
   return { passed: false, outcomes, ...(code ? { code } : {}) };
 }
 
+function isClosedMarketsNavigation(error) {
+  return error?.code === 'SMOKE_BASELINE_NAVIGATION_FAILED' && error.smokeModule === 'markets'
+    && error.smokeSurface === 'read' && error.smokeNavigationCategory === 'context_closed';
+}
+
 async function stagedSmoke({ manifest, staged, env = process.env, fetchImpl = fetch, browserFactory, afterPrerequisites = false, requireNormalRole = false } = {}, diagnostic, deferredModules = []) {
   const origin = binding(manifest, staged);
   const selected = unique(manifest.selection?.modules || []).filter(module => !deferredModules.includes(module));
@@ -719,13 +727,29 @@ async function stagedSmoke({ manifest, staged, env = process.env, fetchImpl = fe
   requireFact(!env.FCOS_E2E_VERCEL_BYPASS || /^[a-zA-Z0-9]{32}$/.test(env.FCOS_E2E_VERCEL_BYPASS), 'SMOKE_PROTECTION_CREDENTIAL_INVALID');
   await verifyIdentity(origin, manifest, fetchImpl, env.FCOS_E2E_VERCEL_BYPASS);
   const launch = browserFactory || (async options => (await import('@playwright/test')).chromium.launch(options));
-  const restricted = await browserRun({ origin, manifest, credentials: ci, normal: false, modules: baselineModules, env, browserFactory: launch,
+  let browserRecovery;
+  async function runRole(options) {
+    try {
+      return await browserRun(options);
+    } catch (error) {
+      if (diagnostic || browserRecovery || !isClosedMarketsNavigation(error)) throw error;
+      // A fresh gated browser reruns the interrupted role in full. The other
+      // role and the staged deployment are untouched. Cleanup failure cannot retry.
+      const started = performance.now();
+      browserRecovery = { module: 'markets', category: 'context_closed', role: options.normal ? 'normal' : 'restricted' };
+      const evidence = await browserRun(options);
+      browserRecovery.elapsedMs = Math.round(performance.now() - started);
+      return evidence;
+    }
+  }
+  const restricted = await runRole({ origin, manifest, credentials: ci, normal: false, modules: baselineModules, env, browserFactory: launch,
     supplierBucketRequired, groupedPetroleumRequired, tradingFxRequired, existingDraftRequired });
-  const ordinary = normal ? await browserRun({ origin, manifest, credentials: normal, normal: true, modules: normalModules, env, browserFactory: launch,
+  const ordinary = normal ? await runRole({ origin, manifest, credentials: normal, normal: true, modules: normalModules, env, browserFactory: launch,
     diagnostic, historyRequired, supplierBucketRequired, groupedPetroleumRequired, tradingFxRequired, signingRateRequired, existingDraftRequired }) : null;
   return { passed: true, deploymentId: staged.id, buildId: staged.buildId, login: true, restrictedAccess: true, businessWrites: 0,
     modules: unique([...restricted.modules, ...(ordinary?.modules || [])]), restrictedEvidence: restricted,
     ...(ordinary ? { normalRole: true, normalRoleEvidence: ordinary } : {}),
+    ...(browserRecovery ? { browserRecovery } : {}),
     ...(supplierBucketRequired ? { supplierBucket: { restrictedVerified: restricted.supplierBucketVerified === true,
       normalVerified: ordinary?.supplierBucketVerified === true } } : {}),
     ...(groupedPetroleumRequired ? { groupedPetroleum: { restrictedVerified: restricted.groupedPetroleumVerified === true,
