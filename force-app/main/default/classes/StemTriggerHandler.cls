@@ -1,4 +1,68 @@
 public class StemTriggerHandler {
+    private static final Map<String,String> koreaDeskActorsByOrg = new Map<String,String>{
+        '00D2x000000Ei4oEAC' => 'vincent@cosulich.com.hk',
+        '00D1m0000008kioEAA' => 'vincent@cosulich.com.hk.devee',
+        '00D1s0000008lFEEAY' => 'vincent@cosulich.com.hk.qat'
+    };
+    private static Map<Id,STEM__c> koreaDeskOriginals = new Map<Id,STEM__c>();
+
+    private static Boolean isKoreaDeskMaintenanceActor() {
+        return UserInfo.getUserName() == koreaDeskActorsByOrg.get(String.valueOf(UserInfo.getOrganizationId()));
+    }
+
+    public static void beginKoreaDeskMaintenance(Set<Id> ids) {
+        System.assert(isKoreaDeskMaintenanceActor(), 'Korea Desk maintenance actor mismatch');
+        System.assert(koreaDeskOriginals.isEmpty(), 'Korea Desk maintenance already active');
+        if (String.valueOf(UserInfo.getOrganizationId()) == '00D2x000000Ei4oEAC') {
+            List<String> normalized = new List<String>();
+            for (Id id : ids) normalized.add(String.valueOf(id).toLowerCase());
+            normalized.sort();
+            String digest = EncodingUtil.convertToHex(Crypto.generateDigest('SHA-256', Blob.valueOf(String.join(normalized, ','))));
+            System.assert(ids.size() == 261 && digest == 'f5260e37a2a33de930f33043fb83b5ad391dded5e19f898e6d10549e61f391d4', 'Korea Desk maintenance cohort mismatch');
+        } else {
+            System.assert(ids.size() > 0 && ids.size() <= 10, 'Limit each sandbox exercise to ten STEMs');
+        }
+        for (STEM__c row : [SELECT Id, Name, KeyStem__c, Account__c, RecordTypeId, Korea_Desk__c
+                           FROM STEM__c WHERE Id IN :ids FOR UPDATE]) {
+            System.assert(row.Korea_Desk__c == null, 'Original Korea Desk choice changed');
+            koreaDeskOriginals.put(row.Id, row);
+        }
+        System.assertEquals(ids, koreaDeskOriginals.keySet(), 'Korea Desk maintenance lock scope mismatch');
+    }
+
+    public static void finishKoreaDeskMaintenance() {
+        koreaDeskOriginals.clear();
+    }
+
+    public static void enforceKoreaDeskMaintenance(List<STEM__c> stems, Map<Id,STEM__c> oldRows) {
+        if (!isKoreaDeskMaintenanceActor()) return;
+        Set<Id> buyerIds = new Set<Id>();
+        for (STEM__c stem : stems) {
+            if (stem.Korea_Desk__c == 'No' && stem.Account__c != null) buyerIds.add(stem.Account__c);
+        }
+        if (buyerIds.isEmpty()) return;
+        Set<Id> valid = new Map<Id,Account>([
+            SELECT Id FROM Account WHERE Id IN :buyerIds AND Inactive_Suspended__c = false
+            AND RecordType.Name IN ('Buyer', 'Buyer & Supplier')
+        ]).keySet();
+        Id historical = Schema.SObjectType.STEM__c.getRecordTypeInfosByName().get('Historical').getRecordTypeId();
+        for (STEM__c stem : stems) {
+            if (stem.Korea_Desk__c != 'No') continue;
+            STEM__c oldStem = oldRows == null ? null : oldRows.get(stem.Id);
+            Boolean buyerException = stem.Account__c != null && stem.RecordTypeId != historical && !valid.contains(stem.Account__c);
+            STEM__c original = koreaDeskOriginals.get(stem.Id);
+            if (original != null && oldStem != null && original.Account__c == stem.Account__c
+                && original.RecordTypeId == stem.RecordTypeId) {
+                // Salesforce invokes before-update again for the existing naming workflow.
+                stem.Name = original.Name;
+                stem.KeyStem__c = original.KeyStem__c;
+            } else if (buyerException || original != null) {
+                stem.addError('Korea Desk maintenance requires an approved blank STEM with its original buyer and record type.');
+            }
+        }
+    }
+
+
 
     public static void validateBuyerBrokerSelection(List<STEM__c> stems, Map<Id, STEM__c> oldStemMap) {
         Set<Id> changedBrokerIds = new Set<Id>();
