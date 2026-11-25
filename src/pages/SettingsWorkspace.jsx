@@ -16,7 +16,6 @@ import { useAuth } from '@/lib/AuthContext';
 import SettingsPage from '@/pages/Settings';
 import AdminControl from '@/pages/AdminControl';
 import UniversalAuditTrail from '@/pages/UniversalAuditTrail';
-import FcosUpdatesPanel from '@/components/admin/FcosUpdatesPanel';
 import PageHeader from '@/components/common/PageHeader';
 import PageMethodology from '@/components/common/PageMethodology';
 import { Button } from '@/components/ui/button';
@@ -25,6 +24,7 @@ import { SETTINGS_METHODOLOGIES } from '@/lib/pageMethodologyIndex';
 import { APP_VERSION } from '@/lib/appVersionMeta';
 
 const FinanceSettings = lazy(() => import('@/components/settings/FinanceSettings'));
+const FcosUpdatesPanel = lazy(() => import('@/components/admin/FcosUpdatesPanel'));
 
 const SECTION_GROUPS = [
   {
@@ -77,7 +77,9 @@ function FcosUpdatesSection({ methodologyAction }) {
         actions={methodologyAction}
       />
       <div className="mt-5">
-        <FcosUpdatesPanel />
+        <Suspense fallback={<p role="status" className="p-6 text-sm text-muted-foreground">Loading FCOS Updates…</p>}>
+          <FcosUpdatesPanel />
+        </Suspense>
       </div>
     </div>
   );
