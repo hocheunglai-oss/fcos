@@ -35,8 +35,9 @@ import {
 } from '../../src/lib/paymentDataReliability.js';
 import { grossMarginPercent } from '../_dashboardMetrics.js';
 import { buildDashboardDateScopeWhere } from '../_dashboardDateScope.js';
+import { dashboardExportScope } from '../_dashboardExportScope.js';
 import { addDashboardMetricTonQuantity, dashboardLineItemVolume, dashboardMetricTonQuantity, dashboardVolumeLabel, findDashboardUomField } from '../_dashboardVolume.js';
-import { addReportedDashboardQuantity, dashboardCurrency, dashboardCurrentYearDateWindows, dashboardDirectoryFinancialFilters, dashboardMonthlyComparison, dashboardMonthlyFinancialTrend, dashboardMonthlyYearOverYear, dashboardStemStatusFields, dashboardSupplierProductRows, dashboardVolumeWarnings, decodeDashboardCursor, decisionDashboardCompleteness, decisionDashboardSummary, decisionDashboardSupplierAmount, encodeDashboardCursor, normalizeDecisionDashboardFilters, priorEquivalentDateWindows, yearOverYearDateWindows } from '../_decisionDashboard.js';
+import { addReportedDashboardQuantity, dashboardCurrency, dashboardCurrentYearDateWindows, dashboardDirectoryFinancialFilters, dashboardDisputeCondition, dashboardMonthlyComparison, dashboardMonthlyFinancialTrend, dashboardMonthlyYearOverYear, dashboardStemStatusFields, dashboardSupplierProductRows, dashboardVolumeWarnings, decodeDashboardCursor, decisionDashboardCompleteness, decisionDashboardSummary, decisionDashboardSupplierAmount, encodeDashboardCursor, normalizeDecisionDashboardFilters, priorEquivalentDateWindows, yearOverYearDateWindows } from '../_decisionDashboard.js';
 import { dashboardAccountRankings } from '../../src/lib/dashboardAccountRankings.js';
 import { loadDashboardAccountInsight } from '../_dashboardAccountInsightService.js';
 import { generateDashboardAccountInsightExport } from '../_dashboardAccountInsightExport.js';
@@ -8146,10 +8147,7 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
     const cancelledStatuses = (statusField?.picklistValues || []).map((item) => item.value).filter((value) => /cancel/i.test(String(value || '')));
     if (cancelledStatuses.length) conditions.push(`(Status__c = null OR Status__c NOT IN (${decisionDashboardValues(cancelledStatuses)}))`);
   }
-  if (body.disputeOnly === true) {
-    if (stemFields.has('Dispute_Status__c')) conditions.push("Dispute_Status__c != 'No Dispute' AND Dispute_Status__c != null");
-    else if (stemFields.has('Dispute__c')) conditions.push('Dispute__c = true');
-  }
+  if (body.disputeOnly === true) conditions.push(dashboardDisputeCondition(stemFields));
   const search = String(body.search || '').trim().slice(0, 100);
   if (search) {
     const like = `%${escapeSoql(search)}%`;
@@ -8164,6 +8162,8 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
   const cursor = decodeDashboardCursor(body.cursor);
   if (pageOnly && body.cursor && !cursor) throw appError('Dashboard cursor is invalid.', 400, 'DASHBOARD_CURSOR_INVALID');
   const parentSelect = ['Id', 'Name', 'CreatedDate'];
+  const exportScope = pageOnly && body.exportSnapshot === true ? dashboardExportScope(stemFields) : null;
+  if (exportScope) parentSelect.push(exportScope.revisionField);
   for (const name of ['Delivery_Date__c', 'Expected_Delivery_Date__c', 'Status__c', 'Type__c', 'Dispute__c', 'Dispute_Status__c', 'CurrencyIsoCode', 'Total_Invoice_Amount__c', 'Total_Invoiced_Amount_From_Suppliers__c', 'Costs_Total__c', 'QLIK_STEM_Line_Item_Total_Cost__c', 'QLIK_Costs_Total_Cost__c']) if (stemFields.has(name)) parentSelect.push(name);
   if (accountField) parentSelect.push(accountField, 'Account__r.Name', 'Account__r.Inactive_Suspended__c');
   if (portField) parentSelect.push(portField, 'Port__r.Name', 'Port__r.Country__c');
@@ -8200,6 +8200,7 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
     if (applyCursor && cursorWhere) scopedConditions.push(cursorWhere);
     const where = combineWhereConditions(scopedConditions);
     if (countOnly) {
+      if (exportScope && !cursor) return exportScope.count(where, decisionDashboardQueryAll);
       const result = await sfQuery(`SELECT COUNT(Id) total FROM stem__c WHERE ${where}`, { clean: true });
       return Number(result.records?.[0]?.total || 0);
     }
@@ -8413,6 +8414,7 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
       id: stem.Id,
       name: stem.Name,
       createdDate: stem.CreatedDate,
+      ...(exportScope ? { exportRevision: stem[exportScope.revisionField] } : {}),
       deliveryDate: stem.Delivery_Date__c || stem.Expected_Delivery_Date__c || null,
       deliveryDateSource: stem.Delivery_Date__c ? 'delivery' : stem.Expected_Delivery_Date__c ? 'expected' : null,
       ...dashboardStemStatusFields(stem),
@@ -8438,6 +8440,7 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
     filters,
     rows,
     completeness,
+    ...(exportScope && !cursor ? { exportSelectionDigest: await exportScope.digest() } : {}),
     nextCursor: hasMore && rows.length ? encodeDashboardCursor(rows[rows.length - 1]._cursorRecord, sort) : null,
     sort,
     // Timing is operational metadata only.  No record values, currencies, or
@@ -8568,7 +8571,7 @@ async function dashboardSummaryUncached(body = {}, req = null, accessContext = n
 async function dashboardStemListUncached(body = {}, req = null, accessContext = null, financeContext = null) {
   const scope = await loadDecisionDashboardScope(body, req, accessContext, { pageOnly: true });
   const rows = financeContext ? await enrichDashboardFinance(scope.rows, financeContext.settings, financeContext.asOfDate) : scope.rows;
-  return { ...scope.completeness, ...(financeContext ? { finance: summarizeDashboardFinance(rows, financeContext.settings, financeContext.asOfDate) } : {}), filters: scope.filters, stems: publicDecisionDashboardRows(rows), pageSize: Math.min(Math.max(Number(body.pageSize) || 50, 1), 200), nextCursor: scope.nextCursor, sort: scope.sort, timing: scope.timing, dataWarnings: scope.dataWarnings };
+  return { ...scope.completeness, ...(scope.exportSelectionDigest ? { exportSelectionDigest: scope.exportSelectionDigest } : {}), ...(financeContext ? { finance: summarizeDashboardFinance(rows, financeContext.settings, financeContext.asOfDate) } : {}), filters: scope.filters, stems: publicDecisionDashboardRows(rows), pageSize: Math.min(Math.max(Number(body.pageSize) || 50, 1), 200), nextCursor: scope.nextCursor, sort: scope.sort, timing: scope.timing, dataWarnings: scope.dataWarnings };
 }
 
 async function dashboardAnalyticsUncached(body = {}, req = null, accessContext = null) {
@@ -8687,7 +8690,7 @@ async function dashboardAnalyticsUncached(body = {}, req = null, accessContext =
 }
 
 async function cachedDecisionDashboard(handler, body, req, accessContext, ttlSeconds, loader, financeContext = null) {
-  const cachePayload = { ...body, ...(financeContext ? { financeVersion: 5, financeSnapshot: { revision: financeContext.settings.revision, asOfDate: financeContext.asOfDate } } : {}) };
+  const cachePayload = { ...body, ...(body.disputeOnly === true ? { disputeFilterVersion: 2 } : {}), ...(financeContext ? { financeVersion: 5, financeSnapshot: { revision: financeContext.settings.revision, asOfDate: financeContext.asOfDate } } : {}) };
   delete cachePayload.force;
   delete cachePayload.forceRefresh;
   delete cachePayload.refresh;
@@ -8805,7 +8808,7 @@ async function salesforceDashboardFilteredUncached(body, req = null, accessConte
   const totalCostsField = fieldNames.includes('Costs_Total__c') ? 'Costs_Total__c' : null;
   const buyerNameField = fieldNames.includes('Buyer_Name__c') ? 'Buyer_Name__c' : fieldNames.includes('Buyer__c') ? 'Buyer__c' : null;
   const expectedDeliveryField = fieldNames.includes('Expected_Delivery_Date__c') ? 'Expected_Delivery_Date__c' : null;
-  const disputeCondition = disputeOnly ? (hasDisputeStatus ? "Dispute_Status__c != 'No Dispute' AND Dispute_Status__c != null" : hasDispute ? 'Dispute__c = true' : '') : '';
+  const disputeCondition = disputeOnly ? dashboardDisputeCondition(new Set(fieldNames)) : '';
   const normalizedPortCountry = String(portCountry || '').trim();
   const portCountryLike = normalizedPortCountry ? `%${escapeSoql(normalizedPortCountry)}%` : '';
   const portCountryCondition = normalizedPortCountry ? `(Port__r.Country__c LIKE '${portCountryLike}' OR Port__r.Name LIKE '${portCountryLike}')` : '';
@@ -9499,7 +9502,7 @@ async function salesforceDashboardFilteredUncached(body, req = null, accessConte
 
 async function salesforceDashboardFilteredFull(body, req = null, accessContext = null, internalOptions = {}) {
   const mode = body.mode === 'exception_review' || body.dateBasis === EXCEPTION_REVIEW_DATE_BASIS ? 'exception_review' : 'dashboard';
-  const cachePayload = { ...body, mode };
+  const cachePayload = { ...body, mode, ...(body.disputeOnly ? { disputeFilterVersion: 2 } : {}) };
   delete cachePayload.where;
   delete cachePayload.force;
   delete cachePayload.forceRefresh;

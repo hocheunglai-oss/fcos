@@ -404,3 +404,11 @@ export function decisionDashboardSummary(rows = [], completeness = {}) {
     financials: scope.complete ? dashboardFinancialBuckets(rows) : null,
   };
 }
+
+export function dashboardDisputeCondition(fields) {
+  if (fields.has('Dispute_Status__c')) return "Dispute_Status__c != 'No Dispute' AND Dispute_Status__c != null";
+  if (fields.has('Dispute__c')) return 'Dispute__c = true';
+  throw Object.assign(new Error('The Disputed only filter is unavailable because Salesforce dispute fields are missing.'), {
+    status: 503, code: 'DASHBOARD_DISPUTE_FILTER_UNAVAILABLE', expose: true,
+  });
+}

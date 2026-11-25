@@ -1,3 +1,5 @@
+import { dashboardExportSelectionDigest } from '../../shared/dashboardExportSelection.js';
+
 const EXPORT_PAGE_SIZE = 200;
 
 function abortError() {
@@ -30,8 +32,7 @@ const sameBankChargeSchedule = (left, right) => JSON.stringify(left) === JSON.st
 
 /**
  * Fetches the complete ordinary Dashboard STEM selection. Each page is checked
- * against the first page so a changing result set can never become a partial
- * download that looks complete.
+ * against the initial STEM IDs and revisions before writing a workbook.
  */
 export async function fetchAllDashboardStems({
   invoke,
@@ -50,6 +51,7 @@ export async function fetchAllDashboardStems({
   const seenCursors = new Set();
   let cursor = null;
   let expectedCount = null;
+  let expectedSelection;
   let finance = null;
   let financeSnapshot = null;
   const financeWarnings = new Set();
@@ -64,6 +66,7 @@ export async function fetchAllDashboardStems({
     }
     const payload = {
       ...(filterPayload || {}),
+      exportSnapshot: true,
       cursor,
       pageSize: safePageSize,
       sort,
@@ -87,8 +90,10 @@ export async function fetchAllDashboardStems({
     if (!Number.isSafeInteger(matchingCount) || matchingCount < 0) {
       throw incomplete('invalid matching row count');
     }
-    if (expectedCount == null) expectedCount = matchingCount;
-    else if (matchingCount !== expectedCount) {
+    if (expectedCount == null) {
+      expectedCount = matchingCount;
+      expectedSelection = data.exportSelectionDigest;
+    } else if (matchingCount !== expectedCount) {
       throw incomplete('selection changed; please export again');
     }
 
@@ -148,6 +153,10 @@ export async function fetchAllDashboardStems({
     cursor = nextCursor;
   }
 
+  if (!expectedSelection || await dashboardExportSelectionDigest(rows) !== expectedSelection) {
+    throw incomplete('selection changed; please export again');
+  }
+  assertNotAborted(signal);
   if (finance) {
     finance = {
       ...finance,

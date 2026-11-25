@@ -11,6 +11,12 @@ import {
 import { read, utils } from 'xlsx';
 import { buildDashboardStemWorkbook, dashboardStemWorkbookInternals as dashboardStemExportInternals } from '../src/lib/dashboardStemWorkbook.js';
 import { dashboardLineItemVolume, dashboardVolumeLabel } from '../api/_dashboardVolume.js';
+import { dashboardExportSelectionDigest } from '../shared/dashboardExportSelection.js';
+import { dashboardExportScope } from '../api/_dashboardExportScope.js';
+import { dashboardDisputeCondition } from '../api/_decisionDashboard.js';
+
+const revision = '2026-11-24T00:00:00.000Z';
+const exportRow = (id, exportRevision = revision) => ({ id, exportRevision });
 
 const finance = {
   annualInterestRatePct: 5,
@@ -24,9 +30,11 @@ const finance = {
 
 test('Dashboard XLS export fetches every page with stable search, sort, filters, and finance snapshot', async () => {
   const calls = [];
+  const rows = ['one', 'two', 'three'].map(id => exportRow(id));
+  const exportSelectionDigest = await dashboardExportSelectionDigest(rows);
   const pages = [
-    { matchingCount: 3, stems: [{ id: 'one' }, { id: 'two' }], nextCursor: 'page-two', finance },
-    { matchingCount: 3, stems: [{ id: 'three' }], nextCursor: null, finance },
+    { matchingCount: 3, stems: rows.slice(0, 2), nextCursor: 'page-two', finance, exportSelectionDigest },
+    { matchingCount: 3, stems: rows.slice(2), nextCursor: null, finance },
   ];
   const progress = [];
   const result = await fetchAllDashboardStems({
@@ -46,6 +54,7 @@ test('Dashboard XLS export fetches every page with stable search, sort, filters,
   assert.equal(result.matchingCount, 3);
   assert.equal(result.finance.revision, 7);
   assert.equal(calls.length, 2);
+  assert.ok(calls.every(call => call.payload.exportSnapshot === true));
   assert.equal(calls[0].name, 'dashboardStemList');
   assert.equal(calls[0].payload.search, 'submitted search');
   assert.deepEqual(calls[0].payload.filters.excludedCountryCodes, ['KOREA']);
@@ -131,15 +140,66 @@ test('Dashboard XLS export rejects count drift, duplicate rows, and incomplete p
 
 test('Dashboard XLS export preserves callers that do not request finance columns', async () => {
   const calls = [];
+  const stems = [exportRow('one')];
+  const exportSelectionDigest = await dashboardExportSelectionDigest(stems);
   const result = await fetchAllDashboardStems({
     invoke: async (_name, payload) => {
       calls.push(payload);
-      return { data: { matchingCount: 1, stems: [{ id: 'one' }], nextCursor: null } };
+      return { data: { matchingCount: 1, stems, exportSelectionDigest, nextCursor: null } };
     },
   });
   assert.equal(result.finance, null);
   assert.equal('includeFinanceCosts' in calls[0], false);
   assert.equal('financeSnapshot' in calls[0], false);
+});
+
+test('Dashboard export detects same-count replacements and edits across pages', async () => {
+  const initial = ['A', 'B', 'C'].map(id => exportRow(id));
+  const exportSelectionDigest = await dashboardExportSelectionDigest(initial);
+  const download = async (last, proof = exportSelectionDigest) => {
+    let calls = 0;
+    return fetchAllDashboardStems({
+      pageSize: 2,
+      invoke: async () => ({ data: calls++ === 0
+        ? { matchingCount: 3, stems: [initial[1], initial[0]], nextCursor: 'two', exportSelectionDigest: proof }
+        : { matchingCount: 3, stems: [last], nextCursor: null } }),
+    });
+  };
+  assert.deepEqual((await download(initial[2])).rows.map(row => row.id), ['B', 'A', 'C']);
+  await assert.rejects(download(exportRow('D')), /selection changed/);
+  await assert.rejects(download(exportRow('C', '2026-11-24T11:00:00.000Z')), /selection changed/);
+  await assert.rejects(download({ id: 'C' }), /cannot verify the STEM revision/);
+  await assert.rejects(download(initial[2], null), /selection changed/);
+});
+
+test('the export manifest reads only IDs and revision stamps within each supplied filter', async () => {
+  const scope = dashboardExportScope(new Set(['LastModifiedDate', 'SystemModstamp']));
+  const queries = [];
+  const queryAll = async (soql, id) => {
+    queries.push(soql);
+    return [{ Id: id, SystemModstamp: revision }];
+  };
+  const counts = await Promise.all(['B', 'A'].map(id => scope.count(
+    `Status__c = 'Open' AND Id IN ('${id}')`, soql => queryAll(soql, id),
+  )));
+  assert.deepEqual(counts, [1, 1]);
+  assert.deepEqual(queries, ['B', 'A'].map(id =>
+    `SELECT Id, SystemModstamp FROM stem__c WHERE Status__c = 'Open' AND Id IN ('${id}')`));
+  assert.equal(await scope.digest(), await dashboardExportSelectionDigest([exportRow('A'), exportRow('B')]));
+  const empty = dashboardExportScope(new Set(['LastModifiedDate']));
+  assert.equal(empty.revisionField, 'LastModifiedDate');
+  const data = { stems: [], matchingCount: 0, exportSelectionDigest: await empty.digest() };
+  assert.deepEqual((await fetchAllDashboardStems({ invoke: async () => ({ data }) })).rows, []);
+  assert.throws(() => dashboardExportScope(new Set()), { code: 'DASHBOARD_EXPORT_REVISION_UNAVAILABLE' });
+});
+
+test('Disputed only uses the available Salesforce field and refuses an unfiltered result', () => {
+  assert.equal(dashboardDisputeCondition(new Set(['Dispute_Status__c', 'Dispute__c'])),
+    "Dispute_Status__c != 'No Dispute' AND Dispute_Status__c != null");
+  assert.equal(dashboardDisputeCondition(new Set(['Dispute__c'])), 'Dispute__c = true');
+  assert.throws(() => dashboardDisputeCondition(new Set(['Id'])), {
+    status: 503, code: 'DASHBOARD_DISPUTE_FILTER_UNAVAILABLE',
+  });
 });
 
 test('Dashboard XLS export cancellation prevents workbook generation', async () => {
