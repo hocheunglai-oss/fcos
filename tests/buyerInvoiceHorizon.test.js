@@ -1,3 +1,4 @@
+import { assertBuyerInvoiceReportConfirmation, buyerInvoiceReportConfirmation, submitBuyerInvoiceReportOnce } from '../api/_buyerInvoiceReportDelivery.js';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
@@ -78,6 +79,20 @@ function selectFixtures(soql) {
 
 function harness() {
   const state = { settings: { subject: 'Outstanding invoices', intro: 'Due through {{reportEnd}} ({{daysAhead}} days)' }, revision: 1, queries: [], snapshots: [], enriched: [], previews: [] };
+  const runs = new Map();
+  const ledger = {
+    insert: async row => {
+      if (runs.has(row.run_key)) return { error: { code: '23505' } };
+      runs.set(row.run_key, row);
+      return {};
+    },
+    select: () => ({ eq: (_field, key) => ({ maybeSingle: async () => ({ data: runs.get(key) }) }) }),
+    update: patch => ({ eq: (_field, key) => ({ eq: () => ({ select: () => ({ single: async () => {
+      if (state.failCompletion) throw new Error('Ledger acknowledgement lost');
+      Object.assign(runs.get(key), patch);
+      return { data: { run_key: key } };
+    } }) }) }) }),
+  };
   const names = [...new Set(fixtures.flatMap(Object.keys))];
   const fields = names.map((name) => name === 'Due_Date_Override__c' ? { name, type: 'boolean', nillable: false } : { name });
   const context = vm.createContext({
@@ -87,8 +102,12 @@ function harness() {
     URL, URLSearchParams,
     buyerInvoiceDaysAhead, DEFAULT_BUYER_INVOICE_DAYS_AHEAD, buyerInvoiceEmailSettingsPatch,
     buyerInvoiceDueCandidates, buyerInvoiceDueDateInRange,
+    buyerInvoiceReportConfirmation: data => buyerInvoiceReportConfirmation({ ...data, secret: 'test-only-secret' }),
+    assertBuyerInvoiceReportConfirmation, submitBuyerInvoiceReportOnce,
     paymentDataReliableSoql, paymentDataReliabilityMetadata, PAYMENT_DATA_RELIABLE_FROM,
-    safeSupabaseAdminClient: () => ({ from: () => ({ select: () => ({ eq: () => ({ maybeSingle: () => ({ data: {} }) }) }) }) }),
+    safeSupabaseAdminClient: () => ({ from: table => table === 'buyer_invoice_email_runs' ? ledger : {
+      select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: {} }) }) }),
+    } }),
     supabaseAdminClient: () => ({}),
     loadFinancialReportSettings: async () => ({ settings: state.settings, revision: state.revision, configured: true }),
     saveFinancialReportSettings: async (_client, _key, update) => {
@@ -100,7 +119,7 @@ function harness() {
     loadPaymentCollectionThresholds: async () => ({}), paymentCollectionThresholdCacheKey: () => 'test-threshold',
     salesforceObjectFields: async ({ objectName }) => ({ fields: objectName === 'stem__c' ? fields : [] }),
     interofficeStemAccessCondition: async (context) => {
-      assert.equal(context, access);
+      assert.equal(context.client, access.client);
       return `Account__c = '${deskAccount}'`;
     },
     accountInvoiceFormatFields: () => [], accountBrokerEmailFields: () => [], isSalesforceId: () => false,
@@ -227,4 +246,62 @@ test('candidate selection retains legacy stored due dates without override metad
   assert.doesNotMatch(dueCondition, /Due_Date_Override__c/);
   assert.equal(buyerInvoiceDueDateInRange({ QLIK_Invoice_Due_Date__c: dueToday }, dueToday), dueToday);
   assert.equal(buyerInvoiceDueDateInRange({ QLIK_Invoice_Due_Date__c: '2025-12-31' }, dueToday), null);
+});
+
+test('manual report binds preview and reserves before contacting the mail provider', async () => {
+  const { context, state } = harness();
+  state.settings = { ...state.settings, to: ['accounts@example.test'] };
+  let calls = 0;
+  let finish;
+  let providerEntered;
+  let submitted;
+  const entered = new Promise(resolve => { providerEntered = resolve; });
+  context.sendOperationalMail = async message => {
+    calls++;
+    assert.equal(message.to[0], 'finance@example.test');
+    submitted = message;
+    return new Promise(resolve => { finish = resolve; providerEntered(); });
+  };
+  const prepare = () => context.outstandingBuyerInvoicesEmailReport({ preview: true }, null, access);
+  const send = (confirmation, actor = access) => context.outstandingBuyerInvoicesEmailReport({
+    force: true, scheduled: true, confirmation,
+  }, null, actor);
+  const first = await prepare();
+  assert.equal(first.settings.to[0], 'accounts@example.test');
+  const previewRequired = { code: 'BUYER_INVOICE_REPORT_PREVIEW_REQUIRED' };
+  const unconfirmed = { code: 'BUYER_INVOICE_REPORT_DELIVERY_UNCONFIRMED' };
+  await assert.rejects(send(), previewRequired);
+  await assert.rejects(send(first.confirmation, { ...access, profile: { id: 'other-user' } }), previewRequired);
+  state.settings.to = ['finance@example.test'];
+  state.revision++;
+  await assert.rejects(send(first.confirmation), previewRequired);
+  assert.equal(calls, 0);
+  const reviewed = await prepare();
+  const { confirmation } = reviewed;
+  const pending = send(confirmation);
+  await entered;
+  assert.deepEqual(submitted.to, reviewed.settings.to);
+  assert.equal(submitted.subject, reviewed.email.subject);
+  assert.equal(submitted.html, reviewed.email.html);
+  assert.equal(submitted.text, reviewed.email.text);
+  await assert.rejects(send(confirmation), unconfirmed);
+  finish({ id: 'graph-request' });
+  assert.equal((await pending).sent, true);
+  assert.equal((await send(confirmation)).replayed, true);
+  assert.equal(calls, 1);
+
+  for (const failure of ['ledger', 'provider']) {
+    state.settings.subject = 'Revised report after ' + failure + ' test';
+    state.revision++;
+    state.failCompletion = failure === 'ledger';
+    context.sendOperationalMail = async () => {
+      calls++;
+      if (failure === 'provider') throw new Error('Provider acknowledgement lost');
+      return { id: 'accepted-before-ledger-acknowledgement-lost' };
+    };
+    const before = calls;
+    await assert.rejects(send((await prepare()).confirmation), unconfirmed);
+    await assert.rejects(send((await prepare()).confirmation), unconfirmed);
+    assert.equal(calls, before + 1);
+  }
 });

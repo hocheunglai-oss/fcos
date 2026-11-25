@@ -18,6 +18,7 @@ import { disputeWorkflowDirectionLabel, disputeWorkflowEditableFilename, dispute
 import { buildDisputePartyRegistry, disputeSalesforceIdKey, findDisputeParty, resolveExtraCostSupplierLookup, resolveOriginalSupplierLookup } from '../_disputeParties.js';
 import { disputeQueueExtraCostProductName } from '../_disputeQueue.js';
 import { buyerInvoiceDueCandidates, buyerInvoiceDueDateInRange, resolvedBuyerInvoiceDueDate } from '../_buyerInvoiceDates.js';
+import { assertBuyerInvoiceReportConfirmation, buyerInvoiceReportConfirmation, submitBuyerInvoiceReportOnce } from '../_buyerInvoiceReportDelivery.js';
 import { scopeCollectionDocumentMetadata } from '../_salesforceDocumentAccess.js';
 import { isFinalBuyerInvoice, resolveBuyerFinancialAmount } from '../_buyerFinancialAmount.js';
 import { buyerInvoiceEmailSettingsPatch, canonicalizeBuyerInvoiceEmail } from '../../src/lib/buyerInvoiceEmailSettings.js';
@@ -14573,8 +14574,8 @@ function requireCronAuthorization(req) {
   if (String(header) !== `Bearer ${secret}`) throw appError('Unauthorized cron request.', 401);
 }
 
-async function outstandingBuyerInvoicesEmailReport(body = {}, req = null, accessContext = null) {
-  const activeAccess = accessContext || (body.scheduled ? null : await requireActiveUser(req));
+async function outstandingBuyerInvoicesEmailReport(body = {}, req = null, accessContext = null, { scheduled = false } = {}) {
+  const activeAccess = accessContext || (scheduled ? null : await requireActiveUser(req));
   const deliveryClient = activeAccess?.client || safeSupabaseAdminClient();
   if (!deliveryClient) throw appError('FCOS database access is unavailable for the internal report.', 503);
   const stored = await loadStoredBuyerInvoiceEmailSettings();
@@ -14602,9 +14603,11 @@ async function outstandingBuyerInvoicesEmailReport(body = {}, req = null, access
   }
   const reportPayload = { daysAhead: settings.daysAhead };
   if (settings.hasBuyerTraderFilter) reportPayload.buyerTraders = settings.buyerTraders;
-  if (!body.preview && !body.dryRun) reportPayload.force = true;
+  if (!scheduled || (!body.preview && !body.dryRun)) reportPayload.force = true;
   const report = await salesforceBuyerInvoicesDue(reportPayload, null, activeAccess);
   const email = buildBuyerInvoiceReportEmail(report, settings);
+  const message = { to: settings.to, cc: settings.cc, bcc: settings.bcc, subject: email.subject, html: email.html, text: email.text };
+  const delivery = scheduled ? null : buyerInvoiceReportConfirmation({ actorId: activeAccess?.profile?.id, revision: stored.meta.revision, report, message });
   if (body.preview || body.dryRun) {
     await updateBuyerInvoiceEmailSettingsMeta({
       last_preview_at: new Date().toISOString(),
@@ -14614,6 +14617,7 @@ async function outstandingBuyerInvoicesEmailReport(body = {}, req = null, access
     return {
       sent: false,
       preview: true,
+      confirmation: delivery?.confirmation,
       settings: { ...settings, to: settings.to, cc: settings.cc },
       report: {
         rows: report.rows,
@@ -14632,27 +14636,23 @@ async function outstandingBuyerInvoicesEmailReport(body = {}, req = null, access
       },
     };
   }
+  if (delivery) assertBuyerInvoiceReportConfirmation(delivery.confirmation, body.confirmation);
+  const send = () => sendOperationalMail(message, { client: deliveryClient, purposeKey: 'outstanding_invoice_reports' });
   let result;
   try {
-    result = await sendOperationalMail({
-      to: settings.to,
-      cc: settings.cc,
-      bcc: settings.bcc,
-      subject: email.subject,
-      html: email.html,
-      text: email.text,
-    }, { client: deliveryClient, purposeKey: 'outstanding_invoice_reports' });
+    result = delivery ? await submitBuyerInvoiceReportOnce(safeSupabaseAdminClient(), { runKey: delivery.runKey, rowCount: report.rows.length }, send) : await send();
   } catch (error) {
     await updateBuyerInvoiceEmailSettingsMeta({ last_error: error.message });
     throw error;
   }
-  await updateBuyerInvoiceEmailSettingsMeta({
+  if (!result.replayed) await updateBuyerInvoiceEmailSettingsMeta({
     last_sent_at: new Date().toISOString(),
     last_sent_row_count: report.rows.length,
     last_error: null,
   });
   return {
     sent: true,
+    replayed: result.replayed === true,
     id: result.id,
     to: settings.to,
     cc: settings.cc,
@@ -14715,8 +14715,7 @@ async function outstandingBuyerInvoicesEmailCron(body, req) {
     const result = await outstandingBuyerInvoicesEmailReport({
       settings,
       force: true,
-      scheduled: true,
-    });
+    }, null, null, { scheduled: true });
     await finishBuyerInvoiceEmailRun(window.runKey, {
       status: 'sent',
       rows_count: result.rows,

@@ -421,6 +421,8 @@ function invoiceTableMarkerHtml(count) {
 
 function invoiceTablePreviewHtml(rows = []) {
   if (!rows.length) return invoiceTableMarkerHtml(0);
+  const columns = [['Stem', 'left'], ['Buyer', 'left'], ['Invoice', 'right'], ['Receivable', 'right'], ['Due Date', 'left'], ['Trader', 'left'], ['Overdue', 'right']];
+  const headers = columns.map(([label, alignment]) => `<th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:${alignment};white-space:nowrap">${label}</th>`).join('\n            ');
   const bodyRows = rows.map((row) => {
     const severity = overdueSeverity(row.daysUntilDue);
     const rowStyle = severity === 'red'
@@ -447,13 +449,7 @@ function invoiceTablePreviewHtml(rows = []) {
       <table style="border-collapse:collapse;width:auto;min-width:100%;max-width:none;font-size:12px;line-height:1.25;table-layout:auto">
         <thead>
           <tr style="background:#f8fafc;color:#667085;text-transform:uppercase;font-size:11px;letter-spacing:.04em">
-            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">Stem</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">Buyer</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:right;white-space:nowrap">Invoice</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:right;white-space:nowrap">Receivable</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">Due Date</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">Trader</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:right;white-space:nowrap">Overdue</th>
+            ${headers}
           </tr>
         </thead>
         <tbody>${bodyRows}</tbody>
@@ -2886,6 +2882,7 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
       setEmailMeta(res.data.meta || null);
       setEmailSettingsRevision(Number(res.data.meta?.revision || emailSettingsRevision + 1));
       setEmailMessage('Email report schedule saved.');
+      setEmailPreview(null);
       setInternalEmailEditing(false);
     }
     setEmailBusy(false);
@@ -2919,24 +2916,30 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
   };
 
   const sendEmailReport = async (preview = false) => {
+    if (!preview && (!emailPreview?.confirmation || emailDirty)) return;
     setEmailBusy(true);
     setEmailAction(preview ? 'preview' : 'send');
     setEmailError(null);
     setEmailMessage(null);
-    const res = await appClient.functions.invoke('outstandingBuyerInvoicesEmailReport', { preview, force: !preview });
-    if (res.data?.error) {
-      setEmailError(res.data.error);
-    } else if (preview) {
-      setEmailPreview(res.data.email || null);
-      setEmailMeta((prev) => ({ ...(prev || {}), lastPreviewAt: new Date().toISOString(), lastPreviewRowCount: res.data.report?.rows?.length ?? 0 }));
-      setEmailMessage(`Preview ready: ${res.data.report?.rows?.length ?? 0} invoice rows. Subject: ${res.data.email?.subject}`);
-    } else {
-      setEmailPreview(res.data.email || null);
-      setEmailMeta((prev) => ({ ...(prev || {}), lastSentAt: new Date().toISOString(), lastSentRowCount: res.data.rows ?? 0, lastError: null }));
-      setEmailMessage(`Sent ${res.data.rows ?? 0} invoice rows to ${res.data.to?.join(', ') || emailSettings.to}.`);
+    setEmailPreview(null);
+    try {
+      const { data } = await appClient.functions.invoke('outstandingBuyerInvoicesEmailReport', {
+        preview, force: !preview, confirmation: emailPreview?.confirmation,
+      });
+      if (data?.error) throw new Error(data.error);
+      if (preview && data?.preview) {
+        setEmailPreview({ ...data.email, recipients: data.settings, confirmation: data.confirmation });
+        setEmailMeta(prev => ({ ...prev, lastPreviewAt: new Date().toISOString(), lastPreviewRowCount: data.report.rows.length }));
+      } else if (data?.sent) {
+        if (!data.replayed) setEmailMeta(prev => ({ ...prev, lastSentAt: new Date().toISOString(), lastSentRowCount: data.rows, lastError: null }));
+        setEmailMessage(data.replayed ? 'This report was already submitted.' : `Sent ${data.rows} invoice rows to ${data.to.join(', ')}.`);
+      } else throw new Error('Report status unavailable. Check delivery history before retrying.');
+    } catch (error) {
+      setEmailError(error.message);
+    } finally {
+      setEmailBusy(false);
+      setEmailAction('');
     }
-    setEmailBusy(false);
-    setEmailAction('');
   };
 
   const mergeCollectionResult = (result) => {
@@ -3293,6 +3296,9 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
                     <div className="text-sm font-semibold text-foreground">Preview</div>
                     <div className="text-xs text-muted-foreground">
                       {emailPreview?.subject ? `Subject: ${emailPreview.subject}` : 'Generate a preview before sending.'}
+                      {emailPreview?.recipients && ['to', 'cc', 'bcc'].map(key => emailPreview.recipients[key]?.length > 0 && (
+                        <div key={key}>{key.toUpperCase()}: {emailPreview.recipients[key].join(', ')}</div>
+                      ))}
                     </div>
                   </div>
                   <Button variant="outline" size="sm" onClick={() => sendEmailReport(true)} disabled={emailBusy || emailLoading}>
@@ -3331,7 +3337,7 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
                 </>
               ))}
               <Button variant="outline" onClick={closeInternalEmailReminder} disabled={emailBusy}>Close</Button>
-              <Button onClick={() => sendEmailReport(false)} disabled={emailBusy || emailLoading} className="gap-2">
+              <Button onClick={() => sendEmailReport(false)} disabled={emailBusy || emailLoading || emailDirty || !emailPreview?.confirmation} className="gap-2">
                 {emailAction === 'send' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                 {emailAction === 'send' ? 'Sending' : 'Send Now'}
               </Button>
