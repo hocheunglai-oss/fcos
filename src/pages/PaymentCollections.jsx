@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Banknote, CheckCircle2, ClipboardCheck, ListChecks, Loader2, RefreshCw, Scale, ShieldCheck } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { appClient } from '@/api/appClient';
@@ -62,17 +62,20 @@ function evidenceComparisonText(evidence) {
   ].filter(Boolean).join(' · ');
 }
 
+const POSTING_ISSUE_LABELS = new Map([
+  ['payment_posting_pending', 'Posting pending'],
+  ['payment_partially_posted', 'Partially posted'],
+  ['payment_posting_mismatch', 'Posting mismatch'],
+  ['payment_posting_overdue', 'Posting overdue'],
+]);
+
 function reconciliationLabel(value) {
-  if (value === 'payment_posting_pending') return 'Posting pending';
-  if (value === 'payment_partially_posted') return 'Partially posted';
-  if (value === 'payment_posting_mismatch') return 'Posting mismatch';
-  if (value === 'payment_posting_overdue') return 'Posting overdue';
-  return String(value || 'not_checked').replaceAll('_', ' ');
+  return POSTING_ISSUE_LABELS.get(value) ?? String(value || 'not_checked').replaceAll('_', ' ');
 }
 
 function postingIssue(entry) {
   const state = entry?.item?.reconciliationState;
-  if (!['payment_posting_pending', 'payment_partially_posted', 'payment_posting_mismatch', 'payment_posting_overdue'].includes(state)) return null;
+  if (!POSTING_ISSUE_LABELS.has(state)) return null;
   return entry.paymentPostingIssue || entry.item?.paymentReconciliationSnapshot || null;
 }
 
@@ -270,7 +273,11 @@ export default function PaymentCollections() {
               <div className="overflow-auto">
                 <table className="w-full min-w-[1240px] text-sm">
                   <thead className="bg-muted/60 text-left text-xs uppercase text-muted-foreground">
-                    <tr><th className="px-4 py-3">STEM</th><th className="px-4 py-3">Collection Status</th><th className="px-4 py-3">Issue</th><th className="px-4 py-3">Balance Reconciliation</th><th className="px-4 py-3">Latest Payment</th><th className="px-4 py-3">Reminder Control</th></tr>
+                    <tr>
+                      {['STEM', 'Collection Status', 'Issue', 'Balance Reconciliation', 'Latest Payment', 'Reminder Control'].map((title) => (
+                        <th key={title} className="px-4 py-3">{title}</th>
+                      ))}
+                    </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
                     {reconciliation.exceptions.map((entry) => {
@@ -286,11 +293,18 @@ export default function PaymentCollections() {
                         <td className="px-4 py-3">
                           {issue ? (
                             <dl className="grid min-w-[290px] grid-cols-[1fr_auto] gap-x-4 gap-y-1 text-xs tabular-nums">
-                              <dt className="text-muted-foreground">Previous balance</dt><dd className="text-right">{currencyMoney(entry.currency, issue.baselineBalance)}</dd>
-                              <dt className="text-muted-foreground">Detected payments</dt><dd className="text-right text-emerald-700">-{currencyMoney(entry.currency, issue.detectedPaymentAmount)}</dd>
-                              <dt className="font-medium">Expected balance</dt><dd className="text-right font-medium">{currencyMoney(entry.currency, issue.expectedBalance)}</dd>
-                              <dt className="font-medium">Current Salesforce balance</dt><dd className="text-right font-medium">{currencyMoney(entry.currency, issue.currentBalance)}</dd>
-                              <dt className="text-muted-foreground">Difference</dt><dd className="text-right font-semibold text-amber-800">{currencyMoney(entry.currency, issue.differenceAmount)}</dd>
+                              {[
+                                { label: 'Previous balance', amount: issue.baselineBalance },
+                                { label: 'Detected payments', amount: issue.detectedPaymentAmount, prefix: '-', tone: 'text-emerald-700' },
+                                { label: 'Expected balance', amount: issue.expectedBalance, emphasis: true },
+                                { label: 'Current Salesforce balance', amount: issue.currentBalance, emphasis: true },
+                                { label: 'Difference', amount: issue.differenceAmount, tone: 'font-semibold text-amber-800' },
+                              ].map(({ label, amount, prefix, tone, emphasis }) => (
+                                <Fragment key={label}>
+                                  <dt className={emphasis ? 'font-medium' : 'text-muted-foreground'}>{label}</dt>
+                                  <dd className={`text-right ${emphasis ? 'font-medium' : tone || ''}`}>{prefix}{currencyMoney(entry.currency, amount)}</dd>
+                                </Fragment>
+                              ))}
                               <dt className="text-muted-foreground">Open</dt><dd className="text-right">{issue.businessDaysOpen || 0} business day{Number(issue.businessDaysOpen) === 1 ? '' : 's'}</dd>
                             </dl>
                           ) : (

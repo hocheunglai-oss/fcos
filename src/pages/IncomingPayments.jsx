@@ -340,6 +340,14 @@ function buildInterestPreview(settings) {
   return { to, cc, bcc, subject, html };
 }
 
+const REPORT_FIELD_LABEL = 'text-xs font-medium uppercase tracking-wide text-slate-500';
+
+const REPORT_PANEL = 'rounded-lg border border-slate-200 bg-white p-3';
+
+const REPORT_METADATA = 'text-xs text-slate-500';
+
+const REPORT_HEADING = 'text-base font-semibold text-slate-950';
+
 function CompactTableEmptyState({ icon: Icon, title, description }) {
   return (
     <div className="flex min-h-12 items-center gap-3 rounded-lg border border-dashed border-border bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
@@ -1245,7 +1253,7 @@ export default function IncomingPayments({ reconciliationItems = [], embedded = 
           <DialogHeader className="border-b border-slate-200 px-5 py-4 text-left">
             <div className="flex flex-wrap items-start justify-between gap-4 pr-8">
               <div className="min-w-0">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Incoming Payment</p>
+                <p className={REPORT_FIELD_LABEL}>Incoming Payment</p>
                 <DialogTitle className="mt-1 text-xl font-semibold text-slate-950">Incoming Payments Internal Report</DialogTitle>
                 <DialogDescription className="mt-1 text-sm text-slate-500">
                   Uses the current payment-created date range and keyword filter.
@@ -1261,20 +1269,18 @@ export default function IncomingPayments({ reconciliationItems = [], embedded = 
           <div className="max-h-[calc(94vh-152px)] overflow-auto px-5 py-4">
             <div className="space-y-4">
               <div className="grid gap-3 lg:grid-cols-[1.4fr_1fr]">
-                <div className="rounded-lg border border-slate-200 bg-white p-3">
+                <div className={REPORT_PANEL}>
                   <div className="grid gap-2 sm:grid-cols-3">
-                    <div>
-                      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Receivable payments</div>
-                      <div className="mt-1 text-lg font-semibold text-slate-950">{visibleRows.length.toLocaleString()}</div>
-                    </div>
-                    <div>
-                      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Buyer CIA invoices</div>
-                      <div className="mt-1 text-lg font-semibold text-slate-950">{visibleBuyerCiaRows.length.toLocaleString()}</div>
-                    </div>
-                    <div>
-                      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Incoming total</div>
-                      <div className="mt-1 text-lg font-semibold text-slate-950">{fmtMoney(summary.totalIncomingAmount)}</div>
-                    </div>
+                    {[
+                      ['Receivable payments', visibleRows.length.toLocaleString()],
+                      ['Buyer CIA invoices', visibleBuyerCiaRows.length.toLocaleString()],
+                      ['Incoming total', fmtMoney(summary.totalIncomingAmount)],
+                    ].map(([label, value]) => (
+                      <div key={label}>
+                        <div className={REPORT_FIELD_LABEL}>{label}</div>
+                        <div className="mt-1 text-lg font-semibold text-slate-950">{value}</div>
+                      </div>
+                    ))}
                   </div>
                 </div>
                 <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
@@ -1286,8 +1292,8 @@ export default function IncomingPayments({ reconciliationItems = [], embedded = 
 
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
                 <div>
-                  <h3 className="text-base font-semibold text-slate-950">Review and send</h3>
-                  <p className="text-xs text-slate-500">One review surface. FCOS rebuilds the report from live data immediately before delivery.</p>
+                  <h3 className={REPORT_HEADING}>Review and send</h3>
+                  <p className={REPORT_METADATA}>One review surface. FCOS rebuilds the report from live data immediately before delivery.</p>
                 </div>
                 <div
                   className={cn(
@@ -1313,58 +1319,54 @@ export default function IncomingPayments({ reconciliationItems = [], embedded = 
 
               <div className="space-y-3">
                   <div>
-                    <h3 className="text-base font-semibold text-slate-950">Review report</h3>
-                    <p className="text-xs text-slate-500">The email will use the same filters currently applied on this page.</p>
+                    <h3 className={REPORT_HEADING}>Review report</h3>
+                    <p className={REPORT_METADATA}>The email will use the same filters currently applied on this page.</p>
                   </div>
                   <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                    <div className="rounded-lg border border-slate-200 bg-white p-3">
-                      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Created from</div>
-                      <div className="mt-1 text-sm font-semibold text-slate-950">{fmtDate(dateFrom)}</div>
-                    </div>
-                    <div className="rounded-lg border border-slate-200 bg-white p-3">
-                      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Created to</div>
-                      <div className="mt-1 text-sm font-semibold text-slate-950">{fmtDate(dateTo)}</div>
-                    </div>
-                    <div className="rounded-lg border border-slate-200 bg-white p-3">
-                      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Keyword</div>
-                      <div className="mt-1 truncate text-sm font-semibold text-slate-950">{search || '-'}</div>
-                    </div>
-                    <div className="rounded-lg border border-slate-200 bg-white p-3">
-                      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Settlement policy</div>
-                      <div className="mt-1 text-sm font-semibold text-slate-950">{thresholdCount.toLocaleString()} configured · fallback &lt;0.005</div>
-                    </div>
+                    {[
+                      { label: 'Created from', value: fmtDate(dateFrom) },
+                      { label: 'Created to', value: fmtDate(dateTo) },
+                      { label: 'Keyword', value: search || '-', truncate: true },
+                      { label: 'Settlement policy', value: `${thresholdCount.toLocaleString()} configured · fallback <0.005` },
+                    ].map(({ label, value, truncate }) => (
+                      <div key={label} className={REPORT_PANEL}>
+                        <div className={REPORT_FIELD_LABEL}>{label}</div>
+                        <div className={cn('mt-1 text-sm font-semibold text-slate-950', truncate && 'truncate')}>{value}</div>
+                      </div>
+                    ))}
                   </div>
-                  <div className="rounded-lg border border-slate-200 bg-white p-3">
+                  <div className={REPORT_PANEL}>
                     <div className="text-sm font-semibold text-slate-950">Report tables</div>
                     <div className="mt-3 grid gap-3 md:grid-cols-2">
-                      <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                        <div className="text-sm font-medium text-slate-900">Receivable Payments</div>
-                        <div className="mt-1 text-xs text-slate-500">{visibleRows.length.toLocaleString()} rows matched by current filters.</div>
-                      </div>
-                      <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                        <div className="text-sm font-medium text-slate-900">Buyer CIA Invoices</div>
-                        <div className="mt-1 text-xs text-slate-500">{visibleBuyerCiaRows.length.toLocaleString()} rows matched by current filters.</div>
-                      </div>
+                      {[
+                        ['Receivable Payments', visibleRows.length],
+                        ['Buyer CIA Invoices', visibleBuyerCiaRows.length],
+                      ].map(([label, count]) => (
+                        <div key={label} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                          <div className="text-sm font-medium text-slate-900">{label}</div>
+                          <div className="mt-1 text-xs text-slate-500">{count.toLocaleString()} rows matched by current filters.</div>
+                        </div>
+                      ))}
                     </div>
                   </div>
               </div>
 
               <div className="space-y-3">
                   <div>
-                    <h3 className="text-base font-semibold text-slate-950">Review recipients</h3>
-                    <p className="text-xs text-slate-500">Only the addresses shown here will be used for this send.</p>
+                    <h3 className={REPORT_HEADING}>Review recipients</h3>
+                    <p className={REPORT_METADATA}>Only the addresses shown here will be used for this send.</p>
                   </div>
                   <div className="grid gap-3 rounded-lg border border-slate-200 bg-white p-3 md:grid-cols-2">
                     <div className="space-y-1.5 md:col-span-2">
-                      <Label className="text-xs text-slate-500">To</Label>
+                      <Label className={REPORT_METADATA}>To</Label>
                       <Input value={emailSettings.to} onChange={(event) => updateEmailSetting('to', event.target.value)} disabled={!emailTemplateEditing} placeholder="email@example.com" className={cn(!String(emailSettings.to || '').trim() && 'border-red-300 focus-visible:ring-red-400')} />
                     </div>
                     <div className="space-y-1.5">
-                      <Label className="text-xs text-slate-500">CC</Label>
+                      <Label className={REPORT_METADATA}>CC</Label>
                       <Input value={emailSettings.cc} onChange={(event) => updateEmailSetting('cc', event.target.value)} disabled={!emailTemplateEditing} />
                     </div>
                     <div className="space-y-1.5">
-                      <Label className="text-xs text-slate-500">BCC</Label>
+                      <Label className={REPORT_METADATA}>BCC</Label>
                       <Input value={emailSettings.bcc} onChange={(event) => updateEmailSetting('bcc', event.target.value)} disabled={!emailTemplateEditing} />
                     </div>
                   </div>
@@ -1372,8 +1374,8 @@ export default function IncomingPayments({ reconciliationItems = [], embedded = 
 
               <div className="space-y-3">
                   <div>
-                    <h3 className="text-base font-semibold text-slate-950">Email preview</h3>
-                    <p className="text-xs text-slate-500">Edit the saved template when needed, then preview and send.</p>
+                    <h3 className={REPORT_HEADING}>Email preview</h3>
+                    <p className={REPORT_METADATA}>Edit the saved template when needed, then preview and send.</p>
                   </div>
 
                   <div className="grid gap-4 xl:grid-cols-[minmax(0,520px)_minmax(0,1fr)]">
@@ -1402,11 +1404,11 @@ export default function IncomingPayments({ reconciliationItems = [], embedded = 
                         </div>
                       )}
                       <div className="space-y-1.5">
-                        <Label className="text-xs text-slate-500">Subject</Label>
+                        <Label className={REPORT_METADATA}>Subject</Label>
                         <Input value={emailSettings.subject} onChange={(event) => updateEmailSetting('subject', event.target.value)} disabled={!emailTemplateEditing} />
                       </div>
                       <div className="space-y-1.5">
-                        <Label className="text-xs text-slate-500">Email content</Label>
+                        <Label className={REPORT_METADATA}>Email content</Label>
                         <div
                           className={cn(
                             'rounded-md border border-slate-200 bg-white [&_.ql-container]:min-h-[360px] [&_.ql-container]:border-0 [&_.ql-toolbar]:border-0 [&_.ql-toolbar]:border-b [&_.ql-toolbar]:border-slate-200',
@@ -1431,7 +1433,7 @@ export default function IncomingPayments({ reconciliationItems = [], embedded = 
                             />
                           </Suspense>
                         </div>
-                        <p className="text-xs text-slate-500">
+                        <p className={REPORT_METADATA}>
                           Table tokens: <span className="font-mono">{RECEIVABLE_PAYMENTS_TABLE_TOKEN}</span> and <span className="font-mono">{BUYER_CIA_TABLE_TOKEN}</span>
                         </p>
                       </div>

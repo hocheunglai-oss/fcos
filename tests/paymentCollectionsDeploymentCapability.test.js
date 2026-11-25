@@ -209,6 +209,7 @@ test('Payment Collections issues no reconciliation mutation until declared writa
   const { default: PaymentCollections } = await execute(`
     const { react: React, auth, useSearchParams, appClient } = globalThis.__deploymentCollectionsHarness;
     const { useCallback, useEffect, useMemo, useRef, useState } = React;
+    const { Fragment } = React;
     const Suspense = "Suspense";
     const lazy = loader => String(loader).match(/(IncomingPayments|VariableCharges|LegacyPaymentDataAudit)/)[1];
     const useAuth = () => auth, PAYMENT_COLLECTIONS_METHODOLOGIES = { collections: {} }, VARIABLE_CHARGES_USER_MANUAL = {};
