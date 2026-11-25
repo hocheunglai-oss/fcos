@@ -74,12 +74,13 @@ test('navigation-aware requests can cancel obsolete filter loads without applyin
 
 test('page loaders use navigation policies while live workflows and mutations retain force behavior', () => {
   const operationalPages = [
-    'src/pages/DashboardSettings.jsx',
     'src/pages/CashflowForecast.jsx',
     'src/pages/UnofficialCompensation.jsx',
     'src/pages/BrokerRegister.jsx',
     'src/pages/ReviewQueue.jsx',
   ];
+  // Dashboard uses a shorter TTL and binds each read to its own selection.
+  assert.match(read('src/pages/DashboardSettings.jsx'), /useDashboardResource/);
   const collaborationPages = [
     'src/pages/BuyerInvoices.jsx',
     'src/pages/IncomingPayments.jsx',

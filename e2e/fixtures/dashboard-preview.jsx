@@ -130,7 +130,8 @@ appClient.functions.invoke = async (name, payload = {}, options = {}) => {
     const offset = payload.cursor ? Number(payload.cursor) : 0;
     const rows = exportRows.slice(offset, offset + Number(payload.pageSize || 200));
     const nextOffset = offset + rows.length;
-    return { data: { stems: rows, matchingCount: exportRows.length, nextCursor: nextOffset < exportRows.length ? String(nextOffset) : null, finance: exportFinance }, meta: FIXTURE_META };
+    const exportSelectionDigest = payload.exportSnapshot && offset === 0 ? await fixtureExportDigest() : undefined;
+    return { data: { stems: rows, matchingCount: exportRows.length, nextCursor: nextOffset < exportRows.length ? String(nextOffset) : null, finance: exportFinance, exportSelectionDigest }, meta: FIXTURE_META };
   }
   const dataByFunction = {
     dashboardCounterpartySearch: { results: FIXTURE_COUNTERPARTIES },
@@ -159,9 +160,16 @@ const exportRows = Array.from({ length: 201 }, (_, index) => {
     ...source,
     id: `fixture-export-stem-${String(index + 1).padStart(3, '0')}`,
     name: `SYN-EXPORT-${String(index + 1).padStart(3, '0')}`,
+    exportRevision: FIXTURE_META.cachedAt,
     finance: { complete: true, financeCost, bankCharge, bankChargeUsd: bankCharge, bankChargeComplete: true, ebit: Number(source.grossProfit || 0) - financeCost - bankCharge, status: 'Complete' },
   };
 });
+
+async function fixtureExportDigest() {
+  const entries = exportRows.map(({ id, exportRevision }) => JSON.stringify([id, exportRevision])).sort().join('\n');
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(entries));
+  return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
 
 const exportFinance = {
   annualInterestRatePct: 5,

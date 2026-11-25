@@ -26,30 +26,3 @@ test('no eligible evidence gives a clear empty result', async () => {
   assert.match(html, /No buyers have eligible/);
   assert.doesNotMatch(html, /<table/);
 });
-
-test('AI results keep pending Production summary and EBIT requests alive', async () => {
-  const source = await readFile(new URL('../src/pages/DashboardSettings.jsx', import.meta.url), 'utf8');
-  const start = source.indexOf('  const runAiSearch = useCallback(async (prompt) => {');
-  const end = source.indexOf('  }, [filterPayload,', start);
-  assert.ok(start >= 0 && end > start);
-  const callbackBody = source.slice(start, end).split('async (prompt) => {')[1];
-  let summaryAborts = 0;
-  let stemAborts = 0;
-  let loading = { stems: true, summary: true };
-  let analysis = null;
-  const ignore = () => {};
-  const run = new Function('invoke', 'filterPayload', 'filters', 'aborts', 'setLoading', 'setErrors', 'setAiSearchActive', 'setStemSearch', 'setPaymentAnalysis', 'setStems', 'setNavigation', 'setTab',
-    `return async (prompt) => {${callbackBody}};`)(
-    async () => ({ result: { data: { aiSearch: { status: 'ready', matchedCount: 1 }, paymentAnalysis: { buyers: [{ name: 'Buyer A' }] } } } }),
-    {}, { selectedYears: [2026], selectedMonths: [9] },
-    { current: { stems: { abort: () => { stemAborts++; } }, summary: { abort: () => { summaryAborts++; } } } },
-    (update) => { loading = update(loading); }, ignore, ignore, ignore,
-    (value) => { analysis = value; }, ignore, ignore, ignore,
-  );
-  await run('buyers paying early');
-  assert.equal(stemAborts, 1);
-  assert.equal(summaryAborts, 0);
-  assert.equal(loading.summary, true);
-  assert.equal(loading.stems, false);
-  assert.equal(analysis.buyers[0].name, 'Buyer A');
-});

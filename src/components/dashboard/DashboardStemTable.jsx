@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, Columns3, Loader2, Maximize2, Minimize2, Search } from 'lucide-react';
 import { appClient } from '@/api/appClient';
 import { Button } from '@/components/ui/button';
@@ -6,6 +6,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import TableShell from '@/components/common/TableShell';
+import DataStatus from '@/components/common/DataStatus';
 
 const DEFAULT_COLUMNS = ['stem', 'deliveryDate', 'vessel', 'buyer', 'supplier', 'productQuantity', 'port', 'turnover', 'grossProfit', 'dispute'];
 const COLUMN_LABELS = {
@@ -121,6 +122,10 @@ function Pagination({ loading, hasPrevious, hasNext, page, onPrevious, onNext })
 export default function DashboardStemTable({
   result,
   loading,
+  error,
+  meta,
+  page = Number(result?.page ?? result?.pagination?.page ?? 1),
+  hasPrevious = Boolean(result?.previousCursor ?? result?.pagination?.previousCursor ?? page > 1),
   search = '',
   wide = false,
   onWideChange,
@@ -128,11 +133,13 @@ export default function DashboardStemTable({
   onPrevious,
   onNext,
   onSortChange,
-  onStemClick,
-  onAccountClick,
+  onStemClick: onOpenStem,
+  onAccountClick: onOpenAccount,
   exportFilterPayload,
   exportScopeLabels,
   includeFinanceCosts = false,
+  exportScope,
+  exportReady = true,
   aiSearchActive = false,
   onClearAiSearch,
 }) {
@@ -142,19 +149,22 @@ export default function DashboardStemTable({
   const exportAbortRef = useRef(null);
   useEffect(() => { setSearchDraft(search); }, [search]);
   const rows = result?.rows || result?.records || result?.stems || [];
-  const page = Number(result?.page ?? result?.pagination?.page ?? 1);
   const pageSize = Number(result?.pageSize ?? result?.pagination?.pageSize ?? 50);
   const total = Number(result?.matchingCount ?? result?.total ?? result?.totalCount ?? result?.pagination?.total ?? rows.length);
   const hasNext = Boolean(result?.nextCursor ?? result?.pagination?.nextCursor ?? result?.hasNext);
-  const hasPrevious = Boolean(result?.previousCursor ?? result?.pagination?.previousCursor ?? page > 1);
+  const actionable = Boolean(result && !loading && !error);
+  const onStemClick = actionable ? onOpenStem : undefined;
+  const onAccountClick = actionable ? onOpenAccount : undefined;
   const displayColumns = useMemo(() => DEFAULT_COLUMNS.filter((column) => visibleColumns.includes(column)), [visibleColumns]);
   const sort = result?.sort || {};
-  const exportContextKey = JSON.stringify({ exportFilterPayload, exportScopeLabels, search, sort, includeFinanceCosts, aiSearchActive });
-  useEffect(() => {
-    exportAbortRef.current?.abort();
-    exportAbortRef.current = null;
+  const canExport = actionable && exportReady && !aiSearchActive && Boolean(exportFilterPayload) && total > 0;
+  const exportContextKey = JSON.stringify({ exportScope, exportFilterPayload, exportScopeLabels, search, sort, includeFinanceCosts, canExport });
+  useLayoutEffect(() => {
     setExportState(null);
-    return () => exportAbortRef.current?.abort();
+    return () => {
+      exportAbortRef.current?.abort();
+      exportAbortRef.current = null;
+    };
   }, [exportContextKey]);
   const toggleColumn = (column) => setVisibleColumns((current) => current.includes(column) ? (current.length === 1 ? current : current.filter((value) => value !== column)) : [...current, column]);
   const applySort = (column) => {
@@ -163,12 +173,15 @@ export default function DashboardStemTable({
     onSortChange?.({ field, direction: sort.field === field && sort.direction === 'asc' ? 'desc' : 'asc' });
   };
   const exportXls = async () => {
-    if (aiSearchActive || !exportFilterPayload || exportAbortRef.current) return;
+    if (!canExport || exportAbortRef.current) return;
     const controller = new AbortController();
     exportAbortRef.current = controller;
+    const isCurrent = () => exportAbortRef.current === controller && !controller.signal.aborted;
     setExportState({ busy: true, message: 'Preparing export…' });
     try {
       const exportModule = await import('@/lib/dashboardStemExport');
+      if (exportAbortRef.current !== controller) return;
+      controller.signal.throwIfAborted();
       const exported = await exportModule.fetchAllDashboardStems({
         invoke: appClient.functions.invoke,
         filterPayload: exportFilterPayload,
@@ -177,10 +190,11 @@ export default function DashboardStemTable({
         includeFinanceCosts,
         signal: controller.signal,
         onProgress: ({ loaded, total: exportTotal }) => {
-          if (exportAbortRef.current === controller) setExportState({ busy: true, message: `Fetching ${loaded.toLocaleString()} of ${exportTotal.toLocaleString()} STEMs…` });
+          if (isCurrent()) setExportState({ busy: true, message: `Fetching ${loaded.toLocaleString()} of ${exportTotal.toLocaleString()} STEMs…` });
         },
       });
-      if (controller.signal.aborted || exportAbortRef.current !== controller) return;
+      if (exportAbortRef.current !== controller) return;
+      controller.signal.throwIfAborted();
       setExportState({ busy: true, message: 'Building XLS locally…' });
       const generatedAt = new Date();
       const blob = await exportModule.createDashboardStemWorkbook({
@@ -193,7 +207,8 @@ export default function DashboardStemTable({
         finance: exported.finance,
         generatedAt: generatedAt.toISOString(),
       });
-      if (controller.signal.aborted || exportAbortRef.current !== controller) return;
+      if (exportAbortRef.current !== controller) return;
+      controller.signal.throwIfAborted();
       exportModule.downloadDashboardStemWorkbook(blob, exportModule.dashboardStemExportFileName({ filterPayload: exportFilterPayload, scopeLabels: exportScopeLabels }));
       setExportState({ message: `Exported ${exported.rows.length.toLocaleString()} STEMs.` });
     } catch (error) {
@@ -207,18 +222,18 @@ export default function DashboardStemTable({
       if (exportAbortRef.current === controller) exportAbortRef.current = null;
     }
   };
-  const meta = total ? `Showing ${Math.min((page - 1) * pageSize + 1, total)}–${Math.min(page * pageSize, total)} of ${total.toLocaleString()} STEMs` : 'No matching STEMs';
+  const countLabel = loading && !result ? 'Loading selected STEMs' : error && !result ? 'Selected STEMs unavailable' : total ? `Showing ${Math.min((page - 1) * pageSize + 1, total)}–${Math.min(page * pageSize, total)} of ${total.toLocaleString()} STEMs` : 'No matching STEMs';
   const exportBusy = exportState?.busy === true;
-  const actions = <div className="flex flex-wrap items-center justify-end gap-1.5"><form className="flex items-center gap-1.5" onSubmit={(event) => { event.preventDefault(); onSearch?.(searchDraft.trim()); }}><Input value={searchDraft} onChange={(event) => setSearchDraft(event.target.value)} placeholder="Search STEMs" aria-label="Search STEMs" className="h-8 w-36 text-xs" /><Button type="submit" variant="outline" size="sm" className="h-8 px-2" disabled={loading}><Search className="h-3.5 w-3.5" /><span className="sr-only">Search STEMs</span></Button></form><Popover><PopoverTrigger asChild><Button type="button" variant="outline" size="sm" className={TOOLBAR_BUTTON_CLASS} aria-label="Choose visible STEM columns"><Columns3 className="mr-1 h-3.5 w-3.5" />Columns</Button></PopoverTrigger><PopoverContent align="end" className="w-56 p-2">{DEFAULT_COLUMNS.map((column) => <label key={column} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted"><Checkbox checked={visibleColumns.includes(column)} onCheckedChange={() => toggleColumn(column)} />{COLUMN_LABELS[column]}</label>)}</PopoverContent></Popover><Button type="button" variant="outline" size="sm" className={TOOLBAR_BUTTON_CLASS} aria-pressed={wide} onClick={() => onWideChange?.(!wide)}>{wide ? <Minimize2 className="mr-1 h-3.5 w-3.5" /> : <Maximize2 className="mr-1 h-3.5 w-3.5" />}{wide ? 'Normal width' : 'Wide view'}</Button><Button type="button" variant="outline" size="sm" className={TOOLBAR_BUTTON_CLASS} disabled={loading || exportBusy || aiSearchActive || !exportFilterPayload || total === 0} onClick={exportXls} title={aiSearchActive ? 'Clear AI search before exporting the ordinary Dashboard selection.' : undefined}>{exportBusy ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : null}Export XLS</Button>{exportBusy ? <Button type="button" variant="ghost" size="sm" className={TOOLBAR_BUTTON_CLASS} onClick={() => exportAbortRef.current?.abort()}>Cancel</Button> : null}{aiSearchActive ? <span className="basis-full text-right text-xs text-amber-700">Export is unavailable for AI results. <button type="button" className="font-semibold underline" onClick={onClearAiSearch}>Clear AI search</button> to return to the ordinary Dashboard selection.</span> : exportState?.message ? <span role={exportState.error ? 'alert' : 'status'} className={`basis-full text-right text-xs ${exportState.error ? 'text-destructive' : 'text-muted-foreground'}`}>{exportState.message}</span> : null}</div>;
+  const actions = <div className="flex flex-wrap items-center justify-end gap-1.5"><form className="flex items-center gap-1.5" onSubmit={(event) => { event.preventDefault(); onSearch?.(searchDraft.trim()); }}><Input value={searchDraft} onChange={(event) => setSearchDraft(event.target.value)} placeholder="Search STEMs" aria-label="Search STEMs" className="h-8 w-36 text-xs" /><Button type="submit" variant="outline" size="sm" className="h-8 px-2" disabled={loading}><Search className="h-3.5 w-3.5" /><span className="sr-only">Search STEMs</span></Button></form><Popover><PopoverTrigger asChild><Button type="button" variant="outline" size="sm" className={TOOLBAR_BUTTON_CLASS} aria-label="Choose visible STEM columns"><Columns3 className="mr-1 h-3.5 w-3.5" />Columns</Button></PopoverTrigger><PopoverContent align="end" className="w-56 p-2">{DEFAULT_COLUMNS.map((column) => <label key={column} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted"><Checkbox checked={visibleColumns.includes(column)} onCheckedChange={() => toggleColumn(column)} />{COLUMN_LABELS[column]}</label>)}</PopoverContent></Popover><Button type="button" variant="outline" size="sm" className={TOOLBAR_BUTTON_CLASS} aria-pressed={wide} onClick={() => onWideChange?.(!wide)}>{wide ? <Minimize2 className="mr-1 h-3.5 w-3.5" /> : <Maximize2 className="mr-1 h-3.5 w-3.5" />}{wide ? 'Normal width' : 'Wide view'}</Button><Button type="button" variant="outline" size="sm" className={TOOLBAR_BUTTON_CLASS} disabled={!canExport || exportBusy} onClick={exportXls} title={aiSearchActive ? 'Clear AI search before exporting the ordinary Dashboard selection.' : undefined}>{exportBusy ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : null}Export XLS</Button>{exportBusy ? <Button type="button" variant="ghost" size="sm" className={TOOLBAR_BUTTON_CLASS} onClick={() => exportAbortRef.current?.abort()}>Cancel</Button> : null}{aiSearchActive ? <span className="basis-full text-right text-xs text-amber-700">Export is unavailable for AI results. <button type="button" className="font-semibold underline" onClick={onClearAiSearch}>Clear AI search</button> to return to the ordinary Dashboard selection.</span> : exportState?.message ? <span role={exportState.error ? 'alert' : 'status'} className={`basis-full text-right text-xs ${exportState.error ? 'text-destructive' : 'text-muted-foreground'}`}>{exportState.message}</span> : null}</div>;
 
-  return <TableShell title="STEMs" meta={meta} bodyClassName="p-0" actions={actions}>
+  return <TableShell title="STEMs" meta={<>{countLabel}{meta ? <DataStatus meta={meta} state={error ? 'stale_error' : loading ? 'refreshing' : undefined} label="STEMs" className="ml-2" /> : null}</>} bodyClassName="p-0" actions={actions}>
     <div className="divide-y divide-border md:hidden">{rows.map((row, index) => {
       const childRows = supplierProductRows(row);
       return <div role="button" tabIndex={0} key={row.id ?? row.Id ?? index} onClick={() => onStemClick?.(row)} onKeyDown={(event) => { if (event.currentTarget === event.target && (event.key === 'Enter' || event.key === ' ')) onStemClick?.(row); }} className="block w-full cursor-pointer px-4 py-3 text-left hover:bg-muted/30"><div className="flex items-start justify-between gap-3"><span className="min-w-0 break-words font-semibold">{renderValue(row, 'stem', onAccountClick)}</span>{renderValue(row, 'deliveryDate', onAccountClick)}</div><div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-muted-foreground"><span className="min-w-0 break-words">{renderValue(row, 'buyer', onAccountClick)}</span><span className="text-right font-semibold text-foreground">{renderValue(row, 'grossProfit', onAccountClick)}</span><div className="col-span-2 mt-1 divide-y divide-border/60 rounded-md border border-border bg-background/60">{childRows.length ? childRows.map((item, childIndex) => <div key={`${item.sourceType}:${item.sourceId || childIndex}`} data-source-type={item.sourceType} className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.25fr)] gap-2 px-2 py-1.5"><SupplierProductSupplier item={item} onAccountClick={onAccountClick} /><SupplierProductItem item={item} /></div>) : <div className="px-2 py-1.5 text-muted-foreground">No product or extra-cost rows</div>}</div><span className="break-words">{renderValue(row, 'port', onAccountClick)}</span></div></div>;
-    })}{!rows.length && !loading ? <div className="px-4 py-14 text-center text-sm text-muted-foreground">No STEMs match these filters. Reset a filter or select a wider period.</div> : null}</div>
+    })}{!rows.length && !loading && !error ? <div className="px-4 py-14 text-center text-sm text-muted-foreground">No STEMs match these filters. Reset a filter or select a wider period.</div> : null}</div>
     <div className="relative hidden overflow-x-auto md:block">
       <table className="w-full min-w-[1180px] text-sm">
-        <thead className="border-b border-border bg-muted/30"><tr>{displayColumns.map((column) => <th key={column} className={`whitespace-nowrap px-3 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground ${MONEY_COLUMNS.has(column) ? 'text-right' : ''}`}>{SORT_FIELDS[column] ? <button type="button" onClick={() => applySort(column)} className="hover:text-foreground">{COLUMN_LABELS[column]} {sort.field === SORT_FIELDS[column] ? (sort.direction === 'asc' ? '↑' : '↓') : ''}</button> : COLUMN_LABELS[column]}</th>)}</tr></thead>
+        <thead className="border-b border-border bg-muted/30"><tr>{displayColumns.map((column) => <th key={column} className={`whitespace-nowrap px-3 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground ${MONEY_COLUMNS.has(column) ? 'text-right' : ''}`}>{SORT_FIELDS[column] ? <button type="button" disabled={!actionable} onClick={() => applySort(column)} className="hover:text-foreground">{COLUMN_LABELS[column]} {sort.field === SORT_FIELDS[column] ? (sort.direction === 'asc' ? '↑' : '↓') : ''}</button> : COLUMN_LABELS[column]}</th>)}</tr></thead>
         <tbody className={loading && rows.length ? 'opacity-55' : ''}>{rows.flatMap((row, index) => {
           const stemKey = row.id ?? row.Id ?? index;
           const showsChildColumns = displayColumns.includes('supplier') || displayColumns.includes('productQuantity');
@@ -231,11 +246,11 @@ export default function DashboardStemTable({
             return <td key={column} rowSpan={physicalRows.length} className={`max-w-72 px-3 py-3 align-top ${MONEY_COLUMNS.has(column) ? 'text-right tabular-nums whitespace-nowrap' : 'break-words'}`}>{renderValue(row, column, onAccountClick)}</td>;
           })}</tr>);
         })}
-          {!rows.length && !loading ? <tr><td colSpan={displayColumns.length} className="px-4 py-14 text-center text-sm text-muted-foreground">No STEMs match these filters. Reset a filter or select a wider period.</td></tr> : null}
+          {!rows.length && !loading && !error ? <tr><td colSpan={displayColumns.length} className="px-4 py-14 text-center text-sm text-muted-foreground">No STEMs match these filters. Reset a filter or select a wider period.</td></tr> : null}
         </tbody>
       </table>
       {loading && !rows.length ? <div className="flex min-h-48 items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Loading STEMs…</div> : null}
     </div>
-    <Pagination loading={loading} hasPrevious={hasPrevious} hasNext={hasNext} page={page} onPrevious={onPrevious} onNext={onNext} />
+    <Pagination loading={!actionable} hasPrevious={hasPrevious} hasNext={hasNext} page={page} onPrevious={onPrevious} onNext={onNext} />
   </TableShell>;
 }

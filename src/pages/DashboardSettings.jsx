@@ -14,14 +14,15 @@ import PageHeader from '@/components/common/PageHeader';
 import PageMethodology from '@/components/common/PageMethodology';
 import PaymentDataReliabilityBadge from '@/components/common/PaymentDataReliabilityBadge';
 import { DASHBOARD_METHODOLOGY } from '@/lib/pageMethodologyIndex';
-import { DASHBOARD_FILTER_STORAGE_KEY, dashboardFilterKey, dashboardFilterPayload, getRecentYears, normalizeDashboardFilters, presetDashboardPeriod } from '@/lib/dashboardFilters';
-import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
+import { DASHBOARD_FILTER_STORAGE_KEY, dashboardFilterKey, getRecentYears, normalizeDashboardFilters, presetDashboardPeriod } from '@/lib/dashboardFilters';
+import { useDashboardResource } from '@/hooks/useDashboardResource';
 
 const DashboardAnalytics = lazy(() => import('@/components/dashboard/DashboardAnalytics'));
 const AccountCreditDirectory = lazy(() => import('@/components/dashboard/AccountCreditDirectory'));
 const AccountInsightModal = lazy(() => import('@/components/dashboard/AccountInsightModal'));
 const STEM_PAGE_SIZE = 50;
 const DEFAULT_STEM_SORT = Object.freeze({ field: 'createdDate', direction: 'desc' });
+const FIRST_STEM_PAGE = { cursor: null, history: [], sort: DEFAULT_STEM_SORT };
 const HONG_KONG_OFFSET_MS = 8 * 60 * 60 * 1000;
 const INSIGHT_QUERY_KEYS = [
   'insightAccountId', 'insightName', 'insightRole', 'insightRoles', 'insightEntityType', 'insightTab', 'insightStatementSide',
@@ -39,7 +40,7 @@ const millisecondsUntilNextHongKongDate = (date = new Date()) => {
 
 function readSavedFilters() { try { return normalizeDashboardFilters(JSON.parse(localStorage.getItem(DASHBOARD_FILTER_STORAGE_KEY) || '{}')); } catch { return normalizeDashboardFilters({ ...presetDashboardPeriod('year_to_date'), datePreset: 'year_to_date' }); } }
 function normaliseOptions(data) { return Array.isArray(data?.options) ? data.options.map((option) => typeof option === 'string' ? { label: option, value: option } : option).filter(Boolean) : []; }
-function ErrorBlock({ message, onRetry }) { return <div className="mb-4 flex items-start justify-between gap-3 rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive"><span className="flex gap-2"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />{message}</span>{onRetry ? <Button type="button" size="sm" variant="outline" onClick={onRetry}>Retry</Button> : null}</div>; }
+function ErrorBlock({ message, onRetry }) { return <div role="alert" className="mb-4 flex items-start justify-between gap-3 rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive"><span className="flex gap-2"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />{message}</span>{onRetry ? <Button type="button" size="sm" variant="outline" onClick={onRetry}>Retry</Button> : null}</div>; }
 
 export default function DashboardSettings() {
   const navigate = useNavigate();
@@ -47,34 +48,43 @@ export default function DashboardSettings() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [filters, setFilters] = useState(readSavedFilters);
   const [tab, setTab] = useState(() => ['overview', 'stems', 'accounts'].includes(searchParams.get('tab')) ? searchParams.get('tab') : 'overview');
-  const [summary, setSummary] = useState(null);
-  const [stems, setStems] = useState(null);
-  const [analytics, setAnalytics] = useState(null);
   const [analyticsEnabled, setAnalyticsEnabled] = useState(false);
-  const [summaryMeta, setSummaryMeta] = useState(null);
-  const [navigation, setNavigation] = useState({ cursor: null, history: [], sort: DEFAULT_STEM_SORT });
-  const [loading, setLoading] = useState({ summary: false, stems: false, analytics: false });
-  const [errors, setErrors] = useState({});
   const [portOptions, setPortOptions] = useState([]);
   const [selectedStemId, setSelectedStemId] = useState(null);
   const [stemSearch, setStemSearch] = useState('');
+  const [navigation, setNavigation] = useState(FIRST_STEM_PAGE);
   const [stemTableWide, setStemTableWide] = useState(false);
-  const [aiSearchActive, setAiSearchActive] = useState(false);
-  const [paymentAnalysis, setPaymentAnalysis] = useState(null);
+  const [aiPrompt, setAiPrompt] = useState(null);
   const [ebitEnabled, setEbitEnabled] = useState(false);
-  const aborts = useRef({});
-  const summaryAttemptRef = useRef(null);
-  const stemsAttemptRef = useRef(null);
-  const analyticsAttemptRef = useRef(null);
+  const [financeRevision, setFinanceRevision] = useState(0);
   const dashboardRootRef = useRef(null);
   const insightScrollContainerRef = useRef(null);
   const insightTriggerRef = useRef(null);
   const insightScrollRef = useRef(null);
   const insightWasOpenRef = useRef(false);
-  const skipNextStemAutoLoadRef = useRef(false);
-  const { cancelPendingUpdates } = useNavigationAwareRequest('operational');
-  const filterPayload = useMemo(() => dashboardFilterPayload(filters), [filters]);
   const filterKey = useMemo(() => dashboardFilterKey(filters), [filters]);
+  const filterPayload = useMemo(() => JSON.parse(filterKey), [filterKey]);
+
+  const stemKey = JSON.stringify([filterKey, stemSearch, navigation.cursor, navigation.sort]);
+  const { snapshot: summarySnapshot, loading: summaryLoading, error: summaryError, load: requestSummary, clear: clearSummary } = useDashboardResource(ebitEnabled ? `${filterKey}:ebit` : filterKey);
+  const { snapshot: stemSnapshot, loading: ordinaryStemLoading, error: ordinaryStemError, load: requestStems, clear: clearStems } = useDashboardResource(stemKey);
+  const { snapshot: analyticsSnapshot, loading: analyticsLoading, error: analyticsError, load: requestAnalytics, clear: clearAnalytics } = useDashboardResource(filterKey);
+  const { snapshot: aiSnapshot, loading: aiLoading, error: aiError, load: requestAi, clear: clearAi } = useDashboardResource(filterKey);
+  const aiSearch = aiSnapshot?.data.aiSearch;
+  const aiSearchActive = aiPrompt !== null;
+  const aiReady = aiSearchActive && aiSearch?.status === 'ready';
+  const aiFailure = aiSearchActive && (aiError || (aiSnapshot && !aiReady && (aiSearch?.clarification?.question || 'AI search needs a more specific request.')));
+  const paymentAnalysis = aiReady ? aiSnapshot.data.paymentAnalysis : null;
+  const summary = summarySnapshot?.data;
+  const analytics = analyticsSnapshot?.data;
+  const currentAnalytics = analyticsLoading || analyticsError ? null : analytics;
+  const stems = aiSearchActive ? (aiReady ? aiSnapshot.data : null) : stemSnapshot?.data;
+  const stemLoading = aiSearchActive ? aiLoading : ordinaryStemLoading;
+  const stemError = aiSearchActive ? aiFailure : ordinaryStemError;
+  const stemReady = Boolean(stems && !stemLoading && !stemError);
+  const stemScope = aiSearchActive ? aiSnapshot : stemKey;
+  const displayedStemId = stemReady && selectedStemId?.scope === stemScope ? selectedStemId.id : null;
+
   const exportScopeLabels = useMemo(() => ({
     counterparty: filters.counterparty?.name || filters.company || filters.group || 'All',
     port: filters.port || 'All',
@@ -90,9 +100,9 @@ export default function DashboardSettings() {
     productVolumeKpi,
     productVolumeUnit,
     monthlyVolumeAxisUnit,
-    comparisonByCurrency: analytics?.comparisonByCurrency || summary.comparisonByCurrency,
-    priorPeriod: analytics?.priorPeriod || summary.priorPeriod,
-  } : summary, [analytics?.comparisonByCurrency, analytics?.priorPeriod, monthlyVolumeAxisUnit, productVolumeKpi, productVolumeUnit, summary]);
+    comparisonByCurrency: currentAnalytics?.comparisonByCurrency || summary.comparisonByCurrency,
+    priorPeriod: currentAnalytics?.priorPeriod || summary.priorPeriod,
+  } : summary, [currentAnalytics?.comparisonByCurrency, currentAnalytics?.priorPeriod, monthlyVolumeAxisUnit, productVolumeKpi, productVolumeUnit, summary]);
   const insightQuery = useMemo(() => {
     const accountId = searchParams.get('insightAccountId') || '';
     const role = ['buyer', 'supplier', 'group', 'both'].includes(searchParams.get('insightRole')) ? searchParams.get('insightRole') : 'buyer';
@@ -137,104 +147,40 @@ export default function DashboardSettings() {
   useEffect(() => { localStorage.setItem(DASHBOARD_FILTER_STORAGE_KEY, JSON.stringify(filters)); }, [filters]);
   useEffect(() => { let live = true; appClient.functions.invoke('dashboardFilterOptions', { optionType: 'ports' }, { cache: true, cacheTtlMs: 300_000 }).then((ports) => { if (live) setPortOptions(normaliseOptions(ports.data)); }); return () => { live = false; }; }, []);
 
-  const invoke = useCallback(async (key, handler, payload, { force = false } = {}) => {
-    aborts.current[key]?.abort();
-    const controller = new AbortController();
-    aborts.current[key] = controller;
-    const result = await appClient.functions.invoke(handler, payload, { cache: true, cacheTtlMs: 30_000, signal: controller.signal, cacheTags: ['dashboard'], force });
-    if (controller.signal.aborted) return { result: null, controller };
-    if (result.data?.error) throw new Error(result.data.error);
-    return { result, controller };
-  }, []);
-
-  const loadSummary = useCallback(async ({ force = false } = {}) => {
-    const attempt = { filterKey, ebitEnabled };
-    summaryAttemptRef.current = attempt;
-    setLoading((value) => ({ ...value, summary: true }));
-    setErrors((value) => ({ ...value, summary: null }));
-    let request;
-    try {
-      request = await invoke('summary', 'dashboardSummary', ebitEnabled ? { ...filterPayload, includeFinanceCosts: true } : filterPayload, { force });
-      if (request.result && summaryAttemptRef.current === attempt) {
-        setSummary(request.result.data);
-        setSummaryMeta(request.result.meta);
-      }
-    } catch (error) {
-      if (error.name !== 'AbortError' && summaryAttemptRef.current === attempt) setErrors((value) => ({ ...value, summary: error.message || 'Dashboard summary could not be loaded.' }));
-    } finally {
-      if (summaryAttemptRef.current === attempt) setLoading((value) => ({ ...value, summary: false }));
-    }
-  }, [ebitEnabled, filterKey, filterPayload, invoke]);
-  const loadStems = useCallback(async ({ cursor = null, history = [], sort = DEFAULT_STEM_SORT, search = stemSearch, force = false } = {}) => {
-    const attempt = { filterKey, cursor, search, sort };
-    stemsAttemptRef.current = attempt;
-    setLoading((value) => ({ ...value, stems: true }));
-    setErrors((value) => ({ ...value, stems: null }));
-    let request;
-    try {
-      request = await invoke('stems', 'dashboardStemList', { ...filterPayload, cursor, pageSize: STEM_PAGE_SIZE, sort, search: search || null }, { force });
-      if (request.result && stemsAttemptRef.current === attempt) {
-        setStems({ ...request.result.data, page: history.length + 1, previousCursor: history.at(-1) ?? null });
-        setNavigation({ cursor, history, sort: request.result.data.sort || sort });
-      }
-    } catch (error) {
-      if (error.name !== 'AbortError' && stemsAttemptRef.current === attempt) setErrors((value) => ({ ...value, stems: error.message || 'STEMs could not be loaded.' }));
-    } finally {
-      if (stemsAttemptRef.current === attempt) setLoading((value) => ({ ...value, stems: false }));
-    }
-  }, [filterKey, filterPayload, invoke, stemSearch]);
+  const loadSummary = useCallback((options) => requestSummary('dashboardSummary',
+    ebitEnabled ? { ...filterPayload, includeFinanceCosts: true } : filterPayload, options
+  ), [ebitEnabled, filterPayload, requestSummary]);
+  const loadStems = useCallback((options) => requestStems('dashboardStemList', {
+    ...filterPayload, cursor: navigation.cursor, pageSize: STEM_PAGE_SIZE, sort: navigation.sort, search: stemSearch || null,
+  }, options), [filterPayload, navigation.cursor, navigation.sort, requestStems, stemSearch]);
+  const loadAnalytics = useCallback(({ force = false } = {}) => requestAnalytics('dashboardAnalytics', filterPayload, {
+    force, once: true,
+  }), [filterPayload, requestAnalytics]);
   const refreshFinanceSummary = useCallback(() => {
-    summaryAttemptRef.current = null;
-    aborts.current.summary?.abort();
-    setSummary((value) => value ? { ...value, finance: null } : value);
-    void loadSummary({ force: true });
+    setFinanceRevision((revision) => revision + 1);
+    void loadSummary({ force: true, retain: false });
   }, [loadSummary]);
-  const loadAnalytics = useCallback(async ({ force = false } = {}) => {
-    // A failed attempt stays settled until Retry, Refresh, or a filter change.
-    // Loading state must not recreate the callback used by the child's effect.
-    if (!force && analyticsAttemptRef.current?.filterKey === filterKey) return;
-    const attempt = { filterKey };
-    analyticsAttemptRef.current = attempt;
-    setAnalytics((value) => value?.filterKey === filterKey ? value : null);
-    setLoading((value) => ({ ...value, analytics: true }));
-    setErrors((value) => ({ ...value, analytics: null }));
-    try {
-      const request = await invoke('analytics', 'dashboardAnalytics', filterPayload, { force });
-      if (request.result && analyticsAttemptRef.current === attempt) setAnalytics({ ...request.result.data, filterKey });
-    } catch (error) {
-      if (error.name !== 'AbortError' && analyticsAttemptRef.current === attempt) {
-        setErrors((value) => ({ ...value, analytics: error.message || 'Analytics could not be loaded.' }));
-      }
-    } finally {
-      if (analyticsAttemptRef.current === attempt) setLoading((value) => ({ ...value, analytics: false }));
-    }
-  }, [filterKey, filterPayload, invoke]);
-  const runAiSearch = useCallback(async (prompt) => {
-    setErrors((value) => ({ ...value, ai: null }));
-    try {
-      const request = await invoke('ai', 'dashboardAiSearch', { prompt, selectedYears: filters.selectedYears, selectedMonths: filters.selectedMonths, filterSpec: filterPayload });
-      if (!request.result) return;
-      const aiSearch = request.result.data?.aiSearch;
-      if (aiSearch?.status !== 'ready') {
-        setErrors((value) => ({ ...value, ai: aiSearch?.clarification?.question || 'AI search needs a more specific request.' }));
-        return;
-      }
-      aborts.current.stems?.abort();
-      setLoading((value) => ({ ...value, stems: false }));
-      setAiSearchActive(true);
-      setStemSearch('');
-      setPaymentAnalysis(request.result.data.paymentAnalysis ? { ...request.result.data.paymentAnalysis, periodLabel: aiSearch.dateScope?.label } : null);
-      const rows = request.result.data.recentStems || request.result.data.stems || [];
-      setStems({ stems: rows, matchingCount: aiSearch.matchedCount, page: 1, pageSize: rows.length, nextCursor: null, aiSearch });
-      setNavigation((value) => ({ ...value, cursor: null, history: [] }));
-      setTab('stems');
-    } catch (error) {
-      if (error.name !== 'AbortError') setErrors((value) => ({ ...value, ai: error.message || 'AI search is unavailable.' }));
-    }
-  }, [filterPayload, filters.selectedMonths, filters.selectedYears, invoke]);
+  const runAiSearch = useCallback(async (prompt, { force = false } = {}) => {
+    clearStems();
+    setSelectedStemId(null);
+    setAiPrompt(prompt);
+    setStemSearch('');
+    setNavigation(FIRST_STEM_PAGE);
+    const snapshot = await requestAi('dashboardAiSearch', {
+      prompt, selectedYears: filters.selectedYears, selectedMonths: filters.selectedMonths, filterSpec: filterPayload,
+    }, { force, retain: false });
+    if (snapshot?.data.aiSearch?.status === 'ready') setTab('stems');
+  }, [clearStems, filterPayload, filters.selectedMonths, filters.selectedYears, requestAi]);
 
-  useEffect(() => { const timer = window.setTimeout(() => loadSummary(), 220); return () => window.clearTimeout(timer); }, [filterKey, loadSummary]);
-  useEffect(() => { if (aiSearchActive) return undefined; if (skipNextStemAutoLoadRef.current) { skipNextStemAutoLoadRef.current = false; return undefined; } const timer = window.setTimeout(() => loadStems({ cursor: null, history: [], sort: DEFAULT_STEM_SORT }), 220); return () => window.clearTimeout(timer); }, [aiSearchActive, filterKey, loadStems]);
+  useEffect(() => {
+    const timer = window.setTimeout(loadSummary, 220);
+    return () => window.clearTimeout(timer);
+  }, [loadSummary]);
+  useEffect(() => {
+    if (aiSearchActive) return undefined;
+    const timer = window.setTimeout(loadStems, 220);
+    return () => window.clearTimeout(timer);
+  }, [aiSearchActive, loadStems]);
   useEffect(() => {
     if (!ebitEnabled) return undefined;
     const refreshIfDateChanged = () => {
@@ -253,7 +199,6 @@ export default function DashboardSettings() {
     };
   }, [ebitEnabled, refreshFinanceSummary, summary?.finance?.asOfDate]);
   useEffect(() => { if (summary && !analyticsEnabled) setAnalyticsEnabled(true); }, [analyticsEnabled, summary]);
-  useEffect(() => () => { analyticsAttemptRef.current = null; summaryAttemptRef.current = null; stemsAttemptRef.current = null; Object.values(aborts.current).forEach((controller) => controller?.abort()); }, []);
   useEffect(() => {
     const open = Boolean(insightQuery.accountId);
     if (insightWasOpenRef.current && !open) {
@@ -269,24 +214,38 @@ export default function DashboardSettings() {
     }
     insightWasOpenRef.current = open;
   }, [insightQuery.accountId]);
-  const changeFilters = (next) => { cancelPendingUpdates(); analyticsAttemptRef.current = null; summaryAttemptRef.current = null; stemsAttemptRef.current = null; Object.values(aborts.current).forEach((controller) => controller?.abort()); const merged = normalizeDashboardFilters(next); if (merged.datePreset !== filters.datePreset && merged.datePreset !== 'custom') Object.assign(merged, presetDashboardPeriod(merged.datePreset)); if (ebitEnabled) setSummary((value) => value ? { ...value, finance: null } : value); setAiSearchActive(false); setFilters(merged); };
-  const changeEbit = useCallback((enabled) => {
-    const next = enabled === true;
-    summaryAttemptRef.current = null;
-    aborts.current.summary?.abort();
-    setErrors((value) => ({ ...value, summary: null }));
-    setSummary((value) => value ? { ...value, finance: null } : value);
-    setLoading((value) => ({ ...value, summary: true }));
-    setEbitEnabled(next);
-  }, []);
-  const submitStemSearch = useCallback((value) => {
-    const search = String(value || '').trim();
+  const changeFilters = (next) => {
+    const merged = normalizeDashboardFilters(next);
+    if (merged.datePreset !== filters.datePreset && merged.datePreset !== 'custom') Object.assign(merged, presetDashboardPeriod(merged.datePreset));
+    if (dashboardFilterKey(merged) !== filterKey) {
+      clearSummary();
+      clearAnalytics();
+      clearStems();
+      clearAi();
+      setAiPrompt(null);
+      setNavigation(FIRST_STEM_PAGE);
+      setSelectedStemId(null);
+      if (insightQuery.accountId) {
+        const params = new URLSearchParams(searchParams);
+        INSIGHT_QUERY_KEYS.forEach((key) => params.delete(key));
+        setSearchParams(params, { replace: true });
+      }
+    }
+    setFilters(merged);
+  };
+  const changeEbit = (enabled) => {
+    clearSummary();
+    setEbitEnabled(enabled === true);
+  };
+  const changeStemSelection = ({ search = stemSearch, page = FIRST_STEM_PAGE } = {}) => {
+    if (!aiSearchActive && search === stemSearch && page === navigation) return;
+    clearAi();
+    clearStems();
+    setAiPrompt(null);
+    setSelectedStemId(null);
     setStemSearch(search);
-    if (!aiSearchActive) return;
-    skipNextStemAutoLoadRef.current = true;
-    setAiSearchActive(false);
-    loadStems({ cursor: null, history: [], sort: DEFAULT_STEM_SORT, search });
-  }, [aiSearchActive, loadStems]);
+    setNavigation(page);
+  };
   const openAccount = useCallback((account, initialTab = 'overview', trigger = null) => {
     if (!account?.accountId) return;
     insightTriggerRef.current = trigger || document.activeElement;
@@ -332,14 +291,47 @@ export default function DashboardSettings() {
     next.set('tab', 'accounts');
     navigate({ pathname: '/', search: `?${next.toString()}` }, { replace: true, state: null });
   }, [location.state, navigate, searchParams]);
-  const refresh = () => { if (aiSearchActive) skipNextStemAutoLoadRef.current = true; setAiSearchActive(false); if (ebitEnabled) setSummary((value) => value ? { ...value, finance: null } : value); loadSummary({ force: true }); loadStems({ cursor: aiSearchActive ? null : navigation.cursor, history: aiSearchActive ? [] : navigation.history, sort: aiSearchActive ? DEFAULT_STEM_SORT : navigation.sort, force: true }); if ((tab === 'overview' && analyticsEnabled) || tab === 'accounts') loadAnalytics({ force: true }); };
+  const refresh = () => {
+    setSelectedStemId(null);
+    if (ebitEnabled) refreshFinanceSummary();
+    else void loadSummary({ force: true });
+    if (aiSearchActive) changeStemSelection({ search: '' });
+    else void loadStems({ force: true });
+    if ((tab === 'overview' && analyticsEnabled) || tab === 'accounts') void loadAnalytics({ force: true });
+  };
 
-  return <main ref={dashboardRootRef} className={`workspace-page workspace-dashboard mx-auto p-3 transition-[max-width] duration-200 sm:p-6 lg:p-8 ${stemTableWide && tab === 'stems' ? 'workspace-page-wide max-w-none' : 'max-w-[1600px]'}`}><PageHeader inlineMeta icon={Building2} title="Dashboard" meta={<span className="flex flex-wrap items-center gap-2">{summaryMeta ? <DataStatus meta={summaryMeta} label="Data" compact /> : <span>Loading current decision data</span>}<PaymentDataReliabilityBadge />{loading.summary && summary ? <span className="text-xs text-muted-foreground">Updating without clearing results…</span> : null}</span>} actions={<><PageMethodology {...DASHBOARD_METHODOLOGY} /><Button type="button" size="sm" variant="outline" onClick={refresh} disabled={loading.summary || loading.stems}><RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading.summary || loading.stems ? 'animate-spin' : ''}`} />Refresh</Button></>} />
-    <DashboardFilterBar showPerspective={tab !== 'accounts'} filters={filters} years={years} portOptions={portOptions} loading={loading.summary || loading.stems} onChange={changeFilters} onReset={() => changeFilters(normalizeDashboardFilters({ ...presetDashboardPeriod('year_to_date'), datePreset: 'year_to_date' }))} onAiSearch={runAiSearch} />
-    {errors.summary ? <ErrorBlock message={errors.summary} onRetry={loadSummary} /> : null}{errors.ai ? <ErrorBlock message={errors.ai} /> : null}<Tabs value={tab} onValueChange={(nextTab) => { setTab(nextTab); const next = new URLSearchParams(searchParams); if (nextTab === 'overview') next.delete('tab'); else next.set('tab', nextTab); setSearchParams(next, { replace: true }); }}><TabsList className="mb-4 w-full justify-start overflow-x-auto"><TabsTrigger value="overview">Overview</TabsTrigger><TabsTrigger value="stems">STEMs</TabsTrigger><TabsTrigger value="accounts">Accounts</TabsTrigger></TabsList>
-      <TabsContent value="overview" className="space-y-4">{!summary && loading.summary ? <div className="dashboard-primary-kpis" role="status" aria-label="Loading Dashboard figures">{[1, 2, 3, 4].map((key) => <div key={key} className="h-32 animate-pulse rounded-xl border border-border bg-muted/40" />)}</div> : <DashboardKpis summary={dashboardKpiSummary} ebitEnabled={ebitEnabled} onEbitChange={changeEbit} financeLoading={ebitEnabled && loading.summary} financeError={ebitEnabled ? errors.summary : null} />}{analyticsEnabled ? <Suspense fallback={<div className="h-56 animate-pulse rounded-xl border border-border bg-card" />}><DashboardAnalytics data={analytics} loading={loading.analytics} error={errors.analytics} onLoad={loadAnalytics} counterpartyMode={filters.counterpartyMode} onAccountClick={(account) => openAccount(account, 'overview')} /></Suspense> : <section className="rounded-xl border border-border bg-card p-4"><h2 className="text-sm font-semibold">Analytics</h2><p className="mt-1 text-xs text-muted-foreground">Load trends and rankings only when you need a deeper view.</p><Button type="button" size="sm" variant="outline" className="mt-3" onClick={() => setAnalyticsEnabled(true)}>Load analytics</Button></section>}</TabsContent>
-      <TabsContent value="stems" className="space-y-4">{errors.stems ? <ErrorBlock message={errors.stems} onRetry={() => loadStems({ cursor: navigation.cursor, history: navigation.history, sort: navigation.sort })} /> : null}{aiSearchActive && paymentAnalysis ? <BuyerPaymentAnalysis result={paymentAnalysis} periodLabel={paymentAnalysis.periodLabel} onAccountClick={(account) => openAccount(account, 'payments')} /> : <DashboardStemTable result={stems} loading={loading.stems} search={stemSearch} wide={stemTableWide} onWideChange={setStemTableWide} exportFilterPayload={filterPayload} exportScopeLabels={exportScopeLabels} includeFinanceCosts={ebitEnabled} aiSearchActive={aiSearchActive} onClearAiSearch={() => submitStemSearch('')} onSearch={submitStemSearch} onPrevious={() => loadStems({ cursor: navigation.history.at(-1) ?? null, history: navigation.history.slice(0, -1), sort: navigation.sort })} onNext={() => loadStems({ cursor: stems?.nextCursor ?? stems?.pagination?.nextCursor, history: [...navigation.history, navigation.cursor], sort: navigation.sort })} onSortChange={(sort) => { if (aiSearchActive) skipNextStemAutoLoadRef.current = true; setAiSearchActive(false); loadStems({ cursor: null, history: [], sort }); }} onStemClick={(row) => setSelectedStemId(row.Id ?? row.id)} onAccountClick={(account) => openAccount(account, 'overview')} />}</TabsContent>
-      <TabsContent value="accounts" className="space-y-5"><Suspense fallback={<div className="h-48 animate-pulse rounded-xl border border-border bg-card" />}><AccountCreditDirectory counterparty={filterPayload.counterparty} dateWindows={filterPayload.dateWindows} disputeOnly={filterPayload.disputeOnly} filters={filterPayload.filters} onOpen={openAccount} /></Suspense></TabsContent></Tabs>
-    <StemDetailModal stemId={selectedStemId} open={Boolean(selectedStemId)} onClose={() => setSelectedStemId(null)} />
+  return <main ref={dashboardRootRef} className={`workspace-page workspace-dashboard mx-auto p-3 transition-[max-width] duration-200 sm:p-6 lg:p-8 ${stemTableWide && tab === 'stems' ? 'workspace-page-wide max-w-none' : 'max-w-[1600px]'}`}><PageHeader inlineMeta icon={Building2} title="Dashboard" meta={<span className="flex flex-wrap items-center gap-2"><DataStatus meta={summarySnapshot?.meta} label="Data" state={summaryError ? (summary ? 'stale_error' : 'unavailable') : summaryLoading ? 'refreshing' : undefined} /><PaymentDataReliabilityBadge /></span>} actions={<><PageMethodology {...DASHBOARD_METHODOLOGY} /><Button type="button" size="sm" variant="outline" onClick={refresh} disabled={summaryLoading || stemLoading}><RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${summaryLoading || stemLoading ? 'animate-spin' : ''}`} />Refresh</Button></>} />
+    <DashboardFilterBar showPerspective={tab !== 'accounts'} filters={filters} years={years} portOptions={portOptions} loading={summaryLoading || stemLoading} onChange={changeFilters} onReset={() => changeFilters(normalizeDashboardFilters({ ...presetDashboardPeriod('year_to_date'), datePreset: 'year_to_date' }))} onAiSearch={runAiSearch} />
+    {summaryError ? <ErrorBlock message={summaryError} onRetry={() => loadSummary({ force: true })} /> : null}
+    {tab !== 'stems' && aiFailure ? <ErrorBlock message={aiFailure} onRetry={() => runAiSearch(aiPrompt, { force: true })} /> : null}
+    <Tabs value={tab} onValueChange={(nextTab) => { setTab(nextTab); const next = new URLSearchParams(searchParams); if (nextTab === 'overview') next.delete('tab'); else next.set('tab', nextTab); setSearchParams(next, { replace: true }); }}>
+      <TabsList className="mb-4 w-full justify-start overflow-x-auto"><TabsTrigger value="overview">Overview</TabsTrigger><TabsTrigger value="stems">STEMs</TabsTrigger><TabsTrigger value="accounts">Accounts</TabsTrigger></TabsList>
+      <TabsContent value="overview" className="space-y-4">
+        {!summary && summaryLoading && !ebitEnabled ? <div className="dashboard-primary-kpis" role="status" aria-label="Loading Dashboard figures">{[1, 2, 3, 4].map((key) => <div key={key} className="h-32 animate-pulse rounded-xl border border-border bg-muted/40" />)}</div> : <DashboardKpis summary={dashboardKpiSummary} ebitEnabled={ebitEnabled} onEbitChange={changeEbit} financeLoading={ebitEnabled && summaryLoading} financeError={ebitEnabled ? summaryError : null} />}
+        {analyticsEnabled ? <Suspense fallback={<div className="h-56 animate-pulse rounded-xl border border-border bg-card" />}>
+          <DashboardAnalytics data={analytics} meta={analyticsSnapshot?.meta} loading={analyticsLoading} error={analyticsError} onLoad={loadAnalytics} counterpartyMode={filters.counterpartyMode} onAccountClick={(account) => openAccount(account, 'overview')} />
+        </Suspense> : <section className="rounded-xl border border-border bg-card p-4"><h2 className="text-sm font-semibold">Analytics</h2><p className="mt-1 text-xs text-muted-foreground">Load trends and rankings only when you need a deeper view.</p><Button type="button" size="sm" variant="outline" className="mt-3" onClick={() => setAnalyticsEnabled(true)}>Load analytics</Button></section>}
+      </TabsContent>
+      <TabsContent value="stems" className="space-y-4">
+        {stemError ? <ErrorBlock message={stemError} onRetry={() => aiSearchActive ? runAiSearch(aiPrompt, { force: true }) : loadStems({ force: true })} /> : null}
+        {paymentAnalysis ? <BuyerPaymentAnalysis result={paymentAnalysis} periodLabel={aiSearch.dateScope?.label} onAccountClick={(account) => openAccount(account, 'payments')} /> : <DashboardStemTable
+          result={aiReady ? { stems: stems.recentStems || stems.stems, matchingCount: aiSearch.matchedCount, pageSize: (stems.recentStems || stems.stems || []).length, aiSearch } : stems}
+          loading={stemLoading} error={stemError} meta={aiSearchActive ? aiSnapshot?.meta : stemSnapshot?.meta}
+          page={navigation.history.length + 1} hasPrevious={navigation.history.length > 0}
+          search={stemSearch} wide={stemTableWide} onWideChange={setStemTableWide}
+          exportFilterPayload={filterPayload} exportScopeLabels={exportScopeLabels} includeFinanceCosts={ebitEnabled}
+          exportScope={JSON.stringify([stemKey, financeRevision])} exportReady={!ebitEnabled || Boolean(summary && !summaryLoading && !summaryError)}
+          aiSearchActive={aiSearchActive} onClearAiSearch={() => changeStemSelection({ search: '' })}
+          onSearch={(search) => { if (aiSearchActive || search !== stemSearch) changeStemSelection({ search }); }}
+          onPrevious={() => changeStemSelection({ page: { ...navigation, cursor: navigation.history.at(-1) ?? null, history: navigation.history.slice(0, -1) } })}
+          onNext={() => changeStemSelection({ page: { ...navigation, cursor: stems.nextCursor ?? stems.pagination?.nextCursor, history: [...navigation.history, navigation.cursor] } })}
+          onSortChange={(sort) => changeStemSelection({ page: { ...FIRST_STEM_PAGE, sort } })}
+          onStemClick={(row) => setSelectedStemId({ id: row.Id ?? row.id, scope: stemScope })}
+          onAccountClick={(account) => openAccount(account, 'overview')}
+        />}
+      </TabsContent>
+      <TabsContent value="accounts" className="space-y-5"><Suspense fallback={<div className="h-48 animate-pulse rounded-xl border border-border bg-card" />}><AccountCreditDirectory counterparty={filterPayload.counterparty} dateWindows={filterPayload.dateWindows} disputeOnly={filterPayload.disputeOnly} filters={filterPayload.filters} onOpen={openAccount} /></Suspense></TabsContent>
+    </Tabs>
+    {displayedStemId ? <StemDetailModal stemId={displayedStemId} open onClose={() => setSelectedStemId(null)} /> : null}
     {insightQuery.account ? <Suspense fallback={null}><AccountInsightModal account={insightQuery.account} open onClose={closeAccountInsight} selectedYears={insightQuery.years.length ? insightQuery.years : filters.selectedYears} selectedMonths={insightQuery.months.length ? insightQuery.months : filters.selectedMonths} dashboardScope={insightDashboardScope} initialPeriodMode={insightQuery.period} onViewChange={updateAccountInsightView} /></Suspense> : null}</main>;
 }
