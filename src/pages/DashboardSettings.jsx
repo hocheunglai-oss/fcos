@@ -98,6 +98,9 @@ export default function DashboardSettings() {
     const role = ['buyer', 'supplier', 'group', 'both'].includes(searchParams.get('insightRole')) ? searchParams.get('insightRole') : 'buyer';
     const roles = splitQueryList(searchParams.get('insightRoles')).filter((item) => item === 'buyer' || item === 'supplier');
     const statementSide = ['both', 'buyer', 'supplier'].includes(searchParams.get('insightStatementSide')) ? searchParams.get('insightStatementSide') : undefined;
+    const mode = searchParams.get('insightKoreaDeskMode');
+    const geographicCodes = (key, legacyMode) => splitQueryList(searchParams.get(key))
+      .filter((country) => mode !== legacyMode || country.toUpperCase() !== 'KOREA');
     return {
       accountId,
       account: accountId ? { accountId, name: searchParams.get('insightName') || 'Account', role, roles, statementSide, entityType: searchParams.get('insightEntityType') === 'group' ? 'group' : 'account', initialTab: ['overview', 'trading', 'payments', 'risk', 'stems', 'credit', 'children'].includes(searchParams.get('insightTab')) ? searchParams.get('insightTab') : 'overview' } : null,
@@ -110,11 +113,11 @@ export default function DashboardSettings() {
         accountIds: splitQueryList(searchParams.get('insightAccountIds')),
         supplierIds: splitQueryList(searchParams.get('insightSupplierIds')),
         portIds: splitQueryList(searchParams.get('insightPortIds')),
-        countryCodes: splitQueryList(searchParams.get('insightCountryCodes')).filter((country) => !(searchParams.get('insightKoreaDeskMode') === 'include' && country.toUpperCase() === 'KOREA')),
-        excludedCountryCodes: splitQueryList(searchParams.get('insightExcludedCountryCodes')).filter((country) => !(searchParams.get('insightKoreaDeskMode') === 'exclude' && country.toUpperCase() === 'KOREA')),
-        koreaDeskMode: ['include', 'exclude'].includes(searchParams.get('insightKoreaDeskMode')) ? searchParams.get('insightKoreaDeskMode') : 'all',
+        countryCodes: geographicCodes('insightCountryCodes', 'include'),
+        excludedCountryCodes: geographicCodes('insightExcludedCountryCodes', 'exclude'),
+        koreaDeskMode: mode === 'include' || mode === 'exclude' ? mode : 'all',
       },
-      labels: { company: searchParams.get('insightCompany') || '', group: searchParams.get('insightGroup') || '', port: searchParams.get('insightPort') || '', country: searchParams.get('insightCountry') || '', desk: searchParams.get('insightKoreaDeskMode') === 'include' ? 'Korea Desk' : searchParams.get('insightKoreaDeskMode') === 'exclude' ? 'Exclude Korea Desk' : '' },
+      labels: { company: searchParams.get('insightCompany') || '', group: searchParams.get('insightGroup') || '', port: searchParams.get('insightPort') || '', country: searchParams.get('insightCountry') || '', desk: mode === 'include' ? 'Korea Desk' : mode === 'exclude' ? 'Exclude Korea Desk' : '' },
     };
   }, [searchParams]);
   const insightDashboardScope = useMemo(() => ({ mode: insightQuery.scope, disputeOnly: insightQuery.disputeOnly, filters: insightQuery.filters, labels: insightQuery.labels }), [insightQuery.disputeOnly, insightQuery.filters, insightQuery.labels, insightQuery.scope]);
