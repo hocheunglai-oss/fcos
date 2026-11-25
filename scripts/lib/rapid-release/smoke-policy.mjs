@@ -40,3 +40,15 @@ export const CI_DENIAL_PROBES = Object.freeze([
   ['/api/functions/salesforceDocumentDownload', {}],
   ['/api/work-notifications', {}],
 ].map(([path, body]) => Object.freeze({ path, body: Object.freeze(body) })));
+
+// Closed vocabulary for failure evidence persisted outside the browser process.
+export const SMOKE_BROWSER_DIAGNOSTIC_KINDS = Object.freeze(['gate_denial', 'runtime_error', 'websocket', 'cdp_failure', 'unknown']);
+export const SMOKE_BROWSER_DIAGNOSTIC_ROLES = Object.freeze(['restricted', 'normal']);
+export const SMOKE_BROWSER_DIAGNOSTIC_PHASES = Object.freeze(['setup', 'issuer_navigation', 'sign_in', 'normal_module_reads', 'baseline', 'desktop', 'restricted_access']);
+export function isSafeSmokeBrowserDiagnostic(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    && Object.keys(value).length === 3 && Object.keys(value).every(key => ['kind', 'role', 'phase'].includes(key))
+    && SMOKE_BROWSER_DIAGNOSTIC_KINDS.includes(value.kind)
+    && SMOKE_BROWSER_DIAGNOSTIC_ROLES.includes(value.role)
+    && SMOKE_BROWSER_DIAGNOSTIC_PHASES.includes(value.phase);
+}

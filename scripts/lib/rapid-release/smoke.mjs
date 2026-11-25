@@ -175,7 +175,7 @@ function assertIdentity(auth, credentials, normal, modules) {
 const cleanLaunchEnvironment = env => Object.fromEntries(['PATH', 'HOME', 'TMPDIR', 'TMP', 'TEMP', 'LANG', 'LC_ALL', 'TZ', 'DISPLAY', 'XAUTHORITY', 'PLAYWRIGHT_BROWSERS_PATH']
   .filter(key => typeof env[key] === 'string').map(key => [key, env[key]]));
 
-async function installGate(context, policy, onAuthRequest) {
+async function installGate(context, policy, onAuthRequest, signals) {
   let page, gateFailed = false, blocked = 0, excludedTelemetry = 0, excludedBackgroundSync = 0, excludedAutoReconciliation = 0, excludedExternalMappings = 0;
   const excludedOptionalReads = new Set();
   const allowed = request => {
@@ -199,7 +199,7 @@ async function installGate(context, policy, onAuthRequest) {
       if (exclusion) { excludedOptionalReads.add(exclusion); return false; }
       if (stagedBrowserRequestAllowed(request, policy)) return true;
     } catch { /* Only fixed failure labels leave the harness. */ }
-    blocked++; return false;
+    blocked++; signals.gate_denial = true; return false;
   };
   await context.route('**/*', async route => {
     let ownPage = false;
@@ -208,18 +208,21 @@ async function installGate(context, policy, onAuthRequest) {
     if (route.request().url() === `${policy.origin}/api/functions/authContext` && route.request().method() === 'POST' && await onAuthRequest(route)) return;
     return route.continue();
   });
-  await context.routeWebSocket('**/*', socket => { blocked++; socket.close({ code: 1008, reason: 'Read-only release verification' }); });
+  await context.routeWebSocket('**/*', socket => { blocked++; signals.websocket = true; socket.close({ code: 1008, reason: 'Read-only release verification' }); });
   page = await context.newPage();
-  page.on('pageerror', () => { gateFailed = true; });
-  const native = await context.newCDPSession(page);
+  page.on('pageerror', () => { gateFailed = true; signals.runtime_error = true; });
+  let native;
+  try { native = await context.newCDPSession(page); }
+  catch (error) { signals.cdp_failure = true; throw error; }
   native.on('Fetch.requestPaused', async event => {
     const request = { url: () => event.request.url, method: () => event.request.method, headers: () => event.request.headers,
       postData: () => event.request.postData, resourceType: () => String(event.resourceType).toLowerCase() };
     const permitted = allowed(request);
     try { await native.send(permitted ? 'Fetch.continueRequest' : 'Fetch.failRequest', permitted ? { requestId: event.requestId } : { requestId: event.requestId, errorReason: 'BlockedByClient' }); }
-    catch { gateFailed = true; await context.close().catch(() => {}); }
+    catch { gateFailed = true; signals.cdp_failure = true; await context.close().catch(() => {}); }
   });
-  await native.send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] });
+  try { await native.send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] }); }
+  catch (error) { signals.cdp_failure = true; throw error; }
   return { page, assertHealthy: () => requireFact(!gateFailed && blocked === 0, 'SMOKE_BROWSER_NETWORK_OR_RUNTIME_FAILURE'),
     summary: () => ({ blockedRequests: blocked, excludedTelemetry, excludedBackgroundSync, excludedAutoReconciliation, excludedExternalMappings,
       excludedFeatures: ['speed_insights', ...(excludedBackgroundSync ? ['automatic_mailbox_sync'] : []), ...(excludedAutoReconciliation ? ['automatic_payment_reconciliation'] : []), ...(excludedExternalMappings ? ['external_xero_mapping_options'] : []), ...[...excludedOptionalReads].sort()] }) };
@@ -474,6 +477,7 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
     return receipt;
   }
   let phase = 'SETUP';
+  const signals = { gate_denial: false, runtime_error: false, websocket: false, cdp_failure: false };
   let browser, context, gate, privateEnv, readNormalModules, companyFxHistory, supplierBucketVerified, groupedPetroleumVerified;
   let tradingFxVerified, signingRateDigest, existingDraftDenialsVerified, cleanupFailed = false;
   let denialReceipts = [], extraReads = [], desktopChecks = [], authProbed = false, probeError, rejectProbe, resolveProbe;
@@ -548,7 +552,7 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
         finally { resolveProbe(); }
       }
       return true;
-    });
+    }, signals);
     const page = gate.page;
     phase = 'ISSUER_NAVIGATION';
     await page.goto(`${origin}/login`, { waitUntil: 'domcontentloaded', timeout: 45000 });
@@ -626,8 +630,14 @@ async function browserRun({ origin, manifest, credentials, normal, modules, env,
     const cause = probeError || error;
     // A context deliberately closed by the request gate is a hard failure.
     // Keep it distinct from an interruption of a healthy, read-only browser.
-    if (isClosedMarketsNavigation(cause)) gate.assertHealthy();
-    const failure = fail(/^(?:SMOKE_|NORMAL_ROLE_)[A-Z0-9_]+$/.test(cause?.code || '') ? cause.code : `SMOKE_BROWSER_${phase}_FAILED`);
+    let effectiveCause = cause;
+    if (isClosedMarketsNavigation(cause)) {
+      try { gate.assertHealthy(); } catch (gateError) { effectiveCause = gateError; }
+    }
+    const failure = fail(/^(?:SMOKE_|NORMAL_ROLE_)[A-Z0-9_]+$/.test(effectiveCause?.code || '') ? effectiveCause.code : `SMOKE_BROWSER_${phase}_FAILED`);
+    const kind = ['cdp_failure', 'runtime_error', 'websocket', 'gate_denial'].find(value => signals[value]) || 'unknown';
+    const diagnosticPhase = phase.startsWith('BASELINE_') ? 'baseline' : phase.startsWith('DESKTOP_') ? 'desktop' : phase.toLowerCase();
+    failure.smokeBrowserDiagnostic = { kind, role: normal ? 'normal' : 'restricted', phase: diagnosticPhase };
     if (Object.hasOwn(moduleReaders, cause?.smokeModule) && ['read', 'desktop'].includes(cause.smokeSurface)) {
       Object.assign(failure, { smokeModule: cause.smokeModule, smokeSurface: cause.smokeSurface });
       if (failure.code === 'SMOKE_BASELINE_NAVIGATION_FAILED' && BASELINE_NAVIGATION_CATEGORIES.includes(cause.smokeNavigationCategory)) {

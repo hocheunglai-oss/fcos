@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier } from '../config/fcosConnections.js';
 import { APP_MODULES } from '../src/lib/authModules.js';
 import { MODULE_READERS, MODULE_SURFACES, moduleReadBody, moduleReaderPayloadVerified } from '../scripts/lib/rapid-release/normal-role-readers.mjs';
+import { isSafeSmokeBrowserDiagnostic } from '../scripts/lib/rapid-release/smoke-policy.mjs';
 import { FCOS_READ_ONLY_CI as ci } from '../config/fcosCiIdentity.js';
 import { diagnoseStagedSmoke, runPreBootstrapSmoke, runStagedSmoke, observeLive, stagedBrowserRequestAllowed, TRADING_FX_STAGED_DENIAL_HANDLERS } from '../scripts/lib/rapid-release/smoke.mjs';
 
@@ -48,13 +49,13 @@ const readPayloads = {
 
 // Fixtures replace browser/provider transports. They simulate the app-owned
 // bootstrap response and actual response events; they never establish live proof.
-function browserFixture({ badIdentity = false, badRead = false, badDenial = false, unexpected = false, missingModule = false, background = false, optionalRequest = null, badPayload = false, badDesktop = false, deniedModule = null, role = 'manager', companyFxRows = undefined, supplierBoundaryRegression = null, groupedBoundaryRegression = false, groupedDesktopMissing = false, tradingFxRouteRegression = false, tradingFxActionVisible = false, existingDraftActionVisible = false, existingDraftRouteRegression = false, marketReadTimeouts = 0, marketResponseStatus = 200, marketNavigationError = null, marketPageClosed = false, closeFirstMarketsFor = null, nativeGateFailure = false, failContextCleanup = false, moduleReadTimeouts = {} } = {}) {
+function browserFixture({ badIdentity = false, badRead = false, badDenial = false, unexpected = false, missingModule = false, background = false, optionalRequest = null, badPayload = false, badDesktop = false, deniedModule = null, role = 'manager', companyFxRows = undefined, supplierBoundaryRegression = null, groupedBoundaryRegression = false, groupedDesktopMissing = false, tradingFxRouteRegression = false, tradingFxActionVisible = false, existingDraftActionVisible = false, existingDraftRouteRegression = false, marketReadTimeouts = 0, marketResponseStatus = 200, marketNavigationError = null, marketPageClosed = false, closeFirstMarketsFor = null, nativeGateFailure = false, runtimeFailure = false, websocketFailure = false, failContextCleanup = false, moduleReadTimeouts = {} } = {}) {
   const observations = { launches: [], reads: [], contextsClosed: 0, browsersClosed: 0, nativeAborts: 0 };
   const remainingTimeouts = { ...moduleReadTimeouts };
   let firstClosure = Boolean(closeFirstMarketsFor);
   const browserFactory = async options => {
     observations.launches.push(options);
-    let routeHandler, pausedHandler, websocketHandler, location = 'about:blank', email = '', password = '';
+    let routeHandler, pausedHandler, websocketHandler, pageErrorHandler, location = 'about:blank', email = '', password = '';
     const responseWaiters = [], urlWaiters = [];
     const changeLocation = value => { location = value; for (const waiter of urlWaiters.splice(0)) { if (waiter.predicate(new URL(location))) waiter.resolve(); else urlWaiters.push(waiter); } };
     const requestOf = (url, method = 'GET', body = {}, type = 'fetch') => ({ url: () => url, method: () => method,
@@ -123,6 +124,8 @@ function browserFixture({ badIdentity = false, badRead = false, badDenial = fals
         if (name === 'Continue with FCUNO') { changeLocation(`${issuer}/admin`); return; }
         assert.equal(name, 'Login');
         assert.ok(password.startsWith('PRIVATE_'));
+        if (runtimeFailure) pageErrorHandler(Error('PRIVATE_RUNTIME_DETAIL'));
+        if (websocketFailure) websocketHandler({ close() {} });
         if (unexpected) await pausedHandler({ requestId: 'unexpected-redirect', request: { url: 'https://unexpected.invalid/collect', method: 'POST', headers: {}, postData: '{}' }, resourceType: 'fetch' });
         if (optionalRequest) await pausedHandler({ requestId: 'optional-read', request: optionalRequest, resourceType: optionalRequest.type || 'XHR' });
         if (background && email !== ci.email) await pausedHandler({ requestId: 'automatic-mailbox-sync', request: { url: `${origin}/api/email-router-background-sync`, method: 'POST', headers: {}, postData: '{}' }, resourceType: 'fetch' });
@@ -133,9 +136,9 @@ function browserFixture({ badIdentity = false, badRead = false, badDenial = fals
     const page = {
       url: () => location,
       isClosed: () => marketPageClosed,
-      on: () => {},
+      on: (name, handler) => { if (name === 'pageerror') pageErrorHandler = handler; },
       waitForLoadState: async () => {}, waitForFunction: async () => {},
-      locator: selector => ({ or() { return this; }, count: async () => badDesktop ? 0 : 1, first() { return this; }, waitFor: async () => { if (badDesktop) throw Error('MISSING_DESKTOP_SURFACE'); }, innerText: async () => badDesktop ? 'Something went wrong' : 'Verified fixture business surface' }),
+      locator: () => ({ or() { return this; }, count: async () => badDesktop ? 0 : 1, first() { return this; }, waitFor: async () => { if (badDesktop) throw Error('MISSING_DESKTOP_SURFACE'); }, innerText: async () => badDesktop ? 'Something went wrong' : 'Verified fixture business surface' }),
       getByText: () => ({ first() { return this; }, waitFor: async () => { if (badDesktop) throw Error('MISSING_DESKTOP_SURFACE'); } }),
       getByRole: (role, options) => locator(role, options.name),
       getByLabel: name => locator('label', name),
@@ -259,6 +262,34 @@ test('closed Markets browser does not retry a request gate or cleanup failure', 
     await assert.rejects(runStagedSmoke({ manifest: manifest(), staged, env,
       fetchImpl: publicFetch(), browserFactory: fixture.browserFactory }), { code });
     assert.equal(fixture.observations.launches.length, 1);
+  }
+});
+
+test('browser diagnostic persistence rejects extra or unrecognized data', () => {
+  const valid = { kind: 'cdp_failure', role: 'restricted', phase: 'baseline' };
+  assert.equal(isSafeSmokeBrowserDiagnostic(valid), true);
+  for (const value of [null, {}, { ...valid, url: 'PRIVATE_URL' }, { ...valid, kind: 'PRIVATE_ERROR' },
+    { ...valid, role: 'PRIVATE_ROLE' }, { ...valid, phase: 'PRIVATE_PHASE' }]) {
+    assert.equal(isSafeSmokeBrowserDiagnostic(value), false);
+  }
+});
+
+test('browser failure details contain only bounded non-sensitive signals', async () => {
+  for (const [options, kind] of [
+    [{ unexpected: true }, 'gate_denial'],
+    [{ runtimeFailure: true }, 'runtime_error'],
+    [{ websocketFailure: true }, 'websocket'],
+    [{ nativeGateFailure: true }, 'cdp_failure'],
+    [{ marketNavigationError: Error('PRIVATE_URL_TOKEN') }, 'unknown'],
+  ]) {
+    const fixture = browserFixture(options);
+    await assert.rejects(runStagedSmoke({ manifest: manifest(), staged, env,
+      fetchImpl: publicFetch(), browserFactory: fixture.browserFactory }), error => {
+      assert.deepEqual(error.smokeBrowserDiagnostic, { kind, role: 'restricted',
+        phase: kind === 'unknown' ? 'baseline' : 'restricted_access' });
+      assert.ok(!JSON.stringify(error).includes('PRIVATE_'));
+      return true;
+    });
   }
 });
 
