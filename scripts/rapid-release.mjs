@@ -3,24 +3,27 @@ import { verifyHostedTradingFxSalesSupportDenial } from './lib/rapid-release/tra
 import { fileURLToPath } from 'node:url';
 import { resolve, join } from 'node:path';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, cpSync } from 'node:fs';
-import { createManifest, changedPaths, digest, git, requireCondition, sourceSnapshot, targets, validateManifest } from './lib/rapid-release/contract.mjs';
+import { approvalWindowOpen, createManifest, changedPaths, digest, git, requireCondition, sourceSnapshot, targets, validateManifest } from './lib/rapid-release/contract.mjs';
 import { assertBuildArtifact, qualityAndBuild } from './lib/rapid-release/build.mjs';
 import { DeploymentJournal, pendingOperations } from './lib/rapid-release/journal.mjs';
 import { improvementSummary } from './lib/rapid-release/learning.mjs';
 import { handleReleaseObstacle } from './lib/rapid-release/improvement-runtime.mjs';
 import { stageRelease, promoteRelease, phaseResult } from './lib/rapid-release/engine.mjs';
-import { githubClient, nativeApproval, verifyExecution, vercelProvider, assertNativeQualityProducer, assertFrozenWorkflow } from './lib/rapid-release/providers.mjs';
+import { githubClient, nativeApproval, verifyExecution, vercelProvider, freshApprovalDisposition, assertNativeQualityProducer, assertFrozenWorkflow } from './lib/rapid-release/providers.mjs';
 import { runPrerequisites, verifyBeforeBootstrap, qualifiedAdapter } from './lib/rapid-release/prerequisites.mjs';
 import { readCandidateModuleInventory } from './lib/rapid-release/modules.mjs';
 import { nativeCompatibilityReader, verifyNativeHandoverDatabase, withPinnedReadOnlyDatabase } from './lib/rapid-release/compatibility.mjs';
 import { hasTradingFxSigningLocator, verifyTradingFxReleaseSigningConfig } from './lib/rapid-release/trading-fx-signing-config.mjs';
 import { readEditorPreflightAttestation } from './lib/rapid-release/salesforce-editor-preflight-transport.mjs';
 
+import { checkApprovalReadiness, planReleaseRecovery } from './lib/rapid-release/recovery.mjs';
+import { isSafeSmokeBrowserDiagnostic } from './lib/rapid-release/smoke-policy.mjs';
+
 const read = path => JSON.parse(readFileSync(resolve(path), 'utf8'));
 const write = (path, value) => { mkdirSync(resolve(path, '..'), { recursive: true }); writeFileSync(resolve(path), `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 }); };
 function options(args) {
   const [command = 'status', ...rest] = args, opts = {};
-  const allowed = new Set(['manifest', 'candidate', 'controller', 'baseline', 'public-environment', 'output', 'build', 'artifact-directory', 'incident', 'registry', 'approach', 'prerequisites']);
+  const allowed = new Set(['manifest', 'candidate', 'controller', 'baseline', 'public-environment', 'output', 'build', 'artifact-directory', 'incident', 'registry', 'approach', 'prerequisites', 'run-id', 'build-run-id']);
   for (let index = 0; index < rest.length; index += 2) {
     const key = rest[index]?.replace(/^--/, '');
     requireCondition(rest[index]?.startsWith('--') && allowed.has(key) && !opts[key] && rest[index + 1] && !rest[index + 1].startsWith('--'), 'CLI_OPTION_INVALID');
@@ -91,6 +94,27 @@ async function rapidReleaseCommand(argv, env, runtime) {
     return { state: 'quality_reused', originalRunId: run.id, buildId: build.buildId, artifactDigest: build.artifactDigest, providerWrites: 0 };
   }
   runtime.journal = journal;
+  if (['approval-check', 'recovery-plan'].includes(command)) {
+    requireCondition(env.GITHUB_ACTIONS !== 'true' && /^[1-9][0-9]*$/.test(opts['run-id'] || ''), 'RECOVERY_OPERATOR_RUN_REQUIRED');
+    // The read-only operator checks must never append recovery events.
+    runtime.journal = undefined;
+    const identity = await github.identity();
+    const bot = await github.read('/users/github-actions%5Bbot%5D');
+    requireCondition(bot.login === 'github-actions[bot]' && Number.isSafeInteger(bot.id), 'JOURNAL_ACTOR_MISMATCH');
+    const recoveryJournal = new DeploymentJournal({ github, actorIds: [identity.user.id, bot.id],
+      releaseId: manifest.releaseId, manifestHash: digest(manifest) });
+    const input = { github, manifest, journal: recoveryJournal, runId: Number(opts['run-id']) };
+    let result;
+    if (command === 'approval-check') result = await checkApprovalReadiness(input);
+    else {
+      requireCondition(/^[1-9][0-9]*$/.test(opts['build-run-id'] || ''), 'PRIOR_QUALITY_ARTIFACT_REQUIRED');
+      const provider = vercelProvider({ manifest, env });
+      result = await planReleaseRecovery({ ...input, provider, readCompatibility: nativeCompatibilityReader({ provider, env }),
+        buildRunId: Number(opts['build-run-id']) });
+    }
+    if (opts.output) write(opts.output, result);
+    return result;
+  }
   if (command === 'status') {
     const records = await journal.read(); return { releaseId: manifest.releaseId, events: records.length,
       pending: pendingOperations(records), latest: records.at(-1)?.payload.event || 'not_started', improvements: improvementSummary(records) };
@@ -144,6 +168,14 @@ async function rapidReleaseCommand(argv, env, runtime) {
     };
     result = await stageRelease({ manifest, journal, provider, build, smoke, verifyStageBaseline, withStageOwnership,
       beforeBootstrap: values => verifyBeforeBootstrap({ ...values, controllerDirectory: controller, env, provider }) });
+    // Keep successful stage receipts on a retry, but stop before GitHub offers
+    // a first-time approval that the frozen controller cannot accept.
+    if (!result.waiting) {
+      const saved = records.find(record => record.payload.event === 'approval.accepted')?.payload.data;
+      const disposition = freshApprovalDisposition({ run: execution.run, manifest, saved });
+      requireCondition(disposition === 'reuse_original_approval'
+        || disposition === 'fresh' && approvalWindowOpen(execution.run.created_at), 'FRESH_NATIVE_APPROVAL_REQUIRED');
+    }
   } else {
     requireCondition(staged, 'STAGED_DEPLOYMENT_REQUIRED');
     const approval = await nativeApproval({ github, manifest, staged, env });
@@ -189,6 +221,16 @@ export async function rapidReleaseMain(argv, env = process.env) {
       result.performanceReview = await recordObstacle(runtime.phase, { code: 'PHASE_PERFORMANCE_BUDGET_EXCEEDED' });
     return result;
   } catch (error) {
+    if (['approval-check', 'recovery-plan'].includes(runtime.phase)) throw error;
+    if (runtime.phase === 'stage' && runtime.opts?.output
+      && (error.code === 'FRESH_NATIVE_APPROVAL_REQUIRED' || isSafeSmokeBrowserDiagnostic(error.smokeBrowserDiagnostic))) {
+      const approvalIneligible = error.code === 'FRESH_NATIVE_APPROVAL_REQUIRED';
+      try {
+        write(runtime.opts.output, { state: 'checkpoint_preserved', passed: false,
+          code: approvalIneligible ? 'FRESH_NATIVE_APPROVAL_REQUIRED' : 'STAGED_BROWSER_FAILURE',
+          ...(approvalIneligible ? { recovery: 'fresh_attempt_one_required' } : { browser: error.smokeBrowserDiagnostic }) });
+      } catch { /* Preserve the original error when runner storage is unavailable. */ }
+    }
     if (runtime.manifest) {
       try {
         const improvement = await recordObstacle(runtime.phase, error);

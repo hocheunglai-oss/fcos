@@ -96,6 +96,11 @@ export async function verifyExecution({ github, manifest, env = process.env, pha
   requireCondition(frozenSetup.type === 'file' && frozenSetup.sha === p.nativeReview.workflowBlobSha, 'NATIVE_HANDOVER_SOURCE_MISMATCH');
   return { user, repo, run, phase, handover: p, handoverDeploymentId: handover.id, workflowProof };
 }
+export function freshApprovalDisposition({ run, manifest, saved }) {
+  if (run.run_attempt === 1) return saved?.runId === run.id ? 'reuse_original_approval' : 'fresh';
+  if (!requiresDeveeDesktopCheckpoint(manifest) && saved?.runId === run.id) return 'reuse_original_approval';
+  return 'fresh_attempt_one_required';
+}
 export async function nativeApproval({ github, manifest, staged, env = process.env }) {
   const { run } = await verifyExecution({ github, manifest, env, phase: 'promote' });
   const deveeDesktop = requiresDeveeDesktopCheckpoint(manifest);
@@ -113,8 +118,9 @@ export async function nativeApproval({ github, manifest, staged, env = process.e
   const identity = await github.identity();
   const journal = new DeploymentJournal({ github, actorIds: [identity.user.id, run.actor.id], releaseId: manifest.releaseId, manifestHash: digest(manifest) });
   const saved = (await journal.read()).find(record => record.payload.event === 'approval.accepted')?.payload.data;
-  if (saved?.runId === run.id) return assertAuthorization(saved, manifest, staged);
-  requireCondition(run.run_attempt === 1, 'FRESH_NATIVE_APPROVAL_REQUIRED');
+  const disposition = freshApprovalDisposition({ run, manifest, saved });
+  if (disposition === 'reuse_original_approval') return assertAuthorization(saved, manifest, staged);
+  requireCondition(disposition === 'fresh', 'FRESH_NATIVE_APPROVAL_REQUIRED');
   const receipt = { manifestHash: digest(manifest), candidateSha: manifest.candidate.sha, buildId: manifest.build.buildId,
     deploymentId: staged.id, previousDeploymentId: manifest.previous.deploymentId, environment: environment.name,
     reviewer: targets().account, nativeReviewVerified: true, runId: Number(env.GITHUB_RUN_ID), approvedAt: run.created_at };
