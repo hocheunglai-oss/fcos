@@ -1,10 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Banknote, CheckCircle2, ClipboardCheck, ListChecks, Loader2, RefreshCw, Scale, ShieldCheck } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { appClient } from '@/api/appClient';
 import { useAuth } from '@/lib/AuthContext';
 import BuyerInvoices from '@/pages/BuyerInvoices';
-import IncomingPayments from '@/pages/IncomingPayments';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -28,9 +27,11 @@ import WorkspaceViewBar from '@/components/common/WorkspaceViewBar';
 import { PAYMENT_COLLECTIONS_METHODOLOGIES } from '@/lib/pageMethodologyIndex';
 import { VARIABLE_CHARGES_USER_MANUAL } from '@/lib/pageUserManualIndex';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
-import VariableCharges from '@/components/payments/VariableCharges';
-import LegacyPaymentDataAudit from '@/components/payments/LegacyPaymentDataAudit';
 import PaymentDataReliabilityBadge from '@/components/common/PaymentDataReliabilityBadge';
+
+const IncomingPayments = lazy(() => import('@/pages/IncomingPayments'));
+const VariableCharges = lazy(() => import('@/components/payments/VariableCharges'));
+const LegacyPaymentDataAudit = lazy(() => import('@/components/payments/LegacyPaymentDataAudit'));
 
 const TABS = [
   { id: 'collections', label: 'Collection Queue', icon: ListChecks, moduleId: 'buyer_invoices' },
@@ -246,9 +247,11 @@ export default function PaymentCollections() {
       </div>
 
       {activeTab === 'collections' && <BuyerInvoices embedded defaultQueueView="needs-action" reconciliationItems={reconciliation?.items || []} dataRefreshToken={collectionDataRefreshToken} />}
-      {activeTab === 'incoming' && <IncomingPayments embedded reconciliationItems={reconciliation?.items || []} />}
-      {activeTab === 'variable-charges' && <VariableCharges onOpenStem={setSelectedStemId} initialStemId={searchParams.get('stemId') || ''} onTaskOpen={openVariableChargeTask} onTaskClose={closeVariableChargeTask} />}
-      {activeTab === 'legacy' && <LegacyPaymentDataAudit />}
+      <Suspense fallback={<p className="p-5 text-sm text-muted-foreground" role="status">Loading payment tab…</p>}>
+        {activeTab === 'incoming' && <IncomingPayments embedded reconciliationItems={reconciliation?.items || []} />}
+        {activeTab === 'variable-charges' && <VariableCharges onOpenStem={setSelectedStemId} initialStemId={searchParams.get('stemId') || ''} onTaskOpen={openVariableChargeTask} onTaskClose={closeVariableChargeTask} />}
+        {activeTab === 'legacy' && <LegacyPaymentDataAudit />}
+      </Suspense>
       {activeTab === 'reconciliation' && (
         <div className="space-y-5 p-4 lg:p-8">
           <div className="flex flex-wrap items-start justify-between gap-3">

@@ -205,10 +205,12 @@ test('Payment Collections issues no reconciliation mutation until declared writa
     appClient: { functions: { clearCache() {}, invoke: async (...args) => { calls.push(args); return { data: result, meta: {} }; } } },
   };
   const componentSource = withoutImports(await source('../src/pages/PaymentCollections.jsx'));
-  const components = ['AlertTriangle', 'Banknote', 'CheckCircle2', 'ClipboardCheck', 'ListChecks', 'Loader2', 'RefreshCw', 'Scale', 'ShieldCheck', 'BuyerInvoices', 'IncomingPayments', 'Badge', 'Button', 'Dialog', 'DialogContent', 'DialogDescription', 'DialogFooter', 'DialogHeader', 'DialogTitle', 'Label', 'Textarea', 'StateBlock', 'TableShell', 'PageMethodology', 'PageUserManual', 'DataStatus', 'SalesforceSyncBadge', 'StemDetailLink', 'WorkspaceViewBar', 'StemDetailModal', 'VariableCharges', 'LegacyPaymentDataAudit', 'PaymentDataReliabilityBadge'];
+  const components = ['AlertTriangle', 'Banknote', 'CheckCircle2', 'ClipboardCheck', 'ListChecks', 'Loader2', 'RefreshCw', 'Scale', 'ShieldCheck', 'BuyerInvoices', 'Badge', 'Button', 'Dialog', 'DialogContent', 'DialogDescription', 'DialogFooter', 'DialogHeader', 'DialogTitle', 'Label', 'Textarea', 'StateBlock', 'TableShell', 'PageMethodology', 'PageUserManual', 'DataStatus', 'SalesforceSyncBadge', 'StemDetailLink', 'WorkspaceViewBar', 'StemDetailModal', 'PaymentDataReliabilityBadge'];
   const { default: PaymentCollections } = await execute(`
     const { react: React, auth, useSearchParams, appClient } = globalThis.__deploymentCollectionsHarness;
     const { useCallback, useEffect, useMemo, useRef, useState } = React;
+    const Suspense = "Suspense";
+    const lazy = loader => String(loader).match(/(IncomingPayments|VariableCharges|LegacyPaymentDataAudit)/)[1];
     const useAuth = () => auth, PAYMENT_COLLECTIONS_METHODOLOGIES = { collections: {} }, VARIABLE_CHARGES_USER_MANUAL = {};
     ${components.map((name) => `const ${name} = ${JSON.stringify(name)};`).join('\n')}
     ${componentSource}
