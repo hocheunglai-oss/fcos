@@ -25,7 +25,7 @@ test('unified counterparty APIs use exact IDs, the approved GROUP rule, and dist
   assert.match(source, /scopeWhereValue/);
   assert.match(source, /type: field\.type \|\| null/);
   assert.match(source, /label: field\.label \|\| null/);
-  assert.match(source, /salesforce-unified-counterparty-describe', version: '2'/);
+  assert.match(source, /salesforce-unified-counterparty-describe', version: koreaDeskDescribeCacheVersion\(name, '2'\)/);
   assert.doesNotMatch(source, /SELECT Account__c accountId/);
   assert.doesNotMatch(source, /fieldName} accountId/);
   assert.match(source, /SELECT Account__c,COUNT\(Id\) FROM STEM__c/);
