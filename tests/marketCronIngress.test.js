@@ -10,12 +10,14 @@ const env = { VERCEL_ENV: 'production', VERCEL_URL: 'fcos-example.vercel.app', V
 const headers = { host: env.VERCEL_URL, authorization: 'Bearer fixture-only' };
 const req = { method: 'GET', url: path, headers };
 const tryRelay = (request, environment, fetchImpl) => relayLiveMarketCron(request, {
-  env: environment, safety: deploymentRequestSafety(request,environment), fetchImpl,
+  env: environment, safety: deploymentRequestSafety(request,environment), fetchImpl, report: () => {},
 });
 
 test('only the authenticated generated domain of the live deployment relays the Market cron', async () => {
   const requests = [];
-  const result = await tryRelay(req, env, async (url, init) => {
+  const native = {...req, url:path+'?name=marketReportDriveSyncCron'};
+  const runtime = {...env, VERCEL: '1', VERCEL_ENV: undefined, VERCEL_URL: undefined};
+  const result = await tryRelay(native, runtime, async (url, init) => {
     requests.push({ url: String(url), init });
     return requests.length === 1
       ? new Response('{}', { headers: { [deploymentHeader]: 'dpl_active' } })
@@ -34,10 +36,10 @@ test('preview, explicit read-only, forged authority, wrong paths and unauthentic
   for (const [request, environment] of [
     [req, {...env, VERCEL_ENV:'preview'}], [req, {...env, FCOS_ENABLE_READ_ONLY_CI:'true'}],
     [req, {...env, VERCEL_DEPLOYMENT_ID:undefined}], [{...req, method:'POST'}, env],
-    [{...req, url:path+'?retry=true'}, env], [{...req, headers:{...headers,authorization:'Bearer different'}}, env],
+    [{...req, url:'/api/functions/emailRouterMaintenanceCron'}, env], [{...req, headers:{...headers,authorization:'Bearer different'}}, env],
     [{...req, headers:{...headers, [deploymentHeader]:'dpl_active'}}, env],
     [{...req, headers:{...headers, 'x-forwarded-host':'example.com'}}, env],
-    [{...req, headers:{...headers, host:'fcos-other.vercel.app'}}, env],
+    [{...req, headers:{...headers, host:'fcos-other.example.com'}}, env],
   ]) assert.equal(await tryRelay(request,environment,unexpected), null);
 });
 

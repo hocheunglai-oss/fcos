@@ -4,6 +4,7 @@ import { currentDeploymentRequestSafety } from './_deploymentReadOnly.js';
 
 const canonicalOrigin = new URL(FCOS_CONNECTION_POLICY.attestation.endpoint).origin;
 const cronPath = '/api/functions/marketReportDriveSyncCron';
+const vercelHostSuffix = '.vercel.app';
 export const deploymentHeader = 'x-fcos-market-cron-deployment';
 
 export function marketCronDeploymentId(env = process.env) {
@@ -12,17 +13,27 @@ export function marketCronDeploymentId(env = process.env) {
 
 export async function relayLiveMarketCron(req, {
   env = process.env, safety = currentDeploymentRequestSafety(), fetchImpl = fetch,
+  report = (reason) => console.info(JSON.stringify({ event: 'fcos.market_cron.ingress_denied', reason })),
 } = {}) {
   const id = marketCronDeploymentId(env);
-  if (!id || env.VERCEL_ENV !== 'production' || safety?.reason !== 'noncanonical_or_unknown_host'
-      || !safety.hostname || safety.hostname !== env.VERCEL_URL
-      || req.method !== 'GET' || req.url !== cronPath || req.headers[deploymentHeader]) return null;
-
+  if (req.method !== 'GET' || req.headers[deploymentHeader]
+      || new URL(req.url, canonicalOrigin).pathname !== cronPath) return null;
+  if (!id || safety?.reason !== 'noncanonical_or_unknown_host'
+      || !safety.hostname?.endsWith(vercelHostSuffix)) {
+    report('runtime_scope');
+    return null;
+  }
   const authorization = req.headers.authorization;
-  if (!env.CRON_SECRET || typeof authorization !== 'string') return null;
+  if (!env.CRON_SECRET || typeof authorization !== 'string') {
+    report('scheduler_authorization_absent');
+    return null;
+  }
   const received = Buffer.from(authorization);
   const expected = Buffer.from(`Bearer ${env.CRON_SECRET}`);
-  if (received.length !== expected.length || !timingSafeEqual(received, expected)) return null;
+  if (received.length !== expected.length || !timingSafeEqual(received, expected)) {
+    report('scheduler_authorization_rejected');
+    return null;
+  }
 
   // A Production-configured staged build also has CRON_SECRET. It must prove
   // that the canonical domain already serves this exact deployment before relay.
@@ -31,7 +42,10 @@ export async function relayLiveMarketCron(req, {
   });
   const isLive = live.ok && live.headers.get(deploymentHeader) === id;
   await live.body?.cancel();
-  if (!isLive) return null;
+  if (!isLive) {
+    report('deployment_not_live');
+    return null;
+  }
 
   return fetchImpl(new URL(cronPath, canonicalOrigin), {
     headers: { authorization, [deploymentHeader]: id },
