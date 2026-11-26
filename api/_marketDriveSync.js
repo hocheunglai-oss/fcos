@@ -14,7 +14,7 @@ const MAX_SECONDARY_MOPS_CSV_BYTES = 2 * 1024 * 1024;
 const DEFAULT_IMPORT_LIMIT = 25;
 const SECONDARY_IMPORT_ADMISSION_MS = 35_000;
 const PDF_IMPORT_ADMISSION_MS = 65_000;
-// Leave room for the 90-second commentary call and final ledger write within the relay deadline.
+// Leave room for the 75-second commentary call and final ledger write within the relay deadline.
 const BRIEF_ADMISSION_MS = 115_000;
 const MAX_BRIEFS_PER_SYNC = 3;
 // The licensed local audit inspected 855 downloaded files, including 23 extra
@@ -714,14 +714,17 @@ async function finishRun(client, runKey, summary, status, errorCode = null) {
 
 export async function runMarketReportDriveSync(client, {
   accessToken,
-  fetchImpl = fetch,
+  fetchImpl: driveFetchImpl = fetch,
   parseReport = parseMarketReportPdf,
   config = CONNECTION_INTEGRATIONS.googleDriveMarketReports,
   now = new Date(),
   importLimit = DEFAULT_IMPORT_LIMIT,
   processDerived = processMarketIntelligenceDate,
   monotonicNow = () => performance.now(),
+  signal,
+  finishClient = client,
 } = {}) {
+  const fetchImpl = signal ? (url, options) => driveFetchImpl(url, { ...options, signal }) : driveFetchImpl;
   const startedAt = monotonicNow();
   const elapsed = () => monotonicNow() - startedAt;
   if (!client || !accessToken) throw syncError('Market sync authorization is unavailable.', 'MARKET_DRIVE_AUTH_UNAVAILABLE', 503);
@@ -775,7 +778,7 @@ export async function runMarketReportDriveSync(client, {
     summary.discoveredCount = files.length + secondaryMopsFiles.length;
 
     for (const [index, file] of secondaryMopsFiles.entries()) {
-      if (elapsed() >= SECONDARY_IMPORT_ADMISSION_MS) {
+      if (signal?.aborted || elapsed() >= SECONDARY_IMPORT_ADMISSION_MS) {
         summary.deferredCount += secondaryMopsFiles.length - index;
         break;
       }
@@ -861,7 +864,7 @@ export async function runMarketReportDriveSync(client, {
     const commentaryByDate = new Map();
     const importBatch = orderedCandidates.slice(0, limit);
     for (const [index, file] of importBatch.entries()) {
-      if (elapsed() >= PDF_IMPORT_ADMISSION_MS) {
+      if (signal?.aborted || elapsed() >= PDF_IMPORT_ADMISSION_MS) {
         summary.deferredCount += importBatch.length - index;
         break;
       }
@@ -940,7 +943,7 @@ export async function runMarketReportDriveSync(client, {
     const pendingDerivedDates = await loadPendingMarketIntelligenceDates(client, { now });
     const derivedDates = [...new Set([...pendingDerivedDates, ...[...touchedReportDates].sort().reverse()])];
     for (const [index, reportDate] of derivedDates.entries()) {
-      if (index >= MAX_BRIEFS_PER_SYNC || elapsed() >= BRIEF_ADMISSION_MS) {
+      if (index >= MAX_BRIEFS_PER_SYNC || signal?.aborted || elapsed() >= BRIEF_ADMISSION_MS) {
         summary.briefDeferredCount = derivedDates.length - index;
         break;
       }
@@ -953,10 +956,13 @@ export async function runMarketReportDriveSync(client, {
           reportDate,
           commentaryContexts,
           reconcileDerived: !touched,
+          signal,
+          beforeCheckpoint: async () => {
+            signal?.throwIfAborted();
+            await reconcileMarketIntradayDate(client, reportDate, { email: 'market-sync@fcos.internal' });
+          },
         });
         if (derived.status === 'completed') {
-          await reconcileMarketIntradayDate(client, reportDate, { email: 'market-sync@fcos.internal' })
-            .catch(() => ({ insertedCount: 0, status: 'deferred' }));
           summary.briefCompletedCount += 1;
           if (!touched) summary.briefReconciledCount += 1;
           summary.marketAlertsPublishedCount += Number(derived.alertsPublished || 0);
@@ -974,17 +980,19 @@ export async function runMarketReportDriveSync(client, {
       }
     }
 
+    signal?.throwIfAborted();
     const expectedSessions = await scanExpectedMarketSessions(client, { now });
     summary.marketAlertsPublishedCount += Number(expectedSessions.published || 0);
     summary.expectedSessionsEvaluatedCount = Number(expectedSessions.evaluated || 0);
 
     const status = summary.failedCount ? 'failed' : 'completed';
-    await finishRun(client, runKey, summary, status, summary.errorCode || null);
+    await finishRun(finishClient, runKey, summary, status, summary.errorCode || null);
     return { ...summary, runKey, status, accountEmail: config.accountEmail };
   } catch (error) {
     summary.failedCount = Math.max(1, summary.failedCount);
-    const errorCode = normalizedErrorCode(error);
-    await finishRun(client, runKey, summary, 'failed', errorCode).catch(() => {});
+    const errorCode = signal?.aborted ? 'MARKET_DRIVE_BUDGET_EXHAUSTED' : normalizedErrorCode(error);
+    await finishRun(finishClient, runKey, summary, 'failed', errorCode).catch(() => {});
+    if (signal?.aborted) return { ...summary, runKey, status: 'failed', errorCode, accountEmail: config.accountEmail };
     throw error;
   }
 }

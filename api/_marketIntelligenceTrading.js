@@ -1190,6 +1190,7 @@ export async function generateMarketCommentaryItems(contexts = [], dependencies 
     };
     const response = await fetchOpenAiResponses(dependencies.fetchImpl || fetch, {
       method: 'POST',
+      signal: dependencies.signal && AbortSignal.any([dependencies.signal, AbortSignal.timeout(75_000)]),
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model,
@@ -1500,7 +1501,7 @@ export function marketBriefSourceHash(reports) {
   return hash(reports.map((row) => `${row.source_document_type}:${row.source_hash}`).sort().join('|'));
 }
 
-export async function processMarketIntelligenceDate(client, { reportDate, commentaryContexts = [], legacyComparisons = [], publishAlerts = true, recordShadow = true, reconcileDerived = false, forceDeterministicRevision = false } = {}) {
+export async function processMarketIntelligenceDate(client, { reportDate, commentaryContexts = [], legacyComparisons = [], publishAlerts = true, recordShadow = true, reconcileDerived = false, forceDeterministicRevision = false, signal, beforeCheckpoint } = {}) {
   const date = isoDate(reportDate);
   if (!date) throw intelligenceError('A valid report date is required.');
   const reportsResult = await client.from('market_report_imports').select('id,source_hash,source_document_type,report_date').eq('report_date', date).in('source_document_type', ['bunkerwire', 'european_marketscan']).eq('status', 'completed');
@@ -1554,7 +1555,7 @@ export async function processMarketIntelligenceDate(client, { reportDate, commen
   if (!ai) {
     const commentaryTypes = new Set((commentaryContexts || []).map((row) => row.documentType));
     ai = commentaryTypes.has('bunkerwire') && commentaryTypes.has('european_marketscan')
-      ? await generateMarketCommentaryItems(commentaryContexts, { observationEvidence: deterministicObservationEvidence })
+      ? await generateMarketCommentaryItems(commentaryContexts, { observationEvidence: deterministicObservationEvidence, signal })
       : { status: 'unavailable', modelId: null, items: [] };
   }
   const completeness = {
@@ -1614,6 +1615,12 @@ export async function processMarketIntelligenceDate(client, { reportDate, commen
     if (!result.error) shadowRecorded += 1;
     else throw intelligenceError(`Curve shadow evidence could not be stored: ${result.error.message}`, 502, 'MARKET_CURVE_SHADOW_SAVE_FAILED');
   }
+  let recoveredAlerts;
+  if (beforeCheckpoint) {
+    signal?.throwIfAborted();
+    await beforeCheckpoint();
+    recoveredAlerts = await handleRecoveredMarketAlerts(client, date, curve.warnings);
+  }
   if (forceDeterministicRevision && reusedBrief) {
     const save = await client.rpc('revise_market_intelligence_brief', {
       p_report_date: date,
@@ -1632,7 +1639,7 @@ export async function processMarketIntelligenceDate(client, { reportDate, commen
     const save = await client.rpc('save_market_intelligence_brief', { p_report_date: date, p_source_hash: sourceHash, p_as_of_at: new Date().toISOString(), p_completeness: completeness, p_deterministic_metrics: deterministicMetrics, p_ai_status: ai.status, p_model_id: ai.modelId, p_source_refs: sourceRefs, p_items: [...deterministicItems, ...ai.items] });
     if (save.error) throw intelligenceError(`Market brief could not be stored: ${save.error.message}`, 502, 'MARKET_BRIEF_SAVE_FAILED');
   }
-  const recoveredAlerts = await handleRecoveredMarketAlerts(client, date, curve.warnings);
+  recoveredAlerts ??= await handleRecoveredMarketAlerts(client, date, curve.warnings);
   return { status: 'completed', reportDate: date, briefItemCount: deterministicItems.length + ai.items.length, aiStatus: ai.status, alertsPublished: alerts.published, alertsRecovered: recoveredAlerts.eventCount, shadowRecorded, reconciled: Boolean(reusedBrief), revised: Boolean(forceDeterministicRevision && reusedBrief), curveCoverage };
 }
 

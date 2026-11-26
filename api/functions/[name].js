@@ -733,16 +733,17 @@ function supabaseUrl() {
 
 let cachedSupabaseAdmin = null;
 
-function supabaseAdminClient() {
+function supabaseAdminClient({ signal } = {}) {
   const config = serverSupabaseConfig();
   if (!config.configured) {
     throw appError(`Missing Supabase server configuration: ${config.missingEnv.join(', ')}.`, 500);
   }
-  if (!cachedSupabaseAdmin) {
-    const trackedFetch = async (...args) => {
+  if (signal || !cachedSupabaseAdmin) {
+    const trackedFetch = async (url, options) => {
       const startedAt = Date.now();
       try {
-        const response = await deploymentSafeSupabaseFetch(...args);
+        const deadline = signal && options?.signal ? AbortSignal.any([signal, options.signal]) : signal || options?.signal;
+        const response = await deploymentSafeSupabaseFetch(url, deadline ? { ...options, signal: deadline } : options);
         recordSupabaseRequest({
           durationMs: Date.now() - startedAt,
           ok: response.ok,
@@ -756,7 +757,7 @@ function supabaseAdminClient() {
         throw error;
       }
     };
-    cachedSupabaseAdmin = createClient(config.url, config.key, {
+    const client = createClient(config.url, config.key, {
       auth: {
         persistSession: false,
         autoRefreshToken: false,
@@ -765,6 +766,8 @@ function supabaseAdminClient() {
         fetch: trackedFetch,
       },
     });
+    if (signal) return client;
+    cachedSupabaseAdmin = client;
   }
   return cachedSupabaseAdmin;
 }
@@ -3905,9 +3908,10 @@ async function buyerInvoiceReminderRuleRemove(body = {}, req = null, accessConte
   return data || { removed: true, accountId: snapshot.accountId };
 }
 
-async function googleDriveMarketAccessToken() {
+async function googleDriveMarketAccessToken(signal) {
   requireExternalActionGate('google_drive');
-  return (await exchangeGoogleDriveRefreshToken(googleDriveMarketOAuthConfig())).access_token;
+  const options = signal ? { fetchImpl: (url, init) => fetch(url, { ...init, signal }) } : undefined;
+  return (await exchangeGoogleDriveRefreshToken(googleDriveMarketOAuthConfig(), options)).access_token;
 }
 
 async function reportExportCreate(body, req, accessContext = null) {
@@ -18580,18 +18584,20 @@ async function marketReportDriveSyncCron(_body = {}, req = null) {
     throw appError('The live deployment changed before the scheduled Market sync could start.', 409, 'MARKET_CRON_DEPLOYMENT_CHANGED');
   }
   requireExternalActionGate('google_drive');
-  const client = supabaseAdminClient();
-  const accessToken = await googleDriveMarketAccessToken();
-  const result = await runMarketReportDriveSync(client, { accessToken });
+  const signal = AbortSignal.timeout(185_000);
+  const client = supabaseAdminClient({ signal });
+  const finishClient = supabaseAdminClient({ signal: AbortSignal.timeout(215_000) });
+  const accessToken = await googleDriveMarketAccessToken(signal);
+  const result = await runMarketReportDriveSync(client, { accessToken, signal, finishClient });
   await expireRuntimeCacheTags(['market:pulse']);
-  if (result.importedCount > 0) await expireRuntimeCacheTags(['markets', 'hedge:markets', 'market:intelligence']);
+  if (result.importedCount > 0 || result.briefCompletedCount > 0) await expireRuntimeCacheTags(['markets', 'hedge:markets', 'market:intelligence']);
   if (result.status === 'failed') {
     const message = String(result.errorCode || '').startsWith('MARKET_SECONDARY_')
       ? secondaryMopsFailureMessage(result.errorCode)
       : 'Scheduled Google Drive market-report synchronization did not complete.';
     throw appError(message, 502, result.errorCode || 'MARKET_DRIVE_SYNC_FAILED', undefined, true);
   }
-  await resolveRecoveredSystemErrorHandler(client, 'marketReportDriveSyncCron', { resolvedThrough: new Date() }).catch(() => {});
+  await resolveRecoveredSystemErrorHandler(finishClient, 'marketReportDriveSyncCron', { resolvedThrough: new Date() }).catch(() => {});
   return result;
 }
 

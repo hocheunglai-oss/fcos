@@ -426,6 +426,30 @@ test('the hourly backlog checkpoints the newest pending pair and resumes without
   assert.deepEqual(await loadPendingMarketIntelligenceDates(client, { now }), [dates[1]]);
 });
 
+test('an expired work signal leaves a terminal receipt through the reserved ledger client', async () => {
+  const report_date = '2026-11-23';
+  const pairedImports = ['bunkerwire', 'european_marketscan'].map((source_document_type) => ({
+    report_date, source_document_type, source_hash: source_document_type,
+  }));
+  const client = clientMock({ pairedImports });
+  const finishClient = clientMock();
+  const controller = new AbortController();
+  const result = await runMarketReportDriveSync(client, {
+    accessToken: 'token', config, now: new Date('2026-11-26T15:00:00Z'), fetchImpl: driveFetch().fetchImpl,
+    signal: controller.signal, finishClient,
+    processDerived: async () => {
+      controller.abort();
+      throw controller.signal.reason;
+    },
+  });
+  assert.equal(result.errorCode, 'MARKET_DRIVE_BUDGET_EXHAUSTED');
+  assert.equal(result.status, 'failed');
+  assert.equal(client.rpcCalls.some(({ name }) => name === 'finish_market_report_sync_run'), false);
+  assert.deepEqual(finishClient.rpcCalls.map(({ name, payload }) => [name, payload.p_status, payload.p_error_code]), [
+    ['finish_market_report_sync_run', 'failed', 'MARKET_DRIVE_BUDGET_EXHAUSTED'],
+  ]);
+});
+
 test('hourly sync parses and atomically stores an unseen report', async () => {
   const pdf = Buffer.from('%PDF-new-report');
   const md5 = (await import('node:crypto')).createHash('md5').update(pdf).digest('hex');
