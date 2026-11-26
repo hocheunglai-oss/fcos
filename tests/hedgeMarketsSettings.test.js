@@ -6,13 +6,15 @@ const read = (path) => fs.readFileSync(new URL(`../${path}`, import.meta.url), '
 
 test('AI Models retains Dashboard, Markets and Email Router settings after Hedge Desk assistant removal', () => {
   const settings = read('src/pages/Settings.jsx');
+  const ai = read('src/components/settings/SettingsAiModels.jsx');
   const workspace = read('src/pages/SettingsWorkspace.jsx');
   const hedgeSettings = read('src/hedge/components/HedgeSettingsPanel.jsx');
   assert.match(workspace, /id: 'ai', label: 'AI Models'/);
-  assert.match(settings, /Dashboard AI Search/);
-  assert.doesNotMatch(settings, /HedgeAssistantAiSettings/);
-  assert.match(settings, /<MarketAssistantSettings \/>/);
-  assert.match(settings, /<EmailRouterAdvisorAiSettings \/>/);
+  assert.match(settings, /lazy\(\(\) => import\('@\/components\/settings\/SettingsAiModels'\)\)/);
+  assert.match(ai, /Dashboard AI Search/);
+  assert.doesNotMatch(settings + ai, /HedgeAssistantAiSettings/);
+  assert.match(ai, /<MarketAssistantSettings \/>/);
+  assert.match(ai, /<EmailRouterAdvisorAiSettings \/>/);
   assert.match(read('src/components/settings/AiModelSettingsCard.jsx'), /Estimated USD/);
   assert.doesNotMatch(hedgeSettings, /title="Trading Assistant"/);
 });

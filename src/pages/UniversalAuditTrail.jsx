@@ -10,6 +10,8 @@ import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
 
+const AUDIT_METADATA_CLASS = 'whitespace-nowrap text-xs text-muted-foreground';
+
 function formatDateTime(value) {
   if (!value) return '—';
   try {
@@ -57,6 +59,7 @@ export default function UniversalAuditTrail({ methodologyAction = null }) {
   const [source, setSource] = useState('all');
   const [keyword, setKeyword] = useState('');
   const [expandedId, setExpandedId] = useState('');
+  const toggleRow = (id) => setExpandedId((current) => current === id ? '' : id);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -149,7 +152,7 @@ export default function UniversalAuditTrail({ methodologyAction = null }) {
       )}
 
       {!error && (
-        <TableShell title="Audit Events" meta="Click a row to inspect raw metadata." bodyClassName="p-0">
+        <TableShell title="Audit Events" meta="Select an event to inspect raw metadata." bodyClassName="p-0">
           {loading ? (
             <StateBlock icon={Loader2} title="Loading audit trail..." description="Reading administrator-only audit sources." />
           ) : rows.length ? (
@@ -158,24 +161,33 @@ export default function UniversalAuditTrail({ methodologyAction = null }) {
                 <TableHeader className="sticky top-0 z-10 bg-card">
                   <TableRow>
                     <TableHead className="whitespace-nowrap">Time</TableHead>
-                    <TableHead>Source</TableHead>
-                    <TableHead>Action</TableHead>
-                    <TableHead>Target</TableHead>
-                    <TableHead>Actor</TableHead>
-                    <TableHead>Summary</TableHead>
+                    {['Source', 'Action', 'Target', 'Actor', 'Summary'].map((label) => <TableHead key={label}>{label}</TableHead>)}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {rows.map((row) => (
                     <Fragment key={row.id}>
-                      <TableRow className="cursor-pointer hover:bg-muted/40" onClick={() => setExpandedId((current) => current === row.id ? '' : row.id)}>
-                        <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{formatDateTime(row.createdAt)}</TableCell>
+                      <TableRow className="cursor-pointer hover:bg-muted/40" onClick={() => toggleRow(row.id)}>
+                        <TableCell className={AUDIT_METADATA_CLASS}>{formatDateTime(row.createdAt)}</TableCell>
                         <TableCell className="whitespace-nowrap">
                           <Badge variant="outline" className={sourceTone(row.source)}>{row.source}</Badge>
                         </TableCell>
-                        <TableCell className="whitespace-nowrap font-medium">{row.action || '—'}</TableCell>
+                        <TableCell className="whitespace-nowrap font-medium">
+                          <button
+                            type="button"
+                            className="text-left hover:underline focus-visible:outline focus-visible:outline-2"
+                            aria-expanded={expandedId === row.id}
+                            aria-label={`Details for ${row.action || 'event'}: ${row.target || row.source || row.id}`}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              toggleRow(row.id);
+                            }}
+                          >
+                            {row.action || '—'}
+                          </button>
+                        </TableCell>
                         <TableCell className="min-w-[180px] text-sm">{row.target || '—'}</TableCell>
-                        <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{row.actor || '—'}</TableCell>
+                        <TableCell className={AUDIT_METADATA_CLASS}>{row.actor || '—'}</TableCell>
                         <TableCell className="min-w-[280px] text-sm text-muted-foreground">{row.summary || '—'}</TableCell>
                       </TableRow>
                       {expandedId === row.id && (

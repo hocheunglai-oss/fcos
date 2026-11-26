@@ -1,4 +1,3 @@
-import WorkflowMetrics from '@/components/settings/WorkflowMetrics';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Activity,
@@ -20,7 +19,6 @@ import {
   Server,
   Settings,
   ShieldCheck,
-  Sparkles,
   XCircle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -37,13 +35,18 @@ import { appClient } from '@/api/appClient';
 import { DOCUMENT_SOURCE_GROUPS, readDocumentSettings, saveDocumentSettings } from '@/lib/documentSettings';
 import { clearDraft, readDraft, sameDraftValue, useDraftAutosave } from '@/lib/draftAutosave';
 import { useAuth } from '@/lib/AuthContext';
-import MarketAssistantSettings from '@/components/markets/MarketAssistantSettings';
-import EmailRouterAdvisorAiSettings from '@/components/email-router/EmailRouterAdvisorAiSettings';
-import AiModelSettingsCard from '@/components/settings/AiModelSettingsCard';
 import { applyAppearancePreferences, readAppearancePreferences } from '@/lib/appearancePreferences';
 
+const SettingsAiModels = lazy(() => import('@/components/settings/SettingsAiModels'));
+const WorkflowMetrics = lazy(() => import('@/components/settings/WorkflowMetrics'));
 const ConnectionChecklist = lazy(() => import('@/components/settings/ConnectionChecklist'));
 
+const SETTINGS_HEADING_CLASS = 'text-sm font-semibold text-foreground';
+const SETTINGS_FIELD_LABEL_CLASS = 'text-xs font-semibold uppercase tracking-wide text-muted-foreground';
+const SETTINGS_DETAIL_CLASS = 'mt-0.5 text-xs text-muted-foreground';
+const SETTINGS_INSET_NOTE_CLASS = 'text-xs leading-relaxed text-muted-foreground';
+const TABLE_HEADING_CLASS = 'px-3 py-2 font-semibold';
+const FIELD_ICON_CLASS = 'mt-0.5 h-4 w-4 shrink-0';
 const SETTINGS_DRAFT_KEY = 'settings:page';
 const SIDEBAR_FIXED_STORAGE_KEY = 'workspace-sidebar-fixed';
 const HEALTH_SAMPLES_KEY = 'fcos:system-health-samples';
@@ -63,6 +66,10 @@ function settingsSnapshot() {
     revision: 0,
     initialized: false,
   };
+}
+
+function workspacePreferenceFields({ sidebarMode, tableDensity, documentShowOnlyRelevant, documentSourceGroups, appearanceMode, glassIntensity }) {
+  return { sidebarMode, tableDensity, documentShowOnlyRelevant, documentSourceGroups, appearanceMode, glassIntensity };
 }
 
 function comparableWorkspaceSettings(value = {}) {
@@ -92,7 +99,7 @@ function SettingsPanel({ title, description, icon: Icon, meta, children }) {
             </div>
           )}
           <div className="min-w-0">
-            <h2 className="text-sm font-semibold text-foreground">{title}</h2>
+            <h2 className={SETTINGS_HEADING_CLASS}>{title}</h2>
             {description && <p className="mt-1 max-w-3xl text-xs text-muted-foreground">{description}</p>}
           </div>
         </div>
@@ -103,15 +110,32 @@ function SettingsPanel({ title, description, icon: Icon, meta, children }) {
   );
 }
 
+const SUCCESS_BADGE_CLASS = 'border-emerald-200 bg-emerald-50 text-emerald-700';
+const ERROR_BADGE_CLASS = 'border-red-200 bg-red-50 text-red-700';
+const NEUTRAL_BADGE_CLASS = 'border-slate-200 bg-slate-50 text-slate-600';
+const WARNING_BADGE_CLASS = 'border-amber-200 bg-amber-50 text-amber-800';
+function WorkspacePreference({ label, value, onChange, detail, children }) {
+  return (
+    <div className="space-y-1.5">
+      <Label className={SETTINGS_FIELD_LABEL_CLASS}>{label}</Label>
+      <Select value={value} onValueChange={onChange}>
+        <SelectTrigger><SelectValue /></SelectTrigger>
+        <SelectContent>{children}</SelectContent>
+      </Select>
+      {detail && <p className={SETTINGS_INSET_NOTE_CLASS}>{detail}</p>}
+    </div>
+  );
+}
+
 const STATUS_META = {
   disabled: {
     label: 'Disabled',
-    className: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+    className: SUCCESS_BADGE_CLASS,
     icon: ShieldCheck,
   },
   online: {
     label: 'Online',
-    className: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+    className: SUCCESS_BADGE_CLASS,
     icon: CheckCircle2,
   },
   configured: {
@@ -121,7 +145,7 @@ const STATUS_META = {
   },
   warning: {
     label: 'Warning',
-    className: 'border-amber-200 bg-amber-50 text-amber-800',
+    className: WARNING_BADGE_CLASS,
     icon: AlertTriangle,
   },
   critical: {
@@ -131,22 +155,22 @@ const STATUS_META = {
   },
   unavailable: {
     label: 'Unavailable',
-    className: 'border-red-200 bg-red-50 text-red-700',
+    className: ERROR_BADGE_CLASS,
     icon: XCircle,
   },
   monitoring_unavailable: {
     label: 'Monitoring unavailable',
-    className: 'border-slate-200 bg-slate-50 text-slate-600',
+    className: NEUTRAL_BADGE_CLASS,
     icon: Clock,
   },
   not_configured: {
     label: 'Not configured',
-    className: 'border-slate-200 bg-slate-50 text-slate-600',
+    className: NEUTRAL_BADGE_CLASS,
     icon: Clock,
   },
   error: {
     label: 'Error',
-    className: 'border-red-200 bg-red-50 text-red-700',
+    className: ERROR_BADGE_CLASS,
     icon: XCircle,
   },
 };
@@ -338,12 +362,15 @@ function KpiMetric({ label, value, metricKey, samples, suffix, maximumFractionDi
   );
 }
 
-function KpiGroup({ title, children }) {
+function KpiGroup({ title, provider, values, samples, metrics }) {
   return (
     <section className="min-w-0">
       <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{title}</h3>
       <dl className="grid grid-cols-2 overflow-hidden rounded-lg border border-border bg-background/40">
-        {children}
+        {metrics.map(({ field, label, suffix, digits, displayValue = values[field], status, staticValue }) => (
+          <KpiMetric key={field} label={label} value={displayValue} metricKey={staticValue ? undefined : `${provider}.${field}`}
+            samples={samples} suffix={suffix} maximumFractionDigits={digits} status={status} />
+        ))}
       </dl>
     </section>
   );
@@ -441,8 +468,8 @@ function HealthOverviewPanel() {
           <div className="mb-5 border-y border-border py-4">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-baseline sm:justify-between">
               <div>
-                <h3 className="text-sm font-semibold text-foreground">Operational KPIs</h3>
-                <p className="mt-0.5 text-xs text-muted-foreground">Arrows compare the latest result with the preceding retained one-minute sample.</p>
+                <h3 className={SETTINGS_HEADING_CLASS}>Operational KPIs</h3>
+                <p className={SETTINGS_DETAIL_CLASS}>Arrows compare the latest result with the preceding retained one-minute sample.</p>
               </div>
               {supabaseKpis.monitoringAvailable === false && (
                 <StatusBadge status="monitoring_unavailable" />
@@ -450,33 +477,38 @@ function HealthOverviewPanel() {
             </div>
 
             <div className="mt-4 grid gap-5 xl:grid-cols-3">
-              <KpiGroup title="Salesforce daily API">
-                <KpiMetric label="Used" value={salesforceKpis.used} metricKey="salesforce.used" samples={samples} maximumFractionDigits={0} />
-                <KpiMetric label="Remaining" value={salesforceKpis.remaining} metricKey="salesforce.remaining" samples={samples} maximumFractionDigits={0} />
-                <KpiMetric label="Daily limit" value={salesforceKpis.max} metricKey="salesforce.max" samples={samples} maximumFractionDigits={0} />
-                <KpiMetric label="Utilisation" value={salesforceKpis.usedPct} metricKey="salesforce.usedPct" samples={samples} suffix="%" />
-                <KpiMetric label="Probe time" value={salesforceKpis.probeLatencyMs} metricKey="salesforce.probeLatencyMs" samples={samples} suffix=" ms" maximumFractionDigits={0} />
-              </KpiGroup>
+              <KpiGroup title="Salesforce daily API" provider="salesforce" values={salesforceKpis} samples={samples}
+                metrics={[
+                  { field: 'used', label: 'Used', digits: 0 },
+                  { field: 'remaining', label: 'Remaining', digits: 0 },
+                  { field: 'max', label: 'Daily limit', digits: 0 },
+                  { field: 'usedPct', label: 'Utilisation', suffix: '%' },
+                  { field: 'probeLatencyMs', label: 'Probe time', suffix: ' ms', digits: 0 },
+                ]} />
 
-              <KpiGroup title="Supabase database">
-                <KpiMetric label="Connections" value={supabaseKpis.databaseConnections} metricKey="supabase.databaseConnections" samples={samples} maximumFractionDigits={0} />
-                <KpiMetric label="Connection max" value={supabaseKpis.maxConnections} metricKey="supabase.maxConnections" samples={samples} maximumFractionDigits={0} />
-                <KpiMetric label="Connection use" value={supabaseKpis.connectionUtilizationPercent} metricKey="supabase.connectionUtilizationPercent" samples={samples} suffix="%" />
-                <KpiMetric label="PgBouncer" value={supabaseKpis.pgbouncerUp == null ? null : supabaseKpis.pgbouncerUp === 1 ? 'Online' : 'Unavailable'} metricKey="supabase.pgbouncerUp" samples={samples} status={supabaseKpis.pgbouncerUp == null ? 'monitoring_unavailable' : supabaseKpis.pgbouncerUp === 1 ? 'online' : 'unavailable'} />
-                <KpiMetric label="Waiting" value={supabaseKpis.waitingConnections} metricKey="supabase.waitingConnections" samples={samples} maximumFractionDigits={0} />
-                <KpiMetric label="Maximum wait" value={supabaseKpis.maxWaitSeconds} metricKey="supabase.maxWaitSeconds" samples={samples} suffix=" s" maximumFractionDigits={2} />
-                <KpiMetric label="Memory used" value={supabaseKpis.memoryUsedPercent} metricKey="supabase.memoryUsedPercent" samples={samples} suffix="%" />
-                <KpiMetric label="Disk used" value={supabaseKpis.diskUsedPercent} metricKey="supabase.diskUsedPercent" samples={samples} suffix="%" />
-                <KpiMetric label="Cache hit" value={supabaseKpis.databaseCacheHitPercent} metricKey="supabase.databaseCacheHitPercent" samples={samples} suffix="%" />
-                <KpiMetric label="Deadlocks" value={supabaseKpis.deadlocksTotal} metricKey="supabase.deadlocksTotal" samples={samples} maximumFractionDigits={0} />
-              </KpiGroup>
+              <KpiGroup title="Supabase database" provider="supabase" values={supabaseKpis} samples={samples}
+                metrics={[
+                  { field: 'databaseConnections', label: 'Connections', digits: 0 },
+                  { field: 'maxConnections', label: 'Connection max', digits: 0 },
+                  { field: 'connectionUtilizationPercent', label: 'Connection use', suffix: '%' },
+                  { field: 'pgbouncerUp', label: 'PgBouncer',
+                    displayValue: supabaseKpis.pgbouncerUp == null ? null : supabaseKpis.pgbouncerUp === 1 ? 'Online' : 'Unavailable',
+                    status: supabaseKpis.pgbouncerUp == null ? 'monitoring_unavailable' : supabaseKpis.pgbouncerUp === 1 ? 'online' : 'unavailable' },
+                  { field: 'waitingConnections', label: 'Waiting', digits: 0 },
+                  { field: 'maxWaitSeconds', label: 'Maximum wait', suffix: ' s', digits: 2 },
+                  { field: 'memoryUsedPercent', label: 'Memory used', suffix: '%' },
+                  { field: 'diskUsedPercent', label: 'Disk used', suffix: '%' },
+                  { field: 'databaseCacheHitPercent', label: 'Cache hit', suffix: '%' },
+                  { field: 'deadlocksTotal', label: 'Deadlocks', digits: 0 },
+                ]} />
 
-              <KpiGroup title="Vercel runtime">
-                <KpiMetric label="Environment" value={vercelKpis.environment} samples={samples} />
-                <KpiMetric label="Region" value={vercelKpis.region} samples={samples} />
-                <KpiMetric label="Node" value={vercelKpis.nodeVersion} samples={samples} />
-                <KpiMetric label="Function check" value={vercelKpis.functionCheckDurationMs} metricKey="vercel.functionCheckDurationMs" samples={samples} suffix=" ms" maximumFractionDigits={0} />
-              </KpiGroup>
+              <KpiGroup title="Vercel runtime" provider="vercel" values={vercelKpis} samples={samples}
+                metrics={[
+                  { field: 'environment', label: 'Environment', staticValue: true },
+                  { field: 'region', label: 'Region', staticValue: true },
+                  { field: 'nodeVersion', label: 'Node', staticValue: true },
+                  { field: 'functionCheckDurationMs', label: 'Function check', suffix: ' ms', digits: 0 },
+                ]} />
             </div>
 
             {supabaseKpis.monitoringError && (
@@ -502,11 +534,7 @@ function HealthOverviewPanel() {
               <table className="w-full min-w-[1080px] text-left text-sm">
                 <thead className="sticky top-0 z-10 bg-muted text-xs uppercase tracking-wide text-muted-foreground">
                   <tr>
-                    <th className="px-3 py-2 font-semibold">Service</th>
-                    <th className="px-3 py-2 font-semibold">Status</th>
-                    <th className="px-3 py-2 font-semibold">Scope</th>
-                    <th className="px-3 py-2 font-semibold">Auth</th>
-                    <th className="px-3 py-2 font-semibold">Token Expiry</th>
+                    {['Service', 'Status', 'Scope', 'Auth', 'Token Expiry'].map((label) => <th key={label} className={TABLE_HEADING_CLASS}>{label}</th>)}
                     <th className="px-3 py-2 text-right font-semibold">Latency</th>
                   </tr>
                 </thead>
@@ -520,7 +548,7 @@ function HealthOverviewPanel() {
                             <Server className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
                             <div className="min-w-0">
                               <div className="font-semibold text-foreground">{row.name}</div>
-                              <div className="mt-0.5 text-xs text-muted-foreground">{row.category} · {row.provider}</div>
+                              <div className={SETTINGS_DETAIL_CLASS}>{row.category} · {row.provider}</div>
                               <div className="mt-1 text-xs text-muted-foreground">{row.purpose}</div>
                               {row.endpoint && <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">{row.endpoint}</div>}
                               {row.error && <div className="mt-2 rounded-md bg-red-50 px-2 py-1 text-xs text-red-700">{row.error}</div>}
@@ -561,6 +589,7 @@ function HealthOverviewPanel() {
 }
 
 function SystemHealthPanel() {
+  const { isAdministrator } = useAuth();
   const [activeView, setActiveView] = useState('overview');
   return (
     <Tabs value={activeView} onValueChange={setActiveView} className="space-y-4">
@@ -572,7 +601,11 @@ function SystemHealthPanel() {
       </div>
       <TabsContent value="overview" className="mt-0">
         <HealthOverviewPanel />
-        <WorkflowMetrics />
+        {isAdministrator && (
+          <Suspense fallback={<p role="status">Loading workflow metrics…</p>}>
+            <WorkflowMetrics />
+          </Suspense>
+        )}
       </TabsContent>
       <TabsContent value="connections" className="mt-0">
         <Suspense fallback={<StateBlock icon={Loader2} title="Loading connection checklist" description="Preparing the CLI-first connection runbook." />}>
@@ -611,19 +644,30 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
   const [routeDrafts, setRouteDrafts] = useState({});
   const [routeAuditReason, setRouteAuditReason] = useState('');
 
+  const applyWorkspaceFields = useCallback((settings) => {
+    setSidebarMode(settings.sidebarMode);
+    setTableDensity(settings.tableDensity);
+    setAppearanceMode(settings.appearanceMode);
+    setGlassIntensity(settings.glassIntensity);
+    setDocumentSettings({
+      showOnlyRelevant: settings.documentShowOnlyRelevant,
+      relevantSourceGroups: settings.documentSourceGroups,
+    });
+  }, []);
+
   useEffect(() => {
     const base = settingsSnapshot();
     const draft = readDraft(SETTINGS_DRAFT_KEY);
     const next = draft?.data && !sameWorkspaceSettings(draft.data, base)
       ? { ...base, ...draft.data }
       : base;
-    setSidebarMode(next.sidebarMode || base.sidebarMode);
-    setTableDensity(next.tableDensity || base.tableDensity);
-    setAppearanceMode(next.appearanceMode || base.appearanceMode);
-    setGlassIntensity(next.glassIntensity || base.glassIntensity);
-    setDocumentSettings({
-      showOnlyRelevant: next.documentShowOnlyRelevant ?? base.documentShowOnlyRelevant,
-      relevantSourceGroups: next.documentSourceGroups || base.documentSourceGroups,
+    applyWorkspaceFields({
+      sidebarMode: next.sidebarMode || base.sidebarMode,
+      tableDensity: next.tableDensity || base.tableDensity,
+      appearanceMode: next.appearanceMode || base.appearanceMode,
+      glassIntensity: next.glassIntensity || base.glassIntensity,
+      documentShowOnlyRelevant: next.documentShowOnlyRelevant ?? base.documentShowOnlyRelevant,
+      documentSourceGroups: next.documentSourceGroups || base.documentSourceGroups,
     });
     setBaseSettings(base);
     setDraftRestoredAt(draft?.data && !sameWorkspaceSettings(next, base) ? draft.updatedAt : null);
@@ -639,23 +683,11 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
       const preferences = response.data?.preferences;
       if (!preferences) return;
       const serverSettings = {
-        sidebarMode: preferences.sidebarMode,
-        tableDensity: preferences.tableDensity,
-        documentShowOnlyRelevant: preferences.documentShowOnlyRelevant,
-        documentSourceGroups: preferences.documentSourceGroups,
-        appearanceMode: preferences.appearanceMode,
-        glassIntensity: preferences.glassIntensity,
+        ...workspacePreferenceFields(preferences),
         revision: preferences.revision,
         initialized: preferences.initialized,
       };
-      setSidebarMode(serverSettings.sidebarMode);
-      setTableDensity(serverSettings.tableDensity);
-      setAppearanceMode(serverSettings.appearanceMode);
-      setGlassIntensity(serverSettings.glassIntensity);
-      setDocumentSettings({
-        showOnlyRelevant: serverSettings.documentShowOnlyRelevant,
-        relevantSourceGroups: serverSettings.documentSourceGroups,
-      });
+      applyWorkspaceFields(serverSettings);
       setWorkspaceRevision(serverSettings.revision);
       setBaseSettings(serverSettings);
       clearDraft(SETTINGS_DRAFT_KEY);
@@ -671,28 +703,16 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
     };
     loadWorkspacePreferences();
     return () => { cancelled = true; };
-  }, []);
+  }, [applyWorkspaceFields]);
 
   useEffect(() => {
     const applyWorkspacePreferences = (event) => {
       const preferences = event.detail;
       if (!preferences?.initialized) return;
-      setSidebarMode(preferences.sidebarMode);
-      setTableDensity(preferences.tableDensity);
-      setAppearanceMode(preferences.appearanceMode);
-      setGlassIntensity(preferences.glassIntensity);
-      setDocumentSettings({
-        showOnlyRelevant: preferences.documentShowOnlyRelevant,
-        relevantSourceGroups: preferences.documentSourceGroups,
-      });
+      applyWorkspaceFields(preferences);
       setWorkspaceRevision(preferences.revision);
       setBaseSettings({
-        sidebarMode: preferences.sidebarMode,
-        tableDensity: preferences.tableDensity,
-        documentShowOnlyRelevant: preferences.documentShowOnlyRelevant,
-        documentSourceGroups: preferences.documentSourceGroups,
-        appearanceMode: preferences.appearanceMode,
-        glassIntensity: preferences.glassIntensity,
+        ...workspacePreferenceFields(preferences),
         revision: preferences.revision,
         initialized: true,
       });
@@ -700,7 +720,7 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
     };
     window.addEventListener('fcos:workspace-preferences-updated', applyWorkspacePreferences);
     return () => window.removeEventListener('fcos:workspace-preferences-updated', applyWorkspacePreferences);
-  }, []);
+  }, [applyWorkspaceFields]);
 
   useEffect(() => {
     applyAppearancePreferences({ appearanceMode, glassIntensity });
@@ -816,12 +836,7 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
     setWorkspaceError('');
     try {
       const response = await appClient.functions.invoke('workspacePreferencesSave', {
-        sidebarMode,
-        tableDensity,
-        documentShowOnlyRelevant: documentSettings.showOnlyRelevant,
-        documentSourceGroups: documentSettings.relevantSourceGroups,
-        appearanceMode,
-        glassIntensity,
+        ...workspacePreferenceFields(settingsDraftValue),
         expectedRevision: workspaceRevision,
       });
       if (response.data?.error) throw new Error(response.data.error);
@@ -869,14 +884,7 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
   const discardSettingsDraft = () => {
     clearDraft(SETTINGS_DRAFT_KEY);
     if (baseSettings) {
-      setSidebarMode(baseSettings.sidebarMode);
-      setTableDensity(baseSettings.tableDensity);
-      setAppearanceMode(baseSettings.appearanceMode);
-      setGlassIntensity(baseSettings.glassIntensity);
-      setDocumentSettings({
-        showOnlyRelevant: baseSettings.documentShowOnlyRelevant,
-        relevantSourceGroups: baseSettings.documentSourceGroups,
-      });
+      applyWorkspaceFields(baseSettings);
     }
     setDraftRestoredAt(null);
   };
@@ -955,7 +963,7 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
 
       {workspaceError && section === 'my' && (
         <div className="mb-6 flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/10 p-4 text-sm text-destructive">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <AlertTriangle className={FIELD_ICON_CLASS} />
           <span>{workspaceError}</span>
         </div>
       )}
@@ -971,7 +979,7 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
           >
             {emailSendersError && (
               <div className="mb-4 flex items-start gap-2 border-y border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                <AlertTriangle className={FIELD_ICON_CLASS} />
                 <div className="min-w-0 flex-1">
                   <p>{emailSendersError}</p>
                   <Button type="button" variant="outline" size="sm" onClick={loadEmailSenders} className="mt-2 gap-2">
@@ -1009,15 +1017,12 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
                 </div>
 
                 <div>
-                  <h3 className="text-sm font-semibold text-foreground">Approved mailboxes</h3>
+                  <h3 className={SETTINGS_HEADING_CLASS}>Approved mailboxes</h3>
                   <div className="mt-2 overflow-x-auto border-y border-border">
                     <table className="w-full min-w-[720px] text-left text-xs">
                       <thead className="bg-muted/40 text-muted-foreground">
                         <tr>
-                          <th className="px-3 py-2 font-semibold">Mailbox</th>
-                          <th className="px-3 py-2 font-semibold">Microsoft 365 address</th>
-                          <th className="px-3 py-2 font-semibold">Verification</th>
-                          <th className="px-3 py-2 font-semibold">Last successful delivery</th>
+                          {['Mailbox', 'Microsoft 365 address', 'Verification', 'Last successful delivery'].map((label) => <th key={label} className={TABLE_HEADING_CLASS}>{label}</th>)}
                           <th className="px-3 py-2 text-right font-semibold">Action</th>
                         </tr>
                       </thead>
@@ -1048,19 +1053,18 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
                 <div>
                   <div className="flex flex-wrap items-end justify-between gap-2">
                     <div>
-                      <h3 className="text-sm font-semibold text-foreground">Purpose assignments</h3>
-                      <p className="mt-0.5 text-xs text-muted-foreground">Change any number of routes, then save the complete set once.</p>
+                      <h3 className={SETTINGS_HEADING_CLASS}>Purpose assignments</h3>
+                      <p className={SETTINGS_DETAIL_CLASS}>Change any number of routes, then save the complete set once.</p>
                     </div>
-                    {dirtySenderRoutes.length > 0 && <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-800">{dirtySenderRoutes.length} unsaved</Badge>}
+                    {dirtySenderRoutes.length > 0 && <Badge variant="outline" className={WARNING_BADGE_CLASS}>{dirtySenderRoutes.length} unsaved</Badge>}
                   </div>
                   <div className="mt-2 overflow-x-auto border-y border-border">
                     <table className="w-full min-w-[820px] text-left text-xs">
                       <thead className="bg-muted/40 text-muted-foreground">
                         <tr>
-                          <th className="px-3 py-2 font-semibold">Email purpose</th>
+                          <th className={TABLE_HEADING_CLASS}>Email purpose</th>
                           <th className="w-[330px] px-3 py-2 font-semibold">Assigned Microsoft 365 mailbox</th>
-                          <th className="px-3 py-2 font-semibold">State</th>
-                          <th className="px-3 py-2 font-semibold">Last changed</th>
+                          {['State', 'Last changed'].map((label) => <th key={label} className={TABLE_HEADING_CLASS}>{label}</th>)}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-border">
@@ -1072,7 +1076,7 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
                           <td className="px-3 py-2.5">
                             <div className="flex items-center gap-2">
                               <span className="font-medium text-foreground">{purpose.label}</span>
-                              {dirty && <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-800">Changed</Badge>}
+                              {dirty && <Badge variant="outline" className={WARNING_BADGE_CLASS}>Changed</Badge>}
                             </div>
                             <p className="mt-0.5 max-w-xl text-[11px] leading-4 text-muted-foreground">{purpose.description}</p>
                           </td>
@@ -1122,7 +1126,7 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
               </div>
             )}
             <div className="mt-4 flex items-start gap-3 text-xs leading-5 text-muted-foreground">
-              <Server className="mt-0.5 h-4 w-4 shrink-0" />
+              <Server className={FIELD_ICON_CLASS} />
               <div>
                 <p>Microsoft application configuration remains protected in Vercel. Mailbox addresses and purpose assignments contain no credentials and are stored server-side in Supabase.</p>
                 <p className="mt-1">Every message uses its assigned Microsoft 365 mailbox through Microsoft Graph. Failed or uncertain deliveries remain reserved for controlled review.</p>
@@ -1180,53 +1184,27 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
               description="Choose how FCOS looks and behaves for your account across browsers and devices."
             >
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                <div className="space-y-1.5">
-                  <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Appearance</Label>
-                  <Select value={appearanceMode} onValueChange={setAppearanceMode}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="system">Follow system</SelectItem>
-                      <SelectItem value="light">Light</SelectItem>
-                      <SelectItem value="dark">Dark</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs leading-relaxed text-muted-foreground">Light is the company default. You can still follow the system or choose Dark for your account.</p>
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Glass intensity</Label>
-                  <Select value={glassIntensity} onValueChange={setGlassIntensity}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="clear">Clear</SelectItem>
-                      <SelectItem value="balanced">Balanced</SelectItem>
-                      <SelectItem value="tinted">Tinted</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs leading-relaxed text-muted-foreground">Controls navigation and transient surfaces only; financial content stays opaque.</p>
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Sidebar behavior</Label>
-                  <Select value={sidebarMode} onValueChange={setSidebarMode}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="fixed">Icon only</SelectItem>
-                      <SelectItem value="auto_hide">Icon and caption</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs leading-relaxed text-muted-foreground">
-                    Icon and caption expands the complete dock while the pointer is anywhere over the sidebar, then magnifies the active row.
-                  </p>
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Table density</Label>
-                  <Select value={tableDensity} onValueChange={setTableDensity}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="compact">Compact</SelectItem>
-                      <SelectItem value="comfort">Comfort</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+                <WorkspacePreference label="Appearance" value={appearanceMode} onChange={setAppearanceMode}
+                  detail="Light is the company default. You can still follow the system or choose Dark for your account.">
+                  <SelectItem value="system">Follow system</SelectItem>
+                  <SelectItem value="light">Light</SelectItem>
+                  <SelectItem value="dark">Dark</SelectItem>
+                </WorkspacePreference>
+                <WorkspacePreference label="Glass intensity" value={glassIntensity} onChange={setGlassIntensity}
+                  detail="Controls navigation and transient surfaces only; financial content stays opaque.">
+                  <SelectItem value="clear">Clear</SelectItem>
+                  <SelectItem value="balanced">Balanced</SelectItem>
+                  <SelectItem value="tinted">Tinted</SelectItem>
+                </WorkspacePreference>
+                <WorkspacePreference label="Sidebar behavior" value={sidebarMode} onChange={setSidebarMode}
+                  detail="Icon and caption expands the complete dock while the pointer is anywhere over the sidebar, then magnifies the active row.">
+                  <SelectItem value="fixed">Icon only</SelectItem>
+                  <SelectItem value="auto_hide">Icon and caption</SelectItem>
+                </WorkspacePreference>
+                <WorkspacePreference label="Table density" value={tableDensity} onChange={setTableDensity}>
+                  <SelectItem value="compact">Compact</SelectItem>
+                  <SelectItem value="comfort">Comfort</SelectItem>
+                </WorkspacePreference>
               </div>
               <div className="mt-4 border-t border-border pt-4">
                 <Button
@@ -1274,36 +1252,28 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
         </TabsContent>
 
         <TabsContent value="ai" className="mt-0">
-          <div className="space-y-5">
-          {isAdministrator && (
-            <AiModelSettingsCard
-              title="Dashboard AI Search"
-              description="Choose automatic routing or a manual model. Salesforce records are never sent to the model."
-              icon={Sparkles}
-              modelLabel="Dashboard AI selection"
-              models={aiModels}
-              selectedModelId={aiSettings?.modelId || ''}
-              savedModelId={baseAiModelId || ''}
-              usageByModel={dashboardUsageByModel}
-              periodLabel={aiUsage?.monthLabel || 'Current month'}
-              loading={aiSettingsLoading}
-              saving={saving}
-              error={aiSettingsError || (aiUsage && !aiUsage.available ? 'Usage tracking is unavailable. Model selection remains available.' : '')}
-              message={saved ? 'Dashboard AI model saved.' : ''}
-              canManage={isAdministrator}
-              apiConfigured={aiSettings?.apiConfigured === true}
-              storageAvailable={aiSettings?.storageAvailable !== false}
-              onModelChange={(modelId) => setAiSettings((current) => ({ ...current, modelId }))}
-              onSave={saveDashboardAiSettings}
-              onRefresh={loadAiSettings}
-              updatedAt={aiSettings?.updatedAt}
-              automaticRouting={aiSettings?.automaticRouting}
-              privacyNote="Only the user’s search sentence is sent. FCOS validates the structured result and builds Salesforce filters server-side."
-            />
+          {(isAdministrator || hasCapability('hedge_admin')) && (
+            <Suspense fallback={<p role="status">Loading AI model settings…</p>}>
+              <SettingsAiModels dashboard={isAdministrator ? {
+                models: aiModels,
+                selectedModelId: aiSettings?.modelId || '',
+                savedModelId: baseAiModelId || '',
+                usageByModel: dashboardUsageByModel,
+                periodLabel: aiUsage?.monthLabel || 'Current month',
+                loading: aiSettingsLoading,
+                saving,
+                error: aiSettingsError || (aiUsage && !aiUsage.available ? 'Usage tracking is unavailable. Model selection remains available.' : ''),
+                message: saved ? 'Dashboard AI model saved.' : '',
+                apiConfigured: aiSettings?.apiConfigured === true,
+                storageAvailable: aiSettings?.storageAvailable !== false,
+                onModelChange: (modelId) => setAiSettings((current) => ({ ...current, modelId })),
+                onSave: saveDashboardAiSettings,
+                onRefresh: loadAiSettings,
+                updatedAt: aiSettings?.updatedAt,
+                automaticRouting: aiSettings?.automaticRouting,
+              } : null} />
+            </Suspense>
           )}
-          {(isAdministrator || hasCapability('hedge_admin')) && <MarketAssistantSettings />}
-          {isAdministrator && <EmailRouterAdvisorAiSettings />}
-          </div>
         </TabsContent>
 
         <TabsContent value="health" className="mt-0">

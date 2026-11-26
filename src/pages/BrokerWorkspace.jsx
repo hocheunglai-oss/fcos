@@ -1,11 +1,13 @@
+import { lazy, Suspense } from 'react';
 import { BadgeDollarSign, Settings2 } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/lib/AuthContext';
 import BrokerRegister from '@/pages/BrokerRegister';
-import BrokerCommissionConfiguration from '@/components/brokers/BrokerCommissionConfiguration';
 import { Button } from '@/components/ui/button';
 import PageMethodology from '@/components/common/PageMethodology';
 import { BROKER_METHODOLOGIES } from '@/lib/pageMethodologyIndex';
+
+const BrokerCommissionConfiguration = lazy(() => import('@/components/brokers/BrokerCommissionConfiguration'));
 
 export default function BrokerWorkspace() {
   const { hasModuleAccess, hasCapability } = useAuth();
@@ -33,7 +35,11 @@ export default function BrokerWorkspace() {
         </div>
         <div className="shrink-0"><PageMethodology {...activeMethodology} size="sm" /></div>
       </div>
-      {activeTab === 'configuration' ? <BrokerCommissionConfiguration /> : <BrokerRegister />}
+      {activeTab === 'configuration' ? (
+        <Suspense fallback={<div role="status" className="p-4">Loading configuration…</div>}>
+          <BrokerCommissionConfiguration />
+        </Suspense>
+      ) : <BrokerRegister />}
     </div>
   );
 }

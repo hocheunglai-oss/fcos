@@ -14,7 +14,6 @@ import {
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/lib/AuthContext';
 import SettingsPage from '@/pages/Settings';
-import UniversalAuditTrail from '@/pages/UniversalAuditTrail';
 import PageHeader from '@/components/common/PageHeader';
 import PageMethodology from '@/components/common/PageMethodology';
 import { Button } from '@/components/ui/button';
@@ -22,6 +21,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { SETTINGS_METHODOLOGIES } from '@/lib/pageMethodologyIndex';
 import { APP_VERSION } from '@/lib/appVersionMeta';
 
+const UniversalAuditTrail = lazy(() => import('@/pages/UniversalAuditTrail'));
 const AdminControl = lazy(() => import('@/pages/AdminControl'));
 const FinanceSettings = lazy(() => import('@/components/settings/FinanceSettings'));
 const FcosUpdatesPanel = lazy(() => import('@/components/admin/FcosUpdatesPanel'));
@@ -68,6 +68,10 @@ function normalizeLegacySection(section, panel) {
   return section || 'my';
 }
 
+function LoadingSection({ children }) {
+  return <p role="status" className="p-6 text-sm text-muted-foreground">{children}</p>;
+}
+
 function FcosUpdatesSection({ methodologyAction }) {
   return (
     <div className="workspace-administration-canvas mx-auto max-w-7xl p-6 lg:p-8">
@@ -79,7 +83,7 @@ function FcosUpdatesSection({ methodologyAction }) {
         actions={methodologyAction}
       />
       <div className="mt-5">
-        <Suspense fallback={<p role="status" className="p-6 text-sm text-muted-foreground">Loading FCOS Updates…</p>}>
+        <Suspense fallback={<LoadingSection>Loading FCOS Updates…</LoadingSection>}>
           <FcosUpdatesPanel />
         </Suspense>
       </div>
@@ -201,16 +205,18 @@ export default function SettingsWorkspace() {
       <main className="settings-content min-w-0">
         {active === 'my' && <SettingsPage section="my" methodologyAction={methodologyAction} />}
         {active === 'people' && (
-          <Suspense fallback={<p role="status" className="p-6 text-sm text-muted-foreground">Loading People &amp; Access…</p>}>
+          <Suspense fallback={<LoadingSection>Loading People &amp; Access…</LoadingSection>}>
             <AdminControl methodologyAction={methodologyAction} />
           </Suspense>
         )}
-        {active === 'email-delivery' && <SettingsPage section="email-delivery" methodologyAction={methodologyAction} />}
-        {active === 'finance' && <Suspense fallback={<div role="status" className="p-6 text-sm text-muted-foreground">Loading Finance settings…</div>}><FinanceSettings methodologyAction={methodologyAction} /></Suspense>}
-        {active === 'ai' && <SettingsPage section="ai" methodologyAction={methodologyAction} />}
+        {active === 'finance' && <Suspense fallback={<LoadingSection>Loading Finance settings…</LoadingSection>}><FinanceSettings methodologyAction={methodologyAction} /></Suspense>}
+        {['email-delivery', 'ai', 'health'].includes(active) && <SettingsPage key={active} section={active} methodologyAction={methodologyAction} />}
         {active === 'updates' && <FcosUpdatesSection methodologyAction={methodologyAction} />}
-        {active === 'health' && <SettingsPage section="health" methodologyAction={methodologyAction} />}
-        {active === 'audit' && <UniversalAuditTrail methodologyAction={methodologyAction} />}
+        {active === 'audit' && (
+          <Suspense fallback={<LoadingSection>Loading Audit Trail…</LoadingSection>}>
+            <UniversalAuditTrail methodologyAction={methodologyAction} />
+          </Suspense>
+        )}
       </main>
     </div>
   );
