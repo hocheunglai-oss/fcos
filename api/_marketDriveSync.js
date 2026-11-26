@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { CONNECTION_INTEGRATIONS } from '../src/lib/connectionChecklist.js';
 import { marketPublicationEligible, marketReportLimits, parseMarketReportPdf } from './_marketIntelligence.js';
-import { processMarketIntelligenceDate, publishMarketDataQualityAlert, scanExpectedMarketSessions } from './_marketIntelligenceTrading.js';
+import { marketBriefSourceHash, processMarketIntelligenceDate, publishMarketDataQualityAlert, scanExpectedMarketSessions } from './_marketIntelligenceTrading.js';
+import { isCompletedReportPair } from './_marketReportDates.js';
 import { reconcileMarketIntradayDate } from './_marketIntraday.js';
 import { secondaryMopsFailureMessage } from './_marketSourceHealth.js';
 
@@ -11,6 +12,11 @@ const DRIVE_PDF_MIME_TYPE = 'application/pdf';
 const DRIVE_CSV_MIME_TYPE = 'text/csv';
 const MAX_SECONDARY_MOPS_CSV_BYTES = 2 * 1024 * 1024;
 const DEFAULT_IMPORT_LIMIT = 25;
+const SECONDARY_IMPORT_ADMISSION_MS = 35_000;
+const PDF_IMPORT_ADMISSION_MS = 65_000;
+// Leave room for the 90-second commentary call and final ledger write within the relay deadline.
+const BRIEF_ADMISSION_MS = 115_000;
+const MAX_BRIEFS_PER_SYNC = 3;
 // The licensed local audit inspected 855 downloaded files, including 23 extra
 // local copies. The governed Drive replay is pinned to the files that actually
 // exist in the two approved Drive folders: 832 PDFs, with one byte duplicate.
@@ -598,30 +604,45 @@ async function loadStoredReportIndex(client) {
   return { completeMd5, storedByMd5 };
 }
 
-export async function loadPendingMarketIntelligenceDates(client, { now = new Date(), limit = 5 } = {}) {
+export async function loadPendingMarketIntelligenceDates(client, { now = new Date() } = {}) {
   const cutoff = new Date(now);
   if (Number.isNaN(cutoff.getTime())) throw syncError('Market reconciliation time is invalid.', 'MARKET_DRIVE_TIME_INVALID', 500);
-  cutoff.setUTCDate(cutoff.getUTCDate() - 14);
+  const upperBound = cutoff.toISOString().slice(0, 10);
+  cutoff.setUTCDate(cutoff.getUTCDate() - 45);
   const importsResult = await client.from('market_report_imports')
-    .select('report_date,source_document_type')
+    .select('report_date,source_document_type,source_hash')
+    .eq('status', 'completed')
+    .in('source_document_type', ['bunkerwire', 'european_marketscan'])
     .gte('report_date', cutoff.toISOString().slice(0, 10))
+    .lte('report_date', upperBound)
     .order('report_date', { ascending: false })
     .limit(500);
   if (importsResult.error) throw syncError('Paired market reports could not be reconciled.', 'MARKET_INTELLIGENCE_RECONCILIATION_LOAD_FAILED');
-  const typesByDate = new Map();
+  const reportsByDate = new Map();
   for (const row of importsResult.data || []) {
-    if (!row.report_date || !['bunkerwire', 'european_marketscan'].includes(row.source_document_type)) continue;
-    const types = typesByDate.get(row.report_date) || new Set();
-    types.add(row.source_document_type);
-    typesByDate.set(row.report_date, types);
+    const reports = reportsByDate.get(row.report_date) || [];
+    reports.push(row);
+    reportsByDate.set(row.report_date, reports);
   }
-  const pairedDates = [...typesByDate.entries()]
-    .filter(([, types]) => types.size === 2)
+  const pairedDates = [...reportsByDate.entries()]
+    .filter(([, reports]) => new Set(reports.map((row) => row.source_document_type)).size === 2)
     .map(([reportDate]) => reportDate)
     .sort((left, right) => right.localeCompare(left));
-  return pairedDates
-    .slice(0, Math.max(1, Math.min(Number(limit) || 5, 10)))
-    .sort();
+  if (!pairedDates.length) return [];
+
+  const briefs = await client.from('market_intelligence_briefs')
+    .select('report_date,source_hash,revision,completeness')
+    .in('report_date', pairedDates)
+    .order('revision', { ascending: false });
+  if (briefs.error) throw syncError('Completed market briefs could not be read.', 'MARKET_INTELLIGENCE_RECONCILIATION_LOAD_FAILED');
+  const latestBriefs = new Map();
+  for (const brief of briefs.data || []) {
+    if (!latestBriefs.has(brief.report_date)) latestBriefs.set(brief.report_date, brief);
+  }
+  return pairedDates.filter((date) => {
+    const brief = latestBriefs.get(date);
+    return !isCompletedReportPair(brief) || brief.source_hash !== marketBriefSourceHash(reportsByDate.get(date));
+  });
 }
 
 async function completeCommentaryPair(client, fetchImpl, accessToken, reportDate, contexts, parseReport) {
@@ -684,7 +705,7 @@ async function finishRun(client, runKey, summary, status, errorCode = null) {
     p_skipped_count: summary.skippedCount,
     p_imported_count: summary.importedCount,
     p_failed_count: summary.failedCount,
-    p_deferred_count: summary.deferredCount,
+    p_deferred_count: summary.deferredCount + summary.briefDeferredCount,
     p_error_code: errorCode,
   });
   if (result.error) throw syncError('Market sync outcome could not be recorded.', 'MARKET_DRIVE_RUN_FINISH_FAILED');
@@ -699,7 +720,10 @@ export async function runMarketReportDriveSync(client, {
   now = new Date(),
   importLimit = DEFAULT_IMPORT_LIMIT,
   processDerived = processMarketIntelligenceDate,
+  monotonicNow = () => performance.now(),
 } = {}) {
+  const startedAt = monotonicNow();
+  const elapsed = () => monotonicNow() - startedAt;
   if (!client || !accessToken) throw syncError('Market sync authorization is unavailable.', 'MARKET_DRIVE_AUTH_UNAVAILABLE', 503);
   if (!config?.accountEmail || !config?.rootFolderId || !config?.secondaryMopsCsv
       || !Array.isArray(config?.folders) || config.folders.length !== 2) {
@@ -721,6 +745,7 @@ export async function runMarketReportDriveSync(client, {
     mopsIncompleteCount: 0,
     mopsConflictCount: 0,
     briefCompletedCount: 0,
+    briefDeferredCount: 0,
     briefWaitingCount: 0,
     briefReconciledCount: 0,
     marketAlertsPublishedCount: 0,
@@ -749,7 +774,11 @@ export async function runMarketReportDriveSync(client, {
     summary.secondaryMopsDiscoveredCount = secondaryMopsFiles.length;
     summary.discoveredCount = files.length + secondaryMopsFiles.length;
 
-    for (const file of secondaryMopsFiles) {
+    for (const [index, file] of secondaryMopsFiles.entries()) {
+      if (elapsed() >= SECONDARY_IMPORT_ADMISSION_MS) {
+        summary.deferredCount += secondaryMopsFiles.length - index;
+        break;
+      }
       try {
         if (!file.md5) throw syncError('A secondary MOPS CSV has no Google Drive checksum.', 'MARKET_SECONDARY_CSV_CHECKSUM_MISSING', 409);
         if (file.size <= 0 || file.size > MAX_SECONDARY_MOPS_CSV_BYTES) {
@@ -826,11 +855,16 @@ export async function runMarketReportDriveSync(client, {
     }
     const orderedCandidates = prioritizeMarketDriveCandidates(candidates, storedByMd5);
     const limit = Math.max(1, Math.min(Number(importLimit) || DEFAULT_IMPORT_LIMIT, 50));
-    summary.deferredCount = Math.max(0, orderedCandidates.length - limit);
+    summary.deferredCount += Math.max(0, orderedCandidates.length - limit);
 
     const touchedReportDates = new Set();
     const commentaryByDate = new Map();
-    for (const file of orderedCandidates.slice(0, limit)) {
+    const importBatch = orderedCandidates.slice(0, limit);
+    for (const [index, file] of importBatch.entries()) {
+      if (elapsed() >= PDF_IMPORT_ADMISSION_MS) {
+        summary.deferredCount += importBatch.length - index;
+        break;
+      }
       try {
         if (file.size > marketReportLimits.maxBytes) throw syncError('A market report exceeds the configured PDF limit.', 'MARKET_REPORT_TOO_LARGE');
         const buffer = await driveBuffer(fetchImpl, accessToken, file.id);
@@ -904,13 +938,17 @@ export async function runMarketReportDriveSync(client, {
     }
 
     const pendingDerivedDates = await loadPendingMarketIntelligenceDates(client, { now });
-    const derivedDates = [...new Set([...touchedReportDates, ...pendingDerivedDates])].sort();
-    for (const reportDate of derivedDates) {
+    const derivedDates = [...new Set([...pendingDerivedDates, ...[...touchedReportDates].sort().reverse()])];
+    for (const [index, reportDate] of derivedDates.entries()) {
+      if (index >= MAX_BRIEFS_PER_SYNC || elapsed() >= BRIEF_ADMISSION_MS) {
+        summary.briefDeferredCount = derivedDates.length - index;
+        break;
+      }
       try {
         const touched = touchedReportDates.has(reportDate);
-        const commentaryContexts = touched
-          ? await completeCommentaryPair(client, fetchImpl, accessToken, reportDate, commentaryByDate.get(reportDate) || [], parseReport)
-          : [];
+        const commentaryContexts = await completeCommentaryPair(
+          client, fetchImpl, accessToken, reportDate, commentaryByDate.get(reportDate) || [], parseReport,
+        );
         const derived = await processDerived(client, {
           reportDate,
           commentaryContexts,

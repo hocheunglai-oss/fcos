@@ -1,3 +1,4 @@
+import { marketBriefSourceHash } from '../api/_marketIntelligenceTrading.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
@@ -58,9 +59,13 @@ function clientMock({ knownMd5 = [], storedReports = [], secondaryImports = [], 
             ...storedReports,
           ], error: null }) }),
         };
-        if (table === 'market_report_imports' && columns === 'report_date,source_document_type') return {
-          gte: () => ({ order: () => ({ limit: async () => ({ data: pairedImports, error: null }) }) }),
-        };
+        if (table === 'market_report_imports' && columns === 'report_date,source_document_type,source_hash') {
+          const query = {
+            eq: () => query, in: () => query, gte: () => query, lte: () => query, order: () => query,
+            limit: async () => ({ data: pairedImports, error: null }),
+          };
+          return query;
+        }
         if (table === 'market_report_imports' && columns === 'id,source_document_type,source_hash') {
           const query = {
             eq: () => query,
@@ -382,6 +387,43 @@ test('hourly reconciliation retries recent paired derived work without reimporti
   assert.equal(repaired.importedCount, 0);
   assert.equal(repaired.briefReconciledCount, 1);
   assert.equal(drive.calls.some((url) => url.includes('alt=media')), false);
+});
+
+test('the hourly backlog checkpoints the newest pending pair and resumes without repeating it', async () => {
+  const now = new Date('2026-11-26T15:00:00Z');
+  const dates = ['2026-11-24', '2026-11-23', '2026-11-09'];
+  const pairedImports = dates.flatMap((date) => ['bunkerwire', 'european_marketscan'].map((type) => ({
+    report_date: date, source_document_type: type, source_hash: `${type}-${date}`,
+  })));
+  const completion = (date, revision = 1) => ({
+    report_date: date, revision, source_hash: marketBriefSourceHash(pairedImports.filter((row) => row.report_date === date)),
+    completeness: { completeReports: 2, requiredReports: 2 },
+  });
+  const briefs = [completion(dates[0])];
+  const client = clientMock({ pairedImports, briefs });
+  let elapsed = 0;
+  const visited = [];
+  const common = {
+    accessToken: 'token', config, now, fetchImpl: driveFetch().fetchImpl, monotonicNow: () => elapsed,
+    processDerived: async (_client, { reportDate }) => {
+      visited.push(reportDate);
+      briefs.unshift(completion(reportDate));
+      elapsed += 116_000;
+      return { status: 'completed' };
+    },
+  };
+  const first = await runMarketReportDriveSync(client, common);
+  assert.deepEqual(visited, ['2026-11-23']);
+  assert.equal(first.briefCompletedCount, 1);
+  assert.equal(first.briefDeferredCount, 1);
+  assert.equal(client.rpcCalls.findLast(({ name }) => name === 'finish_market_report_sync_run').payload.p_deferred_count, 1);
+  elapsed = 0;
+  const next = await runMarketReportDriveSync(client, { ...common, now: new Date('2026-11-26T16:00:00Z') });
+  assert.deepEqual(visited, ['2026-11-23', '2026-11-09']);
+  assert.equal(next.briefDeferredCount, 0);
+
+  pairedImports.push({ report_date: dates[1], source_document_type: 'bunkerwire', source_hash: 'corrected-source' });
+  assert.deepEqual(await loadPendingMarketIntelligenceDates(client, { now }), [dates[1]]);
 });
 
 test('hourly sync parses and atomically stores an unseen report', async () => {

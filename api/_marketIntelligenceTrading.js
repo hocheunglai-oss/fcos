@@ -1496,6 +1496,10 @@ function shadowScopeKey(row = {}) {
   ].join(':');
 }
 
+export function marketBriefSourceHash(reports) {
+  return hash(reports.map((row) => `${row.source_document_type}:${row.source_hash}`).sort().join('|'));
+}
+
 export async function processMarketIntelligenceDate(client, { reportDate, commentaryContexts = [], legacyComparisons = [], publishAlerts = true, recordShadow = true, reconcileDerived = false, forceDeterministicRevision = false } = {}) {
   const date = isoDate(reportDate);
   if (!date) throw intelligenceError('A valid report date is required.');
@@ -1515,7 +1519,7 @@ export async function processMarketIntelligenceDate(client, { reportDate, commen
   }
   const sourceRefs = (reportsResult.data || []).map((row) => ({ reportId: row.id, reportDate: row.report_date, sourceHash: row.source_hash, documentType: row.source_document_type }))
     .sort((left, right) => left.documentType.localeCompare(right.documentType) || left.sourceHash.localeCompare(right.sourceHash));
-  const sourceHash = hash(sourceRefs.map((row) => `${row.documentType}:${row.sourceHash}`).sort().join('|'));
+  const sourceHash = marketBriefSourceHash(reportsResult.data || []);
   const fallbackExpiryResult = await client.rpc('expire_market_forward_fallbacks_for_report', { p_report_date: date });
   if (fallbackExpiryResult.error) throw intelligenceError(`Verified-report fallback expiry could not be reconciled: ${fallbackExpiryResult.error.message}`, 502, 'MARKET_FALLBACK_EXPIRY_RECONCILIATION_FAILED');
   const [curve, deterministicObservationEvidence] = await Promise.all([
@@ -1539,7 +1543,8 @@ export async function processMarketIntelligenceDate(client, { reportDate, commen
   if (reconcileDerived || forceDeterministicRevision) {
     const briefResult = await client.from('market_intelligence_briefs').select('id,source_hash,revision,ai_status,model_id').eq('report_date', date).order('revision', { ascending: false }).limit(1);
     if (briefResult.error) throw intelligenceError(`Derived brief reconciliation state could not be loaded: ${briefResult.error.message}`, 502, 'MARKET_BRIEF_RECONCILIATION_FAILED');
-    reusedBrief = briefResult.data?.[0] || null;
+    const latestBrief = briefResult.data?.[0];
+    if (latestBrief && (forceDeterministicRevision || latestBrief.source_hash === sourceHash)) reusedBrief = latestBrief;
     if (reusedBrief) {
       const itemsResult = await client.from('market_intelligence_brief_items').select('*').eq('brief_id', reusedBrief.id).in('item_kind', ['driver', 'risk']).order('item_order');
       if (itemsResult.error) throw intelligenceError(`Derived brief items could not be reconciled: ${itemsResult.error.message}`, 502, 'MARKET_BRIEF_RECONCILIATION_FAILED');
