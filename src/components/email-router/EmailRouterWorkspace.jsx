@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Activity, Archive, CalendarOff, CheckCircle2, Inbox, Keyboard, Loader2, Mail, Newspaper, RefreshCw, Search, Send, Settings2, ShieldAlert, ShieldCheck, Trash2, X, XCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -15,15 +15,20 @@ import EmailMessageList from './EmailMessageList';
 import EmailMessageSheet, { EmailMessageActions, EmailMessageDetail } from './EmailMessageSheet';
 import EmailRedirectPanel from './EmailRedirectPanel';
 import EmailRoutingLeaveDialog from './EmailRoutingLeaveDialog';
-import EmailRouterSettings from './EmailRouterSettings';
 import EmailRouterOperationsDialog, { EmailRouterFreshness } from './EmailRouterOperationsDialog';
 import { navigationCacheOptions } from '@/lib/navigationCachePolicy';
 import { useAuth } from '@/lib/AuthContext';
 import { emailRouterShortcut, recordEmailRouterClientMetric } from '@/lib/emailRouterEnhancements';
 
+const EmailRouterSettings = lazy(() => import('./EmailRouterSettings'));
+
 const LIMIT = 30;
 const ACTION_STATUS_POLL_DELAYS = [1_500, 2_500, 4_000, 6_000, 8_000, 10_000];
 const ACTION_STATUS_POLL_TIMEOUT_MS = 75_000;
+const sharedClass0 = 'shrink-0 gap-1.5';
+const sharedClass1 = 'h-3.5 w-3.5';
+const sharedClass2 = 'rounded border bg-muted px-2 py-0.5';
+
 function messageError(data, fallback) {
   return data?.error || fallback || '';
 }
@@ -577,11 +582,11 @@ export default function EmailRouterWorkspace({ settingsOpen = false, onSettingsO
     />
     <section className="material-panel flex min-h-[620px] flex-col overflow-hidden rounded-[var(--radius)] border border-border bg-card xl:h-[calc(100dvh-8rem)]">
       <div className="app-navigation-caption-material email-router-commandbar flex shrink-0 items-center gap-3 overflow-x-auto border-b border-border px-3 py-2">
-        <Tabs value={folder} onValueChange={setFolder} className="shrink-0"><TabsList><TabsTrigger value="inbox" className="shrink-0 gap-1.5"><Inbox className="h-3.5 w-3.5" />Inbox</TabsTrigger><TabsTrigger value="sent" className="shrink-0 gap-1.5"><Send className="h-3.5 w-3.5" />Sent</TabsTrigger><TabsTrigger value="archive" className="shrink-0 gap-1.5"><Archive className="h-3.5 w-3.5" />Archive</TabsTrigger><TabsTrigger value="market_report" className="shrink-0 gap-1.5"><Newspaper className="h-3.5 w-3.5" />Market Report</TabsTrigger><TabsTrigger value="trash" className="shrink-0 gap-1.5"><Trash2 className="h-3.5 w-3.5" />Trash</TabsTrigger><TabsTrigger value="junk" className="shrink-0 gap-1.5 border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 hover:text-red-800 data-[state=active]:border-red-600 data-[state=active]:bg-red-600 data-[state=active]:text-white"><ShieldAlert className="h-3.5 w-3.5" />Junk</TabsTrigger></TabsList></Tabs>
+        <Tabs value={folder} onValueChange={setFolder} className="shrink-0"><TabsList><TabsTrigger value="inbox" className={sharedClass0}><Inbox className={sharedClass1} />Inbox</TabsTrigger><TabsTrigger value="sent" className={sharedClass0}><Send className={sharedClass1} />Sent</TabsTrigger><TabsTrigger value="archive" className={sharedClass0}><Archive className={sharedClass1} />Archive</TabsTrigger><TabsTrigger value="market_report" className={sharedClass0}><Newspaper className={sharedClass1} />Market Report</TabsTrigger><TabsTrigger value="trash" className={sharedClass0}><Trash2 className={sharedClass1} />Trash</TabsTrigger><TabsTrigger value="junk" className="shrink-0 gap-1.5 border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 hover:text-red-800 data-[state=active]:border-red-600 data-[state=active]:bg-red-600 data-[state=active]:text-white"><ShieldAlert className={sharedClass1} />Junk</TabsTrigger></TabsList></Tabs>
         <span className="h-7 shrink-0 border-l border-border" aria-hidden="true" />
         <span className="shrink-0 text-[11px] font-semibold uppercase text-blue-700">Actions</span>
         <EmailMessageActions message={detail} actionResult={actionResult} actionPending={submitting} onAction={openAction} />
-        {selectedBatchIds.size > 0 ? <div className="ml-auto flex shrink-0 items-center gap-2 rounded-full border border-sky-200 bg-sky-50 px-2 py-1 text-xs font-semibold text-sky-900"><span>{selectedBatchIds.size} selected for routing</span><button type="button" onClick={() => setSelectedBatchIds(new Set())} className="rounded-full p-0.5 hover:bg-sky-100" aria-label="Clear batch selection"><X className="h-3.5 w-3.5" /></button></div> : null}
+        {selectedBatchIds.size > 0 ? <div className="ml-auto flex shrink-0 items-center gap-2 rounded-full border border-sky-200 bg-sky-50 px-2 py-1 text-xs font-semibold text-sky-900"><span>{selectedBatchIds.size} selected for routing</span><button type="button" onClick={() => setSelectedBatchIds(new Set())} className="rounded-full p-0.5 hover:bg-sky-100" aria-label="Clear batch selection"><X className={sharedClass1} /></button></div> : null}
       </div>
       {batchResult ? <div className={`shrink-0 border-b px-3 py-2 text-xs ${batchResult.failed || batchResult.uncertain ? 'border-amber-200 bg-amber-50 text-amber-950' : 'border-emerald-200 bg-emerald-50 text-emerald-900'}`}>{batchResult.accepted} accepted · {batchResult.failed} failed · {batchResult.uncertain} uncertain. Definite failures remain selected; uncertain messages must be verified in Sent Items before any retry.</div> : null}
       <div className="flex min-h-0 flex-1 flex-col xl:flex-row">
@@ -596,14 +601,14 @@ export default function EmailRouterWorkspace({ settingsOpen = false, onSettingsO
     <EmailActionDialog open={Boolean(actionDialog)} onOpenChange={(open) => !open && setActionDialog(null)} action={actionDialog?.action} message={detail} submitting={submitting} onSubmit={submitAction} />
     <EmailRoutingLeaveDialog open={leaveOpen} onOpenChange={(open) => { setLeaveOpen(open); if (!open) loadRoutingOptions({ force: true }); }} canManageAll={isAdministrator} />
     <EmailRouterOperationsDialog open={operationsOpen} onOpenChange={setOperationsOpen} />
-    <Dialog open={shortcutsOpen} onOpenChange={setShortcutsOpen}><DialogContent className="sm:max-w-lg"><DialogHeader><DialogTitle>Keyboard shortcuts</DialogTitle><DialogDescription>Shortcuts are disabled while typing or while a dialog is open.</DialogDescription></DialogHeader><div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm"><kbd className="rounded border bg-muted px-2 py-0.5">J / ↓</kbd><span>Next message</span><kbd className="rounded border bg-muted px-2 py-0.5">K / ↑</kbd><span>Previous message</span><kbd className="rounded border bg-muted px-2 py-0.5">/ or S</kbd><span>Search mailbox</span><kbd className="rounded border bg-muted px-2 py-0.5">R</kbd><span>Focus routing panel</span><kbd className="rounded border bg-muted px-2 py-0.5">E</kbd><span>Archive selected message</span><kbd className="rounded border bg-muted px-2 py-0.5">M</kbd><span>Move to Market Report</span><kbd className="rounded border bg-muted px-2 py-0.5">Delete / #</kbd><span>Review move to Trash</span><kbd className="rounded border bg-muted px-2 py-0.5">?</kbd><span>Show shortcuts</span></div></DialogContent></Dialog>
+    <Dialog open={shortcutsOpen} onOpenChange={setShortcutsOpen}><DialogContent className="sm:max-w-lg"><DialogHeader><DialogTitle>Keyboard shortcuts</DialogTitle><DialogDescription>Shortcuts are disabled while typing or while a dialog is open.</DialogDescription></DialogHeader><div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm"><kbd className={sharedClass2}>J / ↓</kbd><span>Next message</span><kbd className={sharedClass2}>K / ↑</kbd><span>Previous message</span><kbd className={sharedClass2}>/ or S</kbd><span>Search mailbox</span><kbd className={sharedClass2}>R</kbd><span>Focus routing panel</span><kbd className={sharedClass2}>E</kbd><span>Archive selected message</span><kbd className={sharedClass2}>M</kbd><span>Move to Market Report</span><kbd className={sharedClass2}>Delete / #</kbd><span>Review move to Trash</span><kbd className={sharedClass2}>?</kbd><span>Show shortcuts</span></div></DialogContent></Dialog>
     {isAdministrator && <Dialog open={settingsOpen} onOpenChange={onSettingsOpenChange}>
       <DialogContent className="grid h-[min(92dvh,58rem)] grid-rows-[auto_minmax(0,1fr)] overflow-hidden p-0 sm:max-w-[min(96vw,92rem)]">
         <DialogHeader className="border-b border-border px-5 py-4 pr-12">
           <DialogTitle>Routing Setup</DialogTitle>
           <DialogDescription>Manage the routing directory, presets, leave rules, approved filing folders, and company routing learning.</DialogDescription>
         </DialogHeader>
-        <div className="min-h-0 overflow-y-auto p-4 lg:p-5"><EmailRouterSettings embedded /></div>
+        <div className="min-h-0 overflow-y-auto p-4 lg:p-5"><Suspense fallback={<p role="status">Loading routing setup…</p>}><EmailRouterSettings embedded /></Suspense></div>
       </DialogContent>
     </Dialog>}
   </div>;
