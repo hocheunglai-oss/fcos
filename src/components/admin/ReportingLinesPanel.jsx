@@ -11,6 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { useToast } from '@/components/ui/use-toast';
 
 const NONE = '__none__';
+const REPORT_STATUS_CLASS = 'border-blue-200 bg-blue-50 text-blue-700';
 
 function errorText(response, fallback = 'The reporting-line request could not be completed.') {
   return response?.data?.error || response?.error || fallback;
@@ -203,38 +204,36 @@ export default function ReportingLinesPanel() {
                   <TableCell>
                     <div className="flex flex-wrap items-center gap-2">
                       <div className="font-medium">{userName(employee)}</div>
-                      {isGeneralManager && <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700">General Manager · Reporting root</Badge>}
+                      {isGeneralManager && <Badge variant="outline" className={REPORT_STATUS_CLASS}>General Manager · Reporting root</Badge>}
                     </div>
                     {employee.email && <div className="text-xs text-muted-foreground">{employee.email}</div>}
                   </TableCell>
+                  {[
+                    { field: 'primaryManagerId', placeholder: 'No primary manager' },
+                    { field: 'secondaryManagerId', placeholder: 'No Advisory Manager' },
+                  ].map(({ field, placeholder }) => (
+                    <TableCell key={field}>
+                      {isGeneralManager ? (
+                        <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">Not required</div>
+                      ) : (
+                        <>
+                          <Select value={draft[field] || NONE} onValueChange={(value) => updateDraft(userId, field, value)} disabled={saving}>
+                            <SelectTrigger className="w-full"><SelectValue placeholder={placeholder} /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value={NONE}>{placeholder}</SelectItem>
+                              {optionUsers.map((user) => <SelectItem key={user.id} value={user.id}>{userName(user)}</SelectItem>)}
+                            </SelectContent>
+                          </Select>
+                          {field === 'secondaryManagerId' && invalid && <p className="mt-1 text-xs text-destructive">Choose two different managers.</p>}
+                        </>
+                      )}
+                    </TableCell>
+                  ))}
                   <TableCell>
-                    {isGeneralManager ? (
-                      <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">Not required</div>
-                    ) : (
-                      <Select value={draft.primaryManagerId || NONE} onValueChange={(value) => updateDraft(userId, 'primaryManagerId', value)} disabled={saving}>
-                        <SelectTrigger className="w-full"><SelectValue placeholder="No primary manager" /></SelectTrigger>
-                        <SelectContent><SelectItem value={NONE}>No primary manager</SelectItem>{optionUsers.map((user) => <SelectItem key={user.id} value={user.id}>{userName(user)}</SelectItem>)}</SelectContent>
-                      </Select>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    {isGeneralManager ? (
-                      <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">Not required</div>
-                    ) : (
-                      <>
-                        <Select value={draft.secondaryManagerId || NONE} onValueChange={(value) => updateDraft(userId, 'secondaryManagerId', value)} disabled={saving}>
-                          <SelectTrigger className="w-full"><SelectValue placeholder="No Advisory Manager" /></SelectTrigger>
-                          <SelectContent><SelectItem value={NONE}>No Advisory Manager</SelectItem>{optionUsers.map((user) => <SelectItem key={user.id} value={user.id}>{userName(user)}</SelectItem>)}</SelectContent>
-                        </Select>
-                        {invalid && <p className="mt-1 text-xs text-destructive">Choose two different managers.</p>}
-                      </>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    {isGeneralManager ? <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700">Reporting root</Badge> : line.valid === false || line.hierarchyValid === false ? <Badge variant="outline" className="border-red-200 bg-red-50 text-red-700">Invalid</Badge> : <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700"><CheckCircle2 className="mr-1 h-3 w-3" />Valid</Badge>}
+                    {isGeneralManager ? <Badge variant="outline" className={REPORT_STATUS_CLASS}>Reporting root</Badge> : line.valid === false || line.hierarchyValid === false ? <Badge variant="outline" className="border-red-200 bg-red-50 text-red-700">Invalid</Badge> : <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700"><CheckCircle2 className="mr-1 h-3 w-3" />Valid</Badge>}
                     {(line.path || line.hierarchyPath) && <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground"><GitBranch className="h-3 w-3" />{line.path || line.hierarchyPath}</div>}
                   </TableCell>
-                  <TableCell><div className="flex items-center gap-2"><span className="font-mono text-xs">{draft.expectedRevision}</span>{changedIds.has(userId) && <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700">Unsaved</Badge>}</div></TableCell>
+                  <TableCell><div className="flex items-center gap-2"><span className="font-mono text-xs">{draft.expectedRevision}</span>{changedIds.has(userId) && <Badge variant="outline" className={REPORT_STATUS_CLASS}>Unsaved</Badge>}</div></TableCell>
                 </TableRow>
               );
             })}

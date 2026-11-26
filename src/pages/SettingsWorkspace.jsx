@@ -14,7 +14,6 @@ import {
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/lib/AuthContext';
 import SettingsPage from '@/pages/Settings';
-import AdminControl from '@/pages/AdminControl';
 import UniversalAuditTrail from '@/pages/UniversalAuditTrail';
 import PageHeader from '@/components/common/PageHeader';
 import PageMethodology from '@/components/common/PageMethodology';
@@ -23,6 +22,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { SETTINGS_METHODOLOGIES } from '@/lib/pageMethodologyIndex';
 import { APP_VERSION } from '@/lib/appVersionMeta';
 
+const AdminControl = lazy(() => import('@/pages/AdminControl'));
 const FinanceSettings = lazy(() => import('@/components/settings/FinanceSettings'));
 const FcosUpdatesPanel = lazy(() => import('@/components/admin/FcosUpdatesPanel'));
 
@@ -200,7 +200,11 @@ export default function SettingsWorkspace() {
 
       <main className="settings-content min-w-0">
         {active === 'my' && <SettingsPage section="my" methodologyAction={methodologyAction} />}
-        {active === 'people' && <AdminControl methodologyAction={methodologyAction} />}
+        {active === 'people' && (
+          <Suspense fallback={<p role="status" className="p-6 text-sm text-muted-foreground">Loading People &amp; Access…</p>}>
+            <AdminControl methodologyAction={methodologyAction} />
+          </Suspense>
+        )}
         {active === 'email-delivery' && <SettingsPage section="email-delivery" methodologyAction={methodologyAction} />}
         {active === 'finance' && <Suspense fallback={<div role="status" className="p-6 text-sm text-muted-foreground">Loading Finance settings…</div>}><FinanceSettings methodologyAction={methodologyAction} /></Suspense>}
         {active === 'ai' && <SettingsPage section="ai" methodologyAction={methodologyAction} />}
