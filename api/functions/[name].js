@@ -3,6 +3,7 @@ import { listCompanyFxHistory, saveHistoricalCompanyFxRate } from '../_companyFx
 import { setManagedUserActivation } from '../_fcunoManagedActivation.js';
 import { deploymentSafeSupabaseFetch } from '../_deploymentReadOnlyFetch.js';
 import { withDeploymentRequestSafety } from '../_deploymentReadOnly.js';
+import { deploymentHeader, marketCronDeploymentId, relayLiveMarketCron } from '../_marketCronIngress.js';
 import { activeStemLineItems } from '../../src/lib/stemLineVisibility.js';
 import { loadEffectiveGroupAccess, permissionCanView, reportArchiveAccessLevel, REPORT_ARCHIVE_MODULE_ID, readAllAccessRows, serializeGroupUser, accessOperationError } from '../_accessGroups.js';
 import { AUTO_AI_MODEL, AI_MODEL_SELECTIONS, AI_ROUTING_VERSION, isAllowedAiSelection, automaticRoutingFor, resolveAiModel } from '../_aiModelRouting.js';
@@ -18574,6 +18575,10 @@ async function hedgeDeskMaintenanceCron(body = {}, req = null) {
 
 async function marketReportDriveSyncCron(_body = {}, req = null) {
   requireCronAuthorization(req);
+  const relayedDeployment = req.headers?.[deploymentHeader];
+  if (relayedDeployment && relayedDeployment !== marketCronDeploymentId()) {
+    throw appError('The live deployment changed before the scheduled Market sync could start.', 409, 'MARKET_CRON_DEPLOYMENT_CHANGED');
+  }
   requireExternalActionGate('google_drive');
   const client = supabaseAdminClient();
   const accessToken = await googleDriveMarketAccessToken();
@@ -19478,6 +19483,13 @@ async function handler(req, res) {
         if (handlerPolicy && typeof res?.setHeader === 'function') {
           res.setHeader('X-FCOS-Handler-Mutation', handlerPolicy.mutation ? '1' : '0');
           res.setHeader('X-FCOS-External-Action', handlerPolicy.externalAction ? '1' : '0');
+        }
+        if (name === 'marketReportDriveSyncCron' && isDeploymentReadOnly()) {
+          const relayed = await relayLiveMarketCron(req);
+          if (relayed) {
+            res.setHeader('cache-control', 'no-store');
+            return sendJson(res, await relayed.json(), relayed.status);
+          }
         }
         // Fixed mutation/external-action routes, including cron, are rejected
         // before authentication can bind or provision an identity. The mixed

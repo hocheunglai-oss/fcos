@@ -276,3 +276,28 @@ test('release identity returns only embedded nonsecret receipt fields without an
     assert.equal(rejected.statusCode, 405);
   } finally { globalThis.fetch = original; }
 });
+
+test('a relayed Market cron cannot write after the canonical deployment changes', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => assert.fail('stale relay must stop before contacting a provider'));
+  const oldSecret = process.env.CRON_SECRET;
+  const oldId = process.env.VERCEL_DEPLOYMENT_ID;
+  process.env.CRON_SECRET = 'test-cron-secret';
+  process.env.VERCEL_DEPLOYMENT_ID = 'dpl_replacement';
+  try {
+    const res = response();
+    await dispatcher({
+      method: 'GET',
+      url: '/api/functions/marketReportDriveSyncCron',
+      headers: {
+        host: canonicalHost,
+        authorization: 'Bearer test-cron-secret',
+        'x-fcos-market-cron-deployment': 'dpl_previous',
+      },
+    }, res);
+    assert.equal(res.statusCode, 409);
+    assert.equal(JSON.parse(res.body).code, 'MARKET_CRON_DEPLOYMENT_CHANGED');
+  } finally {
+    if (oldSecret === undefined) delete process.env.CRON_SECRET; else process.env.CRON_SECRET = oldSecret;
+    if (oldId === undefined) delete process.env.VERCEL_DEPLOYMENT_ID; else process.env.VERCEL_DEPLOYMENT_ID = oldId;
+  }
+});

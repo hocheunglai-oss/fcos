@@ -1,5 +1,6 @@
 import { createRequire } from 'node:module';
-import { withDeploymentRequestSafety } from './_deploymentReadOnly.js';
+import { isDeploymentReadOnly, withDeploymentRequestSafety } from './_deploymentReadOnly.js';
+import { deploymentHeader, marketCronDeploymentId } from './_marketCronIngress.js';
 
 const require = createRequire(import.meta.url);
 const receipt = require('./_runtime-build-receipt.json');
@@ -23,6 +24,8 @@ export default withDeploymentRequestSafety(function releaseIdentity(req, res) {
     res.setHeader('allow', 'GET');
     return res.end(JSON.stringify({ error: 'Method not allowed.' }));
   }
+  const deploymentId = marketCronDeploymentId();
+  if (deploymentId && !isDeploymentReadOnly()) res.setHeader(deploymentHeader, deploymentId);
   res.statusCode = 200;
   return res.end(JSON.stringify(publicReleaseIdentity()));
 });
