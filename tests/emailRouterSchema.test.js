@@ -247,7 +247,8 @@ test('Email Router action status is page-level and not duplicated in the message
   assert.match(workspace, /<ResultNotice result=\{actionResult\} compact \/>/);
   assert.doesNotMatch(page, /Mailbox<\/Button>|activeTab|MailSearch/);
   assert.match(workspace, /<Settings2 \/>[\s\S]*Routing Setup[\s\S]*<CalendarOff \/>[\s\S]*Routing Leave/);
-  assert.match(workspace, /<EmailRouterSettings embedded \/>/);
+  assert.match(workspace, /lazy\(\(\) => import\('\.\/EmailRouterSettings'\)\)/);
+  assert.match(workspace, /<EmailRouterSettings \/>/);
   assert.doesNotMatch(workspace, /eyebrow="Operations"|messages loaded|description="Review connected mailbox traffic/);
   assert.doesNotMatch(workspace, /<ResultNotice result=\{actionResult\} \/>\s*<section/);
   assert.match(workspace, /messageId: sourceMessage\.id/);
