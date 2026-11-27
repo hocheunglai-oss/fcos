@@ -597,6 +597,38 @@ test('hourly sync fails closed on the wrong Google account and records a redacte
   assert.equal(finished.payload.p_error_code, 'MARKET_DRIVE_IDENTITY_MISMATCH');
 });
 
+test('hourly sync completes a valid import while reporting separate rejected PDFs', async () => {
+  const { createHash } = await import('node:crypto');
+  const files = ['reject-report-one', 'accept-report-two', 'reject-report-three'].map((id, index) => {
+    const binary = Buffer.from(`%PDF-report-${id}`);
+    return { id, name: `BW_2026082${index}.pdf`, mimeType: 'application/pdf', size: binary.length,
+      md5Checksum: createHash('md5').update(binary).digest('hex'), modifiedTime: '2026-08-23T10:00:00Z',
+      documentType: 'bunkerwire', binary };
+  });
+  const drive = driveFetch({ files, binaryById: Object.fromEntries(files.map(({ id, binary }) => [id, binary])) });
+  const client = clientMock();
+  const result = await runMarketReportDriveSync(client, {
+    accessToken: 'token', fetchImpl: drive.fetchImpl, config, now: new Date('2026-08-23T10:00:00Z'),
+    parseReport: async (_buffer, { filename }) => {
+      if (filename !== files[1].name) throw Object.assign(new Error('PDF contains no prices'), { code: 'MARKET_REPORT_NO_VALUES' });
+      return { sourceHash: 'a'.repeat(64), reportDate: '2026-08-21', observations: [{ sourceSymbol: 'MFSPD00', price: 700 }] };
+    },
+    processDerived: async () => ({ status: 'waiting_for_pair' }),
+  });
+  assert.equal(result.status, 'completed');
+  assert.equal(result.importedCount, 1);
+  assert.equal(result.failedCount, 2);
+  assert.equal(result.runFailureCount, 0);
+  assert.deepEqual(result.fileFailures, [
+    { fileId: files[0].id, filename: files[0].name, sourceType: 'bunkerwire', reportDate: '2026-08-20', code: 'MARKET_REPORT_NO_VALUES' },
+    { fileId: files[2].id, filename: files[2].name, sourceType: 'bunkerwire', reportDate: '2026-08-22', code: 'MARKET_REPORT_NO_VALUES' },
+  ]);
+  const outcome = client.rpcCalls.find(({ name }) => name === 'finish_market_report_sync_run').payload;
+  assert.equal(outcome.p_status, 'completed');
+  assert.equal(outcome.p_failed_count, 2);
+  assert.equal(outcome.p_error_code, null);
+});
+
 test('hourly sync surfaces a quarantined MOPS conflict without retrying delivery actions', async () => {
   const pdf = Buffer.from('%PDF-conflicting-report');
   const md5 = (await import('node:crypto')).createHash('md5').update(pdf).digest('hex');

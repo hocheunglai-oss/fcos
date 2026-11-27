@@ -29,6 +29,23 @@ test('Bunkerwire parsing keeps delivered, posted and cargo symbols deterministic
   assert.equal(result.observations.find((row) => row.sourceSymbol === 'CB3AN00').price, 701);
 });
 
+test('a uniquely relocated Kaohsiung posted row keeps its actual page and does not substitute holiday N/As', () => {
+  const masthead = 'Platts Bunkerwire November 9, 2026\nMFSPD00 NA NA AMFSA00 NA NANA';
+  const posted = 'Kaohsiung CBGAP00 1201.000 CB1AR00 811.000 CB3AN00 701.000';
+  const pages = [masthead, 'page 2', 'PUAFT00 NA–NA NA NA', 'page 4', 'page 5', posted];
+  const result = parseMarketReportText(pages.join('\n'), { documentType: 'bunkerwire', pageTexts: pages });
+  assert.deepEqual(result.observations.map(basicObservation), [
+    { sourceSymbol: 'CBGAP00', price: 1201, dayChange: null, sourcePage: 6 },
+    { sourceSymbol: 'CB1AR00', price: 811, dayChange: null, sourcePage: 6 },
+    { sourceSymbol: 'CB3AN00', price: 701, dayChange: null, sourcePage: 6 },
+  ]);
+  assert.deepEqual(result.publishedNaSymbols, ['MFSPD00', 'AMFSA00', 'PUAFT00']);
+  for (const invalid of [[...pages, posted], [...pages.slice(0, 5), 'Kaohsiung CBGAP00 1201.000']]) {
+    assert.throws(() => parseMarketReportText(invalid.join('\n'), { documentType: 'bunkerwire', pageTexts: invalid }),
+      { code: 'MARKET_REPORT_NO_VALUES' });
+  }
+});
+
 test('Bunkerwire parsing adds all three exact Hong Kong delivered symbols', () => {
   const result = parseMarketReportText(`
     Bunkerwire Aug 19, 2026

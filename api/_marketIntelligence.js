@@ -46,6 +46,9 @@ const DOCUMENT_SYMBOLS = Object.freeze({
   ],
 });
 
+const KAOHSIUNG_POSTED_SYMBOLS = new Set(['CBGAP00', 'CB1AR00', 'CB3AN00']);
+const KAOHSIUNG_POSTED_ROW = /^[ \t]*Kaohsiung[ \t]+CBGAP00[ \t]+\d+(?:\.\d+)?[ \t]+CB1AR00[ \t]+\d+(?:\.\d+)?[ \t]+CB3AN00[ \t]+\d+(?:\.\d+)?[ \t]*$/gim;
+
 const SIGNED_VALUE_SYMBOLS = new Set(['FQLSM01', 'FQLSM02', 'MSJSL00', 'MSKSL00', 'MSLSL00', 'MSMSL00']);
 const MONTH_TOKEN = /\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\b/ig;
 const MONTH_NUMBERS = Object.freeze({ jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 });
@@ -276,8 +279,7 @@ function observationContractMetadata(text, symbol, reportDate) {
   };
 }
 
-function symbolObservation(text, symbol, documentType, reportDate) {
-  const sourcePage = documentType === 'european_marketscan' ? EUROPEAN_SOURCE_PAGES[symbol] : SOURCE_PAGES[symbol];
+function symbolObservation(text, symbol, reportDate, sourcePage) {
   const escaped = symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const pricePattern = SIGNED_VALUE_SYMBOLS.has(symbol) ? '[+-]?\\d+(?:\\.\\d+)?' : '\\d+(?:\\.\\d+)?';
   const exact = new RegExp(`${escaped}\\s+(?:\\d+(?:\\.\\d+)?\\s*-\\s*\\d+(?:\\.\\d+)?\\s+)?(${pricePattern})\\s+([+-]?\\d+(?:\\.\\d+)?)`, 'i').exec(text);
@@ -287,14 +289,11 @@ function symbolObservation(text, symbol, documentType, reportDate) {
   return null;
 }
 
-function symbolAvailability(text, symbol, documentType, reportDate) {
-  const sourcePage = documentType === 'european_marketscan' ? EUROPEAN_SOURCE_PAGES[symbol] : SOURCE_PAGES[symbol];
+function symbolAvailability(text, symbol, reportDate, sourcePage) {
   const escaped = symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  // Platts renders unavailable table cells as either "NA" or the compact
-  // adjacent-cell form "NANA". Match only immediately after the configured
-  // symbol so another row's N/A cannot be attributed to this series.
-  const publishedNa = new RegExp(`(?:^|\\s)${escaped}\\s+NA(?:\\s*NA)?(?:\\s|$)`, 'i').test(text)
-    || new RegExp(`(?:^|\\s)${escaped}\\s+NANA(?:\\s|$)`, 'i').test(text);
+  // Platts prints N/A as separate or compact cells, and may prefix the
+  // assessment with an unavailable low-high range.
+  const publishedNa = new RegExp(`(?:^|\\s)${escaped}\\s+(?:NA\\s*-\\s*NA\\s+)?NA(?:\\s*NA)?(?:\\s|$)`, 'i').test(text);
   return {
     sourceSymbol: symbol,
     status: publishedNa ? 'published_na' : 'not_detected',
@@ -303,20 +302,36 @@ function symbolAvailability(text, symbol, documentType, reportDate) {
   };
 }
 
+function relocatedKaohsiungPostedRow(pageTexts) {
+  const expectedIndex = SOURCE_PAGES.CBGAP00 - 1;
+  const matches = pageTexts.flatMap((text, index) => Array.from(
+    normalizedReportText(text).matchAll(KAOHSIUNG_POSTED_ROW),
+    ([row]) => ({ row, index }),
+  ));
+  if (matches.length !== 1 || matches[0].index === expectedIndex) return null;
+  return matches[0];
+}
+
 export function parseMarketReportText(rawText, { documentType = null, filename = '', pageTexts = null } = {}) {
   const text = normalizedReportText(rawText);
   const type = detectedDocumentType(text, documentType, filename);
   if (!type) throw marketError('Choose whether this is Bunkerwire or European Marketscan.', 400, 'MARKET_REPORT_TYPE_REQUIRED');
   const reportDate = reportDateFrom(text, filename);
   if (!reportDate) throw marketError('The report date could not be detected.', 400, 'MARKET_REPORT_DATE_MISSING');
+  const relocatedPostedRow = type === 'bunkerwire' && Array.isArray(pageTexts)
+    ? relocatedKaohsiungPostedRow(pageTexts)
+    : null;
   const parsedSymbols = DOCUMENT_SYMBOLS[type].map((symbol) => {
     const sourcePage = type === 'european_marketscan' ? EUROPEAN_SOURCE_PAGES[symbol] : SOURCE_PAGES[symbol];
     const pageText = Array.isArray(pageTexts) && sourcePage ? normalizedReportText(pageTexts[sourcePage - 1] || '') : text;
-    const sourceText = pageText || text;
-    return {
-      observation: symbolObservation(sourceText, symbol, type, reportDate),
-      availability: symbolAvailability(sourceText, symbol, type, reportDate),
-    };
+    const movedRow = relocatedPostedRow && KAOHSIUNG_POSTED_SYMBOLS.has(symbol) ? relocatedPostedRow : null;
+    const sourceText = pageText || (movedRow ? '' : text);
+    const observation = symbolObservation(sourceText, symbol, reportDate, sourcePage);
+    const availability = symbolAvailability(sourceText, symbol, reportDate, sourcePage);
+    if (movedRow && !observation && availability.status === 'not_detected') {
+      return { observation: symbolObservation(movedRow.row, symbol, reportDate, movedRow.index + 1), availability };
+    }
+    return { observation, availability };
   });
   const observations = parsedSymbols.map((row) => row.observation).filter(Boolean);
   if (!observations.length) throw marketError('No configured market symbols were found in this report.', 400, 'MARKET_REPORT_NO_VALUES');

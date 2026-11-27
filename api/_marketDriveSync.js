@@ -697,6 +697,25 @@ export function prioritizeMarketDriveCandidates(files = [], storedByMd5 = new Ma
   });
 }
 
+const ISOLATED_PDF_FAILURES = new Set([
+  'MARKET_REPORT_DATE_MISSING', 'MARKET_REPORT_INVALID_FILE', 'MARKET_REPORT_NO_VALUES',
+  'MARKET_REPORT_TOO_LARGE', 'MARKET_REPORT_TYPE_REQUIRED', 'MARKET_REPORT_UNREADABLE',
+]);
+
+function recordRunFailure(summary, code) {
+  summary.failedCount += 1;
+  summary.runFailureCount += 1;
+  summary.errorCode ??= code;
+}
+
+function recordFileFailure(summary, file, code, { isolated = false, reportDate = null } = {}) {
+  const failure = { fileId: file.id, filename: file.name, sourceType: file.documentType || 'secondary_mops_csv', reportDate, code };
+  summary.fileFailures.push(failure);
+  if (isolated) summary.failedCount += 1;
+  else recordRunFailure(summary, code);
+  return failure;
+}
+
 async function finishRun(client, runKey, summary, status, errorCode = null) {
   const result = await client.rpc('finish_market_report_sync_run', {
     p_run_key: runKey,
@@ -742,6 +761,8 @@ export async function runMarketReportDriveSync(client, {
     skippedCount: 0,
     importedCount: 0,
     failedCount: 0,
+    fileFailures: [],
+    runFailureCount: 0,
     deferredCount: 0,
     mopsPublishedCount: 0,
     mopsMatchedCount: 0,
@@ -825,17 +846,18 @@ export async function runMarketReportDriveSync(client, {
         summary.secondaryMopsMatchedValueCount += Number(saved.data?.matchedValueCount || 0);
         summary.importedCount += 1;
       } catch (error) {
-        summary.failedCount += 1;
-        if (!summary.errorCode) summary.errorCode = normalizedErrorCode(error);
+        const code = normalizedErrorCode(error);
+        const failure = recordFileFailure(summary, file, code);
         const alert = await publishMarketDataQualityAlert(client, {
           reportDate: null,
-          code: normalizedErrorCode(error),
+          code,
+          fileScope: file.id,
           title: 'Secondary MOPS CSV processing failed',
           message: String(error?.code || '').startsWith('MARKET_SECONDARY_CSV_')
             ? error.message
             : secondaryMopsFailureMessage(normalizedErrorCode(error)),
           severity: 'critical',
-          evidence: { sourceType: 'secondary_mops_csv' },
+          evidence: failure,
         }).catch(() => ({ created: false }));
         if (alert.created) summary.marketAlertsPublishedCount += 1;
       }
@@ -926,15 +948,17 @@ export async function runMarketReportDriveSync(client, {
           commentaryByDate.set(parsed.reportDate, contexts);
         }
       } catch (error) {
-        summary.failedCount += 1;
-        if (!summary.errorCode) summary.errorCode = normalizedErrorCode(error);
+        const code = normalizedErrorCode(error);
+        const reportDate = reportDateFromFilename(file.name);
+        const failure = recordFileFailure(summary, file, code, { isolated: ISOLATED_PDF_FAILURES.has(code), reportDate });
         const alert = await publishMarketDataQualityAlert(client, {
-          reportDate: reportDateFromFilename(file.name),
-          code: normalizedErrorCode(error),
+          reportDate,
+          code,
+          fileScope: file.id,
           title: 'Market report processing failed',
           message: 'A licensed market report could not be parsed, validated, or imported.',
           severity: 'critical',
-          evidence: { documentType: file.documentType },
+          evidence: { ...failure, documentType: file.documentType },
         }).catch(() => ({ created: false }));
         if (alert.created) summary.marketAlertsPublishedCount += 1;
       }
@@ -975,8 +999,7 @@ export async function runMarketReportDriveSync(client, {
           throw syncError('A paired market report has quarantined evidence and no derived brief was published.', 'MARKET_INTELLIGENCE_PAIR_CONFLICT');
         }
       } catch (error) {
-        summary.failedCount += 1;
-        if (!summary.errorCode) summary.errorCode = normalizedErrorCode(error);
+        recordRunFailure(summary, normalizedErrorCode(error));
       }
     }
 
@@ -985,12 +1008,12 @@ export async function runMarketReportDriveSync(client, {
     summary.marketAlertsPublishedCount += Number(expectedSessions.published || 0);
     summary.expectedSessionsEvaluatedCount = Number(expectedSessions.evaluated || 0);
 
-    const status = summary.failedCount ? 'failed' : 'completed';
+    const status = summary.runFailureCount ? 'failed' : 'completed';
     await finishRun(finishClient, runKey, summary, status, summary.errorCode || null);
     return { ...summary, runKey, status, accountEmail: config.accountEmail };
   } catch (error) {
-    summary.failedCount = Math.max(1, summary.failedCount);
     const errorCode = signal?.aborted ? 'MARKET_DRIVE_BUDGET_EXHAUSTED' : normalizedErrorCode(error);
+    recordRunFailure(summary, errorCode);
     await finishRun(finishClient, runKey, summary, 'failed', errorCode).catch(() => {});
     if (signal?.aborted) return { ...summary, runKey, status: 'failed', errorCode, accountEmail: config.accountEmail };
     throw error;

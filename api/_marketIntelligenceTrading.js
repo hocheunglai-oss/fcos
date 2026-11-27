@@ -1269,9 +1269,9 @@ async function publishAlert(client, payload) {
   return result.data?.created === true;
 }
 
-export async function publishMarketDataQualityAlert(client, { reportDate = null, reportId = null, seriesId = null, code, title, message, severity = 'warning', evidence = {} } = {}) {
+export async function publishMarketDataQualityAlert(client, { reportDate = null, reportId = null, seriesId = null, code, title, message, severity = 'warning', evidence = {}, fileScope = null } = {}) {
   const rules = await getMarketIntelligenceAlertRules(client);
-  const dedupeKey = hash({ reportId, seriesId, reportDate, code, severity, ruleVersion: rules.revision }).slice(0, 64);
+  const dedupeKey = hash({ reportId, seriesId, reportDate, code, severity, ruleVersion: rules.revision, ...(fileScope ? { fileScope } : {}) }).slice(0, 64);
   const created = await publishAlert(client, {
     p_dedupe_key: dedupeKey,
     p_report_id: reportId,
