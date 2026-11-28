@@ -55,7 +55,7 @@ const now = new Date('2026-09-17T10:30:00Z');
 test('a failed secondary attempt retains the last successful import, coverage, and actual missing series', async () => {
   const result = await loadMarketSourceHealth(clientFor(), { now });
   assert.equal(result.status, 'warning');
-  assert.deepEqual(result.sources.map((row) => row.status), ['available', 'available', 'warning']);
+  assert.deepEqual(result.sources.map((row) => row.status), ['imported', 'imported', 'warning']);
   assert.equal(result.sources[0].lastPublicationDate, '2026-09-16');
   assert.equal(result.sources[2].lastSuccessAt, '2026-09-16T09:00:00Z');
   assert.equal(result.sources[2].lastPublicationDate, '2026-09-16');

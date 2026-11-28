@@ -74,11 +74,11 @@ function formatMonth(value) {
   return new Intl.DateTimeFormat('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(date);
 }
 
-function formatDateTime(value, timeZone = 'UTC') {
+function formatDateTime(value) {
   if (!value) return 'Check time unavailable';
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? String(value) : new Intl.DateTimeFormat('en-GB', {
-    day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone, timeZoneName: 'short',
+    day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'UTC', timeZoneName: 'short',
   }).format(date);
 }
 
@@ -249,9 +249,7 @@ function SecondaryBoardRow({ product, pulse, onSelect }) {
 }
 
 function sourceStatusLabel(status) {
-  if (status === 'missing_from_drive') return 'Missing from Drive';
-  if (status === 'awaiting_sync') return 'Awaiting sync check';
-  const normalized = String(status || 'unknown').replaceAll('_', ' ').trim();
+  const normalized = String(status || 'unknown').replaceAll('_', ' ').replace('from drive', 'from Drive').trim();
   return normalized ? normalized.charAt(0).toUpperCase() + normalized.slice(1) : 'Unknown';
 }
 
@@ -270,13 +268,12 @@ function SourceHealthNotice({ sourceHealth }) {
   if (!sourceHealth) return null;
   const sources = rows(sourceHealth.sources);
   const sourceAttemptReported = sources.some((source) => source?.lastAttemptError);
-  const deliveryPending = sources.some((source) => String(source?.delivery?.status || '').startsWith('awaiting_'));
-  const status = String(sourceHealth.status || 'unknown').toLowerCase();
-  const impaired = status !== 'available';
-  return <details className={cn('market-price-board__source-health', impaired && 'market-price-board__source-health--warning')} open={impaired || deliveryPending}>
+  const impaired = sourceHealth.status !== 'available';
+  const pending = sources.some((source) => source.status?.startsWith('awaiting_'));
+  return <details className={cn('market-price-board__source-health', impaired && 'market-price-board__source-health--warning')} open={impaired || pending}>
     <summary>
       <span><strong>Current source status · {sourceStatusLabel(sourceHealth.status)}</strong><small>Checked {formatDateTime(sourceHealth.checkedAt)}</small></span>
-      <span>{impaired ? 'Review affected sources' : deliveryPending ? 'Report delivery pending' : 'All reported sources available'}</span>
+      <span>{impaired ? 'Review affected sources' : pending ? 'Report delivery pending' : 'All reported sources available'}</span>
     </summary>
     <div className="market-price-board__source-list">
       {sourceHealth.message ? <p className="market-price-board__source-message">{sourceHealth.message}</p> : null}
@@ -285,20 +282,16 @@ function SourceHealthNotice({ sourceHealth }) {
         {sourceHealth.lastAttempt.message || 'Existing verified imports remain available.'}
       </p> : null}
       {sources.length ? sources.map((source, index) => <article key={source?.key || `${source?.label || 'source'}:${index}`}>
-        <div><strong>{source?.label || source?.key || 'Market source'}</strong><span className={`market-price-board__source-state market-price-board__source-state--${String(source?.delivery?.status || source?.status || 'unknown').toLowerCase()}`}>{sourceStatusLabel(source?.delivery?.status || source?.status)}</span></div>
+        <div><strong>{source?.label || source?.key || 'Market source'}</strong><span className={`market-price-board__source-state market-price-board__source-state--${String(source?.status || 'unknown').toLowerCase()}`}>{sourceStatusLabel(source?.status)}</span></div>
         <small>{[
-          source?.delivery?.reportDate ? `Expected edition ${formatDate(source.delivery.reportDate)}` : null,
           source?.lastPublicationDate ? `Latest publication ${formatDate(source.lastPublicationDate)}` : null,
           source?.lastSuccessAt ? `Last successful import ${formatDateTime(source.lastSuccessAt)}` : null,
         ].filter(Boolean).join(' · ') || 'No successful source timestamp is available'}</small>
-        {source?.delivery?.dueAt && source.delivery.status !== 'imported' ? <small>
-          Delivery checkpoint {formatDateTime(source.delivery.dueAt, 'Asia/Hong_Kong')}
-        </small> : null}
         {sourceCoverageLabel(source?.coverage) ? <small>{sourceCoverageLabel(source.coverage)}</small> : null}
         {source?.message ? <p>{source.message}</p> : null}
         {source?.lastAttemptError ? <p><strong>Latest secondary attempt:</strong> {source.lastAttemptError.message}</p> : null}
       </article>) : <p>No per-source status was supplied.</p>}
-      {impaired ? <p>The displayed valid market data remains available.</p> : null}
+      {impaired ? <p>The displayed valid market data remains available. This notice applies only to the affected source and its later publications.</p> : null}
     </div>
   </details>;
 }

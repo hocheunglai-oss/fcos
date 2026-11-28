@@ -101,10 +101,13 @@ export async function loadMarketSourceHealth(client, { now = new Date() } = {}) 
       const row = [bunkerwire, marketscan][index].data?.[0];
       const delivery = marketDeliveryStatus(feed, row, snapshot, now);
       return {
-        key: feed.key, label: feed.label, status: row ? 'available' : 'unavailable',
+        key: feed.key, label: feed.label, status: delivery.status,
         lastSuccessAt: row?.created_at || null,
         lastPublicationDate: row?.report_date || null,
         delivery,
+        message: delivery.dueAt && delivery.status !== 'imported'
+          ? `Edition ${delivery.reportDate} · 17:00 HKT checkpoint on ${new Date(Date.parse(delivery.dueAt) + 8 * 3_600_000).toISOString().slice(0, 10)}`
+          : null,
       };
     });
     const coverage = secondaryCoverage(secondary);
