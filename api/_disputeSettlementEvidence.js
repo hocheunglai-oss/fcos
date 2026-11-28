@@ -1,6 +1,4 @@
 import { createHash } from 'node:crypto';
-import { sfQuery } from './_salesforce.js';
-import { getFreshXeroConnection, xeroAccountingFetch, xeroContactSyncServiceClient } from './_xeroContactSync.js';
 
 const idKey = (value) => String(value || '').slice(0, 15);
 const moneyMatches = (left, right) => Number.isFinite(Number(left)) && Number.isFinite(Number(right)) && Math.abs(Number(left) - Number(right)) < 0.005;
@@ -58,42 +56,8 @@ export function exactAllocatedCreditEvidence(record, xero, { party, stem, instru
   return { ...evidence, fingerprint: fingerprint(evidence) };
 }
 
-export async function loadDisputeSettlementEvidence({ stem, action, instruction, party }, { env = process.env, fetchImpl = fetch, client = xeroContactSyncServiceClient(env) } = {}) {
-  const refunds = refundSettlementCandidates(stem, instruction, party);
-  // Refund and credit evidence are different settlement methods; never substitute one for the other.
-  if (instruction?.instruction_type === 'get_back_paid') return { candidates: refunds };
-  const amount = instruction?.planned_amount ?? action?.amount;
-  if (instruction && instruction.instruction_type !== 'withhold_unpaid') return { candidates: [] };
-  if (!instruction && (action?.action_type !== 'issue_buyer_credit_note' || action.currency_iso_code !== 'USD')) return { candidates: [] };
-  if (!(Number(amount) > 0)) return { candidates: [] };
-  const side = action.party_side;
-  if (!/^[a-zA-Z0-9]{15,18}$/.test(stem.Id) || !/^[a-zA-Z0-9]{15,18}$/.test(party.account_id)) throw new Error('Valid dispute source identities are required.');
-  const soql = side === 'buyer'
-    ? `SELECT Id, Name, STEM__c, STEM__r.Account__c, Amount__c, Invoice_Date__c, LastModifiedDate FROM Invoice__c WHERE STEM__c = '${stem.Id}' AND Amount__c < 0 AND Proforma__c = false AND Deprecated__c = false`
-    : `SELECT Id, Name, STEM__c, Supplier__c, Invoice_Amount__c, Invoice_Date__c, LastModifiedDate FROM Supplier_Invoice__c WHERE STEM__c = '${stem.Id}' AND Supplier__c = '${party.account_id}' AND Invoice_Amount__c < 0`;
-  let invoiceMapping;
-  if (instruction) {
-    const result = await client.from('xero_financial_document_mappings').select('*').eq('salesforce_object', 'Supplier_Invoice__c').eq('salesforce_id', instruction.source_supplier_invoice_id).maybeSingle();
-    if (result.error) throw result.error;
-    invoiceMapping = result.data;
-    if (!invoiceMapping) return { candidates: [] };
-  }
-  const records = await sfQuery(soql, { clean: true, limit: 2000 });
-  if (records.totalSize > (records.records || []).length) throw new Error('The settlement evidence check was incomplete. Refresh before using a match.');
-  const candidates = [];
-  let connection;
-  for (const record of records.records || []) {
-    const { data: mapping, error } = await client.from('xero_financial_document_mappings').select('*')
-      .eq('salesforce_object', side === 'buyer' ? 'Invoice__c' : 'Supplier_Invoice__c').eq('salesforce_id', record.Id).maybeSingle();
-    if (error) throw error;
-    if (!mapping) continue;
-    connection ||= await getFreshXeroConnection(client, { env, fetchImpl });
-    const result = await xeroAccountingFetch(connection, `/CreditNotes/${encodeURIComponent(mapping.xero_document_id)}`, { method: 'GET', env, fetchImpl });
-    const evidence = instruction ? exactAllocatedCreditEvidence(record, result.CreditNotes?.[0], { party, stem, instruction, mapping, invoiceMapping })
-      : exactCreditEvidence(record, result.CreditNotes?.[0], { partyAccountId: party.account_id, side, stemId: stem.Id, amount, mapping });
-    if (evidence) candidates.push(evidence);
-  }
-  return { candidates };
+export async function loadDisputeSettlementEvidence({ stem, instruction, party }) {
+  return { candidates: refundSettlementCandidates(stem, instruction, party) };
 }
 
 // Access checks stay at the same service boundary for suggestions and final settlement saves.

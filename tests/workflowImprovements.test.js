@@ -136,7 +136,7 @@ test("notifications and commitments are actionable from one universal workspace"
   const commitmentService = await readFile(new URL('../api/_workCommitments.js', import.meta.url), 'utf8');
   assert.match(commitmentService, /notification\.source === 'special_terms'/);
   assert.match(commitmentService, /notification\.source === 'markets'/);
-  assert.match(commitmentService, /xero_financial_sync_runs/);
+  assert.doesNotMatch(commitmentService, /xero_financial_sync_runs/);
   assert.match(commitmentService, /Review Special Term/);
   assert.match(commitments, /key: "special_terms", label: "Special Terms"/);
   assert.match(commitments, /My Commitments/);
@@ -146,7 +146,7 @@ test("notifications and commitments are actionable from one universal workspace"
   assert.match(commitments, /Disputes/);
   assert.match(commitments, /Hedge Desk/);
   assert.match(commitments, /Markets/);
-  assert.match(commitments, /Xero/);
+  assert.doesNotMatch(commitments, /Xero/);
   assert.match(commitments, /System Errors/);
   assert.match(commitments, /item\.actionLabel/);
 });

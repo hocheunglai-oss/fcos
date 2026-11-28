@@ -33,7 +33,7 @@ const baseline = [
       "DETAIL_HEADER_RIGHT": 6,
       "STICKY_HEADER_LEFT": 8
     },
-    "hash": "8ccce0b01b7d795cb65299dda39d06256091b06b57c199f5870ff54adfdb92f2"
+    "hash": "fc9238cc75fe606418eb2cefa057a690e9f9f8a3315bdec7b56f8ec808567dfc"
   }
 ];
 

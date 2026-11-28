@@ -291,7 +291,9 @@ test('normal-only snapshot and saved Xero reads keep all mutation selectors and 
 });
 
 test('reviewed registry has genuine response contracts and deterministic bounded read bodies for every maintained ID', () => {
-  assert.deepEqual(Object.keys(MODULE_READERS).sort(), APP_MODULES.map(({ id }) => id).sort());
+  const activeModules = APP_MODULES.map(({ id }) => id);
+  assert.equal(activeModules.includes('xero_portal'), false);
+  assert.deepEqual(Object.keys(MODULE_READERS).filter(id => id !== 'xero_portal').sort(), activeModules.sort());
   for (const module of Object.keys(MODULE_READERS)) {
     assert.equal(moduleReaderPayloadVerified(module, readPayloads[module]), true, module);
     for (const data of [{}, { error: 'denied' }, { status: 'unavailable' }, { complete: false }, null])

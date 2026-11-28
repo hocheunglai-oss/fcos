@@ -171,7 +171,7 @@ function sortCommitments(left, right) {
 export async function workCommitmentsList(_body = {}, accessContext) {
   const { client, profile, capabilities = {} } = accessContext;
   const today = hongKongDate();
-  const [itemsResult, goalsResult, relationshipsResult, collectionsResult, variableChargeCasesResult, disputesResult, hedgeClosesResult, xeroRunsResult, improvementTicketsResult, improvementProposalsResult, generalManagerRoleResult, notificationsResult] = await Promise.all([
+  const [itemsResult, goalsResult, relationshipsResult, collectionsResult, variableChargeCasesResult, disputesResult, hedgeClosesResult, improvementTicketsResult, improvementProposalsResult, generalManagerRoleResult, notificationsResult] = await Promise.all([
     client
       .from("collaboration_items")
       .select(
@@ -238,14 +238,6 @@ export async function workCommitmentsList(_body = {}, accessContext) {
           .order('updated_date', { ascending: false })
           .limit(100)
       : Promise.resolve({ data: [], error: null }),
-    capabilities.xeroPortal
-      ? client
-          .from('xero_financial_sync_runs')
-          .select('id,mode,status,classification_summary,error_code,error_message,revision,created_by,created_by_email,reviewed_by_email,created_at,updated_at')
-          .in('status', ['building', 'ready_for_review', 'authorised', 'processing', 'partial', 'failed'])
-          .order('updated_at', { ascending: false })
-          .limit(25)
-      : Promise.resolve({ data: [], error: null }),
     client
       .from('fcos_improvement_tickets')
       .select('id,ticket_key,ticket_type,title,status,priority,reporter_user_id,assignee_user_id,assignee_name,updated_at')
@@ -275,7 +267,6 @@ export async function workCommitmentsList(_body = {}, accessContext) {
   const variableChargeCases = ensureResult(variableChargeCasesResult);
   const disputes = ensureResult(disputesResult);
   const hedgeCloses = ensureResult(hedgeClosesResult);
-  const xeroRuns = ensureResult(xeroRunsResult);
   const improvementTickets = ensureResult(improvementTicketsResult);
   const improvementProposals = ensureResult(improvementProposalsResult);
   const generalManagerRole = ensureResult(generalManagerRoleResult);
@@ -608,29 +599,6 @@ export async function workCommitmentsList(_body = {}, accessContext) {
     );
   }
 
-  for (const run of xeroRuns) {
-    const failed = ['partial', 'failed'].includes(run.status);
-    const review = run.status === 'ready_for_review';
-    const waiting = ['building', 'authorised', 'processing'].includes(run.status);
-    const itemCount = Object.values(run.classification_summary || {}).reduce((sum, value) => sum + (Number(value) || 0), 0);
-    commitments.push(normalizeCommitment({
-      id: `xero-financial-run:${run.id}:${run.revision}`,
-      source: 'xero_portal',
-      kind: 'background_job',
-      title: `Xero accounting ${String(run.mode || 'sync').replaceAll('_', ' ')}`,
-      subtitle: failed
-        ? `${run.status} · ${run.error_message || run.error_code || 'Review the failed batch.'}`
-        : review
-          ? `${itemCount.toLocaleString()} classified item${itemCount === 1 ? '' : 's'} · Finance review required`
-          : `${run.status} · Checkpointed operation in progress`,
-      status: run.status,
-      dueAt: null,
-      urgency: waiting ? 'waiting' : 'needs_action',
-      link: `/xero-portal?tab=financial&runId=${encodeURIComponent(run.id)}`,
-      actionLabel: failed ? 'Review failure' : review ? 'Review batch' : 'View progress',
-    }, today));
-  }
-
   const pendingImprovementByTicket = new Map();
   for (const proposal of improvementProposals) {
     if (!pendingImprovementByTicket.has(proposal.ticket_id)) pendingImprovementByTicket.set(proposal.ticket_id, []);
@@ -708,7 +676,7 @@ export async function workCommitmentsList(_body = {}, accessContext) {
       ['Growth & Coaching', confirmationsResult],
       ['Payment Collections', collectionsResult], ['Supplier Charges', variableChargeCasesResult],
       ['Disputes', disputesResult], ['Hedge Desk', hedgeClosesResult],
-      ['Xero', xeroRunsResult], ['FCOS Improvements', improvementTicketsResult],
+      ['FCOS Improvements', improvementTicketsResult],
       ['FCOS Improvements', improvementProposalsResult], ['Approval roles', generalManagerRoleResult],
     ].filter(([, result]) => unavailableTable(result?.error)).map(([label]) => label),
   ])];
@@ -717,7 +685,7 @@ export async function workCommitmentsList(_body = {}, accessContext) {
     ['Growth & Coaching', relationshipsResult, 100], ['Growth & Coaching', sessionsResult, 100],
     ['Growth & Coaching', actionsResult, 200], ['Payment Collections', collectionsResult, 250],
     ['Supplier Charges', variableChargeCasesResult, 250], ['Disputes', disputesResult, 250],
-    ['Hedge Desk', hedgeClosesResult, 100], ['Xero', xeroRunsResult, 25],
+    ['Hedge Desk', hedgeClosesResult, 100],
     ['FCOS Improvements', improvementTicketsResult, 250], ['FCOS Improvements', improvementProposalsResult, 250],
   ].filter(([, result, limit]) => Array.isArray(result?.data) && result.data.length >= limit).map(([label]) => label)
     .concat((notificationsResult.notifications?.length || 0) >= 100 ? ['Notifications'] : []))];

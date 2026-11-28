@@ -160,7 +160,7 @@ export const MY_COMMITMENTS_METHODOLOGY = {
     },
     {
       title: 'Included work',
-      body: 'The page combines Projects & Tasks, Growth & Coaching, assigned Payment Collections, dispute approvals and accounting work, Hedge settlement decisions, Market evidence alerts, Xero accounting runs, Email Router warnings, and operational system errors. FCOS evaluates each source using your current server-side permissions; this is a personal action view, not a privacy boundary.',
+      body: 'The page combines Projects & Tasks, Growth & Coaching, assigned Payment Collections, dispute approvals and accounting work, Hedge settlement decisions, Market evidence alerts, Email Router warnings, and operational system errors. FCOS evaluates each source using your current server-side permissions; this is a personal action view, not a privacy boundary.',
     },
     {
       title: 'Urgency order',

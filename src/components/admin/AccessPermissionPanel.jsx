@@ -9,7 +9,6 @@ const RELATED_ACTIONS = {
   hedge_desk: ['hedge_book_manage', 'hedge_settlement_manage', 'hedge_close_approve', 'hedge_admin'],
   special_terms: ['special_terms_manage', 'special_terms_clause_approve'],
   brokers: ['broker_settings_manage'],
-  xero_portal: ['xero_portal_manage'],
   settings: ['financial_report_settings_manage'],
 };
 

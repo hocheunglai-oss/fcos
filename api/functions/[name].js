@@ -319,7 +319,6 @@ import {
 import { createEmailRouterServiceClient, currentEmailRouterMailbox, emailRouterGraphFetch, maintainEmailRouterSubscriptions, processEmailRouterOutbox, recordEmailRouterAlert, resolveEmailRouterAlert, syncEmailRouterFolderFromStoredCursor } from '../_emailRouterCore.js';
 import { processEmailRouterLearningJobs } from '../_emailRouterLearning.js';
 import { missingNomBList as missingNomBListService, missingNomBUpload as missingNomBUploadService, runMissingNomBReminders, missingNomBStatus } from '../_missingNomB.js';
-import { createXeroHandlers, XERO_HANDLER_MODULE_ACCESS } from '../_xeroHandlers.js';
 import {
   importCashflowBankStatement as importCashflowBankStatementService,
   loadCashflowBankOverview,
@@ -399,7 +398,7 @@ const ADMIN_APP_MODULES = [
   { id: 'markets', label: 'Markets', path: '/markets', sortOrder: 86 },
   { id: 'special_terms', label: 'Special Terms', path: '/special-terms', sortOrder: 87 },
   { id: 'hedge_desk', label: 'Hedge Desk', path: '/hedge-desk', sortOrder: 88 },
-  { id: 'xero_portal', label: 'Xero Portal', path: '/xero-portal', sortOrder: 89 }, { id: 'email_router', label: 'Email Router', path: '/email-router', sortOrder: 91 },
+  { id: 'email_router', label: 'Email Router', path: '/email-router', sortOrder: 91 },
   { id: 'settings', label: 'Settings', path: '/settings', sortOrder: 90 },
   { id: 'admin', label: 'People & Access', path: '/settings?section=people', sortOrder: 100 },
   { id: 'outlook_nomination_filing', label: 'Outlook Nomination Filing', path: '/outlook-nomination-filing', sortOrder: 190 },
@@ -473,7 +472,7 @@ const ADMIN_CAPABILITIES = [
   { id: 'hedge_admin', label: 'Administer Hedge Desk', description: 'Manage Hedge Desk configuration and integrations.' },
   { id: 'special_terms_manage', label: 'Manage Special Terms', description: 'Create, edit, and remove Salesforce Special Terms and matching rules.' },
   { id: 'special_terms_clause_approve', label: 'Approve Special Term Clauses', description: 'Approve, retire, migrate, and roll back versioned Salesforce clause wording.' },
-  { id: 'broker_settings_manage', label: 'Manage Broker Commission Settings', description: 'Change the company exchange-rate provider used by Broker Commissions.' }, { id: 'xero_portal_manage', label: 'Manage Xero Portal', description: 'Connect Xero, create receipt draft bills, rename contacts, and archive unused contacts.' },
+  { id: 'broker_settings_manage', label: 'Manage Broker Commission Settings', description: 'Change the company exchange-rate provider used by Broker Commissions.' },
 ];
 const ADMIN_CAPABILITY_IDS = new Set(ADMIN_CAPABILITIES.map((capability) => capability.id));
 const ADMIN_FULL_CAPABILITIES = Object.fromEntries(ADMIN_CAPABILITIES.map((capability) => [capability.id, true]));
@@ -566,7 +565,7 @@ const FALLBACK_TYPE_PERMISSIONS = {
     master_contracts: false,
     hedge_desk: true,
     markets: true,
-    special_terms: true, xero_portal: true,
+    special_terms: true,
     settings: false,
     admin: false,
   },
@@ -659,7 +658,7 @@ const FALLBACK_TYPE_CAPABILITIES = {
     hedge_admin: false,
     special_terms_manage: false,
     special_terms_clause_approve: false,
-    broker_settings_manage: true, xero_portal_manage: true,
+    broker_settings_manage: true,
   },
   operations: {
     disputes_approve: false,
@@ -1006,7 +1005,6 @@ async function workCommitmentsList(body = {}, req = null, accessContext = null) 
     emailRouter,
     markets,
     specialTerms,
-    xeroPortal,
   ] = await Promise.all([
     userHasAnyModuleAccess(context.client, context.profile, ['buyer_invoices', 'incoming_payments']),
     userHasAnyModuleAccess(context.client, context.profile, ['disputes']),
@@ -1018,7 +1016,6 @@ async function workCommitmentsList(body = {}, req = null, accessContext = null) 
     userHasAnyModuleAccess(context.client, context.profile, ['email_router']),
     userHasAnyModuleAccess(context.client, context.profile, ['markets']),
     userHasAnyModuleAccess(context.client, context.profile, ['special_terms']),
-    userHasAnyModuleAccess(context.client, context.profile, ['xero_portal']),
   ]);
   return workCommitmentsListService(body, {
     ...context,
@@ -1033,7 +1030,6 @@ async function workCommitmentsList(body = {}, req = null, accessContext = null) 
       emailRouter,
       markets,
       specialTerms,
-      xeroPortal,
     },
   });
 }
@@ -1231,7 +1227,7 @@ const HANDLER_MODULE_ACCESS = {
   emailRouterOutbox: ['email_router'],
   emailRouterDelta: ['email_router'],
   emailRouterSubscription: ['email_router'],
-  emailRouterMaintenanceCron: [], ...XERO_HANDLER_MODULE_ACCESS,
+  emailRouterMaintenanceCron: [],
   hedgeDeskEntity: ['hedge_desk'],
   hedgeMarkets: ['markets'],
   marketPulseSnapshot: ['markets'],
@@ -19093,7 +19089,6 @@ async function missingNomBHealthRow() {
   }, result);
 }
 
-const xeroHandlers = createXeroHandlers({ requireActiveUser, resolveRecoveredSystemErrorHandler });
 const handlers = {
   missingNomBList,
   missingNomBUpload,
@@ -19165,7 +19160,7 @@ const handlers = {
   emailRouterOutbox,
   emailRouterDelta,
   emailRouterSubscription,
-  emailRouterMaintenanceCron, ...xeroHandlers,
+  emailRouterMaintenanceCron,
   hedgeDeskEntity,
   hedgeMarkets,
   marketPulseSnapshot,

@@ -31,19 +31,7 @@ test('critical external actions and mutations carry checked policy metadata', ()
   assert.equal(registeredHandlerBehavior('specialTermsTermRetire').externalAction, true);
   assert.equal(registeredHandlerBehavior('specialTermsTermRetire').capability, 'special_terms_clause_approve');
   assert.equal(registeredHandlerBehavior('emailRouterActionStatus').externalAction, true);
-  for (const name of ['xeroPrepaymentPolicyGet', 'xeroPrepaymentPolicySave']) {
-    const policy = registeredHandlerBehavior(name);
-    assert.equal(policy.externalAction, true);
-    assert.equal(policy.capability, 'xero_portal_manage');
-    assert.equal(policy.mutation, name.endsWith('Save'));
-  }
-  for (const name of ['xeroNativeDocumentApply', 'xeroNativeDocumentReconcile', 'xeroNativeDocumentRecoveryQueue']) {
-    const policy = registeredHandlerBehavior(name);
-    assert.equal(policy.externalAction, true);
-    assert.equal(policy.capability, 'xero_portal_manage');
-    assert.equal(policy.mutation, name !== 'xeroNativeDocumentRecoveryQueue');
-    assert.equal(policy.cache, 'none');
-  }
+
 });
 
 test('declared handler capabilities are enforced by the shared access adapter', async () => {
@@ -66,22 +54,12 @@ test('browser cache invalidation uses server mutation metadata instead of handle
   assert.doesNotMatch(source, /isMutationHandler/);
 });
 
-test('saved Xero previews are mutations protected by Finance management permission', () => {
-  for (const name of ['xeroPortalContactLifecyclePreview', 'xeroFinancialSyncPreview', 'xeroContactRestoreApply']) {
-    assert.equal(registeredHandlerBehavior(name).mutation, true);
-    assert.equal(registeredHandlerBehavior(name).capability, 'xero_portal_manage');
-    assert.equal(registeredHandlerBehavior(name).audit, 'required');
-    assert.equal(registeredHandlerBehavior(name).cache, 'none');
+test('retired Xero reads and accounting mutations have no handler policy', () => {
+  for (const name of ['xeroPortalStatus', 'xeroFinancialSyncPreview', 'xeroPrepaymentPolicyGet',
+    'xeroPrepaymentPolicySave', 'xeroNativeDocumentApply', 'xeroNativeDocumentReconcile',
+    'xeroNativeDocumentRecoveryQueue', 'xeroReconciliationCampaignRetry']) {
+    assert.equal(registeredHandlerBehavior(name), null, name);
   }
-});
-
-test('held credit retries use the same protected external-action policy as approved runs', () => {
-  const policy = registeredHandlerBehavior('xeroReconciliationCampaignRetry');
-  assert.equal(policy.mutation, true);
-  assert.equal(policy.externalAction, true);
-  assert.equal(policy.capability, 'xero_portal_manage');
-  assert.equal(policy.audit, 'required');
-  assert.equal(policy.cache, 'none');
 });
 
 test('Nom B observations and policies bypass caches and declare their audit writes', () => {

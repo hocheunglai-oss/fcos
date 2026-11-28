@@ -479,7 +479,7 @@ test('financial-sync migration is service-only, forced-RLS, resumable, and revis
   assert.match(sql, /grant execute on function public\.authorise_xero_financial_sync_run_v1/);
 });
 
-test('financial handlers and Finance review UI are registered without a scheduler', async () => {
+test('retired financial handlers have no dispatch, policy or scheduler', async () => {
   const server = await readFile(new URL('../api/functions/[name].js', import.meta.url), 'utf8');
   const xeroHandlers = await readFile(new URL('../api/_xeroHandlers.js', import.meta.url), 'utf8');
   const policies = await readFile(new URL('../api/_handlerPolicyRegistry.js', import.meta.url), 'utf8');
@@ -488,9 +488,9 @@ test('financial handlers and Finance review UI are registered without a schedule
   const portal = await readFile(new URL('../src/pages/XeroPortal.jsx', import.meta.url), 'utf8');
   for (const name of ['xeroFinancialSyncPreview', 'xeroFinancialMappingsGet', 'xeroFinancialMappingsSave', 'xeroFinancialSyncApply', 'xeroFinancialSyncRun', 'xeroFinancialPaymentApply']) {
     assert.match(xeroHandlers, new RegExp(name));
-    assert.match(policies, new RegExp(name));
+    assert.doesNotMatch(policies, new RegExp(name));
   }
-  assert.match(server, /\.\.\.xeroHandlers/);
+  assert.doesNotMatch(server, /xeroHandlers|XERO_HANDLER_MODULE_ACCESS/);
   assert.match(ui, /financialCopy\.financeReviewed/);
   assert.match(ui, /financialCopy\.gateLocked/);
   assert.match(ui, /financialCopy\.mappingDescription/);

@@ -48,17 +48,18 @@ test('literal CI mode retains the denial contract on a Production-runtime stagin
   }
 });
 
-test('existing-draft status routes stop before dispatch in read-only staging', async () => {
-  for (const suffix of ['Preview', 'Apply', 'Recover']) {
-    const name = `xeroExistingDraftAuthorisation${suffix}`;
-    for (const flag of [undefined, 'true']) {
-      const { res, headers } = await invoke({ flag, name });
-      assert.equal(res.statusCode, 403, name);
-      assert.equal(res.body.code, flag === 'true' ? 'FCOS_CI_READ_ONLY' : 'FCOS_DEPLOYMENT_READ_ONLY', name);
-      assert.equal(headers.get('x-fcos-handler-mutation'), '1', name);
+test('retired Xero handlers return 404 before parsing or provider calls', async () => {
+  for (const name of ['xeroPortalStatus', 'xeroPortalConnectStart', 'xeroFinancialSyncRun',
+    'xeroExistingDraftAuthorisationPreview', 'xeroExistingDraftAuthorisationApply',
+    'xeroExistingDraftAuthorisationRecover', 'xeroPrepaymentApply', 'xeroCreditAllocationApply',
+    'xeroNativeDocumentApply', 'xeroReconciliationCampaignRun']) {
+    for (const host of [canonicalHost, 'fcos-stage.vercel.app']) {
+      for (const flag of [undefined, 'true']) {
+        const { res } = await invoke({ host, flag, name });
+        assert.equal(res.statusCode, 404, name);
+        assert.equal(res.body.error, `Unknown function: ${name}`);
+      }
     }
-    const { res } = await invoke({ host: canonicalHost, name });
-    assert.equal(res.statusCode, 401, name);
   }
 });
 

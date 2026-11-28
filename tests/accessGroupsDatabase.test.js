@@ -29,7 +29,7 @@ test('group cutover preserves grants, serializes changes, revokes live access an
   await assert.rejects(db.exec(migrationSql), /explicit legacy module grants/);
   await db.exec('rollback');
   // Explicit zero rows prevent the legacy mixed-module/no-fallback discrepancy.
-  for (const role of ['viewer','finance']) for (const moduleId of [...APP_MODULES.map(row=>row.id),'report_archive']) {
+  for (const role of ['viewer','finance']) for (const moduleId of [...APP_MODULES.map(row=>row.id),'report_archive','xero_portal']) {
     await db.query('insert into user_type_module_permissions values ($1,$2,false) on conflict do nothing',[role,moduleId]);
   }
   await db.exec(migrationSql);

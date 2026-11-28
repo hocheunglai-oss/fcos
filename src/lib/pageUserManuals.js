@@ -32,7 +32,7 @@ export const DISPUTE_WORKFLOW_USER_MANUAL = Object.freeze({
       summary: 'Record the final accounting treatment and evidence after approval.',
       steps: [
         'Open an approved case waiting for Accounting.',
-        'Use verified Salesforce or Xero evidence when suggested, or enter the final document or payment reference. Reuse the agreement summary; extra notes are optional.',
+        'Use verified Salesforce evidence when suggested, or enter the final document or payment reference. Reuse the agreement summary; extra notes are optional.',
         'Confirm any balance-payment instruction and settlement amount.',
         'For the last required settlement, Record settlement and close completes both steps. If closure fails, the settlement stays saved and closure can be retried.',
       ],

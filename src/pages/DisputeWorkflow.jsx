@@ -1583,7 +1583,6 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
 
         <nav aria-label="Dispute progress" className="flex shrink-0 flex-wrap items-center gap-2 border-b px-5 py-2">
           {DISPUTE_STAGES.map((stage) => <span key={stage} aria-current={stage === disputeStage(caseRow?.workflowStatus) ? 'step' : undefined} className={cn('rounded-full px-3 py-1 text-xs font-medium', stage === disputeStage(caseRow?.workflowStatus) ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground')}>{stage}</span>)}
-          <a className="ml-auto text-xs text-blue-700 underline" href={`/xero-portal?stem=${encodeURIComponent(stem.Id)}`}>View accounting reconciliation</a>
         </nav>
         <div className="grid shrink-0 grid-cols-2 gap-3 border-b border-border bg-muted/10 px-5 py-3 md:grid-cols-5">
           <div>

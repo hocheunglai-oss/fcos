@@ -29,9 +29,9 @@ test('desktop status mount is absent for readonly/revoked users and opens no pro
  }finally{delete globalThis.__financialFollowonTestAuth;}
  const Child=await component('src/components/xero/XeroExistingDraftAuthorisation.jsx');const disabled=renderToStaticMarkup(React.createElement(Child,{disabled:true}));assert.equal((disabled.match(/disabled=""/g)||[]).length,2);
 });
-test('Finance accounting mounts the draft controls alongside existing tools',async()=>{
+test('retired accounting UI is not mounted alongside Finance tools',async()=>{
  const [app,layout,page]=await Promise.all(['src/App.jsx','src/components/Layout.jsx','src/pages/XeroPortal.jsx'].map(p=>readFile(path.join(root,p),'utf8')));
- assert.match(app,/xero-portal/);assert.match(layout,/Finance/);assert.match(page,/<XeroExistingDraftAuthorisationPanel \/>/);assert.match(page,/<XeroFinancialSync portalStatus=/);assert.match(page,/<XeroNativeDocumentPreview verificationOnly/);assert.match(page,/<XeroContactResolution /);
+ assert.doesNotMatch(app,/xero-portal/);assert.doesNotMatch(layout,/xero_portal/);assert.match(layout,/Finance/);assert.match(page,/<XeroExistingDraftAuthorisationPanel \/>/);assert.match(page,/<XeroFinancialSync portalStatus=/);assert.match(page,/<XeroNativeDocumentPreview verificationOnly/);assert.match(page,/<XeroContactResolution /);
 });
 
 test('a fresh execution denial stops every status mutation before transport', async () => {

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { access } from 'node:fs/promises';
 import test from 'node:test';
 import connectionAttestation from '../api/connection-attestation.js';
 import emailRouterBackgroundSync from '../api/email-router-background-sync.js';
@@ -7,7 +8,6 @@ import emailRouterWebhook from '../api/email-router-webhook.js';
 import fcunoIdentitySync from '../api/fcuno/identity-sync.js';
 import salesforceContactSync from '../api/salesforce/contact-sync.js';
 import workNotifications from '../api/work-notifications.js';
-import xeroCallback from '../api/xero/callback.js';
 
 function response() {
   const headers = new Map();
@@ -66,7 +66,6 @@ const protectedMutationRoutes = [
   ['FCUNO identity sync', fcunoIdentitySync, {}],
   ['Salesforce contact sync', salesforceContactSync, {}],
   ['connection attestation', connectionAttestation, {}],
-  ['Xero OAuth callback', xeroCallback, { url: '/api/xero/callback?code=must-not-exchange&state=must-not-verify' }],
 ];
 
 test('standalone mutation routes reject Preview and explicit read-only deployments before parsing or invoking services', async () => {
@@ -125,4 +124,8 @@ test('authenticated mutation wrapper preserves CI denial before authentication, 
     assert.equal(JSON.parse(res.body).code, 'FCOS_SIGN_IN_REQUIRED');
     assert.equal(bodyReads(), 0);
   });
+});
+
+test('retired Xero OAuth callback has no standalone entrypoint', async () => {
+  await assert.rejects(access(new URL('../api/xero/callback.js', import.meta.url)), { code: 'ENOENT' });
 });
