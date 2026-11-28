@@ -87,6 +87,34 @@ test('read-only audit pins target and preserves actual non-Production unknowns',
   } finally { await f.db.close(); }
 });
 
+test('handover requires all six retired recovery workflows to be disabled and idle', async () => {
+  const names = [
+    'fcos-rapid-invoice-reminders-qat-closure.yml',
+    'fcos-rapid-editors-production-validation-closure.yml',
+    'fcos-rapid-trading-fx-final-posteffect.yml',
+    'fcos-rapid-trading-fx-signing-setup.yml',
+    'fcos-rapid-trading-fx-signing-closure.yml',
+    'fcos-rapid-trading-fx-signing-recovery.yml',
+  ];
+  const f = await fixture();
+  try {
+    const get = f.github.get;
+    const pages = f.github.pages;
+    for (const name of names) {
+      assert.equal(f.audit.providers.workflows[name]?.state, 'disabled_manually');
+      const id = f.audit.providers.workflows[name].id;
+      f.github.get = async path => path.endsWith('/workflows/' + name)
+        ? { id, state: 'active' } : get(path);
+      f.github.pages = async path => path.endsWith('/workflows/' + id + '/runs?per_page=100')
+        ? [{ id: 123, status: 'waiting' }] : pages(path);
+      const { providers } = await auditHandover(f);
+      assert.equal(providers.retired, false);
+      assert.equal(providers.noRunning, false);
+      assert.deepEqual(providers.workflows[name].running, [123]);
+    }
+  } finally { await f.db.close(); }
+});
+
 test('handover admits only factory-proven native delegation and preserves real CLI session identity', async () => {
   const f = await fixture();
   let delegated;

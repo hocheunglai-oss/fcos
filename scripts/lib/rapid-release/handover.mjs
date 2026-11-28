@@ -15,7 +15,22 @@ const sha = value => /^[a-f0-9]{40}$/.test(value || ''), digest = value => /^[a-
 export const handoverPins = () => ({ projectRef: fcosConnectionIdentifier('supabase', 'Project ref'), repository: fcosConnectionIdentifier('github', 'Repository'),
   account: fcosConnectionIdentifier('github', 'Required account'), projectId: fcosConnectionIdentifier('vercel', 'Project ID'), teamId: fcosConnectionIdentifier('vercel', 'Team ID') });
 export const OLD_RELEASE_VARIABLES = Object.freeze(['FCOS_PRODUCTION_RELEASE_ENABLED','FCOS_ROUTINE_RELEASE_ENABLED','FCOS_HOSTED_CONTROLLER_ADMITTED','FCOS_HOSTED_TOOLCHAIN_SETUP_ENABLED','FCOS_HOSTED_TOOLCHAIN_EPOCH_PUBLICATION_ENABLED','FCOS_HOSTED_QUALIFICATION_ADMITTED']);
-export const OLD_RELEASE_WORKFLOWS = Object.freeze(['production-release.yml','routine-release.yml','hosted-release.yml','hosted-release-controller.yml','authenticated-release.yml','hosted-release-toolchain.yml','runtime-compatibility-release.yml']);
+export const OLD_RELEASE_WORKFLOWS = Object.freeze([
+  'production-release.yml',
+  'routine-release.yml',
+  'hosted-release.yml',
+  'hosted-release-controller.yml',
+  'authenticated-release.yml',
+  'hosted-release-toolchain.yml',
+  'runtime-compatibility-release.yml',
+  // Their terminal recovery records are retained by the historical readers.
+  'fcos-rapid-invoice-reminders-qat-closure.yml',
+  'fcos-rapid-editors-production-validation-closure.yml',
+  'fcos-rapid-trading-fx-final-posteffect.yml',
+  'fcos-rapid-trading-fx-signing-setup.yml',
+  'fcos-rapid-trading-fx-signing-closure.yml',
+  'fcos-rapid-trading-fx-signing-recovery.yml',
+]);
 const controlColumns = ['bootstrap_id','epoch','mode','operation_id','plan_completion_id','recovery_id','singleton','source_upgrade_id'];
 const guardSql = readFileSync(new URL('../../rapid-release/handover-guard.sql', import.meta.url), 'utf8');
 
