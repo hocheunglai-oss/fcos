@@ -271,13 +271,6 @@ test('Xero contact sync Supabase migration is service-role only and stores audit
   assert.match(sql, /raw_row jsonb not null/);
 });
 
-test('Salesforce webhook route keeps raw body parsing and calls the contact-sync service', async () => {
-  const source = await readFile(new URL('../api/salesforce/contact-sync.js', import.meta.url), 'utf8');
-  assert.match(source, /bodyParser: false/);
-  assert.match(source, /processSalesforceContactSyncWebhook/);
-  assert.match(source, /X-FCOS-External-Action/);
-});
-
 function jsonResponse(body, status = 200) {
   return {
     ok: status >= 200 && status < 300,

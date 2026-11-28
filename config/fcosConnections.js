@@ -438,11 +438,6 @@ const runtimeConnectionInputs = deepFreeze([
     },
   },
   {
-    id: 'xero',
-    provider: 'Xero',
-    environmentKeys: ['XERO_TENANT_ID', 'XERO_TENANT_NAME', 'XERO_CLIENT_ID', 'XERO_CLIENT_SECRET', 'XERO_REFRESH_TOKEN'],
-  },
-  {
     id: 'drive',
     provider: 'Google Drive market reports',
     environmentKeys: ['GOOGLE_DRIVE_CLIENT_ID', 'GOOGLE_DRIVE_CLIENT_SECRET', 'GOOGLE_DRIVE_MARKET_REFRESH_TOKEN'],

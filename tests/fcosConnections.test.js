@@ -240,7 +240,7 @@ test('runtime catalog exposes local key presence and canonical pins without atte
     FCOS_MICROSOFT_CLIENT_ID: 'private-client', SUPABASE_SERVICE_ROLE_KEY: '  ', SALESFORCE_JWT_PRIVATE_KEY: 'private-key',
     GOOGLE_DRIVE_REFRESH_TOKEN: 'retired-workflow-only',
   });
-  assert.deepEqual(runtime.map(({ id }) => id), ['supabase', 'salesforce', 'xero', 'drive', 'identity', 'microsoft', 'microsoft-growth', 'openai']);
+  assert.deepEqual(runtime.map(({ id }) => id), ['supabase', 'salesforce', 'drive', 'identity', 'microsoft', 'microsoft-growth', 'openai']);
   const byId = Object.fromEntries(runtime.map((entry) => [entry.id, entry]));
   assert.equal(byId.supabase.identityPins.projectRef, fcosConnectionIdentifier('supabase', 'Project ref'));
   assert.equal(byId.salesforce.identityPins.orgId, fcosSalesforceEnvironment('production').orgId);
@@ -248,13 +248,13 @@ test('runtime catalog exposes local key presence and canonical pins without atte
   assert.equal(byId.supabase.configuredEnv.SUPABASE_SERVICE_ROLE_KEY, false);
   assert.equal(byId.salesforce.configuredEnv.SALESFORCE_JWT_PRIVATE_KEY, true);
   assert.equal(byId.openai.configuredEnv.OPENAI_API_KEY, true);
-  for (const id of ['xero', 'microsoft', 'microsoft-growth', 'openai']) {
+  for (const id of ['microsoft', 'microsoft-growth', 'openai']) {
     assert.deepEqual(byId[id].identityPins, { status: 'requires_independent_verification' });
   }
   assert(runtime.every(({ configurationSource, authenticationStatus, writePermission, humanAuthorization }) =>
     configurationSource === 'local_process_environment' && authenticationStatus === 'unknown'
     && writePermission === 'unknown' && humanAuthorization === 'not_granted'));
-  assert.doesNotMatch(JSON.stringify(runtime), /private-|retired-workflow-only|GOOGLE_DRIVE_REFRESH_TOKEN/);
+  assert.doesNotMatch(JSON.stringify(runtime), /private-|retired-workflow-only|GOOGLE_DRIVE_REFRESH_TOKEN|XERO_TENANT_ID/);
   assert.equal(FCOS_CONNECTION_POLICY.providers.length, 4);
 });
 

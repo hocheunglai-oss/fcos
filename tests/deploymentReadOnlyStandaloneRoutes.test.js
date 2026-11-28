@@ -6,7 +6,6 @@ import emailRouterBackgroundSync from '../api/email-router-background-sync.js';
 import emailRouterSync from '../api/email-router-sync.js';
 import emailRouterWebhook from '../api/email-router-webhook.js';
 import fcunoIdentitySync from '../api/fcuno/identity-sync.js';
-import salesforceContactSync from '../api/salesforce/contact-sync.js';
 import workNotifications from '../api/work-notifications.js';
 
 function response() {
@@ -64,7 +63,6 @@ const protectedMutationRoutes = [
   ['Email Router webhook', emailRouterWebhook, {}],
   ['Email Router background sync', emailRouterBackgroundSync, {}],
   ['FCUNO identity sync', fcunoIdentitySync, {}],
-  ['Salesforce contact sync', salesforceContactSync, {}],
   ['connection attestation', connectionAttestation, {}],
 ];
 
@@ -128,4 +126,8 @@ test('authenticated mutation wrapper preserves CI denial before authentication, 
 
 test('retired Xero OAuth callback has no standalone entrypoint', async () => {
   await assert.rejects(access(new URL('../api/xero/callback.js', import.meta.url)), { code: 'ENOENT' });
+});
+
+test('retired Salesforce contact callback has no standalone entrypoint', async () => {
+  await assert.rejects(access(new URL('../api/salesforce/contact-sync.js', import.meta.url)), { code: 'ENOENT' });
 });
