@@ -150,6 +150,31 @@ private class FcosXeroContactSyncServiceTest {
     }
 
     @IsTest
+    static void storedSettingCannotEnableTheRetiredProducer() {
+        resetSync();
+        insert new Xero_Contact_Sync_Setting__c(
+            SetupOwnerId = UserInfo.getOrganizationId(),
+            Enabled__c = true,
+            Endpoint__c = 'https://fcos.fcuno.com/api/salesforce/contact-sync',
+            Signing_Secret__c = 'unit-test-secret'
+        );
+        capturedRequests.clear();
+        Test.setMock(HttpCalloutMock.class, new CaptureMock());
+        Opportunity row = new Opportunity(
+            Id = '006000000000001',
+            AccountId = '001000000000002',
+            CloseDate = Date.newInstance(2026, 1, 1)
+        );
+
+        Test.startTest();
+        FcosXeroContactSyncService.enqueueForOpportunities(new List<Opportunity>{ row }, null);
+        System.assertEquals(0, Limits.getQueueableJobs());
+        Test.stopTest();
+
+        System.assertEquals(0, capturedRequests.size());
+    }
+
+    @IsTest
     static void opportunityBuyerIsPostedWhenChanged() {
         resetSync();
         enableSync();

@@ -289,10 +289,12 @@ public without sharing class FcosXeroContactSyncService {
 
     private static Config currentConfig() {
         Config config = new Config();
-        Xero_Contact_Sync_Setting__c setting = Xero_Contact_Sync_Setting__c.getOrgDefaults();
-        config.enabled = enabledOverride == null ? setting != null && setting.Enabled__c == true : enabledOverride;
-        config.endpoint = endpointOverride == null && setting != null ? setting.Endpoint__c : endpointOverride;
-        config.signingSecret = signingSecretOverride == null && setting != null ? setting.Signing_Secret__c : signingSecretOverride;
+        // The FCOS callback is retired. Retain only the isolated transport test fixture.
+        if (Test.isRunningTest()) {
+            config.enabled = enabledOverride == true;
+            config.endpoint = endpointOverride;
+            config.signingSecret = signingSecretOverride;
+        }
         return config;
     }
 
