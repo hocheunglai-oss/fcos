@@ -278,8 +278,6 @@ function serializeAccount(row) {
     accountLabel: row.account_label,
     currency: row.currency,
     purpose: row.purpose,
-    xeroBankAccountId: row.xero_bank_account_id || null,
-    xeroBankAccountName: row.xero_bank_account_name || null,
     isDefaultOperating: row.is_default_operating === true,
     enabled: row.enabled !== false,
     revision: Number(row.revision || 0),
@@ -656,6 +654,17 @@ export async function saveCashflowBankAccount(body, context) {
   const currency = text(body.currency, 3).toUpperCase();
   if (!bankCode || !cashflowBankCurrencyAllowed(bankCode, currency)) throw bankError('Choose a supported bank and currency.');
   const purpose = bankCode === 'ISP' ? 'treasury' : bankCode === 'DBS' ? 'trading_operations' : 'trading';
+  const expectedRevision = body.revision == null ? null : Number(body.revision);
+  let existingAccount = null;
+  if (body.id) {
+    const { data, error } = await context.client.from('cashflow_bank_accounts')
+      .select('revision,xero_bank_account_id,xero_bank_account_name').eq('id', body.id).maybeSingle();
+    if (error) throw bankError(error.message, 503, 'CASHFLOW_BANK_STORAGE_UNAVAILABLE');
+    if (!data || data.revision !== expectedRevision) {
+      throw bankError('Bank account changed after it was opened.', 409, 'CASHFLOW_BANK_ACCOUNT_SAVE_FAILED');
+    }
+    existingAccount = data;
+  }
   const currentActor = actor(context);
   const { data, error } = await context.client.rpc('save_cashflow_bank_account_v1', {
     p_id: body.id || null,
@@ -663,11 +672,11 @@ export async function saveCashflowBankAccount(body, context) {
     p_account_label: text(body.accountLabel, 160),
     p_currency: currency,
     p_purpose: purpose,
-    p_xero_bank_account_id: text(body.xeroBankAccountId, 160) || null,
-    p_xero_bank_account_name: text(body.xeroBankAccountName, 255) || null,
+    p_xero_bank_account_id: existingAccount?.xero_bank_account_id ?? null,
+    p_xero_bank_account_name: existingAccount?.xero_bank_account_name ?? null,
     p_is_default_operating: body.isDefaultOperating === true && bankCode !== 'ISP',
     p_enabled: body.enabled !== false,
-    p_expected_revision: body.revision == null ? null : Number(body.revision),
+    p_expected_revision: expectedRevision,
     p_actor_id: currentActor.id,
     p_actor_email: currentActor.email,
   });

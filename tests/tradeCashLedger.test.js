@@ -25,6 +25,14 @@ function apply(f, { id = 'a1', native = 780, cash = 97.5, carrying = 100, kind =
     Date__c: event.Payment_Date__c, Payment_Operation_Id__c: allocation.Operation_Id__c, Payment_Request_Fingerprint__c: fingerprint };
   f.allocations.push(allocation); f.payments.push(payment); return allocation;
 }
+test('Salesforce cash evidence requires an exact calendar date', () => {
+  for (const value of ['', '2026-02-30', '2026-09-10T00:00:00Z', '/Date(0)/']) {
+    const data = fixture();
+    data.events[0].Payment_Date__c = value;
+    assert.throws(() => validateTradeCashLedger(data), /Cash event identity, date, direction or bank evidence is incomplete/);
+  }
+});
+
 test('actual cash is independent of proforma plans and may remain on account', () => {
   const f = fixture(); const result = validateTradeCashLedger(f);
   assert.deepEqual(result.balances.get('cash'), { native: 78000, usd: 9750, bank: 78000 });

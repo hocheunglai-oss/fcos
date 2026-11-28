@@ -1,5 +1,4 @@
 import { usdFromHkd } from './_companyFxRates.js';
-import { xeroPaymentDate } from './_xeroPaymentAssociation.js';
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function fail(message) { throw new Error(`Cash ledger reconciliation: ${message}`); }
@@ -16,11 +15,16 @@ function nativeAllocation(row) { return cents(row.Currency__c === 'HKD' ? row.Al
 function operation(row) {
   if (!uuid.test(row.Operation_Id__c || '') || !/^[0-9a-f]{64}$/i.test(row.Request_Fingerprint__c || '')) fail('Operation evidence is incomplete.');
 }
+function validPaymentDate(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const day = new Date(`${value}T00:00:00Z`);
+  return Number.isFinite(day.getTime()) && day.toISOString().slice(0, 10) === value;
+}
 function eventEvidence(row) {
   operation(row);
   if (!['USD', 'HKD'].includes(row.Currency__c) || !['Buy', 'Sell'].includes(row.Direction__c) || !['Payment', 'Refund'].includes(row.Kind__c)
     || !row.STEM__c || !row.Party__c || !row.Trade_FX_Side__c || !row.Bank__c || !row.Bank_Evidence__c || !['USD', 'HKD'].includes(row.Bank_Currency__c)
-    || xeroPaymentDate(row.Payment_Date__c) !== row.Payment_Date__c) fail('Cash event identity, date, direction or bank evidence is incomplete.');
+    || !validPaymentDate(row.Payment_Date__c)) fail('Cash event identity, date, direction or bank evidence is incomplete.');
   if (nativeEvent(row) <= 0 || cents(row.Cash_USD_Amount__c) < 0 || cents(row.Bank_Native_Amount__c) <= 0) fail('Cash event amounts must be positive magnitudes.');
   if (row.Currency__c === row.Bank_Currency__c) same(nativeEvent(row), cents(row.Bank_Native_Amount__c), 'Same-currency bank amount');
   if (row.Currency__c === 'HKD') {

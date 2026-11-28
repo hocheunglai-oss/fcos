@@ -7,6 +7,7 @@ import {
   expandCashflowPlannedMovements,
   parseCashflowBankStatementCsv,
   reconcileCashflowBankEntries,
+  saveCashflowBankAccount,
 } from '../api/_cashflowBankReconciliation.js';
 
 const migration = readFile(new URL('../supabase/migrations/20260902060000_cashflow_bank_reconciliation.sql', import.meta.url), 'utf8');
@@ -162,4 +163,28 @@ test('Cashflow exposes the governed workspace without loading it for unauthorize
   assert.match(workspaceSource, /cashflowBankStatementImport/);
   assert.match(workspaceSource, /ISP deposits & guarantees/);
   assert.match(workspaceSource, /Currencies are never netted together/);
+});
+
+test('bank routing preserves existing accounting links while rejecting stale and caller-supplied links', async () => {
+  const stored = { id: 'account', revision: 4, bank_code: 'DBS', xero_bank_account_id: 'historical-id', xero_bank_account_name: 'Historical name' };
+  const calls = [];
+  const query = {
+    select: () => query, eq: () => query,
+    maybeSingle: async () => ({ data: stored }),
+  };
+  const client = {
+    from(table) { assert.equal(table, 'cashflow_bank_accounts'); return query; },
+    async rpc(name, payload) { calls.push(payload); assert.equal(name, 'save_cashflow_bank_account_v1'); return { data: stored }; },
+  };
+  const body = { bankCode: 'DBS', currency: 'HKD', accountLabel: 'Operating', xeroBankAccountId: 'caller-id', xeroBankAccountName: 'Caller name' };
+  const saved = await saveCashflowBankAccount({ ...body, id: 'account', revision: 4 }, { client });
+  assert.equal(calls[0].p_xero_bank_account_id, 'historical-id');
+  assert.equal(calls[0].p_xero_bank_account_name, 'Historical name');
+  assert.equal(calls[0].p_expected_revision, 4);
+  assert.equal(Object.hasOwn(saved.account, 'xeroBankAccountName'), false);
+  await assert.rejects(saveCashflowBankAccount({ ...body, id: 'account', revision: 3 }, { client }), /Bank account changed/);
+  assert.equal(calls.length, 1);
+  await saveCashflowBankAccount(body, { client });
+  assert.equal(calls[1].p_xero_bank_account_id, null);
+  assert.equal(calls[1].p_xero_bank_account_name, null);
 });
