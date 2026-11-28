@@ -102,6 +102,21 @@ test('campaign stays lazy and measured inside the ordinary budget, with bounded 
   assert.match((await verifyPerformanceBudgets({ root })).failures.join('\n'), /campaign is 101 bytes/);
 });
 
+test('a retired Xero Portal keeps both former entries out of the bundle', async (t) => {
+  const root = await writeFixture({ ...defaultBudgets, onDemandReconciliationCampaign: { retired: true } });
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const manifest = { 'index.html': { isEntry: true, file: 'assets/main.js' } };
+  await mkdir(path.join(root, 'dist/.vite'));
+  const saveManifest = () => writeFile(path.join(root, 'dist/.vite/manifest.json'), JSON.stringify(manifest));
+  await saveManifest();
+  assert.deepEqual((await verifyPerformanceBudgets({ root })).failures, []);
+  for (const key of ['src/pages/XeroPortal.jsx', 'src/components/xero/XeroReconciliationCampaign.jsx']) {
+    manifest['index.html'].dynamicImports = [key];
+    await saveManifest();
+    assert.match((await verifyPerformanceBudgets({ root })).failures.join('\n'), /Retired Xero Portal/);
+  }
+});
+
 async function writePdfViewerFixture() {
   const root = await writeFixture({ ...defaultBudgets, onDemandPdfViewer: {
     rendererBytes: 300, workerBytes: 500, totalBytes: 800, totalGzipBytes: 300,

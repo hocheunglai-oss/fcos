@@ -190,23 +190,28 @@ export async function verifyPerformanceBudgets({
         assertBudget(false, 'XLS writer budgeting requires a valid Vite manifest.');
       }
     }
-    // The manual campaign remains inside the total app budget and also has its
-    // own small cap. Opening Finance must never load this entry eagerly.
-    if (budgets.onDemandReconciliationCampaign) {
+    const campaignBudget = budgets.onDemandReconciliationCampaign;
+    if (campaignBudget) {
       try {
         const manifest = JSON.parse(await readFile(path.join(root, 'dist/.vite/manifest.json'), 'utf8'));
         const entryKey = 'src/components/xero/XeroReconciliationCampaign.jsx';
-        const entry = manifest[entryKey];
-        const asset = javascript.find(item => `assets/${item.filename}` === entry?.file);
-        const lazy = entry?.isDynamicEntry === true && !entry.isEntry
-          && Object.values(manifest).some(item => item.dynamicImports?.includes(entryKey))
-          && !Object.values(manifest).some(item => item.imports?.includes(entryKey));
-        assertBudget(Boolean(asset && lazy), 'Reconciliation campaign must remain a separate dynamic entry without a static importer.');
-        if (asset && lazy) {
-          const limit = budgets.onDemandReconciliationCampaign;
-          assertBudget(asset.bytes <= limit.totalBytes, `On-demand reconciliation campaign is ${asset.bytes} bytes (budget ${limit.totalBytes}).`);
-          assertBudget(asset.gzipBytes <= limit.totalGzipBytes, `Compressed reconciliation campaign is ${asset.gzipBytes} bytes (budget ${limit.totalGzipBytes}).`);
-          clientAssets.onDemandReconciliationCampaign = asset;
+        if (campaignBudget.retired === true) {
+          const retiredEntries = [entryKey, 'src/pages/XeroPortal.jsx'];
+          assertBudget(retiredEntries.every(key => !Object.hasOwn(manifest, key)
+            && !Object.values(manifest).some(item => item.imports?.includes(key) || item.dynamicImports?.includes(key))),
+          'Retired Xero Portal and reconciliation campaign must be absent from the build.');
+        } else {
+          const entry = manifest[entryKey];
+          const asset = javascript.find(item => `assets/${item.filename}` === entry?.file);
+          const lazy = entry?.isDynamicEntry === true && !entry.isEntry
+            && Object.values(manifest).some(item => item.dynamicImports?.includes(entryKey))
+            && !Object.values(manifest).some(item => item.imports?.includes(entryKey));
+          assertBudget(Boolean(asset && lazy), 'Reconciliation campaign must remain a separate dynamic entry without a static importer.');
+          if (asset && lazy) {
+            assertBudget(asset.bytes <= campaignBudget.totalBytes, `On-demand reconciliation campaign is ${asset.bytes} bytes (budget ${campaignBudget.totalBytes}).`);
+            assertBudget(asset.gzipBytes <= campaignBudget.totalGzipBytes, `Compressed reconciliation campaign is ${asset.gzipBytes} bytes (budget ${campaignBudget.totalGzipBytes}).`);
+            clientAssets.onDemandReconciliationCampaign = asset;
+          }
         }
       } catch { assertBudget(false, 'Reconciliation campaign budgeting requires a valid Vite manifest.'); }
     }

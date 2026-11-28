@@ -17,6 +17,7 @@
     "totalGzipBytes": 220000
   },
   "onDemandReconciliationCampaign": {
+    "retired": true,
     "totalBytes": 36000,
     "totalGzipBytes": 11000
   },
