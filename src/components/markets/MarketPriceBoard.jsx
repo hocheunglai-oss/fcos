@@ -272,8 +272,7 @@ function SourceHealthNotice({ sourceHealth }) {
   const sourceAttemptReported = sources.some((source) => source?.lastAttemptError);
   const deliveryPending = sources.some((source) => String(source?.delivery?.status || '').startsWith('awaiting_'));
   const status = String(sourceHealth.status || 'unknown').toLowerCase();
-  const impaired = !['healthy', 'ok', 'available', 'current'].includes(status)
-    || sources.some((source) => source?.delivery ? ['missing_from_drive', 'import_failed', 'calendar_unavailable'].includes(source.delivery.status) : !['healthy', 'ok', 'available', 'current'].includes(String(source?.status || '').toLowerCase()));
+  const impaired = status !== 'available';
   return <details className={cn('market-price-board__source-health', impaired && 'market-price-board__source-health--warning')} open={impaired || deliveryPending}>
     <summary>
       <span><strong>Current source status · {sourceStatusLabel(sourceHealth.status)}</strong><small>Checked {formatDateTime(sourceHealth.checkedAt)}</small></span>
@@ -299,7 +298,6 @@ function SourceHealthNotice({ sourceHealth }) {
         {source?.message ? <p>{source.message}</p> : null}
         {source?.lastAttemptError ? <p><strong>Latest secondary attempt:</strong> {source.lastAttemptError.message}</p> : null}
       </article>) : <p>No per-source status was supplied.</p>}
-      {impaired ? <p>The displayed valid market data remains available. This notice applies only to the affected source and its later publications.</p> : null}
     </div>
   </details>;
 }
