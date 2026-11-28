@@ -47,7 +47,7 @@
 .market-price-board__source-list p { grid-column: 1 / -1; margin: 0; }
 .market-price-board__source-message { padding: 8px 10px; border-left: 3px solid #d97706; background: var(--app-surface, hsl(var(--card))); color: var(--app-text-secondary, hsl(var(--foreground))) !important; }
 .market-price-board__source-state { padding: 2px 6px; border-radius: 999px; background: var(--app-surface-soft, hsl(var(--muted))); color: var(--app-text-muted, hsl(var(--muted-foreground))); font-size: 9px; font-weight: 800; }
-.market-price-board__source-state--healthy, .market-price-board__source-state--ok, .market-price-board__source-state--available, .market-price-board__source-state--current { background: #dcfce7; color: #166534; }
+.market-price-board__source-state--healthy, .market-price-board__source-state--ok, .market-price-board__source-state--available, .market-price-board__source-state--imported, .market-price-board__source-state--current { background: #dcfce7; color: #166534; }
 
 .market-price-board__metric { display: flex; min-width: 0; padding: 11px 12px; color: inherit; text-align: left; background: transparent; border: 0; border-left: 1px solid color-mix(in srgb, var(--app-border, hsl(var(--border))) 84%, transparent); cursor: pointer; }
 .market-price-board__metric:hover { background: color-mix(in srgb, var(--app-surface-soft, hsl(var(--muted))) 65%, transparent); }
@@ -103,4 +103,4 @@
 @media (max-width: 389px) { .market-price-board__card-grid { grid-template-columns: 1fr; }.market-price-board__card-grid > div:nth-child(even) { border-left: 0; } }
 
 .dark .market-price-board__source-health--warning { background: rgb(69 41 10 / 38%); }
-.dark .market-price-board__source-state--healthy, .dark .market-price-board__source-state--ok, .dark .market-price-board__source-state--available, .dark .market-price-board__source-state--current { background: rgb(6 78 59 / 48%); color: #a7f3d0; }
+.dark .market-price-board__source-state--healthy, .dark .market-price-board__source-state--ok, .dark .market-price-board__source-state--available, .dark .market-price-board__source-state--imported, .dark .market-price-board__source-state--current { background: rgb(6 78 59 / 48%); color: #a7f3d0; }

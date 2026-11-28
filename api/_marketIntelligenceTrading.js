@@ -1292,7 +1292,7 @@ function priorEligibleReportDate(localDate, assessmentSession) {
   return latestReviewedPublicationDate(priorDate, assessmentSession);
 }
 
-export async function scanExpectedMarketSessions(client, { now = new Date() } = {}) {
+export async function scanExpectedMarketSessions(client, { now = new Date(), publishMissingReportAlerts = true, cutoffHour = 16 } = {}) {
   const timestamp = now instanceof Date ? now : new Date(now);
   if (Number.isNaN(timestamp.getTime())) throw intelligenceError('The market-session scan time is invalid.');
   const localTimestamp = new Date(timestamp.getTime() + 8 * 60 * 60 * 1000);
@@ -1302,7 +1302,7 @@ export async function scanExpectedMarketSessions(client, { now = new Date() } = 
     { session: 'asia_moc', requiredReportTypes: ['bunkerwire', 'european_marketscan'] },
     { session: 'london_moc', requiredReportTypes: ['european_marketscan'] },
   ].map((row) => ({ ...row, reportDate: priorEligibleReportDate(localDate, row.session) }))
-    .filter((row) => localHour >= 16 && row.reportDate);
+    .filter((row) => localHour >= cutoffHour && row.reportDate);
   let published = 0;
   const results = [];
   for (const due of dueSessions) {
@@ -1326,7 +1326,7 @@ export async function scanExpectedMarketSessions(client, { now = new Date() } = 
     const presentTypes = new Set(reports.map((row) => row.source_document_type));
     const missingTypes = due.requiredReportTypes.filter((type) => !presentTypes.has(type));
     if (missingTypes.length) {
-      const alert = await publishMarketDataQualityAlert(client, {
+      const alert = publishMissingReportAlerts ? await publishMarketDataQualityAlert(client, {
         reportDate,
         reportId: reports[0]?.id || null,
         code: `MISSING_${due.session.toUpperCase()}_REPORT`,
@@ -1334,7 +1334,7 @@ export async function scanExpectedMarketSessions(client, { now = new Date() } = 
         message: 'The expected licensed report was not available after the controlled assessment-session cutoff.',
         severity: 'critical',
         evidence: { assessmentSession: due.session, missingReportTypes: missingTypes },
-      });
+      }) : { created: false };
       if (alert.created) published += 1;
       results.push({ assessmentSession: due.session, reportDate, status: 'missing_report', missingReportTypes: missingTypes });
       continue;
@@ -1501,14 +1501,14 @@ export function marketBriefSourceHash(reports) {
   return hash(reports.map((row) => `${row.source_document_type}:${row.source_hash}`).sort().join('|'));
 }
 
-export async function processMarketIntelligenceDate(client, { reportDate, commentaryContexts = [], legacyComparisons = [], publishAlerts = true, recordShadow = true, reconcileDerived = false, forceDeterministicRevision = false, signal, beforeCheckpoint } = {}) {
+export async function processMarketIntelligenceDate(client, { reportDate, commentaryContexts = [], legacyComparisons = [], publishAlerts = true, publishMissingPairAlert = publishAlerts, recordShadow = true, reconcileDerived = false, forceDeterministicRevision = false, signal, beforeCheckpoint } = {}) {
   const date = isoDate(reportDate);
   if (!date) throw intelligenceError('A valid report date is required.');
   const reportsResult = await client.from('market_report_imports').select('id,source_hash,source_document_type,report_date').eq('report_date', date).in('source_document_type', ['bunkerwire', 'european_marketscan']).eq('status', 'completed');
   if (reportsResult.error) throw intelligenceError(`Market reports could not be reconciled: ${reportsResult.error.message}`, 502, 'MARKET_BRIEF_RECONCILIATION_FAILED');
   const types = new Set((reportsResult.data || []).map((row) => row.source_document_type));
   if (!types.has('bunkerwire') || !types.has('european_marketscan')) {
-    const alert = publishAlerts ? await publishMarketDataQualityAlert(client, { reportDate: date, code: 'MISSING_REPORT_PAIR', title: 'Market report pair is incomplete', message: 'Bunkerwire and European Marketscan are both required before daily intelligence is derived.', evidence: { presentTypes: [...types].sort() } }) : { created: false };
+    const alert = publishMissingPairAlert ? await publishMarketDataQualityAlert(client, { reportDate: date, code: 'MISSING_REPORT_PAIR', title: 'Market report pair is incomplete', message: 'Bunkerwire and European Marketscan are both required before daily intelligence is derived.', evidence: { presentTypes: [...types].sort() } }) : { created: false };
     return { status: 'waiting_for_pair', reportDate: date, briefItemCount: 0, alertsPublished: alert.created ? 1 : 0, shadowRecorded: 0 };
   }
   const importIds = (reportsResult.data || []).map((row) => row.id);

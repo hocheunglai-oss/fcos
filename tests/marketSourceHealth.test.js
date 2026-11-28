@@ -32,6 +32,8 @@ function clientFor({
             data = [{ status, error_code: code, started_at: startedAt, completed_at: startedAt }];
           } else if (table === 'market_report_imports') {
             data = [{ report_date: '2026-09-16', created_at: '2026-09-17T09:00:00Z' }];
+          } else if (table === 'market_intelligence_operations') {
+            data = [];
           } else if (table === 'market_mops_secondary_imports') {
             data = secondary ? [secondary] : [];
           } else if (table === 'market_mops_secondary_evidence') {

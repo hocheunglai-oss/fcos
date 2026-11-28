@@ -1,3 +1,4 @@
+import { scanMarketReportDeliveries, scheduledMarketEditions } from './_marketDeliveryFreshness.js';
 import { createHash } from 'node:crypto';
 import { CONNECTION_INTEGRATIONS } from '../src/lib/connectionChecklist.js';
 import { marketPublicationEligible, marketReportLimits, parseMarketReportPdf } from './_marketIntelligence.js';
@@ -589,7 +590,7 @@ async function loadStoredReportIndex(client) {
   for (let offset = 0; ; offset += 1000) {
     const result = await client
       .from('market_report_imports')
-      .select('id,source_md5,source_hash,source_document_type,report_date,library_observation_count')
+      .select('id,source_md5,source_hash,source_document_type,report_date,library_observation_count,status')
       .not('source_md5', 'is', null)
       .range(offset, offset + 999);
     if (result.error) throw syncError('Stored market-report checksums could not be loaded.', 'MARKET_DRIVE_CHECKSUMS_FAILED');
@@ -698,7 +699,7 @@ export function prioritizeMarketDriveCandidates(files = [], storedByMd5 = new Ma
 }
 
 const ISOLATED_PDF_FAILURES = new Set([
-  'MARKET_REPORT_DATE_MISSING', 'MARKET_REPORT_INVALID_FILE', 'MARKET_REPORT_NO_VALUES',
+  'MARKET_REPORT_DATE_MISSING', 'MARKET_REPORT_EDITION_MISMATCH', 'MARKET_REPORT_INVALID_FILE', 'MARKET_REPORT_NO_VALUES',
   'MARKET_REPORT_TOO_LARGE', 'MARKET_REPORT_TYPE_REQUIRED', 'MARKET_REPORT_UNREADABLE',
 ]);
 
@@ -883,6 +884,11 @@ export async function runMarketReportDriveSync(client, {
     summary.deferredCount += Math.max(0, orderedCandidates.length - limit);
 
     const touchedReportDates = new Set();
+    const recoveryStart = new Date(now.getTime() - 14 * 86_400_000).toISOString().slice(0, 10);
+    const recoveredDeliveries = [...storedByMd5.values()]
+      .filter((row) => row.status === 'completed' && row.report_date >= recoveryStart)
+      .map((row) => ({ key: row.source_document_type, reportDate: row.report_date }));
+    const expectedDeliveries = scheduledMarketEditions(now);
     const commentaryByDate = new Map();
     const importBatch = orderedCandidates.slice(0, limit);
     for (const [index, file] of importBatch.entries()) {
@@ -900,6 +906,10 @@ export async function runMarketReportDriveSync(client, {
           continue;
         }
         const parsed = await parseReport(buffer, { documentType: file.documentType, filename: file.name, includeCommentaryContext: true });
+        const expectedEdition = expectedDeliveries.find((entry) => entry.key === file.documentType && entry.reportDate === reportDateFromFilename(file.name));
+        if (expectedEdition && parsed.reportDate !== expectedEdition.reportDate) {
+          throw syncError('The PDF publication date differs from its expected edition filename.', 'MARKET_REPORT_EDITION_MISMATCH');
+        }
         const storedImport = storedByMd5.get(md5);
         if (storedImport && (storedImport.source_hash !== parsed.sourceHash
           || storedImport.source_document_type !== file.documentType
@@ -941,7 +951,10 @@ export async function runMarketReportDriveSync(client, {
         summary.importedCount += 1;
         summary.libraryObservationCount += Number(saved.data?.libraryObservationCount || 0);
         if (storedImport) summary.libraryRepairedCount += 1;
-        else touchedReportDates.add(parsed.reportDate);
+        else {
+          touchedReportDates.add(parsed.reportDate);
+          recoveredDeliveries.push({ key: file.documentType, reportDate: parsed.reportDate });
+        }
         if (!storedImport && Array.isArray(parsed.commentaryContext) && parsed.commentaryContext.length) {
           const contexts = commentaryByDate.get(parsed.reportDate) || [];
           contexts.push({ sourceHash: parsed.sourceHash, documentType: file.documentType, commentaryContext: parsed.commentaryContext });
@@ -951,6 +964,7 @@ export async function runMarketReportDriveSync(client, {
         const code = normalizedErrorCode(error);
         const reportDate = reportDateFromFilename(file.name);
         const failure = recordFileFailure(summary, file, code, { isolated: ISOLATED_PDF_FAILURES.has(code), reportDate });
+        if (expectedDeliveries.some((entry) => entry.key === file.documentType && entry.reportDate === reportDate)) continue;
         const alert = await publishMarketDataQualityAlert(client, {
           reportDate,
           code,
@@ -963,6 +977,14 @@ export async function runMarketReportDriveSync(client, {
         if (alert.created) summary.marketAlertsPublishedCount += 1;
       }
     }
+
+    const delivery = await scanMarketReportDeliveries(client, {
+      now, runKey, files: files.map((file) => ({ ...file, reportDate: reportDateFromFilename(file.name) })),
+      failures: summary.fileFailures, imported: recoveredDeliveries, scheduled: expectedDeliveries,
+    });
+    summary.marketAlertsPublishedCount += delivery.published;
+    summary.reportDeliveriesEvaluatedCount = delivery.evaluated;
+    summary.deliveryAlertStatesRecovered = delivery.recovered;
 
     const pendingDerivedDates = await loadPendingMarketIntelligenceDates(client, { now });
     const derivedDates = [...new Set([...pendingDerivedDates, ...[...touchedReportDates].sort().reverse()])];
@@ -980,6 +1002,7 @@ export async function runMarketReportDriveSync(client, {
           reportDate,
           commentaryContexts,
           reconcileDerived: !touched,
+          publishMissingPairAlert: false,
           signal,
           beforeCheckpoint: async () => {
             signal?.throwIfAborted();
@@ -1004,7 +1027,7 @@ export async function runMarketReportDriveSync(client, {
     }
 
     signal?.throwIfAborted();
-    const expectedSessions = await scanExpectedMarketSessions(client, { now });
+    const expectedSessions = await scanExpectedMarketSessions(client, { now, publishMissingReportAlerts: false, cutoffHour: 17 });
     summary.marketAlertsPublishedCount += Number(expectedSessions.published || 0);
     summary.expectedSessionsEvaluatedCount = Number(expectedSessions.evaluated || 0);
 

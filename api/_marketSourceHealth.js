@@ -1,3 +1,5 @@
+import { DELIVERY_OPERATION, expectedMarketDeliveries, marketDeliveryStatus } from './_marketDeliveryFreshness.js';
+
 const SECONDARY_MOPS_SYMBOLS = Object.freeze(['AMFSA00', 'PPXDK00', 'POABC00']);
 
 function affectedSecondarySeries(code) {
@@ -50,7 +52,9 @@ function secondaryCoverageMessage(coverage) {
 export async function loadMarketSourceHealth(client, { now = new Date() } = {}) {
   const checkedAt = now.toISOString();
   try {
-    const [runs, ...imports] = await Promise.all([
+    const expected = expectedMarketDeliveries(now);
+    const needsSnapshot = expected.some(({ dueAt }) => dueAt && now >= new Date(dueAt));
+    const [runs, bunkerwire, marketscan, secondaryImport, deliveryRead] = await Promise.all([
       client.from('market_report_sync_runs').select('status,error_code,started_at,completed_at').order('started_at', { ascending: false }).limit(1),
       ...['bunkerwire', 'european_marketscan'].map((type) => client.from('market_report_imports')
         .select('report_date,created_at').eq('source_document_type', type).eq('status', 'completed')
@@ -59,10 +63,14 @@ export async function loadMarketSourceHealth(client, { now = new Date() } = {}) 
         .select('id,created_at,status,source_row_count,comparison_date_count,published_date_count,matched_date_count,conflict_date_count')
         .in('status', ['completed', 'completed_with_conflicts'])
         .order('created_at', { ascending: false }).limit(1),
+      needsSnapshot ? client.from('market_intelligence_operations').select('result_metadata')
+        .eq('operation_type', DELIVERY_OPERATION).eq('entity_id', 'platts-pdf-feeds')
+        .order('created_at', { ascending: false }).limit(1) : null,
     ]);
-    if (runs.error || imports.some((result) => result.error)) throw new Error('unavailable');
+    if ([runs, bunkerwire, marketscan, secondaryImport].some((result) => result.error)) throw new Error('unavailable');
     const run = runs.data?.[0];
-    const secondary = imports[2].data?.[0];
+    const secondary = secondaryImport.data?.[0];
+    const snapshot = deliveryRead?.error ? null : deliveryRead?.data?.[0]?.result_metadata;
     let secondaryPublicationDate = null;
     if (secondary?.id) {
       const evidence = await client.from('market_mops_secondary_evidence')
@@ -89,15 +97,14 @@ export async function loadMarketSourceHealth(client, { now = new Date() } = {}) 
       affectedSeries: affectedSecondarySeries(run.error_code),
       attemptedAt: run.started_at || null,
     } : null;
-    const pdfSources = ['Bunkerwire', 'European Marketscan'].map((label, index) => {
-      const row = imports[index].data?.[0];
+    const pdfSources = expected.map((feed, index) => {
+      const row = [bunkerwire, marketscan][index].data?.[0];
+      const delivery = marketDeliveryStatus(feed, row, snapshot, now);
       return {
-        key: ['bunkerwire', 'european_marketscan'][index],
-        label,
-        status: row ? 'available' : 'unavailable',
+        key: feed.key, label: feed.label, status: row ? 'available' : 'unavailable',
         lastSuccessAt: row?.created_at || null,
         lastPublicationDate: row?.report_date || null,
-        message: row ? 'Last verified import shown.' : 'No verified import is available.',
+        delivery,
       };
     });
     const coverage = secondaryCoverage(secondary);
@@ -117,7 +124,7 @@ export async function loadMarketSourceHealth(client, { now = new Date() } = {}) 
       checkedAt,
       lastRunAt: run?.started_at || null,
       lastAttempt,
-      status: stale || run?.status === 'failed' || sources.some((row) => row.status !== 'available') ? 'warning' : run?.status === 'running' ? 'running' : 'available',
+      status: stale || run?.status === 'failed' || sources.some((row) => ['missing_from_drive', 'import_failed', 'calendar_unavailable'].includes(row.delivery?.status) || (!row.delivery && row.status !== 'available')) ? 'warning' : run?.status === 'running' ? 'running' : 'available',
       message: stale ? 'The last recorded sync check is overdue.' : secondaryFailed ? 'The latest secondary CSV attempt needs attention. The last successful import and its publication coverage remain listed below.' : run?.status === 'failed' ? 'The latest source sync failed. Existing verified imports are shown below.' : 'Current source import status.',
       sources,
     };

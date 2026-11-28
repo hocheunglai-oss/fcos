@@ -31,6 +31,7 @@ function clientMock({ knownMd5 = [], storedReports = [], secondaryImports = [], 
     rpcCalls,
     rpc: async (name, payload) => {
       rpcCalls.push({ name, payload });
+      if (name === 'publish_market_intelligence_alert') return { data: { created: true }, error: null };
       if (name === 'reserve_market_report_sync_run') return { data: { reserved: true, status: 'running' }, error: null };
       if (name === 'finish_market_report_sync_run') return { data: { status: payload.p_status }, error: null };
       if (name === 'save_market_drive_report_import') {
@@ -49,16 +50,26 @@ function clientMock({ knownMd5 = [], storedReports = [], secondaryImports = [], 
       return { data: null, error: new Error('Unexpected RPC') };
     },
     from: (table) => ({
+      upsert: async () => ({ error: null }),
       select: (columns) => {
         if (table === 'market_mops_secondary_imports' && columns === 'source_hash,source_md5') return {
           range: async () => ({ data: secondaryImports, error: null }),
         };
-        if (table === 'market_report_imports' && columns === 'id,source_md5,source_hash,source_document_type,report_date,library_observation_count') return {
+        if (table === 'market_report_imports' && columns === 'id,source_md5,source_hash,source_document_type,report_date,library_observation_count,status') return {
           not: () => ({ range: async () => ({ data: [
             ...knownMd5.map((source_md5) => ({ id: `import-${source_md5}`, source_md5, library_observation_count: 1 })),
             ...storedReports,
           ], error: null }) }),
         };
+        if (table === 'market_intelligence_alert_events') {
+          return { eq: () => ({ in: async () => ({ data: [], error: null }) }) };
+        }
+        if (table === 'market_report_imports' && columns === 'report_date,source_document_type') {
+          return { eq: () => ({ in: () => ({ in: async () => ({ data: [
+            { report_date: '2026-08-19', source_document_type: 'bunkerwire' },
+            { report_date: '2026-08-19', source_document_type: 'european_marketscan' },
+          ], error: null }) }) }) };
+        }
         if (table === 'market_report_imports' && columns === 'report_date,source_document_type,source_hash') {
           const query = {
             eq: () => query, in: () => query, gte: () => query, lte: () => query, order: () => query,
