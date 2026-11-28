@@ -298,6 +298,7 @@ function SourceHealthNotice({ sourceHealth }) {
         {source?.message ? <p>{source.message}</p> : null}
         {source?.lastAttemptError ? <p><strong>Latest secondary attempt:</strong> {source.lastAttemptError.message}</p> : null}
       </article>) : <p>No per-source status was supplied.</p>}
+      {impaired ? <p>The displayed valid market data remains available.</p> : null}
     </div>
   </details>;
 }
