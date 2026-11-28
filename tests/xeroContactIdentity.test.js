@@ -57,13 +57,12 @@ function options(client, contacts = [contact], accounts = []) {
   return { client, accessContext: { profile: actor }, connectionReader: async () => ({ tenantId: tenant }), contactReader: async () => contacts, accountReader: async () => accounts };
 }
 
-test('save requires reviewed identity evidence, live identity, human actor, and Finance capability', async () => {
+test('save requires reviewed identity evidence, live identity, human actor, and a human access context', async () => {
   const client = clientFixture();
   await xeroContactIdentitySave({ ...body, actor: { id: 'fake' } }, options(client));
   assert.equal(client.state.saves[0].values.p_actor_id, actor.id);
   assert.equal(client.state.saves[0].values.p_fingerprint, saved.fingerprint);
-  assert.equal(registeredHandlerBehavior('xeroContactIdentitySave').capability, 'xero_portal_manage');
-  assert.equal(registeredHandlerBehavior('xeroContactIdentitySave').mutation, true);
+  assert.equal(registeredHandlerBehavior('xeroContactIdentitySave'), null);
   for (const patch of [{ reviewed: false }, { evidenceNote: 'none' }, { expectedRevision: -1 }, { evidenceReference: '' }]) {
     await assert.rejects(xeroContactIdentitySave({ ...body, ...patch }, options(client)), { status: 400 });
   }

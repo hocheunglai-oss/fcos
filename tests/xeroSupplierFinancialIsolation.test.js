@@ -43,13 +43,9 @@ test('ordinary sources without a financial receipt retain existing missing-readi
 });
 
 
-test('financial-only preview, read and apply retain explicit uncached Finance permissions', () => {
+test('retired financial-only operations have no active dispatch policy', () => {
   for (const name of ['xeroSupplierFinancialBucketPreview', 'xeroSupplierFinancialBucketRead', 'xeroSupplierFinancialBucketApply']) {
-    const policy = registeredHandlerBehavior(name);
-    assert.equal(policy.capability, 'xero_portal_manage');
-    assert.equal(policy.cache, 'none');
-    assert.equal(policy.mutation, !name.endsWith('Read'));
-    assert.equal(policy.externalAction, !name.endsWith('Read'));
+    assert.equal(registeredHandlerBehavior(name), null);
   }
 });
 

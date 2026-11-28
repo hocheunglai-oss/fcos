@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { changedXeroReviewItems, xeroReviewFingerprint, blockRepeatedFinancialTargets } from '../api/_xeroFinancialSync.js';
 import { zeroBalanceClosureEligibility } from '../api/_disputeAccounting.js';
-import { refundSettlementCandidates, exactCreditEvidence, exactAllocatedCreditEvidence } from '../api/_disputeSettlementEvidence.js';
+import { refundSettlementCandidates, exactCreditEvidence, exactAllocatedCreditEvidence, loadDisputeSettlementEvidence } from '../api/_disputeSettlementEvidence.js';
 import { reconciliationBucket, retainedReviewSelection, documentReviewTotals } from '../src/lib/financialWorkflowUi.js';
 import { disputeStage, disputeNextAction, disputeStatusLabel } from '../src/lib/disputeWorkflowPresentation.js';
 
@@ -63,6 +63,18 @@ test('refund evidence requires exact supplier, invoice, currency, sign and amoun
   assert.equal(refundSettlementCandidates({ _Supplier_Invoice_Exposure_Rows: [invoice] }, instruction, buyer).length, 1);
   assert.equal(refundSettlementCandidates({ _Supplier_Invoice_Exposure_Rows: [invoice] }, { ...instruction, currency_iso_code: 'HKD' }, buyer).length, 0);
   assert.equal(refundSettlementCandidates({ _Supplier_Invoice_Exposure_Rows: [invoice] }, instruction, { ...buyer, account_id: 'different' }).length, 0);
+});
+
+test('settlement suggestions support Salesforce refunds and require manual credit evidence', async () => {
+  const stem = { _Supplier_Invoice_Exposure_Rows: [{ supplierInvoiceId: 'invoice1', supplierAccountId: buyer.account_id,
+    payments: [{ id: 'payment1', amount: -100, date: '2026-09-01', currencyIsoCode: 'USD' }] }] };
+  const instruction = { instruction_type: 'get_back_paid', source_supplier_invoice_id: 'invoice1', planned_amount: 100, currency_iso_code: 'USD' };
+  const result = await loadDisputeSettlementEvidence({ stem, instruction, party: buyer });
+  assert.equal(result.candidates[0].id, 'salesforce-payment:payment1');
+  assert.deepEqual(await loadDisputeSettlementEvidence({ stem, party: buyer,
+    instruction: { ...instruction, instruction_type: 'withhold_unpaid' } }), { candidates: [] });
+  assert.deepEqual(await loadDisputeSettlementEvidence({ stem, party: buyer,
+    action: { action_type: 'issue_buyer_credit_note', currency_iso_code: 'USD', amount: 100 } }), { candidates: [] });
 });
 
 test('draft, wrong-account and wrong-currency credits cannot masquerade as settlement', () => {

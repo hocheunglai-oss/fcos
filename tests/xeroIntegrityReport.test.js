@@ -75,9 +75,8 @@ function fixture(overrides = {}) {
   return { client, calls, data, snapshot };
 }
 
-test('read policy preserves Finance management and module authorization without external actions', async () => {
-  assert.deepEqual(registeredHandlerBehavior('xeroIntegrityReport'), { mutation: false, cache: 'none', externalAction: false,
-    capability: 'xero_portal_manage', audit: 'none' });
+test('historical integrity reader has no active dispatch policy', async () => {
+  assert.equal(registeredHandlerBehavior('xeroIntegrityReport'), null);
   const handlers = await readFile(new URL('../api/_xeroHandlers.js', import.meta.url), 'utf8');
   assert.match(handlers, /'xeroIntegrityReport'/);
   assert.match(handlers, /xeroIntegrityReport: wrap\(xeroIntegrityReport\)/);
